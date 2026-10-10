@@ -69,6 +69,26 @@ void svcPack(bool) { Pack::tick(); }
 #endif
 #if CONFIG_CELEROS_UI
 void svcNotificationAlert(bool inApp) { NotificationAlert::service(inApp); }
+#else
+// Launcher invisivel: sem o LauncherScreen (fora do build sem vidro), este
+// servico e quem CONSUME os pedidos de lancamento — sem ele o gc-sections
+// descartava a cadeia inteira (takeLaunchRequest -> launchApp -> runApp ->
+// CelerKernel::runFile -> JSBindings::init) e o binario ficava SEM o
+// runtime JS (devkit/cam construidos assim nao abriam app nenhum; pegado
+// no size + strings do bin, a bancada ainda pendente).
+// Consome: autostart do boot (applyAutostart -> requestLaunch), `run` do
+// shell/celerctl, System.launchApp de outro app, botao home do perfil.
+void svcLauncherHeadless(bool) {
+    if (LauncherUI::needsRescan) {
+        LauncherUI::scanLocalApps();
+        LauncherUI::needsRescan = false;
+    }
+    std::string req;
+    if (!LauncherUI::takeLaunchRequest(req)) return;
+    if (LauncherUI::appRunning()) return;  // app vivo: o pedido espera a saida
+    const int idx = LauncherUI::findEntry(req);
+    if (idx >= 0) LauncherUI::launchApp(idx);
+}
 #endif
 void svcOtaConfirm(bool) { confirmPendingOta(); }
 // LogPersist (kern.log/apps.log): flush a cada ~3 s — ALWAYS para roda com
@@ -98,6 +118,9 @@ void svcAlarmsCheck(bool) {
 const CelerServices::Service kServices[] = {
 #if CONFIG_CELEROS_UI
     {"navigator", svcNavigator, CelerServices::LOOP},
+#else
+    // substituto do launcher visual: consumidor dos pedidos de lancamento
+    {"launcher", svcLauncherHeadless, CelerServices::LOOP},
 #endif
     // ALWAYS: se o evictRunningApp esgota os 2 s com o app aberto, o pump
     // LOOP nao volta a rodar — o reboot do upload web drena tambem pelo

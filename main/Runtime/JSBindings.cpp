@@ -61,6 +61,11 @@ void confirmPendingOta();  // main.cpp
 // No alvo classico os fatores sao 1:1 e a camada e transparente.
 // ---------------------------------------------------------------------------
 CelerDisplay* s_jsTft = nullptr;  // setado no JSBindings::init
+#if !CONFIG_CELEROS_UI
+// definicao que vivia no JsGfx.cpp (fora do build sem vidro): a init real
+// (ressuscitada pelo servico launcher headless) reseta o modo nativo
+bool s_nativeCanvas = false;
+#endif
 uint32_t s_perms = celer::PERM_ALL;   // capabilities do app corrente (F4)
 std::string s_appPkg;                 // packageName do app corrente (F4)
 bool s_appExitPending = false;        // saida pedida (throwAppExit): relancada nas esperas

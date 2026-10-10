@@ -424,7 +424,8 @@ const std::string& LauncherUI::appEntryPkg(int i) { return apps[i].pkg; }
 // Bits que o consentimento conhece (PERM_ALL do app.json sem o campo vira
 // estes cinco)
 static constexpr uint32_t kKnownPerms =
-    celer::PERM_FS | celer::PERM_NET | celer::PERM_GPIO | celer::PERM_SYSTEM | celer::PERM_MIC;
+    celer::PERM_FS | celer::PERM_NET | celer::PERM_GPIO | celer::PERM_SYSTEM |
+    celer::PERM_MIC | celer::PERM_CAMERA;
 
 static const std::string& grantId(const std::string& pkg, const std::string& path) {
     return pkg.length() > 0 ? pkg : path;

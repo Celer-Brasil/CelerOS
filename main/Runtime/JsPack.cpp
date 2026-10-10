@@ -29,6 +29,7 @@ void pushCaps(duk_context* ctx, uint8_t caps) {
     putBool(ctx, "motors", (caps & netframe::CAPS_MOTORS));
     putBool(ctx, "leds", (caps & netframe::CAPS_LEDS));
     putBool(ctx, "hub", (caps & netframe::CAPS_HUB));
+    putBool(ctx, "camera", (caps & netframe::CAPS_CAMERA));
 }
 }  // namespace
 

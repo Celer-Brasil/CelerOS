@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 34
+### API Level: 35
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2411,3 +2411,60 @@ E.dirty.enable(function (x, y, w, h) {
 ```
 
 In the same level `System.rigidState(id, buf)` accepts the previous frame's array and refills it in place (see API 33); `celeros.physics` 2.1 uses it inside `state()`.
+
+## 40. API Level 35 — Camera: `Camera` (photos and QR on the esp32-cam)
+
+The `Camera` object exists only on boards with a camera sensor in the profile
+(today the esp32-cam, OV2640) built with `CONFIG_CELEROS_JS_CAMERA`, and only
+for apps declaring the **"camera"** permission. Feature-detect with
+`typeof Camera !== "undefined"` (or `System.getInfo().board`).
+
+#### `Camera.setup({framesize, pixformat, fbcount, xclkMhz})`
+Configures the photo pipeline and turns the sensor on. Returns `true` on
+success. Options: `framesize` `"qqvga"|"qvga"|"vga"|"svga"|"hd"|"sxga"|"uxga"`
+(default `qvga`; JPEG benefits from PSRAM), `pixformat`
+`"jpeg"|"gray"|"rgb565"` (default `jpeg`), `fbcount` 1-2 (default 2 with
+PSRAM), `xclkMhz` 10 or 20 (default 20; drop to 10 if the bench shows skew).
+
+#### `Camera.capture()` -> `{id, w, h, len, format}` | `null`
+Grabs one frame. The buffer is copied to a retained slot (PSRAM) and the
+driver's queue is released immediately — up to 2 frames retained (`id` 1-2);
+when both are full the oldest is recycled. `null` = sensor not ready.
+
+#### `Camera.save(id, path)` -> bytes written | `-1`
+Streams retained frame `id` to `path` (same write rules as `FS.writeFile`:
+atomic on `/local`, direct on the SD card). JPEG frames get the extension
+you choose — `/sd/foto.jpg` is the usual.
+
+#### `Camera.free(id)`
+Releases a retained frame.
+
+#### `Camera.led(on)`
+The camera's white flash LED (GPIO4 on the AI-Thinker). Use it as a torch or
+to light a QR code in the dark.
+
+#### `Camera.scanQR({timeoutMs, attempts, led})` -> string | `null`
+Reads QR codes **on-device** (quirc decoder; the grayscale frame goes straight
+to the decoder — no JPEG step). Reconfigures the sensor to grayscale QVGA
+while scanning and restores the photo mode afterwards (the switch costs tens
+of ms, only when the app mixes photos and scanning). Retries until something
+decodes, the `attempts` budget (default: derived from `timeoutMs`, one
+attempt ~= 250 ms) or `timeoutMs` (default 6000) runs out. `led:true` keeps
+the flash on during the scan. Returns the decoded text or `null`.
+
+```javascript
+var code = Camera.scanQR({ timeoutMs: 5000, led: true });
+if (code) {
+    // sensor-node pattern: hand it to the gateway over the mesh
+    var gw = Pack.members().filter(function (m) { return m.caps.hub; })[0];
+    if (gw) Pack.send(gw.id, { t: 'qr', code: code }, { urgent: true });
+}
+```
+
+Notes for sensor nodes: `scanQR` renews the exec-timeout window on every
+attempt, so a scanning loop is safe; the mesh advertises `caps.camera: true`
+in `Pack.members()` on camera boards (API 27 payload), and photos/QR results
+fit the mesh envelope — full images do not (use WiFi for those).
+
+Headless boards: apps that draw do not run on the esp32-cam profile (see
+`CELEROS_UI`); a camera app's UI is LEDs, logs and the mesh.

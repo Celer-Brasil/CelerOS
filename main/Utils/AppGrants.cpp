@@ -100,6 +100,7 @@ std::string describe(uint32_t mask) {
     add(celer::PERM_GPIO, "GPIO");
     add(celer::PERM_SYSTEM, "sistema");
     add(celer::PERM_MIC, "microfone");
+    add(celer::PERM_CAMERA, "camera");
     return out;
 }
 

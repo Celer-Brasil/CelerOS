@@ -70,6 +70,14 @@ set(CELEROS_SRCS
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
 endif()
+# Camera (API 35): bindings + driver esp32-camera (managed, entra pela regra
+# do idf_component.yml) + quirc vendado. O objeto JS so nasce na placa com
+# pinos de camera no perfil E app com a permission "camera".
+set(CELEROS_CAMERA_REQUIRES)
+if(CONFIG_CELEROS_JS_CAMERA)
+    list(APPEND CELEROS_SRCS "Runtime/JsCamera.cpp")
+    list(APPEND CELEROS_CAMERA_REQUIRES esp32-camera quirc)
+endif()
 # Perfil sem vidro (CELEROS_UI=n, placas headless): a pilha de video sai do
 # build — Kui, launcher visual, capturas, icones, fontes e as bindings de
 # desenho. O catalogo do LauncherUI (scan/launch/autostart) fica: sem ele o
@@ -211,6 +219,7 @@ idf_component_register(
         esp_netif
         duktape
         ${CELEROS_BT_REQUIRES}
+        ${CELEROS_CAMERA_REQUIRES}
         ${CELEROS_ULP_REQUIRES}
     PRIV_REQUIRES
         ${CELEROS_PRIV_REQUIRES}
@@ -256,6 +265,13 @@ if(CONFIG_CELEROS_BLUETOOTH)
     )
 endif()
 
+# IDF 6.1: os includes do quirc nao chegam ao main pela via normal do
+# REQUIRES (mesma quirk do bt/NimBLE acima) — caminho explicito.
+if(CONFIG_CELEROS_JS_CAMERA)
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/../components/quirc/lib")
+endif()
+
 # ---- Paginas web: o .html e a fonte; o build gera o .gz (servido com
 # Content-Encoding: gzip) e embute so ele — ~4x menos flash que o texto cru.
 idf_build_get_property(python PYTHON)
@@ -282,7 +298,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.8.2"
-    CELEROS_API_LEVEL=34
+    CELEROS_API_LEVEL=35
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

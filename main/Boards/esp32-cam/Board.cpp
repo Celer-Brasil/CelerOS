@@ -46,6 +46,15 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},
+    // OV2640 no DVP (mapa AI-Thinker) + LED de flash no GPIO4 (Camera.led)
+    .camera = {
+        .pwdn = 32, .reset = -1, .xclk = 0,
+        .siod = 26, .sioc = 27,
+        .y9 = 35, .y8 = 34, .y7 = 39, .y6 = 36,
+        .y5 = 21, .y4 = 19, .y3 = 18, .y2 = 5,
+        .vsync = 25, .href = 23, .pclk = 22,
+        .flashLed = 4,
+    },
     .headless = true,   // sem vidro: splash pulado, getInfo().hasDisplay = false
     .buttonToApp = false,  // sem botao fisico util (GPIO0 e XCLK/strap de gravacao)
     // Camera (OV2640) + slot SD + PSRAM (16/17) + UART0 (1/3, console) + XCLK

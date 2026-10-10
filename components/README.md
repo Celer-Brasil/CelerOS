@@ -19,10 +19,14 @@ entre irmaos ficam nos `REQUIRES` dos CMakeLists, sem `path:`.
 | `ErrorCodes` | (transitivo) | `ErrorCode`/`CommonErrorCodes` |
 | `duktape` | `Kernel`, `Runtime` | Duktape 2.7.0 regerado com `celeros_duk_config.yaml` (ES5 enxuto) |
 | `LovyanGFX` | tudo que desenha | submodulo upstream |
+| `esp_littlefs` | `FileSystem` | vendorada full-source (v1.22.3 upstream, sem patch) |
+| `quirc` | `Runtime` (`Camera.scanQR`) | vendorada full-source do upstream (ISC) — ver patch abaixo |
 
 O flash de OTA nao depende de componente: `main/OTA/OtaManager` chama o
 `esp_https_ota` direto (HTTPS com bundle de CAs; HTTP so com o opt-in
-`/local/ota_allow_http.txt`).
+`/local/ota_allow_http.txt`). O driver da camera (`esp32-camera` v2.1.8,
+Apache-2.0) NAO e vendor: entra como managed component com regra
+`target esp32 + sdkconfig CELEROS_JS_CAMERA` (`main/idf_component.yml`).
 
 ## Patches CelerOS (divergem do esp_components)
 
@@ -41,6 +45,15 @@ O flash de OTA nao depende de componente: `main/OTA/OtaManager` chama o
   requisicoes em curso a cada 30s.
 - **`Utility`**: sem `nlohmann/json` (`ListJsonKeys` removido).
 - **`Storage`**: so `NVS.cpp` compila (o resto foi arquivado).
+
+## Patches em codigo de terceiros (vendored)
+
+- **`quirc/lib/quirc.c`** (snapshot master 2026, tag v1.2): o buffer de
+  imagem (w*h bytes: QVGA 76,8KB / VGA 300KB) sai do `calloc` e passa a
+  preferir a PSRAM (`heap_caps_calloc SPIRAM|8BIT`) com fallback para o heap
+  padrao — mesma regra da casa para buffers de video. A struct, os capstones
+  e a pilha de flood-fill seguem na RAM interna (acesso mais rapido pelo
+  classificador). Referencia do truque: ESP32QRCodeReader (alvarowolfx).
 
 ## Arquivo (tag archive/esp_components)
 

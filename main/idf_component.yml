@@ -15,3 +15,14 @@ dependencies:
       - if: "target in [esp32s3]"
         when:
           - if: "sdkconfig in [CELEROS_WAKE_WORD]"
+  # Camera OV2640 da esp32-cam (AI-Thinker): driver oficial. v2.1.4/.5 curaram
+  # o build no IDF 6 (branch CMake >=6.0 + sccb-ng); v2.1.8 e a linha corrente.
+  # So entra no build da placa que liga CELEROS_JS_CAMERA — sem a regra, as
+  # outras boards pagariam ~150-300KB de driver no slot OTA. A dependencia
+  # transitiva esp_jpeg (so usada pelo to_jpg) sai por gc-sections.
+  espressif/esp32-camera:
+    version: "2.1.8"
+    rules:
+      - if: "target in [esp32]"
+        when:
+          - if: "sdkconfig in [CELEROS_JS_CAMERA]"

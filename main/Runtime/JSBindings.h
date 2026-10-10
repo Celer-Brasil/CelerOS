@@ -377,6 +377,16 @@ private:
     static duk_ret_t js_micRecRecording(duk_context *ctx); // Mic.recording()
     static duk_ret_t js_micRecLevel(duk_context *ctx);    // Mic.level()
 #include "sdkconfig.h"
+#if CONFIG_CELEROS_JS_CAMERA
+    // Camera (API 35): OV2640 da esp32-cam — capability "camera" (JsCamera.cpp)
+    static duk_ret_t js_cameraSetup(duk_context *ctx);    // Camera.setup({framesize,pixformat,fbcount,xclkMhz})
+    static duk_ret_t js_cameraCapture(duk_context *ctx);  // Camera.capture() -> {id,w,h,len,format}|null
+    static duk_ret_t js_cameraSave(duk_context *ctx);     // Camera.save(id, path) -> bytes|-1
+    static duk_ret_t js_cameraFree(duk_context *ctx);     // Camera.free(id)
+    static duk_ret_t js_cameraLed(duk_context *ctx);      // Camera.led(bool) — flash do sensor
+    static duk_ret_t js_cameraScanQR(duk_context *ctx);   // Camera.scanQR({timeoutMs,attempts,led}) -> string|null
+    static void cameraAppReset();                         // teardown por app
+#endif
 #if CONFIG_CELEROS_WAKE_WORD
     static duk_ret_t js_wakeStart(duk_context *ctx);      // WakeWord.start()
     static duk_ret_t js_wakeStop(duk_context *ctx);       // WakeWord.stop()

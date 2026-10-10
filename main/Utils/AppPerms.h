@@ -18,12 +18,13 @@ enum AppPerm : uint32_t {
     PERM_GPIO   = 1u << 2,
     PERM_SYSTEM = 1u << 3,   // restart/factoryReset/OTA/web/wifiConnect
     PERM_MIC    = 1u << 4,   // gravacao de microfone (Mic.*, API 19)
+    PERM_CAMERA = 1u << 5,   // captura de camera (Camera.*, API 35)
     PERM_ALL    = 0xFFFFFFFFu,
 };
 
-// "permissions": ["fs","net","gpio","system","mic"] — campo ausente (ou array
-// mal formado) = PERM_ALL (compat; o consentimento do launcher pede as
-// cinco). Array VALIDO sem nenhuma capability conhecida ("[]") = nenhuma:
+// "permissions": ["fs","net","gpio","system","mic","camera"] — campo ausente
+// (ou array mal formado) = PERM_ALL (compat; o consentimento do launcher pede
+// as seis). Array VALIDO sem nenhuma capability conhecida ("[]") = nenhuma:
 // e o que o autor quis dizer — antes virava PERM_ALL.
 inline uint32_t parsePermissions(const std::string& appJson) {
     size_t key = appJson.find("\"permissions\"");
@@ -40,6 +41,7 @@ inline uint32_t parsePermissions(const std::string& appJson) {
     if (arr.find("\"gpio\"") != std::string::npos) m |= PERM_GPIO;
     if (arr.find("\"system\"") != std::string::npos) m |= PERM_SYSTEM;
     if (arr.find("\"mic\"") != std::string::npos) m |= PERM_MIC;
+    if (arr.find("\"camera\"") != std::string::npos) m |= PERM_CAMERA;
     return m;
 }
 

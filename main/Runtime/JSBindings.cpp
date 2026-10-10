@@ -94,6 +94,9 @@ void JSBindings::appExitCleanup() {
 #endif
     netAsyncReset();
     aiReset();
+#if CONFIG_CELEROS_JS_CAMERA
+    cameraAppReset();  // sensor, framebuffers retidos e quirc voltam ao heap
+#endif
     if (s_hwTouched) {
         s_hwTouched = false;
         Backlight::setAuto(s_launchAuto, false);
@@ -909,6 +912,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // heap stash do app que saiu)
     aiReset();
 
+#if CONFIG_CELEROS_JS_CAMERA
+    // Camera de um app anterior: desligada (sensor, slots retidos e quirc)
+    cameraAppReset();
+#endif
+
     // Gravacao de microfone de um app anterior: descartada (nenhum audio
     // atravessa apps; a task morre e o buffer e liberado)
     BoardIO::micRecCancel();
@@ -1424,6 +1432,24 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFnsMic);
     duk_put_prop_string(ctx, -2, "Mic");
     }
+#if CONFIG_CELEROS_JS_CAMERA
+    // --- Camera Object (API 35): OV2640 da esp32-cam — capability "camera".
+    // Objeto so nasce em placa com sensor no perfil E build com o driver
+    // (CELEROS_JS_CAMERA): apps feature-detectam com typeof Camera. ---
+    if (perm(celer::PERM_CAMERA) && Board::profile().camera.present()) {
+    duk_push_object(ctx);  // Camera
+    static const JsFn kFnsCam[] = {
+        {"setup", js_cameraSetup, 1},      // ({framesize,pixformat,fbcount,xclkMhz}) -> bool
+        {"capture", js_cameraCapture, 0},  // () -> {id,w,h,len,format}|null
+        {"save", js_cameraSave, 2},        // (id, path) -> bytes gravados|-1
+        {"free", js_cameraFree, 1},        // (id)
+        {"led", js_cameraLed, 1},          // (bool): LED de flash do sensor
+        {"scanQR", js_cameraScanQR, 1},    // ({timeoutMs,attempts,led}) -> string|null
+    };
+    putFns(ctx, kFnsCam);
+    duk_put_prop_string(ctx, -2, "Camera");
+    }
+#endif
 #if CONFIG_CELEROS_WAKE_WORD
     // Wake word on-device "Hi ESP" (API 20): mesma permissao do mic (ouvir
     // o dono), mesma placa-requisito, e so no build com esp-sr (o cao).

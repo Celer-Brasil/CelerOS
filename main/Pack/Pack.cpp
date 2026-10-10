@@ -148,6 +148,11 @@ void init() {
     if (!bp.headless) caps |= netframe::CAPS_DISPLAY;
     if (bp.servo.count > 0) caps |= netframe::CAPS_MOTORS;
     if (bp.strips.count > 0 || bp.led.r >= 0) caps |= netframe::CAPS_LEDS;
+#if CONFIG_CELEROS_JS_CAMERA
+    // so anuncia camera quando a API existe no build (a placa sem o driver
+    // nao teria como ler o sensor de qualquer jeito)
+    if (bp.camera.present()) caps |= netframe::CAPS_CAMERA;
+#endif
     s_capsBase = caps;
     CelerNet::onMemberEvent(memberCb);
     CelerNet::subscribe(msgHandler);

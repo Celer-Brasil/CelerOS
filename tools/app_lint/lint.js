@@ -66,6 +66,9 @@ const OPTIONAL_ROOTS = {
   CelerNet: 'CelerNet e opcional (so placas com Bluetooth): proteja com typeof CelerNet !== "undefined" antes de usar',
   Pack: 'Pack e opcional (so placas com Bluetooth): proteja com typeof Pack !== "undefined" antes de usar',
   Phone: 'Phone e opcional (so placas com Phone Link, ex.: watch): proteja com typeof Phone !== "undefined" antes de usar',
+  Camera: 'Camera e opcional (so a esp32-cam com a perm "camera"): proteja com typeof Camera !== "undefined" antes de usar',
+  WakeWord: 'WakeWord e opcional (so builds com wake word, ex.: dog): proteja com typeof WakeWord !== "undefined" antes de usar',
+  Mic: 'Mic e opcional (placas com microfone + perm "mic"): proteja com typeof Mic !== "undefined" antes de usar',
 };
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem
@@ -783,7 +786,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
 
 const REQUIRED_FIELDS = ['name', 'packageName', 'version', 'author', 'description'];
 const RESERVED_FIELDS = ['size', 'md5', 'published_at', 'publisher'];
-const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic'];
+const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic', 'camera'];
 const VALID_REQUIRES = ['psram'];
 
 function lintAppJson(dir, manifest) {

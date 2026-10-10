@@ -117,6 +117,16 @@ config CELEROS_JS_GPIO
       pinMode/digitalWrite/digitalRead/analogRead/analogWrite/pulseIn para
       apps JS. Desligado, System.gpio fica undefined (apps podem testar).
 
+config CELEROS_JS_CAMERA
+    bool "API Camera para apps (driver esp32-camera + decodificador quirc)"
+    default n
+    help
+      Camera.setup/capture/save/led/scanQR (API 35) para a placa com sensor
+      (esp32-cam, OV2640). Puxa o componente espressif/esp32-camera (~150-
+      300KB, regra de target+sdkconfig no idf_component.yml) e o quirc
+      vendado (~40-70KB). O objeto Camera so nasce para app com a
+      permission "camera" em placa com pinos de camera no perfil.
+
 config CELEROS_UI
     bool "Pilha de video (LovyanGFX instanciado, Kui, launcher visual, fontes)"
     default y

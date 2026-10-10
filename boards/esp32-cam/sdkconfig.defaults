@@ -12,6 +12,11 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # boards/devkit/sdkconfig.defaults — mesma decisao da rodada esp32-cam).
 # CONFIG_CELEROS_UI is not set
 
+# Camera OV2640 (API 35): puxa o esp32-camera 2.1.8 (managed, regra no
+# main/idf_component.yml) + quirc vendado. Objeto Camera so para apps com
+# a permission "camera".
+CONFIG_CELEROS_JS_CAMERA=y
+
 # Sem vidro, mas o logcat do celerctl segue completo (nao passa por ESP_LOG).
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 # CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set

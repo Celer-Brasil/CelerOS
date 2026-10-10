@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 34
+### Nível de API: 35
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -2681,3 +2681,62 @@ E.dirty.enable(function (x, y, w, h) {
 ```
 
 No mesmo nível o `System.rigidState(id, buf)` aceita o array do quadro anterior e o preenche no lugar (veja a API 33); a `celeros.physics` 2.1 usa isso dentro do `state()`.
+
+## 40. Nível de API 35 — Câmera: `Camera` (fotos e QR na esp32-cam)
+
+O objeto `Camera` só existe em placas com sensor de câmera no perfil (hoje a
+esp32-cam, OV2640) construídas com `CONFIG_CELEROS_JS_CAMERA`, e só para apps
+que declaram a permissão **"camera"**. Feature-detect com
+`typeof Camera !== "undefined"` (ou `System.getInfo().board`).
+
+#### `Camera.setup({framesize, pixformat, fbcount, xclkMhz})`
+Configura o modo foto e liga o sensor. Devolve `true` em caso de sucesso.
+Opções: `framesize` `"qqvga"|"qvga"|"vga"|"svga"|"hd"|"sxga"|"uxga"` (default
+`qvga`; JPEG acima disso agradece PSRAM), `pixformat` `"jpeg"|"gray"|"rgb565"`
+(default `jpeg`), `fbcount` 1-2 (default 2 com PSRAM) e `xclkMhz` 10 ou 20
+(default 20; baixe para 10 se a bancada mostrar ruído no relógio de pixels).
+
+#### `Camera.capture()` -> `{id, w, h, len, format}` | `null`
+Captura um quadro. O buffer é copiado para um slot retido (PSRAM) e a fila do
+driver é liberada na hora — até 2 quadros retidos (`id` 1-2); com os dois
+cheios, o mais antigo é reciclado. `null` = sensor não pronto.
+
+#### `Camera.save(id, path)` -> bytes gravados | `-1`
+Grava o quadro retido `id` em `path` (mesmas regras do `FS.writeFile`:
+atômico no `/local`, direto no SD). O nome do arquivo é seu —
+`/sd/foto.jpg` é o costumeiro.
+
+#### `Camera.free(id)`
+Libera um quadro retido.
+
+#### `Camera.led(on)`
+O LED de flash branco da câmera (GPIO4 na AI-Thinker). Use como lanterna ou
+para iluminar um QR no escuro.
+
+#### `Camera.scanQR({timeoutMs, attempts, led})` -> string | `null`
+Lê códigos QR **no próprio aparelho** (decodificador quirc; o quadro
+grayscale vai direto para o decoder — sem etapa de JPEG). Reconfigura o
+sensor para grayscale QVGA durante a leitura e devolve o modo foto depois
+(a troca custa dezenas de ms, só quando o app mistura fotos e leitura).
+Tenta até decodificar algo, estourar o orçamento de `attempts` (default:
+derivado do `timeoutMs`, uma tentativa ~250 ms) ou o `timeoutMs`
+(default 6000). `led:true` mantém o flash aceso durante a leitura. Devolve o
+texto decodificado ou `null`.
+
+```javascript
+var code = Camera.scanQR({ timeoutMs: 5000, led: true });
+if (code) {
+    // padrao do no-sensor: entrega pro gateway pela malha
+    var gw = Pack.members().filter(function (m) { return m.caps.hub; })[0];
+    if (gw) Pack.send(gw.id, { t: 'qr', code: code }, { urgent: true });
+}
+```
+
+Notas para nós-sensor: `scanQR` renova a janela do exec-timeout a cada
+tentativa, então um loop de leitura é seguro; a malha anuncia
+`caps.camera: true` no `Pack.members()` das placas com câmera (payload da
+API 27), e fotos/resultados de QR cabem no envelope da malha — imagens
+inteiras não (para isso, WiFi).
+
+Placas sem vidro: apps que desenham não rodam no perfil da esp32-cam (ver
+`CELEROS_UI`); a interface de um app de câmera são LEDs, logs e a malha.

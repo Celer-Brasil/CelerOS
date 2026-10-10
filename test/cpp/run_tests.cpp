@@ -76,7 +76,9 @@ static void testPermissions() {
     CHECK(parsePermissions("{\"api\":6,\"permissions\":[\"fs\"],\"topbar\":true}") == PERM_FS);
     // token desconhecido nao concede nada
     CHECK((parsePermissions("{\"permissions\":[\"fs\",\"netfs\"]}") & (PERM_NET | PERM_GPIO | PERM_SYSTEM)) == 0);
-    CHECK(parsePermissions("{\"permissions\":[\"camera\"]}") == 0);
+    // "camera" e perm valida desde a API 35 (Camera.* na esp32-cam)
+    CHECK(parsePermissions("{\"permissions\":[\"camera\"]}") == PERM_CAMERA);
+    CHECK(parsePermissions("{\"permissions\":[\"webcam\"]}") == 0);  // desconhecida segue nao concedendo
 }
 
 // Enxuga em chunks de 3 bytes (estado atravessa a fronteira dos pedacos)

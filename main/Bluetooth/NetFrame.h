@@ -71,6 +71,7 @@ constexpr uint8_t CAPS_DISPLAY = 0x04;  // tem tela (matilha mostra nele)
 constexpr uint8_t CAPS_MOTORS = 0x08;   // se move (patas/motores)
 constexpr uint8_t CAPS_LEDS = 0x10;     // matriz/fitas de LED
 constexpr uint8_t CAPS_HUB = 0x20;      // rede configurada (alcaca o hub)
+constexpr uint8_t CAPS_CAMERA = 0x40;    // sensor de camera (le QR/fotos)
 
 struct Frame {
     uint8_t type = TYPE_DATA;

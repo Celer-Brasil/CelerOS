@@ -69,6 +69,19 @@ struct LedStrips {
     int ledsPerStrip = 0;  // max 8 (RMT sem DMA: 24 simbolos por LED)
 };
 
+// Camera OV2640 no barramento DVP da placa (AI-Thinker ESP32-CAM). pin_xclk
+// < 0 = placa sem camera. O LED de flash do sensor (quando ha) fica aqui
+// para Camera.led()/scanQR({led}) — nao no struct led (e atuator do sensor,
+// nao status da placa). Verificado no bring-up: pinos 34-39 sao input-only.
+struct CameraPins {
+    int pwdn = -1, reset = -1, xclk = -1;
+    int siod = -1, sioc = -1;            // SCCB (I2C do sensor)
+    int y9 = -1, y8 = -1, y7 = -1, y6 = -1, y5 = -1, y4 = -1, y3 = -1, y2 = -1;
+    int vsync = -1, href = -1, pclk = -1;
+    int flashLed = -1;                   // LED de flash branco (GPIO4 na AI-Thinker)
+    bool present() const { return xclk >= 0; }
+};
+
 struct BoardProfile {
     const char* id;          // "smartdisplay_4in" / "cyd"
     const char* otaChannel;  // canal de updates (updates/<canal>/)
@@ -86,6 +99,7 @@ struct BoardProfile {
     ServoPins servo;         // servos da placa (perfil p/ apps de robo); count = 0 = nao ha
     MicI2sPins mic;          // microfone I2S (System.micLevel); ws < 0 = nao ha
     LedStrips strips;        // fitas WS2812 (System.neopixel); count = 0 = nao ha
+    CameraPins camera = {};  // sensor OV2640 (Camera.*, API 35); vazio = nao ha
     int batteryPin = -1;     // divisor de bateria no ADC (System.battery); -1 = nao ha
     int batteryScalePct = 100;  // mV da bateria = mV no pino * scale / 100 (divisor 2:1 = 200)
     int touchPad = -1;       // pad capacitivo avulso (System.touchPad); -1 = nao ha

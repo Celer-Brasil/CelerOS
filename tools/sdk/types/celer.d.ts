@@ -41,6 +41,10 @@ declare const System: {
     bindSprite(enabled: boolean): void;
     useSprite(arg0: number): any;
     spriteSlots(): any;
+    /** desenho de linha vertical acelerado por hardware. Substancialmente mais rápido que `System.fillRect()` para fatias de */
+    drawFastVLine(x: number, y: number, h: number, color: number): void;
+    /** desenho de linha horizontal acelerado por hardware. */
+    drawFastHLine(x: number, y: number, w: number, color: number): void;
     verletNew(iterations?: number, radius?: number): any;
     verletFree(id: string): void;
     verletAddPoint(id: string, x: number, y: number): any;
@@ -54,10 +58,6 @@ declare const System: {
     verletDelStick(id: string, i: number): any;
     verletDelPoint(id: string, idx: number): any;
     verletPins(id: string): any;
-    /** desenho de linha vertical acelerado por hardware. Substancialmente mais rápido que `System.fillRect()` para fatias de */
-    drawFastVLine(x: number, y: number, h: number, color: number): void;
-    /** desenho de linha horizontal acelerado por hardware. */
-    drawFastHLine(x: number, y: number, w: number, color: number): void;
     rigidNew(iterations?: number): any;
     rigidFree(id: string): void;
     rigidBox(id: string, x: number, y: number, w: number, h: number, angle?: number, density?: number, friction?: number, bounce?: number): any;
@@ -182,9 +182,6 @@ declare const System: {
     getAutoBrightness(): any;
     exitApp(): void;
     launchApp(packageName: number): void;
-    setClip(x: number, y: number, w: number, h: number): void;
-    clearClip(): void;
-    setNativeCanvas(enable: number): any;
     present(): void;
     isBuffered(): any;
     wifiStatus(): any;
@@ -205,8 +202,6 @@ declare const System: {
     get24hFormat(): any;
     getNtpEnabled(): any;
     theme(): CelerTheme;
-    /** desenha um ícone 64x64 de /local/icons/<name>.png com mesclagem de alpha (`.bin` legado aceito). */
-    drawIcon(name: string, x: number, y: number): void;
     setScreenTimeout(arg0: number): void;
     screenTimeout(): any;
     setAlarm(arg0: number, arg1: number, arg2?: number): any;
@@ -229,6 +224,11 @@ declare const System: {
     musicPlaying(): any;
     musicPos(): any;
     notify(arg0: number, arg1?: number): void;
+    setClip(x: number, y: number, w: number, h: number): void;
+    clearClip(): void;
+    setNativeCanvas(enable: number): any;
+    /** desenha um ícone 64x64 de /local/icons/<name>.png com mesclagem de alpha (`.bin` legado aceito). */
+    drawIcon(name: string, x: number, y: number): void;
     /** @permission "gpio" */
     led(r?: number, g?: number, b?: number): any;
     /** @permission "gpio" */

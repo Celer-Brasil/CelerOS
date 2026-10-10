@@ -59,7 +59,9 @@ bool start(const std::string& filePath, const std::string& title, bool topbarFix
 
     // O app e dono do touch (le o I2C em System.getTouch) e do vidro
     // (present/drawString): a UI da main task pausa o pump e o redraw.
+#if CONFIG_CELEROS_UI
     kui::Navigator::setInputSuspended(true);
+#endif
     celer_log_println("app iniciado em task propria (celerapp)");
     return true;
 }

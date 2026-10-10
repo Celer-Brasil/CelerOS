@@ -2,19 +2,25 @@
 
 #include <Arduino.h>
 
+#if CONFIG_CELEROS_UI
 #include "../../UI/Kui.h"
+#endif
 #include "../../WebManager/WebManager.h"
 #include "../../Kernel/TimeManager.h"
 #include "../../Kernel/Alarms.h"
 #include "../../Display/Backlight.h"
+#if CONFIG_CELEROS_UI
 #include "../../Display/ScreenCapture.h"
+#endif
 #include "../../Display/ScreenPower.h"
 #include "../../Hardware/Buttons.h"
 #include "../../Hardware/PowerPolicy.h"
 #include "../../Launcher/LauncherUI.h"
+#if CONFIG_CELEROS_UI
 #include "../../Launcher/AlarmScreen.h"
 #include "../../Launcher/WatchPanels.h"
 #include "../../Launcher/NotificationAlert.h"
+#endif
 #include "../../USBDevice/LogPersist.h"
 #include "../../USBDevice/DebugBridge.h"
 #if CONFIG_CELEROS_BLUETOOTH
@@ -31,16 +37,22 @@ void confirmPendingOta();
 
 namespace {
 
+#if CONFIG_CELEROS_UI
 void svcNavigator(bool) { kui::Navigator::tick(); }
+#endif
 void svcWebManager(bool) { WebManager::tick(); }
 void svcTimeManager(bool) { TimeManager::tick(WebManager::isActive()); }
 void svcBacklight(bool) { Backlight::tick(); }
+#if CONFIG_CELEROS_UI
 void svcScreenCapture(bool) { ScreenCapture::service(); }
+#endif
 void svcButtons(bool inApp) { Buttons::tick(inApp); }
 void svcScreenPower(bool inApp) { ScreenPower::tick(inApp); }
 void svcIdleHome(bool) { LauncherUI::idleHomeTick(); }
+#if CONFIG_CELEROS_UI
 void svcAlarmScreen(bool) { AlarmScreen::service(); }
 void svcWatchPanels(bool) { WatchPanels::service(); }
+#endif
 void svcPowerPolicy(bool) { PowerPolicy::tick(); }
 #if CONFIG_CELEROS_PHONE_LINK
 void svcPhoneLink(bool inApp) { PhoneLink::tick(inApp); }
@@ -55,7 +67,9 @@ void svcCelerNet(bool) { CelerNet::tick(); }
 // acabou de receber.
 void svcPack(bool) { Pack::tick(); }
 #endif
+#if CONFIG_CELEROS_UI
 void svcNotificationAlert(bool inApp) { NotificationAlert::service(inApp); }
+#endif
 void svcOtaConfirm(bool) { confirmPendingOta(); }
 // LogPersist (kern.log/apps.log): flush a cada ~3 s — ALWAYS para roda com
 // app aberto (o teste de voz do cao acontece DENTRO do Dog Face)
@@ -82,7 +96,9 @@ void svcAlarmsCheck(bool) {
 // no contexto LOOP (antes era antes do PowerPolicy) — o pedido de
 // acordar/abrir a tela e visto pelo PowerPolicy uma volta depois (~ms).
 const CelerServices::Service kServices[] = {
+#if CONFIG_CELEROS_UI
     {"navigator", svcNavigator, CelerServices::LOOP},
+#endif
     // ALWAYS: se o evictRunningApp esgota os 2 s com o app aberto, o pump
     // LOOP nao volta a rodar — o reboot do upload web drena tambem pelo
     // PRESENT (o corpo do tick e so isso; ver WebManager::tick).
@@ -92,15 +108,19 @@ const CelerServices::Service kServices[] = {
     // congelava tudo (e no watch com home-app o celerLoop nem roda).
     {"timemanager", svcTimeManager, CelerServices::ALWAYS},
     {"backlight", svcBacklight, CelerServices::ALWAYS},
+#if CONFIG_CELEROS_UI
     // present() chama o SEU ScreenCapture depois do corte do AOD
     // (suppressAppFrame): captura durante AOD com app aberto continua
     // sendo servida so quando o vidro acorda — comportamento preservado.
     {"screencapture", svcScreenCapture, CelerServices::LOOP},
+#endif
     {"buttons", svcButtons, CelerServices::ALWAYS},
     {"screenpower", svcScreenPower, CelerServices::ALWAYS},
     {"idlehome", svcIdleHome, CelerServices::LOOP},
+#if CONFIG_CELEROS_UI
     {"alarmscreen", svcAlarmScreen, CelerServices::LOOP},
     {"watchpanels", svcWatchPanels, CelerServices::LOOP},
+#endif
     {"powerpolicy", svcPowerPolicy, CelerServices::ALWAYS},
 #if CONFIG_CELEROS_PHONE_LINK
     {"phonelink", svcPhoneLink, CelerServices::ALWAYS},
@@ -110,7 +130,9 @@ const CelerServices::Service kServices[] = {
     {"celernet", svcCelerNet, CelerServices::ALWAYS},
     {"pack", svcPack, CelerServices::ALWAYS},
 #endif
+#if CONFIG_CELEROS_UI
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
+#endif
     {"otaconfirm", svcOtaConfirm, CelerServices::ALWAYS},
     {"logpersist", svcLogPersist, CelerServices::ALWAYS},
     {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},

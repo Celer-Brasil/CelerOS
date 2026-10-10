@@ -47,6 +47,7 @@ bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
     present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
     *jx = 0;
     *jy = 0;
+#if CONFIG_CELEROS_UI
     if (!tftInstance) return false;
     touched = kui::readTouch(&tx, &ty);
 
@@ -70,6 +71,10 @@ bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
     int offY = s_topbarFixed ? UI::topbarH() : 0;
     *jy = ((int)ty - offY) * 320 / ((int)tftInstance->height() - offY);
     return true;
+#else
+    (void)tx; (void)ty; (void)touched;  // sem vidro: nao ha dedo nem chrome
+    return false;
+#endif
 }
 
 // Returns an object { x, y, touched } 
@@ -144,7 +149,11 @@ void JSBindings::appWait(duk_context *ctx, int ms) {
         while (remain > 0) {
             esp_task_wdt_reset();
             uint32_t slice = remain > 4000 ? 4000 : remain;
+#if CONFIG_CELEROS_UI
             ScreenCapture::serviceDelay(slice);  // espera atendendo a tela no navegador
+#else
+            delay(slice);  // sem vidro: nao ha stream de tela atendendo na espera
+#endif
             remain -= slice;
             checkRemoteAppExit(ctx);  // delay de ate 30s tambem responde ao "exit"
         }
@@ -373,7 +382,11 @@ duk_ret_t JSBindings::js_setting(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_toast(duk_context *ctx) {
     const char* msg = duk_require_string(ctx, 0);
+#if CONFIG_CELEROS_UI
     kui::Navigator::toast(msg);
+#else
+    celer_log_printf("[toast] %s\n", msg);  // sem vidro: o aviso vai pro logcat
+#endif
     return 0;
 }
 

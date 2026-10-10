@@ -21,6 +21,13 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # Devkit nao tem slot SD: FAT/SDSPI saem do binario (bom para o tamanho).
 # CONFIG_CELEROS_SD_CARD is not set
 
+# Sem vidro de verdade (desde a rodada esp32-cam): a pilha de video inteira
+# (LovyanGFX instanciado, Kui, launcher visual, fontes, icones, capturas e as
+# bindings de desenho) sai do build — antes o painel stub pagava tudo isso
+# para descartar os pixels. Economia medida: ver corpo do commit do perfil
+# CELEROS_UI. A interface da placa e o celerctl/web/shell.
+# CONFIG_CELEROS_UI is not set
+
 # Heap para apps JS (piso do Duktape medido na CYD: 20KB deixa folga para
 # apps aninhados; o compile recursivo chega a ~8,5KB de pico).
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480

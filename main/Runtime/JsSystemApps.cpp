@@ -98,6 +98,7 @@ duk_ret_t JSBindings::js_backlightSupported(duk_context *ctx) {
 
 duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
+#if CONFIG_CELEROS_UI
     // Empilha a tela nativa de WiFi. Como o app JS roda sincrono, a tela
     // so entra em cena quando o script devolver o controle ao loop do Kui
     // (o app deve chamar System.exitApp() logo em seguida).
@@ -106,9 +107,15 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     // AppHostScreen::finishApp quando o app sai (task da UI).
     if (AppRunner::running()) AppRunner::requestWifiSetup();
     else kui::Navigator::push(WifiSetupScreen::instance());
+#else
+    // Sem vidro nao ha tela de setup: o caminho headless e o celerctl
+    // (celerctl wifi ...), como no devkit barebone.
+    celer_log_println("[wifi] setup pedido sem vidro: use celerctl wifi");
+#endif
     return 0;
 }
 
+#if CONFIG_CELEROS_UI
 duk_ret_t JSBindings::js_setClip(duk_context *ctx) {
     // Recorte no canvas virtual: desenho fora de (x,y,w,h) e descartado
     const int x = jsx(duk_require_int(ctx, 0)), y = jsy(duk_require_int(ctx, 1));
@@ -131,6 +138,7 @@ duk_ret_t JSBindings::js_clearClip(duk_context *ctx) {
     gfx()->clearClipRect();
     return 0;
 }
+#endif  // CONFIG_CELEROS_UI
 
 duk_ret_t JSBindings::js_present(duk_context *ctx) {
     // Apresentacao explicita do quadro (animacoes/loops sem delay/getTouch)

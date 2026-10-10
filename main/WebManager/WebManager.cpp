@@ -39,8 +39,10 @@ extern const uint8_t filemanager_gz_start[] asm("_binary_filemanager_html_gz_sta
 extern const uint8_t filemanager_gz_end[] asm("_binary_filemanager_html_gz_end");
 extern const uint8_t ota_upload_gz_start[] asm("_binary_ota_upload_html_gz_start");
 extern const uint8_t ota_upload_gz_end[] asm("_binary_ota_upload_html_gz_end");
+#if CONFIG_CELEROS_UI
 extern const uint8_t screen_gz_start[] asm("_binary_screen_html_gz_start");
 extern const uint8_t screen_gz_end[] asm("_binary_screen_html_gz_end");
+#endif
 
 static esp_err_t sendGzipHtml(httpd_req_t* req, const uint8_t* start, const uint8_t* end) {
     httpd_resp_set_type(req, "text/html");
@@ -895,6 +897,7 @@ static esp_err_t handler_upload(httpd_req_t* req) {
 // ---------------------------------------------------------------------------
 // Tela no navegador: /screen (pagina), /api/screen (um quadro RLE), /api/touch
 // ---------------------------------------------------------------------------
+#if CONFIG_CELEROS_UI
 
 static esp_err_t handler_screen_page(httpd_req_t* req) {
     return sendGzipHtml(req, screen_gz_start, screen_gz_end);
@@ -945,6 +948,7 @@ static esp_err_t handler_touch(httpd_req_t* req) {
     httpd_resp_sendstr(req, "ok");
     return ESP_OK;
 }
+#endif  // CONFIG_CELEROS_UI
 
 static esp_err_t handler_update_get(httpd_req_t* req) {
     addCORS(req);
@@ -1000,9 +1004,11 @@ void WebManager::startWebServerIfNeeded() {
         {"/api/upload",   HTTP_POST,   {handler_upload, true}},
         {"/update",       HTTP_GET,    {handler_update_get, false}},
         {"/update",       HTTP_POST,   {handler_update_post, true}},
+#if CONFIG_CELEROS_UI
         {"/screen",       HTTP_GET,    {handler_screen_page, false}},
         {"/api/screen",   HTTP_GET,    {handler_screen_frame, false}},
         {"/api/touch",    HTTP_POST,   {handler_touch, true}},  // injeta toque: exige o header anti-CSRF
+#endif
     };
     for (const auto& r : kRoutes) {
         const httpd_uri_t uri = {r.uri, r.method, routeGuard, (void*)&r.ctx};

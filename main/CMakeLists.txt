@@ -70,6 +70,28 @@ set(CELEROS_SRCS
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
 endif()
+# Perfil sem vidro (CELEROS_UI=n, placas headless): a pilha de video sai do
+# build — Kui, launcher visual, capturas, icones, fontes e as bindings de
+# desenho. O catalogo do LauncherUI (scan/launch/autostart) fica: sem ele o
+# shell/web nao abre app nenhum. LovyanGFX segue no REQUIRES: e header-only
+# e o BoardDisplay stub do devkit deriva dele (o custo real eram as fontes).
+if(NOT CONFIG_CELEROS_UI)
+    list(REMOVE_ITEM CELEROS_SRCS
+        "Assets/Fonts/CelerFonts.cpp"
+        "Display/ScreenCapture.cpp"
+        "Display/Icon.cpp"
+        "UI/Kui.cpp"
+        "UI/Keyboard.cpp"
+        "Settings/TouchCalibrator.cpp"
+        "Launcher/Screens.cpp"
+        "Launcher/AlarmScreen.cpp"
+        "Launcher/WatchPanels.cpp"
+        "Launcher/NotificationAlert.cpp"
+        "Runtime/JsGfx.cpp"
+        "Runtime/JsUi.cpp"
+        "Runtime/JsKeypad.cpp"
+    )
+endif()
 # Aceleradores de jogo (API 33): corpo rigido nativo; o drawSprite vive no
 # JsGfx.cpp atras do mesmo #if
 if(CONFIG_CELEROS_JS_GAME_ACCEL)
@@ -237,7 +259,10 @@ endif()
 idf_build_get_property(python PYTHON)
 set(CELEROS_WEB_PAGES)
 if(CONFIG_CELEROS_WEB_SERVER)
-    set(CELEROS_WEB_PAGES WebManager/filemanager.html WebManager/ota_upload.html WebManager/screen.html)
+    set(CELEROS_WEB_PAGES WebManager/filemanager.html WebManager/ota_upload.html)
+    if(CONFIG_CELEROS_UI)
+        list(APPEND CELEROS_WEB_PAGES WebManager/screen.html)
+    endif()
 endif()
 foreach(page ${CELEROS_WEB_PAGES})
     get_filename_component(page_name ${page} NAME)

@@ -866,6 +866,7 @@ void handleOtaAbort() {
 
 // ---------------------------------------------------------------- screenshot
 
+#if CONFIG_CELEROS_UI
 void handleScreenshot(const uint8_t* payload, uint16_t len) {
     // Pedido: u8 formato opcional (1 = RLE). Resposta: u16 w + u16 h + u8
     // formato; depois chunks KL_SCR_DATA. Cliente antigo nao manda payload e
@@ -892,10 +893,17 @@ void handleScreenshot(const uint8_t* payload, uint16_t len) {
         return true;
     });
 }
+#else
+void handleScreenshot(const uint8_t*, uint16_t) {
+    // Sem vidro nao ha tela para capturar: o cliente recebe o erro claro
+    respondError(KL_SCREENSHOT, "placa sem video");
+}
+#endif
 
 // ------------------------------------------------------------- touch inject
 
 void handleTouch(const uint8_t* payload, uint16_t len) {
+#if CONFIG_CELEROS_UI
     // u8 n + n entradas {u8 down, u16 x, u16 y, u16 delayMs}
     if (len < 1) {
         respondError(KL_TOUCH, "payload vazio");
@@ -920,6 +928,10 @@ void handleTouch(const uint8_t* payload, uint16_t len) {
         return;
     }
     respond(KL_TOUCH, 0);
+#else
+    (void)payload; (void)len;
+    respondError(KL_TOUCH, "placa sem video");
+#endif
 }
 
 

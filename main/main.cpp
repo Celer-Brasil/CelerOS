@@ -14,14 +14,18 @@
 #include "Display/Layout.h"
 #include "Display/Theme.h"
 #include "Display/Backlight.h"
+#if CONFIG_CELEROS_UI
 #include "Display/ScreenCapture.h"
+#endif
 #include "Display/ScreenPower.h"
 #include "Hardware/Buttons.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
+#if CONFIG_CELEROS_UI
 #include "Launcher/AlarmScreen.h"
 #include "Launcher/WatchPanels.h"
 #include "Launcher/NotificationAlert.h"
+#endif
 #include "Hardware/PowerPolicy.h"
 #if CONFIG_CELEROS_PHONE_LINK
 #include "Bluetooth/PhoneLink.h"
@@ -30,14 +34,20 @@
 #include "Kernel/Alarms.h"
 #include "Kernel/Services.h"
 #include "Kernel/DeviceStats.h"
+#if CONFIG_CELEROS_UI
 #include "Settings/TouchCalibrator.h"
+#endif
 #include "WebManager/WebManager.h"
 #include "WebManager/WifiSetupPortal.h"
 #include "Runtime/JSBindings.h"
+#if CONFIG_CELEROS_UI
 #include "Assets/SplashLogo.h"
+#endif
 #include "Kernel/Core/CelerKernel.h"
 #include "Kernel/TimeManager.h"
+#if CONFIG_CELEROS_UI
 #include "Launcher/Screens.h"
+#endif
 #include "USBDevice/SerialLink.h"
 #include "USBDevice/DebugBridge.h"
 #include "Utils/I18n.h"
@@ -54,13 +64,16 @@
 
 int currentState = STATE_LAUNCHER;
 CelerDisplay& tft = Board::display();
+#if CONFIG_CELEROS_UI
 static LauncherScreen s_launcher;  // base da pilha do Navigator
+#endif
 
 // Splash de boot no tema: logo embutida (gerada por tools/make_splash.py) +
 // status + trilho da barra de progresso (a barra e preenchida pelo scan de
 // apps em (sx(20), sy(200), sx(200), sy(10))). O blit usa zoom do design
 // (ex.: 2x no 480x480), entao o asset fica so na resolucao 240.
 static void bootSplash(const char* status) {
+#if CONFIG_CELEROS_UI
     if (Board::profile().headless) {
         (void)status;  // sem vidro: painel stub descartaria tudo — nao gasta o boot
         return;
@@ -75,6 +88,9 @@ static void bootSplash(const char* status) {
     tft.setTextColor(THEME_TEXT_DIM);
     tft.drawString(status, UI::cx(), UI::sy(175), UI::font(1));
     tft.fillRoundRect(UI::sx(20), UI::sy(200), UI::sx(200), UI::sy(10), UI::sy(5), THEME_CARD);
+#else
+    (void)status;  // perfil sem vidro (CELEROS_UI=n): nem fonte/splash existem
+#endif
 }
 
 // RAM interna livre por etapa do boot: o relogio vive com poucos KB depois
@@ -101,11 +117,13 @@ static void celerSetup() {
     ramStage("inicio");
     // Init TFT (HAL da placa)
     Board::init();
+#if CONFIG_CELEROS_UI
     ScreenCapture::init();  // esta task e a dona do display (capturas passam por ela)
+#endif
     tft.setRotation(Board::profile().rotation);
     UI::init(tft.width(), tft.height(), Board::profile().screenInset);
     ESP_LOGI("celer.lcd", "depth=%d rot=%d w=%d h=%d",
-             (int)tft.getColorDepth(), (int)tft.getRotation(), tft.width(), tft.height());
+             (int)tft.getColorDepth(), (int)tft.getRotation(), (int)tft.width(), (int)tft.height());
 
 
     ramStage("display");
@@ -114,9 +132,11 @@ static void celerSetup() {
     // Initialize File Systems (LittleFS & SD)
     if (!FileSystem::init()) {
         celer_log_println("File System Warning: One or more FS failed to mount.");
+#if CONFIG_CELEROS_UI
         tft.setTextColor(THEME_WARN);
         tft.drawString("Aviso: falha ao montar FS", UI::cx(), UI::sy(230), UI::font(1));
         delay(1000);
+#endif
     }
 
     ramStage("fs");
@@ -161,7 +181,9 @@ static void celerSetup() {
     ramStage("kernel");
     // Init UI Components
     LauncherUI::init(&tft);
+#if CONFIG_CELEROS_UI
     TouchCalibrator::init(&tft);
+#endif
 
     // Initial App Scan (barra da splash: LauncherUI::scanLocalApps preenche)
     celer_log_println("DEBUG: Scanning Local Apps...");
@@ -187,6 +209,7 @@ static void celerSetup() {
 
     // Touch resistivo sem calibracao salva: roda o calibrador antes da UI.
     // Placas com touch capacitivo (GT911) pulam a calibracao.
+#if CONFIG_CELEROS_UI
     if (!Board::profile().capacitiveTouch) {
         uint16_t calData[5];
         if (!FileSystem::readCalData(calData)) {
@@ -196,15 +219,20 @@ static void celerSetup() {
             tft.setTouch(calData);
         }
     }
+#endif
 
     // UI nova: launcher e a base da pilha do Navigator
+#if CONFIG_CELEROS_UI
     kui::Navigator::begin(tft);
     WatchPanels::init();  // gestos de borda do relogio (no-op nas outras placas)
+#endif
 #if CONFIG_CELEROS_PHONE_LINK
     PhoneLink::init();    // Gadgetbridge (Bangle.js) no ar se "phone_on"
 #endif
     ramStage("phone");
+#if CONFIG_CELEROS_UI
     kui::Navigator::push(&s_launcher);
+#endif
     currentState = STATE_LAUNCHER;
 
     // Diagnostico pos-boot: reinicio por watchdog de task (app travado) ou
@@ -228,12 +256,18 @@ static void celerSetup() {
         // a mensagem RTC (com o app corrente embutido pelo my_fatal) vai
         // para o lastcrash.txt: o diagnostico sobrevive ao reinicio
         CelerKernel::recordCrash("fatal do runtime (apos reinicio)", fatal);
+#if CONFIG_CELEROS_UI
         kui::Navigator::toast(i18n::TR("Um app ficou sem memória e o sistema reiniciou",
                                        "An app ran out of memory and the system restarted"),
                               THEME_WARN, 4000);
+#endif
     }
     if (rr == ESP_RST_TASK_WDT || rr == ESP_RST_INT_WDT) {
+#if CONFIG_CELEROS_UI
         kui::Navigator::toast(i18n::TR("Um app travou e o sistema reiniciou", "An app froze and the system restarted"), THEME_WARN, 4000);
+#else
+        celer_log_println("reiniciou por watchdog de task/interrupcao (app travado)");
+#endif
     }
     {
         size_t cdAddr = 0, cdSize = 0;
@@ -242,9 +276,13 @@ static void celerSetup() {
         }
     }
     if (FileSystem::localMountFailed()) {
+#if CONFIG_CELEROS_UI
         kui::Navigator::toast(i18n::TR("Armazenamento interno corrompido: recupere pelo USB",
                                        "Internal storage corrupted: recover over USB"),
                               THEME_WARN, 5000);
+#else
+        celer_log_println("AVISO: armazenamento interno corrompido (recupere pelo celerctl)");
+#endif
     }
 
     // Watchdog da main task: inscricao DEPOIS da calibracao (calibrateTouch

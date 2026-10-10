@@ -4,7 +4,9 @@
 #include "../Boards/Board.h"
 #include "../Display/Backlight.h"
 #include "../Display/Display.h"
+#if CONFIG_CELEROS_UI
 #include "../Display/ScreenCapture.h"
+#endif
 #include "../Display/ScreenPower.h"
 #include "../Launcher/LauncherUI.h"
 #include "../UI/Kui.h"
@@ -34,6 +36,7 @@ bool s_inited = false;
 // System.button() le e consome (padrao poll da casa, como raisePoll/pmuKey).
 uint8_t s_btnEvent = 0;
 
+#if CONFIG_CELEROS_UI
 void put16(uint8_t* p, uint16_t v) { p[0] = v & 0xFF; p[1] = v >> 8; }
 void put32(uint8_t* p, uint32_t v) {
     p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF;
@@ -112,6 +115,7 @@ void saveScreenshot() {
     ESP_LOGI("celer.btn", "screenshot: %s", path);
     kui::Navigator::toast(std::string("Screenshot: ") + path, THEME_ACCENT, 2500);
 }
+#endif  // CONFIG_CELEROS_UI
 
 void onShort1(bool inApp) {
     if (Board::profile().buttonToApp && inApp) {
@@ -124,11 +128,17 @@ void onShort1(bool inApp) {
         // Encerramento limpo pelo mecanismo do X da topbar: o app sai no
         // proximo ponto de espera (delay/getTouch) e o launcher volta.
         LauncherUI::requestAppExit();
+#if CONFIG_CELEROS_UI
     } else if (kui::Navigator::depth() <= 1 && LauncherUI::launchHome()) {
         // ja na raiz do launcher: BOOT leva para a casa (watchface no watch;
         // no devkit headless relanca o homeApp — launcher invisivel nao e casa)
     } else {
         kui::Navigator::home();
+#else
+    } else {
+        // sem vidro: launcher invisivel nao e casa — tenta relancar o homeApp
+        LauncherUI::launchHome();
+#endif
     }
 }
 
@@ -141,7 +151,11 @@ void onLong1(bool inApp) {
         // no launcher nao ha o que fazer: sem vidro, screenshot e lixo
         return;
     }
+#if CONFIG_CELEROS_UI
     saveScreenshot();
+#else
+    (void)inApp;
+#endif
 }
 
 void poll(BtnState& b, uint32_t now, void (*onShort)(bool), void (*onLong)(bool), bool inApp) {

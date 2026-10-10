@@ -80,6 +80,7 @@ extern "C" duk_bool_t celer_exec_timeout_check(void* udata) {
 // "toque para voltar" — qualquer toque (fisico ou injetado) fecha. Antes era
 // um fundo vermelho cru com um "X" que so respondia no canto superior.
 // ---------------------------------------------------------------------------
+#if CONFIG_CELEROS_UI
 static void wrapInto(CelerDisplay* tft, const std::string& text, const lgfx::IFont* f, int maxW,
                      std::vector<std::string>& out, size_t maxLines) {
     size_t start = 0;
@@ -164,6 +165,14 @@ static void showRuntimeError(const char* title, const std::string& detail) {
     while (!dismissHeld()) { esp_task_wdt_reset(); delay(20); }
     while (dismissHeld()) { esp_task_wdt_reset(); delay(20); }
 }
+#else
+// Sem vidro (CELEROS_UI=n): o erro do runtime vai para o logcat (kern.log)
+// com uma pausa curta para o log ir a agua abaixo antes do fluxo seguir.
+static void showRuntimeError(const char* title, const std::string& detail) {
+    celer_log_printf("[kernel] %s: %s\n", title, detail.c_str());
+    delay(1200);
+}
+#endif
 
 // dica de OOM no idioma configurado (primeiro uso trava o idioma)
 static const char* oomHint() {
@@ -471,6 +480,7 @@ static void my_fatal(void *udata, const char *msg) {
     // Tela estatica SEM alocacao: o fatal tipico e OOM ("alloc failed") e o
     // heap do sistema pode estar esgotado — std::string aqui era abort()
     // dentro do proprio handler (o device rebootava sem mostrar nada).
+#if CONFIG_CELEROS_UI
     CelerDisplay* tft = CelerKernel::tftInstance;
     if (tft) {
         tft->clearClipRect();
@@ -493,6 +503,7 @@ static void my_fatal(void *udata, const char *msg) {
                         UI::sx(14), hdr + UI::sy(34), kui::type::body());
         tft->endWrite();
     }
+#endif
     delay(2500);
     ESP.restart(); // Reboot when they close it
 }
@@ -579,10 +590,12 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     // Sem PSRAM: o app e dono do vidro — buffer do Canvas (16KB) e caches
     // de icone (~10KB cada) voltam ao heap para o Duktape; o launcher
     // realoca/recarrega sozinho ao voltar
+#if CONFIG_CELEROS_UI
     if (!Board::profile().hasPsram) {
         kui::releaseCanvasBuffer();
         Icon::releaseAll();
     }
+#endif
     // heap que o app pode usar: DRAM + IRAM de transbordo (duk_caps)
     appLaunchFreeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT) + heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT);
 

@@ -166,6 +166,7 @@ void LauncherUI::applyAutostart() {
 }
 
 void LauncherUI::idleHomeTick() {
+#if CONFIG_CELEROS_UI
     // So placas com casa nativa (watch, cao): o launcher ocioso volta para
     // ela — no watch e o que mantem o AOD (so existe com o watchface aberto).
     if (Board::profile().homeApp == nullptr) return;
@@ -185,12 +186,18 @@ void LauncherUI::idleHomeTick() {
     if (now - Backlight::lastActivity() < (uint32_t)s_idleS * 1000UL) return;
     if (!launchHome()) return;
     kui::Navigator::home();  // o app volta para a raiz do launcher ao sair
+#else
+    // Sem vidro o launcher nao existe: voltar a casa e lancar de novo (o
+    // celerctl/shell faz o restart quando precisar).
+#endif
 }
 
 void LauncherUI::scanLocalApps() {
     appCount = 0;
     apps.clear();
+#if CONFIG_CELEROS_UI
     Icon::invalidateFileIcons();  // app reinstalado pode ter trocado a arte
+#endif
 
     const char* appDirs[] = { "/local/apps/", "/sd/apps/" };
 
@@ -205,9 +212,11 @@ void LauncherUI::scanLocalApps() {
         }
 
         for (int i = 0; i < count && appCount < 50; i++) {
+#if CONFIG_CELEROS_UI
             if (tftInstance) {
                 tftInstance->fillRect(UI::sx(20), UI::sy(200), (i * UI::sx(200)) / count, UI::sy(10), THEME_ACCENT);
             }
+#endif
 
             std::string name, pkg, icon;
             bool isFolder = false, system = false, topbar = false;
@@ -276,7 +285,11 @@ void LauncherUI::scanLocalApps() {
 
             // tela pequena: icone reduzido fica pronto no cache em flash
             // (o scan do boot roda com o heap cheio, antes do WiFi)
+#if CONFIG_CELEROS_UI
             Icon::prewarm(icon.c_str());
+#else
+            (void)icon;
+#endif
 
             AppEntry e;
             e.path = entries[i].path;
@@ -294,8 +307,12 @@ void LauncherUI::scanLocalApps() {
     }
 
     if (appCount >= 50) {
+#if CONFIG_CELEROS_UI
         celer_log_println("[launcher] limite de 50 apps atingido: apps excedentes ocultos");
         kui::Navigator::toast("Limite de 50 apps: alguns ficaram ocultos", THEME_WARN);
+#else
+        celer_log_println("[launcher] limite de 50 apps atingido: apps excedentes ocultos");
+#endif
     }
 
     // Consentimento chegou com este firmware: o que ja estava instalado no

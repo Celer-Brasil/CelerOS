@@ -117,6 +117,19 @@ config CELEROS_JS_GPIO
       pinMode/digitalWrite/digitalRead/analogRead/analogWrite/pulseIn para
       apps JS. Desligado, System.gpio fica undefined (apps podem testar).
 
+config CELEROS_UI
+    bool "Pilha de video (LovyanGFX instanciado, Kui, launcher visual, fontes)"
+    default y
+    help
+      Placas SEM vidro (devkit, esp32-cam) desligam: sai do build o Kui, o
+      launcher visual (LauncherScreen/AlarmScreen/WatchPanels/Notification
+      Alert), ScreenCapture, Icon, Keyboard/TouchCalibrator, CelerFonts e as
+      bindings de desenho de app (System.draw*/sprites/UI/Keypad/prompt —
+      apps testam com typeof/getInfo().hasDisplay). Economiza ~350 KB de
+      flash no alvo 4MB (o devkit pagava a pilha inteira para desenhar num
+      painel stub que jogava tudo fora). O catalogo de apps (scan/launch/
+      autostart) e o shell seguem de pe: a interface e o celerctl/web.
+
 config CELEROS_SMARTDISPLAY_RELAYS
     int "Reles da SmartDisplay 4848S040 (variante Y, 0-3)"
     range 0 3

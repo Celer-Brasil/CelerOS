@@ -66,6 +66,7 @@ bool watchfaceApp() {
 
 // AOD 1x por minuto com deslocamento anti burn-in (porte do render_aod do
 // Rust: shift x = min%9-4, y = (min/9)%9-4 percorre a grade 9x9 em ~81 min).
+#if CONFIG_CELEROS_UI
 void drawAod() {
     if (s_tft == nullptr) return;
     time_t now;
@@ -125,6 +126,11 @@ void drawAod() {
                           s_tft->height() / 2 + 50 + shiftY, 2);
     }
 }
+#else
+// Sem vidro (CELEROS_UI=n) nao ha AOD: o ScreenPower se resume ao bipe das
+// notificacoes e a escada de estados (que ninguem consulta). Nao puxa fontes.
+void drawAod() {}
+#endif
 
 void enterGlance(uint32_t now) {
     const BoardProfile& bp = Board::profile();
@@ -196,7 +202,9 @@ void tick(bool inApp) {
                 Backlight::noteActivity();
             } else if (r == 3) {
                 ESP_LOGW("celer.screen", "wake do ULP: bateria fraca");
+#if CONFIG_CELEROS_UI
                 kui::Navigator::toast(i18n::TR("Bateria fraca", "Low battery"), THEME_WARN, 4000);
+#endif
             }
         }
     }

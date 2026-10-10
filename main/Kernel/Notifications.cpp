@@ -123,11 +123,16 @@ void push(const std::string& title, const std::string& msg, const std::string& s
     // fica o toast de sempre.
     if (quiet) return;
     ScreenPower::beep();
+#if CONFIG_CELEROS_UI
     if (ScreenPower::active()) {
         NotificationAlert::request();
     } else {
         kui::Navigator::toast(shown, THEME_ACCENT, 3000);  // fila cross-task
     }
+#else
+    // Sem vidro: o aviso do push e o bipe + logcat
+    celer_log_printf("[notif] %s\n", shown.c_str());
+#endif
 }
 
 std::vector<Note> list() {

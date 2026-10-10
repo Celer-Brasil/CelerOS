@@ -84,7 +84,9 @@ void JSBindings::appExitCleanup() {
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();
 #endif
+#if CONFIG_CELEROS_UI
     deleteAllSprites();
+#endif
     netAsyncReset();
     aiReset();
     if (s_hwTouched) {
@@ -139,6 +141,7 @@ static int s_tbHotOnGlass = -2;                // hot state ja composto (-2 = na
 static std::string s_bannerText;
 static uint32_t s_bannerUntil = 0;
 static const uint32_t BANNER_MS = 8000;
+#if CONFIG_CELEROS_UI
 static bool bannerActive() { return !s_bannerText.empty(); }
 
 // expira a faixa retratil; true se ela acabou de sair
@@ -151,6 +154,7 @@ static bool retractTick() {
     }
     return false;
 }
+#endif  // CONFIG_CELEROS_UI
 
 // Escala vertical do canvas JS: no modo fixo a topbar fica FORA do canvas (o
 // app desenha em 240x320 mapeado na area abaixo da faixa); no retratil o app
@@ -186,6 +190,7 @@ static bool s_frameSuppressed = false;  // AOD/off: vidro mostrou outra coisa
 // Topbar no estilo da barra que o Terminal desenhava: card, linha de stroke,
 // titulo a esquerda e X a direita. hot (dedo sobre o X) clareia o traco e
 // acende a pastilha — feedback antes de soltar.
+#if CONFIG_CELEROS_UI
 static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot);
 
 // Tira o ultimo CARACTERE (UTF-8): pop_back puro deixava o byte inicial de
@@ -407,6 +412,7 @@ bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
     s_exitArmed = false;
     return fire;
 }
+#endif  // CONFIG_CELEROS_UI
 
 CelerSprite* JSBindings::tftSprite = nullptr;
 bool JSBindings::useSprite = false;
@@ -503,6 +509,7 @@ void JSBindings::present() {
         // conectado depois do lancamento; attacha com a versao dele ja no buffer
         JsDebugger::maybeAttach(s_jsCtx);
     }
+#if CONFIG_CELEROS_UI
     if (tftInstance == nullptr) return;
     // Servicos do OS (Backlight, Buttons, ScreenPower, PowerPolicy,
     // PhoneLink, alerta de notificacao, confirmacao de OTA, alarmes 1x/s):
@@ -589,11 +596,19 @@ void JSBindings::present() {
         s_barHotOnGlass = wantBar && s_exitArmed;
         s_tbHotOnGlass = s_tbHotBtn;
     }
+#else
+    // Sem vidro (CELEROS_UI=n): o present segue sendo o ponto de cedida
+    // universal — WDT, janela do exec-timeout, timers/AI/debugger acima e
+    // os servicos ALWAYS do OS aqui (buttons, screenpower, web upload/OTA
+    // push, logpersist, debug bridge). Nao ha quadro para levar ao vidro.
+    CelerServices::tickPresent();
+#endif
 }
 
 // =====================================================
 // Topbar custom (API level 6) — texto e chips da faixa
 // =====================================================
+#if CONFIG_CELEROS_UI
 
 duk_ret_t JSBindings::js_topbarText(duk_context *ctx) {
     const char *t = duk_require_string(ctx, 0);
@@ -673,6 +688,7 @@ duk_ret_t JSBindings::js_fontHeight(duk_context *ctx) {
     duk_push_int(ctx, (int)(h / appScaleY()));
     return 1;
 }
+#endif  // CONFIG_CELEROS_UI
 
 duk_ret_t JSBindings::js_theme(duk_context *ctx) {
     // Cores do tema do OS ja em RGB565 (espaco de cor do JS) — os apps de
@@ -698,6 +714,7 @@ duk_ret_t JSBindings::js_theme(duk_context *ctx) {
     return 1;
 }
 
+#if CONFIG_CELEROS_UI
 duk_ret_t JSBindings::js_drawIcon(duk_context *ctx) {
     if (!tftInstance) return 0;
     const char* name = duk_require_string(ctx, 0);
@@ -728,6 +745,7 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
                                             appScaleY()));
     return 1;
 }
+#endif  // CONFIG_CELEROS_UI
 duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* from = duk_require_string(ctx, 0);
@@ -855,7 +873,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // Estado grafico limpo por app: sprites de um app anterior (que saiu
     // sem deleteSprite) vazavam e ainda capturavam o desenho do proximo.
+#if CONFIG_CELEROS_UI
     deleteAllSprites();
+#endif
     timersResetAll();
     jsPhysicsReset();  // mundos verlet nativos (malloc incluso)
 #if CONFIG_CELEROS_JS_GAME_ACCEL
@@ -863,7 +883,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #endif
 
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
+#if CONFIG_CELEROS_UI
     keypadCloseSession();
+#endif
 
     // Evento de botao fisico pendente de um app anterior nao atravessa
     // (placas buttonToApp: o longo que encerrou o app anterior ficaria aqui)
@@ -892,7 +914,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #endif
 
     // Toolkit UI (API 22): slots/toque/fundo do app anterior nao atravessam
+#if CONFIG_CELEROS_UI
     uiReset();
+#endif
 
     // Topbar limpa: sem faixa/hot/gesto/conteudo custom herdados do app anterior
     s_exitArmed = false;
@@ -911,6 +935,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_bannerText.clear();
 
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
+#if CONFIG_CELEROS_UI
     if (s_frame == nullptr && Board::profile().hasPsram) {
         s_frame = new FrameSprite(tft);
         s_frame->setSwapBytes(true);  // mesma convencao do display (icones, readRect)
@@ -926,6 +951,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         s_frame->setTextDatum(TL_DATUM);
         s_frame->clearClipRect();
     }
+#endif
     tft->clearClipRect();
     s_sysClipTop = 0;
     s_appClipOn = false;
@@ -967,7 +993,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #endif
 
     // --- Drawing Primitives ---
-
+#if CONFIG_CELEROS_UI
     static const JsFn kFns2[] = {
         {"createSprite", js_createSprite, 2},
         {"deleteSprite", js_deleteSprite, 1},
@@ -975,8 +1001,16 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"bindSprite", js_bindSprite, 1},
         {"useSprite", js_useSprite, 1},
         {"spriteSlots", js_spriteSlots, 0},  // limite do pool (API 29)
-        // Verlet nativo (API 31): a dep celeros.physics feature-detecta e
-        // expoe P.verletFast; em firmware velho o P.verlet JS segue valendo
+        {"drawFastVLine", js_drawFastVLine, 4},
+        {"drawFastHLine", js_drawFastHLine, 4},
+    };
+    putFns(ctx, kFns2);
+#endif
+
+    // Verlet nativo (API 31): a dep celeros.physics feature-detecta e expoe
+    // P.verletFast; em firmware velho o P.verlet JS segue valendo. Nao e
+    // desenho: fica no build sem vidro (CELEROS_UI=n).
+    static const JsFn kFnsVerlet[] = {
         {"verletNew", js_verletNew, 2},
         {"verletFree", js_verletFree, 1},
         {"verletAddPoint", js_verletAddPoint, 3},
@@ -990,10 +1024,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"verletDelStick", js_verletDelStick, 2},
         {"verletDelPoint", js_verletDelPoint, 2},
         {"verletPins", js_verletPins, 1},
-        {"drawFastVLine", js_drawFastVLine, 4},
-        {"drawFastHLine", js_drawFastHLine, 4},
     };
-    putFns(ctx, kFns2);
+    putFns(ctx, kFnsVerlet);
 
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     // Aceleradores de jogo (API 33, placas S3): corpo rigido nativo (a dep
@@ -1016,6 +1048,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFnsAccel);
 #endif
 
+#if CONFIG_CELEROS_UI
     static const JsFn kFns3[] = {
         {"fillScreen", js_fillScreen, 1},
         {"fillRect", js_fillRect, 5},
@@ -1037,7 +1070,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"mixColor", js_mixColor, 3},
     };
     putFns(ctx, kFns3);
-    
+
     static const JsFn kFns4[] = {
         {"drawBMP", js_drawBMP, 3},
         {"drawPNG", js_drawPNG, 3},
@@ -1062,6 +1095,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"screenHeight", js_screenHeight, 0},
     };
     putFns(ctx, kFns6);
+#endif  // CONFIG_CELEROS_UI
 
     // --- Touch Input ---
     static const JsFn kFns7[] = {
@@ -1112,6 +1146,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFns12);
 
     // --- Keyboard ---
+#if CONFIG_CELEROS_UI
     static const JsFn kFns13[] = {
         {"prompt", js_prompt, 3},  // (msg, initial, {mask}) — opts e API level 7
     };
@@ -1135,6 +1170,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"topbarPop", js_topbarPop, 0},
     };
     putFns(ctx, kFns15);
+#endif  // CONFIG_CELEROS_UI
 
     // --- System nivel 3 (apps de sistema em JS) ---
     static const JsFn kFns16[] = {
@@ -1147,9 +1183,6 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"getAutoBrightness", js_getAutoBrightness, 0},
         {"exitApp", js_exitApp, 0},
         {"launchApp", js_launchApp, 1},  // API 16: abre outro app e sai
-        {"setClip", js_setClip, 4},
-        {"clearClip", js_clearClip, 0},
-        {"setNativeCanvas", js_setNativeCanvas, 1},  // API 28: pixels fisicos
         {"present", js_present, 0},
         {"isBuffered", js_isBuffered, 0},
         {"wifiStatus", js_wifiStatus, 0},
@@ -1167,7 +1200,6 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"get24hFormat", js_get24hFormat, 0},
         {"getNtpEnabled", js_getNtpEnabled, 0},
         {"theme", js_theme, 0},
-        {"drawIcon", js_drawIcon, 3},
         {"setScreenTimeout", js_setScreenTimeout, 1},
         {"screenTimeout", js_screenTimeout, 0},
         {"setAlarm", js_setAlarm, 3},
@@ -1191,6 +1223,17 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"notify", js_notify, 2},
     };
     putFns(ctx, kFns16);
+
+#if CONFIG_CELEROS_UI
+    // Desenho/canvas do app (só com vidro): recorte, pixels físicos, icone
+    static const JsFn kFns16ui[] = {
+        {"setClip", js_setClip, 4},
+        {"clearClip", js_clearClip, 0},
+        {"setNativeCanvas", js_setNativeCanvas, 1},  // API 28: pixels fisicos
+        {"drawIcon", js_drawIcon, 3},
+    };
+    putFns(ctx, kFns16ui);
+#endif
 
     // Hardware EXTERNO ligado a pinos: capability "gpio" (a mesma dos
     // servos/digitalWrite). Nas SKUs "Y" o relay comuta rede eletrica —
@@ -1288,6 +1331,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFnsSensors);
     duk_put_prop_string(ctx, -2, "Sensors");
 
+#if CONFIG_CELEROS_UI
     // UI (API 22): toolkit imediato com o visual do Kui (JsUi.cpp)
     duk_push_object(ctx);  // UI
     static const JsFn kFnsUi[] = {
@@ -1320,6 +1364,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     putFns(ctx, kFnsUi);
     duk_put_prop_string(ctx, -2, "UI");
+#endif  // CONFIG_CELEROS_UI
 
     // --- Net Object (HTTP para apps, API level 2) — capability "net" (F4) ---
     if (perm(celer::PERM_NET)) {

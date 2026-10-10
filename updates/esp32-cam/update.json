@@ -1,0 +1,9 @@
+{
+  "version": "0.0.1",
+  "api_version": 34,
+  "major_update": false,
+  "minor_update": false,
+  "security_update": false,
+  "changelog": "CelerOS: canal de updates da ESP32-CAM (AI-Thinker ESP32-S: camera OV2640 + microSD, sem display; perfil headless com CelerNet). Este manifest e espelho legado; o dispositivo consulta o hub (os.celer.tec.br/updates). Publicacao via tools/publish_firmware.py no repo CelerOS-Server.",
+  "guide": "Updates install directly on the device: use the web file manager Firmware Update page, or `celerctl ota push` over the serial console."
+}

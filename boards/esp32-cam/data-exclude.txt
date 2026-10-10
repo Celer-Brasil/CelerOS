@@ -1,0 +1,20 @@
+# Apps/conteudo de data/ que NAO vao para o LittleFS da esp32-cam
+# (tools/flash_data.sh). Um caminho por linha, relativo a data/.
+# Perfil CELEROS_UI=n: as bindings de desenho nao existem no firmware —
+# apps que desenham (grade, teclado, icones) quebrariam no 1o draw. A fabrica
+# leva so o Barebone (referencia headless/autostart); os apps da rodada da
+# camera (sensor, barcode, retransmissao) vem pelo SD ou pelo celerctl.
+apps/App Store
+apps/Settings
+apps/Snake
+apps/Touch Test
+apps/Watchface
+apps/Web Server
+apps/Terminal
+apps/Installer
+apps/Help
+apps/Qwen
+apps/Chat IA
+apps/Matilha
+# Sem launcher visual nao ha grade: os 204KB de icones nao servem de nada.
+icons

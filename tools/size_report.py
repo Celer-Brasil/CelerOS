@@ -26,6 +26,7 @@ BOARDS = {
     "spotpear-dog": {"build": "build-dog", "csv": "partitions_16MB.csv"},
     "waveshare-watch": {"build": "build-watch", "csv": "partitions_32MB.csv"},
     "devkit": {"build": "build-devkit", "csv": "partitions_4MB.csv"},
+    "esp32-cam": {"build": "build-esp32-cam", "csv": "partitions_4MB_cam.csv"},
 }
 
 

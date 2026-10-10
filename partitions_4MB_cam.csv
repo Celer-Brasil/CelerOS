@@ -1,0 +1,16 @@
+# CelerOS — ESP32-CAM 4MB (apps no SD, /local enxuto)
+#
+# Diferenca vs partitions_4MB.csv (cyd/cyd-vspi/devkit): o cartao SD e a casa
+# dos apps e modulos desta placa, entao o littlefs cai de 0xC0000 (768KB)
+# para 0x40000 (256KB — logs, ota_url.txt, autostart.txt, poucos modulos) e
+# cada slot OTA sobe de 0x190000 (1.5625MB) para 0x1D0000 (1.8125MB): e ai
+# que cabem NimBLE (~250-300KB) e, na sequencia, o driver da camera.
+# nvs/otadata/coredump identicos as outras 4MB (diagnostico de placa sem
+# vidro vive do coredump + logcat).
+# Name,   Type, SubType,  Offset,  Size,     Flags
+nvs,      data, nvs,      0x9000,  0x5000,
+otadata,  data, ota,      0xe000,  0x2000,
+app0,     app,  ota_0,    0x10000, 0x1D0000,
+app1,     app,  ota_1,    0x1E0000,0x1D0000,
+littlefs, data, spiffs,   0x3B0000,0x40000,
+coredump, data, coredump, 0x3F0000,0x10000,

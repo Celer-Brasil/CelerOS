@@ -70,6 +70,8 @@ jobs:
             target: esp32s3
           - board: devkit
             target: esp32
+          - board: esp32-cam
+            target: esp32
     container:
       # PINADO: a tag release-v6.1 flutua (snapshot do dia) e uma build nova
       # do IDF 6.1 removeu os dac_ll_* que o LovyanGFX 1.2.30 usa no

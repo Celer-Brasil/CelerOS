@@ -5,7 +5,7 @@
 **Branch:** main
 
 ## OVERVIEW
-CelerOS: an ESP-IDF (C++) firmware OS for ESP32 devices (6 boards, from the headless 4MB devkit to a 32MB AMOLED smartwatch; most have touch displays). It has a LovyanGFX UI, runs user apps in Duktape JS (ES5) from LittleFS or SD, talks to Android via Gadgetbridge (Phone Link), and updates over the air from the hub `https://os.celer.tec.br`.
+CelerOS: an ESP-IDF (C++) firmware OS for ESP32 devices (7 boards, from the headless 4MB devkit and the camera-node esp32-cam to a 32MB AMOLED smartwatch; most have touch displays). It has a LovyanGFX UI, runs user apps in Duktape JS (ES5) from LittleFS or SD, talks to Android via Gadgetbridge (Phone Link), and updates over the air from the hub `https://os.celer.tec.br`.
 
 ## STRUCTURE
 ```
@@ -32,7 +32,7 @@ CelerOS/
 | Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 34) |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
-| Boards, adding a board, per-board data image | `boards/AGENTS.md` | 6 boards |
+| Boards, adding a board, per-board data image | `boards/AGENTS.md` | 7 boards |
 | Test suites and what CI runs | `test/AGENTS.md` | |
 | Wiki pages | `wiki/AGENTS.md` | CI publishes; never edit on the web |
 | Firmware size / what costs flash | `python3 tools/size_report.py` | CYD OTA slot is the binding constraint |
@@ -74,7 +74,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 ## CONVENTIONS
 - Board selected via CMake cache `-DCELEROS_BOARD=smartdisplay|cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit` (default smartdisplay; any other value is FATAL_ERROR). See `boards/AGENTS.md` for the differences.
 - Version lives in TWO places: root `CMakeLists.txt` `project(CelerOS VERSION x)` and `main/CMakeLists.txt` `CELEROS_VERSION`. Keep them in sync.
-- Subsystems compile out per board via Kconfig (the dormant remainder of the old shared `esp_components` lib left the tree in 2026-10; git tag `archive/esp_components` keeps it): `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_BLUETOOTH`, `CELEROS_PHONE_LINK` (watch), `CELEROS_USB_NATIVE` (watch), `CELEROS_LINK_ON_USJ` (dog).
+- Subsystems compile out per board via Kconfig (the dormant remainder of the old shared `esp_components` lib left the tree in 2026-10; git tag `archive/esp_components` keeps it): `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_BLUETOOTH`, `CELEROS_PHONE_LINK` (watch), `CELEROS_USB_NATIVE` (watch), `CELEROS_LINK_ON_USJ` (dog), `CELEROS_UI` (off on headless boards — devkit, esp32-cam — the whole display stack leaves the binary).
 - Built with `-fno-exceptions` and an ES5-lean Duktape (`components/duktape/celeros_duk_config.yaml`) whose builtins live in ROM (base heap ~8KB); JS bindings are lightfuncs. A `std::string`/`new` that cannot grow **aborts** the device: on the no-PSRAM path use malloc/realloc (see `HttpClient::setBodySink`, `CelerKernel` source loader).
 - CYD runs **unicore** with `CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY`: the free IRAM holds the app source during compile, the TLS buffers, and Duktape overflow past a 24KB DRAM reserve. Tasks must not be pinned to core 1 (use `portNUM_PROCESSORS - 1`).
 - The littlefs partition has CSV subtype `spiffs` but is mounted as LittleFS at `/local`. The SD card is at `/sd`. Boards may overlay (`boards/<b>/data/`) or exclude (`data-exclude.txt`) apps from the factory image — see `tools/flash_data.sh`.
@@ -122,7 +122,7 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 - **SECURITY:** the Supabase service_role key was removed from the tree AND purged from the whole git history with `git filter-repo` + force-push (2026-10-01; every commit hash changed). ROTATION in the Supabase dashboard is STILL MANDATORY: the old history remains reachable through old clones, forks and GitHub's PR refs (`refs/pull/1/head`). Its last local copy (`extras/esp_components/config/config/supabase_config.h`, gitignored, never committed) was deleted together with the `extras/` removal (2026-10-05).
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
 - **SmartDisplay screen shaking/scrambling**: read `boards/AGENTS.md` "SMARTDISPLAY RGB PANEL" first (display init pinned to core 1, never the 64 B data cache line, `lcddma` shell diagnostic). The fix took a day of bench time.
-- CI: `build.yml` (tests above + firmware for all 6 boards with an OTA-slot size gate; hardware validation is manual), `wiki.yml` (publishes the wiki from `wiki/`), `release.yml` (tag `v*` -> factory zips + Flasher).
+- CI: `build.yml` (tests above + firmware for all 7 boards with an OTA-slot size gate; hardware validation is manual), `wiki.yml` (publishes the wiki from `wiki/`), `release.yml` (tag `v*` -> factory zips + Flasher).
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 - `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated). `python3 tools/sdkconfig_check.py` lists every bench build dir whose sdkconfig drifted from its board's defaults (in 2026-10 the watch and dog bench builds still ran a 32 KB main stack the defaults had cut to 24 KB). `dependencies.lock` flip-flops with the last-built target; don't commit build churn of it.
 - OTA: device reads update.json v2 (`version`, `api_version`, `firmware_url`, `changelog`) from the hub, or from the URL in `/local/ota_url.txt` when set. The web UI `/update` also accepts uploads.

@@ -3,7 +3,7 @@
 ## OVERVIEW
 One directory per board holding its `sdkconfig.defaults`. Board code itself lives in `main/Boards/<board>/` (Board.cpp, BoardDisplay.h, BoardTraits.h — exactly one is compiled in); this tree is only configuration plus, on the watch, the factory-image overlay. The `-DCELEROS_BOARD=<b>` CMake cache variable selects the board (validated in `main/CMakeLists.txt`; anything else is FATAL_ERROR).
 
-## THE SIX BOARDS
+## THE SEVEN BOARDS
 | Board | Chip / flash / RAM | Display & touch | Partitions | Notes |
 |-------|--------------------|-----------------|------------|-------|
 | `smartdisplay` | ESP32-S3 N16R8, 16MB QIO, PSRAM octal | Guition 4848S040 480x480 capacitive GT911 | `partitions_16MB.csv` | Default board. **Never** `CELEROS_USB_NATIVE` here (GPIO19/20 = touch I2C + RGB lane). Optional relay header (`CELEROS_SMARTDISPLAY_RELAYS`) |
@@ -11,7 +11,8 @@ One directory per board holding its `sdkconfig.defaults`. Board code itself live
 | `cyd-vspi` | ESP32 classic, 4MB, no PSRAM | CYD variant, display on VSPI — **UNTESTED** (see `main/Boards/cyd-vspi/BoardDisplay.h`) | `partitions_4MB.csv` | Same budget rules as `cyd`; exists to validate the variant in CI |
 | `spotpear-dog` | ESP32-S3R8, 16MB DIO, PSRAM octal | SpotBear/ZZPET robot (no main display use) | `partitions_16MB.csv` | Derived from smartdisplay. Console+celerctl on the USB-Serial/JTAG (`CELEROS_LINK_ON_USJ`, the only USB connector). Home app = Dog Face |
 | `waveshare-watch` | ESP32-S3R8, 32MB DIO, PSRAM octal | Waveshare AMOLED 2.06" 410x502 round-ish, FT3168 capacitive | `partitions_32MB.csv` | The smartwatch. Native USB dual CDC (`CELEROS_USB_NATIVE`, CDC_COUNT=2), NimBLE (Celer Link + Phone Link/Gadgetbridge), PM/light-sleep (`PowerPolicy`), RTC PCF85063 + AXP2101 + QMI8658 IMU, `screenInset` for the rounded glass |
-| `devkit` | ESP32 classic, 4MB, no PSRAM | **None** — stub panel that discards rendering (`main/Boards/devkit/BoardDisplay.h`); BOOT button (GPIO0) + single-channel LED (GPIO2) | `partitions_4MB.csv` | The barebone profile: `headless` (splash skipped, `getInfo().hasDisplay=false`/`shape:"headless"`) + `buttonToApp` (BOOT is app input via `System.button`, long = exit, launcher short relaunches homeApp). Same RAM/OTA budget as `cyd`; WiFi provisioned by the `wifi` shell command; factory image drops display apps via `data-exclude.txt` |
+| `devkit` | ESP32 classic, 4MB, no PSRAM | **None** — stub panel that discards rendering (`main/Boards/devkit/BoardDisplay.h`); BOOT button (GPIO0) + single-channel LED (GPIO2) | `partitions_4MB.csv` | The barebone profile: `headless` (splash skipped, `getInfo().hasDisplay=false`/`shape:"headless"`) + `buttonToApp` (BOOT is app input via `System.button`, long = exit, launcher short relaunches homeApp). First board on `CELEROS_UI=n` (the whole display stack leaves the binary). Same RAM budget as `cyd`; WiFi provisioned by the `wifi` shell command; factory image drops display apps via `data-exclude.txt` |
+| `esp32-cam` | ESP32-S (classic) AI-Thinker, 4MB DIO, PSRAM quad 4MB | **None** — the "glass" is the OV2640 sensor | `partitions_4MB_cam.csv` | Camera node: `headless`, `CELEROS_UI=n`, NimBLE (CelerNet mesh), microSD by SDSPI (CLK14/CMD15/D0-2/CS13 — apps live on the SD, hence the small littlefs/1.81MB slots). Bench: brownout is failure #1 (sturdy 5V supply); flash mode = GPIO0 to GND at reset; GPIO12 is the MTD strap (never an output); GPIO16/17 belong to the PSRAM |
 
 ## PER-BOARD FACTORY IMAGE
 `tools/flash_data.sh <board>` stages `data/` and then:

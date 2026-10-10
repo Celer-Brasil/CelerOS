@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gera a imagem LittleFS de data/ e grava na particao "littlefs".
-# Uso: tools/flash_data.sh [smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit] [PORTA]
+# Uso: tools/flash_data.sh [smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit|esp32-cam] [PORTA]
 # (PORTA default: /dev/ttyACM0 no spotpear-dog/waveshare-watch, /dev/ttyUSB0 nas outras)
 # Requer ambiente ESP-IDF exportado (parttool via python do IDF).
 set -euo pipefail
@@ -25,8 +25,9 @@ echo "placa: $BOARD  porta: $PORT"
 case "$BOARD" in
   smartdisplay|spotpear-dog) PART_CSV="partitions_16MB.csv" ;;
   cyd|devkit)   PART_CSV="partitions_4MB.csv" ;;
+  esp32-cam)    PART_CSV="partitions_4MB_cam.csv" ;;
   waveshare-watch) PART_CSV="partitions_32MB.csv" ;;
-  *) echo "board invalida: $BOARD (smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit)"; exit 1 ;;
+  *) echo "board invalida: $BOARD (smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit|esp32-cam)"; exit 1 ;;
 esac
 
 # Tamanho vem do proprio CSV (fonte unica, sem duplicar valor aqui)

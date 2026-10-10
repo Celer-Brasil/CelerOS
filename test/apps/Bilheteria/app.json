@@ -1,0 +1,13 @@
+{
+  "name": "Bilheteria",
+  "packageName": "test.bilheteria",
+  "version": "0.1.0",
+  "author": "CelerOS",
+  "description": "Gateway da malha: valida tickets QR vindos dos nos-sensor (regra local; API real entra no futuro)",
+  "type": "App",
+  "category": "Utility",
+  "api": 35,
+  "permissions": [],
+  "topbar": true,
+  "changelog": "Demo do modulo de camera na CelerNet: recebe {t:'qr'} por Pack, valida por regra local (formato CEL-xxxxxx + anti-reuso em Storage) e responde {t:'ok'} ao no. A URL da API real entra no validate() no futuro."
+}

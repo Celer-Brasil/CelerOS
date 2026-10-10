@@ -1,0 +1,13 @@
+{
+  "name": "QrNode",
+  "packageName": "test.qrnode",
+  "version": "0.1.0",
+  "author": "CelerOS",
+  "description": "No-sensor de QR na esp32-cam: le o codigo e entrega ao gateway da malha (caps.hub) para validar",
+  "type": "App",
+  "category": "Utility",
+  "api": 35,
+  "permissions": ["camera", "fs"],
+  "topbar": false,
+  "changelog": "Demo do modulo de camera na CelerNet: scanQR on-device + Pack.send urgente para o no com internet, retry de 4 s e feedback por LED. Log em /sd/qrlog.txt."
+}

@@ -1424,6 +1424,34 @@ function runInline(src, env) {
     check('cmpV menor', api.cmpV('1.0.0', '1.0.1') === -1);
     check('fmtKB', api.fmtKB(4000) === '3.9 KB' && api.fmtKB(30720) === '30 KB');
 
+    // ranges de deps: depRangeOk ja cortou o 1o caractere da VERSAO junto
+    // com o "^" do range (1.0.0 -> [0,0,0]) e NENHUM caret casava — todo
+    // app com deps falhava com "Dependencia indisponivel no hub" (2.7.0/2.7.1)
+    check('depRangeOk caret na propria base', api.depRangeOk('^1.0.0', '1.0.0') === true);
+    check('depRangeOk caret patch acima', api.depRangeOk('^1.0.0', '1.0.3') === true);
+    check('depRangeOk caret minor acima', api.depRangeOk('^1.0.0', '1.2.0') === true);
+    check('depRangeOk caret major acima nao vale', api.depRangeOk('^1.0.0', '2.0.0') === false);
+    check('depRangeOk caret abaixo da base', api.depRangeOk('^2.1.0', '2.0.9') === false);
+    check('depRangeOk versao exata', api.depRangeOk('1.0.0', '1.0.0') === true);
+    check('depRangeOk exata difere', api.depRangeOk('1.0.0', '1.0.1') === false);
+    // grafo do hub real: engine 1.2.5 e shim que puxa os modulos CelerGame
+    var hubIdx = {
+        'celeros.game': { '1.0.0': { deps: {} } },
+        'celeros.game.fx': { '1.0.0': { deps: { 'celeros.game': '^1.0.0' } } },
+        'celeros.game.spr': { '1.0.0': { deps: { 'celeros.game': '^1.0.0' } } },
+        'celeros.engine': { '1.1.0': { deps: {} },
+                            '1.2.5': { deps: { 'celeros.game': '^1.0.0',
+                                                'celeros.game.fx': '^1.0.0',
+                                                'celeros.game.spr': '^1.0.0' } } }
+    };
+    var res = api.resolveDeps({ 'celeros.game.fx': '^1.0.0', 'celeros.engine': '^1.2.0' }, hubIdx);
+    check('resolveDeps transitivo pelo shim engine',
+          !!res && Object.keys(res).length === 4 &&
+          res['celeros.game'] === '1.0.0' && res['celeros.game.fx'] === '1.0.0' &&
+          res['celeros.game.spr'] === '1.0.0' && res['celeros.engine'] === '1.2.5');
+    check('resolveDeps range sem candidato devolve null',
+          api.resolveDeps({ 'celeros.game': '^2.0.0' }, hubIdx) === null);
+
     // FS: beta v1.0.0 instalado (catalogo traz v2.0.0), mesmo v1.0.0 igual
     env.FS.mkdir('/local/apps/celeros.beta');
     env.FS.writeTextFile('/local/apps/celeros.beta/app.json',

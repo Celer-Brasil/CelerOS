@@ -110,8 +110,9 @@ function depRangeOk(rng, ver) {
     rng = String(rng);
     if (rng.charAt(0) !== "^") return rng === ver;
     function parts(s) {
-        var seg = s.substring(1).split("."), o = [];
-        for (var i = 0; i < 3; i++) o.push(parseInt(seg[i], 10) || 0);
+        if (s.charAt(0) === "^") s = s.substring(1);  // so o range traz "^";
+        var seg = s.split("."), o = [];               // corta-lo da versao
+        for (var i = 0; i < 3; i++) o.push(parseInt(seg[i], 10) || 0); // virava [0,y,z]
         return o;
     }
     var R = parts(rng), V = parts(ver);
@@ -1103,8 +1104,10 @@ function updateAll() {
         selIt = order[k];
         drawBatch(k + 1, order.length, selIt.name);
         System.delay(30);
-        if (installApp() === "done") batchOk++;
-        else batchFails.push(selIt.name);
+        errMsg = "";  // installApp so grava no fail: a linha do lote mostra o
+        if (installApp() === "done") batchOk++;   // motivo de QUEM falhou
+        else batchFails.push(selIt.name +
+                             (errMsg ? " (" + errMsg + ")" : ""));
     }
     return "batchDone";
 }
@@ -1120,6 +1123,8 @@ function screenBatch() {
 if (typeof __harness !== "undefined" && __harness.storeTest) {
     __harness.storeTest({
         cmpV: cmpV,
+        depRangeOk: depRangeOk,
+        resolveDeps: resolveDeps,
         stateInfo: stateInfo,
         scanLocalApps: scanLocalApps,
         resolveInstalledDir: resolveInstalledDir,

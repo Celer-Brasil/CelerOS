@@ -89,11 +89,12 @@ def vtuple(v):
 
 
 def read_dep_version(text, origin="modulo"):
-    """Versao semver declarada no modulo (`var X = { version: 'x.y.z' }`).
-    Aceita aspas simples OU dupla; versoes DISTINTAS no mesmo arquivo sao
+    """Versao semver declarada no modulo (`var X = { version: 'x.y.z' }` ou
+    atribuicao `E.version = 'x.y.z'` no shim de compatibilidade). Aceita
+    aspas simples OU dupla; versoes DISTINTAS no mesmo arquivo sao
     ambiguidade — antes a primeira `version: '...'` vencia calada e o
     publish subia a versao errada."""
-    found = re.findall(r"version\s*:\s*(['\"])(\d+\.\d+\.\d+)\1", text)
+    found = re.findall(r"version\s*[:=]\s*(['\"])(\d+\.\d+\.\d+)\1", text)
     if not found:
         die(f"{origin}: sem `version: 'x.y.z'` declarado (ou use --version)")
     vers = sorted({v for _, v in found}, key=vtuple)
@@ -104,25 +105,37 @@ def read_dep_version(text, origin="modulo"):
 
 
 def local_engine_deps(engine_dir=None):
-    """{nome: (versao, Path)} de cada tools/sdk/engine/*.js — a arvore local
-    canonica das deps compartilhadas."""
+    """({nome: (versao, Path)}, [Path sem versao]) de cada tools/sdk/engine/
+    *.js — a arvore local canonica das deps compartilhadas. Modulo sem
+    `version:` (WIP em construcao) NAO mata o deps-status: entra na segunda
+    lista e o chamador mostra como nota — morrer aqui escondia o drift das
+    outras deps atras de um arquivo pela metade."""
     d = Path(engine_dir) if engine_dir else \
         Path(__file__).resolve().parent / "sdk" / "engine"
-    out = {}
+    out, sem_versao = {}, []
     for f in sorted(d.glob("*.js")):
-        out[f.stem] = (read_dep_version(f.read_text(encoding="utf-8"), f.name), f)
-    return out
+        try:
+            ver = read_dep_version(f.read_text(encoding="utf-8"), f.name)
+        except SystemExit:
+            sem_versao.append(f)
+            continue
+        out[f.stem] = (ver, f)
+    return out, sem_versao
 
 
 def deps_status_report(local, hub, divergent=None):
     """Drift repo x hub, logica pura (testavel): devolve (linhas, drift).
     `local` = {nome: versao}; `hub` = {nome: {versao: meta}} do indice
     /store/deps.json; `divergent` = nomes com mesma versao no hub mas
-    conteudo diferente (md5 do enxuto, calculado pelo chamador).
+    conteudo diferente — set (divergencia REAL: edicao sem bump) ou dict
+    {nome: "wip"|"real"} (o cmd_deps_status tria pelo HEAD: quando o HEAD
+    bate com o hub, a diferenca e WIP nao commitado na arvore e o remendio
+    e COMMITAR — --force substituiria o hub pelo WIP).
     Vereditos: REPO NAO PUBLICADO (a versao do repo nunca foi ao hub — o
     resolve do install segue servindo a antiga), REPO ATRASADO, CONTEUDO
-    DIVERGE (edicao sem bump; so --force cobre), ok."""
-    divergent = divergent or set()
+    DIVERGE (edicao sem bump; so --force cobre), WIP NAO COMMITADO, ok."""
+    div = dict(divergent) if isinstance(divergent, dict) \
+        else {n: "real" for n in (divergent or set())}
     linhas, drift = [], 0
     for name in sorted(local):
         lv = local[name]
@@ -139,9 +152,14 @@ def deps_status_report(local, hub, divergent=None):
         elif vtuple(lv) < vtuple(hv):
             linhas.append(f"{name:22} {lv:8} {hv:8} REPO ATRASADO (hub na frente)")
             drift += 1
-        elif name in divergent:
-            linhas.append(f"{name:22} {lv:8} {hv:8} CONTEUDO DIVERGE na mesma "
-                          f"versao (edicao sem bump): publish-dep --force")
+        elif name in div:
+            if div[name] == "wip":
+                linhas.append(f"{name:22} {lv:8} {hv:8} WIP NAO COMMITADO em "
+                              f"arvore (o HEAD bate com o hub {hv}): commite — "
+                              "NAO use --force (substituiria o hub pelo WIP)")
+            else:
+                linhas.append(f"{name:22} {lv:8} {hv:8} CONTEUDO DIVERGE na mesma "
+                              f"versao (edicao sem bump): publish-dep --force")
             drift += 1
         else:
             linhas.append(f"{name:22} {lv:8} {hv:8} ok")
@@ -237,6 +255,67 @@ def strip_js(path: Path) -> bytes:
     if out.returncode != 0 or (not out.stdout and path.stat().st_size > 0):
         die(f"jsstrip falhou em {path.name}: {out.stderr.decode('utf-8', 'replace').strip()}")
     return out.stdout
+
+
+def git_dirty_files(paths) -> list:
+    """Paths com edicao NAO commitada no repo (WIP em arvore) — exatamente
+    o que um publish subiria sem nunca ter passado por commit/CI. Nasceu do
+    incidente real: a engine 1.2.3 foi ao hub com 2 linhas do WIP do autor
+    (salvas na arvore entre o `git status` do operador e o upload). Fora de
+    um repo git (ou sem git no PATH) devolve [] — o fluxo nao trava."""
+    alvos = [Path(p).expanduser().resolve() for p in paths if p]
+    if not alvos:
+        return []
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(alvos[0].parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if probe.returncode != 0:
+        return []
+    try:
+        st = subprocess.run(
+            ["git", "-C", probe.stdout.strip(), "status", "--porcelain", "--"] +
+            [str(p) for p in alvos],
+            capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if st.returncode != 0:
+        return []
+    sujas = []
+    for linha in st.stdout.splitlines():
+        parte = linha[3:].strip() if len(linha) > 3 else ""
+        if " -> " in parte:               # renomeado: o destino e o que sobe
+            parte = parte.split(" -> ", 1)[1]
+        parte = parte.strip('"').strip()
+        if parte:
+            sujas.append(parte)
+    return sujas
+
+
+def head_strip_md5(path: Path):
+    """md5 do ENXUTO do arquivo como esta no HEAD (None se o repo/git nao
+    tiver o arquivo — novo, ainda sem commit). O deps-status usa para
+    distinguir divergencia REAL (HEAD != hub) de WIP nao commitado na
+    arvore (HEAD == hub: o remendio certo e commitar, NAO --force)."""
+    try:
+        rel = subprocess.run(
+            ["git", "-C", str(path.parent), "rev-parse", "--show-prefix"],
+            capture_output=True, text=True, timeout=10)
+        if rel.returncode != 0:
+            return None
+        blob = subprocess.run(
+            ["git", "-C", str(path.parent), "show", f"HEAD:{rel.stdout.strip()}{path.name}"],
+            capture_output=True, timeout=10)
+        if blob.returncode != 0:
+            return None
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / path.name
+            tmp.write_bytes(blob.stdout)
+            return hashlib.md5(strip_js(tmp)).hexdigest()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
 
 
 def run_app_lint(folder: Path):
@@ -403,23 +482,31 @@ def cmd_deps_status(args):
     no repo (d4e4d53) enquanto o hub resolve ^1.2.0 para a 1.2.1 — nenhum
     comando apontava, e a bancada testava uma engine que os devices nunca
     recebiam. Exit 1 quando ha drift (servivel de CI/gate)."""
-    local = local_engine_deps(args.engine_dir)
+    local, sem_versao = local_engine_deps(args.engine_dir)
     if not local:
-        die("tools/sdk/engine sem *.js — nada a comparar")
+        die("tools/sdk/engine sem *.js versionado — nada a comparar")
+    if sem_versao:
+        nomes = ", ".join(f.name for f in sem_versao)
+        print(f"nota: sem version: (WIP?): {nomes} — fora do drift ate "
+              "declararem versao")
     if args.index:
         idx = json.loads(Path(args.index).read_text(encoding="utf-8"))
     else:
         _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
     hub = idx.get("deps", {})
-    # mesma versao no hub mas bytes diferentes = edicao sem bump: o md5 do
-    # hub e do .js ENXUTO (e assim que o publish-dep sobe)
-    divergent = set()
+    # mesma versao no hub mas bytes diferentes: o md5 do hub e do .js
+    # ENXUTO (e assim que o publish-dep sobe). Triagem pelo HEAD: HEAD
+    # bate com o hub -> a diferenca e WIP nao commitado na arvore (commite
+    # em vez de --force); HEAD diverge -> edicao sem bump de verdade
+    divergent = {}
     for name, (lv, f) in local.items():
         dmeta = (hub.get(name) or {}).get(lv)
         if not dmeta or not dmeta.get("md5"):
             continue
-        if hashlib.md5(strip_js(f)).hexdigest() != dmeta["md5"]:
-            divergent.add(name)
+        if hashlib.md5(strip_js(f)).hexdigest() == dmeta["md5"]:
+            continue
+        head = head_strip_md5(f)
+        divergent[name] = "wip" if head == dmeta["md5"] else "real"
     linhas, drift = deps_status_report({n: v for n, (v, _) in local.items()},
                                        hub, divergent)
     print(f"{'dep':22} {'local':8} {'hub':8} veredito")
@@ -446,6 +533,21 @@ def cmd_publish(args):
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
         meta, avisos, js_sum, extras = validate(folder, strip=not args.no_strip)
+        # guarda de arvore suja (mesma do publish-dep): so sobe conteudo
+        # COMMITADO — publish de app com WIP no main.js embarcaria trabalho
+        # que o autor nem terminou (quase aconteceu com o Arrasa 1.0.0)
+        sobem = [folder / "app.json", folder / "main.js"] + \
+                [folder / n for n in extras] + \
+                ([folder / "icon.png"] if (folder / "icon.png").is_file() else [])
+        suja = git_dirty_files(sobem)
+        if suja:
+            if args.dry:
+                print(f"aviso: {folder.name}: edicao NAO commitada em "
+                      f"{', '.join(suja[:3])} — o upload seria do WIP")
+            elif not args.force:
+                die(f"{folder.name}: edicao NAO commitada ({', '.join(suja[:3])}"
+                    f"{' e mais' if len(suja) > 3 else ''}) — commite antes, ou "
+                    "use --force consciente (a loja receberia o WIP)")
         # .js do pacote sobem ENXUTOS (como o aparelho compila): a soma do
         # teto passa a contar o tamanho real; o fonte comentado fica no repo
         enxutos = {}
@@ -560,6 +662,18 @@ def cmd_publish_dep(args):
     if not VER_RE.match(version or ""):
         die(f"versao invalida: {version!r} (declare no modulo "
             f"version: 'x.y.z' ou use --version)")
+    # guarda de arvore suja: o upload tem que ser de conteudo COMMITADO —
+    # a engine 1.2.3 foi ao hub uma vez com 2 linhas do WIP do autor (o
+    # git status do operador era de minutos antes; a arvore andou)
+    suja = git_dirty_files([src])
+    if suja:
+        if args.dry:
+            print(f"aviso: {src.name} tem edicao NAO commitada — o upload "
+                  "seria do WIP, nao do HEAD")
+        elif not args.force:
+            die(f"{src.name}: edicao NAO commitada ({', '.join(suja[:3])}"
+                f"{' e mais' if len(suja) > 3 else ''}) — commite antes, ou "
+                "use --force consciente (o hub receberia o WIP)")
     # sintaxe de verdade antes de subir: dep quebrada quebra TODOS os apps
     # que a require (cache publico compartilhado). O app_lint parseia com
     # acorn ES5 (mesmo perfil do Duktape do device); o node --check aceitava

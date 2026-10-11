@@ -1,10 +1,10 @@
-// Quica — jogo de exemplo da engine CelerOS (criado com `celer.js new --game`).
+// Quica — jogo de exemplo da familia CelerGame (criado com `celer.js new --game`).
 // Segure as bolas no ar com a raquete (arraste o dedo): cada rebatida vale
 // 1 ponto, bolas novas entram a cada poucos segundos e 3 perdidas encerram.
 //
 // E um tour pela engine: cenas (titulo/jogo/fim), input (tap/drag), particulas,
-// audio e recorde no NVS. Use como base do seu jogo — sprites PNG entram por
-// E.spr.load().
+// audio e recorde no NVS. Use como base do seu jogo — sprites PNG entram com
+// a dep celeros.game.spr (E.spr.load), grade de cenario com celeros.game.tilemap.
 //
 // FISICA DE ARCADE NAO PRECISA DE ENGINE: sao 4 bolas, uma raquete e quatro
 // paredes — pools pre-alocados + reflexao na mao custam nada e nao geram
@@ -13,15 +13,17 @@
 // ai sim declare a dep celeros.physics no app.json. Veja a "escada de fisica"
 // no Game Engine Guide.
 //
-// Boas praticas de render (engine 1.2): menus sao cenas `static` (desenham
+// Boas praticas de render (core 1.0): menus sao cenas `static` (desenham
 // 1x e so repintam no press de botao), o jogo liga a camada suja E.dirty
 // (cada quadro apaga so o que o anterior desenhou — nada de fillScreen por
 // frame) e o texto vai por papel (ts: "title", "label"...) ou px, nunca
 // size cru: a escala acompanha a tela (E.u / E.U).
-// A engine e DEP do app.json (instalada pelo hub em /local/modules — sem
-// copia dentro do jogo).
+// A familia CelerGame e DEP do app.json (instalada pelo hub em
+// /local/modules — sem copia dentro do jogo): este exemplo adota o core +
+// fx; cada modulo a mais e uma dep a mais no app.json.
 
-var E = require("celeros.engine");
+var E = require("celeros.game");
+require("celeros.game.fx");
 
 E.init({ dir: "{{APP_NAME}}", fps: 30, save: "quica." });
 var W = E.W, H = E.H;

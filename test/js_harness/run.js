@@ -1137,15 +1137,49 @@ function satisfiesRange(range, version) {
     return V[0] === B[0] && (V[1] > B[1] || (V[1] === B[1] && V[2] >= B[2]));
 }
 
-function resolveSharedDep(appDir, name, env) {
+// arestas de deps do SDK local (tools/sdk/engine/index.json): a familia
+// CelerGame se compoe (celeros.engine require celeros.game*), entao o
+// fecho transitivo das deps do app.json precisa resolver igual ao install
+// da loja — o modulo novo so aparece no /local/modules via aresta
+var LOCAL_DEP_INDEX = null;
+function localDepIndex() {
+    if (!LOCAL_DEP_INDEX) {
+        try {
+            LOCAL_DEP_INDEX = JSON.parse(
+                fs.readFileSync(path.join(ROOT, 'tools', 'sdk', 'engine', 'index.json'), 'utf8'));
+        } catch (e) { LOCAL_DEP_INDEX = {}; }
+    }
+    return LOCAL_DEP_INDEX;
+}
+
+// deps declaradas no app.json + transitivas do index.json -> {nome: range}
+function appDepClosure(appDir) {
     var mf;
     try { mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8')); }
     catch (e) { return null; }
-    var range = mf && mf.deps && mf.deps[name];
+    var deps = (mf && mf.deps) || {};
+    var want = {}, queue = [], k;
+    for (k in deps) if (deps.hasOwnProperty(k)) queue.push([k, deps[k]]);
+    while (queue.length) {
+        var pair = queue.shift();
+        if (want[pair[0]]) continue;
+        want[pair[0]] = pair[1];
+        var edges = localDepIndex()[pair[0]];
+        if (edges && edges.deps) {
+            for (k in edges.deps)
+                if (edges.deps.hasOwnProperty(k) && !want[k]) queue.push([k, edges.deps[k]]);
+        }
+    }
+    return want;
+}
+
+function resolveSharedDep(appDir, name, env) {
+    var want = appDepClosure(appDir);
+    var range = want && want[name];
     if (!range) return null;
     var local = path.join(ROOT, 'tools', 'sdk', 'engine', name + '.js');
     if (!fs.existsSync(local)) return null;
-    var m = fs.readFileSync(local, 'utf8').match(/version:\s*'([^']+)'/);
+    var m = fs.readFileSync(local, 'utf8').match(/version\s*[:=]\s*'([^']+)'/);
     if (m && !satisfiesRange(range, m[1]) && env && env.__harness && env.__harness.log) {
     env.__harness.log.push('[harness] aviso: dep ' + name + ' local v' + m[1] +
                            ' nao satisfaz "' + range + '" do app.json');

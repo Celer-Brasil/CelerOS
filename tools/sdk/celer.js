@@ -36,13 +36,13 @@ function usage() {
     console.log('uso: node tools/sdk/celer.js <comando> [args]');
     console.log('');
     console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
-    console.log('                                               (--game: jogo c/ dep celeros.engine)');
+    console.log('                                               (--game: jogo c/ deps celeros.game)');
     console.log('  deps [PASTA]                                 deps do app.json + versoes no hub/local');
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
     console.log('  types [--out ARQ]                            (re)gera celer.d.ts do manifest');
     console.log('  test PASTA [--ms N] [--events ARQ]           roda o app no harness (stubs Node)');
-    console.log('  emu PASTA [--events ARQ] [--ms N] [--out ARQ] roda + snapshot PNG da tela (240x320)');
+    console.log('  emu PASTA [--events ARQ] [--ms N] [--out ARQ] roda + snapshot PNG da tela (240x320; 480x480 no canvas nativo)');
     console.log('  bench PASTA [--ms N] [--events ARQ] [--vs B]  ms reais por quadro no harness (A/B com --vs)');
     console.log('  check                                        drift: codigo x docs x stubs x types x emulador');
     console.log('  publish PASTA... [--dry]                     publica na loja (celerhub)');
@@ -119,16 +119,20 @@ function cmdNew(args) {
         changelog: '0.1.0: primeira versao',
     };
     if (game) {
-        // jogos com a engine rodam nas placas S3 com PSRAM (teto de 128 KB);
-        // sem topbar, tela cheia como o Supernova. A engine e DEP do hub
-        // (API 30): nao e copiada — o install da loja baixa em
-        // /local/modules e o require resolve de la. Fisica de arcade de
-        // poucos corpos (o padrao do template) e na mao; celeros.physics so
-        // entra quando o jogo pedir verlet/rigid (ver Game Engine Guide)
+        // jogos com a engine rodam nas placas S3 com PSRAM (teto de 1 MB);
+        // sem topbar, tela cheia como o Supernova. A familia CelerGame e
+        // DEP do hub (API 30): nao e copiada — o install da loja baixa em
+        // /local/modules e o require resolve de la. O scaffold adota so o
+        // core + fx (cada modulo e uma dep; quem adota pouco paga pouco —
+        // sem psram o teto e 48KB e o core enxuto ~20KB cabe). Fisica de
+        // arcade de poucos corpos (o padrao do template) e na mao;
+        // celeros.physics so entra quando o jogo pedir verlet/rigid (ver
+        // Game Engine Guide)
         appJson.requires = ['psram'];
         appJson.topbar = false;
         appJson.deps = {
-            'celeros.engine': '^' + engineVersion('celeros.engine.js'),
+            'celeros.game': '^' + engineVersion('celeros.game.js'),
+            'celeros.game.fx': '^' + engineVersion('celeros.game.fx.js'),
         };
     }
 
@@ -149,13 +153,15 @@ function cmdNew(args) {
     }, null, 2) + '\n');
     fs.writeFileSync(path.join(dir, 'icon.png'), makeIconPng(name[0]));
     if (game) {
-        // so o d.ts da engine (autocomplete no editor; dev-only, o publish
-        // exclui *.d.ts do zip) — o .js vem da dep do hub
-        fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.engine.d.ts'),
-                        path.join(dir, 'celeros.engine.d.ts'));
+        // so os d.ts dos modulos adotados (autocomplete no editor; dev-only,
+        // o publish exclui *.d.ts do zip) — o .js vem da dep do hub
+        fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.game.d.ts'),
+                        path.join(dir, 'celeros.game.d.ts'));
+        fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.game.fx.d.ts'),
+                        path.join(dir, 'celeros.game.fx.d.ts'));
     }
 
-    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com dep celeros.engine' : '') + ')');
+    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com deps celeros.game + fx' : '') + ')');
     console.log('proximos passos:');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);
@@ -164,10 +170,11 @@ function cmdNew(args) {
 
 // ---------------------------------------------------------------- deps ----
 
-// Versao interna de um modulo da engine (var X = { version: 'x.y.z' }).
+// Versao interna de um modulo da engine (var X = { version: 'x.y.z' } ou
+// atribuicao E.version = 'x.y.z' no shim de compatibilidade).
 function engineVersion(file) {
     const m = fs.readFileSync(path.join(ENGINE_DIR, file), 'utf8')
-        .match(/version\s*:\s*['"]([^'"]+)['"]/);
+        .match(/version\s*[:=]\s*['"]([^'"]+)['"]/);
     return m ? m[1] : '0.0.0';
 }
 

@@ -539,6 +539,34 @@ var JSSTRIP = require('../../tools/sdk/lib/jsstrip.js');
 function depSize(nome) {
     return JSSTRIP.strip(fs.readFileSync(path.join(ROOT, 'tools', 'sdk', 'engine', nome + '.js'))).length;
 }
+// fecho transitivo de uma dep (arestas do tools/sdk/engine/index.json — a
+// familia CelerGame se compoe, celeros.engine require celeros.game*): o
+// hub resolve no install e as transitivas contam no teto do app junto
+var LOCAL_INDEX = null;
+function depEdges(nome) {
+    if (!LOCAL_INDEX) {
+        try {
+            LOCAL_INDEX = JSON.parse(fs.readFileSync(
+                path.join(ROOT, 'tools', 'sdk', 'engine', 'index.json'), 'utf8'));
+        } catch (e) { LOCAL_INDEX = {}; }
+    }
+    return (LOCAL_INDEX[nome] || {}).deps || {};
+}
+function depFiles(nome, into) {
+    into = into || {};
+    if (into[nome]) return into;
+    into[nome] = 1;
+    var e = depEdges(nome);
+    for (var k in e) if (e.hasOwnProperty(k)) depFiles(k, into);
+    return into;
+}
+function depsSize(nomes) {
+    var files = {};
+    nomes.forEach(function (n) { depFiles(n, files); });
+    var t = 0;
+    for (var k in files) if (files.hasOwnProperty(k)) t += depSize(k);
+    return t;
+}
 
 // ----------------------------------------------------------------- engine --
 (function () {
@@ -589,19 +617,36 @@ function depSize(nome) {
               ['a.enter', 'a.update', 'a.draw', 'a.update', 'a.draw', 'a.exit', 'b.enter']),
           JSON.stringify(r.grabbed.marks));
 
-    // a engine ENXUTA (como o hub serve) roda igual: o mesmo ciclo de cenas
+    // a familia ENXUTA (como o hub serve cada modulo) roda igual: o mesmo
+    // ciclo de cenas atraves do shim, com o require resolvendo os fontes
+    // enxutos dos irmaos (o jsstrip preserva as linhas — "line N" bate)
     (function () {
         var env = harness.makeEnv();
-        var code = JSSTRIP.strip(fs.readFileSync(path.join(ENGINE_DIR, 'celeros.engine.js'))).toString('utf8');
-        var linhasIguais = code.split('\n').length ===
-            fs.readFileSync(path.join(ENGINE_DIR, 'celeros.engine.js'), 'utf8').split('\n').length;
-        var mod = { exports: {} };
-        new Function('System', 'Storage', 'module', 'exports', code)(env.System, env.Storage, mod, mod.exports);
-        var E2 = mod.exports, marks = [];
+        var linhasIguais = true;
+        var cache = {};
+        function stripReq(name) {
+            var base = name.replace(/\.js$/, '');
+            if (cache[base]) return cache[base];
+            var mod = { exports: {} };
+            cache[base] = mod.exports;   // parcial, como o firmware
+            var file = path.join(ENGINE_DIR, base + '.js');
+            var code = JSSTRIP.strip(fs.readFileSync(file)).toString('utf8');
+            if (code.split('\n').length !== fs.readFileSync(file, 'utf8').split('\n').length) {
+                linhasIguais = false;
+            }
+            new Function('System', 'Storage', 'module', 'exports', 'require',
+                         code)(env.System, env.Storage, mod, mod.exports, stripReq);
+            cache[base] = mod.exports;   // final: o modulo pode trocar o exports
+            return mod.exports;
+        }
+        var E2 = stripReq('celeros.engine');
+        var marks = [];
         E2.init({});
         E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
-        check('engine enxuta (jsstrip) preserva as linhas e roda o loop',
-              linhasIguais && marks.length === 3 && E2.version === /version:\s*'([^']+)'/.exec(fs.readFileSync(path.join(ENGINE_DIR, 'celeros.engine.js'), 'utf8'))[1], 'linhas=' + linhasIguais);
+        check('familia enxuta (jsstrip) preserva as linhas e roda o loop',
+              linhasIguais && marks.length === 3 &&
+              E2.version === '1.2.5' && E2._mods.length === 3,
+              'linhas=' + linhasIguais);
     })();
 
     // input: tap, swipe e justDown sinteticos via touchQ
@@ -996,6 +1041,93 @@ function depSize(nome) {
           JSON.stringify(r.grabbed.backed));
 })();
 
+// ---------------------------------------------------- familia CelerGame --
+(function () {
+    console.log('SDK CelerGame (familia modular celeros.game*):');
+    var harness = require('../../test/js_harness/run.js');
+
+    // app core-only: deps declara so o core — fx/spr/tilemap NAO existem
+    // no E (quem adota pouco paga pouco: ~20KB enxuto contra ~33KB da
+    // familia inteira, e deps contam no teto MESMO compartilhadas)
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-cg-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game': '^1.0.0' } }));
+    var env = harness.makeEnv();
+    var req = harness.makeRequire(tmp, env);
+    var out = {};
+    try {
+        var fn = new Function('System', 'Storage', '__harness', 'require',
+            'var E = require("celeros.game");' +
+            'E.init({});' +
+            'var marks = [];' +
+            'E.run({ s: { update: function () { marks.push(1); if (marks.length >= 3) E.quit(); } } }, "s");' +
+            '__harness.grab("core", [marks.length, E.fx, E.spr, E.tilemap, E.version, E._mods.join(",")]);');
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        fn(env.System, env.Storage, env.__harness, req);
+    } catch (e) { out.core = 'erro: ' + e; }
+    check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
+          Array.isArray(out.core) && out.core[0] === 3 &&
+          out.core[1] === undefined && out.core[2] === undefined &&
+          out.core[3] === undefined && out.core[4] === '1.0.0' && out.core[5] === '',
+          JSON.stringify(out.core));
+
+    // adocao por modulo: app.json declara SO o fx — o core chega pela
+    // transitiva do index.json e o require devolve o MESMO E decorado
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game.fx': '^1.0.0' } }));
+    env = harness.makeEnv();
+    req = harness.makeRequire(tmp, env);
+    out = {};
+    try {
+        var fn2 = new Function('System', 'Storage', '__harness', 'require',
+            'var FX = require("celeros.game.fx");' +
+            'FX.init({});' +
+            'FX.fx.burst(120, 160, { n: 4, life: 0.2 });' +
+            'FX.fx.popText(10, 10, "oi");' +
+            'var vivas = 0;' +
+            'for (var i = 0; i < FX.fx._parts.length; i++) if (!FX.fx._parts[i].dead) vivas++;' +
+            '__harness.grab("fx", [vivas, FX._mods.join(","), FX.version]);');
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        fn2(env.System, env.Storage, env.__harness, req);
+    } catch (e) { out.fx = 'erro: ' + e; }
+    check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
+          Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
+          out.fx[2] === '1.0.0',
+          JSON.stringify(out.fx));
+
+    // require de modulo que o app nao adotou (nem transitivo): erro claro
+    var erro = null;
+    try {
+        var fn3 = new Function('require', 'require("celeros.game.spr");');
+        fn3(req);
+    } catch (e) { erro = String(e); }
+    check('require de modulo NAO adotado falha com erro claro',
+          erro !== null && erro.indexOf('celeros.game.spr') >= 0, erro);
+
+    // shim de compatibilidade: celeros.engine monta a familia no MESMO
+    // objeto do core — a superficie 1.2.x inteira de volta
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.engine': '^1.2.0' } }));
+    env = harness.makeEnv();
+    req = harness.makeRequire(tmp, env);
+    out = {};
+    try {
+        var fn4 = new Function('System', 'Storage', '__harness', 'require',
+            'var ENG = require("celeros.engine");' +
+            'var CORE = require("celeros.game");' +
+            '__harness.grab("shim", [ENG === CORE, ENG.version, ENG._mods.join(","),' +
+            '  typeof ENG.fx.burst, typeof ENG.spr.load, typeof ENG.tilemap]);');
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        fn4(env.System, env.Storage, env.__harness, req);
+    } catch (e) { out.shim = 'erro: ' + e; }
+    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.2.5',
+          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.2.5' &&
+          out.shim[2] === 'fx,spr,tilemap' && out.shim[3] === 'function' &&
+          out.shim[4] === 'function' && out.shim[5] === 'function',
+          JSON.stringify(out.shim));
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------------------ mesh --
 (function () {
     console.log('SDK mesh (tools/sdk/engine/celeros.mesh.js):');
@@ -1253,22 +1385,24 @@ function depSize(nome) {
              { cwd: ROOT });
 
     var want = ['app.json', 'main.js', 'icon.png', 'jsconfig.json', 'celer.d.ts',
-                'README.md', 'celeros.engine.d.ts'];
+                'README.md', 'celeros.game.d.ts', 'celeros.game.fx.d.ts'];
     var missing = want.filter(function (f) { return !fs.existsSync(path.join(appDir, f)); });
-    check('scaffold de jogo cria app + tipos da engine (dev-only)',
+    check('scaffold de jogo cria app + tipos dos modulos adotados (dev-only)',
           missing.length === 0, 'faltam: ' + missing.join(', '));
-    check('engine/physics NAO sao copiadas (deps do hub, API 30)',
+    check('familia/physics NAO sao copiadas (deps do hub, API 30)',
+          !fs.existsSync(path.join(appDir, 'celeros.game.js')) &&
+          !fs.existsSync(path.join(appDir, 'celeros.game.fx.js')) &&
           !fs.existsSync(path.join(appDir, 'celeros.engine.js')) &&
-          !fs.existsSync(path.join(appDir, 'celeros.physics.js')) &&
-          !fs.existsSync(path.join(appDir, 'engine.js')));
+          !fs.existsSync(path.join(appDir, 'celeros.physics.js')));
 
     var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json')));
     check('app.json do jogo: type Game, psram, sem topbar',
           mf.type === 'Game' && mf.category === 'Jogos' &&
           Array.isArray(mf.requires) && mf.requires.indexOf('psram') >= 0 &&
           mf.topbar === false);
-    check('app.json declara dep celeros.engine (fisica de arcade e na mao)',
-          mf.deps && /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.engine']) &&
+    check('app.json adota core + fx (fisica de arcade e na mao)',
+          mf.deps && /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.game']) &&
+          /^(\^)?\d+\.\d+\.\d+$/.test(mf.deps['celeros.game.fx']) &&
           !mf.deps['celeros.physics'],
           JSON.stringify(mf.deps));
 
@@ -1283,8 +1417,8 @@ function depSize(nome) {
     // MAX_MAIN_JS_PSRAM)
     var TETO = 1024 * 1024;
     var size = JSSTRIP.strip(fs.readFileSync(path.join(appDir, 'main.js'))).length +
-               depSize('celeros.engine');
-    check('soma dos .js (pacote + deps) cabe no teto psram (1 MB)', size < TETO,
+               depsSize(Object.keys(mf.deps));
+    check('soma dos .js (pacote + deps, transitivas incluidas) cabe no teto psram (1 MB)', size < TETO,
           (size / 1024).toFixed(1) + ' KB');
     // os dois jogos grandes da loja tambem (pacote + deps do app.json)
     ['Supernova', 'Detona'].forEach(function (nome) {
@@ -1294,7 +1428,7 @@ function depSize(nome) {
             if (/\.js$/.test(f) && f !== 'test.js') total += JSSTRIP.strip(fs.readFileSync(path.join(dir, f))).length;
         });
         var deps = JSON.parse(fs.readFileSync(path.join(dir, 'app.json'), 'utf8')).deps || {};
-        Object.keys(deps).forEach(function (d) { total += depSize(d); });
+        total += depsSize(Object.keys(deps));
         check(nome + ': pacote + deps enxutos cabem no teto do hub (1 MB)', total < TETO,
               (total / 1024).toFixed(1) + ' KB');
     });

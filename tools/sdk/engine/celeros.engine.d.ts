@@ -1,5 +1,7 @@
-// engine.d.ts — tipos da game engine CelerOS (engine.js + physics.js).
-// Vendorizado no app por `celer.js new --game` / `celer.js engine PASTA`.
+// engine.d.ts — tipos do pacote celeros.engine: a familia CelerGame
+// MONTADA (core + fx + spr + tilemap) + physics. Apps novos adotam os
+// modulos um a um (celeros.game.d.ts + os d.ts dos modulos usados);
+// este arquivo e a uniao completa, para quem require("celeros.engine").
 
 declare namespace E {
     const version: string;

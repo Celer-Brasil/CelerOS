@@ -30,7 +30,8 @@ namespace Pack {
 static constexpr size_t MAX_PAYLOAD = 430;
 
 // Kinds do envelope (KIND_RULE e o canal dos reflexos da proxima rodada).
-enum Kind : uint8_t { KIND_CUSTOM = 0, KIND_MUSIC = 1, KIND_RULE = 2 };
+// KIND_RES (API 36): controle dos recursos da matilha (Pack/Resources.h).
+enum Kind : uint8_t { KIND_CUSTOM = 0, KIND_MUSIC = 1, KIND_RULE = 2, KIND_RES = 3 };
 
 struct Member {
     uint16_t id;

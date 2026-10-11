@@ -463,6 +463,7 @@ function makeEnv() {
     drawFastHLine: function() {},
     drawBMP: function() { return true; },
     drawPNG: function() { return true; },
+    drawJPG: function() { return true; },
     drawIcon: function() {},
     setTextColor: function() {},
     setTextSize: function() {},
@@ -1002,6 +1003,7 @@ function makeEnv() {
     // Pack (matilha, API 27): membros com papel, envelopes custom e o
     // handoff de musica — espelho do firmware (dedup/tamanhos ficam la).
     var packRx = [];
+    var resList = [], resHandles = [], resExposed = {}, resWrites = [];
     var packCaps = { speaker: true, mic: false, display: true, motors: false,
                  leds: false, hub: false };
     env.Pack = {
@@ -1016,6 +1018,97 @@ function makeEnv() {
         return true;
     },
     poll: function() { return packRx.length ? packRx.shift() : null; },
+    // Recursos (API 36): no unico, sem vizinhos de verdade — a lista e as
+    // respostas vem do __harness (setResources/pushResData); o E2E com
+    // leases/retry/revogacao e o test/meshsim (resources.js)
+    resources: function(only) {
+        if (!meshOn) return [];
+        return resList.filter(function(r) { return !only || r.type === only; });
+    },
+    open: function(to, name, opts) {
+        if (!meshOn) return -1;
+        var r = null;
+        for (var i = 0; i < resList.length; i++) {
+            if ((resList[i].node === to || resList[i].nodeName === to) && resList[i].name === name) r = resList[i];
+        }
+        var h = resHandles.length;
+        resHandles.push({ state: !r ? 'refused' : (r.ready === false ? 'refused' : (r.busy ? 'refused' : 'open')),
+                          reason: !r ? 'notFound' : (r.ready === false ? 'unsupported' : (r.busy ? 'busy' : '')),
+                          node: r ? r.node : String(to), name: String(name), rx: [] });
+        meshSent.push({ res: 'open', to: to, name: name, opts: opts || {} });
+        return h;
+    },
+    status: function(h) {
+        var x = resHandles[h];
+        return x ? { state: x.state, reason: x.reason, node: x.node, name: x.name,
+                     via: x.state === 'open' ? 'mesh' : '' } : null;
+    },
+    read: function(h) { var x = resHandles[h]; return x && x.rx.length ? x.rx.shift() : null; },
+    write: function(h, d) {
+        var x = resHandles[h];
+        if (!x || x.state !== 'open') return false;
+        meshSent.push({ res: 'write', h: h, data: typeof d === 'string' ? d : JSON.stringify(d) });
+        return true;
+    },
+    close: function(h) { var x = resHandles[h]; if (x && x.state !== 'free') x.state = 'closed'; },
+    expose: function(name) {
+        if (resExposed.hasOwnProperty(name)) return false;
+        resExposed[name] = 0;
+        return true;
+    },
+    unexpose: function(name) {
+        if (!resExposed.hasOwnProperty(name)) return false;
+        delete resExposed[name];
+        return true;
+    },
+    publish: function(name, d) {
+        if (!resExposed.hasOwnProperty(name)) return -1;
+        meshSent.push({ res: 'publish', name: name, data: typeof d === 'string' ? d : JSON.stringify(d) });
+        return resExposed[name];
+    },
+    sessions: function(name) { return resExposed.hasOwnProperty(name) ? resExposed[name] : -1; },
+    pollWrite: function() { return resWrites.length ? resWrites.shift() : null; },
+    // audio de outro no (R3): sessoes sobre o mic/speaker do vizinho; no host
+    // o audio e simulado (a gravacao devolve um WAV mudo do tamanho pedido)
+    listen: function(to) { return env.Pack.open(to, 'mic'); },
+    speak: function(to) { return env.Pack.open(to, 'speaker'); },
+    record: function(to, opts) {
+        var h = env.Pack.open(to, 'mic', opts);
+        if (h >= 0) resHandles[h].recMs = (opts && opts.ms) || 6000;
+        return h;
+    },
+    recording: function(h) {
+        var x = resHandles[h];
+        if (!x || x.state !== 'open' || !x.recMs) return false;
+        if (x.recStart === undefined) x.recStart = clock;
+        return clock - x.recStart < x.recMs;
+    },
+    level: function() { return 0; },
+    recordStop: function(h, opts) {
+        var x = resHandles[h];
+        if (!x || !x.recMs) return opts && opts.path ? false : null;
+        x.state = 'closed';
+        meshSent.push({ res: 'recordStop', h: h, opts: opts || {} });
+        if (opts && opts.path) return true;
+        return opts && opts.raw ? 'RIFF' : 'UklGRg==';
+    },
+    // camera de outro no (R3): a foto "chega" na hora (state done) e o video
+    // entrega um quadro por chamada (o desenho fica no log do harness)
+    snap: function(to, opts) {
+        var h = env.Pack.open(to, 'camera', opts);
+        if (h >= 0 && resHandles[h].state === 'open') {
+            resHandles[h].state = 'done';
+            meshSent.push({ res: 'snap', h: h, path: (opts && opts.path) || '/local/snap.jpg' });
+        }
+        return h;
+    },
+    view: function(to, opts) { return env.Pack.open(to, 'camera', opts); },
+    drawFrame: function(h, x, y) {
+        var x0 = resHandles[h];
+        if (!x0 || x0.state !== 'open') return false;
+        log.push('[pack] drawFrame h' + h + ' @' + x + ',' + y);
+        return true;
+    },
     handoffMusic: function(to) {
         if (!meshOn || !musicState.playing) return false;
         log.push('[pack] handoff' + (to ? ' -> ' + to : ' -> melhor-speaker') +
@@ -1048,6 +1141,10 @@ function makeEnv() {
     pushMesh: function(list) { meshRx = meshRx.concat(list); },
     pushMeshNodes: function(list) { meshNodes = list; },
     pushPack: function(list) { packRx = packRx.concat(list); },
+    setResources: function(list) { resList = list; },
+    pushResData: function(h, d) { if (resHandles[h]) resHandles[h].rx.push(d); },
+    setResSessions: function(name, n) { resExposed[name] = n; },
+    pushResWrite: function(list) { resWrites = resWrites.concat(list); },
     meshSent: meshSent,
     pushNetGet: function(h, resp) { netQueue.push({ h: h, resp: resp }); },
     typeLine: function(text) {

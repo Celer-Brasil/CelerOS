@@ -20,7 +20,13 @@ CONFIG_CELEROS_JS_CAMERA=y
 # Sem vidro, mas o logcat do celerctl segue completo (nao passa por ESP_LOG).
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 # CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
-CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+# ERROR, nao WARN: o driver da camera imprime "EV-EOF-OVF" com ets_printf de
+# DENTRO da ISR quando o nivel padrao e >= WARN (CAM_WARN_THROTTLE). Com o
+# console ocupado pelo outro nucleo a ISR esperava a UART e o watchdog de
+# interrupcao derrubava a cam no video remoto (TG1WDT, bancada 2026-10-11).
+# Os logs do CelerOS (celer_log_printf, [qr]) nao passam por este nivel.
+CONFIG_LOG_DEFAULT_LEVEL_ERROR=y
+# CONFIG_LOG_DEFAULT_LEVEL_WARN is not set
 # CONFIG_LOG_DEFAULT_LEVEL_INFO is not set
 
 # Bundle de CAs "comum" (~45 raizes): ~35 KB a menos no slot OTA.
@@ -100,3 +106,22 @@ CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y
 # CONFIG_ESP_WIFI_ENABLE_SAE_PK is not set
 # CONFIG_ESP_COREDUMP_LOGS is not set
 # CONFIG_ESP_PHY_ENABLE_VERSION_PRINT is not set
+
+# Dual-core (239b2c8): a task ipc0 roda as alocacoes de interrupcao do outro
+# nucleo (driver da camera, WiFi/BT). Com o padrao de 1024 B o esp_camera_init
+# chamado fora da task do app (provedor "camera" dos recursos da matilha)
+# estourava a pilha dela: coredump "stack overflow in task ipc0" e RTC WDT em
+# seguida (bancada 2026-10-11).
+CONFIG_ESP_IPC_TASK_STACK_SIZE=2048
+
+# Driver da camera: buffer de DMA de no maximo 16 KB (eram 32 KB). Ele e um
+# bloco CONTIGUO de RAM interna, e depois do WiFi + NimBLE o maior bloco
+# livre da cam fica em ~10 KB: o init falhava em "DMA buffer 30720 Byte malloc
+# failed" (bancada 2026-10-11). Com 8 KB o VGA nao cabe ("Resolution too
+# high": o I2S do ESP32 amostra ate 4 B por pixel) — 16 KB e o meio-termo.
+# A cam_task vai para o nucleo 1 (WiFi e o controlador BT ficam no 0, na
+# mesma prioridade dela): no 0 a fila de eventos estourava (EV-VSYNC-OVF) e
+# nenhum quadro saia.
+CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384
+# CONFIG_CAMERA_CORE0 is not set
+CONFIG_CAMERA_CORE1=y

@@ -30,7 +30,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 |------|----------|
 | Add a binding | define `JSBindings::js_x` in the module file, declare it in `JSBindings.h`, add `{"name", js_x, nargs}` to the right `kFnsN[]` table in `init()` |
 | Per-app reset of all binding state | `JSBindings::init(ctx, tft, appTitle, topbarFixed)`, called by CelerKernel on each app launch |
-| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 35) |
+| API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 36) |
 | Streaming download | `Net.download` in `JsNet.cpp` (API 6; older firmware truncated bodies at 32KB) |
 | Public docs of every call | `Documentation/JS_API_Guide.md` (EN) / `.pt-BR.md` |
 

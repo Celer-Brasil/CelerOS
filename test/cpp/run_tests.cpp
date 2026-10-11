@@ -15,6 +15,7 @@
 #include "../../main/Display/DirtyRects.h"
 #include "../../main/Utils/JsonMap.h"
 #include "../../main/Bluetooth/NetFrame.h"
+#include "../../main/Pack/ResProto.h"
 #include "../../main/Utils/Rigid2D.h"
 #include "../../main/Utils/Verlet2D.h"
 
@@ -1135,6 +1136,127 @@ static void testVerlet2D() {
     CHECK(!delStick(w, -1) && !delStick(w, 1));         // indice invalido
 }
 
+static void testResProto() {
+    using namespace resproto;
+    uint8_t b[ENV_PAYLOAD];
+    // LIST round-trip
+    Entry e[2];
+    e[0].type = TYPE_MIC;
+    e[0].flags = FLAG_BUSY;
+    snprintf(e[0].name, sizeof(e[0].name), "mic");
+    e[1].type = TYPE_DATA;
+    e[1].flags = FLAG_SHARED | FLAG_READY;
+    snprintf(e[1].name, sizeof(e[1].name), "temperatura");
+    size_t n = encodeList(e, 2, b, sizeof(b));
+    CHECK(n == 2 + (3 + 3) + (3 + 11));
+    CHECK(b[0] == OP_LIST);
+    Entry got[4];
+    CHECK(decodeList(b + 1, n - 1, got, 4) == 2);
+    CHECK(got[0].type == TYPE_MIC && got[0].flags == FLAG_BUSY && strcmp(got[0].name, "mic") == 0);
+    CHECK(strcmp(got[1].name, "temperatura") == 0 && got[1].flags == (FLAG_SHARED | FLAG_READY));
+    CHECK(decodeList(b + 1, n - 2, got, 4) == -1);  // truncado
+    CHECK(decodeList(b + 1, n - 1, got, 1) == 1);   // max respeitado
+    // nome longo demais nao entra
+    Entry big[LIST_MAX + 1];
+    CHECK(encodeList(big, LIST_MAX + 1, b, sizeof(b)) == 0);
+    // OPEN por nome
+    const uint8_t params[] = {'{', '}'};
+    Link lk;
+    lk.flags = LINK_UP | LINK_LOCKED;
+    lk.chan = 6;
+    for (int i = 0; i < 6; i++) lk.mac[i] = (uint8_t)(0xA0 + i);
+    n = encodeOpen(0x2B, "camera", params, 2, lk, b, sizeof(b));
+    CHECK(n == 1 + 1 + 1 + 6 + 1 + 2 + LINK_LEN);
+    OpenReq rq;
+    CHECK(decodeOpen(b + 1, n - 1, &rq));
+    CHECK(rq.req == 0x2B && strcmp(rq.name, "camera") == 0 && rq.plen == 2 && rq.params[0] == '{');
+    CHECK(rq.link.flags == (LINK_UP | LINK_LOCKED) && rq.link.chan == 6 && rq.link.mac[5] == 0xA5);
+    CHECK(!decodeOpen(b + 1, n - 2, &rq));  // truncado
+    CHECK(encodeOpen(1, "", nullptr, 0, lk, b, sizeof(b)) == 0);
+    CHECK(encodeOpen(1, "nome-com-mais-de-15", nullptr, 0, lk, b, sizeof(b)) == 0);
+    uint8_t bigp[PARAMS_MAX + 1] = {0};
+    CHECK(encodeOpen(1, "mic", bigp, sizeof(bigp), lk, b, sizeof(b)) == 0);
+    // ACCEPT / DATA
+    Accept ac;
+    ac.req = 7;
+    ac.sid = 0xBEEF;
+    ac.leaseDs = LEASE_DS_DEFAULT;
+    ac.transport = TRANSPORT_ESPNOW;
+    ac.chan = 11;
+    ac.mac[0] = 0x24;
+    ac.token = 0xDEADBEEF;
+    n = encodeAccept(ac, b, sizeof(b));
+    CHECK(n == 18 && b[0] == OP_ACCEPT && b[2] == 0xBE && b[3] == 0xEF);
+    Accept ad;
+    CHECK(decodeAccept(b + 1, n - 1, &ad));
+    CHECK(ad.sid == 0xBEEF && ad.transport == TRANSPORT_ESPNOW && ad.chan == 11 && ad.mac[0] == 0x24 &&
+          ad.token == 0xDEADBEEF);
+    CHECK(!decodeAccept(b + 1, n - 2, &ad));
+    // escolha do transporte
+    Link sv, cl;
+    uint8_t ch = 99;
+    CHECK(chooseTransport(sv, cl, &ch) == TRANSPORT_MESH && ch == 0);  // ninguem tem ESP-NOW
+    sv.flags = LINK_UP; sv.chan = 1;
+    cl.flags = LINK_UP; cl.chan = 6;
+    CHECK(chooseTransport(sv, cl, &ch) == TRANSPORT_ESPNOW && ch == 1);   // livres: canal do servidor
+    cl.flags |= LINK_LOCKED;
+    CHECK(chooseTransport(sv, cl, &ch) == TRANSPORT_ESPNOW && ch == 6);   // cliente no AP manda
+    sv.flags |= LINK_LOCKED;
+    CHECK(chooseTransport(sv, cl, &ch) == TRANSPORT_MESH);                // os dois presos, canais != 
+    cl.chan = 1;
+    CHECK(chooseTransport(sv, cl, &ch) == TRANSPORT_ESPNOW && ch == 1);   // mesmo AP
+    cl.flags = 0;
+    CHECK(chooseTransport(sv, cl, &ch) == TRANSPORT_MESH);                // cliente sem ESP-NOW
+    n = encodeData(0x0102, 9, "oi", 2, b, sizeof(b));
+    CHECK(n == 7 && b[0] == OP_DATA && b[5] == 'o');
+    uint8_t huge[MAX_DATA + 1] = {0};
+    CHECK(encodeData(1, 1, huge, MAX_DATA, b, sizeof(b)) == ENV_PAYLOAD);
+    CHECK(encodeData(1, 1, huge, MAX_DATA + 1, b, sizeof(b)) == 0);
+    CHECK(encodeData(1, 1, "x", 1, b, 4) == 0);  // buffer pequeno
+    // leases
+    LeaseTable<2> lt;
+    lt.seed(100);
+    auto* a = lt.open(0xA1, 0, 1000, 10000);
+    CHECK(a != nullptr && a->sid == 101);
+    auto* a2 = lt.open(0xA1, 0, 2000, 10000);  // OPEN repetido: mesmo slot
+    CHECK(a2 == a && a2->sid == 101 && lt.countRid(0) == 1);
+    auto* c = lt.open(0xC3, 0, 2000, 10000);
+    CHECK(c != nullptr && c->sid == 102 && lt.countRid(0) == 2);
+    CHECK(lt.open(0xD4, 1, 2000, 10000) == nullptr);  // cheia
+    CHECK(!lt.keep(0xC3, 101, 3000));  // sid de outro cliente nao renova
+    CHECK(lt.keep(0xA1, 101, 9000));   // vence em 19000
+    LeaseTable<2>::Lease dead;
+    CHECK(lt.expireOne(12001, &dead) && dead.sid == 102);  // c vencia em 12000
+    CHECK(!lt.expireOne(12001, &dead));
+    CHECK(lt.expireOne(19001, &dead) && dead.sid == 101);
+    CHECK(lt.countRid(0) == 0);
+    a = lt.open(0xA1, 2, 19500, 10000);
+    a->transport = TRANSPORT_ESPNOW;
+    a->token = 77;
+    lt.close(0xA1, a->sid);
+    auto* d = lt.open(0xD4, 1, 20000, 10000);
+    CHECK(d->transport == TRANSPORT_MESH && d->token == 0);  // slot reaproveitado limpo
+    CHECK(d != nullptr && !lt.close(0xA1, d->sid) && lt.close(0xD4, d->sid) && lt.find(d->sid) == nullptr);
+    CHECK(strcmp(typeName(TYPE_CAMERA), "camera") == 0 && strcmp(reasonName(REASON_POLICY), "denied") == 0);
+    CHECK(strcmp(reasonName(REASON_EXPIRED), "expired") == 0);
+    CHECK(strcmp(reasonName(REASON_NO_LINK), "noLink") == 0);
+    // HELLO (presenca pelo ESP-NOW)
+    n = encodeHello(0x70, "qrnode", b, sizeof(b));
+    CHECK(n == 3 + 6 && b[0] == OP_HELLO);
+    uint8_t hc = 0;
+    char hn[RES_NAME_MAX + 1];
+    CHECK(decodeHello(b + 1, n - 1, &hc, hn) && hc == 0x70 && strcmp(hn, "qrnode") == 0);
+    CHECK(!decodeHello(b + 1, n - 2, &hc, hn));
+}
+
+// ------------------------------------------------------------- shell (shl)
+
+#include <cstdarg>
+
+// Cenario do sh: variaveis + linhas executadas + saida do interpretador.
+struct ShTVar {
+    std::string name, val;
+};
 int main() {
     testSemVer();
     testFsJail();
@@ -1151,6 +1273,7 @@ int main() {
     testDirtyRects();
     testJsonMap();
     testNetFrame();
+    testResProto();
     testRigid2D();
     testVerlet2D();
     if (g_failed == 0) {

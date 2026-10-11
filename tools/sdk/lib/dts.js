@@ -43,6 +43,27 @@ const RETURNS = {
     'CelerNet.poll': 'MeshMessage | null',
     'CelerNet.nodes': 'MeshNode[]',
     'CelerNet.status': 'MeshStatus',
+    // Recursos da matilha (API 36)
+    'Pack.resources': 'PackResource[]',
+    'Pack.open': 'number',
+    'Pack.status': 'PackSession | null',
+    'Pack.read': 'string | null',
+    'Pack.write': 'boolean',
+    'Pack.expose': 'boolean',
+    'Pack.unexpose': 'boolean',
+    'Pack.publish': 'number',
+    'Pack.sessions': 'number',
+    'Pack.pollWrite': '{ res: string; from: string; fromName: string; data: string } | null',
+    'Pack.listen': 'number',
+    'Pack.speak': 'number',
+    'Pack.record': 'number',
+    'Pack.recording': 'boolean',
+    'Pack.level': 'number',
+    'Pack.recordStop': 'string | boolean | null',
+    'Pack.snap': 'number',
+    'Pack.view': 'number',
+    'Pack.drawFrame': 'boolean',
+    'System.drawJPG': 'boolean',
 };
 
 // Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
@@ -59,12 +80,28 @@ const PARAM_TYPES = {
     'UI.badge.opts': '{ color?: number; textColor?: number }',
     'UI.confirm.opts': '{ yes?: string; no?: string; danger?: boolean }',
     'UI.alert.ok': 'string',
+    'System.rigidState.buf': 'number[]',   // API 34: array do quadro anterior (preenchido no lugar)
     'UI.measure.role': 'UITextRole',
     'UI.lineHeight.role': 'UITextRole',
     'UI.measureWrap.role': 'UITextRole',
     'CelerNet.start.opcoes': '{ name?: string; net?: string; relay?: boolean }',
     'CelerNet.broadcast.mensagem': 'string | object',
     'CelerNet.broadcast.ttl': 'number',
+    'Pack.resources.tipo': '"mic" | "speaker" | "camera" | "data"',
+    'Pack.open.no': 'string',
+    'Pack.open.opts': 'object',
+    'Pack.write.dado': 'string | object',
+    'Pack.publish.dado': 'string | object',
+    'Pack.expose.opts': '{ shared?: boolean }',
+    'Pack.listen.no': 'string',
+    'Pack.speak.no': 'string',
+    'Pack.record.no': 'string',
+    'Pack.record.opts': '{ ms?: number }',
+    'Pack.recordStop.opts': '{ raw?: boolean; path?: string }',
+    'Pack.snap.no': 'string',
+    'Pack.snap.opts': '{ path?: string; quality?: number }',
+    'Pack.view.no': 'string',
+    'Pack.view.opts': '{ fps?: number; quality?: number }',
 };
 
 // Nomes de argumento que indicam string (o restante e number: a API e
@@ -187,6 +224,8 @@ function generate() {
     out.push('');
     out.push('// CelerNet (API 26): malha BLE — poll/nodes/status');
     out.push('interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }');
+    out.push('interface PackResource { node: string; nodeName: string; name: string; type: "mic" | "speaker" | "camera" | "data"; busy: boolean; shared: boolean; ready: boolean; }');
+    out.push('interface PackSession { state: "opening" | "open" | "refused" | "revoked" | "lost" | "closed" | "done"; reason: string; node: string; name: string; via: "espnow" | "mesh" | ""; bytes?: number; total?: number; frames?: number; }');
     out.push('interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }');
     out.push('interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }');
     out.push('');

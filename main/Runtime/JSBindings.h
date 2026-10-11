@@ -130,6 +130,7 @@ private:
     static duk_ret_t js_fillRoundRect(duk_context *ctx);
     static duk_ret_t js_drawBMP(duk_context *ctx);
     static duk_ret_t js_drawPNG(duk_context *ctx);
+    static duk_ret_t js_drawJPG(duk_context *ctx);
 
     // Display Bindings - Text
     static duk_ret_t js_drawString(duk_context *ctx);
@@ -432,6 +433,26 @@ private:
     static duk_ret_t js_packMe(duk_context *ctx);
     static duk_ret_t js_packMembers(duk_context *ctx);
     static duk_ret_t js_packSend(duk_context *ctx);
+    static duk_ret_t js_packResources(duk_context *ctx);
+    static duk_ret_t js_packOpen(duk_context *ctx);
+    static duk_ret_t js_packStatus(duk_context *ctx);
+    static duk_ret_t js_packRead(duk_context *ctx);
+    static duk_ret_t js_packWrite(duk_context *ctx);
+    static duk_ret_t js_packClose(duk_context *ctx);
+    static duk_ret_t js_packExpose(duk_context *ctx);
+    static duk_ret_t js_packUnexpose(duk_context *ctx);
+    static duk_ret_t js_packPublish(duk_context *ctx);
+    static duk_ret_t js_packSessions(duk_context *ctx);
+    static duk_ret_t js_packPollWrite(duk_context *ctx);
+    static duk_ret_t js_packListen(duk_context *ctx);
+    static duk_ret_t js_packSpeak(duk_context *ctx);
+    static duk_ret_t js_packRecord(duk_context *ctx);
+    static duk_ret_t js_packRecording(duk_context *ctx);
+    static duk_ret_t js_packLevel(duk_context *ctx);
+    static duk_ret_t js_packRecordStop(duk_context *ctx);
+    static duk_ret_t js_packSnap(duk_context *ctx);
+    static duk_ret_t js_packView(duk_context *ctx);
+    static duk_ret_t js_packDrawFrame(duk_context *ctx);
     static duk_ret_t js_packPoll(duk_context *ctx);
     static duk_ret_t js_packHandoffMusic(duk_context *ctx);
 

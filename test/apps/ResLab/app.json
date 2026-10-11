@@ -1,0 +1,13 @@
+{
+  "name": "ResLab",
+  "packageName": "test.reslab",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bench dos recursos da matilha (API 36): expoe o canal \"eco\", abre o eco dos vizinhos e registra tudo em /local/reslab.txt. App de teste, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 36,
+  "permissions": ["fs"],
+  "topbar": false,
+  "changelog": "1.0.0 - bench da R1 dos recursos"
+}

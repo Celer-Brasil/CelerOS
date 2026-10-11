@@ -1,6 +1,9 @@
 #include "JSBindings.h"
 #include "JsInternal.h"
 #include "../Hardware/BoardIO.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Pack/Resources.h"
+#endif
 
 // =====================================================
 // Mic Bindings - gravacao de microfone (objeto Mic, API level 19)
@@ -26,6 +29,11 @@ duk_ret_t JSBindings::js_micRecStart(duk_context *ctx) {
         if (duk_is_number(ctx, -1)) ms = duk_get_int(ctx, -1);
         duk_pop(ctx);
     }
+#if CONFIG_CELEROS_BLUETOOTH
+    // o dono vem primeiro: sessao remota no nosso mic (Pack.listen/record de
+    // outro no) e revogada — dois leitores no canal roubariam chunks
+    Resources::localClaim(resproto::TYPE_MIC);
+#endif
     duk_push_boolean(ctx, BoardIO::micRecStart(ms) ? 1 : 0);
     return 1;
 }

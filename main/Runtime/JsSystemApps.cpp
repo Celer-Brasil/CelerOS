@@ -1,4 +1,8 @@
 #include "JSBindings.h"
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Pack/Resources.h"
+#endif
 #include <algorithm>
 #include <stdio.h>
 #include <string.h>
@@ -905,6 +909,11 @@ duk_ret_t JSBindings::js_playWav(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     present();
+#if CONFIG_CELEROS_BLUETOOTH
+    // alto-falante e do app local: a sessao remota (Pack.speak de outro no)
+    // segura o PcmFeed e o playWav voltaria Busy
+    Resources::localClaim(resproto::TYPE_SPEAKER);
+#endif
     AudioPlayer::WavError we = AudioPlayer::playWav(path);
     CelerKernel::noteAppYield();  // audio longo: renova a janela p/ o retorno
     duk_push_boolean(ctx, we == AudioPlayer::WavError::None ? 1 : 0);

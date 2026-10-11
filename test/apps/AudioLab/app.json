@@ -1,0 +1,13 @@
+{
+  "name": "AudioLab",
+  "packageName": "test.audiolab",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bench do audio da matilha (API 36): ouve o mic de um vizinho no alto-falante local (Pack.listen), grava o mic dele (Pack.record) e toca o WAV. Log em /local/audiolab.txt. App de teste, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 36,
+  "permissions": ["fs", "mic"],
+  "topbar": false,
+  "changelog": "1.0.0 - bench da R3 dos recursos (audio)"
+}

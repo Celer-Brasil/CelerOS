@@ -44,6 +44,7 @@
 #include "driver/ledc.h"
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../Bluetooth/CelerLink.h"
+#include "../Pack/Resources.h"
 #endif
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../Bluetooth/PhoneLink.h"
@@ -88,6 +89,12 @@ void JSBindings::appExitCleanup() {
     jsPhysicsReset();
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();
+#endif
+#if CONFIG_CELEROS_BLUETOOTH
+    // canais do app saem JA (REVOKE "gone" aos clientes) e os handles fecham:
+    // antes so no init do proximo app, e no launcher os KEEPs dos clientes
+    // mantinham vivo um canal cujo dono ja tinha saido (bancada 2026-10-11)
+    Resources::appReset();
 #endif
 #if CONFIG_CELEROS_UI
     deleteAllSprites();
@@ -735,6 +742,24 @@ duk_ret_t JSBindings::js_drawIcon(duk_context *ctx) {
     return 0;
 }
 
+duk_ret_t JSBindings::js_drawJPG(duk_context *ctx) {
+    // JPEG baseline pelo TJpgDec do LovyanGFX (decode em blocos 8x8, sem o
+    // quadro inteiro na RAM) — a foto do Pack.snap/Camera.save na tela
+    if (!tftInstance) return 0;
+    const char *path = duk_require_string(ctx, 0);
+    int x = duk_require_int(ctx, 1);
+    int y = duk_require_int(ctx, 2);
+    if (!imagePathOk(path)) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    CelerFileWrapper file;
+    duk_push_boolean(ctx, gfx()->drawJpgFile(&file, path, jsx(x), jsy(y), 0, 0, 0, 0,
+                                            s_nativeCanvas ? 1.0f : (float)UI::W / 240.0f,
+                                            appScaleY()));
+    return 1;
+}
+
 duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
     // Desenho streaming (linha a linha via pngle do LovyanGFX): nao aloca
     // framebuffer da imagem inteira, so a janela do deflate (~44 KB durante
@@ -902,6 +927,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Sessao Celer Link de um app anterior (saiu sem stop/disconnect)
 #if CONFIG_CELEROS_BLUETOOTH
     CelerLink::appReset();
+    // canais e handles de recursos do app anterior (API 36)
+    Resources::appReset();
 #endif
 
     // Requisicoes async de um app anterior: zumbis descartam o resultado e
@@ -1087,6 +1114,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     static const JsFn kFns4[] = {
         {"drawBMP", js_drawBMP, 3},
         {"drawPNG", js_drawPNG, 3},
+        {"drawJPG", js_drawJPG, 3},           // API 36: JPEG (Pack.snap / Camera.save)
     };
     putFns(ctx, kFns4);
 
@@ -1550,6 +1578,29 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"send", js_packSend, 3},                    // to (id/nome), msg, opts {urgent}
         {"poll", js_packPoll, 0},                    // envelopes custom | null
         {"handoffMusic", js_packHandoffMusic, 1},    // [to] passa a musica em curso
+        // recursos da matilha (API 36): handles numericos, nada bloqueia
+        {"resources", js_packResources, 1},          // [tipo] recursos dos vizinhos (cache + DESCRIBE)
+        {"open", js_packOpen, 3},                    // no, nome, [opts] -> handle | -1
+        {"status", js_packStatus, 1},                // h -> {state, reason, node, name} | null
+        {"read", js_packRead, 1},                    // h -> dado | null
+        {"write", js_packWrite, 2},                  // h, dado -> bool
+        {"close", js_packClose, 1},                  // h
+        {"expose", js_packExpose, 2},                // nome, [opts {shared}] canal de dados do app
+        {"unexpose", js_packUnexpose, 1},            // nome
+        {"publish", js_packPublish, 2},              // nome, dado -> sessoes alcancadas
+        {"sessions", js_packSessions, 1},            // nome -> sessoes vivas | -1
+        {"pollWrite", js_packPollWrite, 0},          // {res, from, fromName, data} | null
+        // audio de outro no (R3, ESP-NOW; perm "mic"): handles dos recursos
+        {"listen", js_packListen, 1},                // no -> h: mic dele no nosso speaker
+        {"speak", js_packSpeak, 1},                  // no -> h: nosso mic no speaker dele
+        {"record", js_packRecord, 2},                // no, [{ms}] -> h: grava o mic dele aqui
+        {"recording", js_packRecording, 1},          // h -> bool
+        {"level", js_packLevel, 0},                  // RMS 0..100 da gravacao remota
+        {"recordStop", js_packRecordStop, 2},        // h, [{raw, path}] -> base64|wav|bool|null
+        // camera de outro no (R3, ESP-NOW; perm "camera")
+        {"snap", js_packSnap, 2},                    // no, {path, quality} -> h (state "done")
+        {"view", js_packView, 2},                    // no, [{fps, quality}] -> h (video)
+        {"drawFrame", js_packDrawFrame, 3},          // h, x, y -> bool (quadro novo desenhado)
     };
     putFns(ctx, kFnsPack);
     duk_put_prop_string(ctx, -2, "Pack");

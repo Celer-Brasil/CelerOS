@@ -12,6 +12,7 @@
 #include "../Hardware/MusicEngine.h"
 #include "../Hardware/MusicSynth.h"
 #include "NetworkManager.h"
+#include "Resources.h"
 
 // Servico de matilha (ver Pack.h). O nome do jogo: o handler do CelerNet
 // roda DENTRO do mutex da malha — so copia para slots e seta flags; quem
@@ -20,6 +21,7 @@
 //
 // Envelope: ['P'][kind u8][msgId u16][payload <= 430]
 //   KIND_MUSIC: [posMs u32][songLen u16][song <= 403] (encodeSong)
+//   KIND_RES:   controle dos recursos (ResProto.h), despachado no Resources
 
 namespace Pack {
 namespace {
@@ -39,9 +41,12 @@ struct CustomMsg {
 CustomMsg s_custom[CUSTOM_DEPTH];
 uint8_t s_customHead = 0, s_customCount = 0;
 
-// dedup por msgId (as copias do sendTo chegam com seq novo)
+// dedup por msgId (as copias do sendTo chegam com seq novo). 32: com os
+// recursos (KEEP/DATA de varias sessoes) 8 entradas giravam antes da 2a
+// copia chegar e ela era entregue de novo.
+constexpr int SEEN_N = 32;
 struct Seen { uint16_t from, msgId; };
-Seen s_seen[8];
+Seen s_seen[SEEN_N];
 uint8_t s_seenPos = 0;
 
 // handoff pendente (copiado no handler, tocado no tick)
@@ -57,11 +62,11 @@ bool s_capsHub = false;
 bool s_inited = false;
 
 bool seenBefore(uint16_t from, uint16_t msgId) {
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < SEEN_N; i++) {
         if (s_seen[i].from == from && s_seen[i].msgId == msgId) return true;
     }
     s_seen[s_seenPos] = Seen{from, msgId};
-    s_seenPos = (uint8_t)((s_seenPos + 1) & 7);
+    s_seenPos = (uint8_t)((s_seenPos + 1) % SEEN_N);
     return false;
 }
 
@@ -69,6 +74,7 @@ void memberCb(uint16_t id, const char* name, uint8_t caps, bool joined) {
     // Rodada 1: so o log (os reflexos da proxima rodada escutam aqui).
     ESP_LOGI(TAG, "%s %04X \"%s\" (caps 0x%02X)", joined ? "chegou:" : "saiu:  ", id,
              name != nullptr ? name : "", caps);
+    if (!joined) Resources::onMemberLeft(id);  // so enfileira (estamos no mutex da malha)
 }
 
 bool msgHandler(const CelerNet::Msg& m) {
@@ -91,6 +97,10 @@ bool msgHandler(const CelerNet::Msg& m) {
         c->len = (uint16_t)len;
         memcpy(c->data, m.data + ENV_HDR, len);
         s_customCount++;
+        return true;
+    }
+    if (kind == KIND_RES) {
+        Resources::onEnvelope(m.from, m.fromName, m.data + ENV_HDR, m.len - ENV_HDR);
         return true;
     }
     if (kind == KIND_MUSIC) {
@@ -157,6 +167,7 @@ void init() {
     CelerNet::onMemberEvent(memberCb);
     CelerNet::subscribe(msgHandler);
     CelerNet::setCaps(caps);
+    Resources::init();
     ESP_LOGI(TAG, "matilha: caps 0x%02X (%s)", caps, bp.name);
 }
 
@@ -237,6 +248,7 @@ bool handoffMusic(uint16_t to) {
 
 void tick() {
     if (!s_inited) init();
+    Resources::tick();
 
     // CAPS_HUB dinamico: rede alcacavel muda o papel na matilha.
     const bool hub = NetworkManager::instance().isConnected();

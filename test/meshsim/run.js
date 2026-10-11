@@ -47,6 +47,15 @@ function airTx(res, from, re) {
 var scenarios = [];
 function scenario(name, fn) { scenarios.push({ name: name, fn: fn }); }
 
+// Wire que so dispara broadcasts em intervalos: via STRING porque o
+// coordenador serializa o wire com toString() — clojure do run.js nao viaja
+function pinger(from, to, gap, payload) {
+    return 'function(env, sim) {' +
+        'for (var t = ' + from + '; t < ' + to + '; t += ' + gap + ') {' +
+        '  sim.at(t, function(e) { e.CelerNet.broadcast(' + JSON.stringify(payload) + '); });' +
+        '} }';
+}
+
 // ---------------------------------------------------------------------------
 // Sonar: ping atravessando 2 saltos, censo e perda real num enlace ruim
 scenario('Sonar: ping por 2 saltos e censo', function() {
@@ -420,6 +429,115 @@ scenario('CelerNet: mensagem crua com "P" no inicio some (magic do envelope)', f
 });
 
 // ---------------------------------------------------------------------------
+// Recursos da matilha (API 36): DESCRIBE/LIST, canal de dados compartilhado,
+// exclusivo (busy), politica do dono, nativo sem provedor, escrita do
+// cliente, lease que vence quando o cliente some e REVOKE no unexpose
+scenario('Recursos: descoberta, sessoes, leases e revogacao', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    return sim.runMesh({
+        durationMs: 60000, seed: 3,
+        nodes: [
+            { name: 'Prov', id: 'A0A0', app: src, caps: 0x03, settings: { res_share_mic: '0' },
+              wire: function(env, sim) {
+                sim.at(2500, function(e) {
+                    sim.note('expose temp ' + e.Pack.expose('temp'));
+                    sim.note('expose botao ' + e.Pack.expose('botao', { shared: false }));
+                    sim.note('expose dup ' + e.Pack.expose('temp'));
+                });
+                for (var t = 8000; t <= 20000; t += 1000) {
+                    (function(t) {
+                        sim.at(t, function(e) { sim.note('pub ' + t + ' -> ' + e.Pack.publish('temp', 'T' + t)); });
+                    })(t);
+                }
+                sim.at(15000, function(e) {
+                    var w = e.Pack.pollWrite();
+                    sim.note('escrita ' + (w ? w.res + ':' + w.data + ' de ' + w.fromName : 'nenhuma'));
+                });
+                sim.at(21000, function(e) { sim.note('sessoes temp ' + e.Pack.sessions('temp')); });
+                sim.at(30000, function(e) { sim.note('unexpose ' + e.Pack.unexpose('temp')); });
+                sim.at(54000, function(e) { sim.note('sessoes botao ' + e.Pack.sessions('botao')); });
+            } },
+            { name: 'Cli', id: 'C1C1', app: src, caps: 0x04, wire: function(env, sim) {
+                var h = {};
+                sim.at(4000, function(e) { e.Pack.resources(); });
+                sim.at(7000, function(e) {
+                    sim.note('lista ' + e.Pack.resources().map(function(r) {
+                        return r.nodeName + '/' + r.name + '/' + r.type + (r.ready ? '/ok' : '') + (r.shared ? '/sh' : '');
+                    }).join(','));
+                    sim.note('so mic ' + e.Pack.resources('mic').length);
+                    h.temp = e.Pack.open('Prov', 'temp');
+                    h.mic = e.Pack.open('Prov', 'mic');
+                    h.spk = e.Pack.open('Prov', 'speaker');
+                    h.nada = e.Pack.open('Prov', 'nada');
+                    h.botao = e.Pack.open('Prov', 'botao');
+                });
+                sim.at(10000, function(e) {
+                    ['temp', 'mic', 'spk', 'nada', 'botao'].forEach(function(k) {
+                        var st = e.Pack.status(h[k]);
+                        sim.note('st ' + k + ' ' + st.state + (st.reason ? '/' + st.reason : ''));
+                    });
+                    sim.note('write botao ' + e.Pack.write(h.botao, 'click'));
+                });
+                for (var t = 9000; t <= 21000; t += 2000) {
+                    sim.at(t, function(e) {
+                        var d, got = [];
+                        while ((d = e.Pack.read(h.temp)) !== null) got.push(d);
+                        sim.note('leu ' + got.join('|'));
+                    });
+                }
+            } },
+            { name: 'C2', id: 'C2C2', app: src, caps: 0x04, wire: function(env, sim) {
+                var h = {};
+                sim.at(11000, function(e) {
+                    h.botao = e.Pack.open('Prov', 'botao');
+                    h.temp = e.Pack.open('Prov', 'temp');
+                });
+                sim.at(16000, function(e) {
+                    sim.note('c2 botao ' + e.Pack.status(h.botao).state + '/' + e.Pack.status(h.botao).reason);
+                    sim.note('c2 temp ' + e.Pack.status(h.temp).state);
+                });
+                sim.at(34000, function(e) {
+                    var st = e.Pack.status(h.temp);
+                    sim.note('c2 temp depois ' + st.state + '/' + st.reason);
+                });
+                // lease do Cli (offline aos 22 s) vence ~20 s depois do ultimo KEEP
+                sim.at(47000, function(e) { h.botao2 = e.Pack.open('Prov', 'botao'); });
+                sim.at(52000, function(e) { sim.note('c2 botao2 ' + e.Pack.status(h.botao2).state); });
+            } }
+        ],
+        links: [['Prov', 'Cli', -50], ['Prov', 'C2', -55], ['Cli', 'C2', -60]],
+        events: [{ at: 22000, offline: 'Cli' }]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Cli'); dump(res, 'Prov'); dump(res, 'C2');
+        check('expose ok e duplicado recusado', has(res, 'Prov', '[sim] expose temp true') &&
+              has(res, 'Prov', '[sim] expose botao true') && has(res, 'Prov', '[sim] expose dup false'));
+        var lista = last(res, 'Cli', /\[sim\] lista /) || '';
+        check('LIST traz nativos e canais', /Prov\/mic\/mic/.test(lista) && /Prov\/speaker\/speaker/.test(lista) &&
+              /Prov\/temp\/data\/ok\/sh/.test(lista) && /Prov\/botao\/data\/ok(?!\/sh)/.test(lista), lista);
+        check('filtro por tipo', has(res, 'Cli', '[sim] so mic 1'));
+        check('canal compartilhado abre', has(res, 'Cli', '[sim] st temp open'));
+        check('mic com politica do dono = denied', has(res, 'Cli', '[sim] st mic refused/denied'));
+        check('speaker sem provedor = unsupported', has(res, 'Cli', '[sim] st spk refused/unsupported'));
+        check('nome desconhecido = notFound', has(res, 'Cli', '[sim] st nada refused/notFound'));
+        check('exclusivo abre para o 1o', has(res, 'Cli', '[sim] st botao open'));
+        check('exclusivo ocupado para o 2o', has(res, 'C2', '[sim] c2 botao refused/busy'));
+        check('compartilhado abre para o 2o', has(res, 'C2', '[sim] c2 temp open'));
+        check('escrita do cliente chega ao provedor', has(res, 'Prov', '[sim] escrita botao:click de Cli'));
+        var leu = res.nodes.Cli.log.filter(function(l) { return l.indexOf('[sim] leu ') === 0; }).join(' ');
+        var ts = (leu.match(/T\d+/g) || []).map(function(x) { return +x.slice(1); });
+        check('publicacoes chegam todas e em ordem', ts.join(',') ===
+              [8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000, 17000, 18000, 19000, 20000].join(','), leu);
+        check('publish alcanca as 2 sessoes', has(res, 'Prov', '[sim] pub 14000 -> 2'));
+        check('lease do cliente que sumiu vence', has(res, 'Prov', 'lease de C1C1 venceu'));
+        check('unexpose revoga a sessao do C2', has(res, 'Prov', '[sim] unexpose true') &&
+              has(res, 'C2', '[sim] c2 temp depois revoked/gone'));
+        check('exclusivo liberado volta a abrir', has(res, 'C2', '[sim] c2 botao2 open') &&
+              has(res, 'Prov', '[sim] sessoes botao 1'));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Transporte: TTL corta o alcance, no so-escuta (relay:false) nao repete,
 // presenca expira 15 s depois de perder o caminho e volta, fila de TX cheia
 scenario('CelerNet: TTL, so-escuta, presenca que vai e volta, fila cheia', function() {
@@ -464,6 +582,117 @@ scenario('CelerNet: TTL, so-escuta, presenca que vai e volta, fila cheia', funct
         var l = res.nodes.N1.log.filter(function(x) { return /\[sim\] nos /.test(x); });
         check('15 s apos N3 cair, N3 e quem dependia dele somem', l[1] === '[sim] nos N2/1', l[1]);
         check('N3 voltou e a presenca se refez', l[2] === '[sim] nos N2/1,N3/2,N4/3', l[2]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Saturacao do relay: as duas pontas metralhando mensagens de 434 B fazem o
+// anel de repeticao do meio encher — a repeticao descartada tem que aparecer
+// CONTADA (relayDropped do status, como o Info.relayDropped do firmware), nao
+// sumir calada (o "relay handler silencioso" da bancada)
+scenario('CelerNet: relay saturado conta relayDropped (anel de 96)', function() {
+    var src = 'test/meshsim/fixtures/eco.js';
+    var big = new Array(435).join('x');   // 434 B = 31 quadros
+    return sim.runMesh({
+        durationMs: 34000, seed: 41,
+        nodes: [
+            { name: 'P1', id: '9001', app: src, wire: pinger(3000, 30000, 700, big) },
+            { name: 'Meio', id: '9002', app: src },
+            { name: 'P2', id: '9003', app: src, wire: pinger(3000, 30000, 700, big) }
+        ],
+        links: [['P1', 'Meio', -50], ['Meio', 'P2', -52]]
+    }).then(function(res) {
+        noErr(res);
+        check('o meio repetiu sob carga', res.nodes.Meio.relayed > 0, res.nodes.Meio.relayed);
+        check('anel cheio: repeticoes descartadas contadas', res.nodes.Meio.relayDropped > 0,
+              res.nodes.Meio.relayDropped);
+        check('relayDropped visivel no status do JS', res.nodes.Meio.net.relayDropped > 0,
+              res.nodes.Meio.net.relayDropped);
+        // degradacao graciosa: algo das pontas ainda atravessa no meio da carga
+        check('alguma mensagem atravessou apesar da saturacao', res.air.some(function(a) {
+            return a.kind === 'rx' && a.data === big;
+        }));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Presenca estavel sob trafego fragmentado sustentado: BEATs continuam
+// atravessando rajadas de mensagens grandes — a lista nao pode tremer
+// (join/leave flapping era o sintoma da bancada do "peer-watch")
+scenario('CelerNet: presenca nao treme sob trafego fragmentado continuo', function() {
+    var src = 'test/meshsim/fixtures/eco.js';
+    var medio = new Array(201).join('y');   // 200 B = 15 quadros
+    return sim.runMesh({
+        durationMs: 44000, seed: 43,
+        nodes: [
+            { name: 'A', id: '9101', app: src, wire: pinger(4000, 40000, 2000, medio) },
+            { name: 'B', id: '9102', app: src, wire: function(env, sim) {
+                for (var t = 6000; t < 42000; t += 3000) {
+                    (function(t) {
+                        sim.at(t, function(e) {
+                            sim.note('nos ' + e.CelerNet.nodes().map(function(n) {
+                                return n.name;
+                            }).sort().join(','));
+                        });
+                    })(t);
+                }
+            } },
+            { name: 'C', id: '9103', app: src }
+        ],
+        links: [['A', 'B', -50, 0.05], ['B', 'C', -55, 0.05]]
+    }).then(function(res) {
+        noErr(res);
+        var amostras = res.nodes.B.log.filter(function(l) { return l.indexOf('[sim] nos ') === 0; });
+        var estaveis = amostras.filter(function(l) { return l === '[sim] nos A,C'; });
+        check('B viu A e C em todas as amostras (sem flapping)',
+              amostras.length >= 10 && amostras.length === estaveis.length,
+              estaveis.length + '/' + amostras.length);
+        check('mensagens grandes ainda chegaram a B com perda leve', res.air.some(function(a) {
+            return a.kind === 'rx' && a.to === 'B' && a.data === medio;
+        }));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// No que foi embora de verdade: sob pressao CONTINUA de fila no observador a
+// histerese segura a presenca alem do TTL (no surdo nao dita morte), mas o
+// teto duro de 4x TTL derruba mesmo assim — o ciclo de peer-watch da bancada
+// so fecha com as duas pontas deste contrato
+scenario('CelerNet: no sumido sai no teto 4xTTL mesmo sob fila cheia', function() {
+    var src = 'test/meshsim/fixtures/eco.js';
+    var big = new Array(435).join('x');
+    // wire em string (ver pinger): rajada + as duas amostras da presenca
+    var amostra = function(t, tag) {
+        return 'sim.at(' + t + ', function(e) {' +
+            '  sim.note("' + tag + ' " + e.CelerNet.nodes().map(function(n) {' +
+            '    return n.name; }).sort().join(",") + " fila " + e.CelerNet.status().txQueued);' +
+            '});';
+    };
+    var wireA = 'function(env, sim) {' +
+        'for (var t = 2000; t < 72000; t += 700) {' +
+        '  sim.at(t, function(e) { e.CelerNet.broadcast(' + JSON.stringify(big) + '); });' +
+        '}' + amostra(30000, 'nos30') + amostra(78000, 'nos78') + '}';
+    return sim.runMesh({
+        durationMs: 82000, seed: 47,
+        nodes: [
+            { name: 'A', id: '9201', app: src, wire: wireA },
+            { name: 'B', id: '9202', app: src },
+            { name: 'C', id: '9203', app: src }
+        ],
+        links: [['A', 'B', -50], ['B', 'C', -55]],
+        events: [{ at: 12000, offline: 'C' }]
+    }).then(function(res) {
+        noErr(res);
+        var l30 = last(res, 'A', /\[sim\] nos30 /) || '';
+        var l78 = last(res, 'A', /\[sim\] nos78 /) || '';
+        // pressao real: a fila propria nao esvaziou entre as rajadas
+        check('observador sob pressao continua de TX (fila > 0)', /fila [1-9]/.test(l30), l30);
+        // 18 s sem BEAT do C: histerese (no surdo) SEGURA alem dos 15 s
+        check('C ainda presente a 18 s sem BEAT (histerese da fila cheia)',
+              l30.indexOf('C') >= 0, l30);
+        // 66 s sem BEAT: o teto 4x TTL derruba mesmo com a fila cheia — e o
+        // vizinho vivo (B) nao sai junto
+        check('C saiu no teto 4xTTL (66 s sem BEAT)', l78.indexOf('B') >= 0 && l78.indexOf('C') < 0, l78);
     });
 });
 

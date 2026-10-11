@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 35
+### Nível de API: 36
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -314,6 +314,13 @@ errado.)
   (CelerOS 1.2+; antes, o PNG mantinha o tamanho nativo em painéis grandes).
   PNGs entrelaçados são suportados. Ideal para fundos e fotos; use
   `System.drawIcon()` para ícones 64x64 estilo launcher.
+
+#### `System.drawJPG(path, x, y)` (API 36)
+- **Parâmetros:** `path` (String), `x` (Int), `y` (Int)
+- **Retorna:** `Boolean`
+- **Descrição:** desenha um `.jpg` baseline (a saída do `Pack.snap` ou do
+  `Camera.save`) decodificado em blocos 8x8 (sem a imagem inteira na RAM),
+  escalado pelo canvas virtual como o `drawPNG`.
 
 #### `System.drawCircle(x, y, radius, color)`
 #### `System.fillCircle(x, y, radius, color)`
@@ -2710,8 +2717,12 @@ atômico no `/local`, direto no SD). O nome do arquivo é seu —
 Libera um quadro retido.
 
 #### `Camera.led(on)`
-O LED de flash branco da câmera (GPIO4 na AI-Thinker). Use como lanterna ou
-para iluminar um QR no escuro.
+O LED de flash branco da câmera (GPIO4 na AI-Thinker), para iluminar um QR
+ou uma foto no escuro. É um LED de potência sem limitação de corrente na
+placa: o firmware o apaga sozinho após 800 ms acesos e, depois de um
+acendimento longo (> 250 ms), ignora o próximo `led(true)` por 4x o tempo que
+ficou aceso. Pulsos curtos (piscadas) passam livres. Não serve de lanterna
+contínua.
 
 #### `Camera.scanQR({timeoutMs, attempts, led})` -> string | `null`
 Lê códigos QR **no próprio aparelho** (decodificador quirc; o quadro
@@ -2720,7 +2731,8 @@ sensor para grayscale QVGA durante a leitura e devolve o modo foto depois
 (a troca custa dezenas de ms, só quando o app mistura fotos e leitura).
 Tenta até decodificar algo, estourar o orçamento de `attempts` (default:
 derivado do `timeoutMs`, uma tentativa ~250 ms) ou o `timeoutMs`
-(default 6000). `led:true` mantém o flash aceso durante a leitura. Devolve o
+(default 6000). `led:true` acende o flash na leitura, sujeito ao mesmo teto do
+`Camera.led` (até 800 ms por leitura; prefira `led:false` com luz ambiente). Devolve o
 texto decodificado ou `null`.
 
 ```javascript
@@ -2740,3 +2752,138 @@ inteiras não (para isso, WiFi).
 
 Placas sem vidro: apps que desenham não rodam no perfil da esp32-cam (ver
 `CELEROS_UI`); a interface de um app de câmera são LEDs, logs e a malha.
+
+## 41. Nível de API 36 — Recursos da matilha: usar o mic, o speaker, a câmera e os dados de outro aparelho
+
+Cada nó **expõe** o que tem e qualquer membro da matilha pode **abrir**. A
+malha leva a descoberta e o controle; cada abertura é uma *sessão* com
+lease: se o cliente some, o dono recebe o recurso de volta sozinho em ~20 s
+(e, se o dono esqueceu a sessão, o cliente reabre sozinho com o mesmo handle).
+Nada bloqueia — `open()` devolve o handle na hora e `status(h)` conta quando
+o dono respondeu (~1 s num salto).
+
+Os recursos nativos vêm do perfil da placa: `mic`, `speaker` e `camera`
+(exclusivos: uma sessão por vez). `mic` e `speaker` ficam prontos nas placas com áudio I2S (veja `Pack.listen`/`speak`/`record` abaixo); a `camera` fica pronta nas placas com câmera (veja `Pack.snap`/`view` abaixo). As sessões usam **ESP-NOW** (rádio WiFi, sem roteador, ~65 KB/s por sentido) quando os dois nós cabem num canal — o nó no WiFi mantém a internet, o livre vai para o canal do AP — e caem para a malha nos outros casos. Os **canais de dados** criados por
+apps (`Pack.expose`) já funcionam, pela malha (até 425 bytes por mensagem,
+taxa baixa: leituras de sensor, estados, comandos).
+
+Privacidade: abrir o `mic` ou a `camera` de outro nó exige a mesma permissão
+que o `Mic`/`Camera` local exigiria (`"mic"`/`"camera"` no app.json). O dono
+desliga o compartilhamento por recurso com os settings `res_share_mic`,
+`res_share_cam`, `res_share_spk` (`"0"` = recusa com `denied`).
+
+#### `Pack.resources([tipo])` → Array
+O que os vizinhos expõem: `[{node, nodeName, name, type, busy, shared, ready}]`,
+`type` é `"mic" | "speaker" | "camera" | "data"`. Vem de um cache; o nó ainda
+sem cache é consultado em segundo plano — chame de novo ~1 s depois.
+
+#### `Pack.open(no, nome, [opts])` → Number
+Abre o recurso `nome` no `no` (id ou nome). Devolve o handle (0..7) ou `-1`
+(sem slot, malha desligada, nó desconhecido, falta de permissão). `opts`
+viaja ao dono como JSON (até 48 bytes).
+
+#### `Pack.status(h)` → Object|null
+`{state, reason, node, name, via}` (`via`: `"espnow"` — rápido, até 1458 bytes por mensagem — ou `"mesh"`). `state`: `"opening"`, `"open"`, `"refused"`,
+`"revoked"`, `"lost"` (o dono saiu / não respondeu) ou `"closed"`. `reason`
+na recusa/revogação: `"notFound"`, `"busy"`, `"denied"`, `"unsupported"`,
+`"full"`, `"local"`, `"gone"`, `"noLink"` (áudio/imagem sem canal ESP-NOW comum) (`"expired"` não aparece: o cliente reabre).
+
+#### `Pack.read(h)` → String|null
+Próxima mensagem publicada na sessão (a mais antiga primeiro; 6 no buffer).
+
+#### `Pack.write(h, dado)` → Boolean
+Manda um dado ao dono (string ou objeto como JSON; ≤ 1458 bytes pelo ESP-NOW, ≤ 425 pela malha).
+
+#### `Pack.close(h)`
+Fecha a sessão. Os handles fecham sozinhos quando o app sai.
+
+#### `Pack.expose(nome, [opts])` → Boolean
+Cria um canal de dados do app (nome ≤ 15 caracteres). `opts.shared` (padrão
+`true`) aceita várias sessões; `false` = exclusivo (o 2º cliente recebe
+`busy`).
+
+#### `Pack.unexpose(nome)` → Boolean
+Tira o canal e revoga as sessões abertas (`"gone"`); a saída do app faz o
+mesmo.
+
+#### `Pack.publish(nome, dado)` → Number
+Manda `dado` a todas as sessões do canal; devolve quantas.
+
+#### `Pack.sessions(nome)` → Number
+Sessões vivas no canal (`-1` = canal inexistente).
+
+#### `Pack.pollWrite()` → Object|null
+Próxima escrita de um cliente num canal nosso: `{res, from, fromName, data}`.
+
+```javascript
+// dono: termômetro
+Pack.expose("temp");
+setInterval(function () { Pack.publish("temp", { c: Sensors.temp() }); }, 2000);
+
+// cliente: qualquer membro da matilha
+var t = Pack.resources("data").filter(function (r) { return r.name === "temp"; })[0];
+var h = t ? Pack.open(t.node, "temp") : -1;
+// no loop:
+var d = h >= 0 ? Pack.read(h) : null;
+if (d) System.drawString(JSON.parse(d).c + " C", 10, 40);
+
+#### `Pack.listen(no)` → Number
+Toca o microfone do `no` ao vivo no alto-falante **deste** aparelho
+(interfone). Exige a permissão `"mic"` e um canal ESP-NOW comum com o nó
+(senão recusa com `"noLink"`). Devolve um handle; `Pack.close(h)` para. O
+áudio é PCM 16 kHz mono pelo ESP-NOW (32 KB/s), com ~160 ms de reserva.
+
+#### `Pack.speak(no)` → Number
+O inverso: o microfone **deste** aparelho toca no alto-falante do `no`. Exige
+microfone local e `"mic"`.
+
+#### `Pack.record(no, [opts])` → Number
+Grava aqui o microfone do `no` (`opts.ms` de teto, 200..10000, padrão 6000).
+Consulte `Pack.recording(h)` (false no teto ou com a sessão caída) e
+`Pack.level()` (RMS 0..100) e colha com `Pack.recordStop`.
+
+#### `Pack.recording(h)` → Boolean
+True enquanto a gravação remota segue.
+
+#### `Pack.level()` → Number
+RMS 0..100 do último bloco de áudio remoto gravado (-1 = nenhum).
+
+#### `Pack.recordStop(h, [opts])` → String|Boolean|null
+Encerra a gravação e devolve o WAV em base64 (o formato do `input_audio` do
+`AI.chat`), o WAV cru com `{raw:true}`, ou grava direto num arquivo com
+`{path:"/local/x.wav"}` (exige `"fs"`; devolve true/false — use este acima de
+poucos segundos: o `FS.writeFile` tem teto de 64 KB).
+
+```javascript
+var mic = Pack.resources("mic").filter(function (r) { return r.ready; })[0];
+var h = Pack.record(mic.node, { ms: 4000 });
+while (Pack.recording(h)) System.delay(100);
+if (Pack.recordStop(h, { path: "/local/remoto.wav" })) System.playWav("/local/remoto.wav");
+```
+
+#### `Pack.snap(no, [opts])` → Number
+Tira uma foto JPEG na câmera do `no` e grava em `opts.path` (padrão
+`/local/snap.jpg`; exige `"camera"` e `"fs"`). Transferência confiável pelo
+ESP-NOW (blocos de 1400 bytes, ACK com bitmap, só os blocos que faltaram são
+reenviados). Consulte `Pack.status(h)`: `bytes`/`total` mostram o progresso e
+`state` vira `"done"` com o arquivo gravado (~3 s num quadro VGA).
+`opts.quality` 5..63 (menor = melhor, padrão 12). A foto sai do modo vigente da
+câmera: um nó lendo QR manda um quadro em tons de cinza, sem reconfigurar o
+sensor.
+
+#### `Pack.view(no, [opts])` → Number
+Vídeo ao vivo da câmera do `no`: um fluxo de quadros JPEG a `opts.fps` (1..10,
+padrão 3; quadro incompleto no ar é descartado, nunca reenviado).
+
+#### `Pack.drawFrame(h, x, y)` → Boolean
+Desenha o quadro completo mais novo de uma sessão `Pack.view` em `x, y` (mesmo
+decoder e escala do `System.drawJPG`); false = nenhum quadro novo desde a
+última chamada.
+
+```javascript
+var cam = Pack.resources("camera").filter(function (r) { return r.ready; })[0];
+var h = Pack.snap(cam.node, { path: "/local/foto.jpg" });
+while (Pack.status(h).state === "open" || Pack.status(h).state === "opening") System.delay(100);
+if (Pack.status(h).state === "done") System.drawJPG("/local/foto.jpg", 0, 0);
+```
+

@@ -13,6 +13,7 @@
 var wt = require('worker_threads');
 var path = require('path');
 var H = require('../js_harness/run.js');
+var Res = require('./resources.js');
 
 var wd = wt.workerData;
 var Q = wd.quantumMs;
@@ -45,10 +46,10 @@ var gen = 0;
 var MSG_MAX = 434, DATA_MAX = 16, CHUNK = 14, PENDING_DEPTH = 96;
 var TOKENS_PER_S = 8;
 var net = { active: false, relay: true, name: '', net: 'celer', seq: (wd.seed & 0xFFFF),
-            txDropped: 0, rxDropped: 0, relayed: 0 };
+            txDropped: 0, rxDropped: 0, relayed: 0, relayDropped: 0 };
 var rxQ = [];             // CelerNet.poll (8, cheia descarta a mais antiga)
 var packQ = [];           // Pack.poll (4)
-var packSeen = [];        // dedup de msgId por origem (8 entradas, igual ao firmware)
+var packSeen = [];        // dedup de msgId por origem (32 entradas, igual ao firmware)
 var packMsgId = (wd.seed >>> 3) & 0xFFFF;
 var backlog = 0, backlogAt = 0;   // quadros na fila do TX (escoam 8/s)
 var stats = { rxDup: 0, swallowed: 0 };
@@ -142,7 +143,8 @@ env.CelerNet = {
         drainBacklog();
         return { active: net.active, relay: net.relay, node: myId(), name: net.name || ('Celer-' + myId()),
                  net: net.net, txQueued: Math.ceil(backlog), txDropped: net.txDropped,
-                 rxDropped: net.rxDropped, relayed: net.relayed, heard: view.nodes.length };
+                 rxDropped: net.rxDropped, relayed: net.relayed, relayDropped: net.relayDropped,
+                 heard: view.nodes.length };
     }
 };
 
@@ -153,12 +155,24 @@ function decodeCaps(c) {
     for (var i = 0; i < CAPS.length; i++) o[CAPS[i]] = !!(c & (1 << i));
     return o;
 }
-function packSend(dst, kind, data, urgent) {
+function packSend(dst, kind, data, urgent, wireLen) {
     packMsgId = (packMsgId + 1) & 0xFFFF;
     net.seq = (net.seq + 2) & 0xFFFF;
-    return enqueue({ t: 'tx', dst: dst, data: data, pack: { kind: kind, msgId: packMsgId }, ttl: 4,
-                     copies: 2, urgent: !!urgent, seq: net.seq }, data.length + 4, 2);
+    var ev = { t: 'tx', dst: dst, data: data, pack: { kind: kind, msgId: packMsgId }, ttl: 4,
+               copies: 2, urgent: !!urgent, seq: net.seq };
+    if (wireLen) ev.wireLen = wireLen;   // o sim soma os 4 B do envelope
+    return enqueue(ev, (wireLen || data.length) + 4, 2);
 }
+// Recursos da matilha (API 36): main/Pack/Resources.cpp em JS (resources.js)
+var settings = wd.settings || {};
+var res = Res.create({
+    S: S,
+    send: function(dst, data, wl, urgent) { return net.active && packSend(dst, 3, data, urgent, wl); },
+    members: function() { return view.nodes; },
+    log: function(m) { log.push(m); },
+    caps: wd.caps || 0,
+    setting: function(k) { return settings.hasOwnProperty(k) ? String(settings[k]) : '1'; }
+});
 env.Pack = {
     me: function() {
         return { id: myId(), name: net.name || ('Celer-' + myId()), caps: decodeCaps(wd.caps),
@@ -178,6 +192,44 @@ env.Pack = {
         return packSend(dst, 0, s, opts && opts.urgent);
     },
     poll: function() { return packQ.length ? packQ.shift() : null; },
+    resources: function(only) { return net.active ? res.api.resources(only) : []; },
+    open: function(to, name, opts) {
+        var dst = resolve(to);
+        if (dst === null || !net.active) return -1;
+        var params = opts && typeof opts === 'object' ? JSON.stringify(opts) : '';
+        if (params.length > 48) throw new RangeError('opts do recurso deve ter 1 a 48 bytes');
+        return res.api.open(dst, String(name), params);
+    },
+    status: function(h) { return res.api.status(h); },
+    read: function(h) { return res.api.read(h); },
+    write: function(h, d) {
+        var s = payload(d);
+        if (s.length > res.api.MAX_DATA) throw new RangeError('dado do recurso deve ter 1 a 425 bytes');
+        return res.api.write(h, s);
+    },
+    close: function(h) { res.api.close(h); },
+    expose: function(name, opts) {
+        return res.api.expose(String(name), !(opts && opts.shared === false));
+    },
+    unexpose: function(name) { return res.api.unexpose(String(name)); },
+    publish: function(name, d) {
+        var s = payload(d);
+        if (s.length > res.api.MAX_DATA) throw new RangeError('dado do recurso deve ter 1 a 425 bytes');
+        return res.api.publish(String(name), s);
+    },
+    sessions: function(name) { return res.api.sessions(String(name)); },
+    pollWrite: function() { return res.api.pollWrite(); },
+    // audio (R3) exige ESP-NOW, que o sim nao modela: recusa "noLink" como o
+    // firmware faria sem canal comum
+    listen: function(to) { return env.Pack.open(to, 'mic'); },
+    speak: function(to) { return env.Pack.open(to, 'speaker'); },
+    record: function(to, opts) { return env.Pack.open(to, 'mic', opts); },
+    recording: function() { return false; },
+    level: function() { return -1; },
+    recordStop: function(h, opts) { res.api.close(h); return opts && opts.path ? false : null; },
+    snap: function(to, opts) { return env.Pack.open(to, 'camera', opts); },
+    view: function(to, opts) { return env.Pack.open(to, 'camera', opts); },
+    drawFrame: function() { return false; },
     handoffMusic: function(to) {
         var ms = env.__harness.music;
         if (!ms.playing || !net.active) return false;
@@ -302,7 +354,8 @@ function deliver(ev) {
                 if (packSeen[i] === ev.from + ':' + ev.pack.msgId) { stats.rxDup++; return; }
             }
             packSeen.push(ev.from + ':' + ev.pack.msgId);
-            if (packSeen.length > 8) packSeen.shift();
+            if (packSeen.length > 32) packSeen.shift();
+            if (ev.pack.kind === 3) { res.onEnvelope(ev.from, ev.fromName, ev.data); return; }
             if (ev.pack.kind === 1) {
                 var ms = env.__harness.music;
                 if (ms.playing) { log.push('[pack] festa recusada: alto-falante ocupado'); return; }
@@ -324,6 +377,8 @@ function deliver(ev) {
         if (rxQ.length > 8) { rxQ.shift(); net.rxDropped++; }
     } else if (ev.t === 'relayed') {
         net.relayed += ev.n;
+    } else if (ev.t === 'reldrop') {
+        net.relayDropped += ev.n;   // anel do repetidor cheio (Info.relayDropped)
     } else if (ev.t === 'lconn') {
         // conexao estabelecida (central) ou recebida (periferico)
         link.conn = { peer: ev.peer, role: ev.role, rssi: ev.rssi, wrong: 0,
@@ -383,6 +438,11 @@ function sync() {
         var m = wt.receiveMessageOnPort(inbox);
         if (m === undefined) { Atomics.wait(gate, slot, Atomics.load(gate, slot), 2); continue; }
         var batch = m.message;
+        // presenca que sumiu = evento de saida (handles com ele viram "lost")
+        var gone = view.nodes.filter(function(o) {
+            return !batch.nodes.some(function(n) { return n.id === o.id; });
+        });
+        gone.forEach(function(o) { res.memberLeft(o.id); });
         view.nodes = batch.nodes;
         view.linkAdv = batch.linkAdv;
         view.online = batch.online;
@@ -399,6 +459,7 @@ S.delay = function(ms) {
     while (S.millis() >= nextBarrier) {
         sync();
         if (stopNow) throw { harnessStop: true };
+        if (net.active) res.tick();
     }
     if (!inAction) {
         inAction = true;
@@ -415,7 +476,11 @@ var info0 = S.getInfo;
 S.getInfo = function() { var o = info0(); o.board = wd.board || 'host'; return o; };
 if (wd.autoStart) env.CelerNet.start({ name: wd.name });
 
-var res = H.runApp(wd.app, function(e2) {
+// ATENCAO: `res` acima e o motor de recursos — o resultado do runApp vive em
+// `run` (houve um `var res` duplo aqui: depois da saida do app, res.tick()
+// e res.memberLeft explodiam com TypeError ENGOLIDO pelo catch do loop e o
+// no abandonava as barreiras em silencio, parando de ouvir/relayar cedo).
+var run = H.runApp(wd.app, function(e2) {
     // runApp cria o proprio env: reaproveita o nosso (stubs ligados ao sim)
     for (var k in env) if (Object.prototype.hasOwnProperty.call(env, k)) e2[k] = env[k];
 });
@@ -423,9 +488,9 @@ var res = H.runApp(wd.app, function(e2) {
 var exitedAt = S.millis();
 try {
     while (!stopNow) S.delay(Q);
-} catch (e) { /* harnessStop */ }
+} catch (e) { if (!e || !e.harnessStop) throw e; /* harnessStop = fim */ }
 wt.parentPort.postMessage({
-    t: 'done', err: res.err, log: log, exitedAt: exitedAt,
+    t: 'done', err: run.err, log: log, exitedAt: exitedAt,
     music: { playing: env.__harness.music.playing, songs: env.__harness.music.songs,
              startAt: env.__harness.music.startAt },
     storage: env.__storage, stats: stats, net: env.CelerNet.status(),

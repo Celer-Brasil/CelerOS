@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 35 — 303 funcoes.
+// API level 36 — 324 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -21,6 +21,8 @@ interface UIListItem { label: string; sub?: string; right?: string; rightColor?:
 
 // CelerNet (API 26): malha BLE — poll/nodes/status
 interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }
+interface PackResource { node: string; nodeName: string; name: string; type: "mic" | "speaker" | "camera" | "data"; busy: boolean; shared: boolean; ready: boolean; }
+interface PackSession { state: "opening" | "open" | "refused" | "revoked" | "lost" | "closed" | "done"; reason: string; node: string; name: string; via: "espnow" | "mesh" | ""; bytes?: number; total?: number; frames?: number; }
 interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }
 interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }
 
@@ -66,7 +68,7 @@ declare const System: {
     rigidSet(id: string, idx: number, x: number, y: number, angle?: number, vx?: number, vy?: number, w?: number): any;
     rigidImpulse(id: string, idx: number, jx: number, jy: number): any;
     rigidStep(id: string, dt: number, gx?: number, gy?: number, maxSub?: number): any;
-    rigidState(id: string, buf?: number): any;
+    rigidState(id: string, buf?: number[]): any;
     rigidCount(id: string): any;
     drawSprite(id: string, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: string, smooth?: number): void;
     blitSprite(id: string, x: number, y: number, w: number, h: number): void;
@@ -103,6 +105,8 @@ declare const System: {
     drawBMP(path: string, x: number, y: number): any;
     /** desenha uma imagem .png do sistema de arquivos (/sd/ ou `/local/`) em `x, y`, decodificada em streaming linha a linha (sem pico de */
     drawPNG(path: string, x: number, y: number): any;
+    /** desenha um .jpg baseline (a saída do Pack.snap ou do `Camera.save`) decodificado em blocos 8x8 (sem a imagem inteira na RAM), (API 36) */
+    drawJPG(path: string, x: number, y: number): boolean;
     /** renderiza strings em alta velocidade no display. O texto é UTF-8 e todas as fontes cobrem Latin-1 (U+0020..U+00FF), então acentos */
     drawString(text: string, x: number, y: number, font?: number): void;
     /** define as cores ativas de renderização de texto. Com `bg_color`, o texto sobrescreve em nível de hardware, apagando os pixels */
@@ -568,6 +572,26 @@ declare const Pack: {
     send(destino: number, mensagem?: number, opcoes?: number): any;
     poll(): any;
     handoffMusic(destino?: number): any;
+    resources(tipo?: "mic" | "speaker" | "camera" | "data"): PackResource[];
+    open(no: string, nome: string, opts?: object): number;
+    status(h: number): PackSession | null;
+    read(h: number): string | null;
+    write(h: number, dado?: string | object): boolean;
+    close(h: number): void;
+    expose(nome: string, opts?: { shared?: boolean }): boolean;
+    unexpose(nome: string): boolean;
+    publish(nome: string, dado?: string | object): number;
+    sessions(nome: string): number;
+    pollWrite(): { res: string; from: string; fromName: string; data: string } | null;
+    listen(no?: string): number;
+    speak(no?: string): number;
+    record(no?: string, opts?: { ms?: number }): number;
+    recording(h: number): boolean;
+    level(): number;
+    recordStop(h: number, opts?: { raw?: boolean; path?: string }): string | boolean | null;
+    snap(no?: string, opts?: { path?: string; quality?: number }): number;
+    view(no?: string, opts?: { fps?: number; quality?: number }): number;
+    drawFrame(h: number, x: number, y: number): boolean;
 };
 
 declare const Phone: {

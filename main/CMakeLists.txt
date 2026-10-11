@@ -137,8 +137,8 @@ endif()
 # exemplos NimBLE do IDF): os headers do host entram no include path do main.
 set(CELEROS_BT_REQUIRES)
 if(CONFIG_CELEROS_BLUETOOTH)
-    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Bluetooth/CelerNet.cpp" "Pack/Pack.cpp" "Runtime/JsLink.cpp" "Runtime/JsMesh.cpp" "Runtime/JsPack.cpp")
-    list(APPEND CELEROS_BT_REQUIRES bt)
+    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Bluetooth/CelerNet.cpp" "Pack/Pack.cpp" "Pack/Resources.cpp" "Pack/DataLink.cpp" "Pack/AudioRes.cpp" "Pack/CamRes.cpp" "Runtime/JsLink.cpp" "Runtime/JsMesh.cpp" "Runtime/JsPack.cpp")
+    list(APPEND CELEROS_BT_REQUIRES bt esp_ringbuf)  # esp_ringbuf: RX do ESP-NOW (Pack/DataLink)
     if(CONFIG_CELEROS_PHONE_LINK)
         list(APPEND CELEROS_SRCS "Bluetooth/PhoneLink.cpp" "Runtime/JsPhone.cpp" "Launcher/PhoneScreens.cpp")
     endif()
@@ -250,6 +250,13 @@ target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/$
 # o mesmo conjunto que bt/host/nimble/CMakeLists.txt exporta como publico.
 if(CONFIG_CELEROS_BLUETOOTH)
     set(CELEROS_NIMBLE $ENV{IDF_PATH}/components/bt/host/nimble)
+    # pasta do esp_bt.h por alvo: o bt mapeia S3 -> esp32c3 (TARGET_SRC_NAME
+    # em components/bt/CMakeLists.txt; nao existe include/esp32s3)
+    if(CONFIG_IDF_TARGET_ESP32S3)
+        set(CELEROS_BT_CTRL_INC esp32c3)
+    else()
+        set(CELEROS_BT_CTRL_INC ${IDF_TARGET})
+    endif()
     target_include_directories(${COMPONENT_LIB} PRIVATE
         "${CELEROS_NIMBLE}/nimble/porting/nimble/include"
         "${CELEROS_NIMBLE}/nimble/porting/npl/esp-idf/include"
@@ -262,6 +269,10 @@ if(CONFIG_CELEROS_BLUETOOTH)
         "${CELEROS_NIMBLE}/port/include"
         "$ENV{IDF_PATH}/components/bt/porting/include"
         "$ENV{IDF_PATH}/components/bt/porting_btdm/controller/btdm_common/include"
+        # esp_bt.h do controlador (potencia de TX no ESP32 classico, CelerLink)
+        "$ENV{IDF_PATH}/components/bt/include/${CELEROS_BT_CTRL_INC}/include"
+        # freertos/ringbuf.h: RX do ESP-NOW dos recursos (Pack/DataLink)
+        "$ENV{IDF_PATH}/components/esp_ringbuf/include"
     )
 endif()
 
@@ -298,7 +309,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.8.2"
-    CELEROS_API_LEVEL=35
+    CELEROS_API_LEVEL=36
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

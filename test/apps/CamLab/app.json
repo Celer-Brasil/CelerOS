@@ -1,0 +1,13 @@
+{
+  "name": "CamLab",
+  "packageName": "test.camlab",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bench da camera da matilha (API 36): foto de um no-camera (Pack.snap) mostrada com System.drawJPG e video ao vivo (Pack.view + Pack.drawFrame). Log em /local/camlab.txt. App de teste, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 36,
+  "permissions": ["fs", "camera"],
+  "topbar": false,
+  "changelog": "1.0.0 - bench da R3 dos recursos (camera)"
+}

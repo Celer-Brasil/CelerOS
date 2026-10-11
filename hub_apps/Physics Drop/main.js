@@ -1,5 +1,7 @@
-// Physics Drop 4.0 — sandbox de fisica VERLET NATIVO (celeros.physics,
-// API 31) com ferramentas de verdade no toque:
+// Physics Drop 4.1 — sandbox de fisica VERLET NATIVO (celeros.physics,
+// API 31) com ferramentas de verdade no toque. Porte CelerGame: o loop e
+// os gestos vivem no core (cena + E.input), desenho com E.gfx, e a
+// ferramenta/gravidade da ultima sessao ficam lembradas no NVS.
 //   Pintar — arraste cria a cadeia de nos/vinculos (como sempre)
 //   Pegar  — toque perto de um no o pega; arraste puxa (pano/corda
 //            seguem); soltar arremessa com a velocidade do dedo
@@ -9,14 +11,16 @@
 // Os nos tem CORPO (colisao ponto-ponto nativa): corda cai sobre pano em
 // vez de atravessar. Gravidade cicla no botao de status (ate invertida).
 
+var E = require("celeros.game");       // familia CelerGame: core
 var P = require("celeros.physics");
-var T = System.theme();
-var SW = 240, SH = 320;
+
+E.init({ dir: "Physics Drop", fps: 50, save: "drop." });
+var T = E.theme, SW = E.W, SH = E.H;
 var BAR_Y = 236;                      // topo da barra de ferramentas
 
 // gravidade em presets (cicla no botao): normal, leve, lua, forte, invertida
 var GRAVS = [[0.4, "normal"], [0.2, "leve"], [0.07, "lua"], [0.9, "forte"], [-0.3, "invertida"]];
-var gravIdx = 0;
+var gravIdx = E.save.num("grav", 0) % GRAVS.length;
 
 var TOOLS = [
     { label: "Pinta", w: 42 },
@@ -26,7 +30,7 @@ var TOOLS = [
     { label: "Apaga", w: 42 }
 ];
 var T_DRAW = 0, T_GRAB = 1, T_PIN = 2, T_CUT = 3, T_ERASE = 4;
-var tool = T_DRAW;
+var tool = E.save.num("tool", T_DRAW) % TOOLS.length;
 
 var MAX_POINTS = 120;
 var GRAB_R = 22;                      // raio de pescar um no com o dedo
@@ -50,6 +54,17 @@ var isDrawing = false, lastPointIdx = -1;   // Pintar
 var grabbed = -1;                            // Pegar
 var cutPrev = null;                          // Cortar (traco anterior)
 var touchDown = false;
+
+// rects dos botoes (geometria da 4.0 — a bateria do test.js dirige por aqui)
+var BTN_STAT = { x: 10, y: BAR_Y + 2, w: 220, h: 20 };
+var BTN_TOOL = [];
+for (var bi = 0, bx = 10; bi < TOOLS.length; bi++) {
+    BTN_TOOL.push({ x: bx, y: BAR_Y + 26, w: TOOLS[bi].w, h: 26 });
+    bx += TOOLS[bi].w + 2;
+}
+var BTN_CORDA = { x: 10, y: BAR_Y + 56, w: 70, h: 28 };
+var BTN_PANO = { x: 84, y: BAR_Y + 56, w: 70, h: 28 };
+var BTN_LIMPAR = { x: 158, y: BAR_Y + 56, w: 72, h: 28 };
 
 function novoMundo() {
     world.free();
@@ -112,176 +127,190 @@ function segCross(ax, ay, bx, by, cx, cy, dx, dy) {
     return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 
-// ------------------------------------------------------------ desenho -----
-var hasWide = (typeof System.drawWideLine === "function");
-var hasSmooth = (typeof System.fillSmoothCircle === "function");
-
-function drawWorld(tc) {
-    System.fillRect(0, 0, SW, BAR_Y, T.bg);
-    System.drawFastHLine(0, BAR_Y - 1, SW, T.stroke);
-
-    var xy = world.xy();
-    if (!xy.length) {
-        // drawString direto: o fundo do mundo e repintado a cada frame
-        System.setTextDatum(5);           // MC (LovyanGFX: 4 e middle-left)
-        System.setTextColor(T.textDim, T.bg);
-        System.drawString("Pinte, ou solte Corda/Pano", SW / 2, 108, 2);
-        System.drawString("Pegar arrasta e arremessa;", SW / 2, 132, 1);
-        System.drawString("Cortar fatia; Pino fixa no ar", SW / 2, 146, 1);
-        System.setTextDatum(0);
+// ------------------------------------------------------------ interacao ---
+// press/release/arrasto por ferramenta (o mesmo estado da 4.0, agora
+// alimentado pelo E.input)
+function press(x, y) {
+    if (y >= BAR_Y - 6) return;
+    if (tool === T_DRAW) {
+        isDrawing = true;
+        if (world.count() < MAX_POINTS) {
+            lastPointIdx = world.add(x, y);
+            if (lastPointIdx !== -1) world.pin(lastPointIdx);
+        } else lastPointIdx = -1;
+    } else if (tool === T_GRAB) {
+        grabbed = nearest(x, y, GRAB_R);
+        if (typeof __harness !== "undefined") {
+            __harness.log.push('[grab] press em ' + x.toFixed(0) + ',' + y.toFixed(0) +
+                               ' -> ' + grabbed + ' (nos ' + world.count() + ')');
+        }
+    } else if (tool === T_PIN) {
+        var pi = nearest(x, y, GRAB_R);
+        if (pi >= 0) {
+            var pinsNow = world.pins();
+            world.pin(pi, !pinsNow[pi]);
+        }
+    } else if (tool === T_CUT) {
+        cutPrev = { x: x, y: y };
     }
+}
 
-    var pins = world.pins();
-    var st = world.sticks();
-    for (var i = 0; i < st.length; i += 2) {
-        var ia = st[i] * 2, ib = st[i + 1] * 2;
-        if (hasWide) {
-            System.drawWideLine(Math.floor(xy[ia]), Math.floor(xy[ia + 1]),
-                                Math.floor(xy[ib]), Math.floor(xy[ib + 1]), 2, T.text);
+function release() {
+    if (tool === T_DRAW) {
+        isDrawing = false;
+        if (lastPointIdx !== -1) {
+            world.pin(lastPointIdx, false);
+            lastPointIdx = -1;
+        }
+    } else if (tool === T_GRAB) {
+        grabbed = -1;   // soltou: a velocidade do dedo vira arremesso
+    } else if (tool === T_CUT) {
+        cutPrev = null;
+    }
+}
+
+function drag(x, y) {
+    if (y >= BAR_Y - 6) return;
+    if (tool === T_DRAW && isDrawing && lastPointIdx !== -1) {
+        var xy = world.xy();
+        var lp = lastPointIdx * 2;
+        var dx = x - xy[lp], dy = y - xy[lp + 1];
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 15) {
+            if (world.count() < MAX_POINTS) {
+                var nIdx = world.add(x, y);
+                if (nIdx !== -1) {
+                    world.stick(lastPointIdx, nIdx, dist);
+                    world.pin(nIdx);
+                    world.pin(lastPointIdx, false);
+                    lastPointIdx = nIdx;
+                }
+            }
         } else {
-            System.drawLine(Math.floor(xy[ia]), Math.floor(xy[ia + 1]),
-                            Math.floor(xy[ib]), Math.floor(xy[ib + 1]), T.text);
+            world.set(lastPointIdx, x, y);
         }
-    }
-    for (var j = 0; j < xy.length; j += 2) {
-        var idx = j / 2;
-        var col = pins[idx] ? T.warn : T.accent;
-        var r = idx === grabbed ? 4 : 2;
-        if (hasSmooth) System.fillSmoothCircle(Math.floor(xy[j]), Math.floor(xy[j + 1]), r, col);
-        else System.fillCircle(Math.floor(xy[j]), Math.floor(xy[j + 1]), r, col);
-    }
-    // traco da tesoura em vermelho enquanto corta
-    if (tool === T_CUT && cutPrev && tc && tc.down) {
-        System.drawWideLine(Math.floor(cutPrev.x), Math.floor(cutPrev.y),
-                            Math.floor(tc.x), Math.floor(tc.y), 2, T.err);
+    } else if (tool === T_GRAB && grabbed >= 0) {
+        world.set(grabbed, x, y);
+        // teto de log alto: com a engine os botoes da barra desenham todo
+        // frame (o toolkit so logava na mudanca) e o limite antigo de 400
+        // caia antes do arrasto comecar
+        if (typeof __harness !== "undefined" && __harness.log.length < 4000) {
+            var dxy = world.xy();
+            __harness.log.push('[grab] drag dedo ' + x.toFixed(0) + ',' + y.toFixed(0) +
+                               ' | no1 ' + dxy[2].toFixed(0) + ',' + dxy[3].toFixed(0));
+        }
+    } else if (tool === T_CUT && cutPrev) {
+        var st = world.sticks();
+        var pts = world.xy();
+        for (var ci = st.length / 2 - 1; ci >= 0; ci--) {   // do fim pro comeco (delStick faz swap)
+            var a2 = st[ci * 2] * 2, b2 = st[ci * 2 + 1] * 2;
+            if (segCross(cutPrev.x, cutPrev.y, x, y,
+                         pts[a2], pts[a2 + 1], pts[b2], pts[b2 + 1])) {
+                world.delStick(ci);
+            }
+        }
+        cutPrev = { x: x, y: y };
+    } else if (tool === T_ERASE) {
+        var exy = world.xy();          // uma leitura por frame
+        for (var ei = world.count() - 1; ei >= 0; ei--) {   // do fim pro comeco (delPoint faz swap)
+            var edx = x - exy[ei * 2], edy = y - exy[ei * 2 + 1];
+            if (edx * edx + edy * edy <= ERASE_R * ERASE_R) world.delPoint(ei);
+        }
+        grabbed = -1;
     }
 }
 
-// ------------------------------------------------------------------ main ---
-while (true) {
-    UI.begin(T.bg);
-    var tc = UI.touch();
-    var inWorld = tc.down && tc.y < BAR_Y - 6;
+// ------------------------------------------------------------------ cenas ---
+E.run({
+    jogo: {
+        update: function (dt) {
+            var i = E.input;
+            var inWorld = i.down && i.y < BAR_Y - 6;
 
-    if (tc.down && !touchDown) {
-        // press: inicio de gesto por ferramenta
-        touchDown = true;
-        if (inWorld) {
-            if (tool === T_DRAW) {
-                isDrawing = true;
-                if (world.count() < MAX_POINTS) {
-                    lastPointIdx = world.add(tc.x, tc.y);
-                    if (lastPointIdx !== -1) world.pin(lastPointIdx);
-                } else lastPointIdx = -1;
-            } else if (tool === T_GRAB) {
-                grabbed = nearest(tc.x, tc.y, GRAB_R);
-                if (typeof __harness !== "undefined") {
-                    __harness.log.push('[grab] press em ' + tc.x.toFixed(0) + ',' + tc.y.toFixed(0) +
-                                       ' -> ' + grabbed + ' (nos ' + world.count() + ')');
-                }
-            } else if (tool === T_PIN) {
-                var pi = nearest(tc.x, tc.y, GRAB_R);
-                if (pi >= 0) {
-                    var pinsNow = world.pins();
-                    world.pin(pi, !pinsNow[pi]);
-                }
-            } else if (tool === T_CUT) {
-                cutPrev = { x: tc.x, y: tc.y };
+            if (i.down && !touchDown) {
+                touchDown = true;
+                if (inWorld) press(i.x, i.y);
+            } else if (!i.down && touchDown) {
+                touchDown = false;
+                release();
             }
-        }
-    } else if (!tc.down && touchDown) {
-        // release
-        touchDown = false;
-        if (tool === T_DRAW) {
-            isDrawing = false;
-            if (lastPointIdx !== -1) {
-                world.pin(lastPointIdx, false);
-                lastPointIdx = -1;
-            }
-        } else if (tool === T_GRAB) {
-            grabbed = -1;   // soltou: a velocidade do dedo vira arremesso
-        } else if (tool === T_CUT) {
-            cutPrev = null;
-        }
-    }
+            if (inWorld) drag(i.x, i.y);
 
-    // arrasto por ferramenta
-    if (inWorld) {
-        if (tool === T_DRAW && isDrawing && lastPointIdx !== -1) {
+            // fisica: 2 steps por frame, dt=1 mantem os presets em px por step
+            for (var stp = 0; stp < 2; stp++) {
+                world.step(1, { gravity: { x: 0, y: GRAVS[gravIdx][0] },
+                                damp: 0.999,
+                                bounds: { x: 0, y: 0, w: SW, h: BAR_Y - 4 },
+                                bounce: 0.8 });
+            }
+
+            // barra: status / ferramentas / acoes
+            if (E.hit(BTN_STAT)) {
+                gravIdx = (gravIdx + 1) % GRAVS.length;
+                E.save.set("grav", gravIdx);
+            }
+            for (var ti = 0; ti < TOOLS.length; ti++) {
+                if (E.hit(BTN_TOOL[ti])) {
+                    tool = ti;
+                    E.save.set("tool", ti);
+                    grabbed = -1;
+                    cutPrev = null;
+                    isDrawing = false;
+                }
+            }
+            if (E.hit(BTN_CORDA)) spawnRope();
+            if (E.hit(BTN_PANO)) spawnCloth();
+            if (E.hit(BTN_LIMPAR)) novoMundo();
+        },
+        draw: function () {
+            // mundo
+            E.gfx.rect(0, 0, SW, BAR_Y, T.bg, { screen: true });
+            System.drawFastHLine(0, BAR_Y - 1, SW, T.stroke);
+
             var xy = world.xy();
-            var lp = lastPointIdx * 2;
-            var dx = tc.x - xy[lp], dy = tc.y - xy[lp + 1];
-            var dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > 15) {
-                if (world.count() < MAX_POINTS) {
-                    var nIdx = world.add(tc.x, tc.y);
-                    if (nIdx !== -1) {
-                        world.stick(lastPointIdx, nIdx, dist);
-                        world.pin(nIdx);
-                        world.pin(lastPointIdx, false);
-                        lastPointIdx = nIdx;
-                    }
-                }
-            } else {
-                world.set(lastPointIdx, tc.x, tc.y);
+            if (!xy.length) {
+                E.gfx.text("Pinte, ou solte Corda/Pano", SW / 2, 108,
+                           { ts: "big", align: "center", color: T.textDim });
+                E.gfx.text("Pegar arrasta e arremessa;", SW / 2, 132,
+                           { ts: "small", align: "center", color: T.textDim });
+                E.gfx.text("Cortar fatia; Pino fixa no ar", SW / 2, 146,
+                           { ts: "small", align: "center", color: T.textDim });
             }
-        } else if (tool === T_GRAB && grabbed >= 0) {
-            world.set(grabbed, tc.x, tc.y);
-            if (typeof __harness !== "undefined" && __harness.log.length < 400) {
-                var dxy = world.xy();
-                __harness.log.push('[grab] drag dedo ' + tc.x.toFixed(0) + ',' + tc.y.toFixed(0) +
-                                   ' | no1 ' + dxy[2].toFixed(0) + ',' + dxy[3].toFixed(0));
-            }
-        } else if (tool === T_CUT && cutPrev) {
+
+            var pins = world.pins();
             var st = world.sticks();
-            var pts = world.xy();
-            for (var ci = st.length / 2 - 1; ci >= 0; ci--) {   // do fim pro comeco (delStick faz swap)
-                var a2 = st[ci * 2] * 2, b2 = st[ci * 2 + 1] * 2;
-                if (segCross(cutPrev.x, cutPrev.y, tc.x, tc.y,
-                             pts[a2], pts[a2 + 1], pts[b2], pts[b2 + 1])) {
-                    world.delStick(ci);
-                }
+            for (var i = 0; i < st.length; i += 2) {
+                var ia = st[i] * 2, ib = st[i + 1] * 2;
+                E.gfx.line(Math.floor(xy[ia]), Math.floor(xy[ia + 1]),
+                           Math.floor(xy[ib]), Math.floor(xy[ib + 1]),
+                           T.text, { w: 2 });
             }
-            cutPrev = { x: tc.x, y: tc.y };
-        } else if (tool === T_ERASE) {
-            var exy = world.xy();          // uma leitura por frame
-            for (var ei = world.count() - 1; ei >= 0; ei--) {   // do fim pro comeco (delPoint faz swap)
-                var edx = tc.x - exy[ei * 2], edy = tc.y - exy[ei * 2 + 1];
-                if (edx * edx + edy * edy <= ERASE_R * ERASE_R) world.delPoint(ei);
+            for (var j = 0; j < xy.length; j += 2) {
+                var idx = j / 2;
+                var col = pins[idx] ? T.warn : T.accent;
+                var r = idx === grabbed ? 4 : 2;
+                E.gfx.circle(Math.floor(xy[j]), Math.floor(xy[j + 1]), r, col,
+                             { smooth: true });
             }
-            grabbed = -1;
+            // traco da tesoura em vermelho enquanto corta
+            if (tool === T_CUT && cutPrev && E.input.down) {
+                E.gfx.line(Math.floor(cutPrev.x), Math.floor(cutPrev.y),
+                           Math.floor(E.input.x), Math.floor(E.input.y), T.err, { w: 2 });
+            }
+
+            // barra: status / ferramentas / acoes
+            E.gfx.button("g: " + GRAVS[gravIdx][1] + "  ·  " + world.count() + "/" +
+                         MAX_POINTS + " nós", BTN_STAT.x, BTN_STAT.y, BTN_STAT.w,
+                         BTN_STAT.h, { primary: false, px: 11 });
+            for (var ti = 0; ti < TOOLS.length; ti++) {
+                E.gfx.button(TOOLS[ti].label, BTN_TOOL[ti].x, BTN_TOOL[ti].y,
+                             BTN_TOOL[ti].w, BTN_TOOL[ti].h,
+                             { primary: ti === tool, px: 12 });
+            }
+            E.gfx.button("Corda", BTN_CORDA.x, BTN_CORDA.y, BTN_CORDA.w, BTN_CORDA.h);
+            E.gfx.button("Pano", BTN_PANO.x, BTN_PANO.y, BTN_PANO.w, BTN_PANO.h);
+            E.gfx.button("Limpar", BTN_LIMPAR.x, BTN_LIMPAR.y, BTN_LIMPAR.w, BTN_LIMPAR.h,
+                         { primary: false, stroke: T.err });
         }
     }
-
-    // fisica: 2 steps por frame, dt=1 mantem os presets em px por step
-    for (var stp = 0; stp < 2; stp++) {
-        world.step(1, { gravity: { x: 0, y: GRAVS[gravIdx][0] },
-                        damp: 0.999,
-                        bounds: { x: 0, y: 0, w: SW, h: BAR_Y - 4 },
-                        bounce: 0.8 });
-    }
-
-    drawWorld(tc);
-
-    // barra: status / ferramentas / acoes
-    if (UI.button("g: " + GRAVS[gravIdx][1] + "  ·  " + world.count() + "/" + MAX_POINTS + " nós",
-                  10, BAR_Y + 2, 220, 20, { style: "ghost" })) {
-        gravIdx = (gravIdx + 1) % GRAVS.length;
-    }
-    var tx = 10;
-    for (var ti = 0; ti < TOOLS.length; ti++) {
-        var act = ti === tool;
-        if (UI.button(TOOLS[ti].label, tx, BAR_Y + 26, TOOLS[ti].w, 26,
-                      { style: act ? "primary" : "ghost" })) {
-            tool = ti;
-            grabbed = -1;
-            cutPrev = null;
-            isDrawing = false;
-        }
-        tx += TOOLS[ti].w + 2;
-    }
-    if (UI.button("Corda", 10, BAR_Y + 56, 70, 28)) spawnRope();
-    if (UI.button("Pano", 84, BAR_Y + 56, 70, 28)) spawnCloth();
-    if (UI.button("Limpar", 158, BAR_Y + 56, 72, 28, { style: "danger" })) novoMundo();
-    UI.end(50);
-}
+}, "jogo");

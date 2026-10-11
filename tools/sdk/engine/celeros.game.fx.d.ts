@@ -29,6 +29,36 @@ declare namespace E {
             update(dt: number): void;
             draw(): void;
         };
+        interface Emitter {
+            on: boolean;
+            start(): void;
+            stop(): void;
+            /** move a fonte fixa do emissor */
+            set(x: number, y: number): void;
+            dead: boolean;
+        }
+        /** Fonte continua: rate part/s + opts de particula do burst; duration (ms) desliga sozinho; follow () => {x,y} (null pula o quadro). */
+        emitter(o: {
+            x?: number; y?: number; rate?: number; duration?: number;
+            follow?: () => { x: number; y: number } | null;
+            color?: number; colors?: number[]; speed?: number; speed2?: number;
+            angle?: number; spread?: number; life?: number; size?: number;
+            grav?: number; drag?: number; shape?: 'dot' | 'spark' | 'ring';
+        }): Emitter;
+        /** Rastro que segue getXY () => {x, y} (coords de mundo); parado nao deixa rastro. */
+        trail(getXY: () => { x: number; y: number }, o?: {
+            rate?: number; life?: number; size?: number;
+            color?: number; colors?: number[]; grav?: number;
+        }): Emitter;
+        interface Parallax {
+            /** tela inteira (1a linha do draw) ou so as celulas do rect (painter da camada suja) */
+            draw(x?: number, y?: number, w?: number, h?: number): void;
+        }
+        /** Camadas de fundo com rolagem pela camera: [{speed, gap, rowH, paint(x, y)}]. */
+        parallax(layers: {
+            speed?: number; gap?: number; rowH?: number;
+            paint: (x: number, y: number) => void;
+        }[]): Parallax;
         /** Desenha particulas/floaters/flash — chame na ultima linha do draw da cena. */
         draw(): void;
     };

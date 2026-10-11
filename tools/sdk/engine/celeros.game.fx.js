@@ -23,6 +23,7 @@ E.fx = {
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
     _floaters: [],
+    _emitters: [],      // emissores continuos (emitter/trail)
     _flashColor: 0,
     _flashT: 0,
     _flashDur: 1,
@@ -37,7 +38,28 @@ E.fx = {
         }
         this._live = 0;
         this._floaters = [];
+        this._emitters = [];
         this._flashT = 0;
+    },
+
+    // semeia UMA particula do pool com as opts do burst (caminho zero-alloc
+    // compartilhado: burst e emissor caem aqui sem montar objeto por chamada)
+    _put: function (x, y, o, a, v) {
+        var p = this._spawn();
+        if (!p) return false;
+        p.x = x;
+        p.y = y;
+        p.vx = Math.cos(a) * v;
+        p.vy = Math.sin(a) * v;
+        p.t = 0;
+        p.life = (o.life || 0.6) * (0.6 + Math.random() * 0.4);
+        p.size = o.size || 2;
+        p.color = o.colors ? E.m.pick(o.colors) :
+                  (o.color === undefined ? 0xFFFF : o.color);
+        p.grav = o.grav || 0;
+        p.drag = o.drag || 0;
+        p.shape = o.shape || 'dot';
+        return true;
     },
 
     // burst(x, y, {n, color|colors[], speed, speed2, angle, spread, life,
@@ -50,23 +72,10 @@ E.fx = {
         var a0 = o.angle === undefined ? 0 : o.angle;
         var spread = o.spread === undefined ? Math.PI * 2 : o.spread;
         for (var i = 0; i < n; i++) {
-            var p = this._spawn();
-            if (!p) break;
             var a = a0 + (spread >= Math.PI * 2 ?
                           Math.random() * spread : (Math.random() - 0.5) * spread);
             var v = E.m.lerp(sp, sp2, Math.random());
-            p.x = x;
-            p.y = y;
-            p.vx = Math.cos(a) * v;
-            p.vy = Math.sin(a) * v;
-            p.t = 0;
-            p.life = (o.life || 0.6) * (0.6 + Math.random() * 0.4);
-            p.size = o.size || 2;
-            p.color = o.colors ? E.m.pick(o.colors) :
-                      (o.color === undefined ? 0xFFFF : o.color);
-            p.grav = o.grav || 0;
-            p.drag = o.drag || 0;
-            p.shape = o.shape || 'dot';
+            if (!this._put(x, y, o, a, v)) break;
         }
     },
 
@@ -170,6 +179,81 @@ E.fx = {
         };
     },
 
+    // emissor continuo: {x, y, rate (part/s), duration (ms; sem = ate stop),
+    // follow (() -> {x, y}) p/ fonte movel — devolver null pula o quadro —
+    // e as opts de particula do burst (color/colors, speed, speed2, angle,
+    // spread, life, size, grav, drag, shape)}. Devolve {on, stop(), start(),
+    // set(x, y), dead} — set move a fonte fixa. Semeia sem alocar por quadro
+    // (cai no _put direto), e lotar o pool so pula as que nao couberem.
+    emitter: function (o) {
+        var em = { on: true, acc: 0, t: 0, dead: false, opts: o || {},
+                   start: function () { em.on = true; },
+                   stop: function () { em.on = false; },
+                   set: function (x, y) { em.opts.x = x; em.opts.y = y; } };
+        this._emitters.push(em);
+        return em;
+    },
+
+    // rastro que segue uma entidade: getXY () -> {x, y} em coords de MUNDO;
+    // parado nao deixa rastro (emissor com follow que gela). opts {rate
+    // (default 24/s), life (0.5), size (3), color|colors, grav}
+    trail: function (getXY, o) {
+        o = o || EMPTY;
+        var lx = 1e9, ly = 1e9;
+        return this.emitter({
+            rate: o.rate === undefined ? 24 : o.rate,
+            life: o.life === undefined ? 0.5 : o.life,
+            size: o.size === undefined ? 3 : o.size,
+            color: o.color, colors: o.colors, grav: o.grav,
+            speed: 0, speed2: 0, spread: 0, shape: 'dot',
+            follow: function () {
+                var p = getXY();
+                if (p.x === lx && p.y === ly) return null;   // parado
+                lx = p.x;
+                ly = p.y;
+                return p;
+            }
+        });
+    },
+
+    // camadas de fundo com rolagem pela camera: [{speed (0..1 da cam),
+    // gap (colunas px), rowH (linhas px, default gap), paint(x, y)}]. O
+    // paint desenha UM item em coords de TELA (procedural — a casa nao
+    // paga decode por tile). Sem rect desenha a tela inteira (1a linha do
+    // draw da cena); com rect so as celulas que tocam — sirva o MESMO
+    // draw como painter da camada suja:
+    //   var bg = E.fx.parallax([...]);
+    //   E.dirty.enable(function (x, y, w, h) { bg.draw(x, y, w, h); });
+    parallax: function (layers) {
+        var L = [];
+        for (var i = 0; i < layers.length; i++) {
+            var o = layers[i];
+            L.push({ speed: o.speed === undefined ? 0.5 : o.speed,
+                     gap: o.gap || 32, rowH: o.rowH || o.gap || 32,
+                     paint: o.paint, ox: (i * 7 % 13) * 2.5, oy: (i * 11 % 17) * 1.7 });
+        }
+        return {
+            draw: function (x, y, w, h) {
+                var full = w === undefined;
+                var x0 = full ? 0 : x, y0 = full ? 0 : y;
+                var x1 = full ? E.W : x + w, y1 = full ? E.H : y + h;
+                var camx = E.cam.x, camy = E.cam.y;
+                for (var k = 0; k < L.length; k++) {
+                    var l = L[k];
+                    var offX = ((camx * l.speed + l.ox) % l.gap + l.gap) % l.gap;
+                    var offY = ((camy * l.speed + l.oy) % l.rowH + l.rowH) % l.rowH;
+                    var ix = Math.ceil((x0 + offX) / l.gap) * l.gap - offX;
+                    var iy = Math.ceil((y0 + offY) / l.rowH) * l.rowH - offY;
+                    for (var px = ix - l.gap; px < x1; px += l.gap) {
+                        for (var py = iy - l.rowH; py < y1; py += l.rowH) {
+                            l.paint(px, py);
+                        }
+                    }
+                }
+            }
+        };
+    },
+
     _spawn: function () {
         for (var i = 0; i < this._parts.length; i++) {
             var k = (this._cursor + i) % this._parts.length;
@@ -199,6 +283,33 @@ E.fx = {
             }
             p.x += p.vx * dt;
             p.y += p.vy * dt;
+        }
+        var ems = this._emitters;
+        for (var e = ems.length - 1; e >= 0; e--) {
+            var em = ems[e];
+            if (em.dead) { ems.splice(e, 1); continue; }
+            if (!em.on) continue;
+            var o = em.opts;
+            if (o.duration) {
+                em.t += dt * 1000;
+                if (em.t >= o.duration) { em.on = false; continue; }
+            }
+            var src = o.follow ? o.follow() : o;
+            if (!src) continue;   // fonte movel indisponivel neste quadro
+            em.acc += (o.rate === undefined ? 10 : o.rate) * dt;
+            var sp = o.speed === undefined ? 60 : o.speed;
+            var sp2 = o.speed2 === undefined ? sp : o.speed2;
+            var a0 = o.angle === undefined ? 0 : o.angle;
+            var spread = o.spread === undefined ? Math.PI * 2 : o.spread;
+            while (em.acc >= 1) {
+                em.acc -= 1;
+                var a = a0 + (spread >= Math.PI * 2 ?
+                              Math.random() * spread : (Math.random() - 0.5) * spread);
+                if (!this._put(src.x, src.y, o, a, E.m.lerp(sp, sp2, Math.random()))) {
+                    em.acc = 0;   // pool cheio: nao acumula divida
+                    break;
+                }
+            }
         }
         var fs = this._floaters;
         for (var j = fs.length - 1; j >= 0; j--) {

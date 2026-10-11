@@ -1240,6 +1240,105 @@ function depsSize(nomes) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ------------------------------------------ fx: emissores + trail + parallax --
+(function () {
+    console.log('SDK CelerGame fx (emitter/trail/parallax):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-fxe-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game.fx': '^1.0.0' } }));
+
+    function runSnippet(code, setup) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(tmp, env);
+        var out = {};
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        if (setup) setup(env);
+        var fn = new Function('System', 'Storage', '__harness', 'require', code);
+        fn(env.System, env.Storage, env.__harness, req);
+        return out;
+    }
+    function vivas(E) {
+        var n = 0;
+        for (var i = 0; i < E.fx._parts.length; i++) if (!E.fx._parts[i].dead) n++;
+        return n;
+    }
+
+    // emissor: taxa por segundo vira particulas; stop congela; duration para
+    var r = runSnippet(
+        'var E = require("celeros.game.fx");' +
+        'E.init({ particles: 96 });' +
+        'var em = E.fx.emitter({ x: 120, y: 100, rate: 50, life: 5, color: 0x07FF });' +
+        'var v50 = 0, vDepois = 0, t0 = System.millis();' +
+        'E.run({ s: { update: function () {' +
+        '  if (System.millis() > t0 + 500 && !v50) { v50 = 1;' +
+        '    var n = 0; for (var i = 0; i < E.fx._parts.length; i++) if (!E.fx._parts[i].dead) n++;' +
+        '    __harness.grab("n500", n); em.stop(); }' +
+        '  if (System.millis() > t0 + 900) E.quit();' +
+        '} } }, "s");');
+    check('emitter: rate 50/s semeia ~25 em 500 ms (tolerancia do clock)',
+          r.n500 >= 15 && r.n500 <= 96, 'n=' + r.n500);
+    r = runSnippet(
+        'var E = require("celeros.game.fx");' +
+        'E.init({ particles: 64 });' +
+        'var em = E.fx.emitter({ x: 10, y: 10, rate: 80, life: 2, duration: 300 });' +
+        'var t0 = System.millis();' +
+        'E.run({ s: { update: function () { if (System.millis() > t0 + 800) E.quit(); } } }, "s");' +
+        '__harness.grab("dur", [em.on, em.t >= 300]);');
+    check('emitter: duration desliga sozinho',
+          r.dur[0] === false && r.dur[1] === true, JSON.stringify(r.dur));
+
+    // trail: segue a fonte movel; parado nao deixa rastro
+    r = runSnippet(
+        'var E = require("celeros.game.fx");' +
+        'E.init({ particles: 96 });' +
+        'var pos = { x: 0, y: 50 }, t = 0;' +
+        'E.fx.trail(function () { return pos; }, { rate: 30, life: 0.4, color: 0xFFE0 });' +
+        'var spawnMov = [], parado = [];' +
+        'var sp = E.fx._spawn; E.fx._spawn = function () { spawnMov.push(1); return sp.apply(E.fx, arguments); };' +
+        'E.run({ s: { update: function (dt) {' +
+        '  t += dt;' +
+        '  if (t < 0.5) pos.x += 60 * dt; else if (spawnMov.length && !parado.length) {' +
+        '    parado.push(spawnMov.length);' +
+        '    var antes = parado[0];' +
+        '  }' +
+        '  if (t > 1.4) {' +
+        '    __harness.grab("trail", [parado[0] > 0, spawnMov.length - parado[0]]);' +
+        '    E.quit();' +
+        '  }' +
+        '} } }, "s");');
+    check('trail: semeia enquanto anda e PARA quando a fonte para',
+          r.trail[0] === true && r.trail[1] < 3,
+          JSON.stringify(r.trail));
+
+    // parallax: celulas deslocam pela camera x speed (com wrap) e o recorte
+    // do painter pinta so as celulas que tocam o rect
+    r = runSnippet(
+        'var E = require("celeros.game.fx");' +
+        'E.init({});' +
+        'var bg = E.fx.parallax([{ speed: 0.5, gap: 40, paint: function (x, y) { pts.push([x, y]); } }]);' +
+        'var pts = [];' +
+        'bg.draw();' +
+        'var x0 = pts[0][0];' +
+        'E.cam.x = 60;' +
+        'pts.length = 0; bg.draw();' +
+        '__harness.grab("shift", [pts[0][0] - x0]);' +
+        'pts.length = 0; bg.draw(100, 0, 20, 320);' +
+        'var fora = 0, dentro = 0;' +
+        'for (var i = 0; i < pts.length; i++) {' +
+        '  if (pts[i][0] >= 78 && pts[i][0] < 124) dentro++; else fora++;' +
+        '}' +
+        '__harness.grab("clip", [dentro > 0, fora]);');
+    check('parallax: cam.x desloca a rede em -30 (mod gap=40)',
+          ((r.shift[0] + 30) % 40 + 40) % 40 === 0, 'shift=' + r.shift[0]);
+    check('parallax: draw(x, y, w, h) pinta so as celulas do rect (celula anterior entra)',
+          r.clip[0] === true && r.clip[1] === 0,
+          JSON.stringify(r.clip));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------------------ mesh --
 (function () {
     console.log('SDK mesh (tools/sdk/engine/celeros.mesh.js):');

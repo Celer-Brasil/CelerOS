@@ -1,17 +1,14 @@
-// Campo Minado — classico completo no toolkit UI (API 22) e primeiro app
-// da loja multi-arquivo (API 23): o motor do tabuleiro vive em board.js
-// via require. Duas dificuldades (a primeira jogada sempre abre area
-// limpa), bandeiras, atalho de acorde (toque em numero com as bandeiras
-// certas abre os vizinhos), cronometro e melhor tempo por dificuldade
-// salvos no appData. Sons playTone.
-//
-// O tabuleiro e incremental (celula a celula); em frame cheio do toolkit
-// (dialogo fechou, botao voltou) o UI.begin faz fillScreen — por isso o
-// retorno de begin TRUE redesenha o campo todo. O cabecalho nunca pinta
-// fundo em frame parcial: os textos UI.text se auto-limpam com bg.
+// Campo Minado — classico completo. Porte CelerGame: o motor do tabuleiro
+// segue em board.js (require local); o desenho incremental celula-a-celula
+// vira a camada suja E.dirty — o painter repinta so as celulas da caixa
+// tocada (arquitetura do Detona), cronometro/minas no cabecalho sujo, fx
+// na abertura em cadeia e na mina. Melhor tempo por dificuldade no NVS.
 
-var T = System.theme();
-var W = 240, H = 320;
+var E = require("celeros.game");       // familia CelerGame: core + fx
+require("celeros.game.fx");
+
+E.init({ dir: "Campo Minado", fps: 30, save: "minado." });
+var T = E.theme, W = E.W, H = E.H;
 
 var MODES = [
     { name: "facil", cols: 9,  rows: 11, mines: 10, cell: 22 },
@@ -21,40 +18,44 @@ var modeIdx = 0;
 
 var createBoard = require("board");
 
-var DATA = (FS.appData ? FS.appData() : "/local/");
 // Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
 // o loop do jogo; firmware antigo cai no playTone (bloqueante)
 var somFn = typeof System.sfx === "function" ? System.sfx :
             (typeof System.playTone === "function" ? System.playTone : null);
-var hasTone = somFn !== null;
-function tone(hz, ms) {
-    if (hasTone) { try { somFn && somFn([[hz, ms]]); } catch (e) {} }
-}
-function tune(notes) {
-    if (hasTone) { try { somFn && somFn(notes); } catch (e) {} }
-}
+function tone(hz, ms) { if (somFn) { try { somFn([[hz, ms]]); } catch (e) {} } }
+function tune(notes) { if (somFn) { try { somFn(notes); } catch (e) {} } }
 
 // cores dos numeros por perigo (tema do sistema)
 var NUMCOL = [0, T.accent, T.ok, T.err, T.warn, T.warn, T.text, T.text, T.textDim];
 
 // ---------------------------------------------------------------- estado ---
-var state = "menu";         // menu | play | over
 var board = null;
-var gridX = 0, gridY = 30, CELL = 22;
+var gridX = 0, gridY = 30, CELL = 22, gridEnd = 0;
 var flagMode = false;
-var startMs = 0, started = false, elapsedMs = 0, lastClock = 0;
+var startMs = 0, started = false, elapsedMs = 0, lastClock = -1;
 var won = false;
 
-function bestFile() { return DATA + "best_" + MODES[modeIdx].name + ".txt"; }
+var BTN_MODO = { x: 8, y: 288, w: 116, h: 26 };
+var BTN_NOVO = { x: 124, y: 288, w: 108, h: 26 };
+var BTN_DNV = { x: 40, y: 218, w: 160, h: 44 };
+
+// melhor tempo: NVS (migracao 1x dos best_*.txt da versao anterior)
+function bestKey() { return "b" + MODES[modeIdx].name; }
 function bestTime() {
-    var r = FS.readTextFile(bestFile());
-    if (!r) return 0;
-    var v = parseInt(r, 10);
-    return isNaN(v) ? 0 : v;
+    var v = E.save.num(bestKey(), 0);
+    if (!v) {
+        try {
+            var r = FS.readTextFile((FS.appData ? FS.appData() : "/local/") +
+                                    "best_" + MODES[modeIdx].name + ".txt");
+            var old = r ? parseInt(r, 10) : 0;
+            if (old && !isNaN(old)) { v = old; E.save.set(bestKey(), old); }
+        } catch (e) {}
+    }
+    return v;
 }
 function saveBest(ms) {
-    var b = bestTime();
-    if (!b || ms < b) FS.writeTextFile(bestFile(), String(ms));
+    var b = E.save.num(bestKey(), 0);
+    if (!b || ms < b) E.save.set(bestKey(), ms);
 }
 
 function newGame() {
@@ -62,10 +63,12 @@ function newGame() {
     CELL = m.cell;
     board = createBoard(m.cols, m.rows, m.mines);
     gridX = Math.floor((W - m.cols * CELL) / 2);
+    gridEnd = gridY + m.rows * CELL;
     flagMode = false;
     started = false;
     elapsedMs = 0;
-    lastClock = 0;
+    lastClock = -1;
+    hdrKey = -1;
     won = false;
 }
 
@@ -78,9 +81,11 @@ function fmtTime(ms) {
 }
 
 // ---------------------------------------------------------------- desenho ---
-var wellCol = System.mixColor(T.bg, T.card, 60);
+// desenho de UMA celula em coords absolutas (cru: e chamado pelo painter
+// da camada suja, que nao pode registrar caixas)
+var wellCol = null;
 
-function drawCell(x, y) {
+function paintCellRaw(x, y) {
     var c = board.cell(x, y);
     if (!c) return;
     var px = gridX + x * CELL, py = gridY + y * CELL;
@@ -106,43 +111,77 @@ function drawCell(x, y) {
     }
 }
 
-function drawAll() {
+// cabecalho cru (fundo + textos): chamado no frame cheio e pelo painter
+// quando uma caixa toca a faixa de cima
+function paintHeaderRaw() {
+    var rem = board.remaining();
+    System.fillRect(0, 0, W, 26, T.card);
+    System.drawFastHLine(0, 25, W, T.stroke);
+    System.setTextColor(rem === 0 ? T.ok : T.text, T.card);
+    var remS = (rem > 0 ? "" : "+") + Math.abs(rem);
+    System.drawString(remS, 10, 3, 2);
+    var rw = System.textWidth(remS, 2) + 6;
+    System.setTextColor(T.textDim, T.card);
+    System.drawString("minas", 12 + rw, 8, 1);
+    System.setTextDatum(2);               // TR
+    System.setTextColor(T.textDim, T.card);
+    System.drawString(fmtTime(elapsedMs), W - 10, 7, 1);
+    var bt = bestTime();
+    if (bt) System.drawString("melhor " + fmtTime(bt), 118, 7, 1);
+    System.setTextDatum(0);
+}
+
+// painter da camada suja: repinta celulas que tocam a caixa (estado atual
+// do board — celula aberta pinta aberta), a faixa do cabecalho quando
+// tocada e so fundo nas faixas de fora (botoes/trevos)
+function paintField(x, y, w, h) {
+    var x2 = x + w, y2 = y + h;
+    if (y < gridY) paintHeaderRaw();
+    if (y2 > gridEnd) System.fillRect(x, Math.max(y, gridEnd), w, y2 - Math.max(y, gridEnd), T.bg);
     var m = MODES[modeIdx];
-    System.fillRect(0, 26, W, H - 26, T.bg);
-    for (var y = 0; y < m.rows; y++) {
-        for (var x = 0; x < m.cols; x++) drawCell(x, y);
+    var c0 = Math.max(0, Math.floor((x - gridX) / CELL));
+    var c1 = Math.min(m.cols - 1, Math.floor((x2 - gridX - 1) / CELL));
+    var r0 = Math.max(0, Math.floor((y - gridY) / CELL));
+    var r1 = Math.min(m.rows - 1, Math.floor((y2 - gridY - 1) / CELL));
+    for (var ry = r0; ry <= r1; ry++) {
+        for (var cx = c0; cx <= c1; cx++) paintCellRaw(cx, ry);
+    }
+    // faixas laterais do grid
+    if (x < gridX) System.fillRect(x, Math.max(y, gridY), gridX - x, h, T.bg);
+    if (x2 > gridX + m.cols * CELL) {
+        var gx2 = gridX + m.cols * CELL;
+        System.fillRect(Math.max(x, gx2), Math.max(y, gridY), x2 - Math.max(x, gx2), h, T.bg);
     }
 }
 
-// cabecalho: fundo so em frame CHEIO (quando os textos redesenham juntos);
-// em frame parcial cada texto limpa a propria caixa com bg
-function drawHeader(full) {
-    if (full) {
-        System.fillRect(0, 0, W, 26, T.card);
-        System.drawFastHLine(0, 25, W, T.stroke);
+// marca as celulas abertas na camada suja (o painter as repinta no estado
+// novo no proximo quadro)
+function markCells(list) {
+    for (var i = 0; i < list.length; i++) {
+        E.dirty.add(gridX + list[i].x * CELL, gridY + list[i].y * CELL, CELL, CELL);
     }
-    var rem = board.remaining();
-    UI.text((rem > 0 ? "" : "+") + Math.abs(rem), 10, 3, { role: "title", bg: T.card, id: 1,
-            color: rem === 0 ? T.ok : T.text });
-    UI.text("minas", 12 + UI.measure(String(rem > 0 ? rem : "+" + Math.abs(rem), "title"), "title") + 6, 8,
-            { role: "caption", color: T.textDim, bg: T.card, id: 4 });
-    UI.text(fmtTime(elapsedMs), W - 10, 7, { role: "caption", align: "right", bg: T.card, color: T.textDim, id: 2 });
-    var bt = bestTime();
-    UI.text(bt ? "melhor " + fmtTime(bt) : "", 118, 7, { role: "caption", align: "right", bg: T.card,
-            color: T.textDim, id: 3 });
+}
+
+function cellCenter(x, y) {
+    return { x: gridX + x * CELL + CELL / 2, y: gridY + y * CELL + CELL / 2 };
 }
 
 // ---------------------------------------------------------------- jogada ---
+var resultado = null;   // {won, elapsedMs} — cena fim le daqui
+
 function finish(win) {
     won = win;
     if (win) {
         saveBest(elapsedMs);
         tune([[660, 90], [880, 90], [1320, 160]]);
     } else {
-        drawAll();                 // derrota revela as minas (board abriu)
         tone(120, 400);
+        E.fx.flash(T.err, 300);
     }
-    state = "over";
+    resultado = { won: win, ms: elapsedMs };
+    E.after(600, function () {
+        E.goto("fim", { transition: win ? "iris" : "fade", ms: 450 });
+    });
 }
 
 function play(x, y) {
@@ -152,80 +191,120 @@ function play(x, y) {
     if (flagMode) {
         if (board.toggleFlag(x, y)) tone(520, 30);
         else tone(300, 20);
-        drawCell(x, y);
-        drawHeader(false);
+        E.dirty.add(gridX + x * CELL, gridY + y * CELL, CELL, CELL);
+        E.dirty.add(0, 0, 120, 26);       // contador de minas
         return;
     }
     var c = board.cell(x, y);
     var r = (c && c.open) ? board.chord(x, y) : board.reveal(x, y);
-    for (var i = 0; i < r.opened.length; i++) {
-        drawCell(r.opened[i].x, r.opened[i].y);
+    markCells(r.opened);
+    if (r.opened.length > 3) {
+        // abertura em cadeia: estouro na celula de inicio
+        var cc = cellCenter(x, y);
+        E.fx.burst(cc.x, cc.y, { n: 12, color: T.accent, speed: 60, life: 0.5, size: 2 });
     }
-    if (r.hit) { finish(false); return; }
+    if (r.hit) {
+        var mc = cellCenter(x, y);
+        E.fx.burst(mc.x, mc.y, { n: 20, color: T.err, speed: 120, life: 0.7,
+                                 grav: 140, size: 2 });
+        finish(false);
+        return;
+    }
     tone(700, 14);
     if (board.won()) { finish(true); return; }
-    drawHeader(false);
+    E.dirty.add(0, 0, 120, 26);
 }
 
-// ------------------------------------------------------------------ main ---
-newGame();
-while (true) {
-    if (state === "menu") {
-        UI.begin(T.bg);
-        UI.text("Campo Minado", W / 2, 56, { role: "display", align: "center" });
-        UI.text("dificuldade", 16, 112, { role: "title", color: T.textDim });
-        modeIdx = UI.tabs(16, 134, W - 32, 36, ["fácil 9x11", "duro 12x14"], modeIdx);
-        var b = bestTime();
-        UI.text(b ? "melhor tempo: " + fmtTime(b) : "sem tempo nesta dificuldade",
-                W / 2, 188, { role: "caption", align: "center", color: T.textDim, id: 5 });
-        if (UI.button("Jogar", 40, 214, 160, 48)) { newGame(); drawAll(); drawHeader(true); state = "play"; }
-        UI.text("toque abre · bandeira marca · numero com bandeiras certas abre vizinhos",
-                W / 2, 282, { role: "caption", align: "center", color: T.textDim, w: W - 24, lines: 2 });
-        UI.end();
-        System.delay(10);
-        continue;
-    }
+// ------------------------------------------------------------------ cenas ---
+E.run({
+    menu: {
+        static: true,
+        update: function () {
+            var seg = [{ x: 16, y: 134, w: 104, h: 36 }, { x: 124, y: 134, w: 100, h: 36 }];
+            for (var i = 0; i < 2; i++) {
+                if (E.hit(seg[i])) { modeIdx = i; E.redraw(); return; }
+            }
+            if (E.hit({ x: 40, y: 214, w: 160, h: 48 })) {
+                E.goto("jogo", { transition: "wipe", ms: 300 });
+            }
+        },
+        draw: function () {
+            E.gfx.text("Campo Minado", W / 2, 56, { ts: "huge", align: "center" });
+            E.gfx.text("dificuldade", 16, 112, { ts: "label", color: T.textDim });
+            var labels = ["fácil 9x11", "duro 12x14"];
+            E.gfx.button(labels[0], 16, 134, 104, 36, { primary: modeIdx === 0, px: 12 });
+            E.gfx.button(labels[1], 124, 134, 100, 36, { primary: modeIdx === 1, px: 12 });
+            var b = bestTime();
+            E.gfx.text(b ? "melhor tempo: " + fmtTime(b) : "sem tempo nesta dificuldade",
+                       W / 2, 188, { ts: "small", align: "center", color: T.textDim });
+            E.gfx.button("Jogar", 40, 214, 160, 48, { px: Math.round(20 * E.U) });
+            E.gfx.text("toque abre · bandeira marca · numero com bandeiras certas abre vizinhos",
+                       W / 2, 282, { ts: "small", align: "center", color: T.textDim });
+        }
+    },
 
-    if (state === "over") {
-        var bt2 = bestTime();
-        var again = UI.confirm(won ? "Venceu!" : "Boom!",
-                               (won ? "Tempo " + fmtTime(elapsedMs) +
-                                       (elapsedMs <= bt2 ? "  ·  novo melhor tempo!" : "")
-                                    : "As minas venceram esta rodada."),
-                               { yes: "De novo", no: "Menu" });
-        if (again) { newGame(); drawAll(); drawHeader(true); state = "play"; }
-        else { state = "menu"; UI.invalidate(); }
-        continue;
-    }
+    jogo: {
+        enter: function () {
+            newGame();
+            wellCol = System.mixColor(T.bg, T.card, 60);
+            E.dirty.enable(paintField);   // frame cheio: tudo pelo painter
+        },
+        exit: function () { E.dirty.off(); },
+        update: function (dt) {
+            if (started && !board.lost() && !board.won()) {
+                elapsedMs = System.millis() - startMs;
+                // relogio a cada 500 ms (caixa suja na faixa do cabecalho)
+                var seg = Math.floor(elapsedMs / 500);
+                if (seg !== lastClock) {
+                    lastClock = seg;
+                    E.dirty.add(W - 66, 0, 66, 26);
+                }
+            }
+            var t = E.input.tap;
+            if (t && t.x >= gridX && t.y >= gridY && t.y < gridEnd) {
+                var gx = Math.floor((t.x - gridX) / CELL);
+                var gy = Math.floor((t.y - gridY) / CELL);
+                if (board.cell(gx, gy)) play(gx, gy);
+            }
+            if (E.hit(BTN_MODO)) flagMode = !flagMode;
+            if (E.hit(BTN_NOVO)) {
+                newGame();
+                E.dirty.full();
+            }
+        },
+        draw: function () {
+            // so o que flutua por cima do cenario: particulas e botoes
+            E.gfx.button(flagMode ? "Bandeira ON" : "Modo cavar",
+                         BTN_MODO.x, BTN_MODO.y, BTN_MODO.w, BTN_MODO.h,
+                         { primary: flagMode, px: 12 });
+            E.gfx.button("Novo", BTN_NOVO.x, BTN_NOVO.y, BTN_NOVO.w, BTN_NOVO.h,
+                         { primary: false, px: 12 });
+            E.fx.draw();
+        }
+    },
 
-    // ------------------------------------------------------------ play ---
-    var full = UI.begin(T.bg);
-    if (full) { drawAll(); drawHeader(true); }
-    var tc = UI.touch();
-
-    if (started) {
-        elapsedMs = System.millis() - startMs;
-        if (elapsedMs - lastClock >= 500) { lastClock = elapsedMs; drawHeader(false); }
+    fim: {
+        static: true,
+        update: function () {
+            if (E.hit(BTN_DNV)) E.goto("jogo", { transition: "wipe", ms: 300 });
+            else if (E.input.tap && E.input.tap.y > 270) E.goto("menu", { transition: "fade", ms: 300 });
+        },
+        draw: function () {
+            var bt = bestTime();
+            E.gfx.text(resultado && resultado.won ? "Venceu!" : "Boom!", W / 2, 90,
+                       { ts: "huge", align: "center",
+                         color: resultado && resultado.won ? T.ok : T.err });
+            if (resultado && resultado.won) {
+                E.gfx.text("Tempo " + fmtTime(resultado.ms), W / 2, 140,
+                           { ts: "title", align: "center" });
+                if (resultado.ms <= bt) E.gfx.text("novo melhor tempo!", W / 2, 170,
+                                                   { ts: "label", align: "center", color: T.ok });
+            } else {
+                E.gfx.text("As minas venceram esta rodada.", W / 2, 140,
+                           { ts: "body", align: "center" });
+            }
+            E.gfx.button("De novo", BTN_DNV.x, BTN_DNV.y, BTN_DNV.w, BTN_DNV.h);
+            E.gfx.button("Menu", 40, 270, 160, 40, { primary: false });
+        }
     }
-
-    // celula tocada (os botoes da barra ficam fora do grid e consomem o
-    // proprio tap; aqui sobra so o toque no campo)
-    if (tc.tap && tc.x >= gridX && tc.y >= gridY) {
-        var gx = Math.floor((tc.x - gridX) / CELL);
-        var gy = Math.floor((tc.y - gridY) / CELL);
-        if (board.cell(gx, gy)) play(gx, gy);
-    }
-    if (state !== "play") { UI.end(); continue; }
-
-    if (UI.button(flagMode ? "Bandeira ON" : "Modo cavar", 8, 288, 116, 26,
-                  { style: flagMode ? "primary" : "ghost" })) {
-        flagMode = !flagMode;
-    }
-    if (UI.button("Novo", 124, 288, 108, 26, { style: "ghost" })) {
-        newGame();
-        drawAll();
-        drawHeader(true);
-        UI.invalidate();
-    }
-    UI.end(30);
-}
+}, "menu");

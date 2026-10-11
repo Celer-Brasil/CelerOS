@@ -18,6 +18,7 @@
 #include "../../main/Pack/ResProto.h"
 #include "../../main/Utils/Rigid2D.h"
 #include "../../main/Utils/Verlet2D.h"
+#include "../../main/Utils/ShellLogic.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -1089,11 +1090,14 @@ static void testRigid2D() {
           fabsf(S.bodies[suporte].ca - 0.7f) < 0.05f);
 }
 
-// Verlet nativo (API 31): Utils/Verlet2D.h — o mesmo codigo do
-// System.verlet* (JsPhysics.cpp). O corte do vinculo (delStick) devolve a
-// colisao ao par: a bitmask de vinculados e' recompute (relinkAll); o
-// swap-remove antigo nao limpava a marca e o pedaco cortado parava de
-// colidir para sempre
+// Martelo do Rigid2D: sequencias adversarias (remove/setBody teleporte/
+// steps criando e destruindo contatos) num mundo denso, milhares de
+// ciclos com PRNG semeado (deterministico). Confere APOS CADA mutacao e
+// CADA step: arbitros estritamente ordenados por (a,b) sem duplicata,
+// apontando so pra corpo vivo, dentro do teto — e nenhum corpo vivo com
+// posicao/velocidade nao-finitas (o veneno que acordaria o mundo para
+// sempre). Acha quebra do findArb binario (busca em array nao ordenado
+// criava arbitro duplicado do mesmo par)
 static void testRigid2DHammer() {
     using namespace celer::rigid;
     static World W;
@@ -1518,6 +1522,270 @@ static void testResProto() {
 struct ShTVar {
     std::string name, val;
 };
+static std::vector<ShTVar> g_shVars;
+static std::vector<std::string> g_shRan;
+static std::string g_shPrinted;
+
+static const char* shTGet(const char* n) {
+    for (auto& v : g_shVars) {
+        if (v.name == n) return v.val.c_str();
+    }
+    return nullptr;
+}
+static void shTSet(const std::string& n, const std::string& v) {
+    for (auto& v2 : g_shVars) {
+        if (v2.name == n) {
+            v2.val = v;
+            return;
+        }
+    }
+    g_shVars.push_back({n, v});
+}
+static const char* shTLookup(void*, const char* n) { return shTGet(n); }
+
+static void shTestPrint(void*, const char* fmt, ...) {
+    char b[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    g_shPrinted += b;
+}
+
+// Executor falso: expande $, trata set (com aritmetica), [ test ],
+// true/false — o mesmo contrato do CelerShell::execute do device. A
+// CONDICAO de if/while passa por aqui tambem (sem gravar em g_shRan).
+static int shExecRaw(void*, const char* raw) {
+    char exp[512];
+    shl::expandVars(raw, exp, sizeof(exp), shTLookup, nullptr, 0);
+    std::vector<char*> tok;
+    char buf[512];
+    strcpy(buf, exp);
+    for (char* t = strtok(buf, " \t"); t != nullptr; t = strtok(nullptr, " \t")) tok.push_back(t);
+    if (tok.empty()) return 0;
+    if (strcmp(tok[0], "set") == 0 && tok.size() >= 2) {
+        std::string a = tok[1];
+        for (size_t i = 2; i < tok.size(); i++) a += std::string(" ") + tok[i];
+        size_t eq = a.find('=');
+        if (eq == std::string::npos) return 1;
+        std::string val = a.substr(eq + 1);
+        long r = 0;
+        if (shl::arithEval(val.c_str(), &r) == shl::Arith::Ok) {
+            char nb[24];
+            snprintf(nb, sizeof(nb), "%ld", r);
+            val = nb;
+        }
+        shTSet(a.substr(0, eq), val);
+        return 0;
+    }
+    if ((strcmp(tok[0], "[") == 0 || strcmp(tok[0], "test") == 0) && tok.size() == 5) {
+        const std::string a = tok[1], op = tok[2], b = tok[3];
+        if (op == "=") return (a == b) ? 0 : 1;
+        if (op == "!=") return (a != b) ? 0 : 1;
+        const long x = atol(a.c_str()), y = atol(b.c_str());
+        if (op == "-lt") return (x < y) ? 0 : 1;
+        if (op == "-ge") return (x >= y) ? 0 : 1;
+        return 2;
+    }
+    if (strcmp(tok[0], "true") == 0) return 0;
+    if (strcmp(tok[0], "false") == 0) return 1;
+    return 0;
+}
+
+// Linha de corpo: grava a linha crua antes de rodar
+static int shTestExec(void* ctx, const char* raw) {
+    g_shRan.push_back(raw);
+    return shExecRaw(ctx, raw);
+}
+
+static FILE* shScriptFile(const std::string& text) {
+    FILE* f = tmpfile();
+    if (f == nullptr) return nullptr;
+    fwrite(text.data(), 1, text.size(), f);
+    rewind(f);
+    return f;
+}
+
+static int shRun(const std::string& text, const shl::ScriptOpts& o = shl::ScriptOpts()) {
+    FILE* f = shScriptFile(text);
+    if (f == nullptr) return -99;
+    const int rc = shl::runScript(f, o, shTestExec, shExecRaw, nullptr, shTestPrint, nullptr);
+    fclose(f);
+    return rc;
+}
+
+static void testShellResolveWild() {
+    using S = std::string;
+    CHECK(shl::resolvePath("/local/apps", "/sd/x.js") == S("/sd/x.js"));
+    CHECK(shl::resolvePath("/local/apps", "Meu/main.js") == S("/local/apps/Meu/main.js"));
+    CHECK(shl::resolvePath("/local/apps/A", "../B/x") == S("/local/apps/B/x"));
+    // ".." ate sair da jail vira caminho absoluto normal: o pathAllowed do
+    // CelerShell barre na sequencia — aqui e so texto
+    CHECK(shl::resolvePath("/local", "../../etc/passwd") == S("/etc/passwd"));
+    CHECK(shl::resolvePath("/local", "./x") == S("/local/x"));
+    CHECK(shl::resolvePath("/", "//local//x") == S("/local/x"));
+    CHECK(shl::resolvePath("/", "local/x") == S("/local/x"));
+    CHECK(shl::resolvePath("/local/apps", "..") == S("/local"));
+    CHECK(shl::resolvePath("/local/apps", ".") == S("/local/apps"));
+    CHECK(shl::resolvePath("/sd", "a/b/../../c") == S("/sd/c"));
+
+    CHECK(shl::wildMatch("main.js", "main.js"));
+    CHECK(shl::wildMatch("*.js", "main.js"));
+    CHECK(!shl::wildMatch("*.js", "main.json"));
+    CHECK(shl::wildMatch("ma?n.js", "main.js"));
+    CHECK(!shl::wildMatch("ma?n.js", "man.js"));
+    CHECK(shl::wildMatch("*", "qualquer.coisa"));
+    CHECK(shl::wildMatch("*", ""));
+    CHECK(shl::wildMatch("a*c", "aXYZc"));
+    CHECK(!shl::wildMatch("a*c", "aXY"));
+    CHECK(shl::wildMatch("app*", "app.json"));
+    CHECK(shl::wildMatch("", ""));
+    CHECK(shl::containsCI("Erro GRAVE no boot", "grave"));
+    CHECK(shl::containsCI("boot", "GRAVE") == false);
+}
+
+static void testShellTail() {
+    // comeco das ultimas n linhas via FILE* real (tmpfile: sem arquivo no
+    // disco do CI)
+    auto ts = [](const std::string& data, long n) -> long {
+        FILE* f = shScriptFile(data);
+        if (f == nullptr) return -99;
+        long r = shl::tailStart(f, n);
+        char buf[512] = {0};
+        if (r >= 0) fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        // devolve o offset so se o resto bater (offset + conteudo)
+        std::string got = (r >= 0) ? std::string(buf) : std::string("ERR");
+        return (got == data.substr((size_t)(r < 0 ? 0 : r))) ? r : -1000;
+    };
+    CHECK(ts("a\nb\nc\n", 2) == 2);        // "b\nc\n"
+    CHECK(ts("a\nb\nc", 2) == 2);          // sem \n final
+    CHECK(ts("a\nb\nc\n", 5) == 0);        // pede mais do que ha
+    CHECK(ts("a\nb\nc\n", 1) == 4);        // so "c\n"
+    CHECK(ts("a\nb\nc", 1) == 4);          // so "c"
+    CHECK(ts("", 3) == 0);
+    CHECK(ts("solinha\n", 1) == 0);
+    CHECK(ts("solinha", 1) == 0);
+    CHECK(ts("1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n", 3) == 14);  // "8\n9\n10\n"
+}
+
+static void testShellVarsArith() {
+    g_shVars = {{"MSG", "oi"}, {"I", "5"}};
+    char out[128];
+    shl::expandVars("echo $MSG", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "echo oi");
+    shl::expandVars("a${MSG}b", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "aoib");
+    shl::expandVars("custa $5", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "custa $5");
+    shl::expandVars("rc=$?", out, sizeof(out), shTLookup, nullptr, 7);
+    CHECK(std::string(out) == "rc=7");
+    shl::expandVars("vazia=[${NAO_EXISTE}]", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "vazia=[]");
+    shl::expandVars("trio $MSG $I $MSG", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "trio oi 5 oi");
+    shl::expandVars("${SEM_FECHANTE", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "${SEM_FECHANTE");
+    shl::expandVars("$$ I$", out, sizeof(out), shTLookup, nullptr, 0);
+    CHECK(std::string(out) == "$$ I$");
+
+    long r = 0;
+    CHECK(shl::arithEval("5 + 1", &r) == shl::Arith::Ok && r == 6);
+    CHECK(shl::arithEval("4+1", &r) == shl::Arith::Ok && r == 5);
+    CHECK(shl::arithEval("-5 - 3", &r) == shl::Arith::Ok && r == -8);
+    CHECK(shl::arithEval("6 * 7", &r) == shl::Arith::Ok && r == 42);
+    CHECK(shl::arithEval("7 % 3", &r) == shl::Arith::Ok && r == 1);
+    CHECK(shl::arithEval("5 + 1 ", &r) == shl::Arith::Ok && r == 6);  // espaco final ok
+    // data e texto NAO viram conta; lixo no fim tambem nao
+    CHECK(shl::arithEval("2026-10-10", &r) == shl::Arith::None);
+    CHECK(shl::arithEval("oi tudo", &r) == shl::Arith::None);
+    CHECK(shl::arithEval("42", &r) == shl::Arith::None);
+    CHECK(shl::arithEval("5 + 1 x", &r) == shl::Arith::None);
+    CHECK(shl::arithEval("5 / 0", &r) == shl::Arith::DivZero);
+}
+
+static void testShScript() {
+    // if/else: dois caminhos
+    g_shVars.clear();
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("if [ a = a ]\necho sim\nelse\necho nao\nend\n"
+                "if [ a = b ]\necho sim\nelse\necho nao\nend\n") == 0);
+    CHECK(g_shRan.size() == 2 && g_shRan[0] == "echo sim" && g_shRan[1] == "echo nao");
+
+    // bloco morto: if interno NAO avalia condicao, nada roda
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("if false\nif true\necho x\nend\necho y\nend\necho z\n") == 0);
+    CHECK(g_shRan.size() == 1 && g_shRan[0] == "echo z");
+
+    // while com contador via aritmetica do set (3 voltas, I termina em 3)
+    g_shVars = {{"I", "0"}};
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("set I=0\nwhile [ $I -lt 3 ]\necho volta $I\nset I=$I + 1\nend\necho fim\n") == 0);
+    CHECK(g_shRan.size() == 8 && g_shRan[7] == "echo fim");
+    CHECK(shTGet("I") != nullptr && std::string(shTGet("I")) == "3");
+
+    // break saindo do while por condicao do if interno
+    g_shVars = {{"I", "0"}};
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("while true\nset I=$I + 1\nif [ $I -ge 2 ]\nbreak\nend\necho antes\nend\n"
+                "echo depois $I\n") == 0);
+    CHECK(g_shRan.size() == 4 && g_shRan[3] == "echo depois $I");
+    CHECK(shTGet("I") != nullptr && std::string(shTGet("I")) == "2");
+
+    // continue pula o resto do corpo enquanto I < 3
+    g_shVars = {{"I", "0"}};
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("while [ $I -lt 4 ]\nset I=$I + 1\nif [ $I -lt 3 ]\ncontinue\nend\n"
+                "echo grande $I\nend\n") == 0);
+    int ecos = 0;
+    for (auto& x : g_shRan) {
+        if (x.rfind("echo grande", 0) == 0) ecos++;
+    }
+    CHECK(g_shRan.size() == 6 && ecos == 2);
+    CHECK(shTGet("I") != nullptr && std::string(shTGet("I")) == "4");
+
+    // erros estruturais: mensagem certa e rc 1
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("echo x\nend\n") == 1 && g_shPrinted.find("end sem bloco") != std::string::npos);
+    g_shPrinted.clear();
+    CHECK(shRun("if true\necho x\n") == 1 && g_shPrinted.find("bloco(s) aberto") != std::string::npos);
+    g_shPrinted.clear();
+    CHECK(shRun("else\necho x\n") == 1 && g_shPrinted.find("else sem if") != std::string::npos);
+    g_shPrinted.clear();
+    CHECK(shRun("break\n") == 1 && g_shPrinted.find("break fora de while") != std::string::npos);
+
+    // "echo if" nao abre bloco
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("echo if\necho while de verdade\n") == 0 && g_shRan.size() == 2);
+
+    // -e: para no primeiro erro com a linha; -x ecoa o trace
+    g_shVars.clear();
+    g_shRan.clear();
+    g_shPrinted.clear();
+    shl::ScriptOpts e;
+    e.stopErr = true;
+    CHECK(shRun("echo a\nfalse\necho c\n", e) == 1);
+    CHECK(g_shRan.size() == 2 && g_shPrinted.find("parou na linha 2") != std::string::npos);
+    g_shRan.clear();
+    g_shPrinted.clear();
+    shl::ScriptOpts x;
+    x.trace = true;
+    CHECK(shRun("echo a\n", x) == 0 && g_shPrinted.find("+ echo a") != std::string::npos);
+
+    // comentario/comentario indentado/CRLF: so as 2 linhas de comando rodam
+    g_shRan.clear();
+    g_shPrinted.clear();
+    CHECK(shRun("# comentario\r\n\r\necho oi\r\n   # indentado\nls /local\n") == 0);
+    CHECK(g_shRan.size() == 2 && g_shRan[0] == "echo oi" && g_shRan[1] == "ls /local");
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -1539,6 +1807,10 @@ int main() {
     testRigid2DHammer();
     testRigid2DMath();
     testVerlet2D();
+    testShellResolveWild();
+    testShellTail();
+    testShellVarsArith();
+    testShScript();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

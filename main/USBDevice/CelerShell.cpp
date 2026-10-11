@@ -1,4 +1,9 @@
 #include "CelerShell.h"
+#include "sdkconfig.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Bluetooth/CelerNet.h"
+#include "../Pack/Resources.h"
+#endif
 #include "FileSystem/FileSystem.h"
 #include "JsDebugger.h"
 #include "Launcher/LauncherUI.h"
@@ -9,15 +14,19 @@
 #include "NetworkManager.h"
 #include "DebugBridge.h"
 #include "HostFrame.h"
+#include "Kernel/TimeManager.h"
 #include "WebManager/WebManager.h"
 #include "CommonErrorCodes.h"
 #include "Utils/AppGrants.h"
 #include "Utils/AppPerms.h"
+#include "Utils/ShellLogic.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <stdarg.h>
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include "esp_timer.h"
@@ -43,6 +52,10 @@
 #if !defined(CELEROS_API_LEVEL)
 #define CELEROS_API_LEVEL 0
 #endif
+// CONFIG_IDF_TARGET vem sem aspas do build ("esp32s3") — stringify em duas
+// etapas expande o valor antes de virar string
+#define CELER_STR_(v) #v
+#define CELER_STR(v) CELER_STR_(v)
 
 namespace {
 
@@ -90,48 +103,196 @@ bool ipOf(char* out, size_t outLen) {
     return true;
 }
 
+// ------------------------------------------------------------ estado do shell
+
+// Diretorio corrente (cd/pwd): buffer fixo lido/escrito em secao critica
+// curta — o EXEC do HostLink e os consoles (CDC/UART) rodam em tasks
+// diferentes e podem disparar da mesma vez; std::string compartilhada
+// sem guarda corromperia o heap.
+static char s_cwd[96] = "/";
+static portMUX_TYPE s_cwdMux = portMUX_INITIALIZER_UNLOCKED;
+
+static void setCwd(const char* path) {
+    taskENTER_CRITICAL(&s_cwdMux);
+    strncpy(s_cwd, path, sizeof(s_cwd) - 1);
+    s_cwd[sizeof(s_cwd) - 1] = '\0';
+    taskEXIT_CRITICAL(&s_cwdMux);
+}
+
+static std::string getCwd() {
+    char buf[96];
+    taskENTER_CRITICAL(&s_cwdMux);
+    memcpy(buf, s_cwd, sizeof(buf));
+    taskEXIT_CRITICAL(&s_cwdMux);
+    buf[sizeof(buf) - 1] = '\0';
+    return std::string(buf);
+}
+
+// Resolve um argumento DE CAMINHO contra o cwd e normaliza ('.', '..',
+// '//'). Argumentos que nao sao caminhos (nome de app, padrao do grep,
+// linha do gb) nao passam por aqui: cada comando resolve so o que espera
+// ser arquivo/diretorio — senao "run Meu App" viraria "<cwd>/Meu App".
+// (Algoritmo puro no Utils/ShellLogic.h, testado no host.)
+static std::string resolvePath(const char* arg) {
+    return shl::resolvePath(getCwd(), arg);
+}
+
+static const char* baseName(const char* path) {
+    const char* s = strrchr(path, '/');
+    return (s != nullptr) ? s + 1 : path;
+}
+
+// mkdir -p implicito do alvo (mesmo padrao do handleMkdir do HostLink):
+// cria cada pai que falta no caminho.
+static void makeParentDirs(const std::string& path) {
+    char tmp[192];
+    snprintf(tmp, sizeof(tmp), "%s", path.c_str());
+    for (char* slash = strchr(tmp + 1, '/'); slash != nullptr; slash = strchr(slash + 1, '/')) {
+        *slash = '\0';
+        if (!FileSystem::exists(tmp)) FileSystem::mkdir(tmp);
+        *slash = '/';
+    }
+}
+
+// Mount do caminho ('l' = /local, 's' = /sd, 0 = fora da jail) — usado
+// pelo mv para explicar que rename atravessando montagem nao existe.
+static char mountOf(const std::string& path) {
+    if (path.compare(0, 6, "/local") == 0 && (path.size() == 6 || path[6] == '/')) return 'l';
+    if (path.compare(0, 3, "/sd") == 0 && (path.size() == 3 || path[3] == '/')) return 's';
+    return 0;
+}
+
+// Orcamento de entradas dos caminhadores (find/du): para em vez de varrer
+// um cartao inteiro por engano e avisa que truncou.
+struct WalkBudget {
+    int left = 4096;
+    bool clipped = false;
+};
+
+// ------------------------------------------------------- variaveis do shell
+
+// $VAR/$?: tabela pequena e lazy — malloc(16 slots) na primeira
+// atribuicao; shell parado nao paga RAM nenhuma. Valores curtos: script
+// de device nao precisa de string longa.
+struct ShVar {
+    char name[16];
+    char val[64];
+};
+static constexpr int kMaxVars = 16;
+static ShVar* s_vars = nullptr;
+static int s_varCount = 0;
+static int s_lastRc = 0;  // $?: ultimo codigo devolvido por um comando
+
+static const char* shVarGet(const char* name) {
+    for (int i = 0; i < s_varCount; i++) {
+        if (strcmp(s_vars[i].name, name) == 0) return s_vars[i].val;
+    }
+    return nullptr;
+}
+
+static bool shVarSet(const char* name, const char* val) {
+    if (s_vars == nullptr) {
+        s_vars = (ShVar*)malloc(sizeof(ShVar) * kMaxVars);
+        if (s_vars == nullptr) return false;
+    }
+    for (int i = 0; i < s_varCount; i++) {
+        if (strcmp(s_vars[i].name, name) == 0) {
+            snprintf(s_vars[i].val, sizeof(ShVar::val), "%s", val);
+            return true;
+        }
+    }
+    if (s_varCount >= kMaxVars) return false;
+    snprintf(s_vars[s_varCount].name, sizeof(ShVar::name), "%s", name);
+    snprintf(s_vars[s_varCount].val, sizeof(ShVar::val), "%s", val);
+    s_varCount++;
+    return true;
+}
+
+static void shVarUnset(const char* name) {
+    for (int i = 0; i < s_varCount; i++) {
+        if (strcmp(s_vars[i].name, name) == 0) {
+            memmove(&s_vars[i], &s_vars[i + 1], (s_varCount - i - 1) * sizeof(ShVar));
+            s_varCount--;
+            return;
+        }
+    }
+}
+
+// Expande $NOME, ${NOME} e $? (algoritmo puro no Utils/ShellLogic.h).
+static const char* shellVarLookup(void* ctx, const char* name) {
+    (void) ctx;
+    return shVarGet(name);
+}
+
 // ------------------------------------------------------------------ comandos
 
 int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
     print(ctx,
-        "CelerOS shell " CELEROS_VERSION "\n"
-        "comandos:\n"
-        "  help            esta ajuda\n"
-        "  ls [dir]        lista diretorio (default /)\n"
-        "  cat <arq>       mostra conteudo\n"
-        "  rm <arq>        apaga arquivo\n"
-        "  mv <de> <para>  renomeia/move\n"
-        "  mkdir <dir>     cria diretorio\n"
-        "  df              espaco em /local e /sd\n"
-        "  free            heap livre\n"
-        "  ps              tarefas FreeRTOS\n"
-        "  top [ms]        profiling: CPU%% por task + heap/app (janela ms)\n"
+        "CelerOS shell " CELEROS_VERSION "\r\n"
+        "arquivos:\r\n"
+        "  ls [dir]                lista diretorio (default: dir corrente)\r\n"
+        "  cd [dir] / pwd          muda/consulta o diretorio corrente\r\n"
+        "  cat <arq...>            mostra conteudo\r\n"
+        "  head|tail [-n N] <arq>  primeiras/ultimas N linhas (default 10)\r\n"
+        "  cp [-r] <de> <para>     copia arquivo (pasta inteira com -r)\r\n"
+        "  mv <de> <para>          renomeia/move (nao atravessa /local x /sd)\r\n"
+        "  rm [-r] <arq...>        apaga arquivo, dir vazio (ou inteiro com -r)\r\n"
+        "  mkdir <dir> / rmdir <dir> / touch <arq...>\r\n"
+        "  echo [-n] txt           imprime texto (bem util com > arq)\r\n"
+        "  wc [-l|-w|-c] <arq...>  conta linhas/palavras/bytes\r\n"
+        "  grep [-inv] <padrao> <arq...>  busca texto (i=caixa, n=linha, v=inverte)\r\n"
+        "  find [dir] [-name pad] [-type f|d]  busca por nome (glob * e ?)\r\n"
+        "  du [dir]                tamanho recursivo por entrada\r\n"
+        "  stat <arq>              tamanho + crc32 + mtime do arquivo\r\n"
+        "  xxd <arq> [n]           dump hexadecimal (default 1024 bytes)\r\n"
+        "  md5sum <arq...>         md5 do arquivo lido agora no device\r\n"
+        "  df                      espaco em /local e /sd\r\n"
+        "sistema:\r\n"
+        "  free / ps / top [ms] / uptime / date / uname / info / reboot\r\n"
+#if CONFIG_CELEROS_BLUETOOTH
+        "  mesh                    malha CelerNet: rede, contadores, nos ouvidos\r\n"
+        "  res                     recursos da matilha: ESP-NOW, sessoes, cache\r\n"
+#endif
+        "  dmesg [n]               ultimas linhas do log do kernel (default 30)\r\n"
+        "  clear                   limpa o terminal\r\n"
 #if CONFIG_IDF_TARGET_ESP32S3
-        "  lcddma [ms]     saude do DMA do painel RGB (underflow = imagem embaralha)\n"
+        "  lcddma [ms]             saude do DMA do painel RGB (underflow = imagem embaralha)\r\n"
 #endif
-        "  uptime          tempo ligado\n"
-        "  info            versao/board/rede\n"
-        "  reboot          reinicia o sistema\n"
-        "  rescan          reler lista de apps do launcher\n"
-        "  apps            lista apps com origem (local/sd) e caminho\n"
-        "  run <app>       abre um app (pasta, nome ou pacote)\n"
-        "  stat <arq>      tamanho + crc32 + mtime do arquivo\n"
-        "  grant <app>     concede as permissoes declaradas (consentimento headless)\n"
-        "  lasterror       ultimo erro de app gravado (/local/lastcrash.txt)\n"
-        "  debug on|off    arma o debugger Duktape (a sessao e do celerctl debug)\n"
-        "  exit            encerra o app em execucao\n"
-        "  wifi            lista as redes WiFi salvas\n"
-        "  wifi <ssid> <senha> salva a rede no NVS e conecta (ssid sem espacos)\n"
-        "  wifi off|on     desliga (persistente) / religa o WiFi\n"
+        "apps e rede:\r\n"
+        "  apps                    lista apps com origem (local/sd) e caminho\r\n"
+        "  run <app>               abre um app (pasta, nome ou pacote)\r\n"
+        "  exit                    encerra o app em execucao\r\n"
+        "  grant <app>             concede as permissoes declaradas (consentimento headless)\r\n"
+        "  rescan                  reler lista de apps do launcher\r\n"
+        "  wifi                    lista as redes WiFi salvas\r\n"
+        "  wifi <ssid> <senha>     salva a rede no NVS e conecta (ssid sem espacos)\r\n"
+        "  wifi off|on             desliga (persistente) / religa o WiFi\r\n"
+        "  lasterror               ultimo erro de app gravado (/local/lastcrash.txt)\r\n"
+        "  debug on|off            arma o debugger Duktape (a sessao e do celerctl debug)\r\n"
+#if CONFIG_CELEROS_DEBUG_BRIDGE
+        "  bridge                  estado/token do Celer Debug Bridge (WiFi)\r\n"
+#endif
 #if CONFIG_CELEROS_PHONE_LINK
-        "  gb <linha>      injeta linha do Gadgetbridge (teste do protocolo)\n"
+        "  gb <linha>              injeta linha do Gadgetbridge (teste do protocolo)\r\n"
 #endif
-        );
+        "shell:\r\n"
+        "  sh [-e] [-x] <arq>     roda script: uma linha = um comando (# comenta;\r\n"
+        "                         -e para no 1o erro, -x ecoa a linha antes de rodar)\r\n"
+        "                         blocos: if COND / else / end, while COND / end com\r\n"
+        "                         break/continue; COND e comando rodado calado (0=V)\r\n"
+        "                         e o while tem teto de 65535 voltas\r\n"
+        "  set VAR=valor | set    variaveis: $VAR ${VAR} $? (ultimo rc) expandem em\r\n"
+        "                         qualquer linha; valor inteiro 'N + 1' e calculado\r\n"
+        "  [ a = b ] / test       condicao: = !=  -eq..-ge (int)  -f -d -e arq  -z -n\r\n"
+        "  cmd1; cmd2              encadeia comandos (codigo = o do ultimo)\r\n"
+        "  cmd > arq / >> arq      redireciona a saida para arquivo (>> anexa)\r\n"
+        "  (sem aspas: ';' '>' '>>' so valem como palavra isolada)\r\n");
     return 0;
 }
 
 int cmdLs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
-    std::string dir = (argc > 1) ? argv[1] : "/";
+    std::string dir = (argc > 1) ? resolvePath(argv[1]) : getCwd();
     if (!CelerShell::pathAllowed(dir) && dir != "/") {
         print(ctx, "ls: caminho invalido (use /local ou /sd)\n");
         return 1;
@@ -171,44 +332,68 @@ int cmdLs(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 
 int cmdCat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc < 2) {
-        print(ctx, "uso: cat <arquivo>\n");
+        print(ctx, "uso: cat <arquivo...>\n");
         return 1;
     }
-    std::string path = argv[1];
-    if (!CelerShell::pathAllowed(path)) {
-        print(ctx, "cat: caminho invalido (use /local ou /sd)\n");
-        return 1;
+    int rc = 0;
+    for (int a = 1; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "cat: caminho invalido (use /local ou /sd)\n");
+            rc = 1;
+            continue;
+        }
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f == nullptr) {
+            print(ctx, "cat: nao consegui abrir %s\n", path.c_str());
+            rc = 1;
+            continue;
+        }
+        char buf[256];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+            print(ctx, "%.*s", (int)n, buf);
+        }
+        fclose(f);
     }
-    FILE* f = fopen(path.c_str(), "rb");
-    if (f == nullptr) {
-        print(ctx, "cat: nao consegui abrir %s\n", path.c_str());
-        return 1;
-    }
-    char buf[256];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        print(ctx, "%.*s", (int)n, buf);
-    }
-    fclose(f);
     print(ctx, "\r\n");
-    return 0;
+    return rc;
 }
 
 int cmdRm(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
-    if (argc < 2) {
-        print(ctx, "uso: rm <arquivo|diretorio vazio>\n");
+    bool rec = false;
+    int first = 1;
+    if (argc > 1 && strcmp(argv[1], "-r") == 0) {
+        rec = true;
+        first = 2;
+    }
+    if (argc < first + 1) {
+        print(ctx, "uso: rm [-r] <arquivo|diretorio...>\n");
         return 1;
     }
-    if (!CelerShell::pathAllowed(argv[1])) {
-        print(ctx, "rm: caminho invalido (use /local ou /sd)\n");
-        return 1;
+    int rc = 0;
+    for (int a = first; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "rm: caminho invalido (use /local ou /sd)\n");
+            rc = 1;
+            continue;
+        }
+        // -r apaga a arvore toda (mesmo caminho do uninstall do launcher)
+        if (rec && FileSystem::isDirectory(path.c_str())) {
+            if (!FileSystem::removeTree(path.c_str())) {
+                print(ctx, "rm: falhou em %s\n", path.c_str());
+                rc = 1;
+            }
+            continue;
+        }
+        if (!FileSystem::deleteFile(path.c_str()) &&
+            !(FileSystem::isDirectory(path.c_str()) && FileSystem::rmdir(path.c_str()))) {
+            print(ctx, "rm: falhou em %s\n", path.c_str());
+            rc = 1;
+        }
     }
-    if (!FileSystem::deleteFile(argv[1]) &&
-        !(FileSystem::isDirectory(argv[1]) && FileSystem::rmdir(argv[1]))) {
-        print(ctx, "rm: falhou em %s\n", argv[1]);
-        return 1;
-    }
-    return 0;
+    return rc;
 }
 
 int cmdMv(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
@@ -216,11 +401,26 @@ int cmdMv(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "uso: mv <de> <para>\n");
         return 1;
     }
-    if (!CelerShell::pathAllowed(argv[1]) || !CelerShell::pathAllowed(argv[2])) {
+    std::string from = resolvePath(argv[1]);
+    std::string to = resolvePath(argv[2]);
+    if (!CelerShell::pathAllowed(from) || !CelerShell::pathAllowed(to)) {
         print(ctx, "mv: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
-    if (!FileSystem::renameFile(argv[1], argv[2])) {
+    // rename(2) nao atravessa montagem: o VFS devolve EXDEV e a saida era
+    // um seco "falhou" — aponta o par que resolve (cp -r + rm -r)
+    const char mFrom = mountOf(from), mTo = mountOf(to);
+    if (mFrom != 0 && mTo != 0 && mFrom != mTo) {
+        print(ctx, "mv: mover entre /local e /sd nao e suportado (use cp -r + rm -r)\n");
+        return 1;
+    }
+    // destino existindo como diretorio, move PARA DENTRO (semantica unix)
+    if (FileSystem::isDirectory(to.c_str())) {
+        to += '/';
+        to += baseName(from.c_str());
+    }
+    makeParentDirs(to);
+    if (!FileSystem::renameFile(from.c_str(), to.c_str())) {
         print(ctx, "mv: falhou\n");
         return 1;
     }
@@ -232,12 +432,13 @@ int cmdMkdir(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "uso: mkdir <dir>\n");
         return 1;
     }
-    if (!CelerShell::pathAllowed(argv[1])) {
+    std::string path = resolvePath(argv[1]);
+    if (!CelerShell::pathAllowed(path)) {
         print(ctx, "mkdir: caminho invalido (use /local ou /sd)\n");
         return 1;
     }
-    if (!FileSystem::mkdir(argv[1])) {
-        print(ctx, "mkdir: falhou em %s\n", argv[1]);
+    if (!FileSystem::mkdir(path.c_str())) {
+        print(ctx, "mkdir: falhou em %s\n", path.c_str());
         return 1;
     }
     return 0;
@@ -583,7 +784,7 @@ int cmdStat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "uso: stat <arquivo|diretorio>\r\n");
         return 1;
     }
-    std::string path = argv[1];
+    std::string path = resolvePath(argv[1]);
     if (!CelerShell::pathAllowed(path)) {
         print(ctx, "stat: caminho invalido (use /local ou /sd)\r\n");
         return 1;
@@ -685,6 +886,11 @@ int cmdRun(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
               target.c_str());
         return 1;
     }
+    // "exit" de antes do run com o launcher ocioso (o celerctl apps run manda
+    // exit+run): sem app para fechar, o pedido ficava 2 s pendente e matava o
+    // app que este run abre no primeiro delay — no 4848 (sem tela inicial)
+    // todo `apps run` morria com "app exit" (bancada 2026-10-11)
+    LauncherUI::dropIdleExitRequest();
     LauncherUI::requestLaunch(target);
     // E fecha o app atual: em placa com tela inicial (cao/relogio) o "exit"
     // seguido de "run" perdia a corrida — o launcher reabria a casa entre os
@@ -894,6 +1100,846 @@ int cmdGb(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 }
 #endif
 
+// ------------------------------------------------------------- unix basicos
+
+int cmdEcho(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    int i = 1;
+    bool newline = true;
+    if (i < argc && strcmp(argv[i], "-n") == 0) {
+        newline = false;
+        i++;
+    }
+    for (; i < argc; i++) print(ctx, "%s%s", argv[i], (i + 1 < argc) ? " " : "");
+    if (newline) print(ctx, "\r\n");
+    return 0;
+}
+
+// Saida de condicao (if/while): descartada — a condicao roda calada, o
+// codigo de retorno e o que decide. va_start/va_end vazios pelo ABI de
+// varargs.
+static void devNullPrint(void* ctx, const char* fmt, ...) {
+    (void) ctx; (void) fmt;
+    va_list ap;
+    va_start(ap, fmt);
+    va_end(ap);
+}
+
+// set VAR=valor | set (lista) | unset VAR. O valor junta os argumentos
+// (set MSG=oi tudo -> "oi tudo") e, DEPOIS da expansao de $, o que casa
+// INTEIRO com "[-]N OP [-]N" (OP em + - * / %) e calculado — e o jeito
+// curto de incrementar contador num sh sem expr(1). O %n do sscanf
+// exige o fim da string: "2026-10-10" (data) nao vira conta.
+int cmdSet(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        for (int i = 0; i < s_varCount; i++) {
+            print(ctx, "%s=%s\r\n", s_vars[i].name, s_vars[i].val);
+        }
+        return 0;
+    }
+    std::string a = argv[1];
+    for (int i = 2; i < argc; i++) a += std::string(" ") + argv[i];
+    const size_t eq = a.find('=');
+    if (eq == std::string::npos || eq == 0 || eq > 15) {
+        print(ctx, "uso: set VAR=valor (nome ate 15 chars, com letra ou _)\r\n");
+        return 1;
+    }
+    for (size_t i = 0; i < eq; i++) {
+        const char c = a[i];
+        const bool ok = (i == 0) ? (isalpha((unsigned char)c) || c == '_')
+                                 : (isalnum((unsigned char)c) || c == '_');
+        if (!ok) {
+            print(ctx, "set: nome de variavel invalido\r\n");
+            return 1;
+        }
+    }
+    std::string val = a.substr(eq + 1);
+    if (val.size() > 63) {
+        print(ctx, "set: valor acima de 63 caracteres\r\n");
+        return 1;
+    }
+    // aritmetica de inteiros (algoritmo puro no Utils/ShellLogic.h): e o
+    // contador do sh — "set I=$I + 1" depois da expansao vira "5 + 1"
+    long r = 0;
+    switch (shl::arithEval(val.c_str(), &r)) {
+        case shl::Arith::Ok: {
+            char nb[24];
+            snprintf(nb, sizeof(nb), "%ld", r);
+            if (!shVarSet(a.substr(0, eq).c_str(), nb)) {
+                print(ctx, "set: tabela cheia (%d variaveis)\r\n", kMaxVars);
+                return 1;
+            }
+            return 0;
+        }
+        case shl::Arith::DivZero:
+            print(ctx, "set: divisao por zero\r\n");
+            return 1;
+        case shl::Arith::None:
+            break;  // nao era conta: grava literal
+    }
+    if (!shVarSet(a.substr(0, eq).c_str(), val.c_str())) {
+        print(ctx, "set: tabela cheia (%d variaveis)\r\n", kMaxVars);
+        return 1;
+    }
+    return 0;
+}
+
+int cmdUnset(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: unset VAR\r\n");
+        return 1;
+    }
+    shVarUnset(argv[1]);
+    return 0;
+}
+
+// test / [ — a condicao de if/while no estilo do test(1): 0 = verdadeiro.
+//   [ a = b ]  [ a != b ]                    strings
+//   [ 1 -lt 2 ]  -eq -ne -lt -le -gt -ge     inteiros (atol)
+//   [ -e arq ]  [ -f arq ]  [ -d dir ]       filesystem (jail /local /sd)
+//   [ -z str ]  [ -n str ]                   vazio / nao-vazio
+int cmdTest(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (strcmp(argv[0], "[") == 0) {
+        if (argc < 2 || strcmp(argv[argc - 1], "]") != 0) {
+            print(ctx, "uso: [ a = b ] | [ -f arq ] | [ 1 -lt 2 ]\r\n");
+            return 2;
+        }
+        argc--;  // tira o ']' do fim
+    }
+    if (argc == 4) {
+        const char* a = argv[1];
+        const char* op = argv[2];
+        const char* b = argv[3];
+        if (strcmp(op, "=") == 0) return (strcmp(a, b) == 0) ? 0 : 1;
+        if (strcmp(op, "!=") == 0) return (strcmp(a, b) != 0) ? 0 : 1;
+        const long x = atol(a), y = atol(b);
+        if (strcmp(op, "-eq") == 0) return (x == y) ? 0 : 1;
+        if (strcmp(op, "-ne") == 0) return (x != y) ? 0 : 1;
+        if (strcmp(op, "-lt") == 0) return (x < y) ? 0 : 1;
+        if (strcmp(op, "-le") == 0) return (x <= y) ? 0 : 1;
+        if (strcmp(op, "-gt") == 0) return (x > y) ? 0 : 1;
+        if (strcmp(op, "-ge") == 0) return (x >= y) ? 0 : 1;
+    } else if (argc == 3) {
+        const char* op = argv[1];
+        const char* a = argv[2];
+        if (strcmp(op, "-z") == 0) return (a[0] == '\0') ? 0 : 1;
+        if (strcmp(op, "-n") == 0) return (a[0] != '\0') ? 0 : 1;
+        if (strcmp(op, "-e") == 0 || strcmp(op, "-f") == 0 || strcmp(op, "-d") == 0) {
+            std::string path = resolvePath(a);
+            if (!CelerShell::pathAllowed(path)) return 1;
+            if (op[1] == 'e') return FileSystem::exists(path.c_str()) ? 0 : 1;
+            if (op[1] == 'f') return FileSystem::isFile(path.c_str()) ? 0 : 1;
+            return FileSystem::isDirectory(path.c_str()) ? 0 : 1;
+        }
+    }
+    print(ctx, "uso: [ a = b ] | [ 1 -lt 2 ] | [ -e|-f|-d arq ] | [ -z|-n str ]\r\n");
+    return 2;
+}
+
+int cmdCd(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    std::string target = (argc > 1) ? resolvePath(argv[1]) : std::string("/");
+    if (target != "/" && !CelerShell::pathAllowed(target)) {
+        print(ctx, "cd: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    if (target != "/" && !FileSystem::isDirectory(target.c_str())) {
+        print(ctx, "cd: %s nao e diretorio\r\n", target.c_str());
+        return 1;
+    }
+    if (target.size() >= sizeof(s_cwd)) {
+        print(ctx, "cd: caminho muito longo\r\n");
+        return 1;
+    }
+    setCwd(target.c_str());
+    return 0;
+}
+
+int cmdPwd(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    print(ctx, "%s\r\n", getCwd().c_str());
+    return 0;
+}
+
+int cmdTrue(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv; (void) print; (void) ctx;
+    return 0;
+}
+
+int cmdFalse(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv; (void) print; (void) ctx;
+    return 1;
+}
+
+// ANSI: limpa a tela e volta pro canto (no celerctl EXEC so emite os
+// bytes, inofensivo)
+int cmdClear(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    print(ctx, "\x1b[2J\x1b[H");
+    return 0;
+}
+
+int cmdDate(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void) argc; (void) argv;
+    const time_t now = time(nullptr);
+    if (!TimeManager::isTimeValid()) {
+        print(ctx, "relogio nao sincronizado (aguardando NTP)\r\n");
+    }
+    struct tm tmv;
+    if (localtime_r(&now, &tmv) == nullptr) return 1;
+    char buf[40];
+    strftime(buf, sizeof(buf), "%a %d %b %Y %H:%M:%S", &tmv);
+    print(ctx, "%s (epoch %lld)\r\n", buf, (long long)now);
+    return 0;
+}
+
+int cmdUname(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    const char* what = (argc > 1) ? argv[1] : "-s";
+    if (strcmp(what, "-a") == 0) {
+        print(ctx, "CelerOS %s %s " CELER_STR(CONFIG_IDF_TARGET) " SDK %s API %d\r\n",
+              CELEROS_VERSION, boardName(), esp_get_idf_version(), (int)CELEROS_API_LEVEL);
+    } else if (strcmp(what, "-r") == 0) {
+        print(ctx, "%s\r\n", CELEROS_VERSION);
+    } else if (strcmp(what, "-m") == 0) {
+        print(ctx, CELER_STR(CONFIG_IDF_TARGET) "\r\n");
+    } else if (strcmp(what, "-s") == 0) {
+        print(ctx, "CelerOS\r\n");
+    } else {
+        print(ctx, "uso: uname [-a|-r|-m|-s]\r\n");
+        return 1;
+    }
+    return 0;
+}
+
+// Cria o arquivo se nao existe ("ab": nao trunca um existente). Atualizar
+// mtime exigiria utime(2), que o LittleFS so honra com timestamp ligado
+// no build — deixa quieto.
+int cmdTouch(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: touch <arquivo...>\r\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int a = 1; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "touch: caminho invalido (use /local ou /sd)\r\n");
+            rc = 1;
+            continue;
+        }
+        if (FileSystem::exists(path.c_str())) continue;
+        FILE* f = fopen(path.c_str(), "ab");
+        if (f == nullptr) {
+            print(ctx, "touch: falhou em %s\r\n", path.c_str());
+            rc = 1;
+            continue;
+        }
+        fclose(f);
+    }
+    return rc;
+}
+
+int cmdRmdir(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: rmdir <diretorio>\r\n");
+        return 1;
+    }
+    std::string path = resolvePath(argv[1]);
+    if (!CelerShell::pathAllowed(path)) {
+        print(ctx, "rmdir: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    if (!FileSystem::isDirectory(path.c_str())) {
+        print(ctx, "rmdir: %s nao e diretorio\r\n", path.c_str());
+        return 1;
+    }
+    if (!FileSystem::rmdir(path.c_str())) {
+        print(ctx, "rmdir: %s nao vazio? (rm -r apaga a arvore)\r\n", path.c_str());
+        return 1;
+    }
+    return 0;
+}
+
+int cmdCp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    bool rec = false;
+    int first = 1;
+    if (argc > 1 && strcmp(argv[1], "-r") == 0) {
+        rec = true;
+        first = 2;
+    }
+    if (argc < first + 2) {
+        print(ctx, "uso: cp [-r] <de> <para>\r\n");
+        return 1;
+    }
+    std::string src = resolvePath(argv[first]);
+    std::string dst = resolvePath(argv[first + 1]);
+    if (!CelerShell::pathAllowed(src) || !CelerShell::pathAllowed(dst)) {
+        print(ctx, "cp: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    if (!FileSystem::exists(src.c_str())) {
+        print(ctx, "cp: %s nao existe\r\n", src.c_str());
+        return 1;
+    }
+    // destino existindo como diretorio, copia PARA DENTRO (semantica unix)
+    if (FileSystem::isDirectory(dst.c_str())) {
+        dst += '/';
+        dst += baseName(src.c_str());
+    }
+    makeParentDirs(dst);
+    if (FileSystem::isDirectory(src.c_str())) {
+        if (!rec) {
+            print(ctx, "cp: %s e diretorio (use cp -r)\r\n", src.c_str());
+            return 1;
+        }
+        if (!FileSystem::copyDirectory(src.c_str(), dst.c_str())) {
+            print(ctx, "cp: falhou copiando %s -> %s\r\n", src.c_str(), dst.c_str());
+            return 1;
+        }
+        return 0;
+    }
+    if (!FileSystem::copyFile(src.c_str(), dst.c_str())) {
+        print(ctx, "cp: falhou copiando %s -> %s\r\n", src.c_str(), dst.c_str());
+        return 1;
+    }
+    return 0;
+}
+
+// ------------------------------------------- leitores de N linhas (head/tail)
+
+// Imprime as primeiras n linhas. Linha mais longa que o buffer sai em
+// pedacos: a contagem sobe no '\n' que fecha a linha, os pedacos no meio
+// nao contam duas vezes.
+static int printHead(const std::string& path, long n, CelerShell::PrintFn print, void* ctx) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) return -1;
+    long shown = 0;
+    char buf[256];
+    while (shown < n && fgets(buf, sizeof(buf), f) != nullptr) {
+        print(ctx, "%s", buf);
+        for (char* p = buf; *p != '\0'; p++) {
+            if (*p == '\n') shown++;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+// Imprime as ultimas n linhas: shl::tailStart acha onde comecam (varredura
+// de tras pra frente, sem carregar o arquivo na RAM) e dali em diante
+// copia direto.
+static int printTail(const std::string& path, long n, CelerShell::PrintFn print, void* ctx) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) return -1;
+    if (shl::tailStart(f, n) < 0) {
+        fclose(f);
+        return -1;
+    }
+    char out[256];
+    size_t got;
+    while ((got = fread(out, 1, sizeof(out), f)) > 0) {
+        print(ctx, "%.*s", (int)got, out);
+    }
+    fclose(f);
+    return 0;
+}
+
+static long parseLineOpt(int argc, char** argv, int* first) {
+    long n = 10;
+    *first = 1;
+    if (argc > 2 && strcmp(argv[1], "-n") == 0) {
+        n = atol(argv[2]);
+        *first = 3;
+    }
+    if (n < 1) n = 1;
+    if (n > 2000) n = 2000;
+    return n;
+}
+
+int cmdHead(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    int first;
+    const long n = parseLineOpt(argc, argv, &first);
+    if (argc < first + 1) {
+        print(ctx, "uso: head [-n N] <arquivo...>\r\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int a = first; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "head: caminho invalido (use /local ou /sd)\r\n");
+            rc = 1;
+            continue;
+        }
+        if (argc > first + 1) print(ctx, "==> %s <==\r\n", path.c_str());
+        if (printHead(path, n, print, ctx) != 0) {
+            print(ctx, "head: nao consegui abrir %s\r\n", path.c_str());
+            rc = 1;
+        }
+    }
+    return rc;
+}
+
+int cmdTail(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    int first;
+    const long n = parseLineOpt(argc, argv, &first);
+    if (argc < first + 1) {
+        print(ctx, "uso: tail [-n N] <arquivo...>\r\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int a = first; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "tail: caminho invalido (use /local ou /sd)\r\n");
+            rc = 1;
+            continue;
+        }
+        if (argc > first + 1) print(ctx, "==> %s <==\r\n", path.c_str());
+        if (printTail(path, n, print, ctx) != 0) {
+            print(ctx, "tail: nao consegui abrir %s\r\n", path.c_str());
+            rc = 1;
+        }
+    }
+    return rc;
+}
+
+int cmdWc(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    bool wantL = false, wantW = false, wantC = false;
+    int first = 1;
+    for (; first < argc && argv[first][0] == '-' && argv[first][1] != '\0'; first++) {
+        for (const char* p = argv[first] + 1; *p != '\0'; p++) {
+            if (*p == 'l') wantL = true;
+            else if (*p == 'w') wantW = true;
+            else if (*p == 'c') wantC = true;
+            else {
+                print(ctx, "uso: wc [-l|-w|-c] <arquivo...>\r\n");
+                return 1;
+            }
+        }
+    }
+    if (!wantL && !wantW && !wantC) wantL = wantW = wantC = true;
+    if (argc < first + 1) {
+        print(ctx, "uso: wc [-l|-w|-c] <arquivo...>\r\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int a = first; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "wc: caminho invalido (use /local ou /sd)\r\n");
+            rc = 1;
+            continue;
+        }
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f == nullptr) {
+            print(ctx, "wc: nao consegui abrir %s\r\n", path.c_str());
+            rc = 1;
+            continue;
+        }
+        unsigned long lines = 0, words = 0, bytes = 0;
+        bool inWord = false;
+        char buf[512];
+        size_t got;
+        while ((got = fread(buf, 1, sizeof(buf), f)) > 0) {
+            bytes += (unsigned long)got;
+            for (size_t i = 0; i < got; i++) {
+                const char c = buf[i];
+                if (c == '\n') lines++;
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r') inWord = false;
+                else if (!inWord) {
+                    inWord = true;
+                    words++;
+                }
+            }
+        }
+        fclose(f);
+        if (wantL) print(ctx, "%lu ", lines);
+        if (wantW) print(ctx, "%lu ", words);
+        if (wantC) print(ctx, "%lu ", bytes);
+        print(ctx, "%s\r\n", path.c_str());
+    }
+    return rc;
+}
+
+// Substring simples (sem regex). Como o grep(1), cala quando nao acha
+// nada e devolve 1 — util para encadear com ';'.
+int cmdGrep(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    bool ci = false, showNum = false, invert = false;
+    int first = 1;
+    for (; first < argc && argv[first][0] == '-' && argv[first][1] != '\0'; first++) {
+        for (const char* p = argv[first] + 1; *p != '\0'; p++) {
+            if (*p == 'i') ci = true;
+            else if (*p == 'n') showNum = true;
+            else if (*p == 'v') invert = true;
+            else {
+                print(ctx, "uso: grep [-inv] <padrao> <arquivo...> (linhas >255B sao divididas)\r\n");
+                return 1;
+            }
+        }
+    }
+    if (argc < first + 2) {
+        print(ctx, "uso: grep [-inv] <padrao> <arquivo...>\r\n");
+        return 1;
+    }
+    const char* pat = argv[first];
+    const int nFiles = argc - first - 1;
+    int matches = 0, rc = 0;
+    for (int a = first + 1; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "grep: caminho invalido (use /local ou /sd)\r\n");
+            rc = 1;
+            continue;
+        }
+        FILE* f = fopen(path.c_str(), "rb");
+        if (f == nullptr) {
+            print(ctx, "grep: nao consegui abrir %s\r\n", path.c_str());
+            rc = 1;
+            continue;
+        }
+        long lineno = 0;
+        char line[256];
+        while (fgets(line, sizeof(line), f) != nullptr) {
+            lineno++;
+            const bool has = ci ? shl::containsCI(line, pat) : (strstr(line, pat) != nullptr);
+            if (has == invert) continue;
+            matches++;
+            if (nFiles > 1) print(ctx, "%s:", path.c_str());
+            if (showNum) print(ctx, "%ld:", lineno);
+            print(ctx, "%s", line);
+        }
+        fclose(f);
+    }
+    return (matches == 0) ? 1 : rc;
+}
+
+static void findWalk(const std::string& dir, int depth, WalkBudget* b, const char* namePat,
+                     int typeFilter, CelerShell::PrintFn print, void* ctx) {
+    if (depth > 8) return;
+    DIR* d = opendir(dir.c_str());
+    if (d == nullptr) return;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+        if (b->left-- <= 0) {
+            b->clipped = true;
+            break;
+        }
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        std::string full = dir + ((dir == "/") ? "" : "/") + ent->d_name;
+        bool isDir = ent->d_type == DT_DIR;
+        if (ent->d_type == DT_UNKNOWN) {
+            struct stat st;
+            isDir = (stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode));
+        }
+        if (!CelerShell::pathAllowed(full)) continue;  // raiz pode listar fora da jail
+        const bool nameOk = (namePat == nullptr) || shl::wildMatch(namePat, ent->d_name);
+        const bool typeOk = (typeFilter == 0) || (typeFilter == 1 ? !isDir : isDir);
+        if (nameOk && typeOk) print(ctx, "%s\r\n", full.c_str());
+        if (isDir) findWalk(full, depth + 1, b, namePat, typeFilter, print, ctx);
+    }
+    closedir(d);
+}
+
+int cmdFind(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    const char* namePat = nullptr;
+    int typeFilter = 0;
+    int i = 1;
+    std::string root = getCwd();
+    if (argc > 1 && argv[1][0] != '-') {
+        root = resolvePath(argv[1]);
+        i = 2;
+    }
+    for (; i < argc; i++) {
+        if (strcmp(argv[i], "-name") == 0 && i + 1 < argc) {
+            namePat = argv[++i];
+        } else if (strcmp(argv[i], "-type") == 0 && i + 1 < argc) {
+            const char t = argv[++i][0];
+            typeFilter = (t == 'f') ? 1 : (t == 'd') ? 2 : 0;
+        } else {
+            print(ctx, "uso: find [dir] [-name padrao] [-type f|d]\r\n");
+            return 1;
+        }
+    }
+    if (root != "/" && !CelerShell::pathAllowed(root)) {
+        print(ctx, "find: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    if (root != "/" && !FileSystem::isDirectory(root.c_str())) {
+        print(ctx, "find: %s nao e diretorio\r\n", root.c_str());
+        return 1;
+    }
+    WalkBudget b;
+    findWalk(root, 0, &b, namePat, typeFilter, print, ctx);
+    if (b.clipped) print(ctx, "find: varredura truncada (muitas entradas)\r\n");
+    return 0;
+}
+
+static uint64_t treeSize(const std::string& dir, int depth, WalkBudget* b) {
+    if (depth > 8) return 0;
+    DIR* d = opendir(dir.c_str());
+    if (d == nullptr) return 0;
+    uint64_t total = 0;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+        if (b->left-- <= 0) {
+            b->clipped = true;
+            break;
+        }
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        std::string full = dir + ((dir == "/") ? "" : "/") + ent->d_name;
+        struct stat st;
+        if (stat(full.c_str(), &st) != 0) continue;
+        if (!CelerShell::pathAllowed(full)) continue;
+        if (S_ISDIR(st.st_mode)) total += treeSize(full, depth + 1, b);
+        else total += (uint64_t)st.st_size;
+    }
+    closedir(d);
+    return total;
+}
+
+int cmdDu(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    std::string target = (argc > 1) ? resolvePath(argv[1]) : getCwd();
+    if (target != "/" && !CelerShell::pathAllowed(target)) {
+        print(ctx, "du: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    struct stat st;
+    if (target != "/" && stat(target.c_str(), &st) != 0) {
+        print(ctx, "du: %s nao existe\r\n", target.c_str());
+        return 1;
+    }
+    if (target != "/" && !S_ISDIR(st.st_mode)) {
+        print(ctx, "%10s  %s\r\n", humanSize((uint64_t)st.st_size).c_str(), target.c_str());
+        return 0;
+    }
+    WalkBudget b;
+    uint64_t total = 0;
+    DIR* d = opendir(target.c_str());
+    if (d == nullptr) {
+        print(ctx, "du: nao consegui abrir %s\r\n", target.c_str());
+        return 1;
+    }
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+        if (b.left-- <= 0) {
+            b.clipped = true;
+            break;
+        }
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+        std::string full = target + ((target == "/") ? "" : "/") + ent->d_name;
+        if (!CelerShell::pathAllowed(full)) continue;
+        struct stat est;
+        if (stat(full.c_str(), &est) != 0) continue;
+        const uint64_t sz = S_ISDIR(est.st_mode) ? treeSize(full, 1, &b) : (uint64_t)est.st_size;
+        total += sz;
+        print(ctx, "%10s  %s\r\n", humanSize(sz).c_str(), full.c_str());
+    }
+    closedir(d);
+    print(ctx, "%10s  total%s\r\n", humanSize(total).c_str(), b.clipped ? " (varredura truncada)" : "");
+    return 0;
+}
+
+// Dump hexadecimal no formato do xxd(1) (offset, hex, ASCII). Teto no
+// numero de bytes: saida grande demais estoura o buffer do EXEC (32KB)
+// e nao serve pra nada no terminal serial.
+int cmdXxd(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: xxd <arquivo> [bytes] (default 1024, max 8192)\r\n");
+        return 1;
+    }
+    std::string path = resolvePath(argv[1]);
+    if (!CelerShell::pathAllowed(path)) {
+        print(ctx, "xxd: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        print(ctx, "xxd: nao consegui abrir %s\r\n", path.c_str());
+        return 1;
+    }
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    long limit = (argc > 2) ? atol(argv[2]) : 1024;
+    if (limit < 16) limit = 16;
+    if (limit > 8192) limit = 8192;
+    if (limit > size) limit = size;
+    long off = 0;
+    uint8_t buf[16];
+    char row[96];
+    while (off < limit) {
+        const size_t n = fread(buf, 1, sizeof(buf), f);
+        if (n == 0) break;
+        int p = snprintf(row, sizeof(row), "%08lx: ", (unsigned long)off);
+        for (size_t i = 0; i < n; i++) p += snprintf(row + p, sizeof(row) - p, "%02x ", buf[i]);
+        for (size_t i = n; i < sizeof(buf); i++) p += snprintf(row + p, sizeof(row) - p, "   ");
+        p += snprintf(row + p, sizeof(row) - p, " ");
+        for (size_t i = 0; i < n; i++) {
+            row[p++] = (buf[i] >= 0x20 && buf[i] < 0x7F) ? (char)buf[i] : '.';
+        }
+        row[p] = '\0';
+        print(ctx, "%s\r\n", row);
+        off += (long)n;
+    }
+    fclose(f);
+    if (size > limit) {
+        print(ctx, "(%ld de %ld bytes; xxd %s N para mais)\r\n", limit, size, argv[1]);
+    }
+    return 0;
+}
+
+// Par de bancada do `push --verify` do celerctl: o MD5 do que o FS serve
+// AGORA, calculado na ROM do chip (mesmo caminho do System.getFileMD5).
+int cmdMd5Sum(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: md5sum <arquivo...>\r\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int a = 1; a < argc; a++) {
+        std::string path = resolvePath(argv[a]);
+        if (!CelerShell::pathAllowed(path)) {
+            print(ctx, "md5sum: caminho invalido (use /local ou /sd)\r\n");
+            rc = 1;
+            continue;
+        }
+        std::string md = FileSystem::getFileMD5(path.c_str());
+        if (md.empty()) {
+            print(ctx, "md5sum: nao consegui ler %s\r\n", path.c_str());
+            rc = 1;
+            continue;
+        }
+        print(ctx, "%s  %s\r\n", md.c_str(), path.c_str());
+    }
+    return rc;
+}
+
+// Espelho do dmesg do app Terminal: tail do log persistente do kernel
+// (LogPersist grava /local/log/kern.log nos builds com logs persistentes).
+int cmdDmesg(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    long n = (argc > 1) ? atol(argv[1]) : 30;
+    if (n < 1) n = 1;
+    if (n > 200) n = 200;
+    const char* path = "/local/log/kern.log";
+    struct stat st;
+    if (stat(path, &st) != 0 || st.st_size == 0) {
+        print(ctx, "sem %s neste build/firmware\r\n", path);
+        return 1;
+    }
+    if (printTail(path, n, print, ctx) != 0) {
+        print(ctx, "dmesg: nao consegui abrir %s\r\n", path);
+        return 1;
+    }
+    print(ctx, "\r\n");
+    return 0;
+}
+
+// ------------------------------------------------------------------ sh reduzido
+
+// Profundidade de scripts abertos (sh chamando sh): sem a guarda, um
+// script que se chama entra em loop e derruba a stack. int comum — duas
+// tasks aninhando ao mesmo tempo so gastam stack, nada corrompe.
+static int s_shDepth = 0;
+
+// Linha de script: saida visivel no canal que chamou o sh.
+struct ShellRun {
+    CelerShell::PrintFn print;
+    void* ctx;
+};
+
+static int shellLineExec(void* vctx, const char* line) {
+    ShellRun* r = (ShellRun*)vctx;
+    return CelerShell::execute(line, r->print, r->ctx);
+}
+
+// Condicao de if/while: roda calada (devNullPrint) — o codigo decide.
+static int shellCondExec(void* vctx, const char* line) {
+    (void) vctx;
+    return CelerShell::execute(line, devNullPrint, nullptr);
+}
+
+// sh [-e] [-x] <arquivo>: script reduzido, uma linha = um comando.
+// Blocos if/else/end, while/end, break/continue, variaveis $VAR/${VAR}/$?
+// e condicao silenciosa (0 = verdadeiro) — o interpretador inteiro vive
+// no Utils/ShellLogic.h (shl::runScript, testado no host); aqui ficam so
+// a politica de device: jail do caminho, guarda de aninhamento e para
+// onde vai a saida. -e para no 1o erro, -x ecoa a linha antes de rodar.
+int cmdSh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    bool stopErr = false, trace = false;
+    int first = 1;
+    for (; first < argc && argv[first][0] == '-' && argv[first][1] != '\0'; first++) {
+        for (const char* p = argv[first] + 1; *p != '\0'; p++) {
+            if (*p == 'e') stopErr = true;
+            else if (*p == 'x') trace = true;
+            else {
+                print(ctx, "uso: sh [-e] [-x] <arquivo>\r\n");
+                return 1;
+            }
+        }
+    }
+    if (argc < first + 1) {
+        print(ctx, "uso: sh [-e] [-x] <arquivo>\r\n");
+        return 1;
+    }
+    std::string path = resolvePath(argv[first]);
+    if (!CelerShell::pathAllowed(path)) {
+        print(ctx, "sh: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    if (s_shDepth >= 3) {
+        print(ctx, "sh: aninhamento maximo (3) de scripts\r\n");
+        return 1;
+    }
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f == nullptr) {
+        print(ctx, "sh: nao consegui abrir %s\r\n", path.c_str());
+        return 1;
+    }
+    s_shDepth++;
+    ShellRun run = {print, ctx};
+    shl::ScriptOpts opts;
+    opts.stopErr = stopErr;
+    opts.trace = trace;
+    const int rc = shl::runScript(f, opts, shellLineExec, shellCondExec, &run, print, ctx);
+    fclose(f);
+    s_shDepth--;
+    return rc;
+}
+
+#if CONFIG_CELEROS_BLUETOOTH
+// mesh: estado da malha CelerNet (rede, papel, contadores) e nos ouvidos
+int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void)argc;
+    (void)argv;
+    CelerNet::Info st;
+    CelerNet::info(&st);
+    if (!st.active) {
+        print(ctx, "malha desligada (setting celernet=%s)\r\n", CelerNet::enabledSetting() ? "1" : "0");
+        return 0;
+    }
+    print(ctx, "malha: \"%s\" (%04X) rede \"%s\" id %04X %s\r\n", st.name, st.node, st.net, st.netId,
+          st.relay ? "repetidor" : "so escuta");
+    print(ctx, "  tx no ar %u  falha %u  sem ficha %u  fila %u  recusados %u | relay %u (perdidos %u)  rx perdidos %u\r\n",
+          (unsigned)st.txStarted, (unsigned)st.txFail, (unsigned)st.txNoToken, (unsigned)st.txQueued,
+          (unsigned)st.txDropped, (unsigned)st.relayed, (unsigned)st.relayDropped, (unsigned)st.rxDropped);
+    CelerNet::Node nodes[CelerNet::NODES_MAX];
+    const int n = CelerNet::nodes(nodes, CelerNet::NODES_MAX);
+    print(ctx, "nos ouvidos: %d\r\n", n);
+    for (int i = 0; i < n; i++) {
+        print(ctx, "  %04X %-15s caps 0x%02X  rssi %d  saltos %u  ha %u s\r\n", nodes[i].id, nodes[i].name,
+              nodes[i].caps, nodes[i].rssi, nodes[i].hops, (unsigned)(nodes[i].lastSeenMs / 1000));
+    }
+    return 0;
+}
+
+// res: recursos da matilha (ESP-NOW, locais, leases, handles, cache)
+int cmdRes(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    (void)argc;
+    (void)argv;
+    Resources::dump(print, ctx);
+    return 0;
+}
+#endif
+
 struct ShellCmd {
     const char* name;
     int (*fn)(int argc, char** argv, CelerShell::PrintFn print, void* ctx);
@@ -919,7 +1965,20 @@ const ShellCmd kCommands[] = {
 #if CONFIG_CELEROS_PHONE_LINK
     {"gb", cmdGb},
 #endif
+#if CONFIG_CELEROS_BLUETOOTH
+    {"mesh", cmdMesh},  {"res", cmdRes},
+#endif
     {"colorbars", cmdColorBars},
+    // unix basicos (mesma tabela: valem no console CDC/UART e no EXEC)
+    {"echo", cmdEcho},     {"cd", cmdCd},         {"pwd", cmdPwd},
+    {"cp", cmdCp},         {"touch", cmdTouch},   {"rmdir", cmdRmdir},
+    {"head", cmdHead},     {"tail", cmdTail},     {"wc", cmdWc},
+    {"grep", cmdGrep},     {"find", cmdFind},     {"du", cmdDu},
+    {"xxd", cmdXxd},       {"hexdump", cmdXxd},   {"md5sum", cmdMd5Sum},
+    {"date", cmdDate},     {"clear", cmdClear},   {"uname", cmdUname},
+    {"dmesg", cmdDmesg},   {"true", cmdTrue},     {"false", cmdFalse},
+    {"sh", cmdSh},         {"set", cmdSet},       {"unset", cmdUnset},
+    {"[", cmdTest},        {"test", cmdTest},
 };
 
 }  // namespace
@@ -956,27 +2015,116 @@ bool LineEditor::feed(uint8_t byte, char* line, size_t maxLen) {
     return false;
 }
 
-int CelerShell::execute(const char* line, PrintFn print, void* ctx) {
-    // copia para tokenizar
-    char buf[MAX_LINE];
-    strncpy(buf, line, MAX_LINE - 1);
-    buf[MAX_LINE - 1] = '\0';
+// Saida de comando redirecionada para arquivo (cmd > arq / cmd >> arq):
+// formata no stack, tira o '\r' dos "\r\n" (o arquivo fica Unix, sem ^M
+// no cat de volta) e grava. Sem alocacao — roda na task do canal.
+static void filePrint(void* vctx, const char* fmt, ...) {
+    FILE* f = (FILE*)vctx;
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[512];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+    int j = 0;
+    for (int i = 0; i < n; i++) {
+        if (buf[i] != '\r') buf[j++] = buf[i];
+    }
+    fwrite(buf, 1, (size_t)j, f);
+}
 
-    // separa em argc/argv por espacos
+// Um comando (sem o encadeamento): tokeniza, trata o redirecionamento e
+// despacha na tabela.
+static int runSegment(char* seg, CelerShell::PrintFn print, void* ctx) {
     char* argv[16];
     int argc = 0;
     char* save = nullptr;
-    for (char* tok = strtok_r(buf, " \t", &save); tok != nullptr && argc < 16;
+    for (char* tok = strtok_r(seg, " \t", &save); tok != nullptr && argc < 16;
          tok = strtok_r(nullptr, " \t", &save)) {
         argv[argc++] = tok;
     }
     if (argc == 0) return 0;
 
-    for (const ShellCmd& c : kCommands) {
-        if (strcmp(argv[0], c.name) == 0) {
-            return c.fn(argc, argv, print, ctx);
+    // palavras de bloco nao existem fora de script — a dica evita o
+    // "comando nao encontrado" seco no console
+    static const char* const kBlockWords[] = {"if", "while", "else", "end", "break", "continue"};
+    for (const char* w : kBlockWords) {
+        if (strcmp(argv[0], w) == 0) {
+            print(ctx, "%s: palavra de bloco — so dentro de script (sh <arquivo>)\r\n", w);
+            return 1;
         }
     }
-    print(ctx, "%s: comando nao encontrado (help para lista)\r\n", argv[0]);
-    return -1;
+
+    // "cmd ... > arq" trunca, ">>" anexa: token isolado, alvo no token
+    // seguinte (sem aspas no shell, '>' colado num argumento e literal —
+    // mesmo papel do sh sem aspas)
+    int redirAt = -1;
+    bool append = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], ">") == 0) {
+            redirAt = i;
+            break;
+        }
+        if (strcmp(argv[i], ">>") == 0) {
+            redirAt = i;
+            append = true;
+            break;
+        }
+    }
+    FILE* redir = nullptr;
+    CelerShell::PrintFn out = print;
+    void* outCtx = ctx;
+    if (redirAt >= 0) {
+        if (redirAt + 1 >= argc) {
+            print(ctx, "uso: <comando> > <arquivo> (ou >> para anexar)\r\n");
+            return 1;
+        }
+        std::string target = resolvePath(argv[redirAt + 1]);
+        if (!CelerShell::pathAllowed(target)) {
+            print(ctx, "%s: caminho invalido (use /local ou /sd)\r\n", argv[0]);
+            return 1;
+        }
+        makeParentDirs(target);
+        redir = fopen(target.c_str(), append ? "a" : "w");
+        if (redir == nullptr) {
+            print(ctx, "%s: nao consegui abrir %s para escrita\r\n", argv[0], target.c_str());
+            return 1;
+        }
+        argc = redirAt;  // o comando nao ve o redirecionamento nem o alvo
+        out = filePrint;
+        outCtx = redir;
+    }
+
+    int code = -1;
+    for (const ShellCmd& c : kCommands) {
+        if (strcmp(argv[0], c.name) == 0) {
+            code = c.fn(argc, argv, out, outCtx);
+            break;
+        }
+    }
+    if (code < 0) {
+        print(ctx, "%s: comando nao encontrado (help para lista)\r\n", argv[0]);
+    }
+    s_lastRc = (code >= 0) ? code : 127;  // $?: 127 = nao encontrado, como no sh
+    if (redir != nullptr) fclose(redir);
+    return code;
+}
+
+int CelerShell::execute(const char* line, PrintFn print, void* ctx) {
+    // expande $VAR/${VAR}/$? ANTES de tokenizar: sem aspas no shell, o
+    // dollar vale em qualquer posicao. 2x MAX_LINE da folga para a
+    // expansao (valores sao curtos, teto de 63 chars cada)
+    char buf[MAX_LINE * 2];
+    shl::expandVars(line, buf, sizeof(buf), shellVarLookup, nullptr, s_lastRc);
+
+    // ';' encadeia comandos (a saida do anterior NAO alimenta o proximo —
+    // nao ha pipes); o codigo devolvido e o do ultimo
+    int rc = 0;
+    char* save = nullptr;
+    for (char* seg = strtok_r(buf, ";", &save); seg != nullptr;
+         seg = strtok_r(nullptr, ";", &save)) {
+        rc = runSegment(seg, print, ctx);
+    }
+    return rc;
 }

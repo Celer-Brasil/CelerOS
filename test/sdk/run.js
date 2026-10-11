@@ -1339,6 +1339,91 @@ function depsSize(nomes) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ------------------------------------------------ spr: spritesheet/regioes --
+(function () {
+    console.log('SDK CelerGame spr (spritesheet):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-sh-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game.spr': '^1.0.0' } }));
+
+    function runSnippet(code, setup) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(tmp, env);
+        var out = {};
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        if (setup) setup(env);
+        var fn = new Function('System', 'Storage', '__harness', 'require', code);
+        fn(env.System, env.Storage, env.__harness, req);
+        return out;
+    }
+
+    // 1 PNG num slot so; regioes por celula e rect livre; blit recorta
+    var r = runSnippet(
+        'var E = require("celeros.game.spr");' +
+        'E.init({ dir: "Teste" });' +
+        'var calls = [];' +
+        'var sc = System.setClip, ps = System.pushSprite;' +
+        'System.setClip = function (x, y, w, h) { calls.push([x, y, w, h]); sc(x, y, w, h); };' +
+        'System.pushSprite = function (x, y, k) { calls.push([x, y, k]); ps(x, y, k); };' +
+        'var regs = E.spr.sheet("tiles", { file: "tiles", w: 64, h: 32, tw: 16, th: 16,' +
+        '  regions: { chao: [0, 0], bola: [2, 1], logo: [32, 0, 24, 12] } });' +
+        '__harness.grab("sheet", [E.spr._used, !!regs.chao.id, regs.logo.w, regs.logo.h,' +
+        '  E.spr.backed("chao"), regs.chao.id === regs.bola.id]);' +
+        'E.spr.blit("bola", 10, 20);' +
+        '__harness.grab("blit", calls);' +
+        'E.spr.free("chao");' +
+        '__harness.grab("free1", [E.spr.has("chao"), E.spr._used]);' +
+        'E.spr.freeSheet("tiles");' +
+        '__harness.grab("free2", [E.spr.has("bola"), E.spr.has("logo"), E.spr._used]);' +
+        'var an = E.spr.anim ? null : null; __harness.grab("animOk", 1);');
+    check('sheet: 1 slot para o PNG inteiro, regioes compartilham o id',
+          r.sheet[0] === 1 && r.sheet[1] === true && r.sheet[4] === true &&
+          r.sheet[5] === true,
+          JSON.stringify(r.sheet));
+    check('sheet: rect livre [32,0,24,12] vira regiao de 24x12',
+          r.sheet[2] === 24 && r.sheet[3] === 12, JSON.stringify(r.sheet));
+    check('blit de regiao: clip no destino + sheet empurrado deslocado (-22, 4)',
+          r.blit.length === 2 && r.blit[0].join() === '10,20,16,16' &&
+          r.blit[1].join() === '-22,4,0',
+          JSON.stringify(r.blit));
+    check('free de regiao nao derruba o slot do sheet; freeSheet sim',
+          r.free1[0] === false && r.free1[1] === 1 &&
+          r.free2[0] === false && r.free2[1] === false && r.free2[2] === 0,
+          JSON.stringify([r.free1, r.free2]));
+
+    // sem setClip (firmware velho): regiao cai no paint(nome, x, y)
+    r = runSnippet(
+        'var E = require("celeros.game.spr");' +
+        'E.init({});' +
+        'var pintados = [];' +
+        'E.spr.sheet("t", { w: 32, h: 32, tw: 16, regions: { a: [0, 0] },' +
+        '  paint: function (n, x, y) { pintados.push([n, x, y]); } });' +
+        'E.spr.blit("a", 5, 6);' +
+        '__harness.grab("fb", pintados);',
+        function (env) { delete env.System.setClip; });
+    check('sem setClip: regiao cai no paint(nome, x, y)',
+          r.fb.length === 1 && r.fb[0].join() === 'a,5,6', JSON.stringify(r.fb));
+
+    // anim por regiao: flipbook com nomes de regiao
+    r = runSnippet(
+        'var E = require("celeros.game.spr");' +
+        'E.init({ dir: "Teste" });' +
+        'var pushes = [];' +
+        'var ps = System.pushSprite;' +
+        'System.pushSprite = function (x, y, k) { pushes.push(x); ps(x, y, k); };' +
+        'E.spr.sheet("t", { file: "t", w: 32, h: 16, tw: 16, regions: { p1: [0, 0], p2: [1, 0] } });' +
+        'var a = E.anim(["p1", "p2"], 2);' +
+        'a.tick(0.6);' +
+        'a.draw(40, 50);' +
+        '__harness.grab("anim", [a.i, pushes[0]]);');
+    check('anim: flipbook por nomes de regiao (i avanca, blit da regiao)',
+          r.anim[0] === 1 && typeof r.anim[1] === 'number', JSON.stringify(r.anim));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------------------ mesh --
 (function () {
     console.log('SDK mesh (tools/sdk/engine/celeros.mesh.js):');

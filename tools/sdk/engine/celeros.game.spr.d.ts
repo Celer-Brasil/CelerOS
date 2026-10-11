@@ -14,6 +14,15 @@ declare namespace E {
         version: string;
         bases: string[];
         load(defs: SpriteDef[], opts?: { bases?: string[] }): Record<string, SpriteSlot>;
+        /** 1 PNG num UNICO slot + regioes nomeadas ([cx, cy] em celulas tw x th, ou [x, y, w, h] livre). Regioes viram nomes de sprite de 1a classe (blit/anim). */
+        sheet(name: string, o: {
+            file?: string; w: number; h: number; tw?: number; th?: number;
+            regions: Record<string, number[]>;
+            /** fallback procedural por regiao: paint(nome, x, y) — usado sem slot ou sem setClip */
+            paint?: (nome: string, x: number, y: number) => void;
+        }): Record<string, SpriteSlot>;
+        /** libera o slot do sheet e todas as regioes dele */
+        freeSheet(name: string): void;
         has(name: string): boolean;
         /** true se esta num slot real (blit com cor-chave); false = painter */
         backed(name: string): boolean;

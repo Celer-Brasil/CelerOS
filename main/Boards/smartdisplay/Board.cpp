@@ -4,6 +4,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <esp_intr_alloc.h>
+#include <esp_log.h>
+#include <soc/interrupts.h>
+#include <soc/lcd_cam_struct.h>
+#include <hal/lcd_hal.h>
+#include <esp_lcd_io_i80.h>
 
 // Perfil da Guition ESP32-S3-4848S040 (SmartDisplay 4").
 //
@@ -29,6 +35,54 @@ BoardDisplay s_display;
 // balancando). No nucleo 1 a ISR nao disputa com nada disso.
 SemaphoreHandle_t s_initDone = nullptr;
 
+// ISR do VSYNC em IRAM. O Bus_RGB aloca a dele SEM ESP_INTR_FLAG_IRAM (so o
+// handler e IRAM_ATTR): durante QUALQUER operacao na flash (NVS, LittleFS,
+// notifications.txt, OTA) o IDF desliga as interrupcoes nao-IRAM nos dois
+// nucleos, o reinicio do DMA do quadro esperava o erase/escrita acabar e a
+// imagem embaralhava a cada gravacao — sem underflow (o lcddma dava 0), o
+// DMA so seguia fora de fase com o VSYNC (bancada 2026-10-11: app gravando
+// NVS em loop = 1 embaralhada por escrita). O handler so toca registradores
+// do LCD_CAM/GDMA e o proprio Bus_RGB (DRAM: s_display e estatico) — seguro
+// com o cache desligado (conferido no objdump: nenhuma chamada para flash).
+//
+// O LovyanGFX e submodulo upstream (nao se edita): o handle e o handler sao
+// privados, e o acesso vem do idioma de ponteiro-para-membro por
+// instanciacao explicita de template (a regra de acesso nao vale nela).
+template <typename Tag, typename Tag::type M>
+struct PrivAccess {
+    friend typename Tag::type privGet(Tag) { return M; }
+};
+struct BusIntrHandle {
+    typedef intr_handle_t lgfx::Bus_RGB::*type;
+    friend type privGet(BusIntrHandle);
+};
+struct BusIsrHandler {
+    typedef void (*type)(void*);
+    friend type privGet(BusIsrHandler);
+};
+struct BusI80 {
+    typedef esp_lcd_i80_bus_handle_t lgfx::Bus_RGB::*type;
+    friend type privGet(BusI80);
+};
+template struct PrivAccess<BusIntrHandle, &lgfx::Bus_RGB::_intr_handle>;
+template struct PrivAccess<BusIsrHandler, &lgfx::Bus_RGB::lcd_default_isr_handler>;
+template struct PrivAccess<BusI80, &lgfx::Bus_RGB::_i80_bus>;
+
+// Prefixo do esp_lcd_i80_bus_t (esp_lcd/i80/esp_lcd_panel_io_i80.c, IDF
+// v6.1 — struct privada do driver). O Bus_RGB cria um i80 bus so para ligar
+// o clock do LCD_CAM e nunca cria device nele, mas o bus aloca a fonte
+// LCD_CAM COMPARTILHADA e sem IRAM (o i80 do v6.1 nao tem opcao IRAM-safe):
+// enquanto ela existir, nenhuma alocacao IRAM da mesma fonte e aceita. A
+// interrupcao do bus so seria habilitada por um device (nunca ha), entao
+// liberar a dela nao muda nada no driver. Conferir o layout ao trocar de IDF.
+struct I80BusPrefix {
+    int bus_id;
+    portMUX_TYPE spinlock;
+    lcd_hal_context_t hal;
+    size_t bus_width;
+    intr_handle_t intr;
+};
+
 void displayInitTask(void*) {
     s_display.init();
     xSemaphoreGive(s_initDone);
@@ -53,6 +107,45 @@ void initDisplayOnCore1() {
     s_display.init();  // fallback: sem task, no nucleo atual
 }
 }  // namespace
+
+bool CelerBusRGB::init(void) {
+    if (_ready) return true;  // 2a chamada (Panel_Device::init): ja configurado
+    if (!lgfx::Bus_RGB::init()) return false;
+    _ready = true;
+    lgfx::Bus_RGB* self = this;
+    intr_handle_t& h = self->*privGet(BusIntrHandle());
+    if (h == nullptr) return true;
+    esp_intr_free(h);
+    h = nullptr;
+    esp_lcd_i80_bus_handle_t i80 = self->*privGet(BusI80());
+    if (i80 != nullptr) {
+        I80BusPrefix* b = reinterpret_cast<I80BusPrefix*>(i80);
+        // sanidade do layout: bus 0 e o hal apontando para o LCD_CAM
+        if (b->bus_id == 0 && b->hal.dev == &LCD_CAM && b->intr != nullptr) {
+            esp_intr_free(b->intr);
+            b->intr = nullptr;
+        } else {
+            ESP_LOGW("board", "i80 bus com layout inesperado: ISR do painel fica sem IRAM");
+        }
+    }
+    // nivel 3 primeiro (acima das ISRs nivel 1 do nucleo 1, ex.: I2C do
+    // touch, que dividia a linha com ela); sem linha livre, qualquer nivel
+    const int base = ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_INTRDISABLED;
+    esp_err_t err = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE, base | ESP_INTR_FLAG_LEVEL3,
+                                   privGet(BusIsrHandler()), self, &h);
+    if (err != ESP_OK) {
+        err = esp_intr_alloc(ETS_LCD_CAM_INTR_SOURCE, base | ESP_INTR_FLAG_LOWMED,
+                             privGet(BusIsrHandler()), self, &h);
+    }
+    if (err == ESP_OK) {
+        esp_intr_enable(h);
+        ESP_LOGI("board", "ISR do painel em IRAM (linha %d, nucleo %d)", esp_intr_get_intno(h),
+                 esp_intr_get_cpu(h));
+    } else {
+        ESP_LOGE("board", "ISR do painel: realocacao em IRAM falhou (%d) - painel sem VSYNC", (int)err);
+    }
+    return true;
+}
 
 namespace Board {
 

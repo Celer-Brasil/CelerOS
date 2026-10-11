@@ -30,9 +30,26 @@ public:
     }
 };
 
+// Bus_RGB com duas correcoes (corpo em Board.cpp; o LovyanGFX e submodulo):
+//  - init idempotente: o LGFX_Device::init chama initBus() e o
+//    Panel_Device::init chama _bus->init() DE NOVO — cada chamada aloca
+//    framebuffer (460 KB de PSRAM), descritores de DMA e uma ISR nova, e a
+//    1a ISR ficava viva e orfa (duas LCD_CAM na tabela do nucleo 1);
+//  - ISR do VSYNC realocada com ESP_INTR_FLAG_IRAM (ver Board.cpp).
+class CelerBusRGB : public lgfx::Bus_RGB {
+public:
+    bool init(void) override;
+    void release(void) override {
+        _ready = false;
+        lgfx::Bus_RGB::release();
+    }
+private:
+    bool _ready = false;
+};
+
 class BoardDisplay : public CelerDisplayBase {
 public:
-    lgfx::Bus_RGB     _bus;
+    CelerBusRGB       _bus;
     CelerPanel        _panel;
     lgfx::Light_PWM   _light;
     lgfx::Touch_GT911_IDF _touch;

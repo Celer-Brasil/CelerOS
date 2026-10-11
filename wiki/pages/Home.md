@@ -27,11 +27,11 @@ development.
 
 ## What's new
 
-Firmware 1.8.2 — the games round (JS API level 32):
+Firmware 1.8.2 — the games round (JS API level 36):
 
-* **Supernova 2.2** and **Detona! 0.6** — two full games pushing the runtime: a 480×480 sprite shooter on a **native canvas** (API 28) and a grid bomberman whose **1×1 duel plays over the Bluetooth mesh** — lobby, invite and best of 3 rounds in the **same arena built from a shared seed**, with only discrete one-frame events crossing the radio (each player is the authority over its own body).
-* **Shared dependencies on the hub** (API 30) — the engine, physics, mesh, SFX and grid libraries install once and every app reuses them (`deps.json`): app packages got smaller and the app size ceiling rose from 128 KB to **1 MB**.
-* **Native verlet physics** (`System.verlet*`, API 31) — integration, relaxation and collisions in C++ for worlds with thousands of points; Physics Drop 4 and the Bench Fisica app already ride it.
+* **Supernova 2.4, Detona! 0.8 and Arrasa! 1.1** — three full games now riding **CelerGame, the game engine delivered as a shared dependency family** (`celeros.game` core + `.fx`/`.spr`/`.tilemap`/`.ui` modules): a 480×480 sprite shooter on a **native canvas** (API 28), a grid bomberman whose **1×1 duel plays over the Bluetooth mesh** — lobby, invite and best of 3 rounds in the **same arena built from a shared seed**, with only discrete one-frame events crossing the radio — and a slingshot-vs-goblin-fortresses physics game. The monolithic `celeros.engine` stays on the hub as a 1.2.5 compatibility shim that assembles the family.
+* **Shared dependencies on the hub** (API 30) — the game engine family, physics, mesh, SFX and grid libraries install once and every app reuses them (`deps.json`): app packages got smaller and the app size ceiling rose from 128 KB to **1 MB**.
+* **Native verlet physics** (`System.verlet*`, API 31) — integration, relaxation and collisions in C++ for worlds with thousands of points; Physics Drop 4 and the Bench Fisica app already ride it. The physics dependency is at 2.1: the old `P.world`/`P.tiles`/`P.flow` helpers are gone (2.0) — grids moved to `celeros.grid`, tumbling crates to `System.rigid*`.
 * **Native rigid bodies** (`System.rigid*` + `System.drawSprite`, API 33, S3 boards) — boxes that rotate, stack and topple, circles that roll, impacts that break pieces and fast projectiles that never tunnel through a thin plank; **Arrasa!** (slingshot vs. goblin fortresses, 10 levels with stars) is built on it.
 * **Games that sound and move right** — `System.sfx` mixes sound effects into the music (API 32 — a single audio slot used to freeze the game), only the rectangles that changed go to the glass (up to 8 dirty boxes per frame), and the SmartDisplay panel interrupt left the JavaScript core: the image no longer shakes and PSRAM boards gain up to ~2× more frames per second.
 * 1.8.1, in between, made **over-the-air updates survive the trip**: a dropped connection resumes by HTTP Range from the last written byte with growing back-off, and `celerctl push` verifies the board actually booted the slot it wrote.
@@ -77,7 +77,7 @@ the sidebar has the Portuguese translations.
 ## Feature summary
 
 * **JavaScript app runtime** — interactive ES5 apps run natively on Duktape
-  (API level 20): canvas-style drawing, touch and the coupled on-screen
+  (API level 36): canvas-style drawing, touch and the coupled on-screen
   keyboard, file system, HTTP/JSON networking.
 * **On-device AI & voice** — `AI.chat()` talks to DeepSeek or OpenRouter
   from any app (async, TLS, function calling; keys stay outside the JS

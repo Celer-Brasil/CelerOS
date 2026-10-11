@@ -224,11 +224,11 @@ b.x = 100; b.y = 200; b.dead = false;
 bullets.update(E.dt); bullets.draw();
 ```
 
-Pools pre-allocate everything: no per-frame allocation means no GC hiccups.
+Pools pre-allocate everything: no per-frame allocation means no GC hiccups. Both containers have `each(fn)` for bulk iteration (the pool's skips the dead — no scavenging loop in your frame).
 
 ## 9. Sprites and animation
 
-The firmware sprite pool has had **8 slots** on PSRAM boards since API 29 (`System.spriteSlots()` reports the board's limit; engine 1.1 queries it automatically). `E.spr.load` decodes each PNG **once** into a slot and keeps a procedural `paint` fallback, so the game runs even with missing assets or on boards without sprites:
+The firmware sprite pool has **16 slots** on PSRAM boards since API 33 (8 before that, since API 29; 1 without PSRAM — sprites eat internal RAM there) (`System.spriteSlots()` reports the board's limit; the engine queries it automatically). `E.spr.load` decodes each PNG **once** into a slot and keeps a procedural `paint` fallback, so the game runs even with missing assets or on boards without sprites:
 
 ```js
 E.spr.load([
@@ -243,7 +243,7 @@ E.spr.blit("nave", x, y, { cx: true, cy: true, key: 0x0000 });  // key = chroma 
 
 - Assets are probed in `E.spr.bases` (set by `init({dir})` to `/local/apps/<dir>/assets/` and `/sd/apps/<dir>/assets/`).
 - **Transparency convention:** masterize PNGs with a *pure black* background (the chroma key) and turn interior blacks into near-black `(0,0,8)` — same trick as Supernova. Only slot-backed sprites support the key; painter fallbacks draw whatever you draw.
-- More defs than slots → extras become painter-only automatically. `E.spr.backed(name)` tells you whether a sprite got a real slot (fast chroma-key blit) or will draw through its painter. `E.caps.slots` holds the probed limit (8 on API 29 PSRAM boards, 4 on older firmware) — budget your defs against it.
+- More defs than slots → extras become painter-only automatically. `E.spr.backed(name)` tells you whether a sprite got a real slot (fast chroma-key blit) or will draw through its painter. `E.caps.slots` holds the probed limit (16 on PSRAM boards with API 33+, 8 on API 29–32, 1 without PSRAM; 4 is the engine's fallback when `spriteSlots` doesn't exist) — budget your defs against it.
 
 **Spritesheets (spr 1.0):** one whole-image PNG decodes into a **single slot** and each named region becomes a first-class sprite name — `blit`, `anim` and `backed` work with regions, no new code in the game. Regions are `[cx, cy]` cells of `tw x th`, or a free `[x, y, w, h]` rect in pixels. Saves slots (16 max) and decode passes (`drawPNG` costs ~9 ms per call on the SmartDisplay — a 16-tile sheet pays it once):
 
@@ -407,7 +407,7 @@ same ladder. Climb it only as far as the game demands:
 | **2 — Rigid** | Stacks that topple, destruction, slingshots | `P.rigid` → native `System.rigid*` (API 33, S3 boards with PSRAM) | Arrasa! |
 
 Pursuit/chase fields are **not** physics: `celeros.grid` (BFS) is the module
-for that (Detna's chasers use it).
+for that (Detona's chasers use it).
 
 Coordinates everywhere: y grows **down** (screen); body `x, y` is the
 **center**; circle bodies have `r`, boxes `w/h`. No `System` calls in the
@@ -488,7 +488,7 @@ combinations) — handy for pickups and UI-ish tests, no world involved.
 The 1.x module shipped an interpreted arcade world (`P.world` + `P.tiles`
 tilemaps) and a BFS flow field (`P.flow`). They left in **2.0.0**: zero
 consumers in the store, and the interpreted world was exactly the GC trap
-rung 0 avoids (its users had already migrated — Supernova to pools, Detna
+rung 0 avoids (its users had already migrated — Supernova to pools, Detona
 to `celeros.grid`; pursuit fields live in `celeros.grid`). Apps still on
 `^1.x` keep resolving 1.5.0 from the hub unchanged.
 
@@ -503,7 +503,7 @@ to `celeros.grid`; pursuit fields live in `celeros.grid`). Apps still on
   bullets/enemies in pools, distance checks for hits.
 - **Bomberman:** grid state, not bodies — `celeros.grid` for solid/oneway
   queries and chaser paths; explosions walk the grid outward from the blast
-  center, one soft block deep (this is Detna today).
+  center, one soft block deep (this is Detona today).
 
 ## 16. Native canvas (fullscreen, API 28)
 

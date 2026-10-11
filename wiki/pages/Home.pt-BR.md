@@ -26,11 +26,11 @@ desenvolvimento.
 
 ## Novidades
 
-Firmware 1.8.2 — a rodada dos jogos (API JS nível 32):
+Firmware 1.8.2 — a rodada dos jogos (API JS nível 36):
 
-* **Supernova 2.2** e **Detona! 0.6** — dois jogos completos empurrando o runtime: um shooter de sprites 480×480 em **canvas nativo** (API 28) e um bomberman de grade cujo **duelo 1×1 joga pela malha Bluetooth** — lobby, convite e melhor de 3 rounds na **mesma arena construída de uma seed compartilhada**, com só eventos discretos de um quadro cruzando o rádio (cada jogador é a autoridade do próprio corpo).
-* **Dependências compartilhadas no hub** (API 30) — as bibliotecas de engine, física, malha, SFX e grid instalam uma vez e todo app reusa (`deps.json`): pacotes de app menores e o teto de tamanho do app subiu de 128 KB para **1 MB**.
-* **Física verlet nativa** (`System.verlet*`, API 31) — integração, relaxamento e colisões em C++ para mundos com milhares de pontos; o Physics Drop 4 e o app Bench Fisica já usam.
+* **Supernova 2.4, Detona! 0.8 e Arrasa! 1.1** — três jogos completos agora sobre o **CelerGame, a engine de jogos entregue como família de dependências compartilhadas** (núcleo `celeros.game` + módulos `.fx`/`.spr`/`.tilemap`/`.ui`): um shooter de sprites 480×480 em **canvas nativo** (API 28), um bomberman de grade cujo **duelo 1×1 joga pela malha Bluetooth** — lobby, convite e melhor de 3 rounds na **mesma arena construída de uma seed compartilhada**, com só eventos discretos de um quadro cruzando o rádio — e um jogo de física de estilingue contra fortalezas de goblins. A `celeros.engine` monolítica segue no hub como shim de compatibilidade 1.2.5 que monta a família.
+* **Dependências compartilhadas no hub** (API 30) — a família da engine de jogos, física, malha, SFX e grid instalam uma vez e todo app reusa (`deps.json`): pacotes de app menores e o teto de tamanho do app subiu de 128 KB para **1 MB**.
+* **Física verlet nativa** (`System.verlet*`, API 31) — integração, relaxamento e colisões em C++ para mundos com milhares de pontos; o Physics Drop 4 e o app Bench Fisica já usam. A dependência de física está na 2.1: os auxiliares `P.world`/`P.tiles`/`P.flow` saíram (2.0) — grades foram para o `celeros.grid`, caixas que rolam para o `System.rigid*`.
 * **Corpo rígido nativo** (`System.rigid*` + `System.drawSprite`, API 33, placas S3) — caixas que giram, empilham e tombam, círculos que rolam, impactos que quebram peças e projéteis rápidos que nunca atravessam uma tábua fina; o **Arrasa!** (estilingue contra fortalezas de goblins, 10 fases com estrelas) roda sobre ele.
 * **Jogos com som e movimento certos** — o `System.sfx` mistura efeitos sonoros na música (API 32 — um único slot de áudio costumava travar o jogo), só os retângulos que mudaram vão ao vidro (até 8 caixas sujas por quadro) e a interrupção do painel do SmartDisplay saiu do núcleo do JavaScript: a imagem não treme mais e as placas com PSRAM ganham até ~2× mais quadros por segundo.
 * A 1.8.1, no meio do caminho, fez o **OTA sobreviver à viagem**: conexão que cai retoma por HTTP Range do último byte gravado, com back-off crescente, e o `celerctl push` confere que a placa bootou mesmo no slot gravado.
@@ -76,7 +76,7 @@ traduções ficam na seção **Português (BR)**.
 ## Funcionalidades em resumo
 
 * **Runtime de apps JavaScript** — apps interativos em ES5 rodam nativamente
-  via Duktape (API nível 20): desenho estilo canvas, toque e teclado na tela
+  via Duktape (API nível 36): desenho estilo canvas, toque e teclado na tela
   acoplado, sistema de arquivos e rede HTTP/JSON.
 * **IA e voz no aparelho** — `AI.chat()` conversa com a DeepSeek ou a
   OpenRouter de qualquer app (assíncrono, TLS, function calling; as chaves

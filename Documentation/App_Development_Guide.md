@@ -63,7 +63,8 @@ The `app.json` file is the heart of your app's identity. The CelerOS Installer r
 - **`category`**: The specific category (e.g., `Utilities`, `Games`, `Tools`). You can type any value here without restriction.
 - **Boards without PSRAM** (e.g. the classic CYD): the whole `main.js` — plus the JS heap and the compile temporaries — must fit in internal RAM; a source past ~60KB doesn't compile there (comments and indentation are stripped before compiling, so they cost nothing). Apps bigger than 48 KB must declare `"requires": ["psram"]`; the store badges them "Requer PSRAM" and blocks the install on boards without PSRAM.
 - **`permissions`** (optional, F4): array of capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Without the field the app keeps everything (compat with the existing store); with it, only what is declared is registered: `FS` / `Net` / `System.gpio` **plus the external-hardware calls** (`System.led`, `System.relay*`, `System.neopixel`) and the device-affecting calls such as `restart`/`otaStart`. System files under `/local` (WiFi credentials, PIN, OTA/boot config) additionally require `"system"` even for apps with `"fs"`. System apps (`"system": true`) always get everything.
-- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `12`). This is verified by the system at install time.
+- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `36`). This is verified by the system at install time.
+- **`deps`** *(optional, API 30)* — shared libraries from the hub instead of vendored copies: `"deps": { "celeros.game": "^1.0.0", "celeros.physics": "^2.1.0" }`. The version is a `^X.Y.Z` range (same major, ≥ base) or an exact `X.Y.Z`; the store resolves it **at install time** into `/local/modules/<name>/<version>/` (one copy per version on the device, shared across apps) and writes the choice to `<app folder>/deps.json`, which is what `require()` reads. A local `<name>.js` in the app folder still wins over the cache (vendoring keeps working). Deps count toward the 48/128 KB compile ceiling. Resolution order and details: [JS API Guide, section 35](JS_API_Guide.md).
 - **`requires`** (optional): hardware requirements — `"psram"` is the only value today. It raises the hub ceiling for `main.js` from 48 KB to 128 KB (boards with PSRAM compile without a runtime limit); the store badges the app "Requer PSRAM" and blocks the install on boards without PSRAM (CYD, devkit). An SD card does **not** raise the ceiling: the limit is compile RAM, not storage.
 - **`changelog`**: A brief string detailing what changed (one line per version works well, e.g. `"1.1.0 - fixed crash\n1.0.0 - first release"`). The hub publishes it with the catalog and the device store shows it under a **"Novidades" / What's New** header on the update screen.
 
@@ -164,18 +165,18 @@ never assume a peripheral exists.
   scans and connects over Celer Link, drives a D-pad that repeats
   `{type:"move",dir}` messages and shows the robot's telemetry.
 
-### Games: the CelerOS engine (`engine.js` + `physics.js`)
+### Games: CelerGame as shared dependencies
 
-For 2D games there is a complete engine you vendor into the app: game loop
-with scenes, touch gestures, camera, sprites, particles, chiptune audio and
-an optional arcade physics module (circles/AABB, tilemaps, Verlet). It
-targets the PSRAM S3 boards — declare `"requires": ["psram"]` and
-`"topbar": false` (the `new --game` scaffold does it for you):
+For 2D games the engine itself comes from the hub as the **CelerGame dependency family**: `celeros.game` (the core — scenes, loop, camera, entities, dirty layer, save) plus optional modules `celeros.game.fx` (particles/flash), `.spr` (sprites + flipbooks), `.tilemap` (dirty-cell grid) and `.ui`; every module decorates the same `E` object, so adopting little costs little. Physics is the `celeros.physics` dep (2.1 — `P.hit`, `P.verlet`/`P.verletFast`, `P.rigid`), AI/tile grids are `celeros.grid` and table-driven sounds are `celeros.sfx`. The old monolithic `celeros.engine` remains on the hub as a 1.2.5 compatibility shim that assembles the family. Games target the PSRAM S3 boards — declare `"requires": ["psram"]` and `"topbar": false` (the `new --game` scaffold does it for you):
 
 ```bash
-node tools/sdk/celer.js new MyGame --game   # scaffold + sample game
-node tools/sdk/celer.js engine path/MyApp   # add/update in an existing app
+node tools/sdk/celer.js new MyGame --game     # scaffold + celeros.game(+fx) in app.json deps
+node tools/sdk/celer.js deps MyApp            # deps of app.json + versions on hub/local
+node tools/sdk/celer.js deps set celeros.game.spr ^1.0.0 MyApp
 ```
+
+> [!NOTE]
+> **Migrating off physics 2.0:** `P.world`, `P.tiles` and `P.flow` were removed in celeros.physics 2.0 — use the `celeros.grid` dep for tile/AI grids and `System.rigid*` (API 33) for tumbling rigid bodies. `P.verlet`/`P.verletFast` (and the native `System.verlet*` path) are unchanged.
 
 Full documentation: **[Game Engine Guide](Game_Engine_Guide.md)**.
 

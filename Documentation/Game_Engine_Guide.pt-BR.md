@@ -224,11 +224,11 @@ b.x = 100; b.y = 200; b.dead = false;
 balas.update(E.dt); balas.draw();
 ```
 
-Pools pré-alocam tudo: zero alocação por frame significa zero engasgo de GC.
+Pools pré-alocam tudo: zero alocação por frame significa zero engasgo de GC. Os dois recipientes têm `each(fn)` para iteração em lote (o do pool pula os mortos — sem laço de catação no seu frame).
 
 ## 9. Sprites e animação
 
-O pool de sprites do firmware tem **8 slots** em PSRAM desde a API 29 (`System.spriteSlots()` informa o limite da placa; a engine 1.1 consulta sozinha). O `E.spr.load` decodifica cada PNG **uma vez** para dentro de um slot e guarda um `paint` procedural de fallback, então o jogo roda mesmo sem os assets ou em placa sem sprites:
+O pool de sprites do firmware tem **16 slots** em placas com PSRAM desde a API 33 (8 antes disso, desde a API 29; 1 sem PSRAM — sprite come RAM interna ali) (`System.spriteSlots()` informa o limite da placa; a engine consulta sozinha). O `E.spr.load` decodifica cada PNG **uma vez** para dentro de um slot e guarda um `paint` procedural de fallback, então o jogo roda mesmo sem os assets ou em placa sem sprites:
 
 ```js
 E.spr.load([
@@ -243,7 +243,7 @@ E.spr.blit("nave", x, y, { cx: true, cy: true, key: 0x0000 });  // key = cor-cha
 
 - Os assets são sondados em `E.spr.bases` (o `init({dir})` monta `/local/apps/<dir>/assets/` e `/sd/apps/<dir>/assets/`).
 - **Convenção de transparência:** masterize os PNGs com fundo *preto puro* (a cor-chave) e transforme os pretos internos em quase-preto `(0,0,8)` — o mesmo truque do Supernova. Só sprite em slot aceita a chave; o painter desenha o que você mandar.
-- Mais defs que slots → os excedentes viram painter automaticamente. `E.spr.backed(name)` diz se o sprite ganhou slot real (blit com cor-chave rápido) ou vai desenhar pelo painter. `E.caps.slots` guarda o limite sondado (8 nas placas PSRAM com API 29, 4 em firmware velho) — orce suas defs contra ele.
+- Mais defs que slots → os excedentes viram painter automaticamente. `E.spr.backed(name)` diz se o sprite ganhou slot real (blit com cor-chave rápido) ou vai desenhar pelo painter. `E.caps.slots` guarda o limite sondado (16 em placas PSRAM com API 33+, 8 na API 29–32, 1 sem PSRAM; 4 é o fallback da engine quando `spriteSlots` não existe) — orce suas defs contra ele.
 
 **Spritesheet (spr 1.0):** uma imagem PNG inteira decodifica em UM único slot e cada região nomeada vira nome de sprite de 1a classe — `blit`, `anim` e `backed` funcionam com regiões, sem código novo no jogo. Regiões são `[cx, cy]` em células de `tw x th`, ou rect livre `[x, y, w, h]` em pixels. Economiza slots (16 no máximo) e passes de decode (`drawPNG` custa ~9 ms por chamada no SmartDisplay — um sheet de 16 tiles paga 1 vez só):
 
@@ -408,7 +408,7 @@ jogo pedir:
 | **2 — Rígido** | Pilhas que tombam, destruição, estilingues | `P.rigid` → `System.rigid*` nativo (API 33, placas S3 com PSRAM) | Arrasa! |
 
 Campos de perseguição **não** são física: o módulo disso é o `celeros.grid`
-(BFS — os perseguidores do Detna usam).
+(BFS — os perseguidores do Detona usam).
 
 Coordenadas em tudo: y cresce para **baixo** (tela); o `x, y` do corpo é o
 **centro**; corpo circular tem `r`, caixa `w/h`. Nenhuma chamada a `System`
@@ -489,7 +489,7 @@ as combinações) — útil para pickups e testes de UI, sem mundo envolvido.
 O módulo 1.x embarcava um mundo arcade interpretado (`P.world` + tilemaps
 `P.tiles`) e um campo BFS (`P.flow`). Saíram na **2.0.0**: zero consumidores
 na loja, e o mundo interpretado era exatamente a armadilha de GC que o degrau
-0 evita (quem usava já tinha migrado — o Supernova para pools, o Detna para o
+0 evita (quem usava já tinha migrado — o Supernova para pools, o Detona para o
 `celeros.grid`; campo de perseguição mora no `celeros.grid`). Apps em `^1.x`
 continuam resolvendo a 1.5.0 do hub como sempre.
 
@@ -498,7 +498,7 @@ continuam resolvendo a 1.5.0 do hub como sempre.
 - **Platformer:** degrau 0 — herói AABB contra o tilemap, move X depois Y, pousa e pula quando o passo do Y acha chão; `grounded` é "o passo do Y colidiu neste frame". A câmera dá `follow` no herói.
 - **Breakout:** degrau 0 — o padrão do Quica com tijolos como grade de flags vivas; o teste de travessia da bola por aresta do tijolo é o mesmo da raquete.
 - **Shooter top-down:** degrau 0 — `vx/vy` pelo input com fator de arrasto; inimigos/balas em pools, checagem por distância para acertos.
-- **Bomberman:** estado de grade, não corpos — `celeros.grid` para consultas sólido/oneway e caminhos dos perseguidores; a explosão anda pela grade para fora a partir do centro, um bloco macio de profundidade (é o Detna hoje).
+- **Bomberman:** estado de grade, não corpos — `celeros.grid` para consultas sólido/oneway e caminhos dos perseguidores; a explosão anda pela grade para fora a partir do centro, um bloco macio de profundidade (é o Detona hoje).
 
 ## 16. Canvas nativo (tela cheia, API 28)
 

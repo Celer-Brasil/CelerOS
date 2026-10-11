@@ -93,8 +93,17 @@ segurança.
 - **Placas sem PSRAM** (ex.: a CYD clássica): o `main.js` inteiro — mais o heap JS e os temporários do compile — tem que caber na RAM interna; fonte acima de ~60KB não compila nela (comentários e indentação são removidos antes do compile, não custam nada). Apps acima de 48 KB precisam declarar `"requires": ["psram"]`; a loja marca como "Requer PSRAM" e bloqueia o install em placa sem PSRAM.
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`. Sem o campo o app mantém tudo (compatibilidade com a loja existente); com ele, só o que foi declarado é registrado: `FS` / `Net` / `System.gpio` **e as chamadas de hardware externo** (`System.led`, `System.relay*`, `System.neopixel`), além das que afetam o aparelho, como `restart`/`otaStart`. Arquivos do sistema em `/local` (credenciais Wi-Fi, PIN, config de OTA/boot) exigem `"system"` adicionalmente, mesmo para apps com `"fs"`. Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
-  JS](JS_API_Guide.pt-BR.md) — atualmente `12`). Verificado pelo sistema na
+  JS](JS_API_Guide.pt-BR.md) — atualmente `36`). Verificado pelo sistema na
   instalação.
+- **`deps`** *(opcional, API 30)* — bibliotecas compartilhadas do hub em vez de
+  cópias vendorizadas: `"deps": { "celeros.game": "^1.0.0", "celeros.physics": "^2.1.0" }`.
+  A versão é um range `^X.Y.Z` (mesma major, ≥ base) ou um `X.Y.Z` exato; a
+  loja resolve **na instalação** para `/local/modules/<nome>/<versao>/` (uma
+  cópia por versão no aparelho, compartilhada entre apps) e grava a escolha em
+  `<pasta do app>/deps.json`, que é o que o `require()` lê. Um `<nome>.js`
+  local na pasta do app ainda vence sobre o cache (vendorizar segue
+  funcionando). As deps contam no teto de compilação de 48/128 KB. Ordem de
+  resolução e detalhes: [Guia da API JS, seção 35](JS_API_Guide.pt-BR.md).
 - **`requires`** (opcional): requisitos de hardware — `"psram"` é o único
   valor hoje. Sobe o teto do hub para o `main.js` de 48 KB para 128 KB
   (placas com PSRAM compilam sem limite runtime); a loja marca o app como
@@ -233,18 +242,31 @@ são o contrato — nunca assuma que um periférico existe.
   robótica: escaneia e conecta via Celer Link, pilota um D-pad que repete
   mensagens `{type:"move",dir}` e mostra a telemetria do robô.
 
-### Jogos: a engine do CelerOS (`engine.js` + `physics.js`)
+### Jogos: CelerGame como dependências compartilhadas
 
-Para jogos 2D existe uma engine completa que você vendoriza no app: game loop
-com cenas, gestos de toque, câmera, sprites, partículas, áudio chiptune e um
-módulo opcional de física arcade (círculos/AABB, tilemaps, Verlet). Ela mira
-as placas S3 com PSRAM — declare `"requires": ["psram"]` e `"topbar": false`
+Para jogos 2D a própria engine vem do hub como a **família de dependências
+CelerGame**: `celeros.game` (o núcleo — cenas, loop, câmera, entidades,
+camada suja, save) mais os módulos opcionais `celeros.game.fx`
+(partículas/flash), `.spr` (sprites + flipbooks), `.tilemap` (grade de
+células sujas) e `.ui`; cada módulo decora o mesmo objeto `E`, então adotar
+pouco custa pouco. A física é a dep `celeros.physics` (2.1 — `P.hit`,
+`P.verlet`/`P.verletFast`, `P.rigid`), grades de IA/tiles são `celeros.grid`
+e sons de tabela são `celeros.sfx`. A `celeros.engine` monolítica segue no
+hub como shim de compatibilidade 1.2.5 que monta a família. Jogos miram as
+placas S3 com PSRAM — declare `"requires": ["psram"]` e `"topbar": false`
 (o scaffold `new --game` faz isso por você):
 
 ```bash
-node tools/sdk/celer.js new MeuJogo --game   # scaffold + jogo de exemplo
-node tools/sdk/celer.js engine caminho/MeuApp  # adiciona/atualiza num app existente
+node tools/sdk/celer.js new MeuJogo --game    # scaffold + celeros.game(+fx) nas deps do app.json
+node tools/sdk/celer.js deps MeuApp           # deps do app.json + versões no hub/local
+node tools/sdk/celer.js deps set celeros.game.spr ^1.0.0 MeuApp
 ```
+
+> [!NOTE]
+> **Migrando da física 2.0:** `P.world`, `P.tiles` e `P.flow` saíram no
+> celeros.physics 2.0 — use a dep `celeros.grid` para grades de tiles/IA e
+> `System.rigid*` (API 33) para corpos rígidos que rolam e tombam.
+> `P.verlet`/`P.verletFast` (e o caminho nativo `System.verlet*`) não mudaram.
 
 Documentação completa: **[Guia da Game Engine](Game_Engine_Guide.pt-BR.md)**.
 

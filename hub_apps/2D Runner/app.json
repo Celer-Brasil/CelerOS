@@ -1,8 +1,8 @@
 {
   "name": "2D Runner",
   "packageName": "celeros.runner2d",
-  "version": "2.0.1",
-  "api": 22,
+  "version": "2.1.0",
+  "api": 30,
   "permissions": [
     "fs"
   ],
@@ -10,5 +10,9 @@
   "type": "Game",
   "category": "Arcade",
   "description": "Corrida infinita neon: troque de faixa (toque ou deslize), desvie dos trens, pegue as moedas e bata o recorde (salvo no aparelho). Pistas com gradiente e pecas suavizadas.",
-  "changelog": "2.0.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 2.0.0 - renovacao completa com o toolkit UI (API 22): menu, ajustes e fim de jogo nativos; cenario com gradiente, bordas neon grossas e trens/moedas/jogador suavizados (fillSmooth*/drawWideLine); troca de faixa animada por toque OU deslize; render no frame automatico (adeus fatias: mesmo zero flicker na CYD); recorde no appData do app\n1.2.1 - permissoes declaradas (fs); 1.2.0 - recorde persistido, sons, PT-BR; 1.0.0 - primeiro lancamento"
+  "changelog": "2.1.0 - portado para a familia CelerGame COM melhorias: rastro neon na hoverboard (fx.trail), estouro + popText na moeda, flash e explosao na batida com transicao iris, menu/fim com wipe/fade, contador de FPS do proprio engine (E.fps), recorde migrado do appData para o NVS\n2.0.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 2.0.0 - renovacao completa com o toolkit UI (API 22): menu, ajustes e fim de jogo nativos; cenario com gradiente, bordas neon grossas e trens/moedas/jogador suavizados (fillSmooth*/drawWideLine); troca de faixa animada por toque OU deslize; render no frame automatico (adeus fatias: mesmo zero flicker na CYD); recorde no appData do app\n1.2.1 - permissoes declaradas (fs); 1.2.0 - recorde persistido, sons, PT-BR; 1.0.0 - primeiro lancamento",
+  "deps": {
+    "celeros.game": "^1.0.0",
+    "celeros.game.fx": "^1.0.0"
+  }
 }

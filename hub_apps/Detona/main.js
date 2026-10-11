@@ -1014,15 +1014,15 @@ E.run({
                 E.data.modo = "campanha";
                 prog.mundo = E.save.num("mundo", 1);
                 prog.nivel = E.save.num("nivel", 1);
-                E.goto("jogando");
+                E.goto("jogando", { transition: "wipe", ms: 300 });
             } else if (E.hit(this.btn[1])) {
                 E.audio.sfx("ok");
-                E.goto("duelo");
+                E.goto("duelo", { transition: "fade", ms: 350 });
             } else if (E.hit(this.btn[2])) {
                 E.audio.sfx("ok");
                 E.data.retomar = false;
                 E.data.modo = "sobre";
-                E.goto("jogando");
+                E.goto("jogando", { transition: "fade", ms: 350 });
             }
         },
         draw: function () {
@@ -1085,7 +1085,7 @@ E.run({
                 if (!E.hit(b[i])) continue;
                 var a = b[i]._a;
                 E.audio.sfx("ok");
-                if (a === "voltar") { netReset(); E.goto("titulo"); }
+                if (a === "voltar") { netReset(); E.goto("titulo", { transition: "fade", ms: 300 }); }
                 else if (a === "ligar" && now >= this.ligaAte) {
                     this.ligaAte = now + 1200;
                     CelerNet.start({});
@@ -1340,7 +1340,7 @@ E.run({
                 if (this.btn && this.t > 0.4 && E.hit(this.btn[0])) {
                     E.audio.sfx("ok");
                     netReset();
-                    E.goto("titulo");
+                    E.goto("titulo", { transition: "fade", ms: 300 });
                 }
                 return;
             }
@@ -1436,10 +1436,10 @@ E.run({
                     prog.nivel = E.save.num("nivel", 1);
                 }
                 E.data.modo = info.sobre ? "sobre" : "campanha";
-                E.goto("jogando");
+                E.goto("jogando", { transition: "wipe", ms: 300 });
             } else if (E.hit(this.btn[1])) {
                 E.audio.sfx("ui");
-                E.goto("titulo");
+                E.goto("titulo", { transition: "fade", ms: 300 });
             }
         },
         draw: function () {

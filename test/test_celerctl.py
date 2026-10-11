@@ -697,15 +697,19 @@ class SockSerial:
 
 class FakeBridge(threading.Thread):
     """Espelho do main/USBDevice/DebugBridge.cpp: banner "CELERBRIDGE 1",
-    AUTH com 3 tentativas (NO/NO/ERR) e pipe binario para o FakeDevice."""
+    AUTH com 3 tentativas (NO/NO/ERR) e pipe binario para o FakeDevice.
+    O 5o campo do banner e a identidade do device (MAC; devid=None emula
+    firmware antigo, sem o campo)."""
 
     TOKEN = "tok12345"
+    DEVID = "aabbccddeeff"
 
-    def __init__(self, proto=2, chunk=4096, win=4):
+    def __init__(self, proto=2, chunk=4096, win=4, devid=DEVID):
         super().__init__(daemon=True)
         self.proto = proto
         self.chunk = chunk
         self.win = win
+        self.devid = devid
         self.auth_fails = []
         self.dev = None
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -721,7 +725,10 @@ class FakeBridge(threading.Thread):
         except OSError:
             return
         with conn:
-            conn.sendall(f"CELERBRIDGE 1 test 127.0.0.1 {self.port}\n".encode())
+            banner = f"CELERBRIDGE 1 test 127.0.0.1 {self.port}"
+            if self.devid:
+                banner += f" {self.devid}"
+            conn.sendall((banner + "\n").encode())
             if not self._auth(conn):
                 return
             ser = SockSerial(conn)
@@ -857,7 +864,64 @@ class TestNetBridge(unittest.TestCase):
         threading.Thread(target=say_hi, daemon=True).start()
         with self.assertRaises(C.CelerError):
             C.HostLink(f"127.0.0.1:{port}", token="x")
-        srv.close()
+
+    # ---- identidade no banner (id do device; ver DebugBridge.cpp macId) ----
+
+    def test_parse_do_id(self):
+        self.assertEqual(C.banner_devid("CELERBRIDGE 1 b 10.0.0.5 5555 aabbccddeeff"),
+                         "aabbccddeeff")
+        self.assertIsNone(C.banner_devid("CELERBRIDGE 1 b 10.0.0.5 5555"))  # fw antigo
+        self.assertEqual(C.probe_devid("CELEROS 1.8.2|b|api 36|proto 2|tcp 5555|id AA1122334455"),
+                         "aa1122334455")
+        self.assertIsNone(C.probe_devid("CELEROS 1.8.2|b|api 36|proto 2|tcp 5555"))
+
+    def test_fw_antigo_sem_id_continua_pelo_token_do_endereco(self):
+        br = self.start(devid=None)
+        addr = f"127.0.0.1:{br.port}"
+        C.save_token(addr, FakeBridge.TOKEN)
+        link = C.HostLink(addr)  # sem --token: so existe a chave do endereco
+        try:
+            self.assertIn("proto 2", link.hello())
+        finally:
+            link.close()
+
+    def test_ip_mudou_autentica_pela_identidade_e_rekey(self):
+        # device pareado no endereco antigo; DHCP mudou o IP (porta nova aqui)
+        C.save_token("192.168.0.99:5555", FakeBridge.TOKEN, FakeBridge.DEVID)
+        br = self.start()
+        addr = f"127.0.0.1:{br.port}"
+        link = C.HostLink(addr, prompt=False)  # cache do endereco novo: vazio
+        try:
+            self.assertIn("proto 2", link.hello())
+        finally:
+            link.close()
+        cache = C.load_token_cache()
+        self.assertEqual(cache.get(addr), FakeBridge.TOKEN)        # re-key
+        self.assertEqual(cache.get("id:" + FakeBridge.DEVID), FakeBridge.TOKEN)
+
+    def test_token_do_endereco_errado_cai_no_da_identidade(self):
+        br = self.start()
+        addr = f"127.0.0.1:{br.port}"
+        C.save_token(addr, "digitado-trocado")                     # o typo da bancada
+        C.save_token("id:" + FakeBridge.DEVID, FakeBridge.TOKEN)   # e a cura
+        link = C.HostLink(addr)
+        try:
+            self.assertIn("proto 2", link.hello())
+        finally:
+            link.close()
+        self.assertEqual(br.auth_fails, ["AUTH digitado-trocado"])  # 1 falha, 2a valendo
+        self.assertEqual(C.load_token_cache().get(addr), FakeBridge.TOKEN)
+
+    def test_token_rotacionado_no_device_orienta_o_pair(self):
+        # "bridge reset" no device: o cache inteiro (endereco e identidade)
+        # ficou velho — a mensagem tem que apontar para o pair
+        br = self.start()
+        addr = f"127.0.0.1:{br.port}"
+        C.save_token(addr, "velho", FakeBridge.DEVID)
+        with self.assertRaises(C.CelerError) as ctx:
+            C.HostLink(addr)
+        self.assertIn("celerctl pair", str(ctx.exception))
+        self.assertEqual(br.auth_fails, ["AUTH velho"])
 
     def test_push_e_pull_por_tcp(self):
         br = self.start()

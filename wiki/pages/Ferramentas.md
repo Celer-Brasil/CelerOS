@@ -42,6 +42,67 @@ Os opcodes vivem em `main/USBDevice/HostLink.h` e a ferramenta lê esse
 arquivo por regex: uma fonte da verdade para os dois lados. Não rode
 `celerctl` com o `idf.py monitor` segurando a mesma porta.
 
+### Bridge WiFi (Celer Debug Bridge)
+
+Placas no WiFi expõem o mesmo HostLink sobre TCP (porta 5555):
+`-p 192.168.0.50` (ou `IP:5555`) e o `celerctl devices` acha elas por
+sonda UDP — nada exige cabo, nem o `ota push build/CelerOS.bin`. A
+primeira conexão autentica com o token do bridge do device
+(`celerctl pair IP`, ou leia por USB com `celerctl info` / shell
+`bridge`); ele fica em cache no `~/.config/celerctl/tokens.json`. O
+banner do bridge carrega uma identidade estável do device (MAC) e o
+cache guarda o token pelo endereço **e** pela identidade: quando o DHCP
+muda o IP da placa, o token da identidade re-autentica e o cache se
+cura sozinho (o `devices` marca essas placas como `(pareado)`) — a
+recuperação por USB só serve para device nunca pareado ou depois de um
+`bridge reset`.
+
+### O shell do aparelho
+
+O mesmo dispatcher atende o console interativo (`celerctl shell`) e o
+one-shot `celerctl shell "<cmd>"` (opcode EXEC do HostLink). Ele cobre o
+vocabulário Unix do dia a dia; caminhos resolvem contra um diretório
+corrente (`cd`/`pwd`) e ficam presos em `/local` e `/sd`:
+
+```text
+arquivos  ls  cat  head  tail  wc  grep [-inv]  find [-name P] [-type f|d]
+          cp [-r]  mv  rm [-r]  mkdir  rmdir  touch  echo [-n]
+          du  stat  xxd  md5sum  df
+sistema   free  ps  top [ms]  uptime  date  uname  dmesg [n]  clear  info
+apps      apps  run  exit  grant  rescan  wifi  lasterror  debug  bridge
+```
+
+Comandos encadeiam com `;` e a saída redireciona com `>` / `>>`
+(`echo nota > /local/x.txt`). Não há aspas: `;`, `>` e `>>` só valem como
+palavra isolada, e argumentos nunca carregam aspas — mande linhas
+compactas.
+
+`sh [-e] [-x] script.sh` roda um interpretador reduzido de script: um
+comando por linha, `#` comenta a linha inteira, `-e` para no primeiro
+comando que erra e `-x` ecoa cada linha antes de rodar. Os scripts têm
+blocos e variáveis:
+
+```text
+set I=0
+while [ $I -lt 3 ]
+  echo volta $I
+  set I=$I + 1        # aritmetica de inteiros no valor: N + 1
+end
+if [ -f /local/x.txt ]
+  cat /local/x.txt
+else
+  echo ausente
+end
+```
+
+A condição é um comando rodado calado (código 0 = verdadeiro), na
+prática o builtin `[` / `test`: `a = b`, `a != b`, `-eq -ne -lt -le -gt
+-ge` (inteiros), `-e/-f/-d` (caminhos, presos a `/local`+`/sd`), `-z/-n`.
+`if COND / else / end`, `while COND / end` (teto de 65535 iterações) e
+`break`/`continue`. `set VAR=val` grava, `set` lista, `unset VAR` apaga;
+`$VAR`, `${VAR}` e `$?` (último código) expandem em qualquer linha —
+inclusive na condição do `while`, re-avaliada a cada volta.
+
 `logcat --dump` copia o ring buffer sem drená-lo (repetível); `--ts`
 prefixa timestamps do host e `--grep` filtra linhas no host. Todo erro de
 app é persistido em `/local/lastcrash.txt` (versão do OS, data, uptime,

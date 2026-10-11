@@ -61,6 +61,7 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -72,6 +73,15 @@ try:
 except ImportError:
     print("erro: pyserial nao instalado (pip install -r tools/requirements.txt)")
     sys.exit(1)
+
+# Porta USB nativa que some no meio de uma chamada (o device reiniciou: OTA,
+# reboot) levanta termios.error, que NAO e OSError nem SerialException — sem
+# isto o `ota push` do relogio terminava em traceback com o OTA ja aplicado.
+try:
+    import termios
+    PORT_GONE = (serial.SerialException, OSError, termios.error)
+except ImportError:  # Windows
+    PORT_GONE = (serial.SerialException, OSError)
 
 # VIDs que podem hospedar o canal: CDC nativa do ESP32-S3 ou bridges USB-UART
 # comuns (CH340 do SmartDisplay/CYD). A identificacao real e por probing HELLO.
@@ -128,6 +138,29 @@ def read_exact(ser, n, timeout):
 # "CELERBRIDGE 1 ..." + "AUTH <token>" e depois um pipe binario de frames.
 # Aqui embaixo vive so o transporte — o protocolo HostLink em cima e o mesmo
 # da serial. Descoberta: sonda UDP broadcast ("celerctl devices").
+#
+# Identidade: o banner (5o campo) e a sonda UDP ("|id") carregam o MAC do
+# device, ANTES do auth. O cache de tokens guarda "ip:porta" E "id:<mac>";
+# DHCP pode mudar o IP que o token da identidade re-autentica e o cache se
+# re-escreve sozinho (bancada 2026-10-11: duas placas trocaram de IP e o
+# cache por IP virou lockout com recuperacao so por USB).
+
+_BRIDGE_ID_RE = re.compile(r"\|id ([0-9a-fA-F]{6,16})")
+_BANNER_ID_RE = re.compile(r"[0-9a-fA-F]{6,16}")
+
+
+def probe_devid(ident):
+    """Id do device na resposta da sonda UDP ("...|id aabbccddeeff") ou None."""
+    m = _BRIDGE_ID_RE.search(ident or "")
+    return m.group(1).lower() if m else None
+
+
+def banner_devid(banner):
+    """Id do device no banner TCP ("CELERBRIDGE 1 board ip porta <id>") ou None."""
+    f = (banner or "").split()
+    if len(f) >= 6 and _BANNER_ID_RE.fullmatch(f[5]):
+        return f[5].lower()
+    return None
 
 def is_net_addr(s):
     """"192.168.0.10" (porta default) ou "host:5555"."""
@@ -162,12 +195,16 @@ def load_token_cache():
         return {}
 
 
-def save_token(addr, token):
+def save_token(addr, token, devid=None):
+    """Token no cache pela chave do endereco E pela identidade do device
+    ("id:<mac>", firmware novo): o endereco cura sozinho quando o DHCP muda."""
     p = token_store_path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         cache = load_token_cache()
         cache[addr] = token
+        if devid:
+            cache["id:" + devid] = token
         p.write_text(json.dumps(cache, indent=1, sort_keys=True))
     except OSError:
         pass  # cache e conveniencia: sem ele, --token/env continuam valendo
@@ -195,7 +232,9 @@ class NetTransport:
 
     Faz o handshake do bridge (banner + AUTH <token>) e vira pipe binario
     de frames HostLink. O token vem de --token/env/cache — ou do terminal,
-    se interativo.
+    se interativo. Com o firmware novo (id no banner), o cache da IDENTIDADE
+    do device tambem e candidato: IP novo por DHCP autentica do mesmo jeito
+    e o cache re-escreve o endereco na hora.
     """
 
     def __init__(self, addr, timeout=3.0, token=None, prompt=True):
@@ -204,6 +243,7 @@ class NetTransport:
         self.port = self.addr        # pyserial: identificador para reabrir
         self.baudrate = None         # sem baud: o set_baud do HostLink pula
         self._timeout = timeout
+        self.devid = None            # identidade do banner (firmware novo)
         self.sock = socket.create_connection((host, port), timeout=timeout)
         try:
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -215,13 +255,38 @@ class NetTransport:
                                      "segundos e tente de novo")
                 raise CelerError(f"{addr} nao e um Celer Debug Bridge "
                                  f"(banner: {banner!r})")
-            if token is None:
-                token = net_token(self.addr, prompt=prompt)
-            self.sock.sendall(f"AUTH {token}\n".encode())
-            resp = self._line(timeout)
-            if resp != "OK":
-                raise CelerError(f"auth do bridge recusada ({resp}): conferir o "
-                                 "token no device (shell 'bridge' ou celerctl info)")
+            self.devid = banner_devid(banner)
+            cache = load_token_cache()
+            id_tok = cache.get("id:" + self.devid) if self.devid else None
+            cands = []
+            if token is not None:
+                cands.append(token)
+            else:
+                for t in (cache.get(self.addr), id_tok):
+                    if t and t not in cands:
+                        cands.append(t)
+            if not cands:
+                cands = [net_token(self.addr, prompt=prompt)]
+            # 2 tentativas no maximo: o device corta a conexao na 3a falha
+            ok = False
+            last = ""
+            for t in cands[:2]:
+                self.sock.sendall(f"AUTH {t}\n".encode())
+                last = self._line(timeout)
+                if last == "OK":
+                    ok = True
+                    if token is None:
+                        save_token(self.addr, t, self.devid)  # IP novo: re-key
+                    break
+            if not ok:
+                if id_tok and id_tok in cands[:2]:
+                    hint = (" (token da identidade tambem recusado: \"bridge reset\" "
+                            "troca no device? pare de novo com celerctl pair)")
+                else:
+                    hint = ""
+                raise CelerError(f"auth do bridge recusada ({last}): conferir o "
+                                 f"token no device (shell 'bridge' ou celerctl info)"
+                                 f"{hint}")
         except BaseException:
             self.sock.close()
             raise
@@ -958,13 +1023,39 @@ def probe(port, fast=False):
     return None
 
 
+def probe_bounded(port, fast=False):
+    """probe() com coleira: o open() da UART pode ficar PRESO no kernel
+    quando a placa e (re)plugada no meio da sonda (bancada 2026-10-11: um
+    "devices -l" ficou minutos assim com o CH340 re-enumerando). A sonda
+    morre no watchdog e a porta entra como ausente — o comando sempre volta.
+    """
+    box = {}
+
+    def run():
+        try:
+            box["ident"] = probe(port, fast)
+        except BaseException as e:  # erro da thread nao vaza: quem chama ve None
+            box["err"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join((0.6 if fast else 1.5) * 2 + 1.0)
+    if t.is_alive():
+        print(f"aviso: sonda de {getattr(port, 'device', port)} nao voltou "
+              "(porta presa no open? replug)", file=sys.stderr)
+        return None
+    if "err" in box:
+        raise box["err"]
+    return box.get("ident")
+
+
 def find_devices(verbose=False):
     """Varre portas USB candidatas e identifica o canal celerctl por HELLO."""
     found = []
     for port in list_ports.comports():
         if port.vid not in USB_VIDS:
             continue
-        ident = probe(port)
+        ident = probe_bounded(port)
         if ident:
             found.append((port, ident))
             if verbose:
@@ -1103,9 +1194,22 @@ def resolve_port(selector):
 def cmd_devices(args):
     found = find_devices(verbose=True)
     net = find_net_devices()
+    cache = load_token_cache()
     for ip, ident in net:
-        print(f"{ip + ':' + str(BRIDGE_PORT):<14} {'wifi':<14} {ident}")
-    if not found and not net and not args.long:
+        devid = probe_devid(ident)
+        mark = ""
+        if devid and "id:" + devid in cache:
+            addr = f"{ip}:{BRIDGE_PORT}"
+            if cache.get(addr) != cache["id:" + devid]:
+                # DHCP mudou o IP de um device ja pareado: cura o cache ja
+                # na listagem (conectar tambem cura, pelo banner)
+                save_token(addr, cache["id:" + devid], devid)
+            mark = " (pareado)"
+        # o "|id ..." e maquiaria de casamento: fora do display
+        ident = _BRIDGE_ID_RE.sub("", ident)
+        print(f"{ip + ':' + str(BRIDGE_PORT):<14} {'wifi':<14} {ident}{mark}")
+    if not found and not net:
+        # com -l tambem: saida vazia na bancada parecia travamento do comando
         print("nenhum dispositivo encontrado (USB ou WiFi)")
     elif found and not args.long:
         for port, ident in found:
@@ -1114,8 +1218,12 @@ def cmd_devices(args):
 
 
 def cmd_pair(args):
-    """Pareia com o Celer Debug Bridge: valida o token e guarda no cache."""
-    addr = normalize_net_addr(args.addr)
+    """Pareia com o Celer Debug Bridge: valida o token e guarda no cache
+    (pelo endereco E pela identidade do device, quando o banner traz o id)."""
+    sel = args.addr or getattr(args, "port_sel", None)
+    if not sel:
+        die("uso: celerctl pair [--token X] IP_OU_HOST:PORTA (ou -p)")
+    addr = normalize_net_addr(sel)
     token = args.token or net_token(addr, prompt=True)
     link = HostLink(addr, timeout=3.0, token=token)
     try:
@@ -1123,9 +1231,11 @@ def cmd_pair(args):
         info = link.info()
     finally:
         link.close()
-    save_token(addr, token)
+    devid = getattr(link.ser, "devid", None)
+    save_token(addr, token, devid)
+    extra = f", id {devid}" if devid else ""
     print(f"pareado: {addr}  {ident}")
-    print(f"board {info.get('board')}, versao {info.get('version')}; "
+    print(f"board {info.get('board')}, versao {info.get('version')}{extra}; "
           f"token salvo em {token_store_path()}")
 
 
@@ -1523,10 +1633,18 @@ def cmd_ota(args):
         part, written = link.ota_write(args.file)
         print(f"OTA ok: {written} bytes em '{part}'")
         if not args.no_reboot:
-            link.reboot()
+            try:
+                link.reboot()
+            except PORT_GONE + (CelerError,):
+                # o device reiniciou antes de responder (USB nativo some na
+                # hora): o reboot aconteceu — a conferencia abaixo decide
+                pass
             print("reiniciando para o novo firmware...")
     finally:
-        link.close()
+        try:
+            link.close()
+        except PORT_GONE:
+            pass
     if not args.no_reboot:
         verify_ota_boot(args, part)
 
@@ -1563,7 +1681,7 @@ def verify_ota_boot(args, part, wait_s=60):
                 info = link.info()
             finally:
                 link.close()
-        except (CelerError, serial.SerialException, OSError) as e:
+        except PORT_GONE + (CelerError,) as e:
             last = e
             time.sleep(2)
             continue
@@ -2449,7 +2567,7 @@ def _reconnect(old):
                 link.set_baud(baud)
             print("dev: reconectado")
             return link
-        except (CelerError, serial.SerialException, OSError):
+        except PORT_GONE + (CelerError,):
             continue
     die("dev: nao conseguiu reconectar")
 
@@ -2868,7 +2986,11 @@ def main():
 
     p = sub.add_parser("pair", help="pareia com o Celer Debug Bridge WiFi e "
                                     "guarda o token (conecta uma vez so)")
-    p.add_argument("addr", help="IP ou host:porta do device (celerctl devices)")
+    p.add_argument("addr", nargs="?", help="IP ou host:porta do device "
+                                           "(celerctl devices)")
+    p.add_argument("-p", "--port", dest="port_sel", default=None,
+                   help="alias do endereco (mesma sintaxe do -p dos outros "
+                        "comandos)")
     p.add_argument("--token", default=None,
                    help="token do bridge (default: pergunta no terminal)")
     p.set_defaults(func=cmd_pair)

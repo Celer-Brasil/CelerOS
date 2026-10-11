@@ -42,6 +42,66 @@ serial prefix shown by `devices`. The opcodes live in
 one source of truth for both sides. Do not run `celerctl` while
 `idf.py monitor` holds the same port.
 
+### WiFi bridge (Celer Debug Bridge)
+
+Boards on WiFi expose the same HostLink over TCP (port 5555):
+`-p 192.168.0.50` (or `IP:5555`) and `celerctl devices` finds them by a
+UDP probe — no cable needed for anything, including
+`ota push build/CelerOS.bin`. The first connection authenticates with the
+device's bridge token (`celerctl pair IP`, or read it over USB with
+`celerctl info` / shell `bridge`); it is then cached in
+`~/.config/celerctl/tokens.json`. The bridge banner carries a stable
+device id (MAC) and the cache keeps tokens by address **and** by
+identity: when DHCP hands the board a new IP, the stored identity token
+re-authenticates it and the cache heals itself (`devices` marks such
+boards as `(paired)`) — USB recovery is only needed for a never-paired
+device or after a `bridge reset`.
+
+### The device shell
+
+The same dispatcher answers the interactive console (`celerctl shell`)
+and one-shot `celerctl shell "<cmd>"` (the HostLink EXEC opcode). It
+carries the everyday Unix vocabulary; paths resolve against a current
+directory (`cd`/`pwd`) and stay jailed to `/local` and `/sd`:
+
+```text
+files   ls  cat  head  tail  wc  grep [-inv]  find [-name P] [-type f|d]
+        cp [-r]  mv  rm [-r]  mkdir  rmdir  touch  echo [-n]
+        du  stat  xxd  md5sum  df
+system  free  ps  top [ms]  uptime  date  uname  dmesg [n]  clear  info
+apps    apps  run  exit  grant  rescan  wifi  lasterror  debug  bridge
+```
+
+Commands chain with `;` and output redirects with `>` / `>>`
+(`echo nota > /local/x.txt`). There is no quoting: `;`, `>` and `>>` act
+on redirection only as standalone words, and arguments never carry
+quotes — send compact lines.
+
+`sh [-e] [-x] script.sh` runs a reduced script interpreter: one command
+per line, `#` full-line comments, `-e` stops at the first failing
+command, `-x` traces each line. Scripts have blocks and variables:
+
+```text
+set I=0
+while [ $I -lt 3 ]
+  echo volta $I
+  set I=$I + 1        # integer arithmetic in the value: N + 1
+end
+if [ -f /local/x.txt ]
+  cat /local/x.txt
+else
+  echo ausente
+end
+```
+
+Conditions are commands run silently (exit code 0 = true), usually the
+`[` / `test` builtin: `a = b`, `a != b`, `-eq -ne -lt -le -gt -ge`
+(integers), `-e/-f/-d` (paths, jailed to `/local`+`/sd`), `-z/-n`.
+`if COND / else / end`, `while COND / end` (capped at 65535 iterations),
+`break`/`continue`. `set VAR=val` stores, `set` lists, `unset VAR`
+removes; `$VAR`, `${VAR}` and `$?` (last exit code) expand anywhere —
+including in a `while` condition, re-evaluated each round.
+
 `logcat --dump` copies the ring buffer without draining it (repeatable);
 `--ts` prefixes host-side timestamps and `--grep` filters lines on the
 host. Every app error is persisted to `/local/lastcrash.txt` (OS version,

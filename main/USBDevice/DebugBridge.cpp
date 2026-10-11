@@ -7,6 +7,7 @@
 
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -171,6 +172,17 @@ bool ipNow(char* out, size_t cap) {
     return true;
 }
 
+// Identidade estavel do node (MAC STA em 12 hex): viaja NO BANNER e na sonda
+// UDP, antes do AUTH. O celerctl casa o token do cache por ela — o DHCP pode
+// mudar o IP a vontade que o pareamento sobrevive (bancada 2026-10-11: duas
+// placas trocaram de IP e o cache por IP virou lockout com recuperacao so
+// por USB). Firmware antigo (sem o campo) apenas nao participa do casamento.
+void macId(char* out, size_t cap) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(out, cap, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 bool startListener() {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -201,15 +213,19 @@ bool startListener() {
 
 // Sonda "CELERPROBE1" do celerctl devices: resposta unicast no mesmo formato
 // do HELLO — o IP do device e o endereco de origem do proprio datagrama.
+// O "|id" no fim e a identidade do node (ver macId): o celerctl re-casa o
+// token do cache quando o IP mudou.
 void handleProbe() {
     char buf[32];
     struct sockaddr_in from;
     socklen_t flen = sizeof(from);
     int n = recvfrom(s_udpFd, buf, sizeof(buf) - 1, 0, (struct sockaddr*)&from, &flen);
     if (n < (int)11 || memcmp(buf, "CELERPROBE1", 11) != 0) return;
-    char out[96];
-    int m = snprintf(out, sizeof(out), "CELEROS %s|%s|api %d|proto 2|tcp %u", CELEROS_VERSION,
-                     Board::profile().id, CELEROS_API_LEVEL, (unsigned)kPort);
+    char id[13];
+    macId(id, sizeof(id));
+    char out[112];
+    int m = snprintf(out, sizeof(out), "CELEROS %s|%s|api %d|proto 2|tcp %u|id %s", CELEROS_VERSION,
+                     Board::profile().id, CELEROS_API_LEVEL, (unsigned)kPort, id);
     sendto(s_udpFd, out, (size_t)m, 0, (struct sockaddr*)&from, flen);
 }
 
@@ -230,9 +246,13 @@ void handleAccept() {
 
     char ip[16] = "";
     ipNow(ip, sizeof(ip));
-    char banner[112];
-    int m = snprintf(banner, sizeof(banner), "CELERBRIDGE 1 %s %s %u\n", Board::profile().id,
-                     ip[0] ? ip : "?", (unsigned)kPort);
+    char id[13];
+    macId(id, sizeof(id));
+    char banner[128];
+    // 5o campo = identidade (macId): pre-AUTH, para o celerctl casar o token
+    // do cache mesmo com o IP mudado
+    int m = snprintf(banner, sizeof(banner), "CELERBRIDGE 1 %s %s %u %s\n", Board::profile().id,
+                     ip[0] ? ip : "?", (unsigned)kPort, id);
     if (send(fd, banner, (size_t)m, 0) != m) {
         close(fd);
         return;

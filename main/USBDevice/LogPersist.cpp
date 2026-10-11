@@ -89,8 +89,11 @@ void stageLine(Stage& st, const char* line, size_t len) {
 
 void writeOut(const char* name, const char* data, size_t n) {
     if (!s_ok || n == 0) return;
-    // SD montado e a casa dos logs (teto maior); littlefs e o fallback
-    const bool sd = FileSystem::getTotalSpace("/sd") > 0;
+    // SD montado e a casa dos logs (teto maior); littlefs e o fallback.
+    // sdMounted e so um flag: o getTotalSpace antigo fazia f_getfree, que
+    // num cartao com FSInfo invalido varre a FAT inteira (> 45 s no SDSPI)
+    // aqui na task main — task WDT e crash-loop (esp32-cam, 2026-10-10).
+    const bool sd = FileSystem::sdMounted();
     const char* base = sd ? "/sd/log" : "/local/log";
     if (!s_dirTried) {
         FileSystem::mkdir(base);  // idempotente
@@ -203,6 +206,10 @@ void tick() {
     // cada flush. O staging segura as linhas ate o fim do som (cheio, o
     // excedente fica so no ring RAM do logcat).
     if (AudioPlayer::active()) return;
+    // Varredura de livres do SD segurando o volume (1a montagem de um cartao
+    // com FSInfo invalido, ~1 min): cada fopen/stat esperaria ate 10 s pelo
+    // lock aqui na task main — o staging segura ate ela terminar.
+    if (FileSystem::sdScanBusy()) return;
     s_last = now;
     flushStage(*s_kern, "kern");
     flushStage(*s_apps, "apps");

@@ -77,6 +77,11 @@ public:
     // Mounting/Formatting
     static bool mountSD();
     static void unmountSD();
+    /** @brief SD montado em /sd (barato: nao toca o FatFs). */
+    static bool sdMounted();
+    /** @brief Contagem de livres do SD em curso (segura o volume FAT; quem
+     *  nao pode esperar ate CONFIG_FATFS_TIMEOUT_MS deve adiar o acesso). */
+    static bool sdScanBusy();
     static bool formatSD();
     
 private:

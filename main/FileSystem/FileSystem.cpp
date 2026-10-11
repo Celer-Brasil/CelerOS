@@ -21,6 +21,9 @@
 #include "driver/gpio.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
 
 static const char* FS_TAG = "celer.fs";
 
@@ -28,6 +31,30 @@ static const char* FS_TAG = "celer.fs";
 // Handle do cartao para unmount; bus SPI inicializada sob demanda
 static sdmmc_card_t* s_sd_card = nullptr;
 static bool s_spi_bus_ready = false;
+
+// Contagem de clusters livres do FAT. Com o FSInfo do cartao valido o
+// f_getfree e instantaneo; invalido (0xFFFFFFFF), o FatFs varre a FAT
+// INTEIRA — no SDSPI e 1 CMD17 por setor: um cartao de 32 GB com cluster
+// de 4 KB passou de 45 s (bancada esp32-cam 2026-10-10). Na task main isso
+// estourava o task WDT (15 s) a cada boot via LogPersist, e a varredura,
+// morta no meio, nunca chegava a gravar o FSInfo: crash-loop permanente.
+// Agora a varredura roda UMA vez por montagem numa task propria; quando
+// termina o FatFs guarda a contagem (f_getfree vira O(1)) e o proximo sync
+// de escrita grava o FSInfo — boots seguintes nem varrem.
+static volatile bool s_sdFreeReady = false;  // contagem em cache no FatFs
+static volatile bool s_sdFreeBusy = false;   // varredura em curso (segura o volume)
+
+static void sdFreeScanTask(void*) {
+    FATFS* fs = nullptr;
+    DWORD freeClusters = 0;
+    int64_t t0 = esp_timer_get_time();
+    FRESULT r = f_getfree("0:", &freeClusters, &fs);
+    int ms = (int)((esp_timer_get_time() - t0) / 1000);
+    if (r == FR_OK) s_sdFreeReady = true;
+    if (ms > 1000) celer_log_printf("SD: contagem de livres levou %d ms (FSInfo invalido)\n", ms);
+    s_sdFreeBusy = false;
+    vTaskDelete(nullptr);
+}
 #endif
 static bool s_localMountFailed = false;
 
@@ -170,6 +197,13 @@ bool FileSystem::mountSD() {
         return false;
     }
     ESP_LOGI(FS_TAG, "SD montado em /sd (%s)", s_sd_card->cid.name);
+    // Contagem de livres fora do caminho de quem chamou (ver sdFreeScanTask).
+    // Prioridade 1, sem pino de nucleo (CYD/cam unicore ou dual).
+    s_sdFreeReady = false;
+    s_sdFreeBusy = true;
+    if (xTaskCreate(sdFreeScanTask, "sd_free", 3072, nullptr, 1, nullptr) != pdPASS) {
+        s_sdFreeBusy = false;  // sem RAM p/ a task: espaco do SD fica "desconhecido"
+    }
     // Layout padrao do cartao, o mesmo trato do mkdir("/local/apps"): o
     // launcher, Installer, App Store e o celerctl (apps list) escaneiam
     // /sd/apps. Sem a pasta, um cartao de dados puro (gcode, wallpaper)
@@ -184,8 +218,12 @@ bool FileSystem::mountSD() {
 void FileSystem::unmountSD() {
 #if CONFIG_CELEROS_SD_CARD
     if (s_sd_card != nullptr) {
+        // varredura segurando o volume: desmontar no meio dela solta o FATFS
+        // debaixo do f_getfree
+        while (s_sdFreeBusy) vTaskDelay(pdMS_TO_TICKS(50));
         esp_vfs_fat_sdcard_unmount("/sd", s_sd_card);
         s_sd_card = nullptr;
+        s_sdFreeReady = false;
     }
 #endif
 }
@@ -618,10 +656,33 @@ time_t FileSystem::getLastModified(const char* path) {
     return st.st_mtime;
 }
 
+bool FileSystem::sdMounted() {
+#if CONFIG_CELEROS_SD_CARD
+    return s_sd_card != nullptr;
+#else
+    return false;
+#endif
+}
+
+bool FileSystem::sdScanBusy() {
+#if CONFIG_CELEROS_SD_CARD
+    return s_sdFreeBusy;
+#else
+    return false;
+#endif
+}
+
 uint64_t FileSystem::getTotalSpace(const char* drive) {
     if (drive == nullptr) return 0;
 #if CONFIG_CELEROS_SD_CARD
     if (strncmp(drive, "/sd", 3) == 0) {
+        if (s_sd_card == nullptr) return 0;
+        if (!s_sdFreeReady) {
+            // contagem ainda nao pronta: o f_getfree varreria (ou esperaria o
+            // lock da varredura). Capacidade crua do cartao (CSD) — difere do
+            // volume FAT so pelas tabelas/area reservada.
+            return (uint64_t)s_sd_card->csd.capacity * (uint64_t)s_sd_card->csd.sector_size;
+        }
         FATFS* fs = nullptr;
         DWORD freeClusters = 0;
         if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;
@@ -640,6 +701,7 @@ uint64_t FileSystem::getUsedSpace(const char* drive) {
     if (drive == nullptr) return 0;
 #if CONFIG_CELEROS_SD_CARD
     if (strncmp(drive, "/sd", 3) == 0) {
+        if (s_sd_card == nullptr || !s_sdFreeReady) return 0;  // desconhecido (ver getFreeSpace)
         uint64_t total = getTotalSpace(drive);
         uint64_t freeB = getFreeSpace(drive);
         return total > freeB ? (total - freeB) : 0;
@@ -657,6 +719,9 @@ uint64_t FileSystem::getFreeSpace(const char* drive) {
     if (drive == nullptr) return 0;
 #if CONFIG_CELEROS_SD_CARD
     if (strncmp(drive, "/sd", 3) == 0) {
+        // 0 = desconhecido enquanto a varredura nao termina (a App Store ja
+        // trata 0 assim; quem bloqueasse aqui travava a task main)
+        if (s_sd_card == nullptr || !s_sdFreeReady) return 0;
         FATFS* fs = nullptr;
         DWORD freeClusters = 0;
         if (f_getfree("0:", &freeClusters, &fs) != FR_OK || fs == nullptr) return 0;

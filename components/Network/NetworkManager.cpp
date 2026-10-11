@@ -503,6 +503,14 @@ bool NetworkManager::isBackgroundTaskRunning() const {
 // Roaming so procura outro AP abaixo deste sinal (dBm)
 static constexpr int8_t K_ROAM_SCAN_RSSI = -70;
 
+void NetworkManager::holdChannel(bool on) {
+    if (on) {
+        __atomic_add_fetch(&_channelHolds, 1, __ATOMIC_SEQ_CST);
+    } else if (__atomic_sub_fetch(&_channelHolds, 1, __ATOMIC_SEQ_CST) < 0) {
+        __atomic_store_n(&_channelHolds, 0, __ATOMIC_SEQ_CST);
+    }
+}
+
 void NetworkManager::backgroundTaskFunc(void* param) {
     NetworkManager* self = static_cast<NetworkManager*>(param);
     
@@ -531,6 +539,22 @@ void NetworkManager::backgroundTaskFunc(void* param) {
         // com o Bluetooth ligado (o coex da prioridade ao WiFi): a malha
         // CelerNet e o Celer Link ficavam surdos 9 s a cada 39 (bancada
         // 2026-10-07, relogio com 2 redes salvas).
+        // Canal segurado (sessoes ESP-NOW): o scan pula de canal por segundos
+        // e as sessoes perdem tudo nesse tempo. Segura o scan de ROAMING e a
+        // busca de quem ja estava sem rede — mas NUNCA a reconexao de quem
+        // caiu do AP agora ha pouco: a internet do no vale mais que a sessao
+        // (a sessao renegocia o canal sozinha). Na bancada 2026-10-11 o 4848
+        // desassociou sob carga e o hold o deixou offline ate a sessao fechar.
+        static uint32_t s_lastConnectedSec = 0;
+        if (self->isConnected()) s_lastConnectedSec = now;
+        if (self->_channelHolds > 0) {
+            const bool justDropped = s_lastConnectedSec != 0 && now - s_lastConnectedSec < 120;
+            if (self->isConnected() || !justDropped) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
+            }
+        }
+
         if (self->isConnected() && self->_config.enableRoaming &&
             timeSinceLastScan >= self->_config.backgroundScanInterval) {
             wifi_ap_record_t cur;

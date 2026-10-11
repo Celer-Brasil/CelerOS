@@ -227,6 +227,18 @@ public:
     void setAutoReconnect(bool enabled);
 
     /**
+     * @brief Segura o canal do radio (CelerOS: sessoes ESP-NOW dos recursos
+     * da matilha). Com o pedido ativo a background task NAO faz scan de
+     * roaming nem a busca de quem ja estava sem rede: o scan pula de canal
+     * por segundos e as sessoes ESP-NOW (que vivem no canal atual) perderiam
+     * tudo nesse tempo. Quem caiu do AP ha menos de 2 min reconecta mesmo
+     * assim (a internet do no tem prioridade; a sessao renegocia o canal).
+     * Contador: cada hold(true) pede um hold(false).
+     */
+    void holdChannel(bool on);
+    bool channelHeld() const { return _channelHolds > 0; }
+
+    /**
      * @brief Check if auto-reconnect is enabled.
      * @return True if enabled.
      */
@@ -408,6 +420,7 @@ private:
     TaskHandle_t _backgroundTask;            /**< Background task handle */
     SemaphoreHandle_t _mutex;                /**< Thread safety mutex */
     volatile bool _backgroundTaskRunning;    /**< Background task flag */
+    volatile int _channelHolds = 0;  // holdChannel(): scans de fundo suspensos
     volatile bool _initialized;              /**< Initialization flag */
     uint32_t _lastScanTime;                  /**< Timestamp of last scan */
     uint32_t _connectionStartTime;           /**< When current connection started */

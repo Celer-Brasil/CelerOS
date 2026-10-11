@@ -1059,6 +1059,7 @@ E.run({
     // heartbeat 'dhl' anuncia este Detona aos outros por perto.
     duelo: {
         fps: 12,
+        exit: function () { E.clearTimers(); },   // idem jogando: fim de round agenda E.after(900)
         enter: function () {
             this.first = true;
             this.ligaAte = 0;
@@ -1187,6 +1188,10 @@ E.run({
 
     jogando: {
         fps: 30,
+        // o fim de rodada agenda E.after(900, ...) para a transicao; sair
+        // da arena antes (pausa/titulo) derruba o timer pendente — sem isso
+        // ele disparava E.goto("fim") em cima da proxima cena
+        exit: function () { E.clearTimers(); },
         enter: function () {
             var sobre = E.data.modo === "sobre";
             var duelo = E.data.modo === "duelo";

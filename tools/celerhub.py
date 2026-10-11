@@ -258,11 +258,15 @@ def strip_js(path: Path) -> bytes:
 
 
 def git_dirty_files(paths) -> list:
-    """Paths com edicao NAO commitada no repo (WIP em arvore) — exatamente
+    """Paths com conteudo NAO commitado no repo (WIP em arvore) — exatamente
     o que um publish subiria sem nunca ter passado por commit/CI. Nasceu do
     incidente real: a engine 1.2.3 foi ao hub com 2 linhas do WIP do autor
-    (salvas na arvore entre o `git status` do operador e o upload). Fora de
-    um repo git (ou sem git no PATH) devolve [] — o fluxo nao trava."""
+    (salvas na arvore entre o `git status` do operador e o upload).
+    IGNORADOS contam junto (--ignored=matching): arquivo do pacote que o
+    .gitignore esconde nunca sera commitado — publica-lo e subir WIP
+    disfarcado (o filtro de extensoes do publish nao salva ninguem sozinho).
+    Fora de um repo git (ou sem git no PATH) devolve [] — o fluxo nao
+    trava."""
     alvos = [Path(p).expanduser().resolve() for p in paths if p]
     if not alvos:
         return []
@@ -276,8 +280,8 @@ def git_dirty_files(paths) -> list:
         return []
     try:
         st = subprocess.run(
-            ["git", "-C", probe.stdout.strip(), "status", "--porcelain", "--"] +
-            [str(p) for p in alvos],
+            ["git", "-C", probe.stdout.strip(), "status", "--porcelain",
+             "--ignored=matching", "--"] + [str(p) for p in alvos],
             capture_output=True, text=True, timeout=10)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
@@ -506,7 +510,10 @@ def cmd_deps_status(args):
         if hashlib.md5(strip_js(f)).hexdigest() == dmeta["md5"]:
             continue
         head = head_strip_md5(f)
-        divergent[name] = "wip" if head == dmeta["md5"] else "real"
+        # HEAD igual ao hub -> WIP nao commitado (commite). HEAD SEM o
+        # arquivo (novo, nunca commitado; git ausente da None igual) tambem
+        # pede COMMIT — sugerir --force aqui subiria o nao-commitado
+        divergent[name] = "wip" if head in (None, dmeta["md5"]) else "real"
     linhas, drift = deps_status_report({n: v for n, (v, _) in local.items()},
                                        hub, divergent)
     print(f"{'dep':22} {'local':8} {'hub':8} veredito")
@@ -533,6 +540,24 @@ def cmd_publish(args):
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
         meta, avisos, js_sum, extras = validate(folder, strip=not args.no_strip)
+        # SNAPSHOT de tudo o que sobe (uma leitura cada, ANTES da guarda de
+        # arvore suja): a guarda, os tetos e o zip trabalham sobre os MESMOS
+        # bytes — a arvore anda em voo na bancada e o zip relia os arquivos
+        # DEPOIS da checagem (o buraco da engine 1.2.3, no publish de app)
+        enxutos = {}
+        if not args.no_strip:
+            enxutos["main.js"] = strip_js(folder / "main.js")
+            for n, p in extras.items():
+                if n.endswith(".js"):
+                    enxutos[n] = strip_js(p)
+            js_sum = sum(len(b) for b in enxutos.values())
+        blobs = {"app.json": (folder / "app.json").read_bytes(),
+                 "main.js": (folder / "main.js").read_bytes()}
+        if (folder / "icon.png").is_file():
+            blobs["icon.png"] = (folder / "icon.png").read_bytes()
+        for n, p in extras.items():
+            if n not in enxutos:
+                blobs[n] = p.read_bytes()
         # guarda de arvore suja (mesma do publish-dep): so sobe conteudo
         # COMMITADO — publish de app com WIP no main.js embarcaria trabalho
         # que o autor nem terminou (quase aconteceu com o Arrasa 1.0.0)
@@ -548,15 +573,6 @@ def cmd_publish(args):
                 die(f"{folder.name}: edicao NAO commitada ({', '.join(suja[:3])}"
                     f"{' e mais' if len(suja) > 3 else ''}) — commite antes, ou "
                     "use --force consciente (a loja receberia o WIP)")
-        # .js do pacote sobem ENXUTOS (como o aparelho compila): a soma do
-        # teto passa a contar o tamanho real; o fonte comentado fica no repo
-        enxutos = {}
-        if not args.no_strip:
-            enxutos["main.js"] = strip_js(folder / "main.js")
-            for n, p in extras.items():
-                if n.endswith(".js"):
-                    enxutos[n] = strip_js(p)
-            js_sum = sum(len(b) for b in enxutos.values())
         deps = meta.get("deps") or {}
         # deps: resolve contra o indice do hub (existencia + teto com a soma
         # das deps — o mesmo calculo que o servidor faz no upload)
@@ -600,18 +616,19 @@ def cmd_publish(args):
         with tempfile.TemporaryDirectory() as td:
             zpath = Path(td) / "app.zip"
             with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.write(folder / "app.json", "app.json")
+                # tudo do SNAPSHOT (blobs/enxutos): nada relido da arvore
+                zf.writestr("app.json", blobs["app.json"])
                 if "main.js" in enxutos:
                     zf.writestr("main.js", enxutos["main.js"])
                 else:
-                    zf.write(folder / "main.js", "main.js")
-                if (folder / "icon.png").is_file():
-                    zf.write(folder / "icon.png", "icon.png")
-                for n, p in extras.items():
+                    zf.writestr("main.js", blobs["main.js"])
+                if "icon.png" in blobs:
+                    zf.writestr("icon.png", blobs["icon.png"])
+                for n in extras:
                     if n in enxutos:
                         zf.writestr(n, enxutos[n])
                     else:
-                        zf.write(p, n)
+                        zf.writestr(n, blobs[n])
             blob = zpath.read_bytes()
 
         boundary = "----celeroshub7d1f2c"
@@ -657,11 +674,23 @@ def cmd_publish_dep(args):
     name = args.name or src.stem
     if not DEP_NAME_RE.match(name):
         die(f"nome de dep invalido: {name} (use prefixo.nome, ex: celeros.engine)")
-    text = src.read_text(encoding="utf-8")
+    # SNAPSHOT: uma unica leitura do arquivo — versao, lint, enxuto e upload
+    # saem todos dos MESMOS bytes (a arvore anda em voo na bancada: reler
+    # depois da guarda de git sujo e como o incidente da 1.2.3 renasce)
+    code = src.read_bytes()
+    text = code.decode("utf-8", "replace")
     version = args.version or read_dep_version(text, src.name)
     if not VER_RE.match(version or ""):
         die(f"versao invalida: {version!r} (declare no modulo "
             f"version: 'x.y.z' ou use --version)")
+    sub = {}
+    for pair in args.dep or []:
+        if "=" not in pair:
+            die(f"--dep deve ser nome=range (veio {pair!r})")
+        d, r = pair.split("=", 1)
+        if not DEP_NAME_RE.match(d) or not DEP_RANGE_RE.match(r):
+            die(f"--dep invalida: {pair}")
+        sub[d] = r
     # guarda de arvore suja: o upload tem que ser de conteudo COMMITADO —
     # a engine 1.2.3 foi ao hub uma vez com 2 linhas do WIP do autor (o
     # git status do operador era de minutos antes; a arvore andou)
@@ -677,42 +706,38 @@ def cmd_publish_dep(args):
     # sintaxe de verdade antes de subir: dep quebrada quebra TODOS os apps
     # que a require (cache publico compartilhado). O app_lint parseia com
     # acorn ES5 (mesmo perfil do Duktape do device); o node --check aceitava
-    # ES6 que o aparelho rejeitaria na hora de compilar a dep
+    # ES6 que o aparelho rejeitaria na hora de compilar a dep. Linta o
+    # SNAPSHOT (arquivo temp), nao a arvore viva
     lint_js = Path(__file__).resolve().parent / "app_lint" / "lint.js"
-    chk = subprocess.run(["node", str(lint_js), str(src)], capture_output=True, text=True)
-    if chk.returncode != 0:
-        erros = [l.strip() for l in (chk.stdout or chk.stderr or "").splitlines()
-                 if " erro[" in l]
-        die(f"{src.name}: sintaxe invalida no lint ES5 (app_lint): "
-            f"{erros[0] if erros else 'sem detalhe'}")
-    # pre-flight contra o indice: mesma versao ja publicada so passa com
-    # --force explicito (antes moria no 409 do servidor, com rede, e a
-    # mensagem nao dizia o que fazer)
-    if not args.dry and not args.force:
-        _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
-        if ((idx.get("deps", {}).get(name) or {}).get(version)):
-            die(f"dep {name} v{version} ja esta no hub — suba a version no "
-                f"modulo ou use --force para substituir")
-    sub = {}
-    for pair in args.dep or []:
-        if "=" not in pair:
-            die(f"--dep deve ser nome=range (veio {pair!r})")
-        d, r = pair.split("=", 1)
-        if not DEP_NAME_RE.match(d) or not DEP_RANGE_RE.match(r):
-            die(f"--dep invalida: {pair}")
-        sub[d] = r
-
-    code = src.read_bytes()
-    if not args.no_strip:
-        strip = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
-        try:
-            out = subprocess.run(["node", str(strip), str(src)], capture_output=True, timeout=60)
-        except FileNotFoundError:
-            die("node nao encontrado no PATH: necessario para enxugar a dep (ou --sem-strip)")
-        if out.returncode != 0 or not out.stdout:
-            die(f"jsstrip falhou: {out.stderr.decode('utf-8', 'replace').strip()}")
-        print(f"{name}: {len(code)}B -> {len(out.stdout)}B enxuto (linhas preservadas)")
-        code = out.stdout
+    with tempfile.TemporaryDirectory() as td:
+        snap = Path(td) / src.name
+        snap.write_bytes(code)
+        chk = subprocess.run(["node", str(lint_js), str(snap)], capture_output=True, text=True)
+        if chk.returncode != 0:
+            erros = [l.strip() for l in (chk.stdout or chk.stderr or "").splitlines()
+                     if " erro[" in l]
+            die(f"{src.name}: sintaxe invalida no lint ES5 (app_lint): "
+                f"{erros[0] if erros else 'sem detalhe'}")
+        # pre-flight contra o indice: mesma versao ja publicada so passa com
+        # --force explicito (antes morria no 409 do servidor, com rede, e a
+        # mensagem nao dizia o que fazer)
+        if not args.dry and not args.force:
+            _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+            if ((idx.get("deps", {}).get(name) or {}).get(version)):
+                die(f"dep {name} v{version} ja esta no hub — suba a version no "
+                    f"modulo ou use --force para substituir")
+        # enxuta o SNAPSHOT: o que sobe e o que foi lintado
+        if not args.no_strip:
+            strip = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+            try:
+                out = subprocess.run(["node", str(strip), str(snap)],
+                                     capture_output=True, timeout=60)
+            except FileNotFoundError:
+                die("node nao encontrado no PATH: necessario para enxugar a dep (ou --sem-strip)")
+            if out.returncode != 0 or not out.stdout:
+                die(f"jsstrip falhou: {out.stderr.decode('utf-8', 'replace').strip()}")
+            print(f"{name}: {len(code)}B -> {len(out.stdout)}B enxuto (linhas preservadas)")
+            code = out.stdout
     md5_local = hashlib.md5(code).hexdigest()
 
     if args.dry:

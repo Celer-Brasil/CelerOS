@@ -8,6 +8,7 @@ compile contado pelo tamanho ENXUTO.
 
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -197,6 +198,48 @@ class TestGitDirtyGuard(unittest.TestCase):
         self.assertEqual(len(suja), 1)
         self.assertIn("celeros.novo.js", suja[0])
 
+    def test_arquivo_ignorado_conta_como_suja(self):
+        # arquivo do pacote escondido pelo .gitignore NUNCA sera commitado:
+        # publica-lo e subir WIP disfarcado — a guarda tem que ve-lo
+        td, f = self._repo()
+        (Path(td) / ".gitignore").write_text("celeros.secreto.js\n", encoding="utf-8")
+        secreto = Path(td) / "celeros.secreto.js"
+        secreto.write_text("var S = { version: '1.0.0' };\nmodule.exports = S;\n",
+                           encoding="utf-8")
+        suja = H.git_dirty_files([secreto])
+        self.assertEqual(len(suja), 1, "ignorado deve contar como suja")
+        self.assertIn("celeros.secreto.js", suja[0])
+
+    def test_deps_status_sem_head_pede_commit_nao_force(self):
+        # engine NOVA (nunca commitada) divergindo do hub: o remedio e
+        # commitar — o veredito "--force" subiria o nao-commitado
+        import shutil
+        from types import SimpleNamespace
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        eng = Path(td) / "engine"
+        eng.mkdir()
+        # repo git COM commit anterior (a guarda de arvore nao interfere:
+        # deps-status nao guarda, apenas TRIA) — arquivo novo fica sem HEAD
+        for cmd in (["git", "-C", td, "init", "-q"],
+                    ["git", "-C", td, "config", "user.email", "t@t"],
+                    ["git", "-C", td, "config", "user.name", "t"],
+                    ["git", "-C", td, "commit", "-q", "--allow-empty", "-m", "x"]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        (eng / "celeros.wip.js").write_text(
+            "var W = { version: '1.0.0' };\nmodule.exports = W;\n", encoding="utf-8")
+        idx = Path(td) / "deps.json"
+        idx.write_text(json.dumps({"deps": {"celeros.wip": {
+            "1.0.0": {"md5": "md5-que-nao-bate", "url": "x"}}}}), encoding="utf-8")
+        args = SimpleNamespace(index=str(idx), engine_dir=str(eng), hub=None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            with self.assertRaises(SystemExit) as cm:
+                H.cmd_deps_status(args)
+        self.assertEqual(cm.exception.code, 1)
+        self.assertIn("WIP NAO COMMITADO", out.getvalue())
+        self.assertIn("commite", out.getvalue())
+
     def test_fora_de_repo_nao_trava(self):
         f = Path(tempfile.mkdtemp()) / "solto.js"
         f.write_text("x", encoding="utf-8")
@@ -241,6 +284,72 @@ class TestGitDirtyGuard(unittest.TestCase):
         # set (compat) continua sendo divergencia real
         linhas, _ = H.deps_status_report(local, hub, divergent={"celeros.engine"})
         self.assertIn("CONTEUDO DIVERGE", "\n".join(linhas))
+
+
+class TestPublishSnapshot(unittest.TestCase):
+    """O publish real (nao-dry) empacota o SNAPSHOT lido ANTES da guarda de
+    arvore suja: valida + sobe o mesmo zip mesmo que a arvore ande depois
+    (http stubado; token falso no env)."""
+
+    def _app_repo(self):
+        import shutil
+        import zipfile as zf
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        for cmd in (["git", "-C", td, "init", "-q"],
+                    ["git", "-C", td, "config", "user.email", "t@t"],
+                    ["git", "-C", td, "config", "user.name", "t"]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        d = Path(td) / "Snap"
+        d.mkdir()
+        (d / "app.json").write_text(
+            '{"name":"Snap","packageName":"celeros.snap","version":"1.0.0",'
+            '"api":30,"author":"t","description":"d"}', encoding="utf-8")
+        (d / "main.js").write_text("var A = 1;\nSystem.delay(10);\n", encoding="utf-8")
+        subprocess.run(["git", "-C", td, "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "commit", "-qm", "x"], check=True,
+                       capture_output=True)
+        return d
+
+    def test_zip_sai_do_snapshot_nao_da_arvore_viva(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        d = self._app_repo()
+        zips = []
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            if method == "GET":
+                return 200, {"apps": {}, "deps": {}}
+            # POST: guarda o zip e responde como o hub
+            assert data is not None
+            zips.append(data)
+            return 200, {"package": "celeros.snap", "version": "1.0.0",
+                         "size": 1, "md5": "x", "store": {"apps": 1}}
+
+        args = SimpleNamespace(dry=False, force=False, folders=[str(d)],
+                               no_strip=False, token="t", hub=None)
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            with patch.object(H, "http", side_effect=fake_http):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    with self.assertRaises(SystemExit) as cm:
+                        H.cmd_publish(args)
+        self.assertEqual(cm.exception.code, 0)
+        self.assertTrue(zips, "o POST deveria levar o zip")
+        # a arvore ANDA depois do upload ter saido: irrelevante, o zip ja era
+        import zipfile
+        with tempfile.TemporaryDirectory() as tdz:
+            zp = Path(tdz) / "a.zip"
+            zp.write_bytes(zips[0])
+            with zipfile.ZipFile(zp) as zf:
+                nomes = sorted(zf.namelist())
+                self.assertEqual(nomes, ["app.json", "main.js"])
+                main = zf.read("main.js")
+        # main.js sobe ENXUTO (sem linha em branco final de comentario)
+        self.assertIn(b"var A = 1;", main)
+        # e o conteudo e o do snapshot: mudar a arvore AGORA nao muda nada
+        (d / "main.js").write_text("MUDOU DEPOIS\n", encoding="utf-8")
+        self.assertIn(b"var A = 1;", main)
 
 
 if __name__ == "__main__":

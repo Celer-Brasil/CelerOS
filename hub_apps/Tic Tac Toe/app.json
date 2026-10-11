@@ -1,12 +1,18 @@
 {
   "name": "Tic Tac Toe",
   "packageName": "celeros.tictactoe",
-  "version": "1.3.1",
-  "api": 22,
-  "permissions": ["fs"],
+  "version": "1.4.0",
+  "api": 30,
+  "permissions": [
+    "fs"
+  ],
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
   "description": "Jogo da velha: 1 jogador com tres niveis (minimax no impossivel) ou 2 jogadores no mesmo aparelho. Placar salvo e linha de vitoria riscada.",
-  "changelog": "1.3.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.3.0 - visual novo com o toolkit UI (API 22): menu com abas de modo/nivel, marcas suavizadas e dialogo de fim de jogo\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons"
+  "changelog": "1.4.0 - portado para a familia CelerGame COM melhorias: estouro nas celulas da linha vencedora + flash no empate/derrota, fim de jogo com tela propria (transicao iris) no lugar do dialogo nativo, bot joga pelo E.after (o loop nao bloqueia mais 250 ms \"pensando\"), abas do menu viram seletor segmentado da engine, placar migrado do txt para o NVS\n1.3.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.3.0 - visual novo com o toolkit UI (API 22): menu com abas de modo/nivel, marcas suavizadas e dialogo de fim de jogo\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons",
+  "deps": {
+    "celeros.game": "^1.0.0",
+    "celeros.game.fx": "^1.0.0"
+  }
 }

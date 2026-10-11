@@ -1,39 +1,38 @@
-// CelerOS Tic Tac Toe — jogo da velha no tema do OS.
-// 1 jogador (3 niveis de bot, minimax no impossivel) ou 2 jogadores no mesmo
-// aparelho. Placar persistido no FS e linha de vitoria destacada. ES5,
-// toolkit UI (API 22): menu, placar e fim de jogo nativos; tabuleiro com
-// marcas suavizadas (drawWideLine / fillSmoothCircle).
+// CelerOS Tic Tac Toe — jogo da velha no tema do OS. Porte CelerGame:
+// cenas do core (menu static com seletores segmentados, tabuleiro static,
+// fim de jogo proprio no lugar do dialogo nativo), bot jogando pelo
+// E.after (antes o loop bloqueava 250 ms "pensando"), placar no NVS e fx
+// na linha vencedora. 1 jogador (minimax no impossivel) ou 2 no mesmo
+// aparelho.
 
-var T = System.theme();
-var W = 240;
+var E = require("celeros.game");       // familia CelerGame: core + fx
+require("celeros.game.fx");
 
-var SCORE_FILE = (FS.appData ? FS.appData() : "/local/") + "score.txt";
-var score = { v: 0, d: 0, e: 0 };   // vitorias, derrotas, empates
-(function () {
-    var raw = FS.readTextFile(SCORE_FILE);
-    if (!raw) return;
-    var p = raw.split(",");
+E.init({ dir: "Tic Tac Toe", fps: 30, save: "velha." });
+var T = E.theme, W = E.W, H = E.H;
+
+// placar: NVS do core — o score.txt da versao anterior entra como migricao
+var score = { v: E.save.num("v", 0), d: E.save.num("d", 0), e: E.save.num("e", 0) };
+try {
+    var raw = FS.readTextFile((FS.appData ? FS.appData() : "/local/") + "score.txt");
+    var p = raw ? raw.split(",") : [];
     if (p.length === 3) {
-        score.v = parseInt(p[0], 10) || 0;
-        score.d = parseInt(p[1], 10) || 0;
-        score.e = parseInt(p[2], 10) || 0;
+        score.v = Math.max(score.v, parseInt(p[0], 10) || 0);
+        score.d = Math.max(score.d, parseInt(p[1], 10) || 0);
+        score.e = Math.max(score.e, parseInt(p[2], 10) || 0);
+        E.save.set("v", score.v); E.save.set("d", score.d); E.save.set("e", score.e);
     }
-})();
+} catch (e) {}
 function saveScore() {
-    FS.writeTextFile(SCORE_FILE, score.v + "," + score.d + "," + score.e);
+    E.save.set("v", score.v); E.save.set("d", score.d); E.save.set("e", score.e);
 }
 
-// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
-// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+// Som: System.sfx (API 32) mistura por cima da trilha sem travar o loop;
+// firmware antigo cai no playTone (bloqueante)
 var somFn = typeof System.sfx === "function" ? System.sfx :
             (typeof System.playTone === "function" ? System.playTone : null);
-var hasTone = somFn !== null;
-function tone(hz, ms) {
-    if (hasTone) { try { somFn && somFn([[hz, ms]]); } catch (e) {} }
-}
+function tone(hz, ms) { if (somFn) { try { somFn([[hz, ms]]); } catch (e) {} } }
 
-var STATE_MENU = 0, STATE_PLAYING = 1, STATE_OVER = 2;
-var state = STATE_MENU;
 var board = [0, 0, 0, 0, 0, 0, 0, 0, 0];   // 0 vazio | 1 X | 2 O
 var turn = 1;
 var winner = 0;                             // 0 ninguem | 1 X | 2 O | 3 empate
@@ -41,6 +40,8 @@ var winLine = -1;                           // indice do trio vencedor
 var twoPlayers = false;
 var difficulty = 1;                         // 0 facil | 1 medio | 2 impossivel
 var diffNames = ["Fácil", "Médio", "Impossível"];
+var botPend = null;                         // timer do "bot pensando"
+var juiceT = 0;                             // particulas vivas: repinta
 
 var CELL = 62, OX = 27, OY = 88;
 
@@ -82,7 +83,6 @@ function minimax(b, depth, bot) {
 }
 
 function botMove() {
-    System.delay(250);                      // "pensando" (nao pisca: draw ja foi)
     var empty = [];
     for (var e = 0; e < 9; e++) if (board[e] === 0) empty.push(e);
 
@@ -126,26 +126,25 @@ function drawMark(idx) {
     var v = board[idx];
     if (v === 1) {
         var r = 15;
-        System.drawWideLine(c.x - r, c.y - r, c.x + r, c.y + r, 5, T.accent);
-        System.drawWideLine(c.x - r, c.y + r, c.x + r, c.y - r, 5, T.accent);
+        E.gfx.line(c.x - r, c.y - r, c.x + r, c.y + r, T.accent, { w: 5 });
+        E.gfx.line(c.x - r, c.y + r, c.x + r, c.y - r, T.accent, { w: 5 });
     } else if (v === 2) {
-        System.fillSmoothCircle(c.x, c.y, 18, T.warn);
-        System.fillSmoothCircle(c.x, c.y, 13, T.card);
+        E.gfx.circle(c.x, c.y, 18, T.warn, { smooth: true });
+        E.gfx.circle(c.x, c.y, 13, T.card, { smooth: true });
     }
 }
 
-// Tabuleiro (desenho proprio): so no frame total — jogada/fim de jogo
-// chamam UI.invalidate()
-function drawBoard(full) {
+function drawBoard() {
     var vez = twoPlayers ? ("Vez do " + (turn === 1 ? "X" : "O"))
                          : (turn === 1 ? "Sua vez (X)" : "Bot pensando...");
-    UI.text(vez, 12, 12, { role: "title", color: turn === 1 ? T.accent : T.warn, id: 1 });
-    UI.badge("V" + score.v + " D" + score.d + " E" + score.e, 168, 14);
-    if (!full) return;
-    System.fillSmoothRoundRect(OX - 8, OY - 8, CELL * 3 + 16, CELL * 3 + 16, 14, T.card);
+    E.gfx.text(vez, 12, 12, { ts: "title", color: turn === 1 ? T.accent : T.warn });
+    E.gfx.rect(168, 12, E.gfx.measure("V" + score.v + " D" + score.d + " E" + score.e,
+                                      { ts: "small" }) + 12, 20, T.raised, { r: 10 });
+    E.gfx.text("V" + score.v + " D" + score.d + " E" + score.e, 174, 15, { ts: "small" });
+    E.gfx.rect(OX - 8, OY - 8, CELL * 3 + 16, CELL * 3 + 16, T.card, { r: 14 });
     for (var k = 1; k < 3; k++) {
-        System.fillRoundRect(OX + k * CELL - 2, OY + 4, 4, CELL * 3 - 8, 2, T.stroke);
-        System.fillRoundRect(OX + 4, OY + k * CELL - 2, CELL * 3 - 8, 4, 2, T.stroke);
+        E.gfx.rect(OX + k * CELL - 2, OY + 4, 4, CELL * 3 - 8, T.stroke, { r: 2 });
+        E.gfx.rect(OX + 4, OY + k * CELL - 2, CELL * 3 - 8, 4, T.stroke, { r: 2 });
     }
     for (var idx = 0; idx < 9; idx++) drawMark(idx);
     // linha de vitoria riscando o trio
@@ -153,43 +152,19 @@ function drawBoard(full) {
         var base = winLine * 3;
         var a = cellCenter(WINS[base]);
         var b = cellCenter(WINS[base + 2]);
-        System.drawWideLine(a.x, a.y, b.x, b.y, 6, T.ok);
+        E.gfx.line(a.x, a.y, b.x, b.y, T.ok, { w: 6 });
     }
 }
 
-function menu() {
-    UI.text("Jogo da Velha", 120, 28, { role: "title", align: "center" });
-    // placar
-    UI.card(16, 66, 208, 64);
-    var cols = [[52, "você", score.v, T.ok], [120, "empates", score.e, T.text], [188, "bot", score.d, T.err]];
-    for (var i = 0; i < 3; i++) {
-        UI.text(cols[i][1], cols[i][0], 74, { role: "caption", align: "center", color: T.textDim });
-        UI.text(String(cols[i][2]), cols[i][0], 92, { role: "title", align: "center", color: cols[i][3] });
+// seletor segmentado (o papel das abas do toolkit): devolve o index tocado
+function segmented(opts, sel, x, y, w, h) {
+    var bw = (w - (opts.length - 1) * 4) / opts.length;
+    for (var i = 0; i < opts.length; i++) {
+        var r = E.gfx.button(opts[i], x + i * (bw + 4), y, bw, h,
+                             { primary: i === sel, px: 12 });
+        if (E.hit(r)) return i;
     }
-    UI.cardEnd();
-    // modo: 1 jogador (3 niveis) ou 2 jogadores
-    var m = UI.tabs(16, 144, 208, 32, ["1 jogador", "2 jogadores"], twoPlayers ? 1 : 0);
-    twoPlayers = m === 1;
-    if (!twoPlayers) difficulty = UI.tabs(16, 186, 208, 32, diffNames, difficulty);
-    else UI.text("X e O no mesmo aparelho", 120, 194, { role: "caption", align: "center", color: T.textDim });
-    if (UI.button("Jogar", 16, 236, 208, 48, { role: "title" })) resetGame();
-    UI.text("X começa; o placar fica salvo no aparelho", 120, 296, { role: "caption", align: "center", color: T.textDim, w: 224 });
-}
-
-function over() {
-    var msg;
-    if (winner === 3) msg = "Empate!";
-    else if (twoPlayers) msg = (winner === 1 ? "X" : "O") + " venceu!";
-    else if (winner === 1) msg = "Você venceu!";
-    else msg = "Bot venceu!";
-    // o dialogo nativo vai por cima do tabuleiro escurecido
-    var again = UI.confirm(msg, "V " + score.v + "  E " + score.e + "  D " + score.d,
-                           { yes: "Jogar de novo", no: "Menu" });
-    if (again) resetGame();
-    else {
-        state = STATE_MENU;
-        UI.invalidate();
-    }
+    return -1;
 }
 
 // ------------------------------------------------------------------ fluxo ----
@@ -198,20 +173,30 @@ function finishTurn() {
     if (!r) return false;
     winner = r.who;
     winLine = r.line;
-    state = STATE_OVER;
     if (winner === 3) {
         score.e++;
         tone(330, 120);
+        E.fx.flash(T.stroke, 200);
     } else if (twoPlayers || winner === 1) {
         if (!twoPlayers) score.v++;
         tone(784, 80);
         tone(1047, 110);
+        // estouro nas celulas da linha vencedora
+        var base = winLine * 3;
+        for (var k = 0; k < 3; k++) {
+            var c = cellCenter(WINS[base + k]);
+            E.fx.burst(c.x, c.y, { n: 10, color: T.ok, speed: 80, life: 0.6, size: 2 });
+        }
     } else {
         score.d++;
         tone(196, 200);
+        E.fx.flash(T.err, 220);
     }
     saveScore();
-    UI.invalidate();
+    juiceT = 0.8;
+    E.after(700, function () {
+        E.goto("fim", { transition: "iris", ms: 450 });
+    });
     return true;
 }
 
@@ -220,41 +205,105 @@ function resetGame() {
     turn = 1;
     winner = 0;
     winLine = -1;
-    state = STATE_PLAYING;
-    UI.invalidate();
+    if (botPend) { E.cancel(botPend); botPend = null; }
 }
 
-var overShown = false;
-while (true) {
-    var full = UI.begin(T.bg);
-    if (state === STATE_MENU) {
-        menu();
-    } else {
-        drawBoard(full);
-        var t = UI.touch();
-        if (state === STATE_PLAYING && (turn === 1 || twoPlayers) && t.tap &&
-            t.x >= OX && t.x < OX + CELL * 3 && t.y >= OY && t.y < OY + CELL * 3) {
-            var idx = Math.floor((t.y - OY) / CELL) * 3 + Math.floor((t.x - OX) / CELL);
-            if (board[idx] === 0) {
-                board[idx] = turn;
-                UI.invalidate();
-                if (!finishTurn()) {
-                    tone(523, 35);
-                    turn = turn === 1 ? 2 : 1;
-                }
-            }
-        }
-    }
-    UI.end();
-
-    if (state === STATE_PLAYING && !twoPlayers && turn === 2) {
+// agenda a jogada do bot (o "pensando" vira espera viva, nao bloqueante)
+function agendaBot() {
+    botPend = E.after(300, function () {
+        botPend = null;
         botMove();
         if (!finishTurn()) turn = 1;
-        UI.invalidate();
-    }
-    // fim de jogo: mostra o tabuleiro final num frame e entao o dialogo
-    if (state === STATE_OVER) {
-        if (overShown) { overShown = false; over(); }
-        else overShown = true;
-    }
+        E.redraw();
+    });
 }
+
+// ------------------------------------------------------------------ cenas ---
+E.run({
+    menu: {
+        static: true,
+        update: function () {
+            var m = segmented(["1 jogador", "2 jogadores"], twoPlayers ? 1 : 0, 16, 144, 208, 32);
+            if (m >= 0) { twoPlayers = m === 1; E.redraw(); return; }
+            if (!twoPlayers) {
+                var d = segmented(diffNames, difficulty, 16, 186, 208, 32);
+                if (d >= 0) { difficulty = d; E.redraw(); return; }
+            }
+            if (E.hit({ x: 16, y: 236, w: 208, h: 48 })) {
+                resetGame();
+                E.goto("jogo", { transition: "fade", ms: 300 });
+            }
+        },
+        draw: function () {
+            E.gfx.text("Jogo da Velha", W / 2, 28, { ts: "title", align: "center" });
+            E.gfx.panel(16, 66, 208, 64);
+            var cols = [[52, "você", score.v, T.ok], [120, "empates", score.e, T.text],
+                        [188, "bot", score.d, T.err]];
+            for (var i = 0; i < 3; i++) {
+                E.gfx.text(cols[i][1], cols[i][0], 74, { ts: "small", align: "center",
+                                                         color: T.textDim });
+                E.gfx.text(String(cols[i][2]), cols[i][0], 92, { ts: "title",
+                                                                 align: "center", color: cols[i][3] });
+            }
+            segmented(["1 jogador", "2 jogadores"], twoPlayers ? 1 : 0, 16, 144, 208, 32);
+            if (!twoPlayers) segmented(diffNames, difficulty, 16, 186, 208, 32);
+            else E.gfx.text("X e O no mesmo aparelho", W / 2, 194,
+                            { ts: "small", align: "center", color: T.textDim });
+            E.gfx.button("Jogar", 16, 236, 208, 48, { px: Math.round(20 * E.U) });
+            E.gfx.text("X começa; o placar fica salvo no aparelho", W / 2, 296,
+                       { ts: "small", align: "center", color: T.textDim });
+        }
+    },
+
+    jogo: {
+        static: true,
+        enter: function () { E.redraw(); },
+        // sem reset no exit: a cena fim desenha o tabuleiro final com a
+        // linha vencedora (o reset acontece ao ENTRAR numa partida nova)
+        update: function (dt) {
+            if (juiceT > 0) { juiceT -= dt; E.redraw(); }
+            var t = E.input.tap;
+            if (winner || !t) return;
+            if (turn === 2 && !twoPlayers) return;   // vez do bot (agendado)
+            if (t.x < OX || t.x >= OX + CELL * 3 || t.y < OY || t.y >= OY + CELL * 3) return;
+            var idx = Math.floor((t.y - OY) / CELL) * 3 + Math.floor((t.x - OX) / CELL);
+            if (board[idx] !== 0) return;
+            board[idx] = turn;
+            if (!finishTurn()) {
+                tone(523, 35);
+                turn = turn === 1 ? 2 : 1;
+                if (!twoPlayers && turn === 2) agendaBot();
+            }
+            E.redraw();
+        },
+        draw: function () {
+            drawBoard();
+            E.fx.draw();
+        }
+    },
+
+    fim: {
+        static: true,
+        update: function () {
+            if (E.hit({ x: 16, y: 226, w: 99, h: 44 })) {
+                resetGame();
+                E.goto("jogo", { transition: "wipe", ms: 300 });
+            } else if (E.hit({ x: 125, y: 226, w: 99, h: 44 })) {
+                E.goto("menu", { transition: "fade", ms: 300 });
+            }
+        },
+        draw: function () {
+            var msg;
+            if (winner === 3) msg = "Empate!";
+            else if (twoPlayers) msg = (winner === 1 ? "X" : "O") + " venceu!";
+            else if (winner === 1) msg = "Você venceu!";
+            else msg = "Bot venceu!";
+            drawBoard();
+            E.gfx.text(msg, W / 2, 42, { ts: "title", align: "center" });
+            E.gfx.text("V " + score.v + "  E " + score.e + "  D " + score.d, W / 2, 62,
+                       { ts: "small", align: "center", color: T.textDim });
+            E.gfx.button("Jogar de novo", 16, 226, 99, 44, { px: 12 });
+            E.gfx.button("Menu", 125, 226, 99, 44, { primary: false, px: 12 });
+        }
+    }
+}, "menu");

@@ -11,7 +11,10 @@
  * steps (as pilhas ficam em pe), penetracao corrigida por SPLIT IMPULSE
  * (pseudo-velocidade que so mexe na posicao — o Baumgarte na velocidade
  * fazia pilhas tremerem sem dormir) e restituicao acima de um limiar de
- * velocidade. Espelho JS: tools/sdk/lib/rigid2d.js (harness/emulador) —
+ * velocidade — so no PRIMEIRO sub-passo de cada contato, e com o alvo
+ * limitado (kMaxBounce): repetir o alvo em contato persistente injeta
+ * energia quando um corpo leve fica preso entre um pesado e um estatico.
+ * Espelho JS: tools/sdk/lib/rigid2d.js (harness/emulador) —
  * mexeu aqui, mexa la. Extras para jogo:
  *  - sub-passos adaptativos (anti-tunel): ninguem anda, por sub-passo,
  *    mais que uma fracao da MENOR meia-espessura do mundo — a pedra rapida
@@ -19,7 +22,9 @@
  *  - sono por corpo: sem sair da ancora por kSleepTime vira estatico ate
  *    encostar nele um corpo acordado com velocidade, ou o app mexer;
  *  - `hit` por corpo: o maior impulso de impacto do ultimo step (aproximacao
- *    x massa efetiva) — o app tira dano disso;
+ *    x massa efetiva) — o app tira dano disso. Mesmo portao do quique
+ *    (kBounceMin): abaixo disso e' assentamento, nao impacto — contato em
+ *    repouso chega com g*dt por sub-passo e gravaria o "peso" do corpo;
  *  - indices ESTAVEIS: remover libera o slot (o proximo add reaproveita).
  *
  * Coordenadas de tela: y cresce para baixo; angulo em radianos (horario na
@@ -40,6 +45,7 @@ constexpr int kMaxSub = 16;
 constexpr float kSlop = 0.15f;          // penetracao tolerada (sem vies)
 constexpr float kBiasFactor = 0.2f;     // fracao da penetracao corrigida por sub-passo
 constexpr float kBounceMin = 40.0f;     // aproximacao minima p/ quicar
+constexpr float kMaxBounce = 8.0f * kBounceMin;  // teto do alvo de quique (valvula)
 constexpr float kSleepLin = 12.0f;      // rapidez (borda inclusa) abaixo disso conta pro sono
 constexpr float kSleepDrift = 0.8f;     // ...e sem sair da ancora mais que isso
 constexpr float kSleepTurn = 0.04f;     // ...nem girar mais que isso (rad)
@@ -101,6 +107,12 @@ struct World {
 inline float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 inline float absf(float v) { return v < 0 ? -v : v; }
 
+// numero util (rejeita NaN e infinito): o duk aceita NaN como numero e um
+// unico valor assim vindo de conta errada no app envenenaria o mundo — nas
+// comparacoes da fase larga NaN nunca e' "maior que", o corpo para de ser
+// rejeitado pelo AABB e vira despertador eterno dos vizinhos
+inline bool finf(float v) { return v == v && v < 1e30f && v > -1e30f; }
+
 inline void worldInit(World* w, int iterations) {
     memset(w, 0, sizeof(World));
     w->iterations = iterations < 1 ? 1 : (iterations > 30 ? 30 : iterations);
@@ -115,7 +127,9 @@ inline int allocSlot(World* w) {
 }
 
 inline void setMass(Body& b, float density) {
-    if (density <= 0) { b.invM = 0; b.invI = 0; return; }
+    // !(density > 0) pega NaN tambem (comparacao com NaN e' sempre falsa);
+    // densidade nao-finita vira estatico em vez de invM = NaN
+    if (!(density > 0) || !finf(density)) { b.invM = 0; b.invI = 0; return; }
     float m, I;
     if (b.shape == CIRCLE) {
         float r = b.hw;
@@ -128,11 +142,17 @@ inline void setMass(Body& b, float density) {
     }
     b.invM = 1.0f / m;
     b.invI = 1.0f / I;
+    // densidade denormal: m subnormal e 1/m estoura p/ inf — o warm start
+    // viraria NaN (inf * 0). Massa de poeira (invM > 1e12) e' estatico,
+    // como densidade invalida (probe: dens 1e-45 destrua o mundo inteiro)
+    if (b.invM > 1e12f || !finf(b.invM) || !finf(b.invI)) { b.invM = 0; b.invI = 0; }
 }
 
 inline int addBody(World* w, uint8_t shape, float x, float y, float hw, float hh, float a,
                    float density, float mu, float e) {
-    if (!(hw > 0) || !(hh > 0)) return -1;
+    // medida/posicao/angulo invalidos (zero, negativo, NaN, infinito) nao
+    // entram: um corpo assim nunca morre nem colide direito
+    if (!(hw > 0) || !(hh > 0) || !finf(hw) || !finf(hh) || !finf(x) || !finf(y) || !finf(a)) return -1;
     int i = allocSlot(w);
     if (i < 0) return -1;
     Body& b = w->bodies[i];
@@ -142,8 +162,8 @@ inline int addBody(World* w, uint8_t shape, float x, float y, float hw, float hh
     b.awake = 1;
     b.x = x; b.y = y; b.a = a;
     b.hw = hw; b.hh = hh;
-    b.mu = mu < 0 ? 0 : mu;
-    b.e = clampf(e, 0, 1);
+    b.mu = finf(mu) ? (mu < 0 ? 0 : mu) : 0;   // NaN/inf: sem atrito
+    b.e = finf(e) ? clampf(e, 0, 1) : 0;       // ...e sem quique
     // fase larga, speedOf e o anti-tunel leem o raio a cada par/sub-passo:
     // o sqrt da caixa sai uma vez aqui
     b.br = shape == CIRCLE ? hw : sqrtf(hw * hw + hh * hh);
@@ -162,6 +182,7 @@ inline void wakeAll(World* w) {
 inline bool removeBody(World* w, int i) {
     if (i < 0 || i >= w->nBodies || !w->bodies[i].alive) return false;
     w->bodies[i].alive = 0;
+    w->bodies[i].hit = 0;   // slot morto nao carrega hit velho pro rigidState
     // contatos do corpo saem; o resto do mundo acorda (o que estava em cima
     // precisa cair)
     int j = 0;
@@ -402,6 +423,26 @@ inline int findArb(World* w, int a, int b) {
     return ~lo;
 }
 
+// Invariante do array de arbitros (sempre compilado, custo zero se nao
+// chamado): estritamente ordenado por (a, b) com a < b, sem duplicata, todo
+// par aponta pra corpo vivo com indice valido e a marca d'agua no teto. O
+// teste host (martelo) confere apos CADA step de sequencias adversarias —
+// findArb e a insercao ordenada do narrow() dependem disso
+inline bool arbOk(const World* w) {
+    if (w->nArb < 0 || w->nArb > kMaxArbiters) return false;
+    for (int k = 0; k < w->nArb; k++) {
+        const Arbiter& ar = w->arb[k];
+        if (ar.a < 0 || ar.b < 0 || ar.a >= ar.b || ar.a >= w->nBodies || ar.b >= w->nBodies) return false;
+        if (!w->bodies[ar.a].alive || !w->bodies[ar.b].alive) return false;
+        if (ar.n == 0 || ar.n > 2) return false;
+        if (k > 0) {
+            const Arbiter& pv = w->arb[k - 1];
+            if (pv.a > ar.a || (pv.a == ar.a && pv.b >= ar.b)) return false;
+        }
+    }
+    return true;
+}
+
 // colide o par (a < b) e atualiza/cria o arbitro com warm start
 inline void narrow(World* w, int ia, int ib) {
     Body& A = w->bodies[ia];
@@ -538,10 +579,24 @@ inline void subStep(World* w, float dt, float gx, float gy) {
             float pen = c.sep + kSlop;
             c.pbias = pen < 0 ? -kBiasFactor * invDt * pen : 0;
             c.pb = 0;
-            c.vbias = (vn < -kBounceMin && ar.e > 0) ? -ar.e * vn : 0;
-            if (vn < 0) {
+            // Restituicao so em contato FRESCO (pn carregado = 0): quicar e'
+            // evento do primeiro sub-passo do contato. Repetir o alvo em
+            // contato persistente e' bomba de energia quando um corpo leve
+            // fica preso entre um pesado e um estatico — o alvo e' relativo
+            // a vn ATUAL, que ja embute o quique anterior, e cresce (1+e)
+            // por ciclo: probe com razao de massa 75x ejectou o corpo a
+            // 6369 u/s e o anti-tunel (teto do maxSub) deixou atravessar o
+            // chao. O teto kMaxBounce e' a segunda valvula do mesmo probe
+            // (razao 37500x): quique legitimo de jogo nao chega perto dele
+            // (queda de tela inteira a e=0.6 da ~300)
+            c.vbias = (vn < -kBounceMin && ar.e > 0 && c.pn == 0) ? clampf(-ar.e * vn, 0, kMaxBounce) : 0;
+            if (vn < -kBounceMin) {
                 // impacto: impulso p/ zerar a aproximacao (massa efetiva
-                // CHEIA, mesmo contra quem dorme — o dano nao some)
+                // CHEIA, mesmo contra quem dorme — o dano nao some). O portao
+                // e' o mesmo do quique: abaixo de kBounceMin e' assentamento
+                // (contato em repouso chega com g*dt por sub-passo e o hit
+                // gravava o "peso" do corpo TODO step — pilha parada
+                // reportava impulso de impacto)
                 float kf = A.invM + B.invM + A.invI * (c.r1x * c.r1x + c.r1y * c.r1y - rn1 * rn1)
                                            + B.invI * (c.r2x * c.r2x + c.r2y * c.r2y - rn2 * rn2);
                 float imp = kf > 0 ? -vn / kf : 0;
@@ -659,9 +714,17 @@ inline void subStep(World* w, float dt, float gx, float gy) {
 /// corpo ande mais que 40% da menor meia-espessura por sub-passo. Devolve
 /// quantos sub-passos rodou.
 inline int step(World* w, float dt, float gx, float gy, int maxSub) {
-    if (!(dt > 0)) return 0;
-    if (maxSub < 1) maxSub = 1;
+    // dt denormal (1e-45 passa no dt > 0): sdt subnormal e invDt = inf —
+    // pbias vira inf, bvx inf e a posicao NaN (probe). Step menor que um
+    // microssegundo nao move nada mesmo: descarta
+    if (!(dt >= 1e-6f)) return 0;
+    // NaN tambem cai aqui (comparacao falsa) — igual dt <= 0
+    if (!(maxSub >= 1)) maxSub = 1;
     if (maxSub > kMaxSub) maxSub = kMaxSub;
+    // gravidade nao-finita vinda de conta errada do app envenenaria v de
+    // todo corpo: ignora (0 = sem gravidade neste eixo)
+    if (!finf(gx)) gx = 0;
+    if (!finf(gy)) gy = 0;
     float minHalf = 1e9f, maxDisp = 0;
     for (int i = 0; i < w->nBodies; i++) {
         Body& b = w->bodies[i];
@@ -675,11 +738,18 @@ inline int step(World* w, float dt, float gx, float gy, int maxSub) {
         if (sp * dt > maxDisp) maxDisp = sp * dt;
     }
     if (minHalf > 1e8f) return 0;
-    // piso: sub-passo nunca maior que kMaxSubDt (pilha estavel pede ~120 Hz)
-    int sub = (int)ceilf(dt / kMaxSubDt - 0.001f);
+    // piso: sub-passo nunca maior que kMaxSubDt (pilha estavel pede ~120 Hz).
+    // Razao gigante (dt ou velocidade absurda) e' tolhida no 64 antes do
+    // cast: converter float maior que INT_MAX para int e' UB e o resultado
+    // cai no clamp do maxSub de qualquer forma (maxSub <= kMaxSub = 16)
+    float base = dt / kMaxSubDt;
+    int sub = base > 64.0f ? 64 : (int)ceilf(base - 0.001f);
     if (sub < 1) sub = 1;
     float lim = minHalf * 0.4f;
-    if (maxDisp > lim * sub) sub = (int)ceilf(maxDisp / lim);
+    if (maxDisp > lim * sub) {
+        float need = maxDisp / lim;
+        sub = need > 64.0f ? 64 : (int)ceilf(need);
+    }
     if (sub > maxSub) sub = maxSub;
     float sdt = dt / sub;
     for (int s = 0; s < sub; s++) subStep(w, sdt, gx, gy);
@@ -688,6 +758,9 @@ inline int step(World* w, float dt, float gx, float gy, int maxSub) {
 
 inline bool setBody(World* w, int i, float x, float y, float a, float vx, float vy, float av) {
     if (i < 0 || i >= w->nBodies || !w->bodies[i].alive) return false;
+    // teleporte com NaN/infinito (conta errada no app) e' recusado INTEIRO,
+    // antes de acordar vizinho ou mexer em qualquer campo
+    if (!finf(x) || !finf(y) || !finf(a) || !finf(vx) || !finf(vy) || !finf(av)) return false;
     Body& b = w->bodies[i];
     // acordar quem encostava no ANTIGO lugar do corpo (posicao ainda nao
     // trocada): o que estava em cima precisa cair. Nao da para acordar so
@@ -723,6 +796,7 @@ inline bool impulse(World* w, int i, float jx, float jy) {
     if (i < 0 || i >= w->nBodies || !w->bodies[i].alive) return false;
     Body& b = w->bodies[i];
     if (b.invM <= 0) return false;
+    if (!finf(jx) || !finf(jy)) return false;   // impulso NaN envenenaria v
     b.vx += jx * b.invM;
     b.vy += jy * b.invM;
     b.awake = 1; b.sleepT = 0;

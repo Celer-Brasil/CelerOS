@@ -10,7 +10,7 @@
 
 var K = {
     MAX_BODIES: 96, MAX_ARB: 320, MAX_SUB: 16,
-    SLOP: 0.15, BIAS: 0.2, BOUNCE_MIN: 40,
+    SLOP: 0.15, BIAS: 0.2, BOUNCE_MIN: 40, MAX_BOUNCE: 8 * 40,
     SLEEP_LIN: 12, SLEEP_DRIFT: 0.8, SLEEP_TURN: 0.04, SLEEP_TIME: 0.5,
     WAKE_VEL: 18, MAX_SUB_DT: 1 / 120,
     LIN_DAMP: 0.05, ANG_DAMP: 0.8, ROLL_DAMP: 5
@@ -19,6 +19,8 @@ var BOX = 0, CIRCLE = 1;
 
 function clampf(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 function absf(v) { return v < 0 ? -v : v; }
+// numero util (rejeita NaN e infinito) — espelho do finf do header
+function fin(v) { return v === v && v < 1e30 && v > -1e30; }
 
 function newBody() {
     return { alive: 0, shape: 0, awake: 0, touch: 0, x: 0, y: 0, a: 0, vx: 0, vy: 0, w: 0,
@@ -46,7 +48,9 @@ function allocSlot(w) {
 }
 
 function setMass(b, density) {
-    if (!(density > 0)) { b.invM = 0; b.invI = 0; return; }
+    // !(density > 0) pega NaN tambem; nao-finito vira estatico (espelho do
+    // setMass do header)
+    if (!(density > 0) || !fin(density)) { b.invM = 0; b.invI = 0; return; }
     var m, I;
     if (b.shape === CIRCLE) {
         var r = b.hw;
@@ -59,10 +63,15 @@ function setMass(b, density) {
     }
     b.invM = 1 / m;
     b.invI = 1 / I;
+    // massa de poeira (densidade denormal) vira estatico — espelho do
+    // setMass do header (invM infinito e' NaN no warm start)
+    if (b.invM > 1e12 || !fin(b.invM) || !fin(b.invI)) { b.invM = 0; b.invI = 0; }
 }
 
 function addBody(w, shape, x, y, hw, hh, a, density, mu, e) {
-    if (!(hw > 0) || !(hh > 0)) return -1;
+    // medida/posicao/angulo invalidos (zero, negativo, NaN, infinito) nao
+    // entram — espelho do addBody do header
+    if (!(hw > 0) || !(hh > 0) || !fin(hw) || !fin(hh) || !fin(x) || !fin(y) || !fin(a)) return -1;
     var i = allocSlot(w);
     if (i < 0) return -1;
     var b = newBody();
@@ -70,8 +79,8 @@ function addBody(w, shape, x, y, hw, hh, a, density, mu, e) {
     b.alive = 1; b.shape = shape; b.awake = 1;
     b.x = x; b.y = y; b.a = a;
     b.hw = hw; b.hh = hh;
-    b.mu = mu < 0 ? 0 : mu;
-    b.e = clampf(e, 0, 1);
+    b.mu = fin(mu) ? (mu < 0 ? 0 : mu) : 0;   // NaN/inf: sem atrito
+    b.e = fin(e) ? clampf(e, 0, 1) : 0;       // ...e sem quique
     // espelho do header: raio envolvente e cos/sin em cache (o subStep so
     // recalcula quem girou)
     b.br = shape === CIRCLE ? hw : Math.sqrt(hw * hw + hh * hh);
@@ -94,6 +103,7 @@ function dropArbOf(w, i) {
 function removeBody(w, i) {
     if (i < 0 || i >= w.nBodies || !w.bodies[i].alive) return false;
     w.bodies[i].alive = 0;
+    w.bodies[i].hit = 0;   // slot morto nao carrega hit velho pro rigidState
     dropArbOf(w, i);
     while (w.nBodies > 0 && !w.bodies[w.nBodies - 1].alive) w.nBodies--;
     wakeAll(w);
@@ -309,6 +319,24 @@ function findArb(w, a, b) {
     return ~lo;
 }
 
+// invariante do array de arbitros (espelho do arbOk do header, usado pelo
+// martelo do sdk): estritamente ordenado por (a, b), sem duplicata, todo
+// par em corpo vivo com indice valido
+function arbOk(w) {
+    if (w.arb.length > K.MAX_ARB) return false;
+    for (var k = 0; k < w.arb.length; k++) {
+        var ar = w.arb[k];
+        if (ar.a < 0 || ar.b < 0 || ar.a >= ar.b || ar.a >= w.nBodies || ar.b >= w.nBodies) return false;
+        if (!w.bodies[ar.a].alive || !w.bodies[ar.b].alive) return false;
+        if (ar.n < 1 || ar.n > 2) return false;
+        if (k > 0) {
+            var pv = w.arb[k - 1];
+            if (pv.a > ar.a || (pv.a === ar.a && pv.b >= ar.b)) return false;
+        }
+    }
+    return true;
+}
+
 function narrow(w, ia, ib) {
     var A = w.bodies[ia], B = w.bodies[ib];
     var cs = [], r;
@@ -400,8 +428,12 @@ function subStep(w, dt, gx, gy) {
             var pen = c.sep + K.SLOP;
             c.pbias = pen < 0 ? -K.BIAS * invDt * pen : 0;
             c.pb = 0;
-            c.vbias = (vn < -K.BOUNCE_MIN && ar.e > 0) ? -ar.e * vn : 0;
-            if (vn < 0) {
+            // restituicao so em contato fresco e com o alvo no teto —
+            // espelho do header (corpo leve preso entre pesado e estatico
+            // ganhava (1+e) por ciclo e atravessava o chao)
+            c.vbias = (vn < -K.BOUNCE_MIN && ar.e > 0 && c.pn === 0) ?
+                      clampf(-ar.e * vn, 0, K.MAX_BOUNCE) : 0;
+            if (vn < -K.BOUNCE_MIN) {
                 var kf = A.invM + B.invM + A.invI * (c.r1x * c.r1x + c.r1y * c.r1y - rn1 * rn1) +
                          B.invI * (c.r2x * c.r2x + c.r2y * c.r2y - rn2 * rn2);
                 var imp = kf > 0 ? -vn / kf : 0;
@@ -507,9 +539,13 @@ function subStep(w, dt, gx, gy) {
 }
 
 function step(w, dt, gx, gy, maxSub) {
-    if (!(dt > 0)) return 0;
-    if (maxSub < 1) maxSub = 1;
+    // dt denormal/NaN/<=0 descarta, maxSub NaN-safe e gravidade nao-finita
+    // zera — espelho do header
+    if (!(dt >= 1e-6)) return 0;
+    if (!(maxSub >= 1)) maxSub = 1;
     if (maxSub > K.MAX_SUB) maxSub = K.MAX_SUB;
+    if (!fin(gx)) gx = 0;
+    if (!fin(gy)) gy = 0;
     var minHalf = 1e9, maxDisp = 0;
     for (var i = 0; i < w.nBodies; i++) {
         var b = w.bodies[i];
@@ -620,4 +656,4 @@ function makeStub() {
 
 module.exports = { K: K, World: World, addBody: addBody, removeBody: removeBody,
                    step: step, setBody: setBody, impulse: impulse, makeStub: makeStub,
-                   BOX: BOX, CIRCLE: CIRCLE };
+                   arbOk: arbOk, subStep: subStep, BOX: BOX, CIRCLE: CIRCLE };

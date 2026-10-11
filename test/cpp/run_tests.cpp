@@ -37,6 +37,10 @@ inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 
 static int g_failed = 0, g_total = 0;
 
+// PRNG deterministico dos martelos (LCG classico): semeado fixo, cada
+// corrida reproduz a mesma sequencia adversaria
+static uint32_t g_rng = 0xC0FFEE42u;
+
 #define CHECK(cond)                                                        \
     do {                                                                   \
         g_total++;                                                         \
@@ -1090,6 +1094,250 @@ static void testRigid2D() {
 // colisao ao par: a bitmask de vinculados e' recompute (relinkAll); o
 // swap-remove antigo nao limpava a marca e o pedaco cortado parava de
 // colidir para sempre
+static void testRigid2DHammer() {
+    using namespace celer::rigid;
+    static World W;
+    worldInit(&W, 10);
+    // cenario: arena fechada densa — chao, teto e paredes estaticas
+    addBody(&W, BOX, 120, 310, 240, 10, 0, 0, 0.7f, 0);
+    addBody(&W, BOX, 120, -10, 240, 10, 0, 0, 0.7f, 0);
+    addBody(&W, BOX, -10, 150, 10, 320, 0, 0, 0.7f, 0);
+    addBody(&W, BOX, 250, 150, 10, 320, 0, 0, 0.7f, 0);
+    auto addRandom = [&]() {
+        uint32_t r = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        uint32_t r2 = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        uint32_t r3 = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        bool circ = (r & 1) != 0;
+        float hw = 2.0f + (r % 900) / 100.0f;         // 2..11
+        float hh = circ ? hw : 2.0f + ((r >> 8) % 900) / 100.0f;
+        float x = 4.0f + (r2 % 22000) / 100.0f;       // 4..224
+        float y = 4.0f + ((r2 >> 8) % 28000) / 100.0f;  // 4..284
+        float dens = (r3 % 7) == 0 ? 0.0f : 0.2f + (r3 % 500) / 100.0f;
+        float mu = (r3 % 11) / 10.0f;
+        float e = (r3 % 6) / 10.0f;
+        return addBody(&W, circ ? CIRCLE : BOX, x, y, hw, hh,
+                       ((r >> 12) % 628) / 100.0f, dens, mu, e);
+    };
+    int vivos = 0;
+    for (int i = 0; i < 56; i++) if (addRandom() >= 0) vivos++;
+    CHECK(vivos > 50);                 // mundo denso de verdade
+    CHECK(arbOk(&W));
+    // 9000 ciclos (0,2 s no host): remove aleatoria, teleporte pelo mapa
+    // (as vezes EM CIMA de outro corpo — sobreposicao funda), impulso,
+    // repondo corpo, step com dt/gravidade variando
+    int telep = 0, remov = 0, addcnt = 0;
+    for (int it = 0; it < 9000; it++) {
+        uint32_t op = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        if ((op % 100) < 10 && W.nBodies > 6) {      // removeBody aleatorio
+            int i = (int)((op >> 8) % (uint32_t)W.nBodies);
+            if (removeBody(&W, i)) remov++;
+            CHECK(arbOk(&W));
+        }
+        op = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        if ((op % 100) < 14) {                       // teleporte cross-map
+            int i = (int)((op >> 8) % (uint32_t)W.nBodies);
+            float x = 4.0f + (op % 21000) / 100.0f;
+            float y = 4.0f + ((op >> 12) % 27000) / 100.0f;
+            float a = ((op >> 4) % 628) / 100.0f;
+            float vx = ((int)(op % 4000) - 2000) / 10.0f;
+            float vy = ((int)((op >> 6) % 4000) - 2000) / 10.0f;
+            if (setBody(&W, i, x, y, a, vx, vy, 0)) telep++;
+            CHECK(arbOk(&W));
+        }
+        op = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        if ((op % 100) < 8 && W.nBodies < kMaxBodies - 1) {
+            if (addRandom() >= 0) addcnt++;
+            CHECK(arbOk(&W));
+        }
+        op = g_rng;
+        g_rng = g_rng * 1664525u + 1013904223u;
+        if ((op % 100) < 10) {                       // impulso (acorda)
+            int i = (int)((op >> 8) % (uint32_t)W.nBodies);
+            impulse(&W, i, ((int)(op % 2000) - 1000) / 2.0f, ((int)((op >> 5) % 2000) - 1000) / 2.0f);
+        }
+        float dt = 1.0f / (25.0f + (op % 75));       // 1/100..1/25 s
+        float gy = (op & 0x100) ? 400.0f : 0.0f;     // as vezes sem gravidade
+        float gx = (op & 0x200) ? 60.0f : 0.0f;
+        step(&W, dt, gx, gy, 8);
+        CHECK(arbOk(&W));
+        bool finite = true;
+        for (int i = 0; i < W.nBodies; i++) {
+            const Body& b = W.bodies[i];
+            if (!b.alive) continue;
+            if (!finf(b.x) || !finf(b.y) || !finf(b.a) || !finf(b.vx) || !finf(b.vy)) finite = false;
+        }
+        CHECK(finite);
+    }
+    CHECK(telep > 100 && remov > 100 && addcnt > 50);  // a sequencia exercitou
+}
+
+// Sondas de matematica do solver (round 3b): (a) hit fantasma em repouso,
+// (b) restituicao em razao de massa extrema, (c) correcao de posicao sob
+// compressao, (d) rolamento consistente entre contagens de sub-passo,
+// (e) varredura de divisao por zero, (f) bordas do anti-tunel
+static void testRigid2DMath() {
+    using namespace celer::rigid;
+
+    // (a) contato em repouso NAO e' impacto: o corpo chega ao pre-step com
+    // g*dt do sub-passo e o hit gravava o "peso" TODO step (792 u/s*peso na
+    // pilha do probe). Acordar do sono idem — o hit so abre com aproximacao
+    // de verdade (kBounceMin)
+    {
+        static World W;
+        worldInit(&W, 10);
+        addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+        int pilha[4];
+        for (int i = 0; i < 4; i++)
+            pilha[i] = addBody(&W, BOX, 160, 249 - i * 10, 12, 5, 0, 1, 0.7f, 0.1f);
+        for (int t = 0; t < 120; t++) step(&W, 1 / 30.f, 0, 400, 12);
+        int acordados = 0;
+        for (int i = 0; i < 4; i++) acordados += W.bodies[pilha[i]].awake;
+        CHECK(acordados == 0);                     // assentou e dormiu
+        float hitMax = 0;
+        for (int t = 0; t < 30; t++) {             // removeBody distante = wakeAll
+            step(&W, 1 / 30.f, 0, 400, 12);
+            for (int i = 0; i < 4; i++)
+                if (W.bodies[pilha[i]].hit > hitMax) hitMax = W.bodies[pilha[i]].hit;
+        }
+        CHECK(hitMax == 0);                        // repouso acordado: sem hit
+    }
+
+    // (b) corpo LEVE preso entre pesado e chao (razao 75x..37500x): sem as
+    // valvulas, o alvo de restituicao repetido por sub-passo crescia (1+e)
+    // por ciclo — probe antigo: saida a 6369 u/s e tunel pelo chao
+    for (float dens : {1.0f, 60.0f, 500.0f}) {
+        static World W;
+        worldInit(&W, 10);
+        addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+        addBody(&W, BOX, 160, 200, 20, 8, 0, 0.05f, 0.6f, 0.5f);
+        addBody(&W, BOX, 160, 100, 30, 30, 0, dens, 0.6f, 0.5f);
+        for (int t = 0; t < 300; t++) step(&W, 1 / 30.f, 0, 400, 12);
+        // o leve fica EM CIMA do chao (nao atravessa, nao ejetado ao espaco)
+        CHECK(W.bodies[1].y > 240 && W.bodies[1].y < 266);
+        CHECK(finf(W.bodies[1].y) && finf(W.bodies[2].y));
+    }
+    // ...e o quique LEGITIMO segue fisico: bola e=0.75 cai 132, sai a ~0.75v
+    {
+        static World W;
+        worldInit(&W, 10);
+        addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+        int b = addBody(&W, CIRCLE, 160, 120, 8, 8, 0, 1, 0.6f, 0.75f);
+        float vySaida = 0;
+        float vyPrev = 0;
+        for (int t = 0; t < 40 && vySaida == 0; t++) {
+            step(&W, 1 / 30.f, 0, 400, 12);
+            if (vyPrev > 200 && W.bodies[b].vy < 0) vySaida = -W.bodies[b].vy;
+            vyPrev = W.bodies[b].vy;
+        }
+        CHECK(vySaida > 200 && vySaida < 280);     // teorico 244 (0.75 de 325)
+    }
+
+    // (c) compressao 1000x (pesado em cima do leve no chao): a correcao em
+    // pseudo-velocidade e' limitada a kBiasFactor da penetracao POR
+    // sub-passo — equilibrio born, nao cresce sem limite
+    {
+        static World W;
+        worldInit(&W, 10);
+        addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+        addBody(&W, BOX, 160, 254, 30, 6, 0, 0.05f, 0.6f, 0);
+        addBody(&W, BOX, 160, 236, 40, 18, 0, 50, 0.6f, 0);
+        float penMax = 0;
+        for (int t = 0; t < 600; t++) {
+            step(&W, 1 / 30.f, 0, 400, 12);
+            float pen = 250 - (W.bodies[1].y - 6);   // base do leve vs topo do chao
+            if (pen > penMax) penMax = pen;
+        }
+        CHECK(penMax < 8);                          // born (probe: ~5), sem fuga
+        CHECK(fabsf(W.bodies[1].y - 263) < 8);      // e o leve segue em pe
+    }
+
+    // (d) rolamento: atrito do contato gira a bola, e o resultado nao
+    // depende de quantos sub-passos o mesmo tempo leva (kRollDamp e'
+    // geometrico por sub-passo -> exponencial por segundo)
+    {
+        float dx[2] = {0, 0}, w[2] = {0, 0};
+        for (int mode = 0; mode < 2; mode++) {
+            static World W;
+            worldInit(&W, 10);
+            addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.9f, 0);
+            int bola = addBody(&W, CIRCLE, 60, 258, 7, 7, 0, 1, 0.9f, 0);
+            setBody(&W, bola, 60, 258, 0, 120, 0, 0);
+            float x0 = W.bodies[bola].x;
+            if (mode == 0) { for (int t = 0; t < 60; t++) subStep(&W, 1 / 60.f, 0, 400); }
+            else { for (int t = 0; t < 120; t++) subStep(&W, 1 / 120.f, 0, 400); }
+            dx[mode] = W.bodies[bola].x - x0;
+            w[mode] = W.bodies[bola].w;
+        }
+        CHECK(fabsf(w[0]) > 0.5f);                  // atrito gira (rola, nao desliza)
+        CHECK(fabsf(dx[0] - dx[1]) < 6.0f);         // 1s nos dois modos: mesmo lugar
+        CHECK(fabsf(w[0] - w[1]) < 0.35f);          // ...e mesma rotacao
+    }
+
+    // (e) varredura de divisao por zero
+    {
+        static World W;
+        worldInit(&W, 10);
+        CHECK(step(&W, 0, 0, 400, 12) == 0);        // dt 0
+        CHECK(step(&W, -1, 0, 400, 12) == 0);       // negativo
+        CHECK(step(&W, NAN, 0, 400, 12) == 0);      // NaN
+        CHECK(step(&W, 1e-45f, 0, 400, 12) == 0);   // denormal: invDt seria inf
+        int a = addBody(&W, BOX, 160, 200, 20, 10, 0, 1, 0.6f, 0);
+        addBody(&W, BOX, 160, 240, 20, 10, 0, 0, 0.6f, 0);
+        step(&W, 1e-45f, 0, 400, 12);               // com contato: mundo intacto
+        CHECK(finf(W.bodies[a].y) && W.bodies[a].y == 200);
+        // densidade denormal: invM seria inf e o warm start NaN — vira estatico
+        CHECK(addBody(&W, BOX, 100, 10, 4, 4, 0, 1e-45f, 0.6f, 0) >= 0);
+        CHECK(W.bodies[W.nBodies - 1].invM == 0);
+        // medida zero / NaN nem entra
+        CHECK(addBody(&W, BOX, 10, 10, 0, 0, 0, 1, 0.6f, 0) == -1);
+        CHECK(addBody(&W, BOX, 10, 10, 10, 0, 0, 1, 0.6f, 0) == -1);
+        CHECK(addBody(&W, CIRCLE, 10, 10, 0, 0, 0, 1, 0.6f, 0) == -1);
+        CHECK(addBody(&W, BOX, NAN, 10, 4, 4, 0, 1, 0.6f, 0) == -1);
+        // gravidade NaN nao envenena velocidade
+        step(&W, 1 / 30.f, NAN, 400, 12);
+        CHECK(finf(W.bodies[a].vx));
+        // maxSub NaN (comparacoes falsas): cai no piso 1, nao estoura kMaxSub
+        CHECK(step(&W, 1 / 30.f, 0, 400, (int)NAN) >= 1);
+        // impulso em corpo dormindo ACORDA (rigidImpulse do jogo de arrasto)
+        static World S;
+        worldInit(&S, 10);
+        addBody(&S, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+        int c = addBody(&S, BOX, 160, 249, 12, 5, 0, 1, 0.7f, 0);
+        for (int t = 0; t < 120; t++) step(&S, 1 / 30.f, 0, 400, 12);
+        CHECK(!S.bodies[c].awake);
+        CHECK(impulse(&S, c, 30, 0));
+        CHECK(S.bodies[c].awake && S.bodies[c].vx > 0);
+    }
+
+    // (f) bordas do anti-tunel: dt EXATAMENTE kMaxSubDt (base = 1.0 ->
+    // ceilf(1 - eps) = 1 sub-passo), o dobro (2), e o teto do maxSub
+    {
+        static World W;
+        worldInit(&W, 10);
+        addBody(&W, BOX, 160, 270, 200, 10, 0, 0, 0.7f, 0);
+        addBody(&W, CIRCLE, 160, 200, 5, 5, 0, 1, 0.6f, 0.2f);
+        CHECK(step(&W, kMaxSubDt, 0, 400, 12) == 1);
+        CHECK(step(&W, 2 * kMaxSubDt + 1e-6f, 0, 400, 12) == 2);
+        CHECK(step(&W, 0.1f, 0, 400, 12) == 12);    // 0.1/(1/120) = 12
+        // velocidade absurda + maxSub generoso: pede mais que 16, o teto
+        // segura (o clamp dos 64 antes do cast tambem passa por aqui)
+        setBody(&W, 1, 160, 200, 0, 0, 3000, 0);
+        int s = step(&W, 0.1f, 0, 400, 100);
+        CHECK(s == kMaxSub);
+    }
+}
+
+// Verlet nativo (API 31): Utils/Verlet2D.h — o mesmo codigo do
+// System.verlet* (JsPhysics.cpp). O corte do vinculo (delStick) devolve a
+// colisao ao par: a bitmask de vinculados e' recompute (relinkAll); o
+// swap-remove antigo nao limpava a marca e o pedaco cortado parava de
+// colidir para sempre
 static void testVerlet2D() {
     using namespace celer::verlet;
     // layout do malloc do binding: VWorld + bitmask linked no mesmo buffer
@@ -1134,8 +1382,21 @@ static void testVerlet2D() {
     CHECK(d01 > 9 && d01 < 11);                         // colisao voltou
     CHECK(fabsf(w->pts[p3].x - w->pts[p2].x) < 3.5f);   // o par ligado nao
     CHECK(!delStick(w, -1) && !delStick(w, 1));         // indice invalido
+
+    // guardas de parametro (round 3b): dt NaN/infinito/<= 0 nao roda o
+    // passo (o mundo fica intocado em vez de px/py virarem NaN); gravidade
+    // e damp estranhos caem no default; bounds com NaN desligam sozinhos
+    float sx = w->pts[p0].x, sy = w->pts[p0].y;
+    CHECK(!stepWorld(w, NAN, 0, 900, 1, 0, 0, 0, 0, 0.5f));
+    CHECK(!stepWorld(w, 0.0f, 0, 900, 1, 0, 0, 0, 0, 0.5f));
+    CHECK(!stepWorld(w, -1.0f / 30.0f, 0, 900, 1, 0, 0, 0, 0, 0.5f));
+    CHECK(w->pts[p0].x == sx && w->pts[p0].y == sy);    // nada mexeu
+    CHECK(stepWorld(w, 1.0f / 30.0f, NAN, 900, -5.0f, 0, 0, 240, 320, NAN));
+    CHECK(w->pts[p1].y > sy + 0.1f);                    // caiu (gravidade e
+                                                        // damp consertados)
 }
 
+// Recursos da matilha (API 36): codec do controle e leases do servidor.
 static void testResProto() {
     using namespace resproto;
     uint8_t b[ENV_PAYLOAD];
@@ -1275,6 +1536,8 @@ int main() {
     testNetFrame();
     testResProto();
     testRigid2D();
+    testRigid2DHammer();
+    testRigid2DMath();
     testVerlet2D();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);

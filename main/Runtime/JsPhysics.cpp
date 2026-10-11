@@ -72,9 +72,10 @@ duk_ret_t JSBindings::js_verletNew(duk_context* ctx) {
     int iters = duk_is_number(ctx, 0) ? duk_get_int(ctx, 0) : 4;
     if (iters < 1) iters = 1;
     if (iters > 16) iters = 16;
-    // radius > 0 liga a colisao ponto-ponto (raio de cada no)
+    // radius > 0 liga a colisao ponto-ponto (raio de cada no); NaN vira 0
+    // (sem colisao), igual ao negativo
     float radius = duk_is_number(ctx, 1) ? (float)duk_get_number(ctx, 1) : 0.0f;
-    if (radius < 0.0f) radius = 0.0f;
+    if (!(radius > 0.0f) || !celer::verlet::vfin(radius)) radius = 0.0f;
     for (int i = 0; i < kMaxWorlds; i++) {
         if (s_worlds[i]) continue;
         // PSRAM primeiro (os jogos de fisica sao as placas S3); sem ela o
@@ -109,7 +110,12 @@ duk_ret_t JSBindings::js_verletAddPoint(duk_context* ctx) {
     VWorld* w = worldAt(duk_require_int(ctx, 0));
     float x = (float)duk_require_number(ctx, 1);
     float y = (float)duk_require_number(ctx, 2);
-    if (!w || w->nPts >= kMaxPoints) { duk_push_int(ctx, -1); return 1; }
+    // NaN/inf nao entra: um ponto assim envenenaria px/py do mundo (o x do
+    // vizinho menos inf e' NaN na relaxacao de vinculos)
+    if (!w || w->nPts >= kMaxPoints || !celer::verlet::vfin(x) || !celer::verlet::vfin(y)) {
+        duk_push_int(ctx, -1);
+        return 1;
+    }
     VerletPoint& p = w->pts[w->nPts];
     p.x = p.px = x;
     p.y = p.py = y;
@@ -130,7 +136,15 @@ duk_ret_t JSBindings::js_verletStick(duk_context* ctx) {
     s.a = (int16_t)a;
     s.b = (int16_t)b;
     if (duk_is_number(ctx, 3)) {
-        s.len = (float)duk_get_number(ctx, 3);
+        float len = (float)duk_get_number(ctx, 3);
+        if (!celer::verlet::vfin(len) || len < 0.0f) {
+            // comprimento NaN/negativo: o vinculo nasceria quebrado (f na
+            // relaxacao e' (d - len)/d) — recusa em vez de criar lixo
+            w->nSticks--;
+            duk_push_boolean(ctx, 0);
+            return 1;
+        }
+        s.len = len;
     } else {
         float dx = w->pts[b].x - w->pts[a].x, dy = w->pts[b].y - w->pts[a].y;
         s.len = sqrtf(dx * dx + dy * dy);
@@ -158,7 +172,11 @@ duk_ret_t JSBindings::js_verletSet(duk_context* ctx) {
     int idx = duk_require_int(ctx, 1);
     float x = (float)duk_require_number(ctx, 2);
     float y = (float)duk_require_number(ctx, 3);
-    if (!w || idx < 0 || idx >= w->nPts) { duk_push_boolean(ctx, 0); return 1; }
+    // teleporte NaN envenenaria o ponto (e os vinculos dele na relaxacao)
+    if (!w || idx < 0 || idx >= w->nPts || !celer::verlet::vfin(x) || !celer::verlet::vfin(y)) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
     w->pts[idx].x = x;
     w->pts[idx].y = y;
     duk_push_boolean(ctx, 1);
@@ -180,8 +198,9 @@ duk_ret_t JSBindings::js_verletStep(duk_context* ctx) {
     float maxy = numOr(ctx, 8, 0);
     float bounce = numOr(ctx, 9, 0.5f);
     CelerKernel::noteAppYield();  // step pesado renova o exec-timeout (padrao 4b5b9ce)
-    stepWorld(w, dt, gx, gy, damp, minx, miny, maxx, maxy, bounce);
-    duk_push_boolean(ctx, 1);
+    // devolve se o passo RODOU: dt NaN/infinito/<= 0 e' recusado dentro do
+    // stepWorld (mundo intocado) em vez de envenenar posicoes
+    duk_push_boolean(ctx, stepWorld(w, dt, gx, gy, damp, minx, miny, maxx, maxy, bounce));
     return 1;
 }
 

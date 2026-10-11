@@ -39,6 +39,11 @@ inline void linkSet(VWorld* w, int a, int b) {
     w->linked[idx >> 3] |= (uint8_t)(1u << (idx & 7));
 }
 
+// numero util (rejeita NaN e infinito) — mesmo molde do finf do Rigid2D.h:
+// um unico valor assim vindo de conta errada no app envenenaria px/py do
+// mundo inteiro (e NaN nao e' "maior que" nas comparacoes de bounds)
+inline bool vfin(float v) { return v == v && v < 1e30f && v > -1e30f; }
+
 inline bool linked(VWorld* w, int a, int b) {
     int idx = a * kMaxPoints + b;
     return (w->linked[idx >> 3] >> (idx & 7)) & 1;
@@ -67,8 +72,18 @@ inline bool delStick(VWorld* w, int i) {
     return true;
 }
 
-inline void stepWorld(VWorld* w, float dt, float gx, float gy, float damp,
+/// Um step. Parametros nao-finitos (conta errada no app) nao entram:
+/// gravidade/damp/bounce estranhos caem no default; bounds com NaN
+/// desligam sozinhos (maxx > minx nunca e' verdadeiro). dt nao-finito ou
+/// <= 0 nao tem passo — devolve false e o mundo fica intocado. damp
+/// negativo e' amplificacao por quadro (bomba de energia): tambem vira 1.
+inline bool stepWorld(VWorld* w, float dt, float gx, float gy, float damp,
                       float minx, float miny, float maxx, float maxy, float bounce) {
+    if (!vfin(dt) || dt <= 0.0f) return false;
+    if (!vfin(gx)) gx = 0;
+    if (!vfin(gy)) gy = 0;
+    if (!vfin(damp) || damp < 0.0f) damp = 1.0f;
+    if (!vfin(bounce)) bounce = 0.5f;
     // mesma matematica do P.verlet (celeros.physics.js), em float
     const float dt2 = dt * dt;
     for (int i = 0; i < w->nPts; i++) {
@@ -131,6 +146,7 @@ inline void stepWorld(VWorld* w, float dt, float gx, float gy, float damp,
             if (p.y > maxy) { float vy = p.y - p.py; p.y = maxy; p.py = p.y + vy * bounce; }
         }
     }
+    return true;
 }
 
 }  // namespace verlet

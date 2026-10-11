@@ -139,7 +139,10 @@ E.font = function (px) {
             try { h = S.fontHeight(fs[i]); } catch (e) { h = 0; }
             if (!(h > 0)) h = fs[i] === 1 ? 8 : (fs[i] === 2 ? 16 : 26);
             for (var sz = 1; sz <= 4; sz++) t.push({ font: fs[i], size: sz, h: h * sz,
-                                                      _w: {}, _wn: 0 });
+                                                      // proto nulo: "toString"/"constructor"
+                                                      // como chave de cache nao podem voltar
+                                                      // do Object.prototype como largura
+                                                      _w: Object.create(null), _wn: 0 });
         }
         // menor altura primeiro; no empate vence a fonte maior (size 1 de
         // uma fonte grande e mais nitido que size 2 de uma pequena)
@@ -410,6 +413,7 @@ E.run = function (scenes, first) {
 
     function enter(name) {
         cur = scenes[name];
+        if (!cur) throw new Error('cena inexistente: ' + name);
         E._scene = cur;
         E.sceneName = name;
         E._redraw = true;
@@ -1159,6 +1163,7 @@ E.audio = {
     _duckSong: null,       // trilha guardada durante um duck
     _duckFrom: 0,          // ms de retomada (ponto onde parou)
     _duckUntil: 0,
+    _retryAt: 0,           // teto de retry do restart: playMusic falhando nao martela por quadro
 
     // song = {bpm, loops, tracks:[...]} (API 25); opts {startMs} retoma
     music: function (song, opts) {
@@ -1246,9 +1251,15 @@ E.audio = {
             if (!E.audio._song) E.audio.music(song, { startMs: E.audio._duckFrom });
             return;
         }
-        // reinicia a trilha quando os loops acabam
+        // reinicia a trilha quando os loops acabam (falha de playMusic so
+        // tenta de novo a cada 2 s — sem isso um falha persistente martelava
+        // o canal a cada quadro)
         if (E.audio._song && !E.audio.playing()) {
-            try { S.playMusic(E.audio._song); } catch (e) {}
+            if (S.millis() >= E.audio._retryAt) {
+                var ok = false;
+                try { ok = S.playMusic(E.audio._song); } catch (e) {}
+                E.audio._retryAt = ok ? 0 : S.millis() + 2000;
+            }
         }
     }
 };

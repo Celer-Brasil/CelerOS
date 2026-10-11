@@ -16,6 +16,9 @@ var S = System;
 // opts compartilhado (so leitura) — mesmo papel do EMPTY do core
 var EMPTY = {};
 
+// scratch do popText no draw: floater por quadro nao aloca opts
+var _flo = { color: 0, align: 'center', font: null, px: 0, screen: false };
+
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
     version: '1.0.0',
@@ -352,8 +355,11 @@ E.fx = {
             var al = 1 - f.t / f.life;
             var fc = f.color;
             if (al < 0.4 && mix) fc = S.mixColor(f.color, 0x0000, Math.round(100 - al * 250));
-            E.gfx.text(f.str, f.x, f.y, { color: fc, align: 'center', font: f.font, px: f.px,
-                                          screen: f.screen });
+            _flo.color = fc;
+            _flo.font = f.font;
+            _flo.px = f.px;
+            _flo.screen = f.screen;
+            E.gfx.text(f.str, f.x, f.y, _flo);
         }
         if (this._flashT > 0) {
             var q = Math.round(100 * (1 - this._flashT / this._flashDur));

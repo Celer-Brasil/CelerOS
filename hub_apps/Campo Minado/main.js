@@ -68,7 +68,6 @@ function newGame() {
     started = false;
     elapsedMs = 0;
     lastClock = -1;
-    hdrKey = -1;
     won = false;
 }
 

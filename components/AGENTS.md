@@ -10,7 +10,7 @@ Everything in `components/` is built and CelerOS-owned: it descends from the old
 | `Http` | `HttpClient` GET/POST/download with progress; used by OTA and JS `Net.*` |
 | `System` | `SystemInfo`; backs JS `System.getInfo` |
 | `Storage` | Only the `NVS` class is compiled |
-| `Utility`, `ErrorCodes` | `Event<>`, `Singleton<>`, `ErrorCode` registry |
+| `Utility`, `ErrorCodes` | `Event<>` (type-erased `EventBase` core), `Timeout`, `ErrorCode` registry |
 | `duktape` | Duktape 2.7.0, regenerated from `celeros_duk_config.yaml` (ES5-lean) |
 | `LovyanGFX` | Upstream submodule; board config lives in `main/Boards/<board>/` |
 
@@ -19,14 +19,14 @@ Everything in `components/` is built and CelerOS-owned: it descends from the old
 |------|----------|-------|
 | WiFi connect/roaming/scans | `Network/NetworkManager.*` | Singleton; background task; `NETWORK_MANAGER.md` |
 | Saved WiFi credentials | `Network/NetworkCredentialStore.*` | Per-field NVS keys; legacy pipe format read-only |
-| Pub/sub, singleton base | `Utility/Event.h`, `Singleton.h` | Header templates |
+| Pub/sub | `Utility/Event.h` | Header template; one shared static mutex, fixed 16-handler array |
 | Error codes | `ErrorCodes/ErrorCode.*`, `CommonErrorCodes.h` | One `<Category>ErrorCodes.{h,cpp}` pair per domain |
 | Change JS engine features | `duktape/celeros_duk_config.yaml` | Regenerate `duktape.c`/`duktape.h`/`duk_config.h` with the recipe in the YAML header (configure.py needs Python 2.7) |
 | Revive archived code | tag `archive/esp_components` | `git show archive/esp_components:extras/esp_components/<name>`; copy in, satisfy its `idf_component.yml`, maybe re-enable exceptions |
 
 ## CONVENTIONS
 - Registry deps only in `idf_component.yml`; sibling deps in CMake `REQUIRES`, never `path:` entries.
-- Singletons: `class X : public Singleton<X>`, ctor takes `token`; access via `X::instance()`.
+- Singletons: hand-rolled `static X& instance()` (the old `Singleton<T>` base was removed — zero users); construction at first `init()`.
 - Events: `Event<Args...>` with `addHandler` / `removeHandler` / `trigger`.
 - Fallible ops return `ErrorCode`, not raw `esp_err_t`.
 - Flat layout: sources and headers in the component root (`INCLUDE_DIRS "."`).

@@ -66,7 +66,41 @@ def measure(board):
         "image": os.path.getsize(os.path.join(bdir, "CelerOS.bin")),
         "slot": slot_size(cfg["csv"]),
         "archives": archive_sizes(os.path.join(bdir, "CelerOS.map")),
+        "stale": stale_source(bdir),
     }
+
+
+def stale_source(bdir):
+    """Fonte rastreado pelo git mais novo que o CelerOS.bin daquele build.
+
+    Pega exatamente o caso do build morto no meio (SIGPIPE num pipe com
+    grep -m1, Ctrl-C...): o size_report media o binario VELHO e o delta
+    mentia sem aviso. None = binario fresco (ou sem git/fonte).
+    """
+    try:
+        bin_mtime = os.path.getmtime(os.path.join(bdir, "CelerOS.bin"))
+    except OSError:
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "-C", ROOT, "ls-files", "main", "components"],
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout.splitlines()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    newest, newest_t = None, 0.0
+    for p in out:
+        if not p.endswith((".cpp", ".h", ".c")):
+            continue
+        try:
+            t = os.path.getmtime(os.path.join(ROOT, p))
+        except OSError:
+            continue
+        if t > newest_t:
+            newest, newest_t = p, t
+    if newest is not None and newest_t > bin_mtime:
+        return newest
+    return None
 
 
 def main():
@@ -98,6 +132,8 @@ def main():
         if old:
             line += f"  delta {m['image'] - old['image']:+,} B"
         print(line)
+        if m["stale"]:
+            print(f"  (ATENCAO: bin mais velho que {m['stale']} — build interrompido? remonte antes de confiar)")
         arch = m["archives"]
         names = sorted(set(arch) | set(old["archives"] if old else {}), key=lambda k: -arch.get(k, 0))
         for name in names[: args.top]:

@@ -1736,6 +1736,88 @@ function depsSize(nomes) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ------------------------------- espelho rigid2d.js: martelo do espelho --
+// O mesmo adversario do teste host (test/cpp/run_tests.cpp,
+// testRigid2DHammer) contra o espelho JS: sequencia deterministica de
+// remove/setBody-teleporte/impulse/step num mundo denso conferindo o
+// invariante dos arbitros (o splice de insercao do narrow mantem a ordem
+// que o findArb binario espera) — mais as valvulas do header (restituicao
+// so em contato fresco + teto do alvo, portao kBounceMin do hit)
+(function () {
+    console.log('SDK rigid2d.js (espelho do Rigid2D.h):');
+    var M = require('../../tools/sdk/lib/rigid2d.js');
+
+    // LCG igual ao do teste host (uint32)
+    var rng = 0xC0FFEE42;
+    function next() { rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0; return rng; }
+
+    var w = new M.World(10);
+    function addRandom() {
+        var r = next(), r2 = next(), r3 = next();
+        var circ = (r & 1) !== 0;
+        var hw = 2 + (r % 900) / 100;
+        var hh = circ ? hw : 2 + ((r >>> 8) % 900) / 100;
+        var x = 4 + (r2 % 22000) / 100;
+        var y = 4 + ((r2 >>> 8) % 28000) / 100;
+        var dens = (r3 % 7) === 0 ? 0 : 0.2 + (r3 % 500) / 100;
+        return M.addBody(w, circ ? M.CIRCLE : M.BOX, x, y, hw, hh,
+                         ((r >>> 12) % 628) / 100, dens, (r3 % 11) / 10, (r3 % 6) / 10);
+    }
+    // arena densa: chao, teto e paredes estaticas (como no teste host)
+    M.addBody(w, M.BOX, 120, 310, 240, 10, 0, 0, 0.7, 0);
+    M.addBody(w, M.BOX, 120, -10, 240, 10, 0, 0, 0.7, 0);
+    M.addBody(w, M.BOX, -10, 150, 10, 320, 0, 0, 0.7, 0);
+    M.addBody(w, M.BOX, 250, 150, 10, 320, 0, 0, 0.7, 0);
+    var vivos = 0, i;
+    for (i = 0; i < 56; i++) if (addRandom() >= 0) vivos++;
+    check('espelho: mundo denso criado', vivos > 50);
+    check('espelho: arbitros ordenados no repouso', M.arbOk(w));
+    var telep = 0, remov = 0, ok = true, finite = true;
+    for (var it = 0; it < 1500; it++) {
+        var op = next();
+        if ((op % 100) < 10 && w.nBodies > 6) {
+            if (M.removeBody(w, (op >>> 8) % w.nBodies)) remov++;
+        }
+        op = next();
+        if ((op % 100) < 14) {
+            if (M.setBody(w, (op >>> 8) % w.nBodies,
+                          4 + (op % 21000) / 100, 4 + ((op >>> 12) % 27000) / 100,
+                          ((op >>> 4) % 628) / 100,
+                          ((op % 4000) - 2000) / 10, (((op >>> 6) % 4000) - 2000) / 10, 0)) telep++;
+        }
+        op = next();
+        if ((op % 100) < 8 && w.nBodies < M.K.MAX_BODIES - 1) addRandom();
+        op = next();
+        if ((op % 100) < 10) {
+            M.impulse(w, (op >>> 8) % w.nBodies,
+                      ((op % 2000) - 1000) / 2, (((op >>> 5) % 2000) - 1000) / 2);
+        }
+        M.step(w, 1 / (25 + (op % 75)), (op & 0x100) ? 60 : 0, (op & 0x200) ? 0 : 400, 8);
+        if (!M.arbOk(w)) ok = false;
+        for (i = 0; i < w.nBodies; i++) {
+            var b = w.bodies[i];
+            if (b.alive && !(b.x === b.x && Math.abs(b.x) < 1e30 && Math.abs(b.y) < 1e30)) finite = false;
+        }
+    }
+    check('espelho: martelo mantem arbitros ordenados/validos (1500 ciclos)', ok);
+    check('espelho: martelo nao cria NaN/infinito', finite);
+    check('espelho: teleporte e remove exercitados', telep > 100 && remov > 100);
+
+    // valvulas do round 3b no espelho: leve preso entre pesado e chao
+    // (razao 75x) assenta em vez de ser ejetado pelo mapa
+    var W2 = new M.World(10);
+    M.addBody(W2, M.BOX, 160, 270, 200, 10, 0, 0, 0.7, 0);
+    M.addBody(W2, M.BOX, 160, 200, 20, 8, 0, 0.05, 0.6, 0.5);
+    M.addBody(W2, M.BOX, 160, 100, 30, 30, 0, 1, 0.6, 0.5);
+    for (var t = 0; t < 300; t++) M.step(W2, 1 / 30, 0, 400, 12);
+    check('espelho: leve espremido assenta no chao (valvula de restituicao)',
+          W2.bodies[1].y > 240 && W2.bodies[1].y < 266, 'y=' + W2.bodies[1].y.toFixed(1));
+    // ...e o hit nao abre em repouso (portao kBounceMin)
+    for (t = 0; t < 30; t++) M.step(W2, 1 / 30, 0, 400, 12);
+    check('espelho: hit zero em repouso',
+          W2.bodies[1].hit === 0 && W2.bodies[2].hit === 0);
+})();
+
 // ------------------------------------------- verlet: manuseio + colisao --
 (function () {
     console.log('SDK verletFast manuseio (del/pins/colisao, physics 1.3.0):');

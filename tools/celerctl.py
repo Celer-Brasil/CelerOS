@@ -209,6 +209,10 @@ class NetTransport:
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             banner = self._line(timeout)
             if not banner.startswith("CELERBRIDGE"):
+                if "busy" in banner.lower():
+                    raise CelerError(f"{addr}: bridge ocupado por outra sessao "
+                                     "celerctl (uma por vez) — aguarde alguns "
+                                     "segundos e tente de novo")
                 raise CelerError(f"{addr} nao e um Celer Debug Bridge "
                                  f"(banner: {banner!r})")
             if token is None:
@@ -1893,37 +1897,75 @@ def cmd_debug(args):
                 client.kill()
         print(f"debug: encerrado ({reason})")
 
-def cmd_screencap(args):
-    link = open_link(args)
-    try:
-        w, h, data = link.screenshot()
-    finally:
-        link.close()
+def _v2phys(vx, vy, w, h):
+    """Coordenada VIRTUAL do app (240x320) -> fisica do vidro (w x h).
+    Os apps desenham no espaco 240x320 escalado pelo toolkit; dirigir a UI
+    por tap exigia essa conta de cabeca em toda placa (480x480: x2 e y1,5)."""
+    return round(vx * w / 240.0), round(vy * h / 320.0)
+
+
+def _screencap_to(link, out):
+    """Captura o vidro para `out` (PNG); devolve (w, h, md5_do_arquivo) —
+    o md5 fecha o loop tap->tela em um comando (diff de hash em vez de
+    analise visual da tela)."""
+    w, h, data = link.screenshot()
     try:
         from PIL import Image
     except ImportError:
         die("Pillow nao instalado (pip install Pillow)")
     # RGB565 little-endian -> RGB888
     pixels = struct.unpack(f"<{w * h}H", data)
-    out = bytearray(w * h * 3)
+    outb = bytearray(w * h * 3)
     for i, p in enumerate(pixels):
         # replica os bits altos nos baixos de cada canal (sem mascarar, o
         # (p >> 9) do verde arrastava os bits do VERMELHO para o G)
-        out[i * 3] = ((p >> 8) & 0xF8) | (p >> 13)
-        out[i * 3 + 1] = ((p >> 3) & 0xFC) | ((p >> 9) & 0x03)
-        out[i * 3 + 2] = ((p << 3) & 0xF8) | ((p >> 2) & 0x07)
-    Image.frombytes("RGB", (w, h), bytes(out)).save(args.out)
-    print(f"{args.out}: {w}x{h}")
+        outb[i * 3] = ((p >> 8) & 0xF8) | (p >> 13)
+        outb[i * 3 + 1] = ((p >> 3) & 0xFC) | ((p >> 9) & 0x03)
+        outb[i * 3 + 2] = ((p << 3) & 0xF8) | ((p >> 2) & 0x07)
+    Image.frombytes("RGB", (w, h), bytes(outb)).save(out)
+    return w, h, hashlib.md5(Path(out).read_bytes()).hexdigest()
+
+
+def cmd_screencap(args):
+    link = open_link(args)
+    try:
+        w, h, md5 = _screencap_to(link, args.out)
+    finally:
+        link.close()
+    print(f"{args.out}: {w}x{h} md5 {md5[:10]}")
 
 
 def cmd_tap(args):
     link = open_link(args)
     try:
-        link.touch([(True, args.x, args.y, 0), (False, 0, 0, args.hold)])
+        x, y = args.x, args.y
+        if args.v:
+            if args.glass:
+                try:
+                    w, h = (int(v) for v in args.glass.lower().split("x", 1))
+                except ValueError:
+                    die("--glass espera LARGURAxALTURA (ex: 480x480)")
+            else:
+                # o protocolo do screenshot ja traz o vidro: 1 rodada e
+                # serve para qualquer placa, sem tabela hardcoded
+                w, h, _ = link.screenshot()
+            x, y = _v2phys(args.x, args.y, w, h)
+            print(f"tap virtual ({args.x},{args.y}) -> vidro ({x},{y}) [{w}x{h}]")
+        link.touch([(True, x, y, 0), (False, 0, 0, args.hold)])
     finally:
         link.close()
     # deixa o gesto completar no dispositivo antes de um screencap seguinte
     time.sleep((args.hold + 150) / 1000.0)
+    if args.shot:
+        # tap + espera + captura em UM comando: dirigir UI as cegas era um
+        # baile de 3 comandos com sleeps manuais entre eles
+        time.sleep(max(0, args.wait - (args.hold + 150)) / 1000.0)
+        link2 = open_link(args)
+        try:
+            w, h, md5 = _screencap_to(link2, args.shot)
+        finally:
+            link2.close()
+        print(f"{args.shot}: {w}x{h} md5 {md5[:10]}")
 
 
 def cmd_swipe(args):
@@ -1945,6 +1987,170 @@ def cmd_swipe(args):
 
 
 # ------------------------------------------------------------------- apps ---
+
+def _install_app_folder(link, src, args):
+    """Instala a PASTA local no device: lint, push com verificacao, poda de
+    obseletos, deps do hub (args.hub vence; default CELER_HUB/producao) e
+    rescan. Caminho unico de `apps install` (pasta local) e `apps store`
+    (pasta baixada do hub) — os dois entram exatamente igual no device."""
+    if not (src / "app.json").is_file():
+        die(f"{src} nao tem app.json")
+    if not args.pula_lint:
+        _lint_app_folder(src)
+    base = "/sd/apps" if args.sd else "/local/apps"
+    dest = f"{base}/{src.name}"
+    files = [f for f in sorted(src.rglob("*"))
+             if f.is_file() and ".dev" not in f.parts and not _is_junk(f)]
+    link.simple("MKDIR", dest.encode() + b"\0")
+    for f in files:
+        rel = f.relative_to(src).parent
+        if str(rel) != ".":
+            d = dest + "/" + rel.as_posix()
+            link.simple("MKDIR", d.encode() + b"\0")
+    verificados = 0
+    for f in files:
+        dest_f = f"{dest}/{f.relative_to(src).as_posix()}"
+        link.write_file(str(f), dest_f)
+        if not args.pula_verify:
+            # rele cada arquivo: o push dizer ok nao prova que o
+            # filesystem vai servir o conteudo novo (push fantasma
+            # calado quebra o app so em runtime)
+            link.verify_file(str(f), dest_f)
+            verificados += 1
+    # poda o que ficou para tras: modulos que sairam do app entre
+    # versoes seguem no device e o require ainda os acha — app misto
+    # (main novo + fx velho) quebra em runtime (Supernova 2.0:
+    # "doFlash undefined" com o fx.js da 1.0 sobrando na pasta)
+    remote = _remote_tree(link, dest)
+    local = {f.relative_to(src).as_posix() for f in files}
+    stale = []
+    for r, e_dir in remote.items():
+        if e_dir:
+            # dir remoto so e obsoleto se NENHUM arquivo local vive
+            # sob ele (a pasta assets/ nunca esta no conjunto de
+            # arquivos — so os pngs de dentro)
+            if not any(l.startswith(r + "/") for l in local):
+                stale.append(r)
+        elif r not in local:
+            stale.append(r)
+    raizes = _poda_raizes(stale, remote)
+    falhas = []
+    for rel in raizes:
+        try:
+            link.delete(f"{dest}/{rel}", recursive=remote[rel])
+        except CelerError as e:
+            # best-effort: o device responde status 1 ate para
+            # caminho ja inexistente — nao aborta o install por
+            # limpeza; a proxima install re-tenta
+            falhas.append(rel)
+    if raizes:
+        nota = f"; falharam: {', '.join(falhas)} (re-tenta na proxima)" if falhas else ""
+        amostra = ", ".join(r + ("/" if remote[r] else "") for r in raizes[:6])
+        if len(raizes) > 6:
+            amostra += f", +{len(raizes) - 6}"
+        print(f"poda: {len(raizes)} obsoleto(s) removido(s) ({amostra}){nota}")
+    # deps compartilhadas (API 30) DEPOIS da poda: deps.json e do
+    # installer (versao resolvida), nao do pacote — a poda nao o ve
+    # e o require do device le ele p/ cair em /local/modules
+    try:
+        meta = json.loads((src / "app.json").read_text(encoding="utf-8"))
+    except ValueError:
+        meta = {}
+    if meta.get("deps"):
+        hub = (getattr(args, "hub", None) or
+               os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
+        resolved = _install_shared_deps(link, meta["deps"], hub,
+                                        local=getattr(args, "deps_local", False))
+        with tempfile.TemporaryDirectory() as td:
+            dj = Path(td) / "deps.json"
+            dj.write_text(json.dumps(resolved), encoding="utf-8")
+            link.write_file(str(dj), f"{dest}/deps.json")
+            if not args.pula_verify:
+                # deps.json aponta o require para o cache: se o FS
+                # servir lixo aqui, o app nem acha a dep em runtime
+                link.verify_file(str(dj), f"{dest}/deps.json")
+    link.exec("rescan")
+    nota_v = f", {verificados} verificados" if verificados else ""
+    print(f"instalado: {dest} ({len(files)} arquivos{nota_v})")
+    if args.run:
+        _relaunch(link, src.name)
+        print(f"abrindo: {src.name}")
+
+
+def _http_get(url, timeout=30):
+    """GET binario cru (icon/png, main.js) — o celerhub.http decodifica e
+    parseia JSON, inutil para asset."""
+    req = _urlreq.Request(url, headers={"User-Agent": "celerosctl/1.0"})
+    with _urlreq.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _apps_store(link, args):
+    """`apps store PKG`: instala o pacote DO HUB pelo mesmo caminho da loja
+    (catalogo -> app.json/main.js/files/icon -> lint/push/deps) sem tocar na
+    UI do device. Nasceu da sessao de bancada que dirigia a App Store por
+    taps as cegas para validar um install. CELER_HUB aponta para um hub
+    local (default producao) — as deps saem do MESMO hub do pacote."""
+    hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
+    import celerhub
+    _, cat = celerhub.http("GET", f"{hub}/store/all.json")
+    entry = (cat.get("apps") or {}).get(args.pkg)
+    if not entry:
+        nomes = ", ".join(sorted((cat.get("apps") or {}))[:10])
+        die(f"pacote '{args.pkg}' nao esta no hub {hub} (catalogo: {nomes}...)")
+    nome = entry.get("name") or args.pkg
+    tamanho = (entry.get("size") or 0) + sum(
+        (f or {}).get("size") or 0 for f in (entry.get("files") or {}).values())
+    print(f"hub {hub}: {nome} v{entry.get('version', '?')} "
+          f"(api {entry.get('api', '?')}, ~{tamanho // 1024} KB)")
+
+    # pasta de destino: reusa a pasta de um app instalado com o mesmo
+    # packageName (update no lugar, launcher sem duplicar); senao o nome de
+    # exibicao saneado ("Arrasa!" -> "Arrasa")
+    dir_name = None
+    for base in ("/local/apps", "/sd/apps"):
+        try:
+            entradas = link.ls(base)
+        except CelerError:
+            continue
+        for e in entradas:
+            if not e["dir"]:
+                continue
+            m = _app_meta(link, base, e["name"])
+            if m and m.get("packageName") == args.pkg:
+                dir_name = e["name"]
+                break
+        if dir_name:
+            break
+    if not dir_name:
+        dir_name = re.sub(r"[^A-Za-z0-9 ._-]", "", nome).strip() or args.pkg
+
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / dir_name
+        src.mkdir()
+        (src / "app.json").write_bytes(_http_get(hub + entry["meta"]))
+        main = _http_get(hub + entry["app"])
+        if entry.get("md5") and hashlib.md5(main).hexdigest() != entry["md5"]:
+            die(f"main.js: md5 divergente do catalogo do hub")
+        (src / "main.js").write_bytes(main)
+        base_url = entry["app"].rsplit("/", 1)[0] + "/"
+        for n, fi in (entry.get("files") or {}).items():
+            if n in ("app.json", "main.js", "icon.png") or "/" in n or ".." in n:
+                continue  # o que tem tratamento proprio (ou nao e caminho)
+            data = _http_get(hub + (fi.get("url") or base_url + n))
+            if fi.get("md5") and hashlib.md5(data).hexdigest() != fi["md5"]:
+                die(f"{n}: md5 divergente do catalogo do hub")
+            dst = src / n
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+        if entry.get("icon"):
+            try:
+                (src / "icon.png").write_bytes(_http_get(hub + entry["icon"]))
+            except Exception as e:  # noqa: BLE001 — icon e nao-fatal na loja
+                print(f"aviso: icon.png nao veio ({e})")
+        args.hub = hub
+        _install_app_folder(link, src, args)
+
 
 def _app_meta(link, base, dirname):
     """Le <base>/<dirname>/app.json no dispositivo; None se invalido."""
@@ -2281,7 +2487,31 @@ def _dev_screenshot(link, shots_dir, settle_timeout=5.0):
         print(f"== tela: falhou ({e})")
 
 
-def _install_shared_deps(link, deps, hub):
+def _local_sdk_deps():
+    """Modulos do tools/sdk/engine como entradas de indice {nome: {versao:
+    {"_local": caminho}}} — a versao sai do `version: 'x.y.z'` (ou
+    `E.version = 'x.y.z'`) do proprio modulo (o mesmo que o publish-dep
+    le). As arestas de deps do index.json entram junto: a familia
+    CelerGame se compoe (celeros.engine require celeros.game*), o mesmo
+    grafo que o publish-dep declara com --dep."""
+    out = {}
+    eng = Path(__file__).resolve().parent / "sdk" / "engine"
+    edges = {}
+    idx = eng / "index.json"
+    if idx.is_file():
+        try:
+            edges = json.loads(idx.read_text(encoding="utf-8"))
+        except ValueError:
+            edges = {}
+    for js in sorted(eng.glob("*.js")):
+        m = re.search(r"version\s*[:=]\s*['\"](\d+\.\d+\.\d+)['\"]", js.read_text(encoding="utf-8"))
+        if m:
+            deps = (edges.get(js.stem) or {}).get("deps") or {}
+            out.setdefault(js.stem, {})[m.group(1)] = {"_local": str(js), "deps": deps}
+    return out
+
+
+def _install_shared_deps(link, deps, hub, local=False):
     """Deps compartilhadas (API 30): resolve os ranges contra o indice do
     hub (mesma semantica do celerhub.py), baixa cada modulo no PC e empurra
     para /local/modules/<nome>/<versao>/ — o cache publico do require.
@@ -2292,20 +2522,40 @@ def _install_shared_deps(link, deps, hub):
     Devolve {nome: versao} resolvido (o chamador grava o deps.json na
     pasta do app)."""
     import celerhub  # mesma pasta tools/; so funcoes, main() e guardado
-    status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
+    try:
+        status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
+    except Exception as e:  # noqa: BLE001 — offline vale com --deps-local
+        if not local:
+            raise
+        print(f"deps: hub indisponivel ({e}); so as do SDK local")
+        idx = None
     index = (idx or {}).get("deps", {})
+    if local:
+        # --deps-local: as versoes do tools/sdk/engine entram no indice; a
+        # resolucao segue a mesma (maior que satisfaz), entao a dep do repo
+        # vence quando e mais nova que a do hub — testar engine/physics no
+        # aparelho antes do publish-dep sem montar um hub falso
+        for name, vers in _local_sdk_deps().items():
+            for ver, meta in vers.items():
+                index.setdefault(name, {}).setdefault(ver, meta)
     if not index:
         die(f"deps: indice do hub indisponivel ({hub}/store/deps.json)")
     resolved = celerhub.resolve_dep_ranges(deps, index)
     for name, ver in resolved.items():
         dmeta = index[name][ver]
-        print(f"dep {name} {ver}: baixando do hub...")
-        req = _urlreq.Request(dmeta["url"],
-                              headers={"User-Agent": "celerosctl/1.0"})
-        with _urlreq.urlopen(req, timeout=30) as resp:
-            blob = resp.read()
-        if dmeta.get("md5") and hashlib.md5(blob).hexdigest() != dmeta["md5"]:
-            die(f"dep {name} {ver}: md5 divergente do indice do hub")
+        if dmeta.get("_local"):
+            # enxuto como o publish-dep sobe (jsstrip): o aparelho recebe
+            # o mesmo arquivo que viria do hub
+            print(f"dep {name} {ver}: do SDK local (tools/sdk/engine)")
+            blob = celerhub.strip_js(Path(dmeta["_local"]))
+        else:
+            print(f"dep {name} {ver}: baixando do hub...")
+            req = _urlreq.Request(dmeta["url"],
+                                  headers={"User-Agent": "celerosctl/1.0"})
+            with _urlreq.urlopen(req, timeout=30) as resp:
+                blob = resp.read()
+            if dmeta.get("md5") and hashlib.md5(blob).hexdigest() != dmeta["md5"]:
+                die(f"dep {name} {ver}: md5 divergente do indice do hub")
         mod_dir = f"/local/modules/{name}/{ver}"
         for d in (f"/local/modules", f"/local/modules/{name}", mod_dir):
             try:
@@ -2319,6 +2569,20 @@ def _install_shared_deps(link, deps, hub):
             link.verify_file(str(tmp), f"{mod_dir}/{name}.js")
         print(f"dep {name} {ver}: no cache do device ({len(blob)} B, verificada)")
     return resolved
+
+
+def _poda_raizes(stale, remote):
+    """So as RAIZES do que a poda apaga (logica pura, testavel no host): dir
+    obsoleto sai inteiro (delete recursivo) e os filhos dele nao viram
+    tentativa. Apagar o dir primeiro e depois cada filho ja inexistente
+    contava como "falha" — o install do Detona dizia "30 removidos; 29
+    falharam" com a poda perfeita, e o aviso parecia apontar a assets/.
+    `remote` = {caminho relativo: e_diretorio}."""
+    raizes = []
+    for rel in sorted(stale):
+        if not any(rel.startswith(r + "/") for r in raizes if remote[r]):
+            raizes.append(rel)
+    return raizes
 
 
 def _gc_plan(modules, refs):
@@ -2534,83 +2798,9 @@ def cmd_apps(args):
             if sombreada:
                 print("* sombreada: a copia em /local/apps e a que abre")
         elif args.action == "install":
-            src = Path(args.folder).resolve()
-            if not (src / "app.json").is_file():
-                die(f"{src} nao tem app.json")
-            if not args.pula_lint:
-                _lint_app_folder(src)
-            base = "/sd/apps" if args.sd else "/local/apps"
-            dest = f"{base}/{src.name}"
-            files = [f for f in sorted(src.rglob("*"))
-                     if f.is_file() and ".dev" not in f.parts and not _is_junk(f)]
-            link.simple("MKDIR", dest.encode() + b"\0")
-            for f in files:
-                rel = f.relative_to(src).parent
-                if str(rel) != ".":
-                    d = dest + "/" + rel.as_posix()
-                    link.simple("MKDIR", d.encode() + b"\0")
-            verificados = 0
-            for f in files:
-                dest_f = f"{dest}/{f.relative_to(src).as_posix()}"
-                link.write_file(str(f), dest_f)
-                if not args.pula_verify:
-                    # rele cada arquivo: o push dizer ok nao prova que o
-                    # filesystem vai servir o conteudo novo (push fantasma
-                    # calado quebra o app so em runtime)
-                    link.verify_file(str(f), dest_f)
-                    verificados += 1
-            # poda o que ficou para tras: modulos que sairam do app entre
-            # versoes seguem no device e o require ainda os acha — app misto
-            # (main novo + fx velho) quebra em runtime (Supernova 2.0:
-            # "doFlash undefined" com o fx.js da 1.0 sobrando na pasta)
-            remote = _remote_tree(link, dest)
-            local = {f.relative_to(src).as_posix() for f in files}
-            stale = []
-            for r, e_dir in remote.items():
-                if e_dir:
-                    # dir remoto so e obsoleto se NENHUM arquivo local vive
-                    # sob ele (a pasta assets/ nunca esta no conjunto de
-                    # arquivos — so os pngs de dentro)
-                    if not any(l.startswith(r + "/") for l in local):
-                        stale.append(r)
-                elif r not in local:
-                    stale.append(r)
-            falhas = []
-            for rel in sorted(stale):
-                try:
-                    link.delete(f"{dest}/{rel}", recursive=remote[rel])
-                except CelerError as e:
-                    # best-effort: o device responde status 1 ate para
-                    # caminho ja inexistente — nao aborta o install por
-                    # limpeza; a proxima install re-tenta
-                    falhas.append(rel)
-            if stale:
-                nota = f"; {len(falhas)} falharam (re-tenta na proxima)" if falhas else ""
-                print(f"poda: {len(stale)} obsoleto(s) removido(s){nota}")
-            # deps compartilhadas (API 30) DEPOIS da poda: deps.json e do
-            # installer (versao resolvida), nao do pacote — a poda nao o ve
-            # e o require do device le ele p/ cair em /local/modules
-            try:
-                meta = json.loads((src / "app.json").read_text(encoding="utf-8"))
-            except ValueError:
-                meta = {}
-            if meta.get("deps"):
-                hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
-                resolved = _install_shared_deps(link, meta["deps"], hub)
-                with tempfile.TemporaryDirectory() as td:
-                    dj = Path(td) / "deps.json"
-                    dj.write_text(json.dumps(resolved), encoding="utf-8")
-                    link.write_file(str(dj), f"{dest}/deps.json")
-                    if not args.pula_verify:
-                        # deps.json aponta o require para o cache: se o FS
-                        # servir lixo aqui, o app nem acha a dep em runtime
-                        link.verify_file(str(dj), f"{dest}/deps.json")
-            link.exec("rescan")
-            nota_v = f", {verificados} verificados" if verificados else ""
-            print(f"instalado: {dest} ({len(files)} arquivos{nota_v})")
-            if args.run:
-                _relaunch(link, src.name)
-                print(f"abrindo: {src.name}")
+            _install_app_folder(link, Path(args.folder).resolve(), args)
+        elif args.action == "store":
+            _apps_store(link, args)
         elif args.action == "pull":
             # procura o app em /local/apps e depois /sd/apps
             target = None
@@ -2798,9 +2988,20 @@ def main():
     p = sub.add_parser("tap", help="injeta um toque na tela")
     p.add_argument("x", type=int,
                    help="X FISICO do vidro (raw do touch: 480x480 SmartDisplay,"
-                        " 320x240 CYD, ~240x240 watch — nao e a coordenada virtual 240x320 do app)")
-    p.add_argument("y", type=int, help="Y FISICO do vidro (ver -x)")
+                        " 320x240 CYD, ~240x240 watch) — ou VIRTUAL 0..240 com --v")
+    p.add_argument("y", type=int, help="Y FISICO do vidro (ou VIRTUAL 0..320 com --v)")
     p.add_argument("hold", nargs="?", type=int, default=80, help="ms pressionado (default 80)")
+    p.add_argument("-v", "--virtual", dest="v", action="store_true",
+                   help="coordenadas VIRTUAIS do app (240x320): escala pelo vidro"
+                        " (descobre sozinho via screenshot; override com --glass)")
+    p.add_argument("--glass", default=None, metavar="WxH",
+                   help="vidro na mao (ex: 480x480) — pula a sonda do screenshot"
+                        " (util em device ocupado, onde screencap da timeout)")
+    p.add_argument("--shot", default=None, metavar="PNG",
+                   help="captura a tela APOS o toque e imprime o md5 (tap+espera+"
+                        "screencap em um comando — dirigir UI sem baile de 3 comandos)")
+    p.add_argument("--wait", type=int, default=800,
+                   help="ms de espera antes do --shot (default 800)")
     p.set_defaults(func=cmd_tap)
 
     p = sub.add_parser("swipe", help="injeta um arrasto (p0 -> p1)")
@@ -2828,6 +3029,21 @@ def main():
     a.add_argument("folder", help="pasta com app.json + main.js (+ icon.bin)")
     a.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
     a.add_argument("--pula-lint", action="store_true", help="instala mesmo com erros de lint")
+    a.add_argument("--deps-local", action="store_true",
+                   help="deps tambem do tools/sdk/engine (vence a do hub quando mais nova): "
+                        "testa engine/physics no aparelho antes do publish-dep")
+    a.add_argument("--pula-verify", action="store_true",
+                   help="pula a releitura de verificacao (crc32) de cada arquivo")
+    a.add_argument("--run", action="store_true",
+                   help="abre o app ao final (exit + run; encerra o anterior)")
+    a = apps_sub.add_parser("store", help="baixa o pacote do hub e instala "
+                                         "(o caminho da loja, sem dirigir a UI)")
+    a.add_argument("pkg", help="pacote no hub (ex: celeros.arrasa — veja o "
+                               "catalogo em /store/all.json)")
+    a.add_argument("--sd", action="store_true", help="instala no cartao (/sd/apps)")
+    a.add_argument("--pula-lint", action="store_true", help="instala mesmo com erros de lint")
+    a.add_argument("--deps-local", action="store_true",
+                   help="deps tambem do tools/sdk/engine (vence a do hub quando mais nova)")
     a.add_argument("--pula-verify", action="store_true",
                    help="pula a releitura de verificacao (crc32) de cada arquivo")
     a.add_argument("--run", action="store_true",

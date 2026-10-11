@@ -11,6 +11,7 @@ HostFrame.h (test/cpp/run_tests.cpp) e pela bancada.
 
 import io
 import json
+import re
 import os
 import socket
 import struct
@@ -20,6 +21,7 @@ import threading
 import time
 import unittest
 import zlib
+import hashlib
 from contextlib import redirect_stderr
 from pathlib import Path
 
@@ -109,6 +111,7 @@ class FakeDevice:
         self.wr_crc = 0
         self.drop_chunk = []      # seqs cujo WRITE_CHUNK some no caminho (1x cada)
         self.corrupt_chunk = []   # seqs que chegam com 1 byte virado (1x cada)
+        self.execs = []           # linhas EXEC recebidas (o "rescan" do install)
         # fila de fotos de profiling: cada KL_STATS devolve a proxima (a
         # ultima repete — o celerctl top pede 2+ seguidas)
         self.stats_q = [STATS_SNAP_A]
@@ -326,6 +329,23 @@ class FakeDevice:
             self.dirs.pop(path, None)
         self.reply(KL["DELETE"])
 
+    def op_0a(self, p):  # MKDIR: path\0 — cria a cadeia inteira no modelo
+        path = p.rstrip(b"\0").decode().strip("/")
+        partes = path.split("/") if path else []
+        for i in range(1, len(partes) + 1):
+            d = "/" + "/".join(partes[:i])
+            self.dirs.setdefault(d, [])
+            if i > 1:
+                pai = "/" + "/".join(partes[:i - 1])
+                if partes[i - 1] not in self.dirs[pai]:
+                    self.dirs[pai].append(partes[i - 1])
+        self.reply(KL["MKDIR"])
+
+    def op_0c(self, p):  # EXEC: cmdline -> u8 exit + u32 len + saida
+        self.execs.append(p.rstrip(b"\0").decode())
+        # payload: [status u8][exit u8][len u32] — o link.exec pula o 1o byte
+        self.reply(KL["EXEC"], b"\x00\x00" + struct.pack("<I", 0))
+
 
 class FakeSerial:
     def __init__(self, device):
@@ -361,6 +381,7 @@ def make_link(proto=2, chunk=4096, win=4):
     link.proto = 1
     link.max_chunk = C.CHUNK
     link.win = 1
+    link.exec_timeout = 5.0     # EXEC do "rescan" no caminho do install
     return link, dev
 
 
@@ -864,6 +885,46 @@ class TestAppsDeps(unittest.TestCase):
     """apps deps: o plano de GC do cache /local/modules e a listagem E2E
     contra o FakeDevice (LS/STAT/READ/DELETE)."""
 
+    def test_poda_so_raizes(self):
+        # dir obsoleto sai inteiro: filhos nao viram tentativa (nem "falha")
+        remote = {"velho": True, "velho/a.png": False, "velho/sub": True,
+                  "velho/sub/b.png": False, "lixo.js": False, "assets": True}
+        stale = ["velho", "velho/a.png", "velho/sub", "velho/sub/b.png", "lixo.js"]
+        self.assertEqual(C._poda_raizes(stale, remote), ["lixo.js", "velho"])
+        # prefixo de nome nao e filho: "velhona" nao cai junto com "velho"
+        remote2 = {"velho": True, "velhona.js": False}
+        self.assertEqual(C._poda_raizes(["velho", "velhona.js"], remote2), ["velho", "velhona.js"])
+
+    def test_deps_local_do_sdk(self):
+        # --deps-local: tools/sdk/engine entra no indice com a versao do modulo
+        # (forma objeto `version: 'x'` OU atribuicao `E.version = 'x'` do shim)
+        loc = C._local_sdk_deps()
+        eng = (Path(C.__file__).resolve().parent / "sdk" / "engine" / "celeros.engine.js").read_text()
+        ver = re.search(r"version\s*[:=]\s*'([0-9.]+)'", eng).group(1)
+        self.assertIn(ver, loc["celeros.engine"])
+        self.assertTrue(loc["celeros.engine"][ver]["_local"].endswith("celeros.engine.js"))
+        # familia CelerGame: as arestas do index.json viajam no indice local
+        # (o resolve do install instala as transitivas junto)
+        self.assertEqual(loc["celeros.engine"][ver]["deps"].get("celeros.game"), "^1.0.0")
+        fxv = re.search(r"version\s*[:=]\s*'([0-9.]+)'",
+                        (Path(C.__file__).resolve().parent / "sdk" / "engine" /
+                         "celeros.game.fx.js").read_text()).group(1)
+        self.assertEqual(loc["celeros.game.fx"][fxv]["deps"], {"celeros.game": "^1.0.0"})
+        self.assertIn("celeros.game", loc)
+        # local mais novo vence o hub na mesma resolucao; mais velho nao
+        # (indice com a familia INTEIRA do SDK local: o resolve segue as
+        # arestas do engine e acha celeros.game* no indice)
+        import celerhub
+        idx = {"celeros.engine": {"1.0.0": {"url": "x", "deps": {}}}}
+        for name, vers in loc.items():
+            for v, m in vers.items():
+                idx.setdefault(name, {}).setdefault(v, m)
+        self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.engine"], ver)
+        # e o fecho transitivo do engine traz a familia junto
+        self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.game"], "1.0.0")
+        idx["celeros.engine"]["1.99.0"] = {"url": "y", "deps": {}}
+        self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.engine"], "1.99.0")
+
     def test_gc_plan_puro(self):
         modules = {"celeros.engine": {"1.2.1": 32000, "1.2.2": 32000},
                    "celeros.physics": {"1.4.0": 15000}}
@@ -933,6 +994,153 @@ class TestAppsDeps(unittest.TestCase):
         self.assertIn("--yes", err.getvalue())
         # nada foi apagado
         self.assertIn("/local/modules/celeros.engine/1.2.2/celeros.engine.js", dev.files)
+
+
+class TestV2Phys(unittest.TestCase):
+    """tap --v: coordenada virtual do app (240x320) -> fisica do vidro —
+    a conta que era feita de cabeca em toda placa da bancada."""
+
+    def test_480x480(self):
+        self.assertEqual(C._v2phys(120, 292, 480, 480), (240, 438))
+
+    def test_320x240_cyd(self):
+        self.assertEqual(C._v2phys(120, 160, 320, 240), (160, 120))
+
+    def test_quinas_e_inteiro(self):
+        self.assertEqual(C._v2phys(0, 0, 480, 480), (0, 0))
+        self.assertEqual(C._v2phys(240, 320, 480, 480), (480, 480))
+        x, y = C._v2phys(113, 199, 480, 480)
+        self.assertIsInstance(x, int)
+        self.assertIsInstance(y, int)
+
+
+class TestAppsStore(unittest.TestCase):
+    """`apps store PKG`: o caminho da loja sem UI — catalogo -> arquivos ->
+    lint/push/deps — contra um hub HTTP local e o FakeDevice."""
+
+    def setUp(self):
+        main = b"var app = 1;\n"
+        lib = b"var lib = 2;\n"
+        dep = b"var E = { version: '9.9.9' };\nmodule.exports = E;\n"
+        icon = b"\x89PNG-fake\x00"
+        appjson = {
+            "name": "Demo", "packageName": "celeros.demo", "version": "1.0.0",
+            "api": 33, "deps": {"celeros.engine": "^9.9.0"},
+        }
+        rota = {
+            "/store/all.json": json.dumps({"apps": {
+                "celeros.demo": {
+                    "name": "Demo!", "version": "1.0.0", "api": 33,
+                    "size": len(main),
+                    "meta": "/store/apps/celeros.demo/app.json",
+                    "app": "/store/apps/celeros.demo/main.js",
+                    "md5": hashlib.md5(main).hexdigest(),
+                    "icon": "/store/apps/celeros.demo/icon.png",
+                    "files": {"lib.js": {"size": len(lib),
+                                          "md5": hashlib.md5(lib).hexdigest()}},
+                }}}).encode(),
+            "/store/apps/celeros.demo/app.json": json.dumps(appjson).encode(),
+            "/store/apps/celeros.demo/main.js": main,
+            "/store/apps/celeros.demo/lib.js": lib,
+            "/store/apps/celeros.demo/icon.png": icon,
+        }
+        dep_base = "http://127.0.0.1:%d" % 0  # remontado abaixo com a porta
+        dep_entry = {"9.9.9": {"size": len(dep), "md5": hashlib.md5(dep).hexdigest(),
+                               "url": "PENDING"}}
+        rota["/store/deps.json"] = json.dumps({"deps": {"celeros.engine": dep_entry}}).encode()
+        self.rota = rota
+        self.main, self.lib, self.dep, self.icon = main, lib, dep, icon
+
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        rota_ref = self.rota
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                # url absoluta da dep precisa da porta real: remonta na hora
+                if self.path.startswith("/dep/celeros.engine.js"):
+                    corpo = rota_ref["/dep/celeros.engine.js"]
+                else:
+                    corpo = rota_ref.get(self.path)
+                if corpo is None:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(corpo)))
+                self.end_headers()
+                self.wfile.write(corpo)
+
+            def log_message(self, *a):  # silencia o stderr do servidor
+                pass
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        porta = self.httpd.server_address[1]
+        rota["/store/deps.json"] = json.dumps({"deps": {"celeros.engine": {
+            "9.9.9": {"size": len(dep), "md5": hashlib.md5(dep).hexdigest(),
+                      "url": f"http://127.0.0.1:{porta}/dep/celeros.engine.js"}}}}).encode()
+        rota["/dep/celeros.engine.js"] = dep
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.httpd.shutdown)
+        self.env = {"CELER_HUB": f"http://127.0.0.1:{porta}"}
+
+    def test_instala_pacote_e_deps_do_hub(self):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        args = SimpleNamespace(pkg="celeros.demo", sd=False, pula_lint=True,
+                               pula_verify=False, run=False, deps_local=False,
+                               hub=None)
+        out = io.StringIO()
+        saved = {k: os.environ.get(k) for k in self.env}
+        os.environ.update(self.env)
+        try:
+            with contextlib.redirect_stdout(out):
+                C._apps_store(link, args)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        texto = out.getvalue()
+        # pacote inteiro na pasta saneada ("Demo!" -> "Demo")
+        for rel, corpo in [("app.json", None), ("main.js", self.main),
+                           ("lib.js", self.lib), ("icon.png", self.icon)]:
+            self.assertIn(f"/local/apps/Demo/{rel}", dev.files)
+        self.assertEqual(dev.files["/local/apps/Demo/main.js"], self.main)
+        self.assertEqual(dev.files["/local/apps/Demo/lib.js"], self.lib)
+        # deps: modulo no cache publico + deps.json apontando a versao
+        self.assertIn("/local/modules/celeros.engine/9.9.9/celeros.engine.js", dev.files)
+        self.assertEqual(json.loads(dev.files["/local/apps/Demo/deps.json"]),
+                         {"celeros.engine": "9.9.9"})
+        # rescan no fim (o launcher re-le a pasta)
+        self.assertIn("rescan", dev.execs)
+        self.assertIn("instalado: /local/apps/Demo", texto)
+
+    def test_pacote_desconhecido_morre_com_catalogo(self):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        args = SimpleNamespace(pkg="celeros.naoexiste", sd=False, pula_lint=True,
+                               pula_verify=False, run=False, deps_local=False,
+                               hub=None)
+        saved = os.environ.get("CELER_HUB")
+        os.environ.update(self.env)
+        try:
+            err = io.StringIO()
+            with redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    C._apps_store(link, args)
+        finally:
+            if saved is None:
+                os.environ.pop("CELER_HUB", None)
+            else:
+                os.environ["CELER_HUB"] = saved
+        self.assertIn("celeros.demo", err.getvalue())  # dica do catalogo
 
 
 if __name__ == "__main__":

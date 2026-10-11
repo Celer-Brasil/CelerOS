@@ -8,6 +8,7 @@ compile contado pelo tamanho ENXUTO.
 
 import contextlib
 import io
+import os
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,94 @@ class TestTetoPosStrip(unittest.TestCase):
             d = self._app(td)
             msg = die_saida(lambda: H.validate(d, strip=False))
             self.assertIn("psram", msg)
+
+
+class TestGitDirtyGuard(unittest.TestCase):
+    """A guarda de arvore suja do publish: o upload tem que ser de conteudo
+    COMMITADO. Nasceu do incidente real da engine 1.2.3 no hub com 2 linhas
+    do WIP do autor (salvas na arvore entre o git status do operador e o
+    upload — a arvore anda em voo na bancada)."""
+
+    def _repo(self):
+        import shutil
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        for cmd in (["git", "-C", td, "init", "-q"],
+                    ["git", "-C", td, "config", "user.email", "t@t"],
+                    ["git", "-C", td, "config", "user.name", "t"]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        f = Path(td) / "celeros.mod.js"
+        f.write_text("var M = { version: '1.0.0' };\nmodule.exports = M;\n",
+                     encoding="utf-8")
+        subprocess.run(["git", "-C", td, "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "commit", "-qm", "x"], check=True,
+                       capture_output=True)
+        return td, f
+
+    def test_limpo_vazio(self):
+        _, f = self._repo()
+        self.assertEqual(H.git_dirty_files([f]), [])
+
+    def test_modificado_aparece(self):
+        _, f = self._repo()
+        f.write_text("var M = { version: '1.1.0' };\nmodule.exports = M;\n",
+                     encoding="utf-8")
+        suja = H.git_dirty_files([f])
+        self.assertEqual(len(suja), 1)
+        self.assertIn("celeros.mod.js", suja[0])
+
+    def test_novo_arquivo_aparece(self):
+        td, _ = self._repo()
+        novo = Path(td) / "celeros.novo.js"
+        novo.write_text("x = 1;\n", encoding="utf-8")
+        suja = H.git_dirty_files([novo])
+        self.assertEqual(len(suja), 1)
+        self.assertIn("celeros.novo.js", suja[0])
+
+    def test_fora_de_repo_nao_trava(self):
+        f = Path(tempfile.mkdtemp()) / "solto.js"
+        f.write_text("x", encoding="utf-8")
+        self.assertEqual(H.git_dirty_files([f]), [])
+
+    def test_publish_dep_recusa_wip_e_dry_avisa(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        _, f = self._repo()
+        f.write_text("var M = { version: '1.1.0' };\nmodule.exports = M;\n",
+                     encoding="utf-8")
+        base = dict(file=str(f), name=None, version=None, min_api=1,
+                    dep=None, no_strip=False, token=None, hub=None)
+        # real (sem --dry): morre com a receita ANTES de tocar a rede (token
+        # de mentira no env so para passar do token_or_die)
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            msg = die_saida(lambda: H.cmd_publish_dep(SimpleNamespace(
+                dry=False, force=False, **base)))
+        self.assertIn("NAO commitada", msg)
+        self.assertIn("--force", msg)
+        # dry: aviso, nao trava (explorar WIP offline continua valido)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            H.cmd_publish_dep(SimpleNamespace(dry=True, force=False, **base))
+        self.assertIn("NAO commitada", out.getvalue())
+
+    def test_deps_status_triage_wip_vs_real(self):
+        # mesmo veredito de versao, remedios opostos: WIP pede COMMIT,
+        # divergencia real pede --force — o conselho errado custa caro
+        local = {"celeros.engine": "1.2.3"}
+        hub = {"celeros.engine": {"1.2.3": {"md5": "abc"}}}
+        linhas, drift = H.deps_status_report(local, hub,
+                                             divergent={"celeros.engine": "wip"})
+        texto = "\n".join(linhas)
+        self.assertEqual(drift, 1)
+        self.assertIn("WIP NAO COMMITADO", texto)
+        self.assertIn("commite", texto)
+        self.assertNotIn("--force: publish-dep", texto)
+        linhas, _ = H.deps_status_report(local, hub,
+                                         divergent={"celeros.engine": "real"})
+        self.assertIn("CONTEUDO DIVERGE", "\n".join(linhas))
+        # set (compat) continua sendo divergencia real
+        linhas, _ = H.deps_status_report(local, hub, divergent={"celeros.engine"})
+        self.assertIn("CONTEUDO DIVERGE", "\n".join(linhas))
 
 
 if __name__ == "__main__":

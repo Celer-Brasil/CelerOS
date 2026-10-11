@@ -40,6 +40,19 @@ DRIVER = r'''
 #include <string>
 #include "duktape.h"
 #include "Utils/JsStrip.h"
+#include "Utils/JsonMap.h"
+// shim do FileSystem (o require le o deps.json desde a API 30): mesmo
+// parser do firmware (Utils/JsonMap.h), leitura por stdio
+namespace FileSystem {
+inline std::string readTextFile(const char* p) {
+    std::string s; FILE* f = fopen(p, "rb"); if (!f) return s;
+    char b[4096]; size_t n; while ((n = fread(b, 1, sizeof b, f)) > 0) s.append(b, n);
+    fclose(f); return s;
+}
+inline int parseJsonStringMap(const std::string& j, JsonStringPair* o, int m) {
+    return celer::parseJsonStringMap(j, o, m);
+}
+}
 extern "C" duk_bool_t celer_exec_timeout_check(void* udata) { (void)udata; return 0; }
 namespace CelerKernel { inline void noteAppYield() {} }
 std::string s_appDir;

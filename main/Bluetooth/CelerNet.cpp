@@ -564,6 +564,13 @@ void handleFrame(const netframe::Frame& f, int8_t rssi, uint32_t nowMs) {
 volatile bool s_scanOn = false;
 uint32_t s_scanCheckMs = 0;
 bool s_appWasBusy = false;
+// Perfil do scanner no ar: 0 = continuo (10/10 ms), 1 = duty-cycle com
+// enlace GATT de pe (30 ms a cada 100 ms). O scan 100% do tempo competia
+// com os eventos de conexao do Celer Link (intervalo 15..30 ms, supervisao
+// 2 s): sob trafego da malha o controle remoto caia. Com 30% o enlace tem
+// folga e a malha ainda ouve o adv de 100 ms dos vizinhos (a janela de
+// 30 ms pega um evento a cada ~3).
+uint8_t s_scanProfile = 0;
 
 int meshGapCb(ble_gap_event* event, void* arg) {
     (void)arg;
@@ -598,20 +605,33 @@ void scanStart() {
         return;
     }
     const uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-    if (s_scanOn && !s_appWasBusy && now - s_scanCheckMs < 250) return;
+    const uint8_t want = CelerLink::linkActive() ? 1 : 0;
+    if (s_scanOn && !s_appWasBusy && want == s_scanProfile && now - s_scanCheckMs < 250) return;
     s_appWasBusy = false;
     s_scanCheckMs = now;
     if (ble_gap_disc_active()) {
-        s_scanOn = true;
-        return;
+        if (want == s_scanProfile) {
+            s_scanOn = true;
+            return;
+        }
+        ble_gap_disc_cancel();  // perfil mudou (enlace subiu/caiu): reconfigura
     }
     struct ble_gap_disc_params p;
     memset(&p, 0, sizeof(p));
     p.passive = 1;   // nao pede scan response: quadro cru chega inteiro
-    p.itvl = 16;     // 10 ms / 10 ms = janela continua (coex arbitra o WiFi)
-    p.window = 16;
+    if (want == 1) {
+        p.itvl = 160;   // 100 ms
+        p.window = 48;  // 30 ms: folga para os eventos de conexao
+    } else {
+        p.itvl = 16;    // 10 ms / 10 ms = janela continua (coex arbitra o WiFi)
+        p.window = 16;
+    }
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, BLE_HS_FOREVER, &p, meshGapCb, nullptr);
     s_scanOn = rc == 0 || rc == BLE_HS_EALREADY;
+    if (s_scanOn && want != s_scanProfile) {
+        ESP_LOGI(TAG, "scanner: %s", want ? "duty-cycle (enlace GATT de pe)" : "continuo");
+    }
+    if (s_scanOn) s_scanProfile = want;
     if (!s_scanOn) ESP_LOGW(TAG, "scanner: ble_gap_disc rc=%d", rc);
 }
 
@@ -766,6 +786,22 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
         return false;
     }
 
+    // Start idempotente: malha ja no ar com o mesmo nome/rede/papel volta
+    // sem zerar nada. Antes todo app que chamava CelerNet.start() ao abrir
+    // apagava a tabela de membros e o dedup — trocar Matilha -> Bilheteria
+    // deixava a lista vazia ate o proximo BEAT do vizinho, e num enlace
+    // fraco (-93 dBm, esp32-cam) ele "nunca aparecia" (bancada 2026-10-10).
+    if (s_active && relay == s_relay) {
+        const bool sameName = name == nullptr || name[0] == '\0' ||
+                              strncmp(name, s_name, CelerNet::MAX_NAME) == 0;
+        const bool sameNet = net == nullptr || net[0] == '\0' ||
+                             strncmp(net, s_net, sizeof(s_net) - 2) == 0;
+        if (sameName && sameNet) {
+            xSemaphoreGiveRecursive(lock());
+            return true;
+        }
+    }
+
     if (name != nullptr && name[0] != '\0') {
         snprintf(s_name, sizeof(s_name), "%.*s", (int)CelerNet::MAX_NAME, name);
         CelerSettings::set("celernet_name", s_name);
@@ -794,7 +830,7 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     s_heap->count = 0;
     s_heap->reasm.reset();
     for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
-        s_pendingUsed = 0;
+    s_pendingUsed = 0;
     for (int i = 0; i < CelerNet::NODES_MAX; i++) s_heap->nodes[i].used = false;
     xQueueReset(s_raw);
     s_txDropped = s_rxDropped = s_relayed = 0;
@@ -877,6 +913,19 @@ bool CelerNet::stop() {
     if (s_heap != nullptr) {
         for (int i = 0; i < PENDING_DEPTH; i++) s_heap->pending[i].used = false;
         s_pendingUsed = 0;
+        // Presenca sai junto: o tick ja nao roda (sweep morto) e a tabela
+        // ficaria CONGELADA — nodes() listando membros fantasmas para sempre
+        // e o Pack (Resources::onMemberLeft) sem ver a saida de ninguem.
+        // Eventos de saida aqui, sob o mutex, como no sweep.
+        for (int i = 0; i < CelerNet::NODES_MAX; i++) {
+            if (s_heap->nodes[i].used) {
+                s_heap->nodes[i].used = false;
+                if (s_memberCb != nullptr) {
+                    s_memberCb(s_heap->nodes[i].id, s_heap->nodes[i].name,
+                               s_heap->nodes[i].caps, false);
+                }
+            }
+        }
     }
     xSemaphoreGiveRecursive(lock());
     if (wasActive) coexApply(false);
@@ -888,9 +937,10 @@ bool CelerNet::active() {
     return s_active;
 }
 
-// Destino do unicast: id "A1B2" (4 hex) ou NOME do no ouvido (primeiro
-// match, case-insensitive; a tabela e ordenada por RSSI, entao nomes
-// duplicados pegam o vizinho mais forte).
+// Destino do unicast: id "A1B2" (4 hex) ou NOME do no ouvido (match
+// case-insensitive; nomes duplicados pegam o vizinho MAIS FORTE — a tabela
+// bruta e ordem de insercao, o nodes() e que ordena por RSSI na copia, e o
+// comentario antigo prometia o que o codigo nao fazia).
 bool CelerNet::resolveDest(const char* to, uint16_t* out) {
     if (to == nullptr) return false;
     bool hex = strlen(to) == 4;
@@ -911,10 +961,10 @@ bool CelerNet::resolveDest(const char* to, uint16_t* out) {
     if (s_heap == nullptr) return false;
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     NodeEntry* e = nullptr;
-    for (int i = 0; i < NODES_MAX && e == nullptr; i++) {
+    for (int i = 0; i < NODES_MAX; i++) {
         if (s_heap->nodes[i].used && s_heap->nodes[i].name[0] != '\0' &&
             strcasecmp(s_heap->nodes[i].name, to) == 0) {
-            e = &s_heap->nodes[i];
+            if (e == nullptr || s_heap->nodes[i].rssi > e->rssi) e = &s_heap->nodes[i];
         }
     }
     // copia sob lock (o chamador usa depois)
@@ -1152,6 +1202,7 @@ void CelerNet::tickBody() {
         f.netId = s_netId;
         f.src = s_node;
         f.seq = ++s_seq;
+        if (f.seq == 0) f.seq = ++s_seq;  // 0 reservado ("novo" no enqueue)
         f.dlen = (uint8_t)(1 + nameLen);
         f.data = beat;
         size_t n = netframe::encode(f, frame, sizeof(frame));

@@ -117,6 +117,12 @@ public:
     // ou criam conexao): a malha CelerNet pausa o scanner dela enquanto
     // isto for true (CelerNet::tick).
     static bool appBusy();
+
+    // Enlace GATT de pe (central OU peripheral, inclusive o Phone Link): a
+    // malha troca o scanner continuo por duty-cycle enquanto isto for true
+    // (scan 100% do tempo tirava os eventos de conexao e a supervisao
+    // expirava — o Celer Remote caia com a malha ligada).
+    static bool linkActive();
 };
 
 #endif // CELEROS_BT_CELER_LINK_H

@@ -32,6 +32,11 @@ var FRAME_MS = 125;          // 8 quadros/s por no (K_TOKEN_REFILL_PER_S)
 var PENDING_DEPTH = 96;
 var COPY_GAP_MS = 1500;      // copias de unicast espacadas (c702377)
 var NODE_TTL_MS = 15000;
+// Histerese do firmware (CelerNet.cpp nodeExpired): no com fila de TX
+// pendente esta surdo (cada burst desliga o scanner) e nao expira par pelo
+// TTL normal — so no teto duro de 4x TTL. "Pressao" no sim = TX proprio
+// drenando (txFree no futuro) ou repeticoes pendentes no anel.
+var NODE_TTL_CAP_MS = 4 * NODE_TTL_MS;
 var BEAT_MS = 3000;
 var BEAT_TTL = 4;
 
@@ -62,6 +67,7 @@ function runMesh(spec) {
             i: i, spec: n, id: id, name: n.name, caps: n.caps || 0,
             online: true, netActive: false, relay: true, netName: n.name,
             txFree: 0, seen: {}, delivered: {}, inbox: [], relayed: 0,
+            relayPending: 0, relayDropped: 0,
             waiting: false, barrier: 0, done: null,
             lastReach: {}, lastInfo: {},
             ladv: false, lpairing: true, lname: '', session: null, bonds: {}, wrong: 0
@@ -105,9 +111,11 @@ function runMesh(spec) {
 
     function hearable(a, b) { return a.online && b.online && a.netActive && b.netActive; }
 
-    // um no (origem ou repetidor) poe a mensagem no ar a partir de t
+    // um no (origem ou repetidor) poe a mensagem no ar a partir de t;
+    // devolve o instante de PARTIDA (null se o no esta fora/sem malha) —
+    // o anel de relay do repetidor so libera o slot quando o quadro sai
     function emit(from, msg, ttl, hops, t, urgent) {
-        if (!from.online || !from.netActive) return;
+        if (!from.online || !from.netActive) return null;
         var fr = frames(msg.wireLen || msg.len);
         var depart = urgent ? t : Math.max(t, from.txFree);
         if (!urgent) from.txFree = depart + fr * FRAME_MS;
@@ -120,6 +128,7 @@ function runMesh(spec) {
                 hear(to, from, e.rssi, msg, ttl, hops + 1, tt);
             });
         });
+        return depart;
     }
     function hear(node, via, rssi, msg, ttl, hops, t) {
         if (node.id === msg.src.id) return;
@@ -139,9 +148,27 @@ function runMesh(spec) {
             // fragmento: relay fora da frente (jitter largo, c702377)
             var fr = frames(msg.wireLen || msg.len);
             var jit = fr > 1 ? 300 + Math.floor(rand() * 600) : 40 + Math.floor(rand() * 200);
+            // Anel de relay (PENDING_DEPTH do firmware): a mensagem inteira
+            // entra ou e descartada CONTADA — relayDropped visivel no status
+            // do JS, como o Info.relayDropped do CelerNet
+            if (node.relayPending + fr > PENDING_DEPTH) {
+                node.relayDropped += fr;
+                node.inbox.push({ at: t, ev: { t: 'reldrop', n: fr } });
+                return;
+            }
+            node.relayPending += fr;
             node.relayed += fr;
             node.inbox.push({ at: t, ev: { t: 'relayed', n: fr } });
-            schedule(t + jit, function(tt) { emit(node, msg, ttl - 1, hops, tt, false); });
+            schedule(t + jit, function(tt) {
+                var depart = emit(node, msg, ttl - 1, hops, tt, false);
+                if (depart === null) {
+                    node.relayPending -= fr;   // fora do ar: slot consumido
+                } else {
+                    // slot livre quando o quadro sai no ar (como o firmware
+                    // libera o Pending no adv_start, nao no jitter)
+                    schedule(depart, function() { node.relayPending -= fr; });
+                }
+            });
         }
     }
 
@@ -224,6 +251,11 @@ function runMesh(spec) {
     }
 
     // ---- presenca vista por um no no instante T -------------------------
+    // Pressao de TX do no (histerese do nodeExpired do firmware): fila
+    // propria drenando (txFree no futuro) ou repeticoes pendentes no anel
+    function underPressure(n, T) {
+        return T < n.txFree || n.relayPending > 0;
+    }
     function presence(n, T) {
         if (!n.online || !n.netActive) return [];
         var dist = {}, first = {};
@@ -254,7 +286,11 @@ function runMesh(spec) {
                 n.lastInfo[m.id] = { hops: dist[m.id], rssi: first[m.id] };
             }
             var lr = n.lastReach[m.id];
-            if (lr === undefined || T - lr >= NODE_TTL_MS) return;
+            if (lr === undefined) return;
+            var age = T - lr;
+            // mesmo criterio do sweep do firmware: sai no TTL normal quando
+            // o no esta ouvindo bem; surdo (pressao de TX), so no teto 4x
+            if (age >= NODE_TTL_MS && (age >= NODE_TTL_CAP_MS || !underPressure(n, T))) return;
             var age = dist[m.id] !== undefined ? Math.floor(((T + m.i * 977) % BEAT_MS) / 1000)
                                                : Math.floor((T - lr) / 1000) + 2;
             out.push({ id: m.id, name: m.netName, caps: m.caps, rssi: n.lastInfo[m.id].rssi,
@@ -324,7 +360,8 @@ function runMesh(spec) {
                     seed: ((spec.seed || 1) * 7919 + i * 104729) >>> 0,
                     id: n.id, name: n.spec.name, caps: n.caps, board: n.spec.board || 'host',
                     app: n.spec.app, autoStart: n.spec.autoStart !== false,
-                    wire: n.spec.wire ? n.spec.wire.toString() : null
+                    wire: n.spec.wire ? n.spec.wire.toString() : null,
+                    settings: n.spec.settings || null
                 },
                 transferList: [ch.port2]
             });
@@ -346,6 +383,7 @@ function runMesh(spec) {
                 } else if (m.t === 'done') {
                     n.done = m;
                     n.done.relayed = n.relayed;
+                    n.done.relayDropped = n.relayDropped;
                     pending--;
                     w.terminate();
                     if (pending === 0) finish();

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_bt.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -867,6 +868,16 @@ int onGapEvent(ble_gap_event* event, void* arg) {
 // ------------------------------------------------------------ init NimBLE
 
 void onSync() {
+#if CONFIG_IDF_TARGET_ESP32
+    // ESP32 classico: o controlador BTDM nao tem Kconfig de potencia e nasce
+    // em +3 dBm (as S3 vem com BT_CTRL_DFT_TX_POWER_LEVEL_P9). Somado a
+    // antena de PCB da esp32-cam, a malha ficava em -96 dBm a 1 sala de
+    // distancia do 4848 e o ping se perdia (bancada 2026-10-10). Mesmo
+    // +9 dBm das S3 para adv (malha), scan e conexoes.
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, ESP_PWR_LVL_P9);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, ESP_PWR_LVL_P9);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, ESP_PWR_LVL_P9);
+#endif
     // Tambem chega depois de um reset do host: retoma o advertising.
     if (s_started) advRestart();
     xSemaphoreGive(s_syncSem);
@@ -928,7 +939,9 @@ bool resolveTarget(const char* idOrName, ble_addr_t* out) {
         return true;
     }
     for (int i = 0; i < s_scanCount; i++) {
-        if (strcmp(s_scanCache[i].name, idOrName) == 0) {
+        // nome vazio nao e alvo: entrada criada so pelo UUID (a resposta de
+        // scan com o nome pode nem ter chegado) — connect("") nao pega ela
+        if (s_scanCache[i].name[0] != '\0' && strcmp(s_scanCache[i].name, idOrName) == 0) {
             out->type = s_scanCache[i].addrType;
             memcpy(out->val, s_scanCache[i].addr, 6);
             return true;
@@ -1141,6 +1154,10 @@ int CelerLink::scan(uint32_t ms, Peer* out, int max) {
 
 bool CelerLink::appBusy() {
     return s_connecting || s_appScanning;
+}
+
+bool CelerLink::linkActive() {
+    return s_connActive;
 }
 
 bool CelerLink::connect(const char* idOrName, uint32_t ms) {

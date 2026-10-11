@@ -125,7 +125,7 @@ public:
                        uint8_t copies);
 
     // Resolve um destino de unicast: id "A1B2" (4 hex) ou NOME do no ouvido
-    // (primeiro match case-insensitive; a tabela e ordenada por RSSI).
+    // (match case-insensitive; nomes duplicados pegam o vizinho mais forte).
     static bool resolveDest(const char* to, uint16_t* out);
 
     // Mensagem recebida (fila RX_DEPTH, cheia descarta a mais antiga).

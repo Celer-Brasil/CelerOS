@@ -74,12 +74,11 @@ CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=2560
 
-# Unicore + IRAM acessivel a byte (~40KB de IRAM livre viram heap): o init do
-# NimBLE consome ~38KB de interna e o coexist WiFi+BLE disputa o resto — a
-# IRAM extra decide. Se a captura da camera (rodada Camera.*) engasgar, o
-# plano B e dual-core (medir de novo).
-CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE=y
-CONFIG_FREERTOS_UNICORE=y
+# Dual-core (NAO unicore): bancada 2026-10-10 — com unicore + IRAM-as-heap o
+# boot da cam finalizava e o celerLoop caia em reset-loop (motivo 7 =
+# INT_WDT; interruptos bloqueados: coexist WiFi x NimBLE no nucleo unico).
+# A CYD aguenta unicore porque nao tem BT; a cam tem. Segundo nucleo tambem
+# ajuda a captura (ISR da camera longe do Duktape).
 CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y
 CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # (o root defaults pede EXTERNAL=y das placas PSRAM S3; aqui o choice do

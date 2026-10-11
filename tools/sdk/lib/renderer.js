@@ -8,7 +8,7 @@
 //   - texto: glifos 8x8 (font8x8 public domain), metrica {1:6, 2:8, 4:16}px
 //     por caractere (textWidth coerente com o desenho — layouts centrados
 //     batem entre si, nao com a fonte real do firmware);
-//   - drawPNG/drawBMP/drawIcon nao renderizam (ficam no-op como no harness,
+//   - drawPNG/drawJPG/drawBMP/drawIcon nao renderizam (ficam no-op como no harness,
 //     registrados em `unsupported` para o CLI avisar).
 
 const { glyph } = require('./font8x8.js');
@@ -19,6 +19,11 @@ const ADVANCE = { 1: 6, 2: 8, 4: 16 };   // px por caractere por tamanho de font
 
 class Renderer {
     constructor() {
+        // tamanho do vidro emulado: 240x320 virtual; o canvas nativo
+        // (setNativeCanvas, API 28) troca para o do harness (480x480) — antes
+        // ficava fixo e os jogos nativos saiam cortados no quarto de cima
+        this.w = W;
+        this.h = H;
         this.fb = new Uint16Array(W * H);  // RGB565
         this.fg = 0xFFFF;
         this.bg = 0x0000;
@@ -33,8 +38,17 @@ class Renderer {
 
     // ------------------------------------------------------------ pixgrade
     target() { return (this.bound && this.sprite) ? this.sprite.fb : this.fb; }
-    targetW() { return (this.bound && this.sprite) ? this.sprite.w : W; }
-    targetH() { return (this.bound && this.sprite) ? this.sprite.h : H; }
+    targetW() { return (this.bound && this.sprite) ? this.sprite.w : this.w; }
+    targetH() { return (this.bound && this.sprite) ? this.sprite.h : this.h; }
+
+    // novo tamanho de tela (fb limpo, como o quadro recriado no firmware)
+    resize(w, h) {
+        w = Math.max(1, w | 0); h = Math.max(1, h | 0);
+        if (w === this.w && h === this.h) return;
+        this.w = w; this.h = h;
+        this.fb = new Uint16Array(w * h);
+        this.clip = null;
+    }
 
     px(x, y, c) {
         x |= 0; y |= 0;
@@ -246,8 +260,8 @@ class Renderer {
 
     // ------------------------------------------------------------ snapshot
     rgb888() {
-        const out = Buffer.alloc(W * H * 3);
-        for (let i = 0; i < W * H; i++) {
+        const out = Buffer.alloc(this.w * this.h * 3);
+        for (let i = 0; i < this.w * this.h; i++) {
             const p = this.fb[i];
             out[i * 3] = ((p >> 11) & 0x1F) * 255 / 31 | 0;
             out[i * 3 + 1] = ((p >> 5) & 0x3F) * 255 / 63 | 0;
@@ -256,7 +270,7 @@ class Renderer {
         return out;
     }
 
-    png() { return encodePng(W, H, this.rgb888(), false); }
+    png() { return encodePng(this.w, this.h, this.rgb888(), false); }
 
     // ---------------------------------------------------------------- wire
     // Sobrepoe os stubs de desenho do makeEnv (mantem o resto: touch, FS,
@@ -265,6 +279,16 @@ class Renderer {
         const r = this;
         const S = env.System;
         S.fillScreen = (c) => { r.target().fill((c == null ? 0 : c) & 0xFFFF); };
+        // canvas nativo: o harness passa a informar o vidro (screenWidth/
+        // Height) e o fb acompanha
+        const origNative = S.setNativeCanvas;
+        if (typeof origNative === 'function') {
+            S.setNativeCanvas = (on) => {
+                const ok = origNative(on);
+                if (ok) r.resize(S.screenWidth(), S.screenHeight());
+                return ok;
+            };
+        }
         S.fillRect = (x, y, w, h, c) => r.rect(x, y, w, h, c, true);
         S.drawRect = (x, y, w, h, c) => r.rect(x, y, w, h, c, false);
         S.drawLine = (x0, y0, x1, y1, c) => r.line(x0, y0, x1, y1, c);
@@ -386,7 +410,7 @@ class Renderer {
             }
         };
         // nao renderizados no emulador (mesmo comportamento do harness + aviso)
-        for (const name of ['drawPNG', 'drawBMP', 'drawIcon']) {
+        for (const name of ['drawPNG', 'drawJPG', 'drawBMP', 'drawIcon']) {
             const orig = S[name];
             S[name] = (...args) => { r.unsupported.add(name); return orig(...args); };
         }

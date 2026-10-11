@@ -416,7 +416,7 @@ function cmdEmu(args) {
         }
         printRun(r);
         if (!frames) {
-            console.log('tela: ' + out + ' (240x320' +
+            console.log('tela: ' + out + ' (' + r.renderer.w + 'x' + r.renderer.h +
                         (r.renderer.unsupported.size ? '; nao renderizado: ' + Array.from(r.renderer.unsupported).join(', ') : '') + ')');
         }
         process.exit(r.err ? 1 : 0);

@@ -1,13 +1,13 @@
 {
   "name": "Bilheteria",
   "packageName": "test.bilheteria",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "CelerOS",
-  "description": "Gateway da malha: valida tickets QR vindos dos nos-sensor (regra local; API real entra no futuro)",
+  "description": "Gateway da malha: valida tickets QR vindos dos nos-sensor e administra o no-camera remotamente (status, cfg, foto, log, reboot)",
   "type": "App",
   "category": "Utility",
   "api": 35,
-  "permissions": [],
+  "permissions": ["fs"],
   "topbar": true,
-  "changelog": "Demo do modulo de camera na CelerNet: recebe {t:'qr'} por Pack, valida por regra local (formato CEL-xxxxxx + anti-reuso em Storage) e responde {t:'ok'} ao no. A URL da API real entra no validate() no futuro."
+  "changelog": "Painel gateway em 4 abas: Validar (veredito + historico + placares), Nos (stat vivo do no-camera, comandos cmd/ack com retry - status/ping/pisca/pausar/foto/log/reboot - e cfg remota de vga/led/respiro/janela), Dados (totais persistentes, leituras por hora, export CSV, limpar tudo) e Log (tail do log da cam montado dos chunks). Historico persistido em appData/hist.txt com rotacao; placares e anti-reuso em Storage."
 }

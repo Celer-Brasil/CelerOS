@@ -1,13 +1,23 @@
-# Guia da Game Engine CelerOS
+# Guia CelerGame (a game engine do CelerOS)
 
 [English](Game_Engine_Guide.md) | **Português (BR)**
 
-Uma game engine 2D completa para apps CelerOS, entregue como dois módulos JS — desde a API 30, **dependências compartilhadas do hub** (`"deps"` no `app.json`): a loja as instala no cache público `/local/modules` e o `require()` resolve de lá, uma única cópia por versão no aparelho (o pacote do jogo emagrece ~53 KB). Sem permissão extra; vendorizar uma cópia na pasta do app continua funcionando (e vence):
+A **CelerGame** é a game engine 2D do CelerOS, entregue como uma **família de dependências compartilhadas do hub que você adota uma a uma** — desde a API 30, `"deps"` no `app.json`: a loja as instala no cache público `/local/modules` e o `require()` resolve de lá, uma única cópia por versão no aparelho. Sem permissão extra; vendorizar uma cópia na pasta do app continua funcionando (e vence).
 
-- **`celeros.engine`** — game loop com cenas, reconhecimento de gestos de toque, desenho com câmera, sprites, partículas, tweens/timers, áudio chiptune com relógio de batida e saves no NVS.
-- **`celeros.physics`** (opcional) — o módulo de física: corda/pano por Verlet acelerado nativamente (`P.verletFast`, API 31) e corpos rígidos que giram e tombam (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15.
+| Dep | Enxuta | O que entrega |
+|---|---|---|
+| **`celeros.game`** (core) | ~25 KB | loop com cenas + transições, gestos de toque, desenho com câmera, matemática/RNG, tweens/timers/`E.seq`, grupos/pools, camada suja, áudio chiptune com relógio de batida, saves no NVS |
+| **`celeros.game.fx`** | ~6 KB | partículas, bursts/ondas, texto flutuante, flash, campo de estrelas, **emissores contínuos, rastros, parallax** |
+| **`celeros.game.spr`** | ~2 KB | sprites PNG em slots nativos com painter de fallback, flipbooks, **spritesheet (1 PNG, N regiões nomeadas)** |
+| **`celeros.game.tilemap`** | ~2 KB | grade de células sujas p/ cenários procedurais grandes |
+| **`celeros.game.ui`** | ~5 KB | menus, listas com rolagem, diálogos datilografados, telas de título/pausa/fim prontas |
+| **`celeros.engine`** | shim (0,2 KB) | a **família inteira montada** — a API pré-modularidade (1.2.x) num `require` só; jogos existentes seguem funcionando sem mudança |
+| **`celeros.physics`** (opcional) | ~7 KB | corda/pano por Verlet nativo (`P.verletFast`, API 31) e corpos rígidos (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15 |
+| `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | arenas estilo bomberman + BFS de perseguição, tabelas de melodias sfx, boilerplate CelerNet (mesma família, módulos à parte) |
 
-Os dois são ES5 (Duktape) e detectam os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
+Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: um jogo só-core fica em ~25 KB enxutos (cabe no teto de 48 KB sem PSRAM), a família inteira em ~35 KB.
+
+Tudo é ES5 (Duktape) e detecta os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
 
 ## 1. Requisitos
 
@@ -15,24 +25,26 @@ Os dois são ES5 (Duktape) e detectam os recursos do firmware em tempo de execu�
 |---|---|
 | API do firmware | 23+ para módulos; **30+** para as deps compartilhadas (recursos novos — primitivas smooth, `playMusic`, canvas nativo — são auto-detectados) |
 | Placas-alvo | As ESP32-S3 com PSRAM: SmartDisplay, watch Waveshare, cão SpotPear |
-| Orçamento de tamanho | `celeros.engine` ≈ 35 KB (+ `celeros.physics` ≈ 17 KB **só se declarada**) — as deps somam no teto do app MESMO compartilhadas (a engine compila no heap de cada jogo): declare `"requires": ["psram"]` no `app.json` para subir o teto de JS de 48 KB para 128 KB (a loja passa a bloquear install em placa sem PSRAM — que é o que você quer num jogo com engine) |
+| Orçamento de tamanho | Deps somam no teto do app MESMO compartilhadas (compilam no heap de cada jogo): core ~25 KB + ~20 KB do seu código cabe no teto simples de 48 KB; jogos maiores declaram `"requires": ["psram"]` para subir o teto para 1 MB (a loja passa a bloquear install em placa sem PSRAM). O hub mede as deps **enxutas**, como o aparelho compila |
 | Sabor do app | `"topbar": false` para jogos em tela cheia (como o Supernova) é recomendado; o botão de saída mora no menu de título do seu jogo (`System.exitApp()`) |
-| CYD (sem PSRAM) | Jogos com engine não cabem no teto de 48 KB — nem como deps (a soma continua contando). Ou vendorize só a engine (≈ 35 KB, sobram ~13 KB para o seu código) ou escreva jogos de canvas puro |
+| CYD (sem PSRAM) | **Jogos só-core agora cabem**: `celeros.game` (~25 KB) + ~20 KB de código ficam sob o teto de 48 KB, sem vendorizar. Adote fx/spr/tilemap só se o orçamento permitir; família inteira + código pede `"psram"` |
 
 ## 2. Começando
 
 ```bash
-# scaffold de jogo pronto pra rodar (app.json com deps + jogo Quica de
-# exemplo; a engine NAO e copiada — vem do hub no install):
+# scaffold de jogo pronto pra rodar (app.json com deps core+fx + jogo
+# Quica de exemplo; os modulos NAO sao copiados — vem do hub no install):
 node tools/sdk/celer.js new MeuJogo --game
 
 # deps do app.json x versões no hub (e o que existe na arvore local):
 node tools/sdk/celer.js deps MeuJogo
-node tools/sdk/celer.js deps set celeros.engine ^1.0.0 MeuJogo
+node tools/sdk/celer.js deps set celeros.game.spr ^1.0.0 MeuJogo  # adota um módulo
 
 # publique as deps da engine no repositorio do hub (publica a arvore
-# canonica tools/sdk/engine/; precisa do token com escopo deps):
-python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.engine.js --min-api 28
+# canonica tools/sdk/engine/; precisa do token com escopo deps; o --dep
+# declara as arestas da família — espelhe o tools/sdk/engine/index.json):
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.game.js --min-api 30
+python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.game.fx.js --min-api 30 --dep celeros.game=^1.0.0
 python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 31
 
 # itere (lint a cada save; emulador renderiza PNG; device faz live reload —
@@ -48,7 +60,8 @@ O `new --game` scaffolds o **Quica**, um joguinho completo de manter-a-bola-no-a
 
 ```js
 // main.js
-var E = require("celeros.engine");
+var E = require("celeros.game");       // core — adote mais com require():
+require("celeros.game.fx");            // + partículas (E.fx), uma linha cada
 
 E.init({ dir: "Bolas", fps: 30, save: "bolas." });
 var W = E.W, H = E.H;
@@ -105,6 +118,17 @@ E.run(cenas, "titulo");
 ```
 
 Uma cena é `{ enter, update(dt), draw, exit }` — tudo opcional. `E.goto("fim")` troca no começo do próximo frame (rodando o `exit` da cena antiga antes); `E.quit()` encerra o `E.run()`. Use `E.data` para estado que sobrevive à troca de cena (ele vive pelo app inteiro), e `E.sceneName`/`E.dt`/`E.fps` para introspecção. A cena pode sobrepor o alvo de frames global com `fps` (menus a 30, a ação sem teto com `fps: 0`):
+
+**Transições de cena (core 1.0):** `E.goto(nome, {transition, ms, color, dir})` desenha um véu barato (≤ 9 fillRect/quadro, sem captura de tela — o firmware não tem cópia screen→sprite) no lugar do corte seco:
+
+```js
+E.goto("jogo", { transition: "fade", ms: 500 });              // véu fecha na cena antiga, abre na nova
+E.goto("menu", { transition: "wipe", ms: 300, dir: "left" }); // left|right|up|down
+E.goto("jogo", { transition: "iris", ms: 400, color: 0x0000 }); // buraco quadrado abrindo
+E.goto("jogo", { transition: "bands", ms: 450 });             // 8 colunas em stagger
+```
+
+Enquanto o véu vive a camada suja repinta o fundo inteiro por quadro e cenas `static` redesenham todo frame — transição é curta (≤ 0,5 s), mantenha assim.
 
 ```js
 E.run({
@@ -221,6 +245,20 @@ E.spr.blit("nave", x, y, { cx: true, cy: true, key: 0x0000 });  // key = cor-cha
 - **Convenção de transparência:** masterize os PNGs com fundo *preto puro* (a cor-chave) e transforme os pretos internos em quase-preto `(0,0,8)` — o mesmo truque do Supernova. Só sprite em slot aceita a chave; o painter desenha o que você mandar.
 - Mais defs que slots → os excedentes viram painter automaticamente. `E.spr.backed(name)` diz se o sprite ganhou slot real (blit com cor-chave rápido) ou vai desenhar pelo painter. `E.caps.slots` guarda o limite sondado (8 nas placas PSRAM com API 29, 4 em firmware velho) — orce suas defs contra ele.
 
+**Spritesheet (spr 1.0):** uma imagem PNG inteira decodifica em UM único slot e cada região nomeada vira nome de sprite de 1a classe — `blit`, `anim` e `backed` funcionam com regiões, sem código novo no jogo. Regiões são `[cx, cy]` em células de `tw x th`, ou rect livre `[x, y, w, h]` em pixels. Economiza slots (16 no máximo) e passes de decode (`drawPNG` custa ~9 ms por chamada no SmartDisplay — um sheet de 16 tiles paga 1 vez só):
+
+```js
+E.spr.sheet("tiles", { file: "tiles", w: 128, h: 64, tw: 16, th: 16,
+                       regions: { chao: [0, 0], parede: [1, 0], bau: [2, 0],
+                                  logo: [64, 0, 24, 12] } });  // rect livre
+E.spr.blit("chao", x, y);
+var brilho = E.anim(["bau", "chao"], 4);   // flipbook por regiões
+// blit de região = setClip no destino + sheet empurrado deslocado; sem
+// setClip (firmware velho) cai no paint(nome, x, y)
+E.spr.free("chao");       // tira só o nome (o slot é do sheet)
+E.spr.freeSheet("tiles"); // devolve o slot e apaga todas as regiões
+```
+
 Flipbook sem slot extra: os frames são painters (ou nomes de sprite carregado):
 
 ```js
@@ -245,7 +283,26 @@ estrelas.update(E.dt); estrelas.draw();
 E.fx.draw();                                     // chame no FIM do draw da cena
 ```
 
-Partículas/floaters/flash são tickados pelo loop; só o `draw()` é seu.
+Partículas/floaters/flash são tickados pelo loop; só o `draw()` é seu. Além dos bursts, o fx 1.0 tem **fontes contínuas** (zero alocação por frame — o caminho do emissor semeia o pool direto):
+
+```js
+// emissor contínuo: rate/s, duration (ms) opcional e follow () => {x, y}
+// p/ fonte móvel (null pula o quadro); opts de partícula como no burst
+var fogo = E.fx.emitter({ x: 120, y: 200, rate: 40, life: 0.5, size: 3,
+                          grav: -60, colors: [0xFD20, 0xF800] });
+fogo.stop(); fogo.start(); fogo.set(140, 200);   // handle
+
+// rastro que segue uma entidade — fonte parada não deixa nada
+var rastro = E.fx.trail(function () { return nave; }, { rate: 24, life: 0.4 });
+
+// camadas de parallax procedurais rolando com a câmera (speed = fração)
+var fundo = E.fx.parallax([
+  { speed: 0.2, gap: 44, paint: function (x, y) { E.gfx.circle(x, y, 1, 0x39E7); } },
+  { speed: 0.5, gap: 30, paint: function (x, y) { E.gfx.circle(x, y, 1, 0xC5F9); } },
+]);
+fundo.draw();                                  // 1a linha do draw da cena
+E.dirty.enable(function (x, y, w, h) { fundo.draw(x, y, w, h); });  // ou como painter da camada suja
+```
 
 ## 11. Tweens e timers
 
@@ -256,6 +313,15 @@ E.tween(botao, { y: 160 }, 500, { ease: E.m.outBack, onDone: function () {} });
 E.after(1200, function () { E.goto("fim"); });
 var id = E.every(2.5 * 1000, novaOnda);
 E.cancel(id); E.clearTimers(); E.clearTweens();
+
+// timeline (core 1.0): passos em ordem no MESMO objeto; {par: [...]} roda
+// os filhos juntos e espera o mais longo; cancel() corta a cadeia
+var tl = E.seq(nave, [
+  { to: { x: 200 }, ms: 400, ease: E.m.outQuad },
+  { to: { y: 100 }, ms: 300 },
+  { par: [{ to: { x: 0 }, ms: 300 }, { to: { alpha: 1 }, ms: 500 }] },
+], { onDone: function () { E.goto("fim"); } });
+tl.cancel();
 ```
 
 Easings: `E.m.linear/inQuad/outQuad/inOutQuad/outBack`.
@@ -295,6 +361,36 @@ if (E.save.best("recorde", pontos)) { /* novo recorde! */ }
 ## 14. Matemática e RNG
 
 `E.m`: `clamp, lerp, map, rand(a,b), randInt, pick, dist, dist2, ang, approach, wrap, sign` + easings. `E.rng(seed)` devolve uma função PRNG determinística — seede a geração do nível e seus testes ficam reprodutíveis.
+
+## 14b. UI de jogo (`celeros.game.ui`, opcional)
+
+O que todo jogo reescrevia: menus, listas com rolagem, diálogos datilografados e as telas de título/pausa/fim prontas. Immediate-mode no estilo do `E.gfx.button` (desenha e devolve o tap no MESMO quadro), tudo com `screen: true` (fora da câmera) e no tema do firmware:
+
+```js
+require("celeros.game.ui");
+
+// no draw: menu vertical — devolve o value tocado (ou o label), ou null
+var pick = E.ui.menu([{ label: "Jogar", value: "j" },
+                      { label: "Opcoes", value: "o" },
+                      { label: "Apagar", value: "z", danger: true }]);
+
+// lista com rolagem (retida): arrastar rola, tap seco pega a linha sob o
+// scroll; o draw devolve o pick só no quadro do tap (st.picked guarda o
+// último pra polling)
+var lst = E.ui.list({ items: fases, row: 28, onPick: function (v, i) { ... } });
+var pegou = lst.draw(20, 80, 200, 140);   // coords de TELA
+
+// diálogo datilografado: a revelação avança no draw (cena comum, não
+// static); tap completa o texto, tap de novo fecha (draw devolve false)
+var dlg = E.ui.dialog("A princesa está em outro castelo...", { name: "NPC" });
+if (!dlg.draw(20, 230, 200)) dlg = null;  // false = fechou
+
+// telas prontas, desenhadas por cima da sua cena:
+if (E.ui.title({ game: "MEU JOGO", best: E.save.num("hi") }) === "start")
+  E.goto("jogo", { transition: "fade" });
+var a = E.ui.pause({});            // 'resume' | 'restart' | 'quit'
+var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
+```
 
 ## 15. Física (`celeros.physics`, opcional)
 
@@ -456,7 +552,7 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 
 ## 18. Tamanho e performance
 
-- Engine+jogo passam de 48 KB (as deps somam no teto do app!) → mantenha `"requires": ["psram"]`. O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js` (porte 1:1 do JsStripper do firmware — sem comentários/indentação, quebras de linha mantidas, então a linha do erro bate com o fonte), que é exatamente o que o aparelho compila. Hoje: `celeros.engine` 59 KB de fonte → 33 KB; `celeros.physics` 30 → 17 KB — e jogos do degrau 0 (§15) nem a declaram.
+- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~25 KB enxutos, fx ~6, ui ~5, spr ~2, tilemap ~2 (família inteira ~35 KB ≈ a engine monolítica antiga). Passou de 48 KB no total → `"requires": ["psram"]` sobe o teto para 1 MB. O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js` (porte 1:1 do JsStripper do firmware — sem comentários/indentação, quebras mantidas, então a linha do erro bate com o fonte), que é exatamente o que o aparelho compila.
 - **Zero alocação por frame**: use `E.pool`, remoção swap-pop e reúso de objetos. Um `new`/`[...]` por frame por entidade é o que dispara pausa de GC. Desde a engine 1.2.3 os wrappers também não alocam: chamadas de `E.gfx.*` sem opts compartilham um objeto só de leitura, a busca do `E.font` é memoizada e a largura de cada string (`textWidth`) é medida uma vez por estilo — HUD/placar/botão repetidos não custam chamadas de firmware.
 - Se você chama `System.setTextDatum` direto, devolva o `0` ao terminar: a engine 1.2.3 só toca no datum quando o texto pede origem diferente do default, então o `E.gfx.text` confia que o app o deixou em `0` (todos os apps do repo já fazem).
 - Evite `fillScreen` + redesenho total por frame: no painel RGB do SmartDisplay (framebuffer varrido da PSRAM) isso estrangula o DMA do LCD e a imagem treme. Use cenas `static`, `E.dirty` e `E.tilemap` (§16b).
@@ -469,19 +565,21 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 | Chamada | Faz |
 |---|---|
 | `E.init(opts)` / `E.run(cenas, primeira)` | detecta caps / possui o loop |
-| `E.goto(nome)` / `E.quit()` | troca de cena / sai do loop |
+| `E.goto(nome, {transition})` / `E.quit()` | troca de cena (véu: fade/iris/wipe/bands) / sai do loop |
 | `E.input`, `E.hit(r)`, `E.press(r)` | estado do toque, tap no rect, pressão no rect |
 | `E.gfx.*`, `E.cam` | desenho com câmera, scroll/shake/follow |
 | `E.u(v)`, `E.U`, `E.font(px)`, `E.ts` | escala em unidades do projeto, tipografia por pixel |
 | `cena.static`, `E.redraw()` | menus que só desenham quando algo muda |
-| `E.dirty.enable/clip/unclip/add/full`, `E.tilemap` | apaga-e-redesenha só o que mudou |
+| `E.dirty.enable/clip/unclip/add/full/erase`, `E.tilemap` | apaga-e-redesenha só o que mudou (tilemap: módulo opcional) |
 | `E.group()`, `E.pool(n, f)` | listas de entidades, reciclagem pré-alocada |
-| `E.spr.load/blit`, `E.anim(frames, fps)` | sprites PNG com painter de fallback, flipbooks |
-| `E.fx.burst/popText/flash/stars/draw` | juice |
-| `E.tween/after/every/cancel/clear*` | tempo tickado pela engine |
+| `E.spr.load/blit`, `E.spr.sheet`, `E.anim(frames, fps)` | sprites PNG, regiões de spritesheet, flipbooks (módulo opcional) |
+| `E.fx.burst/ring/popText/flash/stars/draw` | juice |
+| `E.fx.emitter/trail/parallax` | fontes contínuas, rastros, parallax pela câmera (módulo fx) |
+| `E.tween/seq/after/every/cancel/clear*` | tempo tickado pela engine, timelines de tween |
+| `E.ui.menu/list/dialog/title/pause/gameOver` | UI de jogo pronta (módulo opcional — §14b) |
 | `E.audio.music/beat/sfx/stop/mute/volume` | chiptune + sfx educado |
 | `E.save.get/set/num/best` | persistência NVS |
 | `E.m.*`, `E.rng(seed)` | matemática, RNG determinístico |
 | `P.verletFast`, `P.rigid`, `P.hit` | a escada de física: verlet nativo, corpo rígido nativo, sobreposição estática (módulo opcional — §15) |
 
-O autocomplete do editor vem no scaffold: `engine.d.ts` (engine + física) junto do `celer.d.ts` (API do firmware).
+O autocomplete do editor vem no scaffold: o `.d.ts` de cada módulo adotado (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) junto do `celer.d.ts` (API do firmware); quem faz `require("celeros.engine")` segue com o `celeros.engine.d.ts` tudo-em-um.

@@ -1,5 +1,7 @@
-// engine.d.ts — tipos da game engine CelerOS (engine.js + physics.js).
-// Vendorizado no app por `celer.js new --game` / `celer.js engine PASTA`.
+// engine.d.ts — tipos do pacote celeros.engine: a familia CelerGame
+// MONTADA (core + fx + spr + tilemap) + physics. Apps novos adotam os
+// modulos um a um (celeros.game.d.ts + os d.ts dos modulos usados);
+// este arquivo e a uniao completa, para quem require("celeros.engine").
 
 declare namespace E {
     const version: string;
@@ -340,60 +342,13 @@ declare namespace E {
 declare namespace P {
     const version: string;
     interface Vec { x: number; y: number }
+    /** formas para o P.hit: circulo tem r, caixa tem w/h (x,y = centro) */
     interface Body {
         x: number; y: number;
-        r?: number;                    // circulo
-        w?: number; h?: number;        // caixa (x,y = centro)
-        vx?: number; vy?: number;
-        ax?: number; ay?: number;
-        gravity?: number;
-        bounce?: number;
-        friction?: number;
-        drag?: number;
-        mass?: number;
-        static?: boolean;
-        sensor?: boolean;
-        group?: number;
-        mask?: number;
-        tiles?: boolean;               // false: ignora o tilemap
-        drop?: boolean;                // atravessa plataformas one-way
-        grounded?: boolean;
-        onCollide?: (me: Body, other: Body, info: { nx: number; ny: number; overlap: number }) => void;
+        r?: number;
+        w?: number; h?: number;
         [k: string]: any;
     }
-    interface World {
-        gravity: Vec;
-        bounds: { x: number; y: number; w: number; h: number } | null;
-        walls: 'contain' | 'wrap' | 'none';
-        maxSub: number;
-        count: number;
-        all: Body[];
-        tiles: Tiles | null;
-        add(b: Body): Body;
-        remove(b: Body): void;
-        clear(): void;
-        each(fn: (b: Body) => void): void;
-        addTiles(t: Tiles): Tiles;
-        step(dt: number): void;
-    }
-    interface Tiles {
-        tw: number; th: number; cols: number; rows: number;
-        grid: any[];
-        tileAt(px: number, py: number): string | null;
-        solidAt(col: number, row: number): boolean;
-        onewayAt(col: number, row: number): boolean;
-        setTile(col: number, row: number, ch: any): void;
-    }
-    function world(opts?: {
-        gravity?: Vec;
-        bounds?: { x: number; y: number; w: number; h: number };
-        walls?: 'contain' | 'wrap' | 'none';
-        maxSub?: number;
-    }): World;
-    function tiles(grid: any[], tw: number, th: number, opts?: {
-        solid?: (ch: any) => boolean;
-        oneway?: (ch: any) => boolean;
-    }): Tiles;
     function hit(a: Body, b: Body): boolean;
     interface VerletPoint { x: number; y: number; px?: number; py?: number; pin?: boolean; [k: string]: any }
     interface VerletStick { a: number; b: number; len?: number }
@@ -413,6 +368,28 @@ declare namespace P {
         sticks?: VerletStick[];
         iterations?: number;
     }): Verlet;
+    /** verlet por INDICE em arrays planos (xy()[2i], xy()[2i+1]). NATIVO na
+     *  API 31+ (System.verlet*, w.native === true); sem o binding roda o
+     *  P.verlet JS com a mesma interface (sem colisao ponto-ponto). */
+    interface VerletFast {
+        native: boolean;
+        id: number;
+        step(dt: number, o?: { gravity?: Vec; damp?: number;
+                               bounds?: { x: number; y: number; w: number; h: number };
+                               bounce?: number }): void;
+        xy(): number[];
+        sticks(): number[];
+        add(x: number, y: number): number;
+        stick(a: number, b: number, len?: number): void;
+        pin(i: number, on?: boolean): void;
+        set(i: number, x: number, y: number): void;
+        count(): number;
+        delStick(i: number): boolean;
+        delPoint(i: number): boolean;
+        pins(): number[];
+        free(): void;
+    }
+    function verletFast(opts?: { iterations?: number; radius?: number }): VerletFast;
     /** Corpo rigido nativo (API 33). Indices estaveis; state() = [x, y, ang, hit, rapidez, flags] por indice. */
     interface RigidOpts { static?: boolean; density?: number; friction?: number; bounce?: number; angle?: number }
     interface Rigid {

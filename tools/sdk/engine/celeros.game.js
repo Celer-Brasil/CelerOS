@@ -330,10 +330,61 @@ E._redraw = true;       // cena static: pede 1 draw
 E._btns = [];           // botoes desenhados no ultimo draw (E.gfx.button)
 E._btnOn = -1;          // indice do botao sob o dedo (feedback de press)
 
-E.goto = function (name) { E._next = name; };
+E.goto = function (name, opts) {
+    E._next = name;
+    E._transReq = opts || null;
+};
 E.quit = function () { E._quit = true; };
 // cena static: agenda um draw (estado mudou). Em cena comum e no-op.
 E.redraw = function () { E._redraw = true; };
+
+// ------------------------------------------- transicao de cena (veu) ------
+
+// E.goto(nome, {transition, ms, color, dir}) — veu por cima da tela em
+// vez de captura de quadro (nao ha binding de screen->sprite): 'fade'
+// fecha um veu sobre a cena atual (metade do ms) e abre na nova (outra
+// metade); 'iris' abre um buraco quadrado crescente na nova cena; 'wipe'
+// retrai o veu numa direcao (dir: left|right|up|down, default left);
+// 'bands' retrai 8 colunas em stagger. Custo: <= 9 fillRect/quadro, e a
+// camada suja repinta o fundo inteiro enquanto o veu vive (E.dirty.full
+// por quadro — transicao e curta).
+E._trans = null;
+E._transReq = null;
+E._drawTrans = function () {
+    var t = E._trans;
+    var p = t.t / t.ms;
+    if (p > 1) p = 1;
+    var c = t.color, W = E.W, H = E.H;
+    if (t.kind === 'wipe') {
+        if (t.dir === 'right') S.fillRect(0, 0, Math.round(W * p), H, c);
+        else if (t.dir === 'up') S.fillRect(0, Math.round(H * p), W, H - Math.round(H * p), c);
+        else if (t.dir === 'down') S.fillRect(0, 0, W, Math.round(H * p), c);
+        else S.fillRect(Math.round(W * p), 0, W - Math.round(W * p), H, c);
+        return;
+    }
+    if (t.kind === 'bands') {
+        var n = 8, bw = W / n;
+        for (var i = 0; i < n; i++) {
+            var q = p * 1.7 - i * 0.0875;   // stagger: coluna i comeca depois
+            var bx = Math.round(i * bw), bw2 = Math.round(bw);
+            if (q <= 0) { S.fillRect(bx, 0, bw2, H, c); continue; }
+            if (q >= 1) continue;
+            var by = Math.round(q * H);
+            S.fillRect(bx, by, bw2, H - by, c);
+        }
+        return;
+    }
+    // 'fadeout' (buraco fechando) e 'in'/'iris' (abrindo): 4 retangulos
+    // em volta do buraco quadrado centrado
+    var half = Math.max(W, H) / 2;
+    var r = (t.kind === 'fadeout' ? 1 - p : p) * half;
+    var x0 = Math.round(W / 2 - r), x1 = Math.round(W / 2 + r);
+    var y0 = Math.round(H / 2 - r), y1 = Math.round(H / 2 + r);
+    if (y0 > 0) S.fillRect(0, 0, W, y0, c);
+    if (y1 < H) S.fillRect(0, y1, W, H - y1, c);
+    if (x0 > 0 && y1 > y0) S.fillRect(0, y0, x0, y1 - y0, c);
+    if (x1 < W && y1 > y0) S.fillRect(x1, y0, W - x1, y1 - y0, c);
+};
 
 // botao sob o dedo entre os do ultimo draw (-1 = nenhum)
 E._btnUnder = function () {
@@ -376,10 +427,35 @@ E.run = function (scenes, first) {
     while (!E._quit) {
         if (E._next !== null) {
             var n = E._next;
-            E._next = null;
-            if (cur && cur.exit) cur.exit();
-            enter(n);
-            E._last = S.millis();
+            var troca = true;
+            if (E._transReq) {
+                if (!E._trans && E._transReq.transition === 'fade') {
+                    // fase OUT: veu fecha sobre a cena atual ANTES da troca
+                    E._trans = { kind: 'fadeout', t: 0, done: false,
+                                 ms: Math.max(1, (E._transReq.ms || 500) / 2),
+                                 color: E._transReq.color === undefined ? 0x0000 : E._transReq.color };
+                    troca = false;
+                } else if (E._trans && E._trans.kind === 'fadeout' && !E._trans.done) {
+                    troca = false;   // espera o veu fechar
+                }
+            }
+            if (troca) {
+                E._next = null;
+                if (cur && cur.exit) cur.exit();
+                enter(n);
+                E._last = S.millis();
+                if (E._transReq) {
+                    var rq = E._transReq, k = rq.transition;
+                    E._trans = {
+                        kind: k === 'bands' ? 'bands' : (k === 'wipe' ? 'wipe' : 'in'),
+                        t: 0, done: false,
+                        ms: Math.max(1, k === 'fade' ? (rq.ms || 500) / 2 : (rq.ms || 400)),
+                        color: rq.color === undefined ? 0x0000 : rq.color,
+                        dir: rq.dir || 'left'
+                    };
+                    E._transReq = null;
+                }
+            }
         }
         var now = S.millis();
         var dt = (now - E._last) / 1000;
@@ -387,6 +463,13 @@ E.run = function (scenes, first) {
         if (dt > 0.1) dt = 0.1;
         if (dt < 0) dt = 0;
         E.dt = dt;
+        if (E._trans) {
+            E._trans.t += dt * 1000;
+            if (E._trans.t >= E._trans.ms) {
+                if (E._trans.kind === 'fadeout') E._trans.done = true;
+                else E._trans = null;   // terminou: cena limpa
+            }
+        }
         E._fpsN++;
         if (now - E._fpsT >= 1000) {
             E.fps = E._fpsN;
@@ -410,14 +493,19 @@ E.run = function (scenes, first) {
                     E._btnOn = on;
                     E._redraw = true;
                 }
-                draw = E._redraw;
+                draw = E._redraw || !!E._trans;   // transicao repinta sempre
             }
             if (draw) {
                 E._redraw = false;
                 E._btns.length = 0;
-                if (E.dirty.on) E.dirty._begin();
+                if (E.dirty.on) {
+                    // o veu cobre a tela: repinta o fundo inteiro por quadro
+                    if (E._trans) E.dirty._full = true;
+                    E.dirty._begin();
+                }
                 cur.draw();
                 if (E.dirty.on) E.dirty._end();
+                if (E._trans) E._drawTrans();
             }
         }
         // pacing: fps global, ou o da cena (cur.fps; 0 = sem teto)
@@ -634,6 +722,51 @@ E._tickTweens = function (now) {
             if (tw.onDone) tw.onDone();
         }
     }
+};
+
+// timeline de tweens NO MESMO obj: E.seq(obj, [passos], {onDone}) — cada
+// passo {to, ms, ease, delay} roda depois do anterior; {par: [passos]}
+// roda os filhos JUNTOS e espera o mais longo. Devolve {dead, done, step,
+// cancel()} — cancel corta a cadeia no passo atual (o tween em voo morre
+// junto). clearTweens da cena derruba a cadeia do mesmo jeito.
+E.seq = function (obj, steps, opts) {
+    opts = opts || {};
+    var h = { dead: false, done: false, step: -1, _tw: null,
+              cancel: function () {
+                  h.dead = true;
+                  if (h._tw) {
+                      if (h._tw.length) {
+                          for (var i = 0; i < h._tw.length; i++) E.cancel(h._tw[i]);
+                      } else E.cancel(h._tw);
+                  }
+              } };
+    function next() {
+        if (h.dead) return;
+        h.step++;
+        if (h.step >= steps.length) {
+            h.done = true;
+            if (opts.onDone) opts.onDone();
+            return;
+        }
+        var st = steps[h.step];
+        if (st.par) {
+            var pend = st.par.length;
+            h._tw = [];
+            for (var i = 0; i < st.par.length; i++) {
+                h._tw.push(E.tween(obj, st.par[i].to, st.par[i].ms,
+                                   { ease: st.par[i].ease, delay: st.par[i].delay,
+                                     onDone: function () {
+                                         if (--pend === 0) next();
+                                     } }));
+            }
+            if (!pend) next();   // par vazio: passa direto
+        } else {
+            h._tw = E.tween(obj, st.to, st.ms,
+                            { ease: st.ease, delay: st.delay, onDone: next });
+        }
+    }
+    next();
+    return h;
 };
 
 // ----------------------------------------------- grupos e pools ----------

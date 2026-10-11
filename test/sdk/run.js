@@ -1128,6 +1128,118 @@ function depsSize(nomes) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ------------------------------- transicoes de cena + timeline (core 1.0) --
+(function () {
+    console.log('SDK CelerGame transicoes + E.seq:');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-tr-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game': '^1.0.0' } }));
+
+    function runSnippet(code, setup) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(tmp, env);
+        var out = {};
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        if (setup) setup(env);
+        var fn = new Function('System', 'Storage', '__harness', 'require', code);
+        fn(env.System, env.Storage, env.__harness, req);
+        return out;
+    }
+
+    // fade: a troca so acontece DEPOIS da fase OUT (veu fechando sobre a)
+    var r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var trocou = -1, frames = 0, t0 = System.millis(), veus = 0;' +
+        'var fr = System.fillRect;' +
+        'System.fillRect = function (x, y, w, h, c) { if (c === 0xF800) veus++; fr(x, y, w, h, c); };' +
+        'E.run({' +
+        '  a: { update: function () { frames++;' +
+        '        if (frames === 2) E.goto("b", { transition: "fade", ms: 300, color: 0xF800 }); },' +
+        '        draw: function () {} },' +
+        '  b: { enter: function () { trocou = System.millis() - t0; E.quit(); } }' +
+        '}, "a");' +
+        '__harness.grab("fade", [trocou, veus]);');
+    check('fade: troca espera a fase OUT fechar (~150 ms) e o veu pintou',
+          r.fade[0] >= 145 && r.fade[1] >= 4,
+          'trocou=' + r.fade[0] + ' veus=' + r.fade[1]);
+
+    // wipe: troca IMEDIATA e veu retraindo (larguras decrescentes)
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var trocou = -1, frames = 0, veus = [];' +
+        'var fr = System.fillRect;' +
+        'System.fillRect = function (x, y, w, h, c) { if (c === 0xF800) veus.push(w); fr(x, y, w, h, c); };' +
+        'E.run({' +
+        '  a: { update: function () { if (++frames === 2) { E.goto("b", { transition: "wipe", ms: 120, color: 0xF800 }); trocou = frames; } },' +
+        '       draw: function () {} },' +
+        '  b: { update: function () { if (!E._trans && veus.length > 0) E.quit();' +
+        '                             if (System.millis() > 4000) E.quit(); },' +
+        '       draw: function () {} }' +
+        '}, "a");' +
+        '__harness.grab("wipe", [E.sceneName, veus[0], veus[veus.length - 1], veus.length]);');
+    check('wipe: troca no quadro seguinte e o veu recai (240 -> menor)',
+          r.wipe[0] === 'b' && r.wipe[1] === 240 && r.wipe[2] < r.wipe[1] &&
+          r.wipe[3] >= 2,
+          JSON.stringify(r.wipe));
+
+    // cena static repinta sob o veu (sem input, sem redraw manual)
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var draws = 0, frames = 0;' +
+        'E.run({' +
+        '  a: { update: function () { if (++frames === 2) E.goto("m", { transition: "iris", ms: 150, color: 0x0000 }); },' +
+        '       draw: function () {} },' +
+        '  m: { static: true, update: function () { if (draws >= 4) E.quit();' +
+        '                                            if (System.millis() > 4000) E.quit(); },' +
+        '       draw: function () { draws++; } }' +
+        '}, "a");' +
+        '__harness.grab("st", draws);');
+    check('cena static repinta a cada quadro enquanto o veu vive',
+          r.st >= 4, 'draws=' + r.st);
+
+    // E.seq: passos em ordem, grupo paralelo, onDone e step final
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var obj = { x: 0, y: 0 }, fase = [];' +
+        'var h = E.seq(obj, [' +
+        '  { to: { x: 10 }, ms: 100 },' +
+        '  { to: { y: 20 }, ms: 100 },' +
+        '  { par: [{ to: { x: 40 }, ms: 60 }, { to: { y: 80 }, ms: 120 }] }' +
+        '], { onDone: function () { fase.push("done"); } });' +
+        'var t0 = System.millis();' +
+        'E.run({ s: { update: function () {' +
+        '  if (obj.x === 10 && fase.indexOf("x10") < 0) fase.push("x10");' +
+        '  if (obj.y === 20 && obj.x === 10 && fase.indexOf("y20") < 0) fase.push("y20");' +
+        '  if (fase.indexOf("done") >= 0 || System.millis() > t0 + 3000) E.quit();' +
+        '} } }, "s");' +
+        '__harness.grab("seq", [obj.x, obj.y, fase.join(","), h.done, h.step]);');
+    check('E.seq: sequencia respeita a ordem, par roda junto, onDone no fim',
+          r.seq[0] === 40 && r.seq[1] === 80 &&
+          r.seq[2] === 'x10,y20,done' && r.seq[3] === true && r.seq[4] === 3,
+          JSON.stringify(r.seq));
+
+    // seq.cancel corta a cadeia: tween em voo morre e onDone nunca dispara
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var obj = { x: 0 }, fim = false, xNoCancel = -1;' +
+        'var h = E.seq(obj, [{ to: { x: 10 }, ms: 100 }, { to: { x: 50 }, ms: 100 }],' +
+        '              { onDone: function () { fim = true; } });' +
+        'var t0 = System.millis();' +
+        'E.run({ s: { update: function () {' +
+        '  if (System.millis() > t0 + 150 && xNoCancel < 0) { xNoCancel = obj.x; h.cancel(); }' +
+        '  if (System.millis() > t0 + 900) E.quit();' +
+        '} } }, "s");' +
+        '__harness.grab("cut", [xNoCancel >= 10, obj.x < 50, fim, h.done]);');
+    check('seq.cancel: congela o obj no meio e onDone nao dispara',
+          r.cut[0] === true && r.cut[1] === true && r.cut[2] === false &&
+          r.cut[3] === false,
+          JSON.stringify(r.cut));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------------------ mesh --
 (function () {
     console.log('SDK mesh (tools/sdk/engine/celeros.mesh.js):');

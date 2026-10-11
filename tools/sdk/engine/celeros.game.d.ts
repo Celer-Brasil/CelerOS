@@ -99,7 +99,14 @@ declare namespace E {
         exit?: () => void;
     }
     function run(scenes: Record<string, Scene>, first: string): void;
-    function goto(name: string): void;
+    /** Troca de cena; opts = {transition: 'fade'|'iris'|'wipe'|'bands', ms, color, dir} desenha um veu. */
+    function goto(name: string, opts?: {
+        transition?: 'fade' | 'iris' | 'wipe' | 'bands';
+        ms?: number;
+        color?: number;
+        /** direcao do wipe (default 'left') */
+        dir?: 'left' | 'right' | 'up' | 'down';
+    }): void;
     function quit(): void;
     /** Cena static: agenda um draw (o estado mudou). */
     function redraw(): void;
@@ -136,6 +143,22 @@ declare namespace E {
     function tween(obj: any, to: Record<string, number>, ms: number,
                    opts?: { ease?: (t: number) => number; delay?: number;
                             onDone?: () => void }): Tween;
+    interface SeqStep {
+        to?: Record<string, number>;
+        ms?: number;
+        ease?: (t: number) => number;
+        delay?: number;
+        /** passos que rodam JUNTOS (o seq espera o mais longo) */
+        par?: SeqStep[];
+    }
+    interface Seq {
+        dead: boolean;
+        done: boolean;
+        step: number;
+        cancel(): void;
+    }
+    /** Timeline de tweens no mesmo obj: passos em ordem, {par:[...]} em paralelo. */
+    function seq(obj: any, steps: SeqStep[], opts?: { onDone?: () => void }): Seq;
 
     // ------------------------------------------------ grupos e pools -----
     interface Entity {

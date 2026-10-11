@@ -66,7 +66,7 @@ declare const System: {
     rigidSet(id: string, idx: number, x: number, y: number, angle?: number, vx?: number, vy?: number, w?: number): any;
     rigidImpulse(id: string, idx: number, jx: number, jy: number): any;
     rigidStep(id: string, dt: number, gx?: number, gy?: number, maxSub?: number): any;
-    rigidState(id: string, buf?: number): any;
+    rigidState(id: string, buf?: number[]): any;
     rigidCount(id: string): any;
     drawSprite(id: string, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: string, smooth?: number): void;
     blitSprite(id: string, x: number, y: number, w: number, h: number): void;

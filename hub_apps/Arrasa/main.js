@@ -508,7 +508,7 @@ E.run({
             if (!this.btn) return;
             if (this.btn.length > 1 && E.hit(this.btn[0])) {
                 E.audio.sfx(SND.ok);
-                E.goto("mapa");
+                E.goto("mapa", { transition: "fade", ms: 300 });
             } else if (E.hit(this.btn[this.btn.length - 1])) {
                 S.exitApp();
             }
@@ -567,11 +567,11 @@ E.run({
                     E.audio.sfx(SND.ok);
                     G.fase = n;
                     G.retomar = false;
-                    E.goto("jogando");
+                    E.goto("jogando", { transition: "wipe", ms: 300 });
                     return;
                 }
             }
-            if (E.hit(this.voltar)) { E.audio.sfx(SND.ok); E.goto("titulo"); }
+            if (E.hit(this.voltar)) { E.audio.sfx(SND.ok); E.goto("titulo", { transition: "fade", ms: 250 }); }
         },
         draw: function () {
             A.fundoInteiro();
@@ -677,7 +677,7 @@ E.run({
             if (G.banner) G.banner.t += dt;
             if (G.fimT >= 0) {
                 G.fimT += dt;
-                if (G.fimT > 1.4) { E.goto("fim"); return; }
+                if (G.fimT > 1.4) { E.goto("fim", { transition: "iris", ms: 450 }); return; }
             }
         },
         draw: function () {
@@ -750,14 +750,14 @@ E.run({
                 E.audio.sfx(SND.ok);
                 G.retomar = false;
                 if (prox) G.fase++;
-                E.goto("jogando");
+                E.goto("jogando", { transition: "wipe", ms: 300 });
             } else if (this.btn[1] && E.hit(this.btn[1])) {
                 E.audio.sfx(SND.ok);
-                if (prox) { G.retomar = false; E.goto("jogando"); }
-                else E.goto("mapa");
+                if (prox) { G.retomar = false; E.goto("jogando", { transition: "wipe", ms: 300 }); }
+                else E.goto("mapa", { transition: "fade", ms: 300 });
             } else if (this.btn[2] && E.hit(this.btn[2])) {
                 E.audio.sfx(SND.ok);
-                E.goto("mapa");
+                E.goto("mapa", { transition: "fade", ms: 300 });
             }
         },
         draw: function () {

@@ -42,7 +42,10 @@ if (typeof __harness !== "undefined") {
                          E: null };   // E entra depois do require abaixo
 }
 
-var E = require("celeros.engine");
+var E = require("celeros.game");       // familia CelerGame: adota so o que usa
+require("celeros.game.fx");
+require("celeros.game.spr");
+require("celeros.game.tilemap");
 var arena = require("arena");
 var NV = require("niveis");
 var ia = require("ia");

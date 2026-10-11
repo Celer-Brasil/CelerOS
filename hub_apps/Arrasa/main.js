@@ -11,7 +11,8 @@
 // se MEXE (corpo acordado, pedra, elastico, particulas) e o que a borracha
 // do quadro anterior TOCOU — pilha dormindo nao custa nada.
 
-var E = require("celeros.engine");
+var E = require("celeros.game");       // familia CelerGame: adota so o que usa
+require("celeros.game.fx");
 var M = require("mundo");
 var A = require("arte");
 var NIV = require("niveis");

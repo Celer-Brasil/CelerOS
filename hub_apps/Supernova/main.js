@@ -18,7 +18,9 @@
 // com colisao por distancia (sem fisica desde a 2.3). Layout em unidades do
 // projeto 240 (E.u): 2x no 480, ~1,7x no relogio.
 
-var E = require("celeros.engine");
+var E = require("celeros.game");       // familia CelerGame: adota so o que usa
+require("celeros.game.fx");
+require("celeros.game.spr");
 var jogo = require("jogo");
 
 E.init({ dir: "Supernova", fps: 30, native: true, save: "supernova.", particles: 120 });
@@ -307,7 +309,7 @@ E.run({
             if (E.hit(this.btn[0])) {
                 E.audio.sfx("ok");
                 jogo.reset();
-                E.goto("jogando");
+                E.goto("jogando", { transition: "fade", ms: 350 });
             } else if (E.hit(this.btn[1])) {
                 System.exitApp();
             }
@@ -371,7 +373,7 @@ E.run({
                 E.goto("pausa");
                 return;
             }
-            if (s.over && s.overT > 0.6) E.goto("fim");
+            if (s.over && s.overT > 0.6) E.goto("fim", { transition: "iris", ms: 450 });
         },
         draw: function () {
             var s = jogo.state();
@@ -440,10 +442,10 @@ E.run({
             if (E.hit(this.btn[0])) {
                 E.audio.sfx("ok");
                 jogo.reset();
-                E.goto("jogando");
+                E.goto("jogando", { transition: "wipe", ms: 300 });
             } else if (E.hit(this.btn[1])) {
                 E.audio.sfx("ui");
-                E.goto("titulo");
+                E.goto("titulo", { transition: "fade", ms: 300 });
             }
         },
         draw: function () {

@@ -15,7 +15,9 @@
 // e velocidades nasceram no 480 e escalam por K = E.U / 2 (1 no
 // SmartDisplay, ~0,85 no relogio de 410).
 
-var E = require("celeros.engine");
+var E = require("celeros.game");
+require("celeros.game.fx");
+require("celeros.game.spr");
 
 // paleta do jogo (preto puro e a cor-chave dos sprites)
 var CIANO = 0x07FF, CIANOD = 0x03EF, MAGENTA = 0xF81F, LARANJA = 0xFD20,

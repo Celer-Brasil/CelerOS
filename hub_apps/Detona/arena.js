@@ -13,7 +13,10 @@
 // Coordenadas: o jogador vive em PIXELS locais da grade (0,0 = canto da
 // celula 0,0; centro da celula i = (i + 0.5) * cell). Bichos em celulas.
 
-var E = require("celeros.engine");
+var E = require("celeros.game");
+require("celeros.game.fx");
+require("celeros.game.spr");
+require("celeros.game.tilemap");
 var NV = require("niveis");
 var S = System;
 

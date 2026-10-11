@@ -413,6 +413,137 @@ function check(name, ok, detail) {
     check('Nucleo: parado no pad de chegada nao volta (sem ping-pong)', cel.c === 1 && cel.r === 5);
 })();
 
+// ------------------------------------------------------ Arrasa: mundo ----
+// A fisica de jogo do Arrasa direto (mundo.js/niveis.js sobre o P.rigid do
+// espelho JS): contratos que o app consome por indice — metas de estrela
+// alcancaveis, ciclo de mundo entre recargas, indices estaveis depois de
+// remocoes (TNT em cadeia) e a massa do app batendo com a do solver
+// (impulso J = dv * m tem que mudar a velocidade em dv).
+(function () {
+    console.log('SDK Arrasa (hub_apps/Arrasa/mundo.js):');
+    var harness = require('../../test/js_harness/run.js');
+    var DIR = path.join(ROOT, 'hub_apps', 'Arrasa');
+    var env = harness.makeEnv();
+    var req = harness.makeRequire(DIR, env);
+    var out = {};
+    new Function('System', 'Storage', 'require', '__out',
+        'var M = require("mundo"), NIV = require("niveis");' +
+        '__out.M = M; __out.NIV = NIV;')(env.System, env.Storage, req, out);
+    var M = out.M, NIV = out.NIV;
+
+    // pontos teoricos da fase (g = goblins, bl = quebraveis) pelo MAT do app
+    function pontuacao(n) {
+        var pecas = NIV.montar(n), g = 0, bl = 0;
+        for (var p = 0; p < pecas.length; p++) {
+            var c = pecas[p];
+            var m = M.MAT[c.k === 'goblin' ? c.tipo : c.mat];
+            if (c.k === 'goblin') g += m.pts;
+            else if (!m.estatico) bl += m.pts;
+        }
+        return { g: g, bl: bl, tiros: NIV.fase(n).tiros.length };
+    }
+
+    // 1) metas de estrela: ordenadas e ALCANCAVEIS em todas as fases. O maximo
+    // teorico e g + bl + 1000*(tiros-1); a formula antiga pedia +2000 de
+    // bonus e a fase 1 (2 tiros, max 2300) tinha meta-3 de 3200 — impossivel
+    var pior = null;
+    for (var n = 0; n < NIV.total; n++) {
+        var pt = pontuacao(n), metas = M.metas(n);
+        var max = pt.g + pt.bl + 1000 * (pt.tiros - 1);
+        if (!(metas[0] === pt.g && metas[0] < metas[1] && metas[1] < metas[2] &&
+              metas[1] <= pt.g + pt.bl && metas[2] <= max)) {
+            pior = 'fase ' + (n + 1) + ': metas ' + JSON.stringify(metas) +
+                   ' vs g=' + pt.g + ' bl=' + pt.bl + ' max=' + max;
+        }
+    }
+    check('metas de estrela ordenadas e alcancaveis nas 10 fases (3* <= maximo)', pior === null, pior);
+    var pt1 = pontuacao(0), m1 = M.metas(0);
+    check('fase 1: 3 estrelas cabem no maximo (2300) — regressao da meta impossivel',
+          m1[2] <= pt1.g + pt1.bl + 1000 * (pt1.tiros - 1),
+          'meta3=' + m1[2] + ' max=' + (pt1.g + pt1.bl + 1000 * (pt1.tiros - 1)));
+
+    // 2) ciclo de mundo: recarregar a fase N vezes nao vaza corpo (o count
+    // volta exato) nem mundo (id valido, M.sem false)
+    M.carregar(9);
+    var base = M.w.count(), ok = true;
+    for (var vez = 0; vez < 5; vez++) {
+        if (!M.carregar(9) || M.w.id <= 0 || M.w.count() !== base) ok = false;
+    }
+    check('recarregar a fase 5x: mesmo numero de corpos, mundo novo a cada vez', ok,
+          'count=' + M.w.count() + ' esperado=' + base);
+    check('estado do quadro: 6 numeros por corpo, todo corpo vivo', 
+          M.s.length === M.w.count() * M.NS && (M.s[5] & 1) === 1);
+
+    // 3) indices estaveis depois de remocoes: TNT em cadeia tira pecas e a
+    // tripla cria corpos que reaproveitam slot — todo slot VIVO tem
+    // descritor com .i === i (slot morto no meio da marca d'agua pode
+    // existir: o remove so encolhe a marca pelo fim)
+    function invariante() {
+        var cnt = M.w.count(), st = M.w.state();
+        for (var i = 0; i < cnt; i++) {
+            var vivo = (st[i * M.NS + 5] & 1) !== 0;
+            var c = M.corpos[i];
+            if (vivo !== !!c) return 'slot ' + i + (vivo ? ' vivo sem descritor' : ' morto com descritor');
+            if (c && c.i !== i) return 'slot ' + i + ' com descritor de outro indice';
+        }
+        for (var j = 0; j < M.corpos.length; j++) {
+            if (M.corpos[j] && j >= cnt) return 'descritor ' + j + ' alem da marca d\'agua';
+        }
+        return null;
+    }
+    M.carregar(9);
+    for (var s4 = 0; s4 < 40; s4++) M.step(1 / 30);
+    var g0 = M.goblins, tnt = -1;
+    for (var i4 = 0; i4 < M.corpos.length; i4++)
+        if (M.corpos[i4] && M.corpos[i4].mat === 'tnt') tnt = i4;
+    M.corpos[tnt].morto = true;
+    for (s4 = 0; s4 < 90; s4++) M.step(1 / 30);
+    var inv = invariante();
+    check('TNT em cadeia: remocoes mantem M.corpos coerente com os slots', inv === null, inv);
+    check('a explosao derrubou goblins (mundo vivo)', M.goblins < g0, 'goblins ' + g0 + ' -> ' + M.goblins);
+
+    // tripla: racha cria corpos REAPROVEITANDO slots livres do castelo quebrado
+    M.carregar(2);
+    for (s4 = 0; s4 < 40; s4++) M.step(1 / 30);
+    M.tiro.tipo = 'tripla'; M.tiro.estado = 'mirando';
+    M.pull.x = -36; M.pull.y = 14;
+    M.soltar();
+    for (s4 = 0; s4 < 8; s4++) M.step(1 / 30);
+    var evt = [];
+    var partiu = M.habilidade(evt);
+    inv = invariante();
+    check('tripla racha em 3 e os novos corpos entram em slots coerentes',
+          partiu && M.tiro.extras.length === 2 && inv === null,
+          'extras=' + (M.tiro && M.tiro.extras.length) + ' ' + inv);
+
+    // 4) massa do app = massa do solver: impulso J = dv*m muda v em ~dv
+    // (M.explodir e o dano por hit dependem disso — dv = J/m)
+    M.carregar(0);
+    for (s4 = 0; s4 < 40; s4++) M.step(1 / 30);
+    var alvo = -1;
+    for (var i5 = 0; i5 < M.corpos.length; i5++)
+        if (M.corpos[i5] && M.corpos[i5].k === 'box') alvo = i5;
+    var c5 = M.corpos[alvo];
+    M.w.set(alvo, 100, 100, 0, 0, 0, 0);
+    var dv = 240;
+    M.w.impulse(alvo, dv * c5.m, 0);
+    M.w.step(0.001, { gravity: { x: 0, y: 0 } });
+    var s5 = M.w.state();
+    var medido = (s5[alvo * M.NS] - 100) / 0.001;
+    check('massa() do app bate com a do solver (impulso dv*m move dv)',
+          Math.abs(medido - dv) < dv * 0.05, 'dv pedido=' + dv + ' medido=' + medido.toFixed(1));
+
+    // 5) o castelo assenta e DORME (a carencia segura o dano de montagem)
+    M.carregar(3);
+    for (s4 = 0; s4 < 60; s4++) M.step(1 / 30);
+    var acordados = 0;
+    for (var i6 = 0; i6 < M.corpos.length; i6++)
+        if (M.corpos[i6] && !M.corpos[i6].fixo && (M.s[i6 * M.NS + 5] & 2)) acordados++;
+    check('torre de pedra dorme parada depois de assentar (sem colapso espontaneo)',
+          acordados === 0 && M.goblins === 3 && M.pontos === 0,
+          'acordados=' + acordados + ' goblins=' + M.goblins);
+})();
+
 // ---------------------------------------------------------------- physics --
 (function () {
     console.log('SDK physics (tools/sdk/engine/celeros.physics.js):');

@@ -1,7 +1,7 @@
 {
   "name": "Arrasa!",
   "packageName": "celeros.arrasa",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "api": 33,
   "permissions": [],
   "requires": [
@@ -12,7 +12,7 @@
   "category": "Arcade",
   "topbar": false,
   "description": "Estilingue contra a fortaleza dos goblins, com fisica de corpo rigido NATIVA: tabuas e blocos de madeira, gelo e pedra giram, empilham, tombam e quebram pelo impacto; a pedra puxa o elastico de couro, voa e nunca atravessa nada. 10 fases com estrelas, TNT e 7 tipos de pedra com poderes: pedrao, tripla (racha em 3), flecha (dispara reto), bomba, chocadeira (solta ovo-bomba) e bumerangue (volta por tras).",
-  "changelog": "1.1.0 - migra para a familia CelerGame (core + fx no lugar do pacote celeros.engine; physics segue): mesmo E, compile mais leve, adocao explicita; transicoes de cena (fade/wipe/iris) nas trocas de titulo/jogo/fim — pausa e retomada continuam instantaneas (recurso novo do core 1.0)\n1.0.1 - desempenho: so redesenha o que se mexe (estilingue e nome da fase parados saem do quadro a quadro), leitura direta do estado da fisica, fundo restaurado numa chamada (API 34, cai no caminho antigo sem ela), peca que acorda nao deixa rastro; 1.0.0 - jogo novo sobre o corpo rigido nativo (API 33): pecas que giram e empilham, dano por impacto, TNT e bomba com explosao radial, tripla que racha no ar, elastico que estica e afina, mira com trajetoria, rastro do voo (some ao fim do turno), pedras flecha/bumerangue/chocadeira com arte propria, 10 fases com 3 estrelas e recorde por fase, arte gerada (personagens, cenario, texturas)",
+  "changelog": "1.1.1 - equilibrio: as metas de estrela cabem no maximo de pontos de TODAS as fases (a 1 tinha 3 estrelas impossiveis: meta 3200 contra maximo 2300); agora 2 estrelas = metade do estrago, 3 = 60% do estrago com uma pedra sobrando\n1.1.0 - migra para a familia CelerGame (core + fx no lugar do pacote celeros.engine; physics segue): mesmo E, compile mais leve, adocao explicita; transicoes de cena (fade/wipe/iris) nas trocas de titulo/jogo/fim — pausa e retomada continuam instantaneas (recurso novo do core 1.0)\n1.0.1 - desempenho: so redesenha o que se mexe (estilingue e nome da fase parados saem do quadro a quadro), leitura direta do estado da fisica, fundo restaurado numa chamada (API 34, cai no caminho antigo sem ela), peca que acorda nao deixa rastro; 1.0.0 - jogo novo sobre o corpo rigido nativo (API 33): pecas que giram e empilham, dano por impacto, TNT e bomba com explosao radial, tripla que racha no ar, elastico que estica e afina, mira com trajetoria, rastro do voo (some ao fim do turno), pedras flecha/bumerangue/chocadeira com arte propria, 10 fases com 3 estrelas e recorde por fase, arte gerada (personagens, cenario, texturas)",
   "deps": {
     "celeros.game": "^1.0.0",
     "celeros.game.fx": "^1.0.0",

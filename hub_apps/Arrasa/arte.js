@@ -4,10 +4,12 @@
 // pecas desenhadas giradas (drawSprite com angulo/zoom) + contorno e
 // rachaduras procedurais; estilingue com elastico de verdade.
 //
-// Orcamento do pool (8 slots com PSRAM): fundo (tela inteira), pedra,
-// goblin, rei, 3 texturas = 7; o 8o e o temporario do carregamento (PNG no
-// tamanho de arquivo -> sprite no tamanho da tela). Sem slot ou sem PNG,
-// cada peca cai num desenho procedural (nunca tela vazia).
+// Orcamento do pool (16 slots com PSRAM desde a API 33; eram 8 ate a 32 —
+// foi por este jogo que o pool dobrou): fundo (tela inteira), pedra,
+// goblin, rei, 6 tiros com arte e 3 texturas = 13; +1 do rei grande do
+// titulo = pico 14 (o temporario do carregamento nao passa de 11). Sem
+// slot ou sem PNG, cada peca cai num desenho procedural (nunca tela
+// vazia).
 
 var S = System;
 var M = require("mundo");

@@ -479,7 +479,11 @@ M.vitoria = function (ev) {
     ev.push({ t: "vitoria", bonus: bonus, resto: resto });
 };
 
-// estrelas pelos pontos: 1 = venceu; 2 e 3 pedem estrago e tiros sobrando
+// estrelas pelos pontos: 1 = venceu; 2 = metade do estrago; 3 = 60% do
+// estrago E uma pedra sobrando (bonus de 1000/tiro). O teto teorico e
+// g + bl + 1000*(tiros - 1): as metas tem que caber nele em TODAS as fases
+// (a formula antiga pedia 2000 de bonus e a fase 1, com 2 tiros, tinha
+// maximo 2300 para meta-3 de 3200 — 3 estrelas impossivel).
 M.metas = function (n) {
     var pecas = NIV.montar(n), g = 0, bl = 0;
     for (var p = 0; p < pecas.length; p++) {
@@ -488,8 +492,8 @@ M.metas = function (n) {
         if (c.k === "goblin") g += m.pts;
         else if (!m.estatico) bl += m.pts;
     }
-    return [g, Math.round((g + bl * 0.35 + 1000) / 100) * 100,
-            Math.round((g + bl * 0.6 + 2000) / 100) * 100];
+    return [g, Math.round((g + bl * 0.5) / 100) * 100,
+            Math.round((g + bl * 0.6 + 1000) / 100) * 100];
 };
 
 M.estrelas = function () {

@@ -64,7 +64,10 @@ function reset() {
 
 function countdown() {
     for (var n = 3; n >= 1; n--) {
-            UI.text(String(n), 120, 120, { role: "display", align: "center", color: T.accent, id: n });
+        // id FIXO: o slot do UI.text apaga o numero anterior antes de pintar o
+        // novo; com id por numero (3/2/1) eram tres slots sobrepostos e os
+        // digitos empilhavam
+        UI.text(String(n), 120, 120, { role: "display", align: "center", color: T.accent, bg: T.bg, id: 1 });
         System.delay(450);
     }
     // o numero ficaria pintado no campo (redesenho e por celula): limpa

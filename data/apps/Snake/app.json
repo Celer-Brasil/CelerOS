@@ -1,7 +1,7 @@
 {
   "name": "Snake",
   "packageName": "celeros.snake",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "author": "CelerOS",
   "description": "Classico da cobrinha: deslize o dedo para virar, coma as frutas, acelere e bata o recorde (salvo no littlefs).",
   "type": "Game",
@@ -10,5 +10,5 @@
   "permissions": [
     "fs"
   ],
-  "changelog": "1.3.2 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.3.1 - placar estavel: textos do cabecalho por drawString (o fundo do card podia apagar o recorde por um instante)\n1.3.0 - visual novo com o toolkit UI (API 22): pausa e fim de jogo nativos, fruta dourada (+3, expira), swipe ou toque para virar, desenho por celulas alteradas\n1.2.0 - tema CelerOS, recorde persistido, sons playTone; 1.0.0 - primeira versao"
+  "changelog": "1.3.3 - contador inicial nao empilha mais os digitos (slot do UI.text com id fixo apaga o numero anterior); 1.3.2 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.3.1 - placar estavel: textos do cabecalho por drawString (o fundo do card podia apagar o recorde por um instante)\n1.3.0 - visual novo com o toolkit UI (API 22): pausa e fim de jogo nativos, fruta dourada (+3, expira), swipe ou toque para virar, desenho por celulas alteradas\n1.2.0 - tema CelerOS, recorde persistido, sons playTone; 1.0.0 - primeira versao"
 }

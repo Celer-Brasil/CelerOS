@@ -873,6 +873,7 @@ void init() {
     if (s_lock == nullptr || s_inLock == nullptr) return;
     s_leases.seed((uint16_t)(esp_random() & 0xFFFF));
     registerNatives();
+    CamRes::init();  // worker da camera agora, com RAM interna ainda inteira
     s_inited = true;
 }
 

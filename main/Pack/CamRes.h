@@ -29,6 +29,8 @@ static constexpr size_t MAX_CHUNKS = 256;          // 358 KB: VGA JPEG sobra
 static constexpr size_t MAX_IMAGE = CHUNK * MAX_CHUNKS;
 
 bool available();
+// Worker do provedor criado no boot (RAM interna contigua ainda livre)
+void init();
 
 // ---- provedor ----
 // fps = 0: uma foto (confiavel); 1..10: video ate a sessao fechar.

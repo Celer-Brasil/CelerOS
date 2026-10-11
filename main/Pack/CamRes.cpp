@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "../Runtime/CameraCore.h"
 #include "../USBDevice/LogSink.h"
@@ -83,7 +84,23 @@ bool sendChunk(uint8_t xfer, const uint8_t* img, size_t len, size_t idx, uint16_
     return false;
 }
 
+void serveSession();
+
+// Worker PERMANENTE: criado no boot (CamRes::init), quando ainda ha RAM
+// interna contigua — na esp32-cam, depois do WiFi + NimBLE o maior bloco
+// livre fica em ~10 KB e criar a task por sessao falhava ("res_cam nao
+// subiu", bancada 2026-10-11). Dorme no semaforo entre as sessoes.
+SemaphoreHandle_t s_go = nullptr;
+
 void serveTask(void*) {
+    for (;;) {
+        xSemaphoreTake(s_go, portMAX_DELAY);
+        serveSession();
+        s_srv.alive = false;
+    }
+}
+
+void serveSession() {
     uint8_t xfer = 0;
     uint16_t seq = 0;
     uint32_t frames = 0, resent = 0, fails = 0;
@@ -150,10 +167,8 @@ void serveTask(void*) {
         if (spent < period) vTaskDelay(pdMS_TO_TICKS(period - spent));
     }
     if (s_srv.fps > 0) {
-        ESP_LOGI(TAG, "video parou (sessao %u, %u quadros)", (unsigned)s_srv.sid, (unsigned)frames);
+        celer_log_printf("[cam] video parou (sessao %u, %u quadros)\n", (unsigned)s_srv.sid, (unsigned)frames);
     }
-    s_srv.alive = false;
-    vTaskSuspend(nullptr);  // pilha com caps: o serveStop apaga (como o mic)
 }
 
 // ------------------------------------------------------------- cliente
@@ -196,12 +211,21 @@ bool available() {
     return CameraCore::available();
 }
 
-bool serveStart(const uint8_t mac[6], uint16_t sid, uint32_t token, int quality, int fps) {
-    if (!available() || s_srv.alive) return false;
-    if (s_srv.task != nullptr) {
-        celerTaskDelete(s_srv.task);
+void init() {
+    if (s_srv.task != nullptr || !available()) return;
+    s_go = xSemaphoreCreateBinary();
+    if (s_go == nullptr) return;
+    // 6 KB: o frame2jpg (quadro cinza do modo QR) cabe; o crash do video era o
+    // log de dentro da ISR do driver (ver boards/esp32-cam/sdkconfig.defaults)
+    if (celerTaskCreate(serveTask, "res_cam", 8192, 6144, nullptr, 4, &s_srv.task) != pdPASS) {
         s_srv.task = nullptr;
+        celer_log_printf("[cam] provedor: task res_cam nao subiu (interna %u)\n",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     }
+}
+
+bool serveStart(const uint8_t mac[6], uint16_t sid, uint32_t token, int quality, int fps) {
+    if (!available() || s_srv.alive || s_srv.task == nullptr) return false;
     memcpy(s_srv.mac, mac, 6);
     s_srv.sid = sid;
     s_srv.token = token;
@@ -210,18 +234,7 @@ bool serveStart(const uint8_t mac[6], uint16_t sid, uint32_t token, int quality,
     s_srv.ackNew = false;
     s_srv.run = true;
     s_srv.alive = true;
-    // pilha na PSRAM: driver da camera, JPEG por software e esp_now_send —
-    // nada de flash. 8 KB: o frame2jpg usa bem a pilha
-    // interna (ESP32 classico): 8 KB — com 6 KB o video (frame2jpg VGA a cada
-    // quadro) derrubava a cam depois de 3 quadros (bancada 2026-10-11)
-    if (celerTaskCreate(serveTask, "res_cam", 8192, 8192, nullptr, 4, &s_srv.task) != pdPASS) {
-        s_srv.run = false;
-        s_srv.alive = false;
-        s_srv.task = nullptr;
-        celer_log_printf("[cam] provedor: task res_cam nao subiu (interna %u)\n",
-                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-        return false;
-    }
+    xSemaphoreGive(s_go);
     ESP_LOGI(TAG, "camera -> sessao %u (%s, qualidade %d)", (unsigned)sid,
              s_srv.fps > 0 ? "video" : "foto", quality);
     return true;
@@ -230,12 +243,8 @@ bool serveStart(const uint8_t mac[6], uint16_t sid, uint32_t token, int quality,
 void serveStop(uint16_t sid) {
     if (s_srv.sid != sid) return;
     s_srv.run = false;
-    // a task sai no fim do quadro em curso (um JPEG leva ate ~300 ms)
+    // o worker sai da sessao no fim do quadro em curso (um JPEG leva ~300 ms)
     for (int i = 0; i < 60 && s_srv.alive; i++) vTaskDelay(pdMS_TO_TICKS(10));
-    if (!s_srv.alive && s_srv.task != nullptr) {
-        celerTaskDelete(s_srv.task);
-        s_srv.task = nullptr;
-    }
 }
 
 bool serving(uint16_t sid) {

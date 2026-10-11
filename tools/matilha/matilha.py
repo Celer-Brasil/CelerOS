@@ -176,8 +176,8 @@ class MeshNode:
         self.last_refill_ms = None
         self.last_beat_ms = None
         self.next_slot_ms = 0
-        self.counters = {"frames": 0, "relayed": 0, "rxDropped": 0, "txDropped": 0,
-                         "txStarted": 0, "txFail": 0, "txNoToken": 0}
+        self.counters = {"frames": 0, "relayed": 0, "relayDropped": 0, "rxDropped": 0,
+                         "txDropped": 0, "txStarted": 0, "txFail": 0, "txNoToken": 0}
 
     # ------------------------------------------------------------------ tick
     def tick(self):
@@ -205,6 +205,8 @@ class MeshNode:
     def _enqueue_beat(self, now):
         data = bytes([self.caps]) + self.name.encode("utf-8", "replace")[:DATA_MAX - 1]
         self.seq = (self.seq + 1) & 0xFFFF
+        if self.seq == 0:   # 0 reservado ("novo" no enqueue), como o firmware
+            self.seq = (self.seq + 1) & 0xFFFF
         enc = encode(Frame(TYPE_BEAT, self.net_id, self.node, DST_BROADCAST,
                            self.seq, TTL_DEFAULT, 0, data))
         if enc is None:   # fila cheia: o proximo BEAT (3 s) tenta de novo
@@ -348,6 +350,10 @@ class MeshNode:
                     jitter += 700 + self.rng.randrange(900)
                 if self._push_pending(enc, now + jitter, 0):
                     self.counters["relayed"] += 1
+                else:
+                    # anel cheio: conta — relay perdido em serie e sintoma de
+                    # fila atolada (paridade com o relayDropped do firmware)
+                    self.counters["relayDropped"] += 1
 
     def _node_touch(self, nid, name, caps, rssi, hops, now):
         e = self.nodes_tbl.get(nid)
@@ -375,9 +381,18 @@ class MeshNode:
                 "rssi": e["rssi"], "hops": e["hops"],
                 "last_seen_s": (now - e["last_ms"]) / 1000.0}
 
+    def _node_expired(self, e, now):
+        """No vencido? Mesmo criterio do nodeExpired do firmware: com fila de
+        TX pendente o proprio no esta SURDO (cada burst desliga o scanner) e
+        nao expira par pelo TTL normal — so no teto duro de 4x TTL."""
+        age = now - e["last_ms"]
+        if age <= self.K_NODE_TTL_MS:
+            return False
+        return not self.pending or age > 4 * self.K_NODE_TTL_MS
+
     def _sweep(self, now):
         for nid in [n for n, e in self.nodes_tbl.items()
-                    if now - e["last_ms"] > self.K_NODE_TTL_MS]:
+                    if self._node_expired(e, now)]:
             e = self.nodes_tbl.pop(nid)
             if self.on_member:
                 self.on_member("leave", self._node_view(nid, e, now))

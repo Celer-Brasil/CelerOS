@@ -233,9 +233,29 @@ class TestPresenca(unittest.TestCase):
         self.assertEqual(node.nodes_tbl[0x4848]["caps"], 0x25)
         self.assertEqual(eventos, [("join", 0x4848)])
         clk.advance(15001)
-        node.tick()                                  # varredura expira
+        node.tick()   # BEAT proprio entra na fila ANTES da varredura: a
+        # histerese (fila pendente = no surdo, criterio do nodeExpired do
+        # firmware) segura o par neste giro
+        self.assertIn(0x4848, node.nodes_tbl)
+        node.tick()   # fila drenada: varredura expira no TTL normal
         self.assertNotIn(0x4848, node.nodes_tbl)
         self.assertEqual(eventos, [("join", 0x4848), ("leave", 0x4848)])
+
+    def test_no_sumido_sai_no_teto_4xttl_com_fila_cheia(self):
+        # par que foi embora DE VERDADE: pressao continua de fila segura a
+        # presenca alem do TTL (no surdo nao dita morte), mas o teto duro
+        # de 4x TTL derruba mesmo assim (paridade com o CelerNet.cpp)
+        eventos = []
+        node, radio, clk = make_node(on_member=lambda k, n: eventos.append((k, n["id"])))
+        radio.tx = lambda frame: False   # radio sempre ocupado: fila nunca drena
+        node.on_adv_report(beat_raw(0x4848, "Celer-4848"), -58)
+        clk.advance(30000)               # 29 s sem BEAT: histerese segura
+        node.tick()
+        self.assertIn(0x4848, node.nodes_tbl)
+        clk.advance(31001)               # 60 s sem BEAT: teto 4x TTL
+        node.tick()
+        self.assertNotIn(0x4848, node.nodes_tbl)
+        self.assertEqual(eventos[-1], ("leave", 0x4848))
 
     def test_beat_outra_rede_ignorado(self):
         node, _, _ = make_node()
@@ -438,6 +458,16 @@ class TestTx(unittest.TestCase):
         self.assertEqual(node.pending, [])
         flushar(node, clk)
         self.assertEqual(radio.sent, [])
+
+    def test_relay_com_anel_cheio_conta_descarte(self):
+        # anel de 96 lotado: a repeticao caida aparece CONTADA no status
+        # (relayDropped), nunca silenciosa — paridade com o firmware
+        node, _, _ = make_node(relay=True)
+        node.pending = [{"frame": b"", "due_ms": 0, "prio": 0}] * M.MeshNode.PENDING_DEPTH
+        node.on_adv_report(data_raw(0x4848, b"xy", ttl=4), -60)
+        self.assertEqual(len(node.pending), M.MeshNode.PENDING_DEPTH)
+        self.assertEqual(node.counters["relayDropped"], 1)
+        self.assertEqual(node.counters["relayed"], 0)
 
 
 # ------------------------------------------------------------------- CLI --

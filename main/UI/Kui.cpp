@@ -1164,8 +1164,11 @@ int Navigator::depth() { return (int)s_stack.size(); }
 void Navigator::showDialog(Dialog* d) {
     s_dialog = d;
     s_dialogArmed = false;
+    if (d != nullptr) d->shownAtMs = millis();
     s_repaint = true;
 }
+
+bool Navigator::dialogOpen() { return s_dialog != nullptr; }
 
 void Navigator::closeDialog() {
     if (s_dialog != nullptr) {
@@ -1242,7 +1245,13 @@ void Navigator::tick() {
     pumpEvents();
 
     if (s_dialog != nullptr) {
-        s_dialog->onTick(dt);
+        Dialog* d = s_dialog;
+        d->onTick(dt);
+        if (d == s_dialog && d->timeoutMs > 0 && now - d->shownAtMs > d->timeoutMs) {
+            if (d->onTimeout) d->onTimeout();
+            else closeDialog();
+        }
+        if (s_dialog != nullptr && s_dialog->tickUnder && !s_stack.empty()) s_stack.back()->onTick(dt);
     } else if (!s_stack.empty()) {
         s_stack.back()->onTick(dt);
     }

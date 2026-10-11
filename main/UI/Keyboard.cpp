@@ -93,7 +93,9 @@ Rect KeyboardScreen::cancelRect() const {
     int m = UI::sx(4);
     int h = UI::sy(20);
     if (h < 20) h = 20;  // piso fisico: alvo de toque (CYD landscape sy(20)=15)
-    return {UI::W - m - UI::sx(34), UI::sy(2), UI::sx(34), h};
+    // inset: vidro de cantos arredondados (watch) — mesmo recuo do X do
+    // topbar (Layout.h hitTopbarExit) e do glifo de rede do relogio
+    return {UI::W - m - UI::sx(34) - UI::inset, UI::sy(2), UI::sx(34), h};
 }
 
 Rect KeyboardScreen::eyeRect() const {

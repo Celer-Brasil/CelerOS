@@ -39,8 +39,17 @@ void loadLocked() {
     while (pos < hist.size()) {
         size_t eol = hist.find('\n', pos);
         if (eol == std::string::npos) eol = hist.size();
+        // Linha legivel tem no max ~300 bytes (clean() limita titulo 64 +
+        // msg 160 + src 24 + numericos). Linha maior e lixo de gravacao
+        // corrompida: alocar strings sem limite na CYD sem PSRAM aborta —
+        // o teste vem ANTES do substr justamente para nao alocar.
+        if (eol - pos > 512) {
+            pos = eol + 1;
+            continue;
+        }
         std::string line = hist.substr(pos, eol - pos);
         pos = eol + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();  // CRLF de edicao manual
         std::vector<std::string> f;
         size_t a = 0;
         while (true) {
@@ -52,10 +61,10 @@ void loadLocked() {
         if (f.size() < 3) continue;
         Notifications::Note n;
         n.epoch = atoll(f[0].c_str());
-        n.title = f[1];
-        n.msg = f[2];
+        n.title = clean(f[1], 64);
+        n.msg = clean(f[2], 160);
         if (f.size() >= 6) {
-            n.src = f[3];
+            n.src = clean(f[3], 24);
             n.id = (uint32_t)strtoul(f[4].c_str(), nullptr, 10);
             n.read = f[5] == "1";
         } else {
@@ -63,6 +72,9 @@ void loadLocked() {
         }
         s_notes.push_back(n);
     }
+    // O arquivo pode ter mais que MAX (firmware antigo, edicao manual):
+    // carregar tudo violaria o teto de RAM do centro de notificacoes.
+    while ((int)s_notes.size() > Notifications::MAX) s_notes.erase(s_notes.begin());
 }
 
 void saveLocked() {

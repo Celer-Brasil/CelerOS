@@ -19,7 +19,6 @@ struct AppParams {
     uint32_t perms = 0xFFFFFFFFu;
 };
 
-TaskHandle_t s_task = nullptr;
 volatile bool s_running = false;
 volatile bool s_wifiSetupRequested = false;
 
@@ -33,9 +32,16 @@ void appTask(void* raw) {
     CelerKernel::runFile(p->filePath.c_str(), p->title.c_str(), p->topbarFixed,
                          p->appPkg.c_str(), p->perms);
 
+    // Desinscreve ANTES do vTaskDelete: no IDF 6.x o TWDT nao tem hook de
+    // exclusao — entry pendurada apontava para um TCB ja livre (o idle
+    // desaloca) e o proximo timeout do WDT andava em memoria morta.
+    esp_task_wdt_delete(nullptr);
+
     delete p;
+    // Ordem importa: s_running e o UNICO estado compartilhado escrito aqui
+    // (o handle da task nao e guardado — so start() o via, na criacao).
+    // Depois deste ponto a task nao toca nada compartilhado, so vTaskDelete.
     s_running = false;
-    s_task = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -47,15 +53,20 @@ bool supported() { return true; }
 
 bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
                       const std::string& appPkg, uint32_t perms) {
-    if (s_task != nullptr) return false;  // um app por vez
+    if (s_running) return false;  // um app por vez
 
+    // Reclama ANTES do xTaskCreate: se o app terminar antes do retorno da
+    // criacao (a task ja roda na outra core), um "s_running = true" tardio
+    // deixava a UI esperando para sempre com o input suspenso. O handle da
+    // task nao e guardado: com a task podendo terminar antes do retorno de
+    // xTaskCreate, escrever nele apos o fim era escrever em task morta.
+    s_running = true;
     AppParams* p = new AppParams{filePath, title, topbarFixed, appPkg, perms};
-    if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, &s_task, portNUM_PROCESSORS - 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, nullptr, portNUM_PROCESSORS - 1) != pdPASS) {
         delete p;
-        s_task = nullptr;
+        s_running = false;
         return false;
     }
-    s_running = true;
 
     // O app e dono do touch (le o I2C em System.getTouch) e do vidro
     // (present/drawString): a UI da main task pausa o pump e o redraw.

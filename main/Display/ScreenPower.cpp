@@ -76,8 +76,13 @@ void drawAod() {
     if (t.tm_min == s_lastAodMin) return;
     s_lastAodMin = t.tm_min;
 
-    int shiftX = (t.tm_min % 9) - 4;
-    int shiftY = ((t.tm_min / 9) % 9) - 4;
+    // Grade anti burn-in: contador de minutos desde a epoca (nao tm_min, que
+    // reinicia a cada hora) percorre as 81 celulas da 9x9 em ~81 min — com
+    // (min/9)%9 o Y nunca passava de +2 (min <= 59 => min/9 <= 6) e as
+    // linhas +3/+4 da grade ficavam virgens.
+    const int aodCell = (int)((now / 60) % 81);
+    int shiftX = (aodCell % 9) - 4;
+    int shiftY = (aodCell / 9) - 4;
     char buf[16];
     snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
 
@@ -97,7 +102,14 @@ void drawAod() {
                 break;
             }
         }
-        if (title.size() > 22) title = title.substr(0, 21) + "...";
+        if (title.size() > 22) {
+            title = title.substr(0, 21);
+            // recuo UTF-8: nao cortar um acento no meio deixava um byte
+            // chumbo pendurado antes do "..."
+            while (!title.empty() && ((unsigned char)title.back() & 0xC0) == 0x80) title.pop_back();
+            if (!title.empty() && ((unsigned char)title.back() & 0x80) != 0) title.pop_back();  // lead do glifo cortado
+            title += "...";
+        }
         s_tft->setTextColor(0x4A69);
         int tw = s_tft->textWidth(title.c_str(), 2);
         int cx = s_tft->width() / 2 + shiftX;

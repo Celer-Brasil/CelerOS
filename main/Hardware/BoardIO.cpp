@@ -730,9 +730,22 @@ bool micInitUnlocked() {
     if (m.ws < 0) return false;
     if (s_mic) {
         if (!s_micPinsDirty) return true;
-        // beep/playWav passou por aqui: recria o canal para re-rotear os
-        // pinos no GPIO matrix (ver comentario do s_micPinsDirty)
+        // beep/playWav passou por aqui: re-roteia os pinos no GPIO matrix
+        // (ver comentario do s_micPinsDirty) SEM soltar o canal — recriar
+        // pedia os descritores DMA de novo, e com o WiFi do ESP-NOW no ar o
+        // DMA interno do relogio nao tinha 3 KB inteiros (o mic morria a cada
+        // som, bancada 2026-10-11). So recria se o re-roteamento falhar.
+        i2s_std_gpio_config_t g = {};
+        g.mclk = Board::profile().i2s.mclk >= 0 ? (gpio_num_t)Board::profile().i2s.mclk : I2S_GPIO_UNUSED;
+        g.bclk = (gpio_num_t)m.bck;
+        g.ws = (gpio_num_t)m.ws;
+        g.dout = I2S_GPIO_UNUSED;
+        g.din = (gpio_num_t)m.din;
         i2s_channel_disable(s_mic);
+        if (i2s_channel_reconfig_std_gpio(s_mic, &g) == ESP_OK && i2s_channel_enable(s_mic) == ESP_OK) {
+            s_micPinsDirty = false;
+            return true;
+        }
         i2s_del_channel(s_mic);
         s_mic = nullptr;
         s_micPinsDirty = false;
@@ -745,8 +758,13 @@ bool micInitUnlocked() {
         s_micFail = false;
     }
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    // 6 x 128 frames (stereo 16-bit = 512 B cada, 48 ms no total): eram 6 x
+    // 256 (1 KB cada). Com o WiFi do ESP-NOW no ar o DMA interno do relogio
+    // fragmenta (maior bloco 2,5 KB com 10 KB livres) e o canal nao subia
+    // ("allocate DMA buffer failed", bancada 2026-10-11). Os leitores pedem
+    // 256 frames por chamada: o i2s_channel_read junta 2 buffers.
     cc.dma_desc_num = 6;
-    cc.dma_frame_num = 256;
+    cc.dma_frame_num = 128;
     esp_err_t e = i2s_new_channel(&cc, nullptr, &s_mic);
     if (e != ESP_OK) {
         celer_log_printf("[mic] i2s_new_channel: %s (RAM interna %u)\n", esp_err_to_name(e),

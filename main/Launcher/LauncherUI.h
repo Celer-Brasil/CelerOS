@@ -20,6 +20,10 @@ public:
     // via throwAppExit — mesma saida limpa do X da topbar.
     static void requestAppExit();
     static bool consumeAppExitRequest();
+    // Descarta um pedido de saida feito SEM app em execucao (o "exit" que o
+    // celerctl manda antes do "run"): o app que o run abre nao pode morrer
+    // no primeiro delay por ele.
+    static void dropIdleExitRequest();
     static bool appRunning();  // um app JS esta em execucao agora
     static int findEntry(const std::string& pathOrName);  // -1 se nao achar
     static void scanLocalApps();

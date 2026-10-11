@@ -89,6 +89,7 @@ void LauncherScreen::onEnter() {
     }
     if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
     if (page < 0) page = 0;
+    clampScroll();  // lista pode ter encolhido: rolagem valida na entrada
     m_noWifiPref = FileSystem::exists("/local/nowifi.txt");
     m_dragDx = 0;
 }
@@ -275,6 +276,9 @@ int LauncherScreen::entryAt(int x, int y) const {
 void LauncherScreen::openAppActions(int entry) {
     const std::string name = LauncherUI::appEntryName(entry);
     m_dlg.buttons.clear();
+    m_dlg.tickUnder = false;  // m_dlg e reaproveitado: o consentimento liga estes
+    m_dlg.timeoutMs = 0;
+    m_dlg.onTimeout = nullptr;
     kui::Button cancel;
     cancel.label = "Cancelar";
     cancel.style = kui::Button::Ghost;
@@ -323,6 +327,17 @@ void LauncherScreen::launchEntry(int entry) {
         Navigator::push(AppHostScreen::instance(entry));
     };
     m_dlg.buttons.push_back(allow);
+    // O launcher segue atendendo "run" remoto com o dialogo aberto (o shell
+    // `grant` + `run` resolve sem toque) e o pedido expira em 60 s: numa tela
+    // apagada, no relogio no pulso ou no headless ninguem responde, e o
+    // dialogo prendia o launcher — todo `apps run` seguinte esperava para
+    // sempre (bancada 2026-10-11, 4848 parado em "Permitir 2048?")
+    m_dlg.tickUnder = true;
+    m_dlg.timeoutMs = 60000;
+    m_dlg.onTimeout = [] {
+        Navigator::closeDialog();
+        Navigator::toast("Permissão não respondida", THEME_WARN);
+    };
     Navigator::showDialog(&m_dlg);
 }
 
@@ -332,6 +347,7 @@ void LauncherScreen::uninstall(int entry) {
     LauncherUI::scanLocalApps();  // ja: a grade reflete na hora
     LauncherUI::needsRescan = false;
     if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
+    clampScroll();  // entrada sumida: rolagem/lista em modo lista volta pro fim
     Navigator::toast(ok ? name + " removido" : "Falha ao remover " + name, ok ? THEME_OK : THEME_ERR);
     markDirty();
 }
@@ -437,6 +453,19 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
 }
 
 void LauncherScreen::onTick(uint32_t dtMs) {
+    // rescan pedido com o launcher OCIOSO no topo (celerctl apps install,
+    // shell rescan/run): antes so o onEnter ou um launch consumiam o pedido,
+    // e o app instalado so aparecia na grade depois de reiniciar — o
+    // waitEntry do "run" esperava um scan que nunca vinha
+    if (LauncherUI::needsRescan) {
+        LauncherUI::scanLocalApps();
+        LauncherUI::needsRescan = false;
+        if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
+        if (page < 0) page = 0;
+        clampScroll();  // apps a menos: rolagem antiga apontava alem do fim
+        markDirty();
+    }
+
     // "run" do shell (celerctl shell "run <app>")
     std::string req;
     if (LauncherUI::takeLaunchRequest(req)) {
@@ -446,6 +475,10 @@ void LauncherScreen::onTick(uint32_t dtMs) {
         }
         int idx = LauncherUI::findEntry(req);
         if (idx >= 0) {
+            // pedido novo vence o consentimento pendente (de outro app ou do
+            // mesmo, ja concedido pelo shell `grant`): o launchEntry reabre o
+            // dialogo se este ainda precisar dele
+            if (Navigator::dialogOpen()) Navigator::closeDialog();
             launchEntry(idx);  // run remoto/autostart tambem pede consentimento
             return;
         }

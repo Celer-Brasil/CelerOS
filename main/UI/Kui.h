@@ -373,6 +373,14 @@ public:
     std::string title;
     std::string body;
     std::vector<Button> buttons;  // desenham lado a lado
+    // tickUnder: a tela de baixo segue recebendo onTick (o launcher consome
+    // os "run" remotos com o consentimento aberto). timeoutMs > 0: fecha
+    // sozinho depois do prazo (onTimeout, se houver, decide o que fazer) —
+    // sem isso um dialogo numa tela apagada/headless prendia o launcher
+    bool tickUnder = false;
+    uint32_t timeoutMs = 0;
+    std::function<void()> onTimeout;
+    uint32_t shownAtMs = 0;  // preenchido pelo Navigator::showDialog
 
     void draw(Canvas& c) override;
     bool onTouch(const TouchEvent& ev, Rect myRect) override;
@@ -460,6 +468,7 @@ public:
     // Dialog/modal por cima da tela atual (nao entra na pilha)
     static void showDialog(Dialog* d);
     static void closeDialog();
+    static bool dialogOpen();
 
     // Toasts (um por vez, fila)
     static void toast(const std::string& message, uint32_t color = THEME_ACCENT, uint32_t durationMs = 2500);

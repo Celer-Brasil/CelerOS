@@ -86,6 +86,12 @@ bool LauncherUI::consumeAppExitRequest() {
     return out;
 }
 
+void LauncherUI::dropIdleExitRequest() {
+    portENTER_CRITICAL(&s_appExitMux);
+    if (s_appExitPending && !s_appExitForApp) s_appExitPending = false;
+    portEXIT_CRITICAL(&s_appExitMux);
+}
+
 int LauncherUI::findEntry(const std::string& pathOrName) {
     std::string want = pathOrName;
     while (want.size() > 1 && want.back() == '/') want.pop_back();
@@ -93,6 +99,15 @@ int LauncherUI::findEntry(const std::string& pathOrName) {
         std::string p = apps[i].path;
         while (p.size() > 1 && p.back() == '/') p.pop_back();
         if (p == want || apps[i].name == want || apps[i].pkg == want) return i;
+    }
+    // nome da PASTA (o que o celerctl apps run/dev mandam): app cujo nome de
+    // exibicao difere da pasta ("Arrasa!" em /local/apps/Arrasa) nao abria.
+    // Depois dos casamentos exatos; /local vem antes do /sd na lista
+    for (int i = 0; i < appCount; i++) {
+        std::string p = apps[i].path;
+        while (p.size() > 1 && p.back() == '/') p.pop_back();
+        size_t cut = p.rfind('/');
+        if (cut != std::string::npos && p.compare(cut + 1, std::string::npos, want) == 0) return i;
     }
     return -1;
 }

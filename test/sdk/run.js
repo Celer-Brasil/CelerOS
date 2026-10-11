@@ -1424,6 +1424,137 @@ function depsSize(nomes) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ---------------------------------------------- ui: menus/listas/dialogos --
+(function () {
+    console.log('SDK CelerGame ui (menu/list/dialog/title/pause):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-ui-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game.ui': '^1.0.0' } }));
+
+    function runSnippet(code, setup) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(tmp, env);
+        var out = {};
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        if (setup) setup(env);
+        var fn = new Function('System', 'Storage', '__harness', 'require', code);
+        fn(env.System, env.Storage, env.__harness, req);
+        return out;
+    }
+
+    // menu: tap no 2o item devolve o value; disabled nao pega
+    var r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var pegou = null, quadros = 0;' +
+        'E.run({ m: { update: function () { quadros++; if (quadros > 30) E.quit(); },' +
+        '  draw: function () {' +
+        '    var v = E.ui.menu([{ label: "Jogar", value: "j" },' +
+        '                        { label: "Opcoes", value: "o" },' +
+        '                        { label: "Nao", value: "n", disabled: true }]);' +
+        '    if (v) pegou = v;' +
+        '    if (pegou) E.quit();' +
+        '  } } }, "m");' +
+        '__harness.grab("menu", pegou);',
+        function (env) {
+            // menu default: x=30, y=96, w=180, row=40 — item 2 no y=136..172
+            env.__harness.pushTouch([{ x: 120, y: 150, touched: 1 },
+                                     { x: 120, y: 150, touched: 0 }]);
+        });
+    check('menu: tap no 2o item devolve o value', r.menu === 'o', JSON.stringify(r.menu));
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var pegou = null, quadros = 0;' +
+        'E.run({ m: { update: function () { quadros++; if (quadros > 30) E.quit(); },' +
+        '  draw: function () {' +
+        '    var v = E.ui.menu([{ label: "Um" }, { label: "Dois", disabled: true }]);' +
+        '    if (v) pegou = v;' +
+        '  } } }, "m");' +
+        '__harness.grab("dis", pegou);',
+        function (env) {
+            env.__harness.pushTouch([{ x: 120, y: 140, touched: 1 },
+                                     { x: 120, y: 140, touched: 0 }]);
+        });
+    check('menu: item disabled nao pega o tap', r.dis === null, JSON.stringify(r.dis));
+
+    // list: arrasto rola e o tap pega a linha CERTA com o scroll
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var itens = [];' +
+        'for (var i = 0; i < 20; i++) itens.push({ label: "item " + i, value: "i" + i });' +
+        'var lst = E.ui.list({ items: itens, row: 28 });' +
+        'var fase = 0, tapRow = -1, voltas = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  if (lst.scroll > 50 && fase === 0) { fase = 1; __harness.tap(120, 150); }' +
+        '  if (fase === 1 && lst.picked) { fase = 2;' +
+        '    tapRow = Math.floor((150 - 80 + lst.scroll) / 28);' +
+        '    E.quit(); }' +
+        '  if (++voltas > 200) E.quit();' +
+        '}, draw: function () { lst.draw(20, 80, 200, 140); } } }, "s");' +
+        '__harness.grab("list", [lst.scroll > 50, lst.picked, tapRow]);',
+        function (env) {
+            // arrasto de 200 -> 100 DENTRO do rect da lista (sobe ~100 px)
+            env.__harness.swipe(120, 200, 120, 100);
+        });
+    check('list: arrasto rola e o tap pega a linha certa sob o scroll',
+          r.list[0] === true && r.list[1] === 'i' + r.list[2],
+          JSON.stringify(r.list));
+
+    // dialog: revelacao progressiva, tap 1 completa, tap 2 fecha
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var d = E.ui.dialog("uma fala bem longa de teste", { speed: 30 });' +
+        'var ds = System.drawString, visto = [];' +
+        'System.drawString = function (s, x, y, f) { visto.push(String(s)); ds(s, x, y, f); };' +
+        'var fase = 0, parcial = -1, cheio = -1, fechou = null, quadros = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  quadros++;' +
+        '  var junto = visto.join("").replace(/ /g, "").length;' +
+        '  if (fase === 0 && junto > 0 && junto < 26) { parcial = junto; fase = 1; __harness.tap(120, 250); }' +
+        '  else if (fase === 1 && junto >= 26) { cheio = junto; fase = 2;' +
+        '    E.after(150, function () { __harness.tap(120, 250); }); }' +
+        '  if (quadros > 300) E.quit();' +
+        '}, draw: function () { if (d.draw(20, 230, 200) === false) { fechou = true; E.quit(); } } } }, "s");' +
+        '__harness.grab("dlg", [parcial > 0 && parcial < 26, cheio >= 26, fechou, d.closed]);');
+    check('dialog: revela progressivo, tap completa, tap fecha',
+          r.dlg[0] === true && r.dlg[1] === true && r.dlg[2] === true &&
+          r.dlg[3] === true,
+          JSON.stringify(r.dlg));
+
+    // title/pause/gameOver: telas prontas devolvem a acao do tap
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var acts = [], tela = "title", quadros = 0;' +
+        'E.run({ s: { update: function () { quadros++; if (quadros > 90) E.quit(); },' +
+        '  draw: function () {' +
+        '    if (tela === "title") { var a = E.ui.title({ game: "X", best: 10 });' +
+        '      if (a) { acts.push(a); tela = "pause"; } }' +
+        '    else if (tela === "pause") { var p = E.ui.pause({});' +
+        '      if (p) { acts.push(p); tela = "over"; } }' +
+        '    else { var g = E.ui.gameOver({ score: 42, best: 42, isNew: true });' +
+        '      if (g) { acts.push(g); E.quit(); } }' +
+        '  } } }, "s");' +
+        '__harness.grab("telas", acts);',
+        function (env) {
+            // title: JOGAR em ~H*0.5 (y 160, h 44); pause: 1a opcao y ~96;
+            // gameOver: 'De novo' em y ~166 (menu y = H*0.52)
+            env.__harness.pushTouch([{ x: 120, y: 180, touched: 1 }, { x: 120, y: 180, touched: 0 },
+                                     { x: 120, y: 108, touched: 1 }, { x: 120, y: 108, touched: 0 },
+                                     { x: 120, y: 175, touched: 1 }, { x: 120, y: 175, touched: 0 }]);
+        });
+    check('title/pause/gameOver: acoes dos taps na sequencia',
+          JSON.stringify(r.telas) === JSON.stringify(['start', 'resume', 'again']),
+          JSON.stringify(r.telas));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------------------ mesh --
 (function () {
     console.log('SDK mesh (tools/sdk/engine/celeros.mesh.js):');

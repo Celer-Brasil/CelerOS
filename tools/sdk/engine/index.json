@@ -10,5 +10,6 @@
   },
   "celeros.game.fx": { "deps": { "celeros.game": "^1.0.0" } },
   "celeros.game.spr": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.tilemap": { "deps": { "celeros.game": "^1.0.0" } }
+  "celeros.game.tilemap": { "deps": { "celeros.game": "^1.0.0" } },
+  "celeros.game.ui": { "deps": { "celeros.game": "^1.0.0" } }
 }

@@ -1,12 +1,18 @@
 {
   "name": "Breakout",
   "packageName": "celeros.breakout",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "CelerOS",
   "description": "Quebre os tijolos com a bola: arraste a raquete, pegue os rebotes e avance de nivel. Recorde salvo no aparelho.",
   "type": "Game",
   "category": "Arcade",
-  "api": 22,
-  "permissions": ["fs"],
-  "changelog": "1.2.0 - visual novo (API 22): tijolos e raquete em gradiente, bola suavizada, placar com fontes do sistema e dialogo de fim de jogo\n1.1.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.1 - tijolo destruido sai da tela na hora (antes ficava pintado e a bola deixava rastro nele)\n1.1.0 - vida extra a cada 500 pts e banner de nivel; 1.0.0 - primeiro lancamento"
+  "api": 30,
+  "permissions": [
+    "fs"
+  ],
+  "changelog": "1.3.0 - portado para a familia CelerGame COM melhorias: camada suja E.dirty no lugar do apagamento manual de rastro (painter repita fundo e tijolos so na caixa tocada), burst + popText na quebra, flash ao perder vida, fim de jogo com transicao iris e NOVO RECORDE, recorde migrado do txt para o NVS\n1.2.0 - visual novo (API 22): tijolos e raquete em gradiente, bola suavizada, placar com fontes do sistema e dialogo de fim de jogo\n1.1.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.1 - tijolo destruido sai da tela na hora (antes ficava pintado e a bola deixava rastro nele)\n1.1.0 - vida extra a cada 500 pts e banner de nivel; 1.0.0 - primeiro lancamento",
+  "deps": {
+    "celeros.game": "^1.0.0",
+    "celeros.game.fx": "^1.0.0"
+  }
 }

@@ -44,6 +44,7 @@ function runAppFolder(appDir, opts = {}) {
     if (!fs.existsSync(mainAbs)) throw new Error('entrypoint nao encontrado: ' + mainAbs);
 
     const renderer = opts.render ? new Renderer() : null;
+    if (renderer) renderer.appDir = dir;   // drawPNG resolve /local|/sd/apps a partir daqui
     const frames = Array.isArray(opts.frames) && opts.frames.length
         ? opts.frames.map(Number).sort((a, b) => a - b) : null;
     // clock do harness comeca em 1000: marcos do app = base + ms pedido.

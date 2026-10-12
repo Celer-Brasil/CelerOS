@@ -228,6 +228,29 @@ function check(name, ok, detail) {
     check('bench: runner.profile coleta quadros com tempos reais',
           r8.profile.frames > 10 && r8.profile.avgMs >= 0 && r8.profile.maxMs >= r8.profile.p50Ms,
           JSON.stringify(r8.profile));
+
+    // round 4: os jogos da rodada no emulador com render. O placar do
+    // Breakout sobrevive ao 1o repaint integral da camada suja (o
+    // cabecalho era apagado pelo painter full do 1o quadro antes do clip
+    // do HUD); o 2D Runner (Neon Surfer) roda o menu static com sprites
+    // PNG renderizados (decodePng) sem primitiva nao renderizada
+    var rb = runAppFolder(path.join(ROOT, 'hub_apps', 'Breakout'),
+                          { render: true, stopAtMs: 2500 });
+    check('Breakout roda limpo no emu', rb.err === null, rb.err);
+    var linhasHud = 0;
+    for (var ly = 4; ly <= 32; ly += 4) {
+        var cores = {};
+        for (var lx = 0; lx < 240; lx++) cores[rb.renderer.fb[ly * 240 + lx]] = 1;
+        if (Object.keys(cores).length > 1) linhasHud++;
+    }
+    check('Breakout: o placar sobrevive ao 1o repaint integral (clip do HUD + touches)',
+          linhasHud >= 4, 'linhas com glifo=' + linhasHud);
+    var rn = runAppFolder(path.join(ROOT, 'hub_apps', '2D Runner'),
+                          { render: true, stopAtMs: 2500 });
+    check('2D Runner (Neon Surfer) roda limpo no emu com sprites PNG',
+          rn.err === null && rn.renderer.unsupported.size === 0,
+          rn.err || Array.from(rn.renderer.unsupported).join(','));
+
     var { execSync } = require('child_process');
     execSync('node tools/sdk/celer.js test hub_apps/Cronometro --ms 600',
              { cwd: ROOT, stdio: 'pipe' });

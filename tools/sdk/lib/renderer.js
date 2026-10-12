@@ -8,11 +8,14 @@
 //   - texto: glifos 8x8 (font8x8 public domain), metrica {1:6, 2:8, 4:16}px
 //     por caractere (textWidth coerente com o desenho — layouts centrados
 //     batem entre si, nao com a fonte real do firmware);
-//   - drawPNG/drawJPG/drawBMP/drawIcon nao renderizam (ficam no-op como no harness,
-//     registrados em `unsupported` para o CLI avisar).
+//   - drawPNG/drawIcon renderizam a arte DE VERDADE (decodePng: color types
+//     0/2/3/4/6, alfa composto no RGB565; caminhos /local|/sd/apps/<pasta>/
+//     sao resolvidos para as pastas do repo); drawJPG/drawBMP seguem no-op.
 
 const { glyph } = require('./font8x8.js');
-const { encodePng } = require('./png.js');
+const { encodePng, decodePng } = require('./png.js');
+const fs = require('fs');
+const path = require('path');
 
 const W = 240, H = 320;
 const ADVANCE = { 1: 6, 2: 8, 4: 16 };   // px por caractere por tamanho de fonte
@@ -60,6 +63,33 @@ class Renderer {
 
     hLine(x, y, w, c) { for (let i = 0; i < w; i++) this.px(x + i, y, c); }
     vLine(x, y, h, c) { for (let i = 0; i < h; i++) this.px(x, y + i, c); }
+
+    // imagem RGBA ({w,h,rgba}) no ponto, alfa straight composto no RGB565 do
+    // alvo corrente (como o drawPNG do firmware compoe)
+    blitRGBA(img, x, y) {
+        x |= 0; y |= 0;
+        const tw = this.targetW(), th = this.targetH(), tgt = this.target();
+        for (let j = 0; j < img.h; j++) {
+            const yy = y + j;
+            if (yy < 0 || yy >= th) continue;
+            for (let i = 0; i < img.w; i++) {
+                const k = (j * img.w + i) * 4;
+                const a = img.rgba[k + 3];
+                if (a === 0) continue;
+                const xx = x + i;
+                if (xx < 0 || xx >= tw) continue;
+                const r = img.rgba[k], g = img.rgba[k + 1], b = img.rgba[k + 2];
+                if (a === 255) {
+                    this.px(xx, yy, ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+                } else {
+                    const d = tgt[yy * tw + xx];
+                    const dr = (d >> 8) & 0xF8, dg = (d >> 3) & 0xFC, db = (d << 3) & 0xF8;
+                    const mix = (s, t) => Math.round((s * a + t * (255 - a)) / 255);
+                    this.px(xx, yy, ((mix(r, dr) & 0xF8) << 8) | ((mix(g, dg) & 0xFC) << 3) | (mix(b, db) >> 3));
+                }
+            }
+        }
+    }
 
     rect(x, y, w, h, c, filled) {
         if (filled) {
@@ -409,8 +439,42 @@ class Renderer {
                 for (let i = x0; i < x1; i++) r.px(i, j, sp.fb[j * sp.w + i]);
             }
         };
-        // nao renderizados no emulador (mesmo comportamento do harness + aviso)
-        for (const name of ['drawPNG', 'drawJPG', 'drawBMP', 'drawIcon']) {
+        // PNG de arquivo no framebuffer do emulador: caminho do APP
+        // ("/local|/sd/apps/<pasta>/...") resolve para as pastas do repo
+        // (irma do appDir, data/apps, hub_apps e a propria pasta do app);
+        // caminho host valido passa direto (testes com fixture em tmp)
+        const REPO = path.join(__dirname, '..', '..', '..');
+        const resolveAsset = (p) => {
+            if (typeof p !== 'string' || !p) return null;
+            if (p[0] !== '/') return fs.existsSync(p) ? p : null;
+            const APP = /^\/(?:local|sd)\/apps\/([^/]+)\/(.*)$/.exec(p);
+            if (APP) {
+                const cands = [
+                    path.join(r.appDir || '.', '..', APP[1], APP[2]),
+                    path.join(REPO, 'data', 'apps', APP[1], APP[2]),
+                    path.join(REPO, 'hub_apps', APP[1], APP[2]),
+                    path.join(r.appDir || '.', APP[2]),
+                ];
+                for (const c of cands) if (fs.existsSync(c)) return c;
+                return null;
+            }
+            return fs.existsSync(p) ? p : null;
+        };
+        S.drawPNG = (p, x, y) => {
+            const f = resolveAsset(p);
+            if (!f) return false;
+            try { r.blitRGBA(decodePng(fs.readFileSync(f)), x, y); }
+            catch (e) { return false; }
+            return true;
+        };
+        // icone do sistema (data/icons do repo; void como o firmware)
+        S.drawIcon = (name, x, y) => {
+            const f = path.join(REPO, 'data', 'icons', String(name) + '.png');
+            if (!fs.existsSync(f)) return;
+            try { r.blitRGBA(decodePng(fs.readFileSync(f)), x, y); } catch (e) {}
+        };
+        // ainda nao renderizados no emulador (mesmo comportamento do harness + aviso)
+        for (const name of ['drawJPG', 'drawBMP']) {
             const orig = S[name];
             S[name] = (...args) => { r.unsupported.add(name); return orig(...args); };
         }
@@ -428,6 +492,7 @@ const RENDERED = [
     'fontHeight', 'createSprite', 'bindSprite', 'useSprite', 'pushSprite', 'deleteSprite',
     'setClip', 'clearClip', 'fillGradient', 'fillArc', 'fillSmoothCircle',
     'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite', 'blitSprite',
+    'drawPNG', 'drawIcon',
 ];
 
 module.exports = { Renderer, W, H, RENDERED };

@@ -8,6 +8,7 @@
 var E = require("celeros.game");       // familia CelerGame: core + fx + spr
 require("celeros.game.fx");
 require("celeros.game.spr");
+var PISTA = require("pista");          // regras de nascimento (fuzz no sdk)
 
 E.init({ dir: "2D Runner", fps: 60, save: "surfer." });
 var T = E.theme, W = E.W, H = E.H, S = System;
@@ -119,15 +120,6 @@ function move(dir) {
 // faixa mais proxima do x tocado (limites no meio das faixas 0|1 e 1|2)
 function laneAt(x) { return x < 87 ? 0 : (x < 153 ? 1 : 2); }
 
-function laneOcupada(lane, margo) {
-    // ha trem nesse lane ainda perto do topo? (garante faixa de fuga)
-    for (var i = 0; i < entities.length; i++) {
-        var e = entities[i];
-        if (e.type === "train" && e.lane === lane && e.y < margo) return true;
-    }
-    return false;
-}
-
 function update(dt) {
     var move_ = speed * dt;
     distance += move_;
@@ -139,30 +131,20 @@ function update(dt) {
     if (Math.abs(target - playerX) < 0.5) playerX = target;
 
     spawnT += dt;
-    var rate = Math.max(0.2, 1.0 - speed / 1000.0);
+    var rate = Math.max(0.24, 1.0 - speed / 1000.0);
     if (spawnT > rate) {
         spawnT = 0;
-        var lane = Math.floor(Math.random() * 3);
-        var r = Math.random();
-        if (r < 0.16) {
-            // fileira de 3 moedas no mesmo lane (risco x recompensa)
-            for (var c = 0; c < 3; c++) {
-                entities.push({ type: "coin", lane: lane, y: HUD_H + 10 - c * 30 });
-            }
-        } else if (r < 0.24) {
-            entities.push({ type: "coin", lane: lane, y: HUD_H + 10 });
-        } else {
-            // trem: nunca fecha as 3 faixas — com 2 ocupadas perto do topo,
-            // a livre ganha moeda (ou nada) em vez de trem
-            var livres = [];
-            for (var l = 0; l < 3; l++) if (!laneOcupada(l, 130)) livres.push(l);
-            if (livres.length <= 1) {
-                if (livres.length === 1) {
-                    entities.push({ type: "coin", lane: livres[0], y: HUD_H + 10 });
+        // justica do nascimento vive no pista.js (I1 espaco na mesma faixa,
+        // I2 teia entre faixas vizinhas, I3 moeda alcancavel, I4 saturacao
+        // desiste): o que sai daqui e sempre passavel
+        var n = PISTA.nascer(entities, { speed: speed, hudH: HUD_H });
+        if (n) {
+            if (n.type === "fileira") {
+                for (var c = 0; c < 3; c++) {
+                    entities.push({ type: "coin", lane: n.lane, y: n.y - c * 30 });
                 }
             } else {
-                var pick = livres[Math.floor(Math.random() * livres.length)];
-                entities.push({ type: "train", lane: pick, y: HUD_H - 76, h: 80 });
+                entities.push(n);
             }
         }
     }

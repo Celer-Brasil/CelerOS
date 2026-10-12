@@ -2154,6 +2154,141 @@ function depsSize(nomes) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ------------------------------------------- Neon Surfer: pista justa ----
+// Invariantes de justica do nascimento (hub_apps/2D Runner/pista.js),
+// fuzzados com rnd semeado em varias velocidades: I1 espaco na mesma
+// faixa (trem x qualquer entidade), I2 teia entre trens de faixas
+// vizinhas (sempre ha corredor em Y), I3 moeda so em faixa alcancavel e
+// I4 saturacao desiste (null) em vez de fechar a pista. As entidades
+// andam juntas, entao o que vale no nascimento vale na passada toda.
+(function () {
+    console.log('Neon Surfer (pista.js):');
+    var P = require(path.join(ROOT, 'hub_apps', '2D Runner', 'pista.js'));
+    check('pista.js: module.exports versionado', P.version === '1.0.0', P.version);
+
+    function mulberry32(a) {
+        return function () {
+            a |= 0; a = (a + 0x6D2B79F5) | 0;
+            var t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+    function janela(e) { return { a: e.y, b: e.y + (e.h || 20) }; }
+
+    // violacao dos invariantes na pista inteira (null = tudo justo)
+    function violacao(ents, speed) {
+        var gT = speed * 0.45 + 50, gS = speed * 0.55 + 70;
+        for (var i = 0; i < ents.length; i++) {
+            var a = ents[i];
+            for (var j = i + 1; j < ents.length; j++) {
+                var b = ents[j];
+                var mesma = a.lane === b.lane;
+                var viz = Math.abs(a.lane - b.lane) === 1;
+                if (mesma) {
+                    // I1: so quando um dos dois e trem (moedas em fileira
+                    // colam de proposito — sao coletadas juntas)
+                    if (a.type !== 'train' && b.type !== 'train') continue;
+                } else if (viz) {
+                    // I2: corredor vale entre trens
+                    if (a.type !== 'train' || b.type !== 'train') continue;
+                } else continue;
+                var g = mesma ? gS : gT;
+                var wa = janela(a), wb = janela(b);
+                if (wa.a < wb.b + g && wa.b > wb.a - g)
+                    return a.type + '@' + a.lane + ',' + a.y.toFixed(0) +
+                           ' x ' + b.type + '@' + b.lane + ',' + b.y.toFixed(0) +
+                           ' (speed ' + speed + ')';
+            }
+        }
+        return null;
+    }
+
+    // I3: moeda alcancavel — na faixa dela, todo trem clareia antes ou
+    // chega depois com espaco de saida
+    function moedaInalcancavel(ents, speed) {
+        var g = speed * 0.55 + 70;
+        for (var i = 0; i < ents.length; i++) {
+            var c = ents[i];
+            if (c.type !== 'coin') continue;
+            var w = janela(c);
+            for (var j = 0; j < ents.length; j++) {
+                var t = ents[j];
+                if (t.type !== 'train' || t.lane !== c.lane) continue;
+                var wt = janela(t);
+                if (!(wt.a >= w.b + g || wt.b <= w.a - g))
+                    return 'moeda@' + c.lane + ',' + c.y.toFixed(0) +
+                           ' presa no trem@' + t.y.toFixed(0);
+            }
+        }
+        return null;
+    }
+
+    function fuzz(speed, n, seed) {
+        var rnd = mulberry32(seed);
+        var ents = [];
+        var cfg = { speed: speed, hudH: 34, rnd: rnd };
+        for (var i = 0; i < n; i++) {
+            var x = P.nascer(ents, cfg);
+            if (x) {
+                if (x.type === 'fileira') {
+                    for (var c = 0; c < 3; c++)
+                        ents.push({ type: 'coin', lane: x.lane, y: x.y - c * 30 });
+                } else ents.push(x);
+            }
+            // o mundo anda: os que passaram saem (como no jogo, y > H+20)
+            for (var k = ents.length - 1; k >= 0; k--)
+                if (ents[k].y > 340) ents.splice(k, 1);
+            var ruim = violacao(ents, speed) || moedaInalcancavel(ents, speed);
+            if (ruim) return { i: i, ruim: ruim };
+        }
+        return null;
+    }
+
+    var casos = [[150, 400, 11], [300, 400, 23], [450, 400, 37], [600, 400, 51]];
+    for (var ci = 0; ci < casos.length; ci++) {
+        var ruim = fuzz(casos[ci][0], casos[ci][1], casos[ci][2]);
+        check('fuzz speed ' + casos[ci][0] + ': ' + casos[ci][1] +
+              ' nascimentos sem fechar a pista', ruim === null, ruim && ruim.ruim);
+    }
+
+    // determinismo: mesma semente, mesma pista (o fuzz e reprodutivel)
+    function pistaTxt(speed, seed) {
+        var rnd = mulberry32(seed);
+        var ents = [], cfg = { speed: speed, hudH: 34, rnd: rnd };
+        for (var i = 0; i < 60; i++) {
+            var x = P.nascer(ents, cfg);
+            if (x) ents.push(x);
+            for (var k = ents.length - 1; k >= 0; k--)
+                if (ents[k].y > 340) ents.splice(k, 1);
+        }
+        return JSON.stringify(ents);
+    }
+    check('pista deterministica com a mesma semente',
+          pistaTxt(300, 99) === pistaTxt(300, 99));
+
+    // I4 na mao: pista saturada (3 trens colados no topo) — o resolver
+    // desiste ou empurra pra longe, nunca sobrepoem
+    var cheia = [
+        { type: 'train', lane: 0, y: 40, h: 80 },
+        { type: 'train', lane: 1, y: 40, h: 80 },
+        { type: 'train', lane: 2, y: 40, h: 80 }
+    ];
+    var t = P.trem(cheia, 1, { speed: 300, hudH: 34 });
+    var tOk = t === null || (t.y <= 40 - (300 * 0.55 + 70) - 80);
+    check('pista saturada: resolver desiste ou empurra acima do gap',
+          tOk, JSON.stringify(t));
+    var f = P.nascer(cheia, { speed: 300, hudH: 34, rnd: mulberry32(7) });
+    var fOk = f === null || f.type === 'coin' || f.type === 'fileira' ||
+              f.y <= 40 - (300 * 0.55 + 70) - 80;
+    check('pista saturada: nascer devolve saida justa (moeda ou trem afastado)',
+          fOk, JSON.stringify(f));
+
+    // trem nasce sempre com altura (o bug do NaN na colisao)
+    var nt = P.trem([], 1, { speed: 150, hudH: 34 });
+    check('trem novo sempre carrega h', !!nt && nt.h === 80, JSON.stringify(nt));
+})();
+
 // resumo
 console.log('');
 if (failures) {

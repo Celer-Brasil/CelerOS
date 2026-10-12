@@ -42,6 +42,28 @@ volatile bool s_attached = false;
 duk_context* s_ctx = nullptr;
 StreamBufferHandle_t s_rx = nullptr;
 char s_appPath[160] = "";  // main.js do app em execucao (noteApp)
+
+// Cria o buffer host->device UMA vez mesmo com as duas tasks (feedHost na
+// task do link, attach na task do app) chegando juntas: sem a guarda, a
+// interleave criava dois handles — o perdedor vazava 4 KB e bytes ja
+// escritos nele ficavam presos (dessincroniza o dmsg binario).
+portMUX_TYPE s_rxMux = portMUX_INITIALIZER_UNLOCKED;
+StreamBufferHandle_t ensureRx() {
+    StreamBufferHandle_t rx = s_rx;
+    if (rx != nullptr) return rx;
+    StreamBufferHandle_t fresh = xStreamBufferCreate(K_DBG_RX, 1);
+    if (fresh == nullptr) return nullptr;
+    taskENTER_CRITICAL(&s_rxMux);
+    rx = s_rx;
+    if (rx == nullptr) {
+        s_rx = rx = fresh;
+        taskEXIT_CRITICAL(&s_rxMux);
+        return fresh;
+    }
+    taskEXIT_CRITICAL(&s_rxMux);
+    vStreamBufferDelete(fresh);  // outra task criou antes: a nossa sobra sai
+    return rx;
+}
 // Uma sessao por EXECUCAO de app: o Detach do cliente (`q`) nao pode ser
 // desfeito pelo maybeAttach do proximo yield do mesmo app (re-attach =
 // pausa de novo); o app seguinte (run id novo) attacha normalmente
@@ -152,10 +174,7 @@ void setClient(bool on) {
 
 bool attach(duk_context* ctx) {
     if (ctx == nullptr) return false;
-    if (s_rx == nullptr) {
-        s_rx = xStreamBufferCreate(K_DBG_RX, 1);
-        if (s_rx == nullptr) return false;
-    }
+    if (ensureRx() == nullptr) return false;
     // o attach PAUSA o app e o executor passa a esperar comandos: sem
     // cliente do outro lado o app ficaria parado. So attacha com o proxy
     // avisando que ha cliente — o runFile tenta primeiro e o present() do
@@ -202,11 +221,11 @@ void feedHost(const uint8_t* data, size_t n) {
     if (data == nullptr || n == 0) return;
     // o buffer pode ser criado aqui (task do link): comandos que chegarem
     // antes do attach esperam no buffer
-    if (s_rx == nullptr) s_rx = xStreamBufferCreate(K_DBG_RX, 1);
-    if (s_rx == nullptr) return;
+    StreamBufferHandle_t rx = ensureRx();
+    if (rx == nullptr) return;
     // cheio = o app nao esta consumindo (rodando sem cooperar) e o cliente
     // despeja comandos: byte perdido dessincroniza o dmsg — melhor avisar
-    if (xStreamBufferSend(s_rx, data, n, pdMS_TO_TICKS(100)) != n) {
+    if (xStreamBufferSend(rx, data, n, pdMS_TO_TICKS(100)) != n) {
         celer_log_println("debugger JS: buffer de comandos cheio, bytes perdidos");
     }
 }

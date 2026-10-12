@@ -21,6 +21,11 @@ std::string CelerSettings::get(const char* key, const char* def) {
 }
 
 bool CelerSettings::set(const char* key, const char* value) {
+    // Teto simetrico ao get (buf[64]): sem isto o nvs_set_str aceitava valor
+    // maior e a leitura seguinte devolvia o default — o chamador achava que
+    // estava gravado. (O binding JS ja corta em 63; aqui fecha para todo
+    // caller C++ futuro.)
+    if (value != nullptr && strlen(value) > 63) return false;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok;

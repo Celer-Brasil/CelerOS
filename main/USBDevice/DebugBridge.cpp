@@ -68,10 +68,10 @@ constexpr const char* kAlphabet = "abcdefghjkmnpqrstuvwxyz23456789";
 constexpr size_t kTokenLen = 8;
 
 void tokenGenerate() {
+    memset(s_token, 0, sizeof(s_token));
     for (size_t i = 0; i < kTokenLen; i++) {
         s_token[i] = kAlphabet[esp_random() % (sizeof(kAlphabet) - 1)];
     }
-    s_token[kTokenLen] = '\0';
 }
 
 bool tokenPersist() {
@@ -446,6 +446,12 @@ bool DebugBridge::tokenSet(const char* t) {
         char c = t[i];
         if (c <= ' ' || c >= 0x7F) return false;  // sem espacos/controle
     }
+    // Zera o fim: tokenEq compara o array INTEIRO (comprimento fixo, sem
+    // vazamento) e o restinho de um token anterior, mais longo, ficava no
+    // buffer depois do snprintf — o token NOVO, correto, era recusado ("NO"
+    // x3 = ERR) ate o reboot. Vale para o tokenReset (8 chars) depois de um
+    // "bridge set" mais longo.
+    memset(s_token, 0, sizeof(s_token));
     snprintf(s_token, sizeof(s_token), "%s", t);
     if (!tokenPersist()) {
         ESP_LOGW(TAG, "NVS rejeitou o token novo (vale ate reiniciar)");

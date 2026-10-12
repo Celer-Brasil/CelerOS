@@ -3,7 +3,7 @@
   "packageName": "celeros.matilha",
   "version": "1.0.1",
   "author": "CelerOS",
-  "description": "Painel do bando de CelerOS (API 27): liga a malha, mostra os membros com o papel de cada um (som, mic, tela, patas, leds, rede), manda mensagens diretas ou para todos e passa a música em curso para o vizinho com alto-falante — do mesmo ponto.",
+  "description": "Painel do bando de CelerOS (API 27): liga a malha, mostra os membros com o papel de cada um (som, mic, tela, patas, leds, rede), manda mensagens diretas ou para todos e passa a música em curso para o vizinho com alto-falante, do mesmo ponto.",
   "type": "App",
   "category": "Utility",
   "api": 27,

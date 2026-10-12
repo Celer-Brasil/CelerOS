@@ -722,169 +722,168 @@ static void testMusicHandoff() {
     CHECK(e.pos == c2.totalSamples);
 }
 
-// CelerNet (NetFrame.h): quadro da malha por flood de advertising —
-// round-trip (com dst do unicast), fragmentacao/remontagem e dedup, no host.
+// CelerNet v3 (NetFrame.h): quadro seguro — round-trip cifrado, ofuscacao,
+// MIC adulterado, rede errada, relay sem recifrar, janela anti-replay, dedup
+// e remontagem por seqZero (juntando copias). A cifra e FALSA (o PSA do
+// firmware tem o self-test no device: shell "mesh selftest").
+namespace fakenet {
+struct Key { uint8_t k; };
+uint8_t mixOf(const Key* key, const uint8_t n[13], const uint8_t* aad, size_t aadLen,
+              const uint8_t* data, size_t len, int salt) {
+    uint32_t h = 2166136261u ^ key->k ^ (uint32_t)salt;
+    for (int i = 0; i < 13; i++) h = (h ^ n[i]) * 16777619u;
+    for (size_t i = 0; i < aadLen; i++) h = (h ^ aad[i]) * 16777619u;
+    for (size_t i = 0; i < len; i++) h = (h ^ data[i]) * 16777619u;
+    return (uint8_t)(h ^ (h >> 8) ^ (h >> 16));
+}
+bool seal(void* ctx, const uint8_t n[13], const uint8_t* aad, size_t aadLen, const uint8_t* in, size_t len,
+          uint8_t* out) {
+    const Key* key = (const Key*)ctx;
+    for (size_t i = 0; i < len; i++) out[i] = (uint8_t)(in[i] ^ key->k ^ n[i % 13]);
+    for (int m = 0; m < 4; m++) out[len + m] = mixOf(key, n, aad, aadLen, in, len, m);
+    return true;
+}
+bool open(void* ctx, const uint8_t n[13], const uint8_t* aad, size_t aadLen, const uint8_t* in, size_t len,
+          uint8_t* out) {
+    const Key* key = (const Key*)ctx;
+    for (size_t i = 0; i < len; i++) out[i] = (uint8_t)(in[i] ^ key->k ^ n[i % 13]);
+    for (int m = 0; m < 4; m++) {
+        if (in[len + m] != mixOf(key, n, aad, aadLen, out, len, m)) return false;
+    }
+    return true;
+}
+void ecb(void* ctx, const uint8_t in[16], uint8_t out[16]) {
+    const Key* key = (const Key*)ctx;
+    for (int i = 0; i < 16; i++) out[i] = (uint8_t)(in[i] * 7 + key->k + i);
+}
+netframe::Cipher cipher(Key* k, uint8_t nid) {
+    netframe::Cipher c;
+    c.ctx = k;
+    c.nid = nid;
+    c.seal = seal;
+    c.open = open;
+    c.ecb = ecb;
+    return c;
+}
+}  // namespace fakenet
+
 static void testNetFrame() {
     using namespace netframe;
+    fakenet::Key ka{0x5A}, kb{0x3C};
+    Cipher na = fakenet::cipher(&ka, 0x11), nb = fakenet::cipher(&kb, 0x22);
+    Cipher nbSameNid = fakenet::cipher(&kb, 0x11);  // colisao de nid, chave diferente
 
-    // round-trip DATA com o payload maximo (16 B) e dst do unicast
     uint8_t buf[ADV_MAX];
     Frame f;
     f.type = TYPE_DATA;
-    f.netId = 0xBEEF;
     f.src = 0x1234;
     f.dst = 0xA1B2;
-    f.seq = 0x5678;
+    f.seq = 0xABCDEF;
     f.ttl = 4;
     f.hops = 2;
-    const uint8_t payload[DATA_MAX] = "0123456789ABCDE";  // 15 + NUL = 16
+    const uint8_t payload[DATA_MAX] = "0123456789ABCDE";
     f.dlen = DATA_MAX;
     f.data = payload;
-    size_t n = encode(f, buf, sizeof(buf));
-    CHECK(n == HDR + DATA_MAX);
+    size_t n = encode(f, na, buf, sizeof(buf));
+    CHECK(n == ADV_MAX);
+    CHECK(buf[0] == 'C' && (buf[1] >> 4) == 3 && buf[2] == 0x11 && buf[3] == 0x42);
+    // seq/src/dst nao aparecem em claro
+    CHECK(!(buf[7] == 0x12 && buf[8] == 0x34 && buf[9] == 0xA1 && buf[10] == 0xB2));
+    CHECK(memcmp(buf + HDR, payload, DATA_MAX) != 0);
     Frame g;
-    CHECK(decode(buf, n, &g));
-    CHECK(g.type == TYPE_DATA && g.netId == 0xBEEF && g.src == 0x1234 && g.seq == 0x5678);
-    CHECK(g.dst == 0xA1B2);
-    CHECK(g.ttl == 4 && g.hops == 2 && g.dlen == DATA_MAX);
-    CHECK(memcmp(g.data, payload, DATA_MAX) == 0);
-    CHECK(g.dst != DST_BROADCAST);
+    uint8_t plain[DATA_MAX];
+    int net = -1;
+    Cipher both[2] = {nb, na};
+    CHECK(decode(buf, n, both, 2, &g, plain, &net) && net == 1);
+    CHECK(g.type == TYPE_DATA && g.src == 0x1234 && g.dst == 0xA1B2 && g.seq == 0xABCDEF);
+    CHECK(g.ttl == 4 && g.hops == 2 && g.dlen == DATA_MAX && memcmp(g.data, payload, DATA_MAX) == 0);
+    // outra rede (nid diferente) e chave errada com o mesmo nid: nao decifra
+    CHECK(!decode(buf, n, &nb, 1, &g, plain, &net));
+    CHECK(!decode(buf, n, &nbSameNid, 1, &g, plain, &net));
+    // MIC adulterado / dado adulterado / cabecalho ofuscado adulterado
+    uint8_t bad[ADV_MAX];
+    memcpy(bad, buf, n); bad[n - 1] ^= 1;  CHECK(!decode(bad, n, &na, 1, &g, plain, &net));
+    memcpy(bad, buf, n); bad[HDR] ^= 1;    CHECK(!decode(bad, n, &na, 1, &g, plain, &net));
+    memcpy(bad, buf, n); bad[8] ^= 1;      CHECK(!decode(bad, n, &na, 1, &g, plain, &net));
+    memcpy(bad, buf, n); bad[1] ^= 1;      CHECK(!decode(bad, n, &na, 1, &g, plain, &net));  // tipo no AAD
+    // relay: so o byte de ttl/saltos muda e o quadro segue autenticando
+    memcpy(bad, buf, n);
+    CHECK(relayPatch(bad, n) && bad[3] == 0x33);
+    CHECK(memcmp(bad + 4, buf + 4, n - 4) == 0);
+    CHECK(decode(bad, n, &na, 1, &g, plain, &net) && g.ttl == 3 && g.hops == 3 && g.seq == 0xABCDEF);
+    bad[3] = 0x10;
+    CHECK(!relayPatch(bad, n));  // ttl 1 nao repete
+    // rejeicoes de encode e lixo no ar
+    Frame e = f; e.dlen = DATA_MAX + 1; CHECK(encode(e, na, buf, sizeof(buf)) == 0);
+    e = f; e.ttl = 0;            CHECK(encode(e, na, buf, sizeof(buf)) == 0);
+    e = f; e.ttl = TTL_MAX + 1;  CHECK(encode(e, na, buf, sizeof(buf)) == 0);
+    e = f; e.seq = SEQ_MAX + 1;  CHECK(encode(e, na, buf, sizeof(buf)) == 0);
+    CHECK(!looksLike(buf, HDR + MIC - 1));
+    n = encode(f, na, buf, sizeof(buf));
+    buf[1] = (uint8_t)((2 << 4) | TYPE_DATA);  // v2 no ar
+    CHECK(!decode(buf, n, &na, 1, &g, plain, &net));
+    // BEAT curto (1 byte de dados): mascara com menos de 7 bytes cifrados
+    Frame bt;
+    bt.type = TYPE_BEAT;
+    bt.src = 0x0E0E;
+    bt.seq = 1;
+    const uint8_t caps = CAPS_MIC;
+    bt.data = &caps;
+    bt.dlen = 1;
+    n = encode(bt, na, buf, sizeof(buf));
+    CHECK(n == HDR + 1 + MIC && decode(buf, n, &na, 1, &g, plain, &net) && g.dlen == 1 && plain[0] == CAPS_MIC);
 
-    // default do Frame e broadcast: vizinho nao filtrado entrega
-    Frame bc;
-    CHECK(bc.dst == DST_BROADCAST);
-    bc.type = TYPE_DATA;
-    bc.netId = 0xBEEF;
-    bc.src = 0x1234;
-    bc.seq = 1;
-    bc.dlen = 2;
-    const uint8_t two[2] = {0xAA, 0xBB};
-    bc.data = two;
-    n = encode(bc, buf, sizeof(buf));
-    CHECK(decode(buf, n, &g) && g.dst == DST_BROADCAST);
+    // anti-replay: janela de 64 com reordenacao
+    Rpl<4> rpl;
+    CHECK(rpl.check(0, 0xAA, 100) == Rpl<4>::NEW);
+    rpl.commit(0, 0xAA, 100, 1);
+    CHECK(rpl.check(0, 0xAA, 100) == Rpl<4>::REPLAY);
+    CHECK(rpl.check(0, 0xAA, 99) == Rpl<4>::NEW);     // chegou fora de ordem: vale
+    rpl.commit(0, 0xAA, 99, 2);
+    CHECK(rpl.check(0, 0xAA, 99) == Rpl<4>::REPLAY);
+    rpl.commit(0, 0xAA, 180, 3);                       // janela andou
+    CHECK(rpl.check(0, 0xAA, 116) == Rpl<4>::REPLAY);  // 64 atras: velho demais
+    CHECK(rpl.check(0, 0xAA, 117) == Rpl<4>::NEW);
+    CHECK(rpl.check(1, 0xAA, 100) == Rpl<4>::NEW);     // outra rede, outra janela
+    for (uint16_t s = 1; s <= 4; s++) rpl.commit(2, s, 5, 10 + s);  // enche: recicla o mais velho
+    CHECK(rpl.check(0, 0xAA, 180) == Rpl<4>::NEW);     // (0,AA) era o mais antigo
+    // chave MAC (ESP-NOW): 48 bits nao colidem nos 16 de baixo
+    Rpl<4, uint64_t> rm;
+    rm.commit(0, 0x24A1600112ABull, 7, 1);
+    CHECK(rm.check(0, 0x24A1600112ABull, 7) == (Rpl<4, uint64_t>::REPLAY));
+    CHECK(rm.check(0, 0x30AE000112ABull, 7) == (Rpl<4, uint64_t>::NEW));
 
-    // rejeicoes: dados grandes demais, ttl fora da faixa, lixo no ar
-    Frame bad = f;
-    bad.dlen = DATA_MAX + 1;
-    CHECK(encode(bad, buf, sizeof(buf)) == 0);
-    bad = f; bad.ttl = 0;   CHECK(encode(bad, buf, sizeof(buf)) == 0);
-    bad = f; bad.ttl = TTL_MAX + 1; CHECK(encode(bad, buf, sizeof(buf)) == 0);
-    CHECK(!decode(buf, n - 1, &g));                 // tamanho colidindo
-    buf[0] = 'X';            CHECK(!decode(buf, n, &g));  // magic errado
-    buf[0] = 'C'; buf[2] = 1; CHECK(!decode(buf, n, &g));  // versao errada (v1)
+    // dedup por (src, seq)
+    DedupRing<4> d;
+    CHECK(!d.seen(1, 10) && d.seen(1, 10) && !d.seen(1, 11) && !d.seen(2, 10));
 
-    // BEAT v2: [caps(1)][nome] — o papel do no viaja na presenca
-    f.type = TYPE_BEAT;
-    f.dst = DST_BROADCAST;
-    const char* nome = "Celer-Dog";
-    uint8_t beat[DATA_MAX];
-    beat[0] = CAPS_SPEAKER | CAPS_MOTORS | CAPS_LEDS;
-    size_t nomeLen = strlen(nome);
-    memcpy(beat + 1, nome, nomeLen);
-    f.dlen = (uint8_t)(1 + nomeLen);
-    f.data = beat;
-    n = encode(f, buf, sizeof(buf));
-    CHECK(n == HDR + 1 + nomeLen);
-    CHECK(decode(buf, n, &g) && g.type == TYPE_BEAT);
-    CHECK(g.data[0] == (CAPS_SPEAKER | CAPS_MOTORS | CAPS_LEDS));
-    CHECK(memcmp(g.data + 1, nome, nomeLen) == 0);
-
-    // fnv16: deterministico e distingue nomes de rede
-    CHECK(fnv16("celer") == fnv16("celer"));
-    CHECK(fnv16("celer") != fnv16("casa"));
-
-    // dedup: (src, seq, idx) visto 2x; vizinhos distintos passam
-    DedupRing<4> dd;
-    CHECK(!dd.seen(1, 100, 0));   // 1a vez = novo
-    CHECK(dd.seen(1, 100, 0));    // repetido
-    CHECK(!dd.seen(1, 100, 1));   // outro fragmento
-    CHECK(!dd.seen(1, 101, 0));   // outro seq
-    CHECK(!dd.seen(2, 100, 0));   // outro no
-    CHECK(dd.seen(1, 100, 1));    // frag repetido de antes
-    dd.clear();
-    CHECK(!dd.seen(1, 100, 0));   // clear: tudo novo de novo
-
-    // dedup do tamanho do CelerNet: uma mensagem cheia (31 frags) x 2 copias
-    // + 30 BEATs de vizinhos; o frag 0 repetido DEPOIS da rajada (2o evento
-    // do adv, relay atrasado) ainda tem que ser reconhecido. Com 32 entradas
-    // (o tamanho antigo) o anel transbordava no meio da propria mensagem.
-    DedupRing<128> big;
-    DedupRing<32> old;
-    for (uint16_t c = 0; c < 2; c++) {
-        for (uint8_t i = 0; i < 31; i++) {
-            big.seen(5, (uint16_t)(200 + c), i);
-            old.seen(5, (uint16_t)(200 + c), i);
-        }
-    }
-    for (uint16_t k = 0; k < 30; k++) { big.seen(9, k, 0); old.seen(9, k, 0); }
-    CHECK(big.seen(5, 200, 0));    // 128: ainda lembra o 1o frag
-    CHECK(!old.seen(5, 200, 0));   // 32: esqueceu (o bug da bancada)
-
-    // copias de unicast dividem o seq: o frag que faltou na copia 0 vem da
-    // copia 1 (copia nos bits 5-6 do idx) e a remontagem sai UMA vez so
-    {
-        Reassembler rc;
-        uint8_t m3[3 * CHUNK_MAX];
-        for (size_t i = 0; i < sizeof(m3); i++) m3[i] = (uint8_t)(i + 1);
-        uint8_t o3[MSG_MAX];
-        size_t l3 = 0;
-        const uint8_t c1 = (uint8_t)(1 << FRAG_COPY_SHIFT);
-        CHECK(!rc.feed(7, 50, 0, 3, m3, CHUNK_MAX, 0, o3, sizeof(o3), &l3));            // copia 0: frag 0
-        CHECK(!rc.feed(7, 50, 2, 3, m3 + 28, CHUNK_MAX, 10, o3, sizeof(o3), &l3));      // copia 0: frag 2 (1 perdido)
-        CHECK(!rc.feed(7, 50, (uint8_t)(0 | c1), 3, m3, CHUNK_MAX, 20, o3, sizeof(o3), &l3));  // copia 1: frag 0 repetido
-        CHECK(rc.feed(7, 50, (uint8_t)(1 | c1), 3, m3 + 14, CHUNK_MAX, 30, o3, sizeof(o3), &l3)); // copia 1 completa
-        CHECK(l3 == sizeof(m3) && memcmp(o3, m3, sizeof(m3)) == 0);
-        CHECK(!rc.feed(7, 50, (uint8_t)(2 | c1), 3, m3 + 28, CHUNK_MAX, 40, o3, sizeof(o3), &l3)); // sem 2a entrega
-        CHECK(!rc.feed(7, 50, (uint8_t)(0 | c1), 3, m3, CHUNK_MAX, 50, o3, sizeof(o3), &l3));      // nem slot novo
-    }
-
-    // remontagem: mensagem de 434 B = 31 fragmentos de 14 B, fora de ordem
-    uint8_t msg[MSG_MAX];
-    for (size_t i = 0; i < MSG_MAX; i++) msg[i] = (uint8_t)(i * 7);
+    // remontagem: 40 B em 3 fragmentos, 2 copias; seqs consecutivos
+    uint8_t msg[40];
+    for (int i = 0; i < 40; i++) msg[i] = (uint8_t)(i * 3);
+    const uint8_t total = 3;
+    const uint32_t seqZero = 500;
     Reassembler ra;
-    uint8_t out[MSG_MAX];
+    uint8_t outMsg[MSG_MAX];
     size_t outLen = 0;
-    const uint8_t total = (MSG_MAX + CHUNK_MAX - 1) / CHUNK_MAX;  // 31
-    CHECK(total == MAX_FRAGS);
-    bool done = false;
-    for (int pass = 0; pass < 2 && !done; pass++) {
-        for (int k = 0; k < total && !done; k++) {
-            int idx = (k * 7) % total;  // ordem embaralhada (7 e coprimo de 31)
-            size_t off = (size_t)idx * CHUNK_MAX;
-            uint8_t len = idx + 1 == total ? (uint8_t)(MSG_MAX - off) : CHUNK_MAX;
-            done = ra.feed(0xA1B2, 42, (uint8_t)idx, total, msg + off, len,
-                           pass * 100 + k * 10, out, sizeof(out), &outLen);
-        }
-    }
-    CHECK(done);
-    CHECK(outLen == MSG_MAX);
-    CHECK(memcmp(out, msg, MSG_MAX) == 0);
-
-    // fragmento repetido nao entrega duas vezes nem corrompe o slot
-    ra.reset();
-    done = ra.feed(3, 7, 0, 2, msg, CHUNK_MAX, 0, out, sizeof(out), &outLen);
-    CHECK(!done);
-    done = ra.feed(3, 7, 0, 2, msg, CHUNK_MAX, 1, out, sizeof(out), &outLen);  // repetido
-    CHECK(!done);
-    done = ra.feed(3, 7, 1, 2, msg + CHUNK_MAX, 4, 2, out, sizeof(out), &outLen);
-    CHECK(done && outLen == CHUNK_MAX + 4);
-
-    // chunk curto no MEIO (nao-ultimo) e recusado: buraco nao cola
-    ra.reset();
-    CHECK(!ra.feed(3, 8, 0, 2, msg, CHUNK_MAX - 1, 0, out, sizeof(out), &outLen));
-
-    // total acima do teto e recusado (31 e o maximo de fragmentos)
-    ra.reset();
-    CHECK(!ra.feed(3, 8, 30, 32, msg, CHUNK_MAX, 0, out, sizeof(out), &outLen));
-
-    // slot vence: fragmento perdido libera para a proxima mensagem
-    ra.reset();
-    CHECK(!ra.feed(4, 9, 0, 2, msg, CHUNK_MAX, 0, out, sizeof(out), &outLen));
-    ra.prune(3000, 2000);  // 3 s depois do lastMs=0
-    done = ra.feed(4, 9, 1, 2, msg + CHUNK_MAX, 4, 4000, out, sizeof(out), &outLen);
-    CHECK(!done);  // slot antigo foi podado: frag solto nao entrega
-    done = ra.feed(4, 9, 0, 2, msg, CHUNK_MAX, 4100, out, sizeof(out), &outLen);
-    CHECK(done);   // mensagem nova (mesmo src/seq) recomeca limpa
+    auto chunkOf = [&](uint8_t i) { return msg + i * CHUNK_MAX; };
+    auto lenOf = [&](uint8_t i) { return (uint8_t)(i + 1 < total ? CHUNK_MAX : 40 - CHUNK_MAX * (total - 1)); };
+    // copia 0 perde o frag 1; a copia 1 traz o frag 1 com seq proprio
+    CHECK(fragSeqZero(seqZero + 0, 0, total) == seqZero);
+    CHECK(!ra.feed(7, fragSeqZero(500, 0, total), 0, total, chunkOf(0), lenOf(0), 1, outMsg, sizeof(outMsg), &outLen));
+    CHECK(!ra.feed(7, fragSeqZero(502, 2, total), 2, total, chunkOf(2), lenOf(2), 2, outMsg, sizeof(outMsg), &outLen));
+    const uint8_t idxCopy1 = (uint8_t)(1 | (1 << FRAG_COPY_SHIFT));
+    CHECK(fragSeqZero(seqZero + total + 1, idxCopy1, total) == seqZero);
+    CHECK(ra.feed(7, fragSeqZero(seqZero + total + 1, idxCopy1, total), idxCopy1, total, chunkOf(1), lenOf(1), 3,
+                  outMsg, sizeof(outMsg), &outLen));
+    CHECK(outLen == 40 && memcmp(outMsg, msg, 40) == 0);
+    // a mesma mensagem nao remonta de novo (resto das copias)
+    CHECK(!ra.feed(7, seqZero, 0, total, chunkOf(0), lenOf(0), 4, outMsg, sizeof(outMsg), &outLen));
+    // fragmento perdido: o slot vence no prune
+    Reassembler rb;
+    CHECK(!rb.feed(8, 900, 0, total, chunkOf(0), lenOf(0), 0, outMsg, sizeof(outMsg), &outLen));
+    rb.prune(10000, 6000);
+    CHECK(!rb.feed(8, 900, 1, total, chunkOf(1), lenOf(1), 10001, outMsg, sizeof(outMsg), &outLen));
+    CHECK(!rb.feed(8, 900, 2, total, chunkOf(2), lenOf(2), 10002, outMsg, sizeof(outMsg), &outLen));
 }
 
 // System.sfx (API 32): voz de efeito misturada por cima da trilha

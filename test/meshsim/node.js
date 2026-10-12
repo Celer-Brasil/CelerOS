@@ -45,7 +45,8 @@ var gen = 0;
 // ---- CelerNet (contrato de main/Runtime/JsMesh.cpp) ---------------------
 var MSG_MAX = 434, DATA_MAX = 16, CHUNK = 14, PENDING_DEPTH = 96;
 var TOKENS_PER_S = 8;
-var net = { active: false, relay: true, name: '', net: 'celer', seq: (wd.seed & 0xFFFF),
+// v3: a rede e a matilha do no (spec.pack), nunca a do app
+var net = { active: false, relay: true, name: '', net: wd.pack ? wd.pack.name : 'celer', seq: (wd.seed & 0xFFFF),
             txDropped: 0, rxDropped: 0, relayed: 0, relayDropped: 0 };
 var rxQ = [];             // CelerNet.poll (8, cheia descarta a mais antiga)
 var packQ = [];           // Pack.poll (4)
@@ -99,9 +100,8 @@ function enqueue(ev, len, copies) {
 env.CelerNet = {
     start: function(opts) {
         opts = opts || {};
-        if (typeof opts.name === 'string' && opts.name) net.name = opts.name.slice(0, 15);
+        if (typeof opts.name === 'string' && opts.name) net.name = opts.name.slice(0, 14);
         if (!net.name) net.name = 'Celer-' + myId();
-        if (typeof opts.net === 'string' && opts.net) net.net = opts.net;
         if (opts.relay === false) net.relay = false;
         else if (opts.relay === true) net.relay = true;
         if (!net.active) { net.seq = (net.seq + 101) & 0xFFFF; }
@@ -142,9 +142,10 @@ env.CelerNet = {
     status: function() {
         drainBacklog();
         return { active: net.active, relay: net.relay, node: myId(), name: net.name || ('Celer-' + myId()),
-                 net: net.net, txQueued: Math.ceil(backlog), txDropped: net.txDropped,
+                 net: net.net, secure: !!wd.pack, provisioned: !!wd.pack,
+                 txQueued: Math.ceil(backlog), txDropped: net.txDropped,
                  rxDropped: net.rxDropped, relayed: net.relayed, relayDropped: net.relayDropped,
-                 heard: view.nodes.length };
+                 heard: view.nodes.length, rxAuthFail: 0, rxReplay: 0 };
     }
 };
 
@@ -171,6 +172,7 @@ var res = Res.create({
     members: function() { return view.nodes; },
     log: function(m) { log.push(m); },
     caps: wd.caps || 0,
+    secure: !!wd.pack,
     setting: function(k) { return settings.hasOwnProperty(k) ? String(settings[k]) : '1'; }
 });
 env.Pack = {

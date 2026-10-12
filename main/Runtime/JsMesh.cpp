@@ -127,6 +127,9 @@ duk_ret_t JSBindings::js_meshStatus(duk_context *ctx) {
     putNodeId(ctx, "node", st.node);
     putStr(ctx, "name", st.name);
     putStr(ctx, "net", st.net);
+    // v3 (API 37): matilha privada (cifrada com chave so dela) ou a aberta
+    putBool(ctx, "secure", st.secure);
+    putBool(ctx, "provisioned", st.secure);
     putInt(ctx, "txQueued", st.txQueued);
     putUint(ctx, "txDropped", st.txDropped);
     putUint(ctx, "txStarted", st.txStarted);  // quadros que SAIRAM no ar (bench)
@@ -136,5 +139,7 @@ duk_ret_t JSBindings::js_meshStatus(duk_context *ctx) {
     putUint(ctx, "relayed", st.relayed);
     putUint(ctx, "relayDropped", st.relayDropped);  // repeticoes descartadas (anel cheio)
     putInt(ctx, "heard", st.heard);
+    putUint(ctx, "rxAuthFail", st.rxAuthFail);  // quadros de outra rede (nao autenticaram)
+    putUint(ctx, "rxReplay", st.rxReplay);      // seq repetido (dup de relay/replay)
     return 1;
 }

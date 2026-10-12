@@ -1,38 +1,34 @@
 #ifndef CELEROS_BT_NET_FRAME_H
 #define CELEROS_BT_NET_FRAME_H
 
-// CelerNet: quadro da malha por flood de advertising (API 26; v2 na 27).
+// CelerNet v3 (API 37): quadro SEGURO da malha por flood de advertising.
 //
-// Cada no da malha anuncia pacotes ADV_NONCONN de 31 bytes e escuta o ar;
-// quem ouve um quadro novo repete com ttl-1 — a area e coberta por saltos,
-// sem nenhuma conexao GATT (o Celer Link par-a-par segue intocado). E o
-// mecanismo-nucleo do BLE Mesh (flood gerenciado), aqui em 31 bytes crus:
-// o quadro vai direto no advertising data, sem estrutura AD — o proprio
-// advertising bearer do BLE Mesh e cru (magic 'C''N' no byte 0 decide o que
-// e nosso; scanners de fora ignoram payload desconhecido).
+// Cada no anuncia pacotes ADV_NONCONN de 31 bytes e escuta o ar; quem ouve
+// um quadro novo QUE AUTENTICA na sua rede entrega ao app e repete com
+// ttl-1. Inspirado na camada de rede do Bluetooth Mesh SIG:
 //
-// Layout v2 (15 bytes de cabecalho + dados, total <= 31):
-//   'C''N' | ver(1) | tipo(1) | netId(2) | src(2) | dst(2) | seq(2) | ttl(1)
-//         | hops(1) | dlen(1) | dados(dlen)
+//   [0]  'C'                magic
+//   [1]  ver(4) | tipo(4)   ver = 3
+//   [2]  nid                8 bits da chave da rede (escolhe a chave no RX)
+//   [3]  ttl(4) | saltos(4) EM CLARO e fora do MIC: o repetidor so troca
+//                           este byte, sem recifrar (o SIG idem com CTL/TTL)
+//   [4..6]  seq24           -+ OFUSCADOS (XOR com AES-ECB(privKey, iv ||
+//   [7..8]  src              |  7 primeiros bytes cifrados), como no SIG
+//   [9..10] dst             -+
+//   [11..]  dados cifrados (AES-CCM, encKey) + MIC de 4 bytes
 //
-//   ver    = 2 (v1 nao tinha dst; a v2 nasceu antes do primeiro push da v1)
-//   tipo   = BEAT (presenca: [caps(1)][nome NUL]) | DATA (mensagem inteira,
-//          |   <= 16 B) | FRAG (fragmento: [idx(1)][total(1)][chunk(<= 14 B)];
-//          |   mensagem de ate 434 B = 31 fragmentos com o MESMO (src, seq)
-//   netId  = FNV-1a 16 bits do nome da rede: so entra na malha quem tem o
-//            mesmo ID (v1 aberta; criptografia fica para uma v3)
-//   src    = 2 ultimos bytes da MAC BT (identidade do no, zero config)
-//   dst    = destino do UNICAST; 0xFFFF = broadcast (todos entregam). O
-//            repetidor NAO filtra por dst: o quadro segue o flood do mesmo
-//            jeito — so a ENTREGA e do destinatario.
-//   seq    = contador u16 por no; dedup por (src, seq, idx)
-//   ttl    = saltos restantes (repetidor decrementa); max 8
-//   hops   = saltos ja dados (repetidor incrementa; e o que o app mostra)
+// Nonce do CCM (13 B) = 0x00 | tipo | seq24 | src | dst | iv32 — seq UNICO
+// por quadro (fragmentos e copias ganham seqs proprios: ver FRAG abaixo).
+// AAD = bytes 1..2 (ver/tipo e nid). Dados uteis: 31 - 11 - 4 = 16 B.
 //
-// caps do BEAT (byte 0 dos dados): o que o no oferece a matilha.
+// tipo = BEAT (presenca: [caps][flags][nome]) | DATA (mensagem inteira,
+//        <= 16 B) | FRAG ([idx|copia][total][chunk <= 14 B]). A mensagem
+//        fragmentada usa seqs CONSECUTIVOS: o fragmento i da copia c tem
+//        seq = seqZero + c*total + i — o remontador junta fragmentos de
+//        qualquer copia pela chave (src, seqZero).
 //
-// Header-only puro, sem um tipo do ESP/NimBLE: compila no host e os testes
-// C++ (test/cpp) exercitam round-trip, dedup e remontagem.
+// Header-only puro: a cifra entra por interface (Cipher) — o firmware liga
+// o PSA (NetKeys), os testes do host ligam uma cifra falsa deterministica.
 
 #include <stddef.h>
 #include <stdint.h>
@@ -40,127 +36,262 @@
 
 namespace netframe {
 
-constexpr uint8_t MAGIC[2] = {'C', 'N'};
-constexpr uint8_t VERSION = 2;
-constexpr size_t HDR = 15;             // cabecalho inteiro (ate dlen)
-constexpr size_t ADV_MAX = 31;         // payload do ADV_NONCONN legado
-constexpr size_t DATA_MAX = ADV_MAX - HDR;  // 16 bytes de dados
+constexpr uint8_t MAGIC = 'C';
+constexpr uint8_t VERSION = 3;
+constexpr size_t HDR = 11;
+constexpr size_t MIC = 4;
+constexpr size_t ADV_MAX = 31;
+constexpr size_t DATA_MAX = ADV_MAX - HDR - MIC;  // 16
 constexpr uint16_t DST_BROADCAST = 0xFFFF;
-constexpr uint8_t TYPE_BEAT = 0;       // presenca: [caps(1)][nome NUL]
-constexpr uint8_t TYPE_DATA = 1;       // mensagem que cabe inteira (<= 16 B)
-constexpr uint8_t TYPE_FRAG = 2;       // fragmento de mensagem maior
-constexpr size_t FRAG_IDX = 1;         // posicao do idx nos dados do FRAG
-constexpr size_t FRAG_TOTAL = 1;       // posicao do total
-constexpr size_t CHUNK_MAX = DATA_MAX - FRAG_IDX - FRAG_TOTAL;  // 14
-constexpr uint8_t MAX_FRAGS = 31;      // 31 x 14 = 434 (teto da mensagem)
-// Byte idx do FRAG: bits 0-4 = indice (0..30), bits 5-6 = numero da COPIA
-// (unicast com copies). As copias de uma mensagem dividem o MESMO seq: o
-// dedup ve (src, seq, idx-com-copia) distintos — repetidores levam todas —
-// e o remontador junta fragmentos de qualquer copia. Firmware sem isso
-// descarta as copias >= 1 (idx >= total) e segue com a copia 0.
+constexpr uint8_t TYPE_BEAT = 0;
+constexpr uint8_t TYPE_DATA = 1;
+constexpr uint8_t TYPE_FRAG = 2;
+constexpr size_t CHUNK_MAX = DATA_MAX - 2;  // [idx|copia][total] + 14
+constexpr uint8_t MAX_FRAGS = 31;
 constexpr uint8_t FRAG_IDX_MASK = 0x1F;
 constexpr uint8_t FRAG_COPY_SHIFT = 5;
-constexpr size_t MSG_MAX = 434;        // envelope de musica cabe inteiro
+constexpr size_t MSG_MAX = 434;              // 31 x 14
 constexpr uint8_t TTL_MAX = 8;
 constexpr uint8_t TTL_DEFAULT = 4;
+constexpr uint32_t SEQ_MAX = 0xFFFFFF;       // 24 bits
 
-// caps do BEAT: papel do no na matilha (bitmask nos dados do BEAT).
-constexpr uint8_t CAPS_SPEAKER = 0x01;  // tem alto-falante (recebe musica)
-constexpr uint8_t CAPS_MIC = 0x02;      // tem microfone
-constexpr uint8_t CAPS_DISPLAY = 0x04;  // tem tela (matilha mostra nele)
-constexpr uint8_t CAPS_MOTORS = 0x08;   // se move (patas/motores)
-constexpr uint8_t CAPS_LEDS = 0x10;     // matriz/fitas de LED
-constexpr uint8_t CAPS_HUB = 0x20;      // rede configurada (alcaca o hub)
-constexpr uint8_t CAPS_CAMERA = 0x40;    // sensor de camera (le QR/fotos)
+// caps do BEAT: papel do no na matilha (bitmask, 1o byte dos dados)
+constexpr uint8_t CAPS_SPEAKER = 0x01;
+constexpr uint8_t CAPS_MIC = 0x02;
+constexpr uint8_t CAPS_DISPLAY = 0x04;
+constexpr uint8_t CAPS_MOTORS = 0x08;
+constexpr uint8_t CAPS_LEDS = 0x10;
+constexpr uint8_t CAPS_HUB = 0x20;
+constexpr uint8_t CAPS_CAMERA = 0x40;
+
+// flags do BEAT (2o byte): estado de provisionamento
+constexpr uint8_t BFLAG_UNPROV = 0x01;  // na rede aberta, aceitando matilha
+constexpr uint8_t BFLAG_ADMIN = 0x02;   // tem a chave de admin da matilha
 
 struct Frame {
     uint8_t type = TYPE_DATA;
-    uint16_t netId = 0;
-    uint16_t src = 0;
-    uint16_t dst = DST_BROADCAST;
-    uint16_t seq = 0;
+    uint8_t nid = 0;
     uint8_t ttl = TTL_DEFAULT;
     uint8_t hops = 0;
-    const uint8_t* data = nullptr;  // aponta para os dados (nao copia)
+    uint32_t seq = 0;  // 24 bits
+    uint16_t src = 0;
+    uint16_t dst = DST_BROADCAST;
+    const uint8_t* data = nullptr;  // texto claro (encode) / buffer do chamador (decode)
     uint8_t dlen = 0;
 };
 
-// FNV-1a truncado para 16 bits (netId do nome da rede).
-inline uint16_t fnv16(const char* s) {
-    uint32_t h = 2166136261u;
-    for (const char* p = s; *p != '\0'; p++) {
-        h ^= (uint8_t)*p;
-        h *= 16777619u;
-    }
-    return (uint16_t)(h ^ (h >> 16));
+// Cifra de UMA rede. seal: out = cifrado(len) || MIC(4). open: in tem len
+// bytes cifrados seguidos do MIC; out recebe len bytes claros. ecb: 1 bloco
+// AES com a privKey (ofuscacao do cabecalho).
+struct Cipher {
+    void* ctx = nullptr;
+    uint8_t nid = 0;
+    uint32_t iv = 0;
+    bool (*seal)(void* ctx, const uint8_t nonce[13], const uint8_t* aad, size_t aadLen,
+                 const uint8_t* in, size_t len, uint8_t* out) = nullptr;
+    bool (*open)(void* ctx, const uint8_t nonce[13], const uint8_t* aad, size_t aadLen,
+                 const uint8_t* in, size_t len, uint8_t* out) = nullptr;
+    void (*ecb)(void* ctx, const uint8_t in[16], uint8_t out[16]) = nullptr;
+};
+
+inline void nonceOf(uint8_t type, uint32_t seq, uint16_t src, uint16_t dst, uint32_t iv, uint8_t n[13]) {
+    n[0] = 0x00;
+    n[1] = type;
+    n[2] = (uint8_t)(seq >> 16);
+    n[3] = (uint8_t)(seq >> 8);
+    n[4] = (uint8_t)seq;
+    n[5] = (uint8_t)(src >> 8);
+    n[6] = (uint8_t)src;
+    n[7] = (uint8_t)(dst >> 8);
+    n[8] = (uint8_t)dst;
+    n[9] = (uint8_t)(iv >> 24);
+    n[10] = (uint8_t)(iv >> 16);
+    n[11] = (uint8_t)(iv >> 8);
+    n[12] = (uint8_t)iv;
 }
 
-// Serializa; devolve o tamanho total (0 = dados nao cabem).
-inline size_t encode(const Frame& f, uint8_t* out, size_t cap) {
-    if (f.dlen > DATA_MAX || f.ttl == 0 || f.ttl > TTL_MAX || f.data == nullptr) return 0;
-    size_t len = HDR + f.dlen;
-    if (len > cap) return 0;
-    out[0] = MAGIC[0];
-    out[1] = MAGIC[1];
-    out[2] = VERSION;
-    out[3] = f.type;
-    out[4] = (uint8_t)(f.netId >> 8);
-    out[5] = (uint8_t)f.netId;
-    out[6] = (uint8_t)(f.src >> 8);
-    out[7] = (uint8_t)f.src;
-    out[8] = (uint8_t)(f.dst >> 8);
-    out[9] = (uint8_t)f.dst;
-    out[10] = (uint8_t)(f.seq >> 8);
-    out[11] = (uint8_t)f.seq;
-    out[12] = f.ttl;
-    out[13] = f.hops;
-    out[14] = f.dlen;
-    memcpy(out + HDR, f.data, f.dlen);
+// Mascara de 7 bytes do cabecalho ofuscado (seq|src|dst), funcao dos bytes
+// cifrados (que o relay nao muda) e do iv
+inline void privacyMask(const Cipher& c, const uint8_t* enc, size_t encLen, uint8_t mask[7]) {
+    uint8_t in[16] = {0};
+    in[0] = (uint8_t)(c.iv >> 24);
+    in[1] = (uint8_t)(c.iv >> 16);
+    in[2] = (uint8_t)(c.iv >> 8);
+    in[3] = (uint8_t)c.iv;
+    memcpy(in + 4, enc, encLen < 7 ? encLen : 7);
+    uint8_t out[16];
+    c.ecb(c.ctx, in, out);
+    memcpy(mask, out, 7);
+}
+
+// Serializa e cifra; devolve o tamanho total (0 = invalido / cifra falhou).
+inline size_t encode(const Frame& f, const Cipher& c, uint8_t* out, size_t cap) {
+    if (f.dlen > DATA_MAX || f.ttl == 0 || f.ttl > TTL_MAX || f.hops > 15 || f.seq > SEQ_MAX) return 0;
+    if (f.dlen > 0 && f.data == nullptr) return 0;
+    const size_t len = HDR + f.dlen + MIC;
+    if (len > cap || c.seal == nullptr || c.ecb == nullptr) return 0;
+    out[0] = MAGIC;
+    out[1] = (uint8_t)((VERSION << 4) | (f.type & 0x0F));
+    out[2] = c.nid;
+    out[3] = (uint8_t)((f.ttl << 4) | (f.hops & 0x0F));
+    uint8_t nonce[13];
+    nonceOf(f.type, f.seq, f.src, f.dst, c.iv, nonce);
+    if (!c.seal(c.ctx, nonce, out + 1, 2, f.data, f.dlen, out + HDR)) return 0;
+    uint8_t mask[7];
+    privacyMask(c, out + HDR, f.dlen + MIC, mask);
+    const uint8_t clear[7] = {(uint8_t)(f.seq >> 16), (uint8_t)(f.seq >> 8), (uint8_t)f.seq,
+                              (uint8_t)(f.src >> 8),  (uint8_t)f.src,       (uint8_t)(f.dst >> 8),
+                              (uint8_t)f.dst};
+    for (int i = 0; i < 7; i++) out[4 + i] = clear[i] ^ mask[i];
     return len;
 }
 
-// Reconhece e decodifica um quadro nosso (magic + versao + tamanhos).
-// Frame.data aponta DENTRO de buf; valido enquanto buf viver.
-inline bool decode(const uint8_t* buf, size_t len, Frame* out) {
-    if (len < HDR || len > ADV_MAX) return false;
-    if (buf[0] != MAGIC[0] || buf[1] != MAGIC[1] || buf[2] != VERSION) return false;
-    uint8_t dlen = buf[14];
-    if ((size_t)dlen + HDR != len) return false;
-    out->type = buf[3];
-    out->netId = (uint16_t)((buf[4] << 8) | buf[5]);
-    out->src = (uint16_t)((buf[6] << 8) | buf[7]);
-    out->dst = (uint16_t)((buf[8] << 8) | buf[9]);
-    out->seq = (uint16_t)((buf[10] << 8) | buf[11]);
-    out->ttl = buf[12];
-    out->hops = buf[13];
-    out->dlen = dlen;
-    out->data = buf + HDR;
-    if (out->ttl == 0 || out->ttl > TTL_MAX) return false;
+// Reconhece o formato (magic/versao/tamanho) sem chave: o RX descarta o
+// resto do ar no 1o if, antes de gastar AES.
+inline bool looksLike(const uint8_t* buf, size_t len) {
+    return len >= HDR + MIC && len <= ADV_MAX && buf[0] == MAGIC && (buf[1] >> 4) == VERSION;
+}
+
+// Decifra com a rede de nid igual (ciphers[0..n)); plain recebe ate
+// DATA_MAX bytes e out->data aponta para ele. *net = indice da rede que
+// autenticou. false = formato invalido, nenhuma rede casa ou MIC falhou.
+inline bool decode(const uint8_t* buf, size_t len, const Cipher* ciphers, int n, Frame* out,
+                   uint8_t* plain, int* net) {
+    if (!looksLike(buf, len)) return false;
+    const uint8_t nid = buf[2];
+    const size_t encLen = len - HDR;  // dados + MIC
+    const uint8_t dlen = (uint8_t)(encLen - MIC);
+    for (int k = 0; k < n; k++) {
+        const Cipher& c = ciphers[k];
+        if (c.nid != nid || c.open == nullptr || c.ecb == nullptr) continue;
+        uint8_t mask[7];
+        privacyMask(c, buf + HDR, encLen, mask);
+        uint8_t h[7];
+        for (int i = 0; i < 7; i++) h[i] = buf[4 + i] ^ mask[i];
+        const uint32_t seq = ((uint32_t)h[0] << 16) | ((uint32_t)h[1] << 8) | h[2];
+        const uint16_t src = (uint16_t)((h[3] << 8) | h[4]);
+        const uint16_t dst = (uint16_t)((h[5] << 8) | h[6]);
+        const uint8_t type = buf[1] & 0x0F;
+        uint8_t nonce[13];
+        nonceOf(type, seq, src, dst, c.iv, nonce);
+        if (!c.open(c.ctx, nonce, buf + 1, 2, buf + HDR, dlen, plain)) continue;
+        out->type = type;
+        out->nid = nid;
+        out->ttl = (uint8_t)(buf[3] >> 4);
+        out->hops = (uint8_t)(buf[3] & 0x0F);
+        out->seq = seq;
+        out->src = src;
+        out->dst = dst;
+        out->data = plain;
+        out->dlen = dlen;
+        if (net != nullptr) *net = k;
+        if (out->ttl == 0 || out->ttl > TTL_MAX) return false;
+        return true;
+    }
+    return false;
+}
+
+// Relay: o quadro segue IDENTICO, so o byte de ttl/saltos muda (fora do MIC)
+inline bool relayPatch(uint8_t* buf, size_t len) {
+    if (!looksLike(buf, len)) return false;
+    const uint8_t ttl = (uint8_t)(buf[3] >> 4), hops = (uint8_t)(buf[3] & 0x0F);
+    if (ttl <= 1) return false;
+    buf[3] = (uint8_t)(((ttl - 1) << 4) | (hops < 15 ? hops + 1 : 15));
     return true;
 }
 
-// ------------------------------------------------------------------ dedup
+// ------------------------------------------------------------- replay
 
-// Chave de dedup: (src, seq, idx). DATA/BEAT usam idx 0; FRAG usa o proprio
-// idx do fragmento. Ring de N entradas: visto de novo = true.
-struct DedupKey {
-    uint16_t src;
-    uint16_t seq;
-    uint8_t idx;
-    uint8_t used;
+// Janela deslizante por origem (anti-replay do IPsec): aceita seq ainda nao
+// visto dentro de [max-63, max] e qualquer um acima do max. O relay troca a
+// ordem dos quadros (jitter por salto), por isso nao vale "so maior que".
+// check() nao grava; commit() grava depois que o MIC autenticou. Src = id do
+// no na malha (16 bits) ou a MAC no ESP-NOW (uint64_t).
+template <int N, typename Src = uint16_t>
+class Rpl {
+public:
+    enum Verdict { NEW, REPLAY, FULL };
+
+    Verdict check(uint8_t net, Src src, uint32_t seq) const {
+        const Entry* e = find(net, src);
+        if (e == nullptr) return NEW;
+        if (seq > e->max) return NEW;
+        const uint32_t back = e->max - seq;
+        if (back >= 64) return REPLAY;  // velho demais para a janela
+        return (e->bits >> back) & 1 ? REPLAY : NEW;
+    }
+
+    void commit(uint8_t net, Src src, uint32_t seq, uint32_t nowMs) {
+        Entry* e = find(net, src);
+        if (e == nullptr) {
+            e = slotFor(nowMs);
+            e->used = true;
+            e->net = net;
+            e->src = src;
+            e->max = seq;
+            e->bits = 1;
+            e->lastMs = nowMs;
+            return;
+        }
+        e->lastMs = nowMs;
+        if (seq > e->max) {
+            const uint32_t shift = seq - e->max;
+            e->bits = shift >= 64 ? 0 : e->bits << shift;
+            e->bits |= 1;
+            e->max = seq;
+        } else {
+            e->bits |= (uint64_t)1 << (e->max - seq);
+        }
+    }
+
+    void clear() {
+        for (int i = 0; i < N; i++) m_e[i].used = false;
+    }
+
+private:
+    struct Entry {
+        bool used = false;
+        uint8_t net = 0;
+        Src src = 0;
+        uint32_t max = 0;
+        uint64_t bits = 0;  // bit i = (max - i) ja visto
+        uint32_t lastMs = 0;
+    };
+    Entry m_e[N];
+
+    const Entry* find(uint8_t net, Src src) const {
+        for (int i = 0; i < N; i++) {
+            if (m_e[i].used && m_e[i].net == net && m_e[i].src == src) return &m_e[i];
+        }
+        return nullptr;
+    }
+    Entry* find(uint8_t net, Src src) {
+        return const_cast<Entry*>(static_cast<const Rpl*>(this)->find(net, src));
+    }
+    // livre ou o menos recente (no que sumiu ha mais tempo)
+    Entry* slotFor(uint32_t nowMs) {
+        Entry* old = &m_e[0];
+        for (int i = 0; i < N; i++) {
+            if (!m_e[i].used) return &m_e[i];
+            if (nowMs - m_e[i].lastMs > nowMs - old->lastMs) old = &m_e[i];
+        }
+        return old;
+    }
 };
 
+// ------------------------------------------------------------------ dedup
+
+// Quadro ja tratado (entregue/repetido)? Chave (src, seq): o seq e unico por
+// quadro na v3. Ring de N entradas: visto de novo = true.
 template <int N>
 class DedupRing {
     static_assert(N > 0 && (N & (N - 1)) == 0, "N deve ser potencia de 2");
 public:
-    bool seen(uint16_t src, uint16_t seq, uint8_t idx) {
+    bool seen(uint16_t src, uint32_t seq) {
         for (int i = 0; i < N; i++) {
-            if (m_e[i].used && m_e[i].src == src && m_e[i].seq == seq && m_e[i].idx == idx) {
-                return true;
-            }
+            if (m_e[i].used && m_e[i].src == src && m_e[i].seq == seq) return true;
         }
-        m_e[m_pos] = DedupKey{src, seq, idx, 1};
+        m_e[m_pos] = Key{src, seq, 1};
         m_pos = (m_pos + 1) & (N - 1);
         return false;
     }
@@ -171,41 +302,45 @@ public:
     }
 
 private:
-    DedupKey m_e[N] = {};
+    struct Key {
+        uint16_t src;
+        uint32_t seq;
+        uint8_t used;
+    };
+    Key m_e[N] = {};
     uint32_t m_pos = 0;
 };
 
 // ------------------------------------------------------------- remontagem
 
-// Coleta os fragmentos de UMA mensagem (mesmos src/seq) e devolve a
-// mensagem completa quando o ultimo chega. Slots parados ha mais que o
-// prazo viram livres (fragmento perdido nao trava o proximo).
+// seqZero do fragmento: seq - (copia*total + idx)
+inline uint32_t fragSeqZero(uint32_t seq, uint8_t idxByte, uint8_t total) {
+    const uint32_t idx = idxByte & FRAG_IDX_MASK;
+    const uint32_t copy = (uint32_t)(idxByte >> FRAG_COPY_SHIFT) & 3;
+    return seq - (copy * total + idx);
+}
 
-// alimenta um fragmento; true = mensagem completa em *outMsg/outLen.
-// ageMs/pruneNow mantem o relogio do chamador (millis no firmware, contagem
-// no teste).
+// Junta os fragmentos de UMA mensagem (src, seqZero) e devolve a mensagem
+// completa no ultimo. Slots parados ha mais que o prazo viram livres.
 class Reassembler {
 public:
-    // Descarta slots parados ha mais que timeoutMs (chamar antes de alimentar).
     void prune(uint32_t nowMs, uint32_t timeoutMs) {
         for (int i = 0; i < SLOTS; i++) {
             if (m_s[i].active && nowMs - m_s[i].lastMs > timeoutMs) m_s[i].active = false;
         }
     }
 
-    bool feed(uint16_t src, uint16_t seq, uint8_t idxByte, uint8_t total,
-              const uint8_t* chunk, uint8_t chunkLen, uint32_t nowMs,
-              uint8_t* outMsg, size_t cap, size_t* outLen) {
-        const uint8_t idx = idxByte & FRAG_IDX_MASK;  // copia nao importa aqui
+    bool feed(uint16_t src, uint32_t seqZero, uint8_t idxByte, uint8_t total, const uint8_t* chunk,
+              uint8_t chunkLen, uint32_t nowMs, uint8_t* outMsg, size_t cap, size_t* outLen) {
+        const uint8_t idx = idxByte & FRAG_IDX_MASK;
         if (total == 0 || total > MAX_FRAGS || idx >= total || chunkLen > CHUNK_MAX) return false;
-        // ja entregue (a outra copia terminou antes): nao remonta de novo
         for (int i = 0; i < DONE; i++) {
-            if (m_done[i].used && m_done[i].src == src && m_done[i].seq == seq) return false;
+            if (m_done[i].used && m_done[i].src == src && m_done[i].seqZero == seqZero) return false;
         }
         Slot* s = nullptr;
         for (int i = 0; i < SLOTS; i++) {
-            if (m_s[i].active && m_s[i].src == src && m_s[i].seq == seq) {
-                if (m_s[i].total != total) return false;  // colisao de seq: descarta
+            if (m_s[i].active && m_s[i].src == src && m_s[i].seqZero == seqZero) {
+                if (m_s[i].total != total) return false;
                 s = &m_s[i];
                 break;
             }
@@ -217,28 +352,28 @@ public:
                     break;
                 }
             }
-            if (s == nullptr) return false;  // sem slot: 4 mensagens grandes em voo
+            if (s == nullptr) return false;
             memset(s->buf, 0, sizeof(s->buf));
             s->src = src;
-            s->seq = seq;
+            s->seqZero = seqZero;
             s->total = total;
             s->gotMask = 0;
             s->len = 0;
             s->active = true;
         }
         s->lastMs = nowMs;
-        if (s->gotMask & (1u << idx)) return false;  // repetido
+        if (s->gotMask & (1u << idx)) return false;
         if ((size_t)(idx * CHUNK_MAX + chunkLen) > MSG_MAX) return false;
-        if (idx + 1 < total && chunkLen != CHUNK_MAX) return false;  // so o ultimo pode ser curto
+        if (idx + 1 < total && chunkLen != CHUNK_MAX) return false;
         memcpy(s->buf + idx * CHUNK_MAX, chunk, chunkLen);
         s->gotMask |= (uint32_t)(1u << idx);
         if ((size_t)(idx * CHUNK_MAX + chunkLen) > s->len) s->len = (uint16_t)(idx * CHUNK_MAX + chunkLen);
-        if (s->gotMask != totalMask(s->total)) return false;
-        size_t n = s->len < cap ? s->len : cap;
+        if (s->gotMask != (uint32_t)((1u << s->total) - 1)) return false;
+        const size_t n = s->len < cap ? s->len : cap;
         memcpy(outMsg, s->buf, n);
         *outLen = s->len;
         s->active = false;
-        m_done[m_donePos] = Done{src, seq, true};
+        m_done[m_donePos] = Done{src, seqZero, true};
         m_donePos = (uint8_t)((m_donePos + 1) % DONE);
         return true;
     }
@@ -251,27 +386,24 @@ public:
 private:
     static constexpr int SLOTS = 4;
     struct Slot {
-        uint16_t src = 0, seq = 0;
+        uint16_t src = 0;
+        uint32_t seqZero = 0;
         bool active = false;
         uint8_t total = 0;
-        uint32_t gotMask = 0;  // bit i = fragmento i em maos (ate 31)
+        uint32_t gotMask = 0;
         uint16_t len = 0;
         uint32_t lastMs = 0;
         uint8_t buf[MSG_MAX] = {};
     };
     Slot m_s[SLOTS];
-    // mensagens remontadas ha pouco: os frags da copia seguinte nao abrem slot
     static constexpr int DONE = 8;
     struct Done {
-        uint16_t src = 0, seq = 0;
+        uint16_t src = 0;
+        uint32_t seqZero = 0;
         bool used = false;
     };
     Done m_done[DONE];
     uint8_t m_donePos = 0;
-
-    static uint32_t totalMask(uint8_t total) {
-        return (uint32_t)((1u << total) - 1);  // total <= 31
-    }
 };
 
 }  // namespace netframe

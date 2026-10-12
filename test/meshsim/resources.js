@@ -90,6 +90,8 @@ function create(deps) {
             case 'open': {
                 var x = findLocal(o.name), reason = '';
                 if (!x) reason = 'notFound';
+                // v3: mic e camera so na matilha privada
+                else if ((x.type === 1 || x.type === 3) && !deps.secure) reason = 'denied';
                 else if (x.policy && deps.setting(x.policy) === '0') reason = 'denied';
                 else if (!x.ready) reason = 'unsupported';
                 else if (!x.shared && leasesOf(x.name).some(function(q) { return q.client !== from; })) reason = 'busy';

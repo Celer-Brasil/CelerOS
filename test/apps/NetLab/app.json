@@ -1,0 +1,13 @@
+{
+  "name": "NetLab",
+  "packageName": "test.netlab",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bench da CelerNet v3 (API 37): rede, contadores de seguranca, recursos dos vizinhos e a politica do mic/camera (recusa na rede aberta, abre na matilha). Log em /local/netlab.txt. App de teste, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 36,
+  "permissions": ["fs", "mic", "camera"],
+  "topbar": false,
+  "changelog": "1.0.0 - bench da V1 da CelerNet v3"
+}

@@ -2226,21 +2226,37 @@ malha é de uns poucos pacotes por segundo por nó; não é para streaming).
 troca de app e ao reboot (o estado fica no setting `celernet`; default
 desligado). No relógio (bateria) avalie o custo: o rádio fica escutando.
 
-**Segurança (v1):** os pacotes vão **em claro** no ar e o filtro é o
-**ID da rede** (`net`, default `"celer"`): só entram nós com o mesmo
-nome de rede. Qualquer um que escutar o rádio lê as mensagens — use
-para telemetria e comandos de brinquedo, não para segredos.
+**Segurança (v3, API 37):** todo pacote é cifrado e autenticado
+(AES-CCM) com a **chave da rede**, e cada pacote leva um número de
+sequência que nunca se repete: o nó descarta o que não autentica (outra
+rede, pacote forjado — nem entrega, nem repete) e o que já viu (captura
+reenviada). A rede não é mais escolha do app:
+
+- a **matilha** (rede privada) é nome + senha definidos no aparelho —
+  `mesh join <nome> <senha>` no shell (o assistente de provisionamento
+  no app Matilha vem a seguir). A chave sai dos dois (PBKDF2-SHA256):
+  um segundo aparelho que digita o mesmo nome e senha entra na mesma
+  matilha, e o mesmo nome com outra senha é outra rede;
+- aparelho sem matilha fica na **rede aberta "celer"**: a chave dela é
+  pública (integridade, sem sigilo) e serve para aparelhos ainda não
+  configurados. Nela, `mic` e `camera` recusam toda sessão remota com
+  `denied` (veja `Pack`); `speaker` e canais de dados seguem valendo.
+
+Nós com firmware CelerNet v2 e nós v3 não se ouvem mais: atualize todos
+os aparelhos juntos.
 
 #### `CelerNet.start([opcoes])` → Boolean (API 26)
 Liga o nó da malha. `opcoes`: `{name: "Celer-Dog"` (nome anunciado, até
-15 caracteres; default `Celer-XXXX` do fim da MAC), `net: "celer"`
-(nome da rede — só nós com o mesmo nome se ouvem) e `relay: true`
+14 caracteres desde a API 37; default `Celer-XXXX` do fim da MAC) e
+`relay: true`
 (repete pacotes de outros; `false` = só escuta e anuncia presença, para
 economia). Persiste o estado: o nó volta sozinho no próximo boot.
 A primeira chamada pode subir o Bluetooth (~300 ms). Com a RAM interna
 apertada (BLE ainda fora do ar e um app aberto) o pedido é **aceito
 mesmo assim** — o nó sobe sozinho em segundos, quando a RAM permitir
 (`status().active` confirma); `false` só sem memória para as filas.
+A opção `net` (API 26–36) é **ignorada** desde a API 37: a rede é a
+matilha do aparelho.
 
 #### `CelerNet.stop()` → Boolean (API 26)
 Desliga o nó (e persiste o desligado).
@@ -2311,10 +2327,14 @@ presença a cada ~3 s; desde a API 27 o anúncio leva o **papel** do nó
 (`caps`, um bitmask — `Pack.members()` devolve decodificado).
 
 #### `CelerNet.status()` → Object (API 26)
-`{active, relay, node, name, net, txQueued, txDropped, rxDropped,
-relayed, heard}` — `node` é o nosso id (fim da MAC), `relay` se estamos
-repetindo, `relayed` quantos pacotes de outros repetimos desde o
-`start()`, `heard` quantos nós estão na tabela de presença.
+`{active, relay, node, name, net, secure, provisioned, txQueued,
+txDropped, rxDropped, relayed, heard, rxAuthFail, rxReplay}` — `node` é
+o nosso id (fim da MAC), `net` o nome da rede (a matilha, ou `"celer"`),
+`secure`/`provisioned` (API 37) se é uma matilha privada, `relay` se
+estamos repetindo, `relayed` quantos pacotes de outros repetimos desde
+o `start()`, `heard` quantos nós estão na tabela de presença,
+`rxAuthFail` pacotes ouvidos que não autenticaram (outra rede por perto)
+e `rxReplay` pacotes já vistos (duplicatas de relay, replays).
 
 ### Exemplo — mensagem atravessando a área
 
@@ -2768,9 +2788,12 @@ apps (`Pack.expose`) já funcionam, pela malha (até 425 bytes por mensagem,
 taxa baixa: leituras de sensor, estados, comandos).
 
 Privacidade: abrir o `mic` ou a `camera` de outro nó exige a mesma permissão
-que o `Mic`/`Camera` local exigiria (`"mic"`/`"camera"` no app.json). O dono
+que o `Mic`/`Camera` local exigiria (`"mic"`/`"camera"` no app.json), e **só
+funciona dentro de uma matilha privada** (API 37): um nó na rede aberta
+`"celer"` recusa com `denied` (veja a nota de segurança em `CelerNet`). O dono
 desliga o compartilhamento por recurso com os settings `res_share_mic`,
-`res_share_cam`, `res_share_spk` (`"0"` = recusa com `denied`).
+`res_share_cam`, `res_share_spk` (`"0"` = recusa com `denied`). O tráfego
+ESP-NOW também vai cifrado com a chave da matilha.
 
 #### `Pack.resources([tipo])` → Array
 O que os vizinhos expõem: `[{node, nodeName, name, type, busy, shared, ready}]`,
@@ -2783,7 +2806,7 @@ Abre o recurso `nome` no `no` (id ou nome). Devolve o handle (0..7) ou `-1`
 viaja ao dono como JSON (até 48 bytes).
 
 #### `Pack.status(h)` → Object|null
-`{state, reason, node, name, via}` (`via`: `"espnow"` — rápido, até 1458 bytes por mensagem — ou `"mesh"`). `state`: `"opening"`, `"open"`, `"refused"`,
+`{state, reason, node, name, via}` (`via`: `"espnow"` — rápido, até 1449 bytes por mensagem — ou `"mesh"`). `state`: `"opening"`, `"open"`, `"refused"`,
 `"revoked"`, `"lost"` (o dono saiu / não respondeu) ou `"closed"`. `reason`
 na recusa/revogação: `"notFound"`, `"busy"`, `"denied"`, `"unsupported"`,
 `"full"`, `"local"`, `"gone"`, `"noLink"` (áudio/imagem sem canal ESP-NOW comum) (`"expired"` não aparece: o cliente reabre).
@@ -2792,7 +2815,7 @@ na recusa/revogação: `"notFound"`, `"busy"`, `"denied"`, `"unsupported"`,
 Próxima mensagem publicada na sessão (a mais antiga primeiro; 6 no buffer).
 
 #### `Pack.write(h, dado)` → Boolean
-Manda um dado ao dono (string ou objeto como JSON; ≤ 1458 bytes pelo ESP-NOW, ≤ 425 pela malha).
+Manda um dado ao dono (string ou objeto como JSON; ≤ 1449 bytes pelo ESP-NOW, ≤ 425 pela malha).
 
 #### `Pack.close(h)`
 Fecha a sessão. Os handles fecham sozinhos quando o app sai.

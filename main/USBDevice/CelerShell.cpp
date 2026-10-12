@@ -2,6 +2,7 @@
 #include "sdkconfig.h"
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../Bluetooth/CelerNet.h"
+#include "../Bluetooth/NetKeys.h"
 #include "../Pack/Resources.h"
 #endif
 #include "FileSystem/FileSystem.h"
@@ -1907,17 +1908,63 @@ int cmdSh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 
 #if CONFIG_CELEROS_BLUETOOTH
 // mesh: estado da malha CelerNet (rede, papel, contadores) e nos ouvidos
+//   mesh join <nome> <senha>  entra (ou cria) a matilha privada
+//   mesh leave                volta para a "celer" aberta
+//   mesh selftest             vetores dos RFCs (CCM/HKDF/PBKDF2) + quadro v3
+//   mesh replay               reinjeta o ultimo quadro ouvido (RPL descarta)
 int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
-    (void)argc;
-    (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "selftest") == 0) {
+        const bool ok = NetKeys::selftest(print, ctx);
+        print(ctx, "selftest: %s\r\n", ok ? "ok" : "FALHOU");
+        return ok ? 0 : 1;
+    }
+    if (argc >= 2 && strcmp(argv[1], "replay") == 0) {
+        CelerNet::Info a, b;
+        CelerNet::info(&a);
+        if (!CelerNet::replayLast()) {
+            print(ctx, "nada para reinjetar (malha desligada ou nada ouvido)\r\n");
+            return 1;
+        }
+        vTaskDelay(pdMS_TO_TICKS(300));  // o tick drena a fila crua
+        CelerNet::info(&b);
+        const bool ok = b.rxReplay > a.rxReplay;
+        print(ctx, "replay: %s (repetidos %u -> %u)\r\n", ok ? "descartado pelo RPL" : "NAO descartado",
+              (unsigned)a.rxReplay, (unsigned)b.rxReplay);
+        return ok ? 0 : 1;
+    }
+    if (argc >= 2 && (strcmp(argv[1], "join") == 0 || strcmp(argv[1], "leave") == 0)) {
+        const bool join = argv[1][0] == 'j';
+        if (join && (argc < 4 || strlen(argv[2]) == 0 || strlen(argv[2]) > 15 || strlen(argv[3]) < 8)) {
+            print(ctx, "uso: mesh join <nome 1..15> <senha >= 8>\r\n");
+            return 1;
+        }
+        NetKeys::init();
+        bool ok = true;
+        if (join) {
+            ok = NetKeys::join(argv[2], argv[3]);
+        } else {
+            NetKeys::leave();
+        }
+        if (!ok) {
+            print(ctx, "falhou (PSA/NVS)\r\n");
+            return 1;
+        }
+        CelerNet::netChanged();
+        Resources::netChanged();
+        const NetKeys::Net* n = NetKeys::primary();
+        print(ctx, "rede \"%s\" nid %02X (%s)\r\n", n->name, n->nid, n->open ? "aberta" : "privada");
+        return 0;
+    }
     CelerNet::Info st;
     CelerNet::info(&st);
     if (!st.active) {
         print(ctx, "malha desligada (setting celernet=%s)\r\n", CelerNet::enabledSetting() ? "1" : "0");
         return 0;
     }
-    print(ctx, "malha: \"%s\" (%04X) rede \"%s\" id %04X %s\r\n", st.name, st.node, st.net, st.netId,
-          st.relay ? "repetidor" : "so escuta");
+    print(ctx, "malha: \"%s\" (%04X) rede \"%s\" nid %02X %s %s\r\n", st.name, st.node, st.net, st.nid,
+          st.secure ? "privada" : "aberta", st.relay ? "repetidor" : "so escuta");
+    print(ctx, "  rx sem chave %u  repetidos %u  rede secundaria %u\r\n", (unsigned)st.rxAuthFail,
+          (unsigned)st.rxReplay, (unsigned)st.rxOther);
     print(ctx, "  tx no ar %u  falha %u  sem ficha %u  fila %u  recusados %u | relay %u (perdidos %u)  rx perdidos %u\r\n",
           (unsigned)st.txStarted, (unsigned)st.txFail, (unsigned)st.txNoToken, (unsigned)st.txQueued,
           (unsigned)st.txDropped, (unsigned)st.relayed, (unsigned)st.relayDropped, (unsigned)st.rxDropped);
@@ -1925,8 +1972,9 @@ int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     const int n = CelerNet::nodes(nodes, CelerNet::NODES_MAX);
     print(ctx, "nos ouvidos: %d\r\n", n);
     for (int i = 0; i < n; i++) {
-        print(ctx, "  %04X %-15s caps 0x%02X  rssi %d  saltos %u  ha %u s\r\n", nodes[i].id, nodes[i].name,
-              nodes[i].caps, nodes[i].rssi, nodes[i].hops, (unsigned)(nodes[i].lastSeenMs / 1000));
+        print(ctx, "  %04X %-15s caps 0x%02X%s  rssi %d  saltos %u  ha %u s\r\n", nodes[i].id, nodes[i].name,
+              nodes[i].caps, (nodes[i].flags & netframe::BFLAG_UNPROV) ? " nao-configurado" : "",
+              nodes[i].rssi, nodes[i].hops, (unsigned)(nodes[i].lastSeenMs / 1000));
     }
     return 0;
 }

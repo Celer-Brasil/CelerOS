@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 36 — 324 funcoes.
+// API level 37 — 324 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -24,7 +24,7 @@ interface MeshMessage { from: string; fromName: string; msg: string; hops: numbe
 interface PackResource { node: string; nodeName: string; name: string; type: "mic" | "speaker" | "camera" | "data"; busy: boolean; shared: boolean; ready: boolean; }
 interface PackSession { state: "opening" | "open" | "refused" | "revoked" | "lost" | "closed" | "done"; reason: string; node: string; name: string; via: "espnow" | "mesh" | ""; bytes?: number; total?: number; frames?: number; }
 interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }
-interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }
+interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; secure: boolean; provisioned: boolean; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; rxAuthFail: number; rxReplay: number; }
 
 declare function setTimeout(callback: () => void, ms: number): number;
 declare function setInterval(callback: () => void, ms: number): number;
@@ -448,7 +448,7 @@ declare const Camera: {
     setup({framesize?: number, pixformat?: number, fbcount?: number, xclkMhz}?: number): any;
     /** @permission "camera" */
     capture(): any;
-    /** @permission "camera" */
+    /** @permission "camera+fs" */
     save(id: string, path: string): any;
     /** @permission "camera" */
     free(id: string): void;
@@ -557,7 +557,7 @@ interface CelerLinkApi {
 }
 
 declare const CelerNet: {
-    start(opcoes?: { name?: string; net?: string; relay?: boolean }): boolean;
+    start(opcoes?: { name?: string; /** ignorado desde a API 37 */ net?: string; relay?: boolean }): boolean;
     stop(): boolean;
     broadcast(mensagem?: string | object, ttl?: number): boolean;
     send(destino: number, mensagem?: number, opcoes?: number): any;

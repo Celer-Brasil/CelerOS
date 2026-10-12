@@ -1949,22 +1949,38 @@ survives app switches and reboots (state lives in the `celernet`
 setting; off by default). On the watch (battery) weigh the cost: the
 radio keeps listening.
 
-**Security (v1):** packets travel **in the clear** and the only filter is
-the **network ID** (`net`, default `"celer"`): only nodes sharing the
-network name hear each other. Anyone sniffing the radio can read the
-messages — use it for telemetry and toy commands, not secrets.
+**Security (v3, API 37):** every packet is encrypted and authenticated
+(AES-CCM) with the **network key**, and every packet carries a sequence
+number that is never reused: a node drops anything that does not
+authenticate (another network, a forged packet — not delivered and not
+relayed) and anything it has already seen (a replayed capture). The
+network is no longer chosen by the app:
+
+- a **pack** (private network) is a name + password set on the device —
+  `mesh join <name> <password>` in the shell (the provisioning wizard in
+  the Matilha app comes next). The key is derived from both
+  (PBKDF2-SHA256), so a second device that types the same name and
+  password joins the same pack, and the same name with another password is
+  another network;
+- a device without a pack sits in the **open network "celer"**: its key
+  is public (integrity, no secrecy) and it is meant for devices not yet
+  configured. There, `mic` and `camera` refuse every remote session with
+  `denied` (see `Pack`); `speaker` and data channels still work.
+
+Nodes on CelerNet v2 firmware and v3 nodes no longer hear each other:
+update every device together.
 
 #### `CelerNet.start([options])` → Boolean (API 26)
 Turns this node on. `options`: `{name: "Celer-Dog"` (announced name, up
-to 15 characters; default `Celer-XXXX` from the end of the MAC),
-`net: "celer"` (network name — only nodes with the same name hear each
-other) and `relay: true` (repeat others' packets; `false` = listen and
+to 14 characters since API 37; default `Celer-XXXX` from the end of the
+MAC) and `relay: true` (repeat others' packets; `false` = listen and
 announce presence only, for battery). State persists: the node comes
 back on the next boot by itself. The first call may bring Bluetooth up
 (~300 ms). With internal RAM tight (BLE not up yet and an app open) the
 request is **accepted anyway** — the node comes up on its own within
 seconds, as soon as RAM allows (`status().active` confirms); `false`
-only without memory for the queues.
+only without memory for the queues. A `net` option (API 26–36) is
+**ignored** since API 37: the network is the device's pack.
 
 #### `CelerNet.stop()` → Boolean (API 26)
 Turns the node off (and persists the off state).
@@ -2036,10 +2052,14 @@ every ~3 s; since API 27 the announcement carries the node's **role**
 (`caps`, a bitmask — use `Pack.members()` for it decoded).
 
 #### `CelerNet.status()` → Object (API 26)
-`{active, relay, node, name, net, txQueued, txDropped, rxDropped,
-relayed, heard}` — `node` is our id (end of the MAC), `relay` whether we
-are repeating, `relayed` how many others' packets we relayed since
-`start()`, `heard` how many nodes are in the presence table.
+`{active, relay, node, name, net, secure, provisioned, txQueued,
+txDropped, rxDropped, relayed, heard, rxAuthFail, rxReplay}` — `node` is
+our id (end of the MAC), `net` the network name (the pack, or `"celer"`),
+`secure`/`provisioned` (API 37) whether it is a private pack, `relay`
+whether we are repeating, `relayed` how many others' packets we relayed
+since `start()`, `heard` how many nodes are in the presence table,
+`rxAuthFail` packets heard that did not authenticate (another network
+nearby) and `rxReplay` packets already seen (relay duplicates, replays).
 
 ### Example — a message crossing the area
 
@@ -2493,9 +2513,12 @@ Built-in resources come from the board profile: `mic`, `speaker` and
 low rate: sensor readings, states, commands).
 
 Privacy: opening someone else's `mic` or `camera` needs the same permission
-the local `Mic`/`Camera` would (`"mic"`/`"camera"` in app.json). The owner can
-turn sharing off per resource with the settings `res_share_mic`,
-`res_share_cam`, `res_share_spk` (`"0"` = refuse with `denied`).
+the local `Mic`/`Camera` would (`"mic"`/`"camera"` in app.json), and **only
+works inside a private pack** (API 37): a node in the open network `"celer"`
+refuses them with `denied` (see the security note in `CelerNet`). The owner
+can turn sharing off per resource with the settings `res_share_mic`,
+`res_share_cam`, `res_share_spk` (`"0"` = refuse with `denied`). ESP-NOW
+traffic is encrypted with the pack key too.
 
 #### `Pack.resources([type])` → Array
 What the neighbours expose: `[{node, nodeName, name, type, busy, shared, ready}]`,
@@ -2508,7 +2531,7 @@ Opens resource `name` on `node` (id or name). Returns the handle (0..7) or
 to the owner as JSON (up to 48 bytes).
 
 #### `Pack.status(h)` → Object|null
-`{state, reason, node, name, via}` (`via`: `"espnow"` — fast, up to 1458 bytes per message — or `"mesh"`). `state`: `"opening"`, `"open"`, `"refused"`,
+`{state, reason, node, name, via}` (`via`: `"espnow"` — fast, up to 1449 bytes per message — or `"mesh"`). `state`: `"opening"`, `"open"`, `"refused"`,
 `"revoked"`, `"lost"` (owner left / no answer) or `"closed"`. `reason` on
 refusal/revocation: `"notFound"`, `"busy"`, `"denied"`, `"unsupported"`,
 `"full"`, `"local"`, `"gone"`, `"noLink"` (audio/image without a shared ESP-NOW channel) (`"expired"` never shows: the client reopens).
@@ -2517,7 +2540,7 @@ refusal/revocation: `"notFound"`, `"busy"`, `"denied"`, `"unsupported"`,
 Next message published on the session (oldest first; 6 buffered).
 
 #### `Pack.write(h, data)` → Boolean
-Sends data to the owner (string or object as JSON; ≤ 1458 bytes over ESP-NOW, ≤ 425 over the mesh).
+Sends data to the owner (string or object as JSON; ≤ 1449 bytes over ESP-NOW, ≤ 425 over the mesh).
 
 #### `Pack.close(h)`
 Closes the session. Handles close themselves when the app exits.

@@ -207,7 +207,7 @@ duk_ret_t JSBindings::js_packOpen(duk_context *ctx) {
         return 1;
     }
     uint16_t dst = 0;
-    if (!CelerNet::resolveDest(to, &dst)) {  // no sumido: -1, sem throw
+    if (!Resources::resolve(to, &dst)) {  // no sumido: -1, sem throw
         duk_push_int(ctx, -1);
         return 1;
     }
@@ -327,7 +327,7 @@ duk_ret_t JSBindings::js_packPollWrite(duk_context *ctx) {
 namespace {
 // destino (id/nome) -> no; false = sumiu da malha
 bool packNode(duk_context* ctx, uint16_t* out) {
-    return CelerNet::resolveDest(duk_require_string(ctx, 0), out);
+    return Resources::resolve(duk_require_string(ctx, 0), out);
 }
 }  // namespace
 

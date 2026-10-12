@@ -429,6 +429,68 @@ scenario('CelerNet: mensagem crua com "P" no inicio some (magic do envelope)', f
 });
 
 // ---------------------------------------------------------------------------
+// CelerNet v3 (API 37): a rede e a matilha do no (nome + senha), nunca a do
+// app. Mesmo nome com senha errada = outra chave: nada se ouve nem se repete.
+// Mic/camera so abrem na matilha privada (na "celer" aberta: denied).
+scenario('CelerNet v3: matilhas isoladas e mic so na privada', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    var pack = { name: 'bancada', pass: 'senha-forte-1' };
+    // o wire viaja por toString (sem closure): a etiqueta e o nome do no
+    function probe(env, sim) {
+            sim.at(2000, function(e) {
+                // o net do app e ignorado: a matilha do no vale
+                e.CelerNet.start({ net: 'outra-rede' });
+            });
+            sim.at(4500, function(e) { e.CelerNet.broadcast(e.CelerNet.status().name + ' ola'); });
+            sim.at(9000, function(e) {
+                var st = e.CelerNet.status();
+                sim.note('rede ' + st.net + ' secure=' + st.secure + ' nos=' +
+                         e.CelerNet.nodes().map(function(n) { return n.name; }).sort().join(','));
+                var m, got = [];
+                while ((m = e.CelerNet.poll()) !== null) got.push(m.msg);
+                sim.note('rx ' + got.sort().join('|'));
+                e.Pack.resources();
+            });
+            sim.at(12000, function(e) {
+                var mics = e.Pack.resources('mic');
+                sim.note('mics ' + mics.map(function(r) { return r.nodeName; }).join(','));
+                if (mics.length) sim.h = e.Pack.open(mics[0].nodeName, 'mic');
+            });
+            sim.at(16000, function(e) {
+                if (sim.h === undefined) return;
+                var st = e.Pack.status(sim.h);
+                sim.note('mic ' + st.state + '/' + st.reason);
+            });
+    }
+    return sim.runMesh({
+        durationMs: 20000, seed: 11,
+        nodes: [
+            { name: 'A', id: 'AAAA', app: src, caps: 0x02, pack: pack, wire: probe },
+            { name: 'B', id: 'BBBB', app: src, caps: 0x04, pack: pack, wire: probe },
+            { name: 'Intruso', id: 'C0C0', app: src, caps: 0x02, pack: { name: 'bancada', pass: 'chute' },
+              wire: probe },
+            { name: 'Aberto1', id: 'D1D1', app: src, caps: 0x02, wire: probe },
+            { name: 'Aberto2', id: 'D2D2', app: src, caps: 0x04, wire: probe }
+        ],
+        links: [['A', 'B', -50], ['A', 'Intruso', -50], ['B', 'Intruso', -50], ['Intruso', 'Aberto1', -50],
+                ['A', 'Aberto1', -55], ['Aberto1', 'Aberto2', -50]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'A'); dump(res, 'B'); dump(res, 'Intruso'); dump(res, 'Aberto2');
+        check('matilha: A e B se veem (net do app ignorado)', has(res, 'B', '[sim] rede bancada secure=true nos=A') &&
+              has(res, 'A', '[sim] rede bancada secure=true nos=B'));
+        check('senha errada nao ve ninguem', has(res, 'Intruso', '[sim] rede bancada secure=true nos='));
+        check('broadcast da matilha nao vaza', has(res, 'B', '[sim] rx A ola') &&
+              !has(res, 'Intruso', 'A ola') && !has(res, 'Aberto1', 'A ola'));
+        check('rede aberta separada da matilha', has(res, 'Aberto2', '[sim] rede celer secure=false nos=Aberto1') &&
+              has(res, 'Aberto2', '[sim] rx Aberto1 ola'));
+        // provedor sem driver de mic no sim: passar da politica = unsupported
+        check('mic na matilha passa da politica', has(res, 'B', '[sim] mic refused/unsupported'));
+        check('mic na rede aberta = denied', has(res, 'Aberto2', '[sim] mic refused/denied'));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Recursos da matilha (API 36): DESCRIBE/LIST, canal de dados compartilhado,
 // exclusivo (busy), politica do dono, nativo sem provedor, escrita do
 // cliente, lease que vence quando o cliente some e REVOKE no unexpose

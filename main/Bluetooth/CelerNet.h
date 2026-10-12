@@ -6,7 +6,8 @@
 
 #include "NetFrame.h"
 
-// CelerNet: malha BLE entre CelerOS por flood de advertising (API 26; v2 na 27).
+// CelerNet: malha BLE entre CelerOS por flood de advertising (API 26; v2 na 27;
+// v3 segura na 37).
 //
 // CelerOS proximos formam UMA rede: cada no anuncia quadros ADV_NONCONN de
 // 31 bytes (NetFrame.h) e escuta o ar; quem ouve um quadro novo entrega ao
@@ -26,10 +27,13 @@
 // setting "celernet" (CelerSettings). O servico ALWAYS (Services.cpp)
 // bombeia o tick nos dois contextos (launcher e app).
 //
-// Filtro de rede: so entram quadros com o MESMO netId (FNV-1a 16 bits do
-// nome da rede, setting "celernet_net", default "celer"). v1 ABERTA: os
-// pacotes vai em claro no ar — criptografia com chave compartilhada fica
-// para uma v3. Identidade do no: 2 ultimos bytes da MAC BT (zero config).
+// v3 (API 37): todo quadro e cifrado e autenticado (AES-CCM) com a chave da
+// rede (NetKeys.h): a matilha privada (nome + senha, "mesh join" ou o
+// provisionamento) ou a aberta "celer" dos aparelhos nao configurados.
+// Quadro que nao autentica e descartado sem entrega nem repeticao; o RPL
+// descarta seq repetido (dup de relay e replay). A rede NAO e mais escolha
+// do app: o net do start() e ignorado. Identidade do no: 2 ultimos bytes
+// da MAC BT (zero config).
 //
 // Bancada (A/B sem recompilar): /local/celernet_tune.txt, lido em cada
 // start(), uma linha "adv=<ms 20..400> defer=<0|1> suppress=<0|1> coex=<0|1|2>"
@@ -49,7 +53,7 @@
 class CelerNet {
 public:
     static constexpr size_t MAX_MSG = netframe::MSG_MAX;  // 434 (31 frag x 14 B)
-    static constexpr size_t MAX_NAME = netframe::DATA_MAX - 1;  // 15 (BEAT: caps + nome)
+    static constexpr size_t MAX_NAME = netframe::DATA_MAX - 2;  // 14 (BEAT: caps + flags + nome)
     static constexpr int RX_DEPTH = 8;       // mensagens entregues ao JS
     static constexpr int NODES_MAX = 16;     // presenca ouvida
     static constexpr uint8_t TTL_DEFAULT = 4;
@@ -59,6 +63,7 @@ public:
         uint16_t id;
         char name[MAX_NAME + 1];
         uint8_t caps;                    // CAPS_* do NetFrame.h (papel na matilha)
+        uint8_t flags;                   // BFLAG_* (v3: nao configurado, admin)
         int8_t rssi;
         uint8_t hops;
         uint32_t lastSeenMs;
@@ -78,9 +83,10 @@ public:
         bool active;
         bool relay;                     // repete quadros de outros (roteador)
         uint16_t node;                  // nosso id (fim da MAC BT)
-        uint16_t netId;                 // FNV do nome da rede
+        uint8_t nid;                    // 8 bits da chave da rede primaria
+        bool secure;                    // matilha privada (false = "celer" aberta)
         char name[MAX_NAME + 1];
-        char net[16];                   // nome da rede (setting)
+        char net[16];                   // nome da rede primaria (NetKeys)
         uint16_t txQueued;              // quadros proprios na fila
         uint32_t txDropped;             // envios recusados (fila cheia/sem ficha)
         uint32_t txStarted;             // bursts que SAIRAM no ar (bench)
@@ -90,6 +96,9 @@ public:
         uint32_t relayed;               // quadros de outros repetidos
         uint32_t relayDropped;          // repeticoes descartadas (anel de TX cheio)
         uint16_t heard;                 // nos na tabela de presenca
+        uint32_t rxAuthFail;            // quadros v3 que nao autenticaram (outra rede)
+        uint32_t rxReplay;              // seq ja visto: dup de relay ou replay
+        uint32_t rxOther;               // autenticados na rede secundaria (aberta)
     };
 
     // Evento de presenca (join/leave) e mensagens para o KERNEL (o servico
@@ -105,10 +114,16 @@ public:
     static void setCaps(uint8_t caps);
     static uint8_t ourCaps();
 
-    // Liga o no (name/net nullptr = mantem o setting atual). relay=false:
-    // so escuta/anuncia presenca, nao repete (economia). Persiste
-    // "celernet"="1" e, dados, "celernet_name"/"celernet_net".
+    // Liga o no (name nullptr = mantem o setting atual). relay=false: so
+    // escuta/anuncia presenca, nao repete (economia). Persiste "celernet"="1"
+    // e, dado, "celernet_name". net: ignorado na v3 (so loga se diferente).
     static bool start(const char* name, const char* net, bool relay);
+    // A rede primaria do NetKeys mudou (join/leave): zera presenca, RPL,
+    // remontagem e fila (o que estava cifrado na rede velha nao serve).
+    static void netChanged();
+    // Bancada: reinjeta o ultimo quadro autenticado na fila crua (o RPL tem
+    // que conta-lo em rxReplay e nao entregar de novo).
+    static bool replayLast();
     // Desliga e persiste "celernet"="0".
     static bool stop();
     static bool active();

@@ -10,16 +10,19 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
 
 #include "../Bluetooth/CelerNet.h"
+#include "../Bluetooth/NetKeys.h"
 #include "../Kernel/Notifications.h"
 #include "../Boards/Board.h"
 #include "../Utils/CelerSettings.h"
 #include "AudioRes.h"
 #include "CamRes.h"
+#include "../Runtime/CameraCore.h"
 #include "DataLink.h"
 #include "../Utils/TaskCaps.h"
 #include "Pack.h"
@@ -97,6 +100,7 @@ struct Local {
     bool shared;
     bool ready;            // provedor existe neste firmware
     const char* policyKey; // setting do dono (nativos); nullptr = sem politica
+    bool allowed;          // cache do policyKey (refreshSettings)
     char name[RES_NAME_MAX + 1];
 };
 
@@ -254,6 +258,8 @@ constexpr int HELLOS = 8;
 constexpr uint32_t K_HELLO_MS = 5000, K_HELLO_TTL_MS = 15000;
 constexpr uint16_t TOKEN_ALL = 0xFFFF;  // CTRL broadcast para todos (HELLO)
 HelloNode s_hello[HELLOS];
+// diagnostico do controle em banda (shell "res")
+uint32_t s_ctrlRx = 0, s_ctrlNotUs = 0, s_ctrlFrom0 = 0, s_helloOk = 0;
 uint8_t s_peerPos = 0;
 
 void learnPeer(uint16_t node, const uint8_t mac[6]) {
@@ -277,14 +283,41 @@ const uint8_t* peerMac(uint16_t node) {
     return nullptr;
 }
 
+// Id do no = 2 ultimos bytes da MAC BT (a MESMA formula da CelerNet), lido
+// direto: com a malha ainda desligada o CelerNet::info dava 0 e o HELLO/
+// controle da esp32-cam saia com remetente 0 — os vizinhos descartavam tudo
+// (bancada 2026-10-11). Os recursos andam pelo ESP-NOW sem a malha BLE.
 uint16_t ourNode() {
     static uint16_t s_me = 0;
     if (s_me == 0) {
-        CelerNet::Info st;
-        CelerNet::info(&st);
-        s_me = st.node;
+        uint8_t mac[6] = {0};
+        esp_read_mac(mac, ESP_MAC_BT);
+        s_me = (uint16_t)((mac[4] << 8) | mac[5]);
     }
     return s_me;
+}
+
+// Settings em cache na RAM: a task res_rx (pilha na PSRAM) NAO pode ler o
+// NVS — leitura de flash com a pilha fora da interna e assert no
+// spi_flash (bancada 2026-10-11: o relogio reiniciava no 1o HELLO, antes da
+// malha subir e o nome vir dela). O tick do servico (pilha interna) recarrega.
+char s_nameCache[CelerNet::MAX_NAME + 1] = {0};
+
+// Nome anunciado no HELLO: o da malha ou o setting, senao "Celer-XXXX"
+void ourName(char* out, size_t cap) {
+    CelerNet::Info st;
+    CelerNet::info(&st);
+    if (st.name[0] != '\0') {
+        snprintf(out, cap, "%s", st.name);
+        return;
+    }
+    if (s_nameCache[0] != '\0') snprintf(out, cap, "%s", s_nameCache);
+    else snprintf(out, cap, "Celer-%04X", ourNode());
+}
+
+// Recursos no ar: malha BLE ligada OU o plano ESP-NOW de pe
+bool linkAlive() {
+    return CelerNet::active() || DataLink::up();
 }
 
 bool sendEnv(uint16_t to, const uint8_t* p, size_t n, bool urgent) {
@@ -334,6 +367,7 @@ int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
             l->shared = shared;
             l->ready = ready;
             l->policyKey = policyKey;
+            l->allowed = policyKey == nullptr || CelerSettings::get(policyKey, "1") == "1";
             snprintf(l->name, sizeof(l->name), "%s", name);
             return i;
         }
@@ -342,8 +376,20 @@ int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
 }
 
 bool policyAllows(const Local& l) {
-    if (l.policyKey == nullptr) return true;
-    return CelerSettings::get(l.policyKey, "1") == "1";
+    // CelerNet v3: mic e camera so na matilha PRIVADA — na "celer" aberta
+    // qualquer vizinho entraria (a chave dela e publica)
+    if ((l.type == TYPE_MIC || l.type == TYPE_CAMERA) && !NetKeys::provisioned()) return false;
+    return l.policyKey == nullptr || l.allowed;
+}
+
+// So de pilha interna (tick do servico, init): le o NVS
+void refreshSettings() {
+    const std::string n = CelerSettings::get("celernet_name", "");
+    snprintf(s_nameCache, sizeof(s_nameCache), "%s", n.c_str());
+    for (int i = 0; i < LIST_MAX; i++) {
+        Local& l = s_local[i];
+        if (l.used && l.policyKey != nullptr) l.allowed = CelerSettings::get(l.policyKey, "1") == "1";
+    }
 }
 
 // Derruba todas as sessoes de um recurso local avisando os clientes.
@@ -635,6 +681,13 @@ void rxPushData(int h, const uint8_t* d, size_t n) {
 
 void dispatch(const InMsg& m) {
     if (m.len == 0) {  // evento: vizinho saiu
+        // so da malha: um no que segue mandando HELLO pelo ESP-NOW esta vivo —
+        // a presenca BLE da esp32-cam oscila (coex) e o "saiu" matava a foto
+        // no meio da transferencia (bancada 2026-10-11)
+        const uint32_t now = nowMs();
+        for (int h = 0; h < HELLOS; h++) {
+            if (s_hello[h].id == m.from && now - s_hello[h].lastMs <= K_HELLO_TTL_MS) return;
+        }
         for (int i = 0; i < HANDLES_MAX; i++) {
             if ((s_h[i].state == ST_OPEN || s_h[i].state == ST_OPENING) && s_h[i].node == m.from) {
                 s_h[i].state = ST_LOST;
@@ -794,6 +847,7 @@ void dispatch(const InMsg& m) {
             slot->caps = caps;
             snprintf(slot->name, sizeof(slot->name), "%s", name);
             slot->lastMs = now;
+            s_helloOk++;
             return;
         }
         case OP_DATA: {
@@ -873,8 +927,17 @@ void init() {
     if (s_lock == nullptr || s_inLock == nullptr) return;
     s_leases.seed((uint16_t)(esp_random() & 0xFFFF));
     registerNatives();
-    CamRes::init();  // worker da camera agora, com RAM interna ainda inteira
     s_inited = true;
+    // Ordem de boot da RAM interna (esp32-cam: depois do WiFi sobram ~74 KB e
+    // o NimBLE leva ~38): 1o o ESP-NOW e a res_rx (o driver WiFi ja subiu no
+    // boot), depois o worker e o driver da camera. Com a camera primeiro o
+    // esp_now_init nao achava RAM e a cam ficava fora do plano de dados
+    {
+        Guard g;
+        ownLink(false);
+    }
+    CamRes::init();
+    CameraCore::warmup();
 }
 
 void onEnvelope(uint16_t from, const char* fromName, const uint8_t* payload, size_t len) {
@@ -906,9 +969,12 @@ void rxTask(void*) {
     for (;;) {
         if (rx != nullptr && DataLink::pollWait(rx, 50)) {
             if (rx->kind == DataLink::KIND_CTRL) {
+                s_ctrlRx++;
                 const uint16_t from = rx->sid;  // id do no remetente (ver sendEnv)
                 // broadcast: o token leva o destino (0 = unicast, ja e nosso)
                 const bool forUs = rx->token == 0 || rx->token == ourNode() || rx->token == TOKEN_ALL;
+                if (!forUs) s_ctrlNotUs++;
+                if (from == 0) s_ctrlFrom0++;
                 if (forUs && from != 0 && from != ourNode() && rx->len > 0) {
                     {
                         Guard g;
@@ -944,11 +1010,11 @@ void tickTimers() {
     static uint32_t s_helloMs = 0;
     if (DataLink::up() && nowMs() - s_helloMs >= K_HELLO_MS) {
         s_helloMs = nowMs();
-        CelerNet::Info st;
-        CelerNet::info(&st);
+        char nm[RES_NAME_MAX + 1];
+        ourName(nm, sizeof(nm));
         uint8_t b[24];
         static const uint8_t kAll[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        const size_t n = encodeHello(Pack::myCaps(), st.name, b, sizeof(b));
+        const size_t n = encodeHello(Pack::myCaps(), nm, b, sizeof(b));
         if (n > 0) DataLink::send(kAll, DataLink::KIND_CTRL, ourNode(), TOKEN_ALL, 0, b, n);
     }
     const uint32_t now = nowMs();
@@ -1098,21 +1164,28 @@ void tick() {
     if (!s_inited) return;
     // A caixa so existe depois do 1o uso; o handler da malha precisa dela
     // para nao perder o 1o DESCRIBE/OPEN que chega: aloca com a malha no ar.
+    // ESP-NOW de pe onde o driver WiFi ja roda (STA no AP ou buscando rede):
+    // o controle em broadcast acha os vizinhos do mesmo canal sem esperar a
+    // malha. Sem o driver (WiFi desligado), so na 1a sessao — subir o WiFi so
+    // por isso custa a RAM interna das placas justas
+    static uint32_t s_setMs = 0;
+    if (nowMs() - s_setMs > 2000) {
+        s_setMs = nowMs();
+        Guard g;
+        refreshSettings();
+    }
+    static uint32_t s_dlTryMs = 0;
+    if (!DataLink::up() && nowMs() - s_dlTryMs > 10000) {
+        s_dlTryMs = nowMs();
+        Guard g;
+        ownLink(false);  // so se o driver ja roda (nunca inicia o WiFi aqui)
+    }
     if (s_heap == nullptr) {
-        if (!CelerNet::active()) return;
+        if (!linkAlive()) return;
         Guard g;
         if (!heapEnsure()) return;
     }
     Guard g;
-    // ESP-NOW de pe junto com a malha onde o driver WiFi ja roda (STA no AP
-    // ou buscando rede): o controle em broadcast acha os vizinhos do mesmo
-    // canal sem esperar a malha. Sem o driver (WiFi desligado), so na 1a
-    // sessao — subir o WiFi so por isso custa a RAM interna das placas justas
-    static uint32_t s_dlTryMs = 0;
-    if (!DataLink::up() && nowMs() - s_dlTryMs > 10000) {
-        s_dlTryMs = nowMs();
-        ownLink(false);  // so se o driver ja roda (nunca inicia o WiFi aqui)
-    }
     InMsg m;
     for (int i = 0; i < INBOX_DEPTH && inboxPop(&m); i++) dispatch(m);
 
@@ -1170,7 +1243,7 @@ void tick() {
 }
 
 int remotes(Remote* out, int max) {
-    if (!s_inited || !CelerNet::active()) return 0;
+    if (!s_inited || !linkAlive()) return 0;
     Guard g;
     if (!heapEnsure()) return 0;
     const uint32_t now = nowMs();
@@ -1212,7 +1285,7 @@ int remotes(Remote* out, int max) {
 
 int open(uint16_t node, const char* name, const uint8_t* params, size_t plen, Mode mode,
          uint32_t maxMs) {
-    if (!s_inited || !CelerNet::active() || name == nullptr || name[0] == '\0') return -1;
+    if (!s_inited || !linkAlive() || name == nullptr || name[0] == '\0') return -1;
     if (strlen(name) > RES_NAME_MAX || plen > PARAMS_MAX) return -1;
     Guard g;
     if (!heapEnsure()) return -1;
@@ -1289,6 +1362,21 @@ void localClaim(uint8_t type) {
             revokeRid(i, REASON_LOCAL);
         }
     }
+}
+
+bool resolve(const char* to, uint16_t* out) {
+    if (CelerNet::resolveDest(to, out)) return true;  // "A1B2" ou nome da malha
+    if (!s_inited || to == nullptr) return false;
+    Guard g;
+    const uint32_t now = nowMs();
+    for (int h = 0; h < HELLOS; h++) {
+        if (s_hello[h].id != 0 && now - s_hello[h].lastMs <= K_HELLO_TTL_MS &&
+            strcasecmp(s_hello[h].name, to) == 0) {
+            *out = s_hello[h].id;
+            return true;
+        }
+    }
+    return false;
 }
 
 size_t dataCap() {
@@ -1438,9 +1526,9 @@ void dump(PrintFn pr, void* ctx) {
     pr(ctx, "ESP-NOW: %s  canal %u%s  mac %02X:%02X:%02X:%02X:%02X:%02X  sessoes %d  res_rx %s\r\n",
        me.up ? "no ar" : "parado", me.chan, me.sta ? " (preso ao AP)" : "", me.mac[0], me.mac[1],
        me.mac[2], me.mac[3], me.mac[4], me.mac[5], s_espnowSessions, s_rxTask ? "sim" : "nao");
-    pr(ctx, "  tx %u  falha %u  fila cheia %u | rx %u  descartados %u  alheios %u\r\n", (unsigned)ds.tx,
-       (unsigned)ds.txFail, (unsigned)ds.txNoMem, (unsigned)ds.rx, (unsigned)ds.rxDropped,
-       (unsigned)ds.rxForeign);
+    pr(ctx, "  tx %u  falha %u  fila cheia %u | rx %u  descartados %u  alheios %u  sem chave %u  replay %u\r\n",
+       (unsigned)ds.tx, (unsigned)ds.txFail, (unsigned)ds.txNoMem, (unsigned)ds.rx, (unsigned)ds.rxDropped,
+       (unsigned)ds.rxForeign, (unsigned)ds.rxAuthFail, (unsigned)ds.rxReplay);
     pr(ctx, "locais:\r\n");
     for (int i = 0; i < LIST_MAX; i++) {
         const Local& l = s_local[i];
@@ -1478,6 +1566,19 @@ void dump(PrintFn pr, void* ctx) {
                c.askedMs ? (int)((now - c.askedMs) / 1000) : -1);
         }
     }
+    pr(ctx, "controle ESP-NOW: rx %u  nao-nosso %u  remetente-0 %u  HELLO ok %u  (nosso id %04X)\r\n",
+       (unsigned)s_ctrlRx, (unsigned)s_ctrlNotUs, (unsigned)s_ctrlFrom0, (unsigned)s_helloOk, ourNode());
+    pr(ctx, "HELLO (presenca pelo ESP-NOW):\r\n");
+    for (int h = 0; h < HELLOS; h++) {
+        const HelloNode& hn = s_hello[h];
+        if (hn.id == 0) continue;
+        pr(ctx, "  %04X %-15s caps 0x%02X  ha %d s\r\n", hn.id, hn.name, hn.caps, (int)((now - hn.lastMs) / 1000));
+    }
+    pr(ctx, "pares ESP-NOW conhecidos:");
+    for (int i = 0; i < PEERS; i++) {
+        if (s_peers[i].node != 0) pr(ctx, " %04X", s_peers[i].node);
+    }
+    pr(ctx, "\r\n");
     AudioRes::Stats as;
     AudioRes::stats(&as);
     pr(ctx, "audio: mic->par %u blocos (%u sem fila)  tocados %u  gravados %u\r\n", (unsigned)as.srcFrames,
@@ -1503,6 +1604,22 @@ void appReset() {
         s_heap->wrHead = s_heap->wrCount = 0;
         s_heap->rxHead = s_heap->rxCount = 0;
     }
+}
+
+void netChanged() {
+    DataLink::netChanged();
+    if (!s_inited) return;
+    Guard g;
+    // sessoes da rede velha: os pares nao decifram mais nada nosso
+    for (int i = 0; i < LEASES; i++) {
+        LeaseTable<LEASES>::Lease* l = s_leases.at(i);
+        if (l == nullptr) continue;
+        leaseGone(*l);
+        s_leases.close(l->client, l->sid);
+    }
+    for (int i = 0; i < HANDLES_MAX; i++) close(i);
+    memset(s_hello, 0, sizeof(s_hello));
+    memset(s_peers, 0, sizeof(s_peers));
 }
 
 }  // namespace Resources

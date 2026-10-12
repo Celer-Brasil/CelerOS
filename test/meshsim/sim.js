@@ -66,6 +66,10 @@ function runMesh(spec) {
         var st = {
             i: i, spec: n, id: id, name: n.name, caps: n.caps || 0,
             online: true, netActive: false, relay: true, netName: n.name,
+            // CelerNet v3: a chave da rede e nome + senha da matilha (sem
+            // matilha = a "celer" aberta). Chave diferente = quadro que nao
+            // autentica: nem entrega, nem repete, nem presenca
+            netKey: n.pack ? n.pack.name + '\u0000' + n.pack.pass : 'celer',
             txFree: 0, seen: {}, delivered: {}, inbox: [], relayed: 0,
             relayPending: 0, relayDropped: 0,
             waiting: false, barrier: 0, done: null,
@@ -109,7 +113,9 @@ function runMesh(spec) {
     }
     var timeline = (spec.events || []).slice(0).sort(function(a, b) { return a.at - b.at; });
 
-    function hearable(a, b) { return a.online && b.online && a.netActive && b.netActive; }
+    function hearable(a, b) {
+        return a.online && b.online && a.netActive && b.netActive && a.netKey === b.netKey;
+    }
 
     // um no (origem ou repetidor) poe a mensagem no ar a partir de t;
     // devolve o instante de PARTIDA (null se o no esta fora/sem malha) —
@@ -361,7 +367,8 @@ function runMesh(spec) {
                     id: n.id, name: n.spec.name, caps: n.caps, board: n.spec.board || 'host',
                     app: n.spec.app, autoStart: n.spec.autoStart !== false,
                     wire: n.spec.wire ? n.spec.wire.toString() : null,
-                    settings: n.spec.settings || null
+                    settings: n.spec.settings || null,
+                    pack: n.spec.pack || null
                 },
                 transferList: [ch.port2]
             });

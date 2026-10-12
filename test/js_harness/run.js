@@ -995,8 +995,8 @@ function makeEnv() {
     nodes: function() { return meshNodes.slice(0); },
     status: function() {
         return { active: meshOn, relay: true, node: 'A1B2', name: 'Celer-TEST',
-                 net: 'celer', txQueued: 0, txDropped: 0, rxDropped: 0,
-                 relayed: 0, heard: meshNodes.length };
+                 net: 'celer', secure: false, provisioned: false, txQueued: 0, txDropped: 0,
+                 rxDropped: 0, relayed: 0, heard: meshNodes.length, rxAuthFail: 0, rxReplay: 0 };
     }
     };
 

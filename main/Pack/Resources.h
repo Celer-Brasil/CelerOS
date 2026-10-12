@@ -85,6 +85,9 @@ void onMemberLeft(uint16_t id);
 // Recursos conhecidos dos vizinhos (cache). Dispara DESCRIBE para quem nao
 // tem cache fresco (resposta chega em ~1 s; o app consulta de novo).
 int remotes(Remote* out, int max);
+// Destino por id "A1B2" ou nome: malha BLE ou HELLO do ESP-NOW (no ouvido so
+// pelo plano de dados, como a esp32-cam com o BLE abafado pelo coex).
+bool resolve(const char* to, uint16_t* out);
 // Abre (nao bloqueia): handle >= 0 ou -1 (sem slot/malha fora/nome vazio).
 int open(uint16_t node, const char* name, const uint8_t* params, size_t plen,
          Mode mode = MODE_DATA, uint32_t maxMs = 0);
@@ -128,6 +131,8 @@ void dump(PrintFn print, void* ctx);
 // Troca de app (JSBindings::init): canais do app saem (REVOKE "gone" para
 // os clientes) e os handles abertos pelo app fecham (CLOSE ao servidor).
 void appReset();
+// Rede da malha mudou (mesh join/leave): derruba sessoes, HELLOs e pares.
+void netChanged();
 
 }  // namespace Resources
 

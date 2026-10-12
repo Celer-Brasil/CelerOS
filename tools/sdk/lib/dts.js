@@ -84,7 +84,7 @@ const PARAM_TYPES = {
     'UI.measure.role': 'UITextRole',
     'UI.lineHeight.role': 'UITextRole',
     'UI.measureWrap.role': 'UITextRole',
-    'CelerNet.start.opcoes': '{ name?: string; net?: string; relay?: boolean }',
+    'CelerNet.start.opcoes': '{ name?: string; /** ignorado desde a API 37 */ net?: string; relay?: boolean }',
     'CelerNet.broadcast.mensagem': 'string | object',
     'CelerNet.broadcast.ttl': 'number',
     'Pack.resources.tipo': '"mic" | "speaker" | "camera" | "data"',
@@ -227,7 +227,7 @@ function generate() {
     out.push('interface PackResource { node: string; nodeName: string; name: string; type: "mic" | "speaker" | "camera" | "data"; busy: boolean; shared: boolean; ready: boolean; }');
     out.push('interface PackSession { state: "opening" | "open" | "refused" | "revoked" | "lost" | "closed" | "done"; reason: string; node: string; name: string; via: "espnow" | "mesh" | ""; bytes?: number; total?: number; frames?: number; }');
     out.push('interface MeshNode { id: string; name: string; rssi: number; hops: number; lastSeen: number; }');
-    out.push('interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; }');
+    out.push('interface MeshStatus { active: boolean; relay: boolean; node: string; name: string; net: string; secure: boolean; provisioned: boolean; txQueued: number; txDropped: number; txStarted: number; txFail: number; txNoToken: number; rxDropped: number; relayed: number; relayDropped: number; heard: number; rxAuthFail: number; rxReplay: number; }');
     out.push('');
     // funcoes globais (ex.: timers API 12): setTimeout e irmãos no escopo global
     if (manifest.objects.global) {

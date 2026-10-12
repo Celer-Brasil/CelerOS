@@ -14,18 +14,26 @@
 // no sem STA muda para o canal do par. A sessao (Resources) negocia o canal
 // e segura o radio nele (NetworkManager::holdChannel: sem scans de fundo).
 //
-// Quadro (dentro do payload ESP-NOW):
-//   'C''D' | ver(1) | tipo(1) | sid u16 | token u32 | seq u16 | dados
-// sid/token vem do ACCEPT da sessao: quem nao tem a sessao nao casa quadro.
-// v1 sem criptografia: o sigilo chega com a chave da rede (CelerNet v3).
+// Quadro v2 (CelerNet v3, API 37), dentro do payload ESP-NOW:
+//   em claro:  'C''D' | ver=2 | nid | seq32
+//   cifrado:   tipo | sid u16 | token u32 | seq u16 | dados   + MIC(4)
+// AES-CCM com a encKey da rede (NetKeys); nonce = 0x01 | MAC de origem |
+// seq32 | 0 0 (a MAC entra no nonce: trocar a origem quebra o MIC); AAD =
+// os 8 bytes em claro. RPL por (rede, MAC): quadro repetido ou reinjetado
+// cai. sid/token vem do ACCEPT da sessao: quem nao tem a sessao nao casa.
+// Cifra e decifra fora do callback do WiFi (send na task de quem envia,
+// pollWait na task res_rx).
 //
 // Concorrencia: o callback de RX roda na task do WiFi e so copia para um
 // ringbuffer (PSRAM); poll() drena da task do servico.
 namespace DataLink {
 
 static constexpr size_t FRAME_MAX = 1470;     // ESP_NOW_MAX_DATA_LEN_V2
-static constexpr size_t HDR = 12;
-static constexpr size_t PAYLOAD_MAX = FRAME_MAX - HDR;  // 1458
+static constexpr size_t CLEAR_HDR = 8;      // 'C''D' ver nid seq32
+static constexpr size_t INNER_HDR = 9;      // tipo sid token seq (cifrados)
+static constexpr size_t MIC = 4;
+static constexpr size_t HDR = CLEAR_HDR + INNER_HDR + MIC;
+static constexpr size_t PAYLOAD_MAX = FRAME_MAX - HDR;  // 1449
 
 enum Kind : uint8_t {
     KIND_DATA = 1,     // mensagem de canal de dados (publish/write)
@@ -49,12 +57,15 @@ struct Rx {
     uint32_t token;
     uint16_t seq;
     int8_t rssi;
+    uint8_t net;      // indice NetKeys da rede que autenticou (0 = primaria)
     uint16_t len;
     uint8_t data[PAYLOAD_MAX];
 };
 
 struct Stats {
     uint32_t tx, txFail, txNoMem, rx, rxDropped, rxForeign;
+    uint32_t rxAuthFail;  // nao autenticou (outra rede/forjado)
+    uint32_t rxReplay;    // seq32 ja visto (replay)
 };
 
 // Sobe o ESP-NOW (e, com allowWifiInit, o driver WiFi em STA sem conectar).
@@ -68,8 +79,11 @@ bool setChannel(uint8_t ch);
 // Sessao ESP-NOW viva: segura o canal (sem scans de fundo). Contador.
 void hold(bool on);
 
+// Cifra na rede primaria e envia.
 bool send(const uint8_t mac[6], uint8_t kind, uint16_t sid, uint32_t token, uint16_t seq,
           const void* data, size_t len);
+// Rede mudou (mesh join/leave): zera o RPL.
+void netChanged();
 bool poll(Rx* out);
 // Espera ate ms por um quadro (task res_rx dos recursos)
 bool pollWait(Rx* out, uint32_t ms);

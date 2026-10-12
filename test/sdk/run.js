@@ -77,6 +77,31 @@ function check(name, ok, detail) {
     r.circle(100, 100, 8, T.accent, true);
     check('fillCircle centro e borda', r.fb[100 * W + 100] === T.accent && r.fb[100 * W + 108] === T.accent);
 
+    // drawPNG/decodePng: fixture 3x2 RGBA (vermelho/verde/azul na 1a linha;
+    // alfa 0, cinza a=128 e branco na 2a) + o fundo.png REAL do Arrasa (paleta)
+    var pngPath = path.join(os.tmpdir(), 'sdk_png_fixture.png');
+    fs.writeFileSync(pngPath, Buffer.from(
+        'iVBORw0KGgoAAAABJRU5ErkJggg=='.slice(0, 0) +
+        'iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAYAAACddGYaAAAAGUlEQVR4nGP4z8DwHwwZ/gMxEDQAwX8gAACIngv3FJk/BgAAAABJRU5ErkJggg==', 'base64'));
+    var rP = new Renderer();
+    var envP = { System: {} };
+    rP.wire(envP);
+    rP.fb.fill(0x0000);
+    var okPng = envP.System.drawPNG(pngPath, 0, 0);
+    check('drawPNG renderiza arquivo host (retorna true e pinta RGB565)',
+          okPng === true && rP.fb[0] === 0xF800 && rP.fb[1] === 0x07E0 && rP.fb[2] === 0x001F,
+          'ok=' + okPng + ' fb0=0x' + rP.fb[0].toString(16));
+    check('drawPNG alfa 0 preserva o fundo', rP.fb[W + 0] === 0x0000,
+          'fb=0x' + rP.fb[W].toString(16));
+    check('drawPNG alfa 128 compoe (cinza sobre preto -> 0x4208)', rP.fb[W + 1] === 0x4208,
+          'fb=0x' + rP.fb[W + 1].toString(16));
+    check('drawPNG arquivo inexistente devolve false', envP.System.drawPNG('/x/y/z.png', 0, 0) === false);
+    var { decodePng } = require('../../tools/sdk/lib/png.js');
+    var fundo = decodePng(fs.readFileSync(path.join(ROOT, 'hub_apps/Arrasa/fundo.png')));
+    check('decodePng le PNG de PALETA real (fundo 480x480, ceu no px0)',
+          fundo.w === 480 && fundo.h === 480 && fundo.rgba[0] === 61 && fundo.rgba[1] === 169,
+          fundo.w + 'x' + fundo.h + ' px0=' + fundo.rgba[0] + ',' + fundo.rgba[1]);
+
     // sprite: cria, bind, desenha NELE, push para a tela
     var env = { System: { fillRect: function () {}, drawPNG: function () { return true; } } };
     r.wire(env.System ? env : env);  // wire espera env; aqui so exercita S.*
@@ -844,6 +869,20 @@ function depsSize(nomes) {
           erroTween === null && r.grabbed.t2 === 10,
           erroTween || ('t2=' + r.grabbed.t2));
 
+    // fim do veu de transicao força UM repaint integral: os rects do veu
+    // (_drawTrans) pintam FORA da camada suja e os restos do ultimo quadro
+    // (cantos do iris, colunas do bands, borda do wipe) ficariam na tela
+    // ate algo se mover em cima — os "blocos pretos" do Detona/Arrasa
+    r = runEngine(
+        'var E = require("celeros.game"); E.init({});' +
+        'var cheio = -1;' +
+        'E.run({ a: { update: function () { E.goto("b", { transition: "bands", ms: 120 }); } },' +
+        '        b: { enter: function () { E.dirty.enable(0); },' +
+        '             draw: function () { if (!E._trans) { cheio = E.dirty._wasFull ? 1 : 0; E.quit(); } } } }, "a");' +
+        '__harness.grab("cheio", cheio);');
+    check('fim do veu de transicao repinta tudo (restos do veu saem da tela)',
+          r.grabbed.cheio === 1, 'cheio=' + r.grabbed.cheio);
+
     // tween com easing linear chega no alvo e chama onDone
     r = runEngine(
         'var E = require("celeros.engine"); E.init({});' +
@@ -1199,7 +1238,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.0.0' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.0.1' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1223,7 +1262,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.0.0',
+          out.fx[2] === '1.0.1',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro

@@ -21,7 +21,7 @@ var _flo = { color: 0, align: 'center', font: null, px: 0, screen: false };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.0.0',
+    version: '1.0.1',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,

@@ -35,7 +35,7 @@
 // registro E._modTicks (antes colado no corpo do E.run); init tolera
 // modulo ausente (E.spr/E.fx/E.tilemap undefined quando nao adotado).
 
-var E = { version: '1.0.0' };
+var E = { version: '1.0.1' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -471,7 +471,15 @@ E.run = function (scenes, first) {
             E._trans.t += dt * 1000;
             if (E._trans.t >= E._trans.ms) {
                 if (E._trans.kind === 'fadeout') E._trans.done = true;
-                else E._trans = null;   // terminou: cena limpa
+                else {
+                    E._trans = null;   // terminou: cena limpa
+                    // o ultimo quadro do veu pintou rects FORA da camada suja
+                    // (_drawTrans e System.fillRect puro): sem este repaint
+                    // integral os restos do veu (cantos/colunas/borda) ficam
+                    // na tela ate algo se mover em cima — "blocos pretos"
+                    E.dirty._full = true;
+                    E._redraw = true;  // cena static repinta junto
+                }
             }
         }
         E._fpsN++;

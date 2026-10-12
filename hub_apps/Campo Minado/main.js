@@ -1,11 +1,12 @@
 // Campo Minado — classico completo. Porte CelerGame: o motor do tabuleiro
 // segue em board.js (require local); o desenho incremental celula-a-celula
 // vira a camada suja E.dirty — o painter repinta so as celulas da caixa
-// tocada (arquitetura do Detona), cronometro/minas no cabecalho sujo, fx
-// na abertura em cadeia e na mina. Melhor tempo por dificuldade no NVS.
+// tocada (arquitetura do Detona), cronometro/minas no cabecalho sujo,
+// estilhaços na abertura em cadeia e flash na mina (efeitos locais sobre o
+// core — sem a dep fx o app volta a caber nos 48 KB da CYD). Melhor tempo
+// por dificuldade no NVS.
 
-var E = require("celeros.game");       // familia CelerGame: core + fx
-require("celeros.game.fx");
+var E = require("celeros.game");       // familia CelerGame: core (fx e local)
 
 E.init({ dir: "Campo Minado", fps: 30, save: "minado." });
 var T = E.theme, W = E.W, H = E.H;
@@ -39,6 +40,41 @@ var BTN_MODO = { x: 8, y: 288, w: 116, h: 26 };
 var BTN_NOVO = { x: 124, y: 288, w: 108, h: 26 };
 var BTN_DNV = { x: 40, y: 218, w: 160, h: 44 };
 
+// ------------------------------------------------- efeitos locais (sem fx) ---
+// Flash de tela cheia + estilhaços: o par minimo do celeros.game.fx que o
+// jogo usa, sobre as primitivas do core. Cada particular registra a caixa
+// na camada suja (E.dirty.add) — a borracha do quadro seguinte apaga.
+var FX = [];
+function fxFlash(cor, ms) { FX.push({ fl: 1, c: cor, t: ms / 1000, T: ms / 1000 }); }
+function fxBurst(x, y, n, cor, spd, life, grav) {
+    for (var i = 0; i < n; i++) {
+        var a = Math.random() * 6.2832, v = spd * (0.4 + Math.random() * 0.6);
+        FX.push({ x: x, y: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+                  t: life * (0.6 + Math.random() * 0.4), c: cor, g: grav || 0 });
+    }
+}
+function fxTick(dt) {
+    for (var i = FX.length - 1; i >= 0; i--) {
+        var p = FX[i];
+        p.t -= dt;
+        if (p.t <= 0) { FX.splice(i, 1); continue; }
+        if (!p.fl) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt; }
+    }
+}
+function fxDraw() {
+    for (var i = 0; i < FX.length; i++) {
+        var p = FX[i];
+        if (p.fl) {
+            System.fillRect(0, 0, W, H, System.mixColor(p.c, T.bg,
+                          Math.round(70 * p.t / (p.T || 1))));
+            E.dirty.add(0, 0, W, H);
+        } else {
+            System.fillCircle(p.x, p.y, 2, p.c);
+            E.dirty.add(p.x - 3, p.y - 3, 7, 7);
+        }
+    }
+}
+
 // melhor tempo: NVS (migracao 1x dos best_*.txt da versao anterior; sem a
 // perm "fs" o runtime nao registra o objeto FS e a migracao e pulada)
 function bestKey() { return "b" + MODES[modeIdx].name; }
@@ -71,6 +107,7 @@ function newGame() {
     elapsedMs = 0;
     lastClock = -1;
     won = false;
+    FX.length = 0;
 }
 
 function fmtTime(ms) {
@@ -177,7 +214,7 @@ function finish(win) {
         tune([[660, 90], [880, 90], [1320, 160]]);
     } else {
         tone(120, 400);
-        E.fx.flash(T.err, 300);
+        fxFlash(T.err, 300);
     }
     resultado = { won: win, ms: elapsedMs };
     E.after(600, function () {
@@ -202,12 +239,11 @@ function play(x, y) {
     if (r.opened.length > 3) {
         // abertura em cadeia: estouro na celula de inicio
         var cc = cellCenter(x, y);
-        E.fx.burst(cc.x, cc.y, { n: 12, color: T.accent, speed: 60, life: 0.5, size: 2 });
+        fxBurst(cc.x, cc.y, 12, T.accent, 60, 0.5, 0);
     }
     if (r.hit) {
         var mc = cellCenter(x, y);
-        E.fx.burst(mc.x, mc.y, { n: 20, color: T.err, speed: 120, life: 0.7,
-                                 grav: 140, size: 2 });
+        fxBurst(mc.x, mc.y, 20, T.err, 120, 0.7, 140);
         // derrota revela todas as minas (classico): o board abre elas no
         // estado, mas so a tocada vinha na lista — as demais ficavam
         // escondidas (ninguem via onde elas estavam)
@@ -258,6 +294,7 @@ E.run({
         },
         exit: function () { E.dirty.off(); },
         update: function (dt) {
+            fxTick(dt);
             if (started && !board.lost() && !board.won()) {
                 elapsedMs = System.millis() - startMs;
                 // relogio a cada 500 ms (caixa suja na faixa do cabecalho)
@@ -286,7 +323,7 @@ E.run({
                          { primary: flagMode, px: 12 });
             E.gfx.button("Novo", BTN_NOVO.x, BTN_NOVO.y, BTN_NOVO.w, BTN_NOVO.h,
                          { primary: false, px: 12 });
-            E.fx.draw();
+            fxDraw();
         }
     },
 

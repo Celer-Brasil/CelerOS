@@ -39,13 +39,15 @@ var BTN_MODO = { x: 8, y: 288, w: 116, h: 26 };
 var BTN_NOVO = { x: 124, y: 288, w: 108, h: 26 };
 var BTN_DNV = { x: 40, y: 218, w: 160, h: 44 };
 
-// melhor tempo: NVS (migracao 1x dos best_*.txt da versao anterior)
+// melhor tempo: NVS (migracao 1x dos best_*.txt da versao anterior; sem a
+// perm "fs" o runtime nao registra o objeto FS e a migracao e pulada)
 function bestKey() { return "b" + MODES[modeIdx].name; }
 function bestTime() {
     var v = E.save.num(bestKey(), 0);
-    if (!v) {
+    var FSx = typeof FS !== "undefined" ? FS : null;
+    if (!v && FSx) {
         try {
-            var r = FS.readTextFile((FS.appData ? FS.appData() : "/local/") +
+            var r = FSx.readTextFile((FSx.appData ? FSx.appData() : "/local/") +
                                     "best_" + MODES[modeIdx].name + ".txt");
             var old = r ? parseInt(r, 10) : 0;
             if (old && !isNaN(old)) { v = old; E.save.set(bestKey(), old); }

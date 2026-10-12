@@ -12,17 +12,23 @@ E.init({ dir: "Tic Tac Toe", fps: 30, save: "velha." });
 var T = E.theme, W = E.W, H = E.H;
 
 // placar: NVS do core — o score.txt da versao anterior entra como migricao
+// opcional: sem a perm "fs" o runtime nao registra o objeto FS (a migracao
+// so faria sentido num aparelho que ja teve a versao antiga — e esse tem a
+// concessao de quando ela pediu)
 var score = { v: E.save.num("v", 0), d: E.save.num("d", 0), e: E.save.num("e", 0) };
-try {
-    var raw = FS.readTextFile((FS.appData ? FS.appData() : "/local/") + "score.txt");
-    var p = raw ? raw.split(",") : [];
-    if (p.length === 3) {
-        score.v = Math.max(score.v, parseInt(p[0], 10) || 0);
-        score.d = Math.max(score.d, parseInt(p[1], 10) || 0);
-        score.e = Math.max(score.e, parseInt(p[2], 10) || 0);
-        E.save.set("v", score.v); E.save.set("d", score.d); E.save.set("e", score.e);
-    }
-} catch (e) {}
+var FSx = typeof FS !== "undefined" ? FS : null;
+if (FSx) {
+    try {
+        var raw = FSx.readTextFile((FSx.appData ? FSx.appData() : "/local/") + "score.txt");
+        var p = raw ? raw.split(",") : [];
+        if (p.length === 3) {
+            score.v = Math.max(score.v, parseInt(p[0], 10) || 0);
+            score.d = Math.max(score.d, parseInt(p[1], 10) || 0);
+            score.e = Math.max(score.e, parseInt(p[2], 10) || 0);
+            E.save.set("v", score.v); E.save.set("d", score.d); E.save.set("e", score.e);
+        }
+    } catch (e) {}
+}
 function saveScore() {
     E.save.set("v", score.v); E.save.set("d", score.d); E.save.set("e", score.e);
 }

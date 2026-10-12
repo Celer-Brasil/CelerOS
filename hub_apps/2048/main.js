@@ -15,12 +15,16 @@ var GX = (W - (N * CELL + (N - 1) * GAP)) / 2;   // 22
 var GY = 58;
 
 // recorde: NVS do core — o valor do arquivo da 1.2 entra como migacao 1x
+// (opcional: sem a perm "fs" o runtime nao registra o objeto FS)
 var hi = E.save.num("hi", 0);
-try {
-    var raw = FS.readTextFile("/local/config_2048_hi.txt");
-    var old = raw ? parseInt(raw, 10) : 0;
-    if (!isNaN(old) && old > hi) { hi = old; E.save.set("hi", hi); }
-} catch (e) {}
+var FSx = typeof FS !== "undefined" ? FS : null;
+if (FSx) {
+    try {
+        var raw = FSx.readTextFile("/local/config_2048_hi.txt");
+        var old = raw ? parseInt(raw, 10) : 0;
+        if (!isNaN(old) && old > hi) { hi = old; E.save.set("hi", hi); }
+    } catch (e) {}
+}
 
 var board, score, won, over;
 var prevBoard = null, prevScore = 0;   // 1 passo de desfazer

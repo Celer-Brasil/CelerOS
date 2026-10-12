@@ -23,12 +23,16 @@ var ROW_COLORS = [T.err, T.warn, T.ok, T.accent, T.accentD];
 var ROW_POINTS = [50, 40, 30, 20, 10];
 
 // recorde: NVS do core — o valor do arquivo da 1.2 entra como migacao 1x
+// (opcional: sem a perm "fs" o runtime nao registra o objeto FS)
 var hi = E.save.num("hi", 0);
-try {
-    var raw = FS.readTextFile("/local/config_breakout_hi.txt");
-    var old = raw ? parseInt(raw, 10) : 0;
-    if (!isNaN(old) && old > hi) { hi = old; E.save.set("hi", old); }
-} catch (e) {}
+var FSx = typeof FS !== "undefined" ? FS : null;
+if (FSx) {
+    try {
+        var raw = FSx.readTextFile("/local/config_breakout_hi.txt");
+        var old = raw ? parseInt(raw, 10) : 0;
+        if (!isNaN(old) && old > hi) { hi = old; E.save.set("hi", old); }
+    } catch (e) {}
+}
 
 // ------------------------------------------------------------- estado ------
 var bricks, score, lives, level, state;   // state: serve|play|levelup|over

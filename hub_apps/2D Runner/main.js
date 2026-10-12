@@ -16,12 +16,16 @@ var LANES = [ROAD_X + LANE_W / 2, ROAD_X + 3 * LANE_W / 2, ROAD_X + 5 * LANE_W /
 var HUD_H = 34;
 
 // recorde: NVS do core — o valor do appData entra como migacao 1x
+// (opcional: sem a perm "fs" o runtime nao registra o objeto FS)
 var hi = E.save.num("hi", 0);
-try {
-    var rawHi = FS.readTextFile((FS.appData ? FS.appData() : "/local/") + "hi.txt");
-    var oldHi = rawHi ? parseInt(rawHi, 10) : 0;
-    if (!isNaN(oldHi) && oldHi > hi) { hi = oldHi; E.save.set("hi", hi); }
-} catch (e) {}
+var FSx = typeof FS !== "undefined" ? FS : null;
+if (FSx) {
+    try {
+        var rawHi = FSx.readTextFile((FSx.appData ? FSx.appData() : "/local/") + "hi.txt");
+        var oldHi = rawHi ? parseInt(rawHi, 10) : 0;
+        if (!isNaN(oldHi) && oldHi > hi) { hi = oldHi; E.save.set("hi", hi); }
+    } catch (e) {}
+}
 
 // Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
 // o loop do jogo; firmware antigo cai no playTone (bloqueante)

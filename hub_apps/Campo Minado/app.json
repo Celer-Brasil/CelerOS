@@ -1,16 +1,14 @@
 {
   "name": "Campo Minado",
   "packageName": "celeros.minado",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "api": 30,
-  "permissions": [
-    "fs"
-  ],
+  "permissions": [],
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
   "description": "Classico do campo minado: a primeira jogada sempre abre area limpa, bandeiras, atalho de acorde (numero com bandeiras certas abre os vizinhos), cronometro e melhor tempo por dificuldade salvo no aparelho.",
-  "changelog": "1.1.0 - portado para a familia CelerGame COM melhorias: o desenho incremental celula-a-celula vira a camada suja E.dirty (painter repinta so as celulas da caixa tocada — arquitetura do Detona), estouro na abertura em cadeia e na mina com flash, relogio/minas no cabecalho sujo, fim de jogo com tela propria e transicao, melhor tempo migrado dos txt para o NVS\n1.0.2 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.0.1 - numero da celula centrado de verdade (setTextDatum 5: no LovyanGFX o 4 e middle-left e o digito escorria meia largura para a direita); 1.0.0 - primeiro lancamento; primeiro app da loja multi-arquivo (API 23): o motor do tabuleiro vive em board.js carregado via require, menu e controles no toolkit UI (API 22)",
+  "changelog": "1.1.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.1.0 - portado para a familia CelerGame COM melhorias: o desenho incremental celula-a-celula vira a camada suja E.dirty (painter repinta so as celulas da caixa tocada — arquitetura do Detona), estouro na abertura em cadeia e na mina com flash, relogio/minas no cabecalho sujo, fim de jogo com tela propria e transicao, melhor tempo migrado dos txt para o NVS\n1.0.2 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.0.1 - numero da celula centrado de verdade (setTextDatum 5: no LovyanGFX o 4 e middle-left e o digito escorria meia largura para a direita); 1.0.0 - primeiro lancamento; primeiro app da loja multi-arquivo (API 23): o motor do tabuleiro vive em board.js carregado via require, menu e controles no toolkit UI (API 22)",
   "deps": {
     "celeros.game": "^1.0.0",
     "celeros.game.fx": "^1.0.0"

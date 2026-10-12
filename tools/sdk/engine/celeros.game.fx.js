@@ -21,7 +21,7 @@ var _flo = { color: 0, align: 'center', font: null, px: 0, screen: false };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.0.1',
+    version: '1.0.2',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
@@ -162,11 +162,16 @@ E.fx = {
             // com E.dirty ligado cada estrela apaga o proprio pixel antigo
             // (1 chamada em vez de uma caixa na camada); estrela parada com
             // o fundo intacto nao pinta nada — o que passou por cima dela
-            // cura no proximo tick (ou no quadro de fundo cheio)
+            // cura no proximo tick (ou no quadro de fundo cheio). Com fundo
+            // PAINTER o apagar de 1 px nao vale (a cor lisa cobriria a arte
+            // do painter): a estrela que andou marca o pixel antigo na
+            // camada e o painter o cura no quadro seguinte — sem isso o
+            // rastro ficava para sempre (o desenho cru nao registra caixa)
             draw: function () {
                 var d = E.dirty;
                 var full = !d.on || d._wasFull;
                 var erase = d.on && !d._paint && !full;
+                var heal = d.on && d._paint && !full;
                 var bg = d._bg;
                 for (var i = 0; i < pts.length; i++) {
                     var p = pts[i];
@@ -174,6 +179,7 @@ E.fx = {
                     var moved = p.dx !== x || p.dy !== y;
                     if (!moved && !full) continue;
                     if (erase && p.dx !== undefined) S.drawPixel(p.dx, p.dy, bg);
+                    else if (heal && p.dx !== undefined) d.add(p.dx, p.dy, 1, 1);
                     S.drawPixel(x, y, p.color);
                     p.dx = x;
                     p.dy = y;
@@ -197,9 +203,10 @@ E.fx = {
         return em;
     },
 
-    // rastro que segue uma entidade: getXY () -> {x, y} em coords de MUNDO;
-    // parado nao deixa rastro (emissor com follow que gela). opts {rate
-    // (default 24/s), life (0.5), size (3), color|colors, grav}
+    // rastro que segue uma entidade: getXY () -> {x, y} em coords de MUNDO
+    // (null quando a entidade morreu — o rastro para em vez de semear no
+    // cadaver); parado nao deixa rastro (emissor com follow que gela). opts
+    // {rate (default 24/s), life (0.5), size (3), color|colors, grav}
     trail: function (getXY, o) {
         o = o || EMPTY;
         var lx = 1e9, ly = 1e9;
@@ -211,6 +218,7 @@ E.fx = {
             speed: 0, speed2: 0, spread: 0, shape: 'dot',
             follow: function () {
                 var p = getXY();
+                if (!p) return null;          // alvo sumiu: pula o quadro
                 if (p.x === lx && p.y === ly) return null;   // parado
                 lx = p.x;
                 ly = p.y;

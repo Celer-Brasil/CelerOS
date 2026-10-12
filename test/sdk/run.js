@@ -801,7 +801,7 @@ function depsSize(nomes) {
         E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
         check('familia enxuta (jsstrip) preserva as linhas e roda o loop',
               linhasIguais && marks.length === 3 &&
-              E2.version === '1.2.5' && E2._mods.length === 3,
+              E2.version === '1.2.6' && E2._mods.length === 3,
               'linhas=' + linhasIguais);
     })();
 
@@ -1238,7 +1238,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.0.1' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.0.2' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1262,7 +1262,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.0.1',
+          out.fx[2] === '1.0.2',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro
@@ -1290,8 +1290,8 @@ function depsSize(nomes) {
         env.__harness.grab = function (k, v) { out[k] = v; };
         fn4(env.System, env.Storage, env.__harness, req);
     } catch (e) { out.shim = 'erro: ' + e; }
-    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.2.5',
-          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.2.5' &&
+    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.2.6',
+          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.2.6' &&
           out.shim[2] === 'fx,spr,tilemap' && out.shim[3] === 'function' &&
           out.shim[4] === 'function' && out.shim[5] === 'function',
           JSON.stringify(out.shim));
@@ -1406,6 +1406,218 @@ function depsSize(nomes) {
           r.cut[0] === true && r.cut[1] === true && r.cut[2] === false &&
           r.cut[3] === false,
           JSON.stringify(r.cut));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// --------------------------------------------- round 4: veu x estados etc --
+// Interacoes que o soak round 4 achou (core 1.0.2 / fx 1.0.2 / spr 1.0.1 /
+// ui 1.0.1): goto seco no meio do fadeout descarta o veu (antes ficava
+// pendurado pintando a tela inteira para sempre), fim do veu com recorte
+// repinta a faixa de FORA do clip (o veu cobre a tela toda; o _full cobre
+// so o clip), E.redraw de TIMER acorda cena static, seq.cancel no meio do
+// par, dois tweens na mesma prop (o antigo vence), trail com alvo morto
+// (getXY null nao explode), blit sem slot E sem painter e no-op seco,
+// estrelas com fundo PAINTER curam o pixel antigo na camada e o dialog
+// cresce com o texto
+(function () {
+    console.log('SDK CelerGame round 4 (veu x estados, fx/spr/ui):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-r4-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'), JSON.stringify({
+        deps: { 'celeros.game': '^1.0.0', 'celeros.game.fx': '^1.0.0',
+                'celeros.game.spr': '^1.0.0', 'celeros.game.ui': '^1.0.0' }
+    }));
+
+    function runSnippet(code, setup) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(tmp, env);
+        var out = {};
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        if (setup) setup(env);
+        var fn = new Function('System', 'Storage', '__harness', 'require', code);
+        fn(env.System, env.Storage, env.__harness, req);
+        return out;
+    }
+
+    // 1) goto SEM opts no meio do fadeout: o veu nao pode ficar pendurado
+    // (antes: fadeout concluido nunca saia de E._trans e o _drawTrans
+    // pintava a tela inteira a cada quadro — tela preta para sempre)
+    var r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var cenas = "", veusTardios = 0, t0 = System.millis();' +
+        'var fr = System.fillRect;' +
+        'System.fillRect = function (x, y, w, h, c) {' +
+        '  if (c === 0xF800 && System.millis() > t0 + 700) veusTardios++;' +
+        '  fr(x, y, w, h, c); };' +
+        'var pediu = false;' +
+        'E.run({' +
+        '  a: { update: function () {' +
+        '        if (!pediu) { pediu = true; E.goto("b", { transition: "fade", ms: 300, color: 0xF800 }); return; }' +
+        '        if (E._trans && E._trans.kind === "fadeout") E.goto("c"); },' +
+        '       draw: function () {} },' +
+        '  b: { enter: function () { cenas += "b"; }, draw: function () {} },' +
+        '  c: { enter: function () { cenas += "c"; },' +
+        '       update: function () { if (System.millis() > t0 + 1000) {' +
+        '         __harness.grab("r", [cenas, E._trans === null, veusTardios]); E.quit(); } },' +
+        '       draw: function () { E.gfx.circle(120, 160, 30, 0x07FF); } }' +
+        '}, "a");');
+    check('goto seco no meio do fadeout: pula pra cena nova, descarta o veu e nada pinta depois',
+          r.r[0] === 'c' && r.r[1] === true && r.r[2] === 0,
+          JSON.stringify(r.r));
+
+    // 2) fim do veu com RECORTE ativo: o painter tambem cura a faixa de
+    // fora do clip (o veu pintou a tela inteira depois do _end)
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var faixa = 0, t0 = System.millis();' +
+        'function painter(x, y, w, h) { if (y + h <= 30) faixa++; System.fillRect(x, y, w, h, 0x0000); }' +
+        'E.run({' +
+        '  a: { update: function () { E.goto("b", { transition: "wipe", ms: 120 }); }, draw: function () {} },' +
+        '  b: { enter: function () { E.dirty.enable(painter); E.dirty.clip(0, 30, 240, 290); },' +
+        '       update: function () { if (System.millis() > t0 + 600) { __harness.grab("heal", faixa); E.quit(); } },' +
+        '       draw: function () {} }' +
+        '}, "a");');
+    check('fim do veu com clip: painter cura a faixa de fora do recorte (HUD)',
+          r.heal >= 1, 'faixa=' + r.heal);
+
+    // 3) cena static + E.redraw() vindo de um TIMER (nao de input): o draw
+    // acontece no mesmo quadro do tick
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var draws = 0;' +
+        'E.after(300, function () { E.redraw(); });' +
+        'E.run({ m: { static: true,' +
+        '  update: function () { if (draws >= 2) { __harness.grab("d", draws); E.quit(); } },' +
+        '  draw: function () { draws++; } } }, "m");');
+    check('cena static: E.redraw() de um timer acorda o draw',
+          r.d >= 2, 'draws=' + r.d);
+
+    // 4) seq.cancel no meio de um passo paralelo: pend nao vaza, onDone
+    // nao dispara, obj congela e a lista de tweens esvazia
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var obj = { x: 0, y: 0 }, fim = false, t0 = System.millis();' +
+        'var h = E.seq(obj, [' +
+        '  { par: [{ to: { x: 40 }, ms: 500 }, { to: { y: 80 }, ms: 500 }] }' +
+        '], { onDone: function () { fim = true; } });' +
+        'E.run({ s: { update: function () {' +
+        '  if (System.millis() > t0 + 200 && !h.dead) h.cancel();' +
+        '  if (System.millis() > t0 + 900) { __harness.grab("par", [h.dead, fim, obj.x < 40, obj.y < 80, E._tweens.length]); E.quit(); }' +
+        '} } }, "s");');
+    check('seq.cancel no meio do par: cadeia morta, obj congelado, tweens esvaziam',
+          r.par[0] === true && r.par[1] === false && r.par[2] === true &&
+          r.par[3] === true && r.par[4] === 0,
+          JSON.stringify(r.par));
+
+    // 5) dois tweens na MESMA propriedade: o criado primeiro vence (o tick
+    // percorre a lista de tras pra frente — o valor final e o do antigo)
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var obj = { x: 0 };' +
+        'E.tween(obj, { x: 10 }, 100, { ease: E.m.linear });' +
+        'E.tween(obj, { x: 50 }, 100, { ease: E.m.linear });' +
+        'var t0 = System.millis();' +
+        'E.run({ s: { update: function () { if (System.millis() > t0 + 300) { __harness.grab("tw", obj.x); E.quit(); } } } }, "s");');
+    check('dois tweens na mesma prop: o primeiro criado vence (documentado)',
+          r.tw === 10, 'x=' + r.tw);
+
+    // 6) trail cujo alvo morreu (getXY devolve null): nao explode (antes
+    // TypeError no p.x) e o rastro PARA de semear
+    r = runSnippet(
+        'var E = require("celeros.game.fx");' +
+        'E.init({ particles: 64 });' +
+        'var alvo = { x: 0, y: 50, morto: false }, erro = null;' +
+        'try { E.fx.trail(function () { return alvo.morto ? null : alvo; },' +
+        '                 { rate: 30, life: 0.3, size: 2 }); } catch (e) { erro = String(e); }' +
+        'var t0 = System.millis();' +
+        'E.run({ s: { update: function (dt) {' +
+        '  alvo.x += 40 * dt;' +
+        '  if (System.millis() > t0 + 300) alvo.morto = true;' +
+        '  if (System.millis() > t0 + 800) { var n = 0;' +
+        '    for (var i = 0; i < E.fx._parts.length; i++) if (!E.fx._parts[i].dead) n++;' +
+        '    __harness.grab("tr", [erro === null, n]); E.quit(); }' +
+        '} } }, "s");');
+    check('trail com alvo morto (getXY null): sem excecao e para de semear',
+          r.tr[0] === true && r.tr[1] === 0, JSON.stringify(r.tr));
+
+    // 7) blit de sprite/regiao SEM slot e SEM painter: no-op seco (nada
+    // desenha e nenhuma caixa entra na camada suja — a caixa "fantasma"
+    // apagava o que estivesse embaixo no quadro seguinte). setup: o PNG
+    // falha (decode sempre false) e a def nao traz paint
+    r = runSnippet(
+        'var E = require("celeros.game.spr");' +
+        'E.init({ dir: "Teste" });' +
+        'E.dirty.enable(0);' +
+        'E.spr.load([{ name: "fantasma", file: "naoexiste", w: 8, h: 8 }]);' +
+        '__harness.grab("sem", [E.spr.has("fantasma"), E.spr.backed("fantasma"), E.spr._used]);' +
+        'E.spr.blit("fantasma", 5, 5);' +
+        '__harness.grab("caixa", E.dirty._cur.length);' +
+        'E.spr.sheet("t", { file: "naoexiste", w: 32, h: 32, tw: 16, regions: { a: [0, 0] } });' +
+        'E.spr.blit("a", 5, 5);' +
+        '__harness.grab("caixa2", E.dirty._cur.length);' +
+        'E.spr.freeSheet("t");' +
+        '__harness.grab("pos", [E.spr._used, E.spr.has("a")]);',
+        function (env) { env.System.drawPNG = function () { return false; }; });
+    check('blit sem slot e sem painter e no-op seco (nem caixa suja)',
+          r.sem[0] === true && r.sem[1] === false && r.sem[2] === 0 &&
+          r.caixa === 0 && r.caixa2 === 0,
+          JSON.stringify([r.sem, r.caixa, r.caixa2]));
+    check('freeSheet com sheet sem slot (id 0) nao desce o contador',
+          r.pos[0] === 0 && r.pos[1] === false, JSON.stringify(r.pos));
+
+    // 8) estrelas com fundo PAINTER: o pixel antigo da estrela que andou
+    // entra na camada (o painter cura no quadro seguinte) — sem isso o
+    // rastro ficava para sempre (o desenho cru nao registra caixa)
+    r = runSnippet(
+        'var E = require("celeros.game.fx");' +
+        'E.init({});' +
+        'var curas = 0;' +
+        'function painter(x, y, w, h) { if (w === 3 && h === 3) curas++; }' +
+        'var campo = E.fx.stars(20, { vy: 40 });' +
+        'var t0 = System.millis();' +
+        'E.run({ s: { enter: function () { E.dirty.enable(painter); },' +
+        '  update: function () { campo.update(E.dt); if (System.millis() > t0 + 600) { __harness.grab("cur", curas); E.quit(); } },' +
+        '  draw: function () { campo.draw(); } } }, "s");');
+    check('estrelas com painter: pixel antigo marcado na camada (painter cura)',
+          r.cur >= 5, 'curas=' + r.cur);
+
+    // 9) dialog: quebra 1x e a altura acompanha o texto (a caixa cresce —
+    // antes fixa em 58*E.U, texto longo transbordava)
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var curto = E.ui.dialog("oi", { speed: 30 });' +
+        'var longo = E.ui.dialog("uma fala bem comprida que vai precisar de varias linhas dentro da caixa de dialogo", { speed: 30 });' +
+        'curto.draw(20, 230, 200);' +
+        'longo.draw(20, 60, 200);' +
+        '__harness.grab("dlg", [curto._lines.length, longo._lines.length]);');
+    check('dialog: quebra calculada 1x e cresce com o texto',
+          r.dlg[0] === 1 && r.dlg[1] >= 3, JSON.stringify(r.dlg));
+
+    // 10) lista: dedo que desceu FORA do rect e atravessou nao salta a
+    // rolagem (o arrasto pertence a quem estava sob o press)
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var itens = []; for (var i = 0; i < 20; i++) itens.push("item " + i);' +
+        'var lst = E.ui.list({ items: itens, row: 28 });' +
+        'var quadros = 0;' +
+        'E.run({ s: { update: function () { quadros++;' +
+        '    if (quadros > 40) { __harness.grab("sc", lst.scroll); E.quit(); } },' +
+        '  draw: function () { lst.draw(20, 80, 200, 140); } } }, "s");',
+        function (env) {
+            // press ABAIXO da lista (y 260) subindo ate 100 atravessando o
+            // rect: a lista nao pode comecar a rolar no meio do caminho
+            env.__harness.pushTouch([{ x: 120, y: 260, touched: 1 },
+                                     { x: 120, y: 220, touched: 1 },
+                                     { x: 120, y: 160, touched: 1 },
+                                     { x: 120, y: 100, touched: 1 },
+                                     { x: 120, y: 100, touched: 0 }]);
+        });
+    check('lista: press fora do rect nao salta a rolagem ao atravessar',
+          r.sc === 0, 'scroll=' + r.sc);
 
     fs.rmSync(tmp, { recursive: true, force: true });
 })();

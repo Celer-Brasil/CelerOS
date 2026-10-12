@@ -22,7 +22,9 @@ declare namespace E {
             /** desenha em coords de TELA e devolve o item do tap (ou null); arrastar rola */
             draw(x: number, y: number, w: number, h: number): any;
         }
-        /** Lista com rolagem por arrasto; onPick(value, index) dispara no tap seco. */
+        /** Lista com rolagem por arrasto (o arrasto comeca no PRESSIONAR
+         *  dentro dela — dedo que atravessou o rect nao a salta); onPick
+         *  dispara no tap seco. */
         list(o: {
             items: (string | MenuItem)[];
             row?: number;
@@ -36,7 +38,9 @@ declare namespace E {
             skip(): void;
             close(): void;
         }
-        /** Texto datilografado (speed chars/s): reveal avanca no draw — cena comum, nao static. */
+        /** Texto datilografado (speed chars/s): reveal avanca no draw — cena
+         *  comum, nao static. A quebra de linhas e calculada 1x e a ALTURA do
+         *  painel cresce com o texto. */
         dialog(text: string, o?: {
             speed?: number; name?: string; px?: number;
         }): Dialog;

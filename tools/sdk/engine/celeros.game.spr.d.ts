@@ -26,6 +26,8 @@ declare namespace E {
         has(name: string): boolean;
         /** true se esta num slot real (blit com cor-chave); false = painter */
         backed(name: string): boolean;
+        /** Blit do sprite/regiao. Sem slot E sem painter (PNG falhou e a def
+         *  nao trouxe paint) e no-op seco — nada desenha, nada entra na camada. */
         blit(name: string, x: number, y: number,
              opts?: { key?: number; cx?: boolean; cy?: boolean }): void;
         free(name: string): void;

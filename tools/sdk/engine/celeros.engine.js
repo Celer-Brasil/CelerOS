@@ -1,4 +1,4 @@
-// engine.js — COMPATIBILIDADE (1.2.5): a engine monolitica virou a familia
+// engine.js — COMPATIBILIDADE (1.2.6): a engine monolitica virou a familia
 // CelerGame de deps modulares. Este pacote monta a API de sempre — core +
 // fx + spr + tilemap no MESMO objeto E — para os apps que fazem
 // require("celeros.engine"). Apps novos adotam os modulos um a um:
@@ -16,8 +16,8 @@ require('celeros.game.fx');
 require('celeros.game.spr');
 require('celeros.game.tilemap');
 
-// versao da COMPATIBILIDADE (o core carrega '1.0.0' em E.version; apps
+// versao da COMPATIBILIDADE (o core carrega '1.0.2' em E.version; apps
 // que leem E.version continuam vendo a linha 1.2.x)
-E.version = '1.2.5';
+E.version = '1.2.6';
 
 module.exports = E;

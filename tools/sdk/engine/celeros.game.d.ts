@@ -99,7 +99,8 @@ declare namespace E {
         exit?: () => void;
     }
     function run(scenes: Record<string, Scene>, first: string): void;
-    /** Troca de cena; opts = {transition: 'fade'|'iris'|'wipe'|'bands', ms, color, dir} desenha um veu. */
+    /** Troca de cena; opts = {transition: 'fade'|'iris'|'wipe'|'bands', ms, color, dir} desenha um veu.
+     *  Sem opts no meio de um fade: a troca e seca e o veu que fechava e descartado (nunca fica pendurado). */
     function goto(name: string, opts?: {
         transition?: 'fade' | 'iris' | 'wipe' | 'bands';
         ms?: number;
@@ -120,7 +121,10 @@ declare namespace E {
         off(): void;
         /** Proximo quadro repinta o fundo inteiro. */
         full(): void;
-        /** Recorte da area de jogo (o HUD fica de fora); sem args remove. */
+        /** Recorte da area de jogo (o HUD fica de fora); sem args remove. O veu de
+         *  transicao cobre a tela INTEIRA: no fim dele a engine repinta tambem a
+         *  faixa de fora do recorte com o fundo — o HUD em si e do jogo, cujo memo
+         *  deve incluir E.dirty.touches(caixaDoHud). */
         clip(x?: number, y?: number, w?: number, h?: number): void;
         /** Solta o recorte no meio do draw (desenhar o HUD). */
         unclip(): void;
@@ -140,6 +144,9 @@ declare namespace E {
     function cancel(t: Timer | Tween): void;
     function clearTimers(): void;
     function clearTweens(): void;
+    /** Tween de props numericas. Dois tweens na MESMA prop: o mais antigo
+     *  vence (escreve por cima a cada quadro — o tick percorre a lista de
+     *  tras pra frente); cancele o antigo antes de retweenar. */
     function tween(obj: any, to: Record<string, number>, ms: number,
                    opts?: { ease?: (t: number) => number; delay?: number;
                             onDone?: () => void }): Tween;

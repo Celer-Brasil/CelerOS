@@ -27,6 +27,8 @@ declare namespace E {
             stride?: number;
         }): {
             update(dt: number): void;
+            /** com a camada suja ligada apaga o pixel antigo (fundo liso) ou o
+             *  marca na camada p/ o PAINTER curar no quadro seguinte */
             draw(): void;
         };
         interface Emitter {
@@ -45,8 +47,10 @@ declare namespace E {
             angle?: number; spread?: number; life?: number; size?: number;
             grav?: number; drag?: number; shape?: 'dot' | 'spark' | 'ring';
         }): Emitter;
-        /** Rastro que segue getXY () => {x, y} (coords de mundo); parado nao deixa rastro. */
-        trail(getXY: () => { x: number; y: number }, o?: {
+        /** Rastro que segue getXY () => {x, y} (coords de mundo; null quando a
+         *  entidade morreu — o rastro para em vez de semear no cadaver);
+         *  parado nao deixa rastro. */
+        trail(getXY: () => { x: number; y: number } | null, o?: {
             rate?: number; life?: number; size?: number;
             color?: number; colors?: number[]; grav?: number;
         }): Emitter;

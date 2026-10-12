@@ -34,8 +34,14 @@
 // 1.0.0 (CelerGame): modulos fx/spr/tilemap extraidos; tick deles no
 // registro E._modTicks (antes colado no corpo do E.run); init tolera
 // modulo ausente (E.spr/E.fx/E.tilemap undefined quando nao adotado).
+// 1.0.1: fim da transicao repinta o fundo inteiro (restos do veu fora da
+// camada suja — os "blocos pretos").
+// 1.0.2: goto SEM veu no meio de um fadeout descarta o veu (antes ficava
+// pendurado pintando a tela inteira para sempre) e o fim do veu com
+// RECORTE ativo (dirty.clip) tambem repinta a faixa de fora do recorte
+// (o veu cobre a tela toda; o _full so cobre o clip).
 
-var E = { version: '1.0.1' };
+var E = { version: '1.0.2' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -400,6 +406,25 @@ E._btnUnder = function () {
     return -1;
 };
 
+// fim/descarte de veu: pinta o fundo nas faixas DE FORA do recorte da
+// camada suja (o veu cobre a tela INTEIRA, mas o repaint integral do
+// _begin cobre so o clip — o HUD la fora ficaria com restos do veu) e
+// pede o repaint integral + redraw da cena static. O conteudo da faixa
+// (o HUD em si) e do jogo: o memo dele repinta consultando
+// E.dirty.touches(caixa do HUD), que esta true no quadro do _full
+function veilClean() {
+    E.dirty._full = true;
+    E._redraw = true;
+    var dc = E.dirty.on ? E.dirty._clip : null;
+    if (!dc) return;
+    if (dc.y > 0) E.dirty._fill(0, 0, E.W, dc.y);
+    var db = dc.y + dc.h;
+    if (db < E.H) E.dirty._fill(0, db, E.W, E.H - db);
+    if (dc.x > 0) E.dirty._fill(0, dc.y, dc.x, dc.h);
+    var dr = dc.x + dc.w;
+    if (dr < E.W) E.dirty._fill(dr, dc.y, E.W - dr, dc.h);
+}
+
 // roda cenas {enter, update(dt), draw, exit, fps, static} ate E.quit();
 // ticka input, audio, camera, MODULOS (E._modTicks), timers e tweens
 // antes do update da cena. static: true = a cena so desenha na entrada,
@@ -458,6 +483,14 @@ E.run = function (scenes, first) {
                         dir: rq.dir || 'left'
                     };
                     E._transReq = null;
+                } else if (E._trans && E._trans.kind === 'fadeout') {
+                    // goto SEM veu no meio do fadeout: o veu que fechava
+                    // sobre a cena ANTIGA perdeu o sentido (troca seca), mas
+                    // ficava pendurado para sempre — fadeout concluido nunca
+                    // sai de E._trans e o _drawTrans pintava a tela inteira
+                    // a cada quadro. Descarta e repinta (veilClean)
+                    E._trans = null;
+                    veilClean();
                 }
             }
         }
@@ -476,9 +509,10 @@ E.run = function (scenes, first) {
                     // o ultimo quadro do veu pintou rects FORA da camada suja
                     // (_drawTrans e System.fillRect puro): sem este repaint
                     // integral os restos do veu (cantos/colunas/borda) ficam
-                    // na tela ate algo se mover em cima — "blocos pretos"
-                    E.dirty._full = true;
-                    E._redraw = true;  // cena static repinta junto
+                    // na tela ate algo se mover em cima — "blocos pretos".
+                    // Com recorte ativo o _full cobre so o clip: veilClean
+                    // devolve tambem a faixa de fora ao fundo
+                    veilClean();
                 }
             }
         }

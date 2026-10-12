@@ -17,7 +17,7 @@ var S = System;
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.0.0',
+    version: '1.0.1',
     bases: [],
     _slots: {},
     _sheets: {},        // spritesheets: 1 PNG inteiro + regioes nomeadas
@@ -135,6 +135,12 @@ E.spr = {
     blit: function (name, x, y, opts) {
         var s = E.spr._slots[name];
         if (!s) return;
+        // sem slot E sem painter nada pode ser desenhado (PNG falhou no
+        // load/sheet e a def nao trouxe paint): no-op SECO — antes registrava
+        // a caixa na camada suja mesmo assim e o "apagar" do quadro seguinte
+        // comia o que estivesse embaixo do fantasma
+        var pode = s.paint || (s.sheet ? (s.sheet.id && E.caps.clip) : s.id);
+        if (!pode) return;
         var dx = Math.round(opts && opts.cx ? x - s.w / 2 : x);
         var dy = Math.round(opts && opts.cy ? y - s.h / 2 : y);
         if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);

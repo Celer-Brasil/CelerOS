@@ -32,8 +32,8 @@ public:
     // URL do update.json do canal da placa. Ordem de precedencia:
     //   1. /local/ota_url.txt (dev: servidor local; se nao terminar em
     //      ".json", "/update.json" e anexado)
-    //   2. GitHub raw: updates/<canal>/update.json, onde canal e
-    //      smartdisplay_4848S040 ou esp32 conforme a placa
+    //   2. Hub: https://os.celer.tec.br/updates/<canal>/update.json, onde
+    //      canal vem do perfil da placa (Boards/<placa>/Board.cpp)
     static std::string getUpdateJsonUrl();
 
     // Baixa e interpreta o update.json. Retorna true se ha atualizacao
@@ -41,7 +41,7 @@ public:
     static bool checkForUpdates();
 
     // Flashea o firmware da URL no slot OTA inativo com validacao de
-    // checksum (Update.end(true)) antes de ativa-lo. onProgress recebe
+    // checksum (esp_ota_end) antes de ativa-lo. onProgress recebe
     // percentuais 0-100. Retorna false e preenche lastError em caso de
     // falha — nesse caso o slot atual permanece intacto.
     static bool performUpdate(const std::string& firmwareUrl,
@@ -56,6 +56,19 @@ public:
     // ele ceder; o caminho do hub (System.otaStart) NAO chama — o updater
     // e o app da vez e precisa vivo para desenhar o progresso.
     static void evictRunningApp();
+
+    // Verificacao automatica em background (UpdateCheck.h decide o quando):
+    // corpo do servico "updcheck", nunca bloqueia — quando devido, spawna a
+    // task curta "celerupd" que roda checkForUpdates() e notifica a versao
+    // nova pelo centro de notificacoes (1x por versao, dedup em
+    // CelerSettings "ota_noted_ver"). inApp = true pula: com app aberto o
+    // fetch disputaria RAM/rede com ele.
+    static void tickCheck(bool inApp);
+
+private:
+    // Corpos de checkForUpdates/performUpdate (a guarda s_busy mora no .cpp)
+    static bool runCheck();
+    static bool runUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent));
 };
 
 #endif // CELEROS_OTA_MANAGER_H

@@ -1,6 +1,9 @@
 #include "OtaManager.h"
+#include "UpdateCheck.h"
 #include <string>
 #include <cstdio>
+#include <atomic>
+#include <Arduino.h>
 #include "esp_http_client.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
@@ -11,14 +14,44 @@
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "HttpClient.h"
+#include "NetworkManager.h"
 #include "../FileSystem/FileSystem.h"
+#include "../Kernel/Notifications.h"
+#include "../Launcher/LauncherUI.h"
+#include "../USBDevice/DebugBridge.h"
+#include "../Utils/CelerSettings.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/SemVer.h"
 #include "../Boards/Board.h"
-#include "../Launcher/LauncherUI.h"
 
 OtaUpdateInfo OtaManager::info;
 std::string OtaManager::lastError;
+
+namespace {
+
+// Um check/instalacao POR VEZ (guarda compartilhada pelos tres caminhos:
+// check manual do Ajustes, check automatico e performUpdate): o TLS do
+// HttpClient nao e reentrante e a RAM do CYD (sem PSRAM) nao comporta dois
+// TLS vivos.
+std::atomic<bool> s_busy{false};
+
+// Agendamento do check automatico, consumido pelo servico "updcheck" no
+// loop principal (celerLoop/present). A (re)conexao e detectada por
+// SONDA do estado (nao por evento): o servico roda a cada tick, a
+// transicao desconectado->conectado ancora o grace de 1 min e dispensa a
+// inscricao no onStateChanged (um handler a menos, zero problema de
+// ordenacao no boot).
+bool s_wasConnected = false;
+uint32_t s_connectedAtMs = 0;
+uint32_t s_lastCheckMs = 0;
+bool s_checkedThisSession = false;
+std::atomic<bool> s_taskRunning{false};
+
+// Id fixo da nota de update: o push com extId != 0 SUBSTITUI a nota anterior
+// em vez de empilhar uma por check (mesmo truque do K_NOTE_BASE da Matilha).
+constexpr uint32_t kOtaNoteId = 0x4F544100u;  // "OTA\0"
+
+}  // namespace
 
 // Canal de updates da placa (perfil em Boards/<placa>/Board.cpp)
 static const char* CELEROS_UPDATE_CHANNEL = Board::profile().otaChannel;
@@ -60,6 +93,19 @@ static const char* HTTP_BLOCKED_MSG =
     "OTA bloqueado: http:// requer /local/ota_allow_http.txt no aparelho";
 
 bool OtaManager::checkForUpdates() {
+    // Guarda compartilhada: outro check/instalacao em curso devolve o
+    // resultado corrente (fresco: so pode ter sido escrito ha poucos s)
+    bool freeSlot = false;
+    if (!s_busy.compare_exchange_strong(freeSlot, true)) {
+        ESP_LOGW("celer.ota", "check ignorado: outro check/instalacao em curso");
+        return info.available;
+    }
+    const bool available = runCheck();
+    s_busy = false;
+    return available;
+}
+
+bool OtaManager::runCheck() {
     info = OtaUpdateInfo();
     std::string url = getUpdateJsonUrl();
     if (!urlSchemeAllowed(url)) {
@@ -210,11 +256,29 @@ static void feedWatchdog() {
 // o BLE (malha, Phone Link) — e qualquer soluco no meio jogava fora o que ja
 // tinha baixado. Agora uma conexao que cai e reaberta com "Range: bytes=N-"
 // e o download continua do byte N (servidor que ignora Range devolve 200:
-// pulamos os N bytes ja gravados). Ate 6 falhas SEGUIDAS sem progresso, com
-// espera crescente. HTTPS valida o servidor contra o bundle de CAs; o
-// esp_ota_end confere a imagem inteira (checksum/SHA/chip) antes de marcar
-// o boot — falha em qualquer etapa deixa o slot atual intacto.
+// pulamos os N bytes ja gravados; o 206 "atrasado", cujo corpo e maior que
+// o que faltava, recebe a mesma cura de pular bytes). Dois tetos: 6 falhas
+// SEGUIDAS sem progresso (espera crescente) e um total de 50 conexoes — sem
+// o segundo, um servidor que entrega 1 byte por conexao e fecha (progresso
+// "real" que zera a conta de falhas) prenderia o aparelho no download para
+// sempre, com o watchdog alimentado. HTTPS valida o servidor contra o
+// bundle de CAs; o esp_ota_end confere a imagem inteira (checksum/SHA/chip)
+// antes de marcar o boot — falha em qualquer etapa deixa o slot atual
+// intacto.
 bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
+    // Mesma guarda do check: instalar com um check em voo briga pelo TLS/RAM
+    bool freeSlot = false;
+    if (!s_busy.compare_exchange_strong(freeSlot, true)) {
+        lastError = "OTA failed: verificacao/instalacao em curso";
+        ESP_LOGE("celer.ota", "%s", lastError.c_str());
+        return false;
+    }
+    const bool ok = runUpdate(firmwareUrl, onProgress);
+    s_busy = false;
+    return ok;
+}
+
+bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
 
     if (!urlSchemeAllowed(firmwareUrl)) {
@@ -246,13 +310,15 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
         return false;
     }
 
-    constexpr int kMaxFails = 6;
+    constexpr int kMaxFails = 6;   // falhas SEGUIDAS sem progresso
+    constexpr int kMaxConns = 50;  // teto TOTAL de conexoes da tentativa
     size_t written = 0;
     int64_t total = -1;
-    int fails = 0, lastPct = -1;
+    int fails = 0, conns = 0, lastPct = -1;
     bool done = false, fatal = false;  // fatal: flash/imagem — repetir nao ajuda
     err = ESP_FAIL;
-    while (!done && !fatal && fails < kMaxFails) {
+    while (!done && !fatal && fails < kMaxFails && conns < kMaxConns) {
+        conns++;
         feedWatchdog();  // TWDT: open/fetch_headers bloqueiam por conta do timeout
         if (fails > 0) {
             ESP_LOGW("celer.ota", "retomando do byte %u (falha %d/%d)", (unsigned)written, fails, kMaxFails);
@@ -288,8 +354,15 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
         if (status == 200) {
             skip = written;
             if (len > 0) total = len;
-        } else if (total < 0 && len > 0) {
-            total = (int64_t)written + len;
+        } else if (len > 0) {
+            if (total < 0) {
+                total = (int64_t)written + len;  // 206 honesto: falta exatamente len
+            } else if ((int64_t)len > total - (int64_t)written) {
+                // 206 "atrasado": corpo maior que o que faltava gravar — o
+                // servidor comecou antes do byte pedido; pula o trecho ja
+                // gravado (mesma cura do 200 sem Range)
+                skip = (size_t)((int64_t)len - (total - (int64_t)written));
+            }
         }
         bool progressed = false;
         for (;;) {
@@ -332,6 +405,9 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
     if (!done) {
         esp_ota_abort(ota);
         OtaGuard::release();
+        if (conns >= kMaxConns)
+            ESP_LOGE("celer.ota", "download nao fecha apos %d conexoes "
+                     "(servidor entregando migalhas com progresso?)", conns);
         setOtaError("download", err);
         return false;
     }
@@ -344,4 +420,73 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
     }
     ESP_LOGI("celer.ota", "OTA ok: %u bytes em %s", (unsigned)written, part->label);
     return true;
+}
+
+// ========================= Verificacao automatica ==========================
+
+namespace {
+
+// Notifica a versao nova no centro de notificacoes (1x por versao: o dedup
+// em "ota_noted_ver" sobrevive a reboot — o mesmo update pendente nao
+// volta a apitar no proximo boot). Push e thread-safe por construcao (mutex
+// interno + fila de toast/beep cross-task) e respeita o Nao Perturbe.
+void noteUpdate() {
+    const std::string noted = CelerSettings::get("ota_noted_ver");
+    if (!celer::updchk::shouldNotify(noted, OtaManager::info.version)) return;
+    std::string title = "CelerOS " + OtaManager::info.version + " disponível";
+    std::string msg = OtaManager::info.changelog;
+    size_t nl = msg.find('\n');
+    if (nl != std::string::npos) msg = msg.substr(0, nl);
+    msg = msg.empty() ? "Atualize em Ajustes > Atualização"
+                      : msg + " (Ajustes > Atualização)";
+    Notifications::push(title, msg, "ota", kOtaNoteId);
+    CelerSettings::set("ota_noted_ver", OtaManager::info.version.c_str());
+}
+
+void updchkTask(void*) {
+    OtaManager::checkForUpdates();
+    if (OtaManager::info.fetchFailed) {
+        ESP_LOGI("celer.ota", "check automatico: hub nao respondeu (silencioso)");
+    } else if (OtaManager::info.available) {
+        ESP_LOGI("celer.ota", "check automatico: %s disponivel",
+                 OtaManager::info.version.c_str());
+        noteUpdate();
+    } else {
+        ESP_LOGI("celer.ota", "check automatico: em dia (%s)", CELEROS_VERSION);
+    }
+    s_taskRunning = false;
+    vTaskDelete(nullptr);
+}
+
+}  // namespace
+
+// Corpo do servico "updcheck" (ALWAYS: roda no celerLoop e no present() dos
+// apps). Nunca bloqueia: quando a politica de UpdateCheck.h diz "sim",
+// spawna a task curta acima — 16 KB de stack so enquanto o fetch vive
+// (~10 s; o mesmo TLS do check manual do Ajustes roda na task de 32 KB do
+// app), prio 1 igual ao loop: os bloqueios de socket devolvem a CPU.
+void OtaManager::tickCheck(bool inApp) {
+    const uint32_t now = millis();
+    const bool conn = NetworkManager::instance().isConnected();
+    if (conn && !s_wasConnected) s_connectedAtMs = now;  // (re)conexao ancora o grace
+    s_wasConnected = conn;
+
+    celer::updchk::State st;
+    st.wifiConnected = conn;
+    st.appOpen = inApp;
+    st.busy = s_busy || s_taskRunning;
+    st.shellSession = DebugBridge::sessionActive();
+    st.checkedThisSession = s_checkedThisSession;
+    st.sinceConnectMs = now - s_connectedAtMs;
+    st.sinceLastCheckMs = s_checkedThisSession ? now - s_lastCheckMs : 0;
+    if (!celer::updchk::due(st)) return;
+    s_taskRunning = true;
+    // Marca ANTES do fim da task: o tick seguinte (task ainda no fetch) nao
+    // re-spawna; falha de fetch tambem conta (nao martelar o hub caido)
+    s_checkedThisSession = true;
+    s_lastCheckMs = now;
+    if (xTaskCreate(updchkTask, "celerupd", 16384, nullptr, 1, nullptr) != pdPASS) {
+        s_taskRunning = false;
+        ESP_LOGW("celer.ota", "task do check automatico nao criou (heap?)");
+    }
 }

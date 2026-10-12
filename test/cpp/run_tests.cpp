@@ -5,6 +5,7 @@
 // é subir a cada PR o que antes só era validado no device.
 
 #include "../../main/Utils/SemVer.h"
+#include "../../main/OTA/UpdateCheck.h"
 #include "../../main/Utils/AppPerms.h"
 #include "../../main/Utils/JsStrip.h"
 #include "../../main/USBDevice/HostFrame.h"
@@ -66,6 +67,37 @@ static void testSemVer() {
     CHECK(versionGreater("0.9.1", "0.9"));
     // sujeira nao numerica: atoi para em letra (mesma semantica do device)
     CHECK(!versionGreater("abc", "0.0.1"));
+}
+
+// Politica do check automatico de update (OTA/UpdateCheck.h): quando checar
+// e quando (re)notificar. Os tempos sao inputs, nao millis() reais.
+static void testUpdateCheck() {
+    using namespace celer::updchk;
+    auto mk = []() { State s; s.wifiConnected = true; s.sinceConnectMs = kGraceMs; return s; };
+
+    // devido: primeira checagem da sessao apos o grace
+    State s = mk();
+    CHECK(due(s));
+    // ainda no grace pos-conexao (NTP/boot assentando): espera
+    s.sinceConnectMs = kGraceMs - 1;
+    CHECK(!due(s));
+    // sem WiFi / com app aberto / ocupado / sessao celerctl: nunca
+    s = mk(); s.wifiConnected = false; CHECK(!due(s));
+    s = mk(); s.appOpen = true; CHECK(!due(s));
+    s = mk(); s.busy = true; CHECK(!due(s));
+    s = mk(); s.shellSession = true; CHECK(!due(s));
+    // ja checou nesta sessao: so de novo apos 24 h
+    s = mk(); s.checkedThisSession = true; s.sinceLastCheckMs = kIntervalMs - 1;
+    CHECK(!due(s));
+    s.sinceLastCheckMs = kIntervalMs;
+    CHECK(due(s));
+
+    // dedup da notificacao: 1x por versao nova (vazia = nunca notificou)
+    CHECK(shouldNotify("", "1.9.0"));
+    CHECK(shouldNotify("1.8.2", "1.9.0"));
+    CHECK(!shouldNotify("1.9.0", "1.9.0"));   // mesma versao: reboot nao re-notifica
+    CHECK(!shouldNotify("1.9.1", "1.9.0"));   // hub nao anda para tras
+    CHECK(!shouldNotify("1.9.0", ""));        // sem versao valida, sem nota
 }
 
 static void testPermissions() {
@@ -1788,6 +1820,7 @@ static void testShScript() {
 
 int main() {
     testSemVer();
+    testUpdateCheck();
     testFsJail();
     testPermissions();
     testJsStrip();

@@ -23,6 +23,7 @@
 #endif
 #include "../../USBDevice/LogPersist.h"
 #include "../../USBDevice/DebugBridge.h"
+#include "../../OTA/OtaManager.h"
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../../Bluetooth/CelerNet.h"
 #include "../../Pack/Pack.h"
@@ -91,6 +92,9 @@ void svcLauncherHeadless(bool) {
 }
 #endif
 void svcOtaConfirm(bool) { confirmPendingOta(); }
+// Check automatico de atualizacao (OtaManager::tickCheck): so decide e
+// (raramente) spawna a task do fetch — ALWAYS roda barato em qualquer pump
+void svcOtaCheck(bool inApp) { OtaManager::tickCheck(inApp); }
 // LogPersist (kern.log/apps.log): flush a cada ~3 s — ALWAYS para roda com
 // app aberto (o teste de voz do cao acontece DENTRO do Dog Face)
 void svcLogPersist(bool) { LogPersist::tick(); }
@@ -157,6 +161,7 @@ const CelerServices::Service kServices[] = {
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
 #endif
     {"otaconfirm", svcOtaConfirm, CelerServices::ALWAYS},
+    {"updcheck", svcOtaCheck, CelerServices::ALWAYS},
     {"logpersist", svcLogPersist, CelerServices::ALWAYS},
     {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},
     // fim da fila no present(): erro no callback de alarme nao pula o resto

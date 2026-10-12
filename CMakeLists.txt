@@ -6,4 +6,4 @@ set(CELEROS_BOARD "smartdisplay" CACHE STRING "CelerOS target board")
 
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(CelerOS VERSION 1.8.2)
+project(CelerOS VERSION 1.9.0)

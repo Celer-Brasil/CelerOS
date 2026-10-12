@@ -23,6 +23,8 @@ int s_snoozeId = -1;
 std::string s_snoozeLabel;
 time_t s_lastCheck = 0;  // eventos em (s_lastCheck, agora] disparam
 bool s_ringing = false;
+time_t s_prevNow = 0;    // amostra do relogio do tick anterior
+bool s_prevValid = false;
 Alarms::Ring s_ring;
 
 void keyFor(int id, char* buf, size_t n) { snprintf(buf, n, "alarm%d", id); }
@@ -186,9 +188,30 @@ int32_t timerRemaining(std::string* label) {
 bool tick() {
     std::lock_guard<std::mutex> lock(s_mux);
     loadLocked();
-    if (s_ringing) return true;
     time_t now;
     time(&now);
+    // Transicao relogio invalido -> valido (NTP/celular chegando; o SNTP seta
+    // a hora sem passar pelo clockChanged): um timer ou soneca marcados com
+    // o epoch do boot disparariam na hora do salto. Sao contagens
+    // regressivas — o salto nao consome o que falta: rebaseia preservando o
+    // tempo restante (o descarte da soneca velha em clockChanged cobre so os
+    // caminhos manuais, que avisam).
+    bool validNow = TimeManager::isTimeValid();
+    if (validNow && !s_prevValid && s_prevNow != 0) {
+        if (s_timerAt != 0 && s_timerAt > s_prevNow) {
+            s_timerAt = now + (s_timerAt - s_prevNow);
+            persistTimer();
+            ESP_LOGI("celer.alarm", "relogio valido chegou: timer rebaseado");
+        }
+        if (s_snoozeAt != 0 && s_snoozeAt > s_prevNow) {
+            s_snoozeAt = now + (s_snoozeAt - s_prevNow);
+            persistSnooze();
+            ESP_LOGI("celer.alarm", "relogio valido chegou: soneca rebaseada");
+        }
+    }
+    s_prevNow = now;
+    s_prevValid = validNow;
+    if (s_ringing) return true;
     // O timer e relativo: vale mesmo com a hora de parede ainda invalida
     // (o epoch corre do boot). Alarmes de hh:mm exigem hora valida.
     if (s_timerAt != 0 && now >= s_timerAt) {

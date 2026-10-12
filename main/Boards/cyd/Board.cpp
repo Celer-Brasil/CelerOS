@@ -32,6 +32,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},               // sem reles
+    .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
     .gpioDeniedMask = (1ULL << 1) | (1ULL << 3),  // GPIO1/3: UART0 = console/celerctl (CH340)
 };
 

@@ -3,6 +3,7 @@
 #include "LauncherUI.h"
 #include "../Utils/AppGrants.h"
 #include "../Display/Icon.h"
+#include "../Kernel/Notifications.h"
 #include "../Kernel/TimeManager.h"
 #include "../FileSystem/FileSystem.h"
 #include "../WebManager/WebManager.h"
@@ -136,12 +137,19 @@ void LauncherScreen::drawStatusBar(kui::Canvas& c) {
 
     // relogio + data (esquerda; inset = cantos arredondados do vidro)
     int x = UI::sx(14) + UI::inset;
+    std::string now = TimeManager::getFormattedTime();
     std::string date = shortDate();
     if (date.empty()) {
-        c.text(TimeManager::getFormattedTime(), x, hdr / 2, kui::type::display(), THEME_TEXT, ML_DATUM);
+        c.text(now, x, hdr / 2, kui::type::display(), THEME_TEXT, ML_DATUM);
     } else {
-        c.text(TimeManager::getFormattedTime(), x, hdr * 2 / 5, kui::type::display(), THEME_TEXT, ML_DATUM);
+        c.text(now, x, hdr * 2 / 5, kui::type::display(), THEME_TEXT, ML_DATUM);
         c.text(date, x + UI::sx(1), hdr * 4 / 5, kui::type::caption(), THEME_TEXT_DIM, ML_DATUM);
+    }
+    // ponto de nao-lidas ao lado do relogio: ha historico novo na central
+    if (Notifications::unread() > 0) {
+        int dx = x + c.textWidth(now.c_str(), kui::type::display()) + UI::sx(10);
+        int dy = date.empty() ? hdr / 2 : hdr * 2 / 5;
+        c.fillCircle(dx, dy, UI::sx(4), THEME_ACCENT);
     }
 
     // rede (direita): glifo + pilula "Sem WiFi" quando offline
@@ -502,9 +510,11 @@ void LauncherScreen::onTick(uint32_t dtMs) {
     m_pollAccumMs = 0;
     std::string clock = TimeManager::getFormattedTime();
     bool wifi = WebManager::isActive();
-    if (clock != lastClock || wifi != lastWifi) {
+    int unread = Notifications::unread();
+    if (clock != lastClock || wifi != lastWifi || unread != lastUnread) {
         lastClock = clock;
         lastWifi = wifi;
+        lastUnread = unread;
         markDirty();
     }
 }

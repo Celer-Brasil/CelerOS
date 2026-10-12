@@ -23,6 +23,7 @@ private:
     int page = 0;
     std::string lastClock;
     bool lastWifi = false;
+    int lastUnread = -1;          // ponto de nao-lidas na barra (notificacoes)
     bool m_noWifiPref = false;     // /local/nowifi.txt (lido no onEnter, nao por frame)
     uint32_t m_pollAccumMs = 0;    // relogio/wifi checados a cada 250 ms
     int m_dragDx = 0;              // arrasto horizontal em curso (pagina acompanha o dedo)

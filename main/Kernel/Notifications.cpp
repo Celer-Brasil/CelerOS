@@ -87,11 +87,14 @@ void saveLocked() {
         snprintf(head, sizeof(head), "%lu|%d\n", (unsigned long)n.id, n.read ? 1 : 0);
         out += head;
     }
+    bool ok;
     if (out.empty()) {
-        FileSystem::deleteFile(NF);
+        ok = FileSystem::deleteFile(NF);
     } else {
-        FileSystem::writeTextFile(NF, out.c_str());
+        ok = FileSystem::writeTextFile(NF, out.c_str());
     }
+    if (!ok)
+        ESP_LOGW("celer.notif", "historico nao gravou em %s (LittleFS cheio?)", NF);
 }
 
 }  // namespace

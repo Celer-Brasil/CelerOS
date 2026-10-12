@@ -385,7 +385,10 @@ namespace {
 // classico). O raw vem do analogRead do Compat (adc_oneshot a 12 dB), que
 // ja cria/unifica a unidade ADC.
 adc_cali_handle_t s_battCali = nullptr;
-int64_t s_battAt = 0;
+// Carimbos em u32 com subtracao sem sinal: o millis() vira a cada ~49,7 dias
+// e a diferenca (int64) negativa deixava o cache "fresco" para sempre (valor
+// de bateria congelado ate a proxima volta completa do contador).
+uint32_t s_battAt = 0;
 int s_battMv = -1;
 bool s_battFail = false;  // sem esquema de calibracao: nao tenta de novo
 
@@ -418,7 +421,7 @@ bool battCaliInit() {
 int batteryMv() {
     const BoardProfile& bp = Board::profile();
     if (bp.batteryPin < 0 && !bp.readBatteryMv) return -1;
-    const int64_t now = (int64_t)millis();
+    const uint32_t now = millis();
     if (s_battMv >= 0 && now - s_battAt < 2000) return s_battMv;  // cache 2 s
     // Bateria por PMU (AXP2101 do watch): hook da placa vem antes do ADC.
     // Sem resposta do PMU nao ha fallback util (a placa nao tem divisor).
@@ -444,10 +447,10 @@ int batteryMv() {
 
 int batteryPct() {
     const BoardProfile& bp = Board::profile();
-    static int64_t s_at = 0;
+    static uint32_t s_at = 0;
     static int s_pct = -1;
-    const int64_t now = (int64_t)millis();
-    if (s_pct >= 0 && now - s_at < 2000) return s_pct;  // cache 2 s
+    const uint32_t now = millis();
+    if (s_pct >= 0 && now - s_at < 2000) return s_pct;  // cache 2 s (u32: wrap-safe)
     int pct = -1;
     if (bp.readBatteryPct) pct = bp.readBatteryPct();
     if (pct < 0) {
@@ -479,9 +482,9 @@ int batteryPct() {
 int chargeState() {
     const BoardProfile& bp = Board::profile();
     if (!bp.readChargeState) return 0;
-    static int64_t s_at = -10000;
+    static uint32_t s_at = (uint32_t)-10000;  // ~10 s "atras": forca a 1a leitura
     static int s_state = -1;
-    const int64_t now = (int64_t)millis();
+    const uint32_t now = millis();
     if (now - s_at < 2000) return s_state;  // cache 2 s (bus I2C compartilhado)
     s_state = bp.readChargeState();
     s_at = now;

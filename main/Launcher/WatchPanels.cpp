@@ -101,8 +101,8 @@ public:
         c.text("Volume", m, UI::sy(88), kui::type::caption(), THEME_TEXT_DIM, ML_DATUM);
         m_vol.rect = {m + UI::sx(8), UI::sy(94), UI::W - 2 * m - UI::sx(16), UI::sy(26)};
         m_vol.draw(c);
-        // tiles 2 colunas x 3 linhas
-        for (int i = 0; i < kTiles; i++) drawTile(c, i);
+        // tiles 2 colunas x N linhas
+        for (int i = 0; i < tileCount(); i++) drawTile(c, i);
         c.text("arraste para cima para fechar", UI::cx(), UI::H - UI::sy(8) - UI::inset / 3,
                kui::type::caption(), THEME_STROKE, MC_DATUM);
     }
@@ -117,9 +117,9 @@ public:
             return true;
         }
         if (!ev.isTap()) return true;
-        for (int i = 0; i < kTiles; i++) {
+        for (int i = 0; i < tileCount(); i++) {
             if (tileRect(i).contains(ev.x, ev.y)) {
-                tap(i);
+                tap(tileAt(i));
                 break;
             }
         }
@@ -148,11 +148,20 @@ public:
     bool allowsBackGesture() const override { return false; }  // borda = fechar (onTouch)
 
 private:
+    // Ids fixos dos tiles: 0 WiFi, 1 Nao perturbe, 2 Levantar pulso,
+    // 3 Sempre ligada, 4 Lanterna, 5 Ajustes, +6 Celular, +7 Achar celular
+    // (PHONE_LINK). "Levantar pulso" e "Sempre ligada" so existem com a
+    // maquina de estados de tela (watch): fora dela o painel os oculta e a
+    // numeracao dos slots pula direto para a Lanterna.
+    static int tileCount() {
+        int n = ScreenPower::active() ? 6 : 4;
 #if CONFIG_CELEROS_PHONE_LINK
-    static constexpr int kTiles = 8;   // + Celular, Achar celular
-#else
-    static constexpr int kTiles = 6;
+        n += 2;
 #endif
+        return n;
+    }
+    static int tileAt(int slot) { return ScreenPower::active() || slot < 2 ? slot : slot + 2; }
+
     kui::Slider m_bright;
     kui::Slider m_vol;
     uint32_t m_clockAccum = 0;
@@ -165,7 +174,7 @@ private:
         const int gap = UI::sx(8);
         const int w = (UI::W - 2 * m - gap) / 2;
         const int top = UI::sy(128);
-        const int h = kTiles > 6 ? UI::sy(38) : UI::sy(50);
+        const int h = tileCount() > 6 ? UI::sy(38) : UI::sy(50);
         const int row = i / 2, col = i % 2;
         return {m + col * (w + gap), top + row * (h + UI::sy(6)), w, h};
     }

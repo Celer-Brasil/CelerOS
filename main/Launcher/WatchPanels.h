@@ -1,10 +1,11 @@
 #ifndef CELEROS_WATCH_PANELS_H
 #define CELEROS_WATCH_PANELS_H
 
-// Paineis de sistema do relogio (API 15), ativos com
-// BoardProfile::watchGestures:
+// Paineis de sistema (API 15), ativos com BoardProfile::watchGestures
+// (watch + placas com touch: smartdisplay, cyd):
 //   - borda de cima, arrastar para baixo  -> Ajustes rapidos (brilho, volume,
-//     WiFi, Nao Perturbe, levantar p/ acordar, AOD, lanterna, Ajustes);
+//     WiFi, Nao perturbe, levantar p/ acordar*, AOD*, lanterna, Ajustes)
+//     [* so no watch, com a maquina de estados de tela];
 //   - borda de baixo, arrastar para cima  -> Central de notificacoes;
 //   - borda esquerda, arrastar p/ direita -> sai do app JS (telas nativas ja
 //     tinham o voltar).

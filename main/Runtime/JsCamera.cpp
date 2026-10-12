@@ -50,8 +50,18 @@ SemaphoreHandle_t camLock() {
     static SemaphoreHandle_t s = xSemaphoreCreateRecursiveMutex();
     return s;
 }
+// Espera em fatias alimentando o TWDT: o provedor da matilha pode segurar o
+// driver por segundos (um fb_get sem quadro espera ate 4 s no driver), e a
+// task do app parada no mutex sem alimentar o watchdog derrubava a cam a
+// cada ~50 s (TWDT no main, bancada 2026-10-11). A janela do executor JS
+// tambem e renovada (a espera nao e loop do app).
 struct CamGuard {
-    CamGuard() { xSemaphoreTakeRecursive(camLock(), portMAX_DELAY); }
+    CamGuard() {
+        while (xSemaphoreTakeRecursive(camLock(), pdMS_TO_TICKS(200)) != pdTRUE) {
+            if (esp_task_wdt_status(nullptr) == ESP_OK) esp_task_wdt_reset();
+            CelerKernel::noteAppYield();
+        }
+    }
     ~CamGuard() { xSemaphoreGiveRecursive(camLock()); }
 };
 bool s_qrMode = false;          // false = modo foto (jpeg/etc), true = gray p/ QR
@@ -169,11 +179,12 @@ void freeRetained() {
     }
 }
 
-void teardown() {
-    if (s_inited) {
-        esp_camera_deinit();
-        s_inited = false;
-    }
+// Buffers do APP (frames retidos, quirc, LED): saem na troca de app. O
+// driver da camera FICA no ar — ele nao aguenta ciclos deinit+init (o 3o
+// init caia em "camera not supported") e, na esp32-cam, um init depois do
+// WiFi + NimBLE subia sem entregar quadro nenhum por falta de RAM interna
+// (bancada 2026-10-11). So o Camera.setup explicito reconfigura.
+void appRelease() {
     freeRetained();
     if (s_qr != nullptr) {
         quirc_destroy(s_qr);
@@ -425,9 +436,9 @@ bool decodeBuffers() {
 // decodifica o que o quirc achou na ultima passada; true = `out` preenchido
 bool decodeGrids(int n, std::string& out) {
     if (n > 0 && !decodeBuffers()) return false;
-    struct quirc_code& code = *s_qcode;
-    struct quirc_data& data = *s_qdata;
     for (int i = 0; i < n; i++) {
+        struct quirc_code& code = *s_qcode;  // s_qcode existe (n > 0)
+        struct quirc_data& data = *s_qdata;
         quirc_extract(s_qr, i, &code);
         quirc_decode_error_t err = quirc_decode(&code, &data);
         if (err == QUIRC_ERROR_DATA_ECC || err == QUIRC_ERROR_FORMAT_ECC) {
@@ -503,9 +514,25 @@ bool qrDecodeOnce(std::string& out) {
 }  // namespace
 
 // reset por app (init/appExitCleanup): camera desligada, slots e quirc livres
+static void teardown() {
+    if (s_inited) {
+        esp_camera_deinit();
+        s_inited = false;
+    }
+    appRelease();
+}
+
 void JSBindings::cameraAppReset() {
     CamGuard g;
-    teardown();
+    appRelease();  // driver segue no ar (ver appRelease)
+}
+
+void CameraCore::warmup() {
+    if (!available()) return;
+    CamGuard g;
+    // cinza VGA a 10 MHz, o modo do QR (o app de QR e o provedor da matilha
+    // usam este mesmo): sobe com a RAM interna ainda inteira, antes do NimBLE
+    if (!s_inited && ensureMode(true, true)) celer_log_printf("[cam] driver aquecido no boot (QR VGA)\n");
 }
 
 // ---- nucleo nativo (provedor "camera" dos recursos) ---------------------------
@@ -519,11 +546,20 @@ bool CameraCore::snapJpeg(int quality, uint8_t** out, size_t* len, int* w, int* 
     if (quality < 5) quality = 5;
     if (quality > 63) quality = 63;
     CamGuard g;
-    // camera parada (nenhum app a usa): sobe no modo foto padrao (QVGA JPEG)
-    // e FICA — o proximo pedido nao paga o init de novo
-    if (!s_inited && !ensureMode(false)) return false;
+    // camera parada (nenhum app a usa): sobe no modo que a bancada provou —
+    // cinza VGA a 10 MHz, o mesmo do QrNode (o JPEG do driver nessa placa nao
+    // entregava quadro nenhum: fb_get estourava, bancada 2026-10-11) — e FICA:
+    // o proximo pedido nao paga o init, e um app de QR que chegue depois nao
+    // troca de modo (o driver nao aguenta ciclos deinit+init)
+    if (!s_inited && !ensureMode(true, true)) {
+        celer_log_printf("[cam] snap: camera nao subiu\n");
+        return false;
+    }
     camera_fb_t* fb = esp_camera_fb_get();
-    if (fb == nullptr) return false;
+    if (fb == nullptr) {
+        celer_log_printf("[cam] snap: quadro nao veio\n");
+        return false;
+    }
     bool ok = false;
     if (fb->format == PIXFORMAT_JPEG) {
         uint8_t* b = (uint8_t*)heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -537,6 +573,11 @@ bool CameraCore::snapJpeg(int quality, uint8_t** out, size_t* len, int* w, int* 
     } else {
         // modo QR (cinza) ou RGB: JPEG por software do quadro vigente
         ok = frame2jpg(fb, (uint8_t)(100 - quality * 100 / 64), out, len);
+        if (!ok) {
+            celer_log_printf("[cam] snap: frame2jpg %dx%d fmt %d falhou (interna %u, maior %u)\n", fb->width,
+                             fb->height, (int)fb->format, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        }
     }
     if (w != nullptr) *w = fb->width;
     if (h != nullptr) *h = fb->height;
@@ -547,6 +588,8 @@ bool CameraCore::snapJpeg(int quality, uint8_t** out, size_t* len, int* w, int* 
 // ---- bindings ----------------------------------------------------------------
 
 duk_ret_t JSBindings::js_cameraSetup(duk_context *ctx) {
+    CamGuard g;  // antes de tocar o estado: o provedor da matilha pode estar
+                 // num initCamera concorrente lendo estes campos (snapJpeg)
     s_photoSize = FRAMESIZE_QVGA;
     s_photoFmt = PIXFORMAT_JPEG;
     s_fbCount = Board::profile().hasPsram ? 2 : 1;
@@ -568,16 +611,27 @@ duk_ret_t JSBindings::js_cameraSetup(duk_context *ctx) {
         s_photoSize = FRAMESIZE_QVGA;
     }
     s_qrMode = false;
-    CamGuard g;
     teardown();  // reconfiguracao explicita: desliga o que havia
     duk_push_boolean(ctx, initCamera(s_photoSize, s_photoFmt) ? 1 : 0);
     return 1;
 }
 
+// qualidade do JPEG por software no capture a partir do quadro cinza do
+// modo QR: a mesma escala 5..63 do snapJpeg com o default 12
+constexpr uint8_t kCapJpgQ = (uint8_t)(100 - 12 * 100 / 64);
+
 duk_ret_t JSBindings::js_cameraCapture(duk_context *ctx) {
     JSBindings::present();  // captura bloqueia ate o frame: app cede antes
     CamGuard g;
-    if (!ensureMode(false)) {
+    // Sem ciclo deinit+init quando o driver ja esta no modo QR (cinza): o
+    // JPEG sai por software do quadro vigente (frame2jpg — a mesma filosofia
+    // do CameraCore::snapJpeg), porque o modo JPEG do driver nao entrega
+    // quadro nenhum na esp32-cam e cada religadura arrisca o "camera not
+    // supported" do 3o init (bancadas 2026-10-10/11). rgb565 (ou driver
+    // parado) troca de modo como antes; o resultado informa o w/h real.
+    const bool inPlace = s_inited && s_qrMode &&
+                         (s_photoFmt == PIXFORMAT_JPEG || s_photoFmt == PIXFORMAT_GRAYSCALE);
+    if (!inPlace && !ensureMode(false)) {
         duk_push_null(ctx);
         return 1;
     }
@@ -586,9 +640,20 @@ duk_ret_t JSBindings::js_cameraCapture(duk_context *ctx) {
         duk_push_null(ctx);
         return 1;
     }
-    const int id = retainFrame(fb->buf, fb->len, fb->width, fb->height, fb->format);
-    const pixformat_t fmt = fb->format;
-    const int w = fb->width, h = fb->height;
+    int id = 0;
+    pixformat_t fmt = fb->format;
+    const int w = fb->width, h = fb->height;  // antes do fb_return (fb morre la)
+    if (inPlace && s_photoFmt == PIXFORMAT_JPEG) {
+        // quadro cinza do modo QR -> JPEG no slot retido
+        uint8_t* jpg = nullptr;
+        size_t jlen = 0;
+        if (frame2jpg(fb, kCapJpgQ, &jpg, &jlen) && jpg != nullptr) {
+            id = retainFrame(jpg, jlen, fb->width, fb->height, PIXFORMAT_JPEG);
+            free(jpg);
+        }
+    } else {
+        id = retainFrame(fb->buf, fb->len, fb->width, fb->height, fb->format);
+    }
     esp_camera_fb_return(fb);
     CelerKernel::noteAppYield();
     if (id == 0) {
@@ -613,9 +678,11 @@ duk_ret_t JSBindings::js_cameraSave(duk_context *ctx) {
         duk_push_int(ctx, -1);
         return 1;
     }
-    if (!fsWriteAllowed(path)) {
+    if (!perm(celer::PERM_FS) || !fsWriteAllowed(path)) {  // lint-perm: fs
+        // mesma regra do FS.writeFile/Pack.snap: a permissao "camera" libera
+        // o sensor, gravar arquivo no disco pede "fs"
         char msg[160];
-        snprintf(msg, sizeof(msg), "FS: escrita negada em %s", path);
+        snprintf(msg, sizeof(msg), "FS: escrita negada em %s (permissao fs)", path);
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
     const Retained& r = s_ret[id - 1];

@@ -217,7 +217,10 @@ void init() {
     if (s_go == nullptr) return;
     // 6 KB: o frame2jpg (quadro cinza do modo QR) cabe; o crash do video era o
     // log de dentro da ISR do driver (ver boards/esp32-cam/sdkconfig.defaults)
-    if (celerTaskCreate(serveTask, "res_cam", 8192, 6144, nullptr, 4, &s_srv.task) != pdPASS) {
+    // nucleo 0, o mesmo da task do app: com o worker sem afinidade o
+    // esp_camera_init (camera parada) instalava a ISR no outro nucleo e
+    // nenhum quadro chegava ("quadro nao veio", bancada 2026-10-11)
+    if (celerTaskCreate(serveTask, "res_cam", 8192, 6144, nullptr, 4, &s_srv.task, 0) != pdPASS) {
         s_srv.task = nullptr;
         celer_log_printf("[cam] provedor: task res_cam nao subiu (interna %u)\n",
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));

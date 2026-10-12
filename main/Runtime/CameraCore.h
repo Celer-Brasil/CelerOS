@@ -18,11 +18,14 @@ namespace CameraCore {
 
 #if CONFIG_CELEROS_JS_CAMERA
 bool available();
+// Sobe o driver no boot (RAM interna inteira) no modo QR VGA e o deixa no ar.
+void warmup();
 // JPEG do quadro atual em buffer malloc do chamador (free). quality 5..63
 // (menor = melhor). false = sem camera / init falhou / quadro nao veio.
 bool snapJpeg(int quality, uint8_t** out, size_t* len, int* w, int* h);
 #else
 inline bool available() { return false; }
+inline void warmup() {}
 inline bool snapJpeg(int, uint8_t**, size_t*, int*, int*) { return false; }
 #endif
 

@@ -17,14 +17,18 @@
 #include "esp_heap_caps.h"
 #include "sdkconfig.h"
 
+// core: tskNO_AFFINITY ou o nucleo (a ISR de um driver iniciado pela task
+// nasce no nucleo dela — a camera so entregou quadro com o init no nucleo 0)
 inline BaseType_t celerTaskCreate(TaskFunction_t fn, const char* name, uint32_t extStack,
-                                  uint32_t intStack, void* arg, UBaseType_t prio, TaskHandle_t* out) {
+                                  uint32_t intStack, void* arg, UBaseType_t prio, TaskHandle_t* out,
+                                  BaseType_t core = tskNO_AFFINITY) {
 #if CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
     (void)intStack;
-    return xTaskCreateWithCaps(fn, name, extStack, arg, prio, out, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return xTaskCreatePinnedToCoreWithCaps(fn, name, extStack, arg, prio, out, core,
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 #else
     (void)extStack;
-    return xTaskCreate(fn, name, intStack, arg, prio, out);
+    return xTaskCreatePinnedToCore(fn, name, intStack, arg, prio, out, core);
 #endif
 }
 

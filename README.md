@@ -123,6 +123,7 @@ noticeably simpler:
 | **Robot dog** (SpotPear ESP32-S3 AI Robot Dog, ZZPET `zzpet-s3`) | ESP32-S3R8 | 1.3" OLED SH1106 128x64 (face) | Capacitive pad (GPIO10) | 16 MB flash / 8 MB PSRAM (embedded), 4 leg servos, I²S mic + speaker, 2x WS2812, battery ADC; boots into the **Dog Face** app (expressive eyes, ramped gaits with a dead-man keepalive); driven from another CelerOS board over Celer Link BLE ([wiki](https://github.com/maikramer/CelerOS/wiki/Robot-Dog)) |
 | **Waveshare AMOLED 2.06 watch** (ESP32-S3-Touch-AMOLED-2.06) | ESP32-S3R8 | 2.06" round AMOLED 410x502 QSPI (CO5300) | Capacitive FT3168 | 32 MB flash / 8 MB PSRAM (embedded), AXP2101 PMU, PCF85063 RTC + QMI8658 IMU (pedometer) + ES8311 audio codec on I²C, microSD; boots into the **Watchface** app; screen ladder with always-on display and automatic deep sleep under a ULP-RISC-V sentinel (PWR wakes in ~100 ms); `celerctl` over native USB ([wiki](https://github.com/maikramer/CelerOS/wiki/Waveshare-Watch)) |
 | **Barebone devkit** (any plain ESP32 board, e.g. DOIT DevKit v1) | ESP32 | none — on-board LED (GPIO2) | BOOT button (GPIO0) | 4 MB flash, headless: apps run without a screen via `System.button()` + `System.led`; Wi-Fi from the serial shell; OTA channel `updates/devkit`; boots into the **Barebone** app ([wiki](https://github.com/maikramer/CelerOS/wiki/Barebone-Devkit)) |
+| **ESP32-CAM** (AI-Thinker, ESP32-S module) | ESP32 | none — the "glass" is the OV2640 sensor | none (flash LED on GPIO4 as torch) | 4 MB flash / 4 MB PSRAM; camera node of the CelerNet sensor network: `Camera.*` (API 35 — photos + on-device QR), apps and modules on the microSD, NimBLE mesh (`CAPS_CAMERA`), 1.81 MB OTA slots; sturdy 5 V supply (brownout is failure #1), GPIO0 to GND to flash; OTA channel `updates/esp32-cam` |
 
 Board definitions live in `boards/<board>/` (sdkconfig defaults) and
 `main/Boards/<board>/` (pin map and display driver). Select the target with
@@ -206,7 +207,7 @@ node test/js_harness/run.js
 
 ## Roadmap
 
-* More boards (help with a bring-up is welcome — board profiles are small and self-contained; the [barebone devkit](https://github.com/maikramer/CelerOS/wiki/Barebone-Devkit), the [SpotPear robot dog](https://github.com/maikramer/CelerOS/wiki/Robot-Dog) and the [Waveshare AMOLED 2.06 watch](https://github.com/maikramer/CelerOS/wiki/Waveshare-Watch) are the latest three to land).
+* More boards (help with a bring-up is welcome — board profiles are small and self-contained; the [barebone devkit](https://github.com/maikramer/CelerOS/wiki/Barebone-Devkit), the [SpotPear robot dog](https://github.com/maikramer/CelerOS/wiki/Robot-Dog), the [Waveshare AMOLED 2.06 watch](https://github.com/maikramer/CelerOS/wiki/Waveshare-Watch) and the [ESP32-CAM camera node](https://github.com/maikramer/CelerOS/wiki/Supported-Boards) are the latest four to land).
 * More hardware APIs in the JS runtime (I2C/SPI sensors), and voice/wake word on more boards.
 
 ## History & Credits

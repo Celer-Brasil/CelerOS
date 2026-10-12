@@ -1,4 +1,5 @@
 #include "Notifications.h"
+#include "esp_log.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Launcher/NotificationAlert.h"
 #include "../Utils/CelerSettings.h"

@@ -984,8 +984,12 @@ class TestAppsDeps(unittest.TestCase):
             for v, m in vers.items():
                 idx.setdefault(name, {}).setdefault(v, m)
         self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.engine"], ver)
-        # e o fecho transitivo do engine traz a familia junto
-        self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.game"], "1.0.0")
+        # e o fecho transitivo do engine traz a familia junto (a versao e a
+        # do proprio modulo do repo — nao fixar na mao: o bump da engine
+        # quebra a expectativa chumbada)
+        game = (Path(C.__file__).resolve().parent / "sdk" / "engine" / "celeros.game.js").read_text()
+        gver = re.search(r"version\s*[:=]\s*'([0-9.]+)'", game).group(1)
+        self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.game"], gver)
         idx["celeros.engine"]["1.99.0"] = {"url": "y", "deps": {}}
         self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.engine"], "1.99.0")
 
@@ -1205,6 +1209,257 @@ class TestAppsStore(unittest.TestCase):
             else:
                 os.environ["CELER_HUB"] = saved
         self.assertIn("celeros.demo", err.getvalue())  # dica do catalogo
+
+
+# --------------------------------------------------- push-dep / deps-status
+# Comandos novos do cache de deps (Round 4): resolucao de versao do
+# push-dep, vereditos do deps-status e a forma CANONICA (o enxuto do
+# jsstrip — o mesmo bytes que o publish-dep sobe e o install grava) que os
+# dois comandos compartilham entre si e com o caminho normal do hub.
+
+class TestPushDep(unittest.TestCase):
+    """apps push-dep: versao do cache resolvida, push verificado por releitura."""
+
+    ENGINE = Path(C.__file__).resolve().parent / "sdk" / "engine"
+
+    def setUp(self):
+        # forma canonica sem depender do node: o cru do repo (a variacao com
+        # o jsstrip real tem teste proprio em TestEngineCanonical)
+        self._canon = C._engine_deploy_bytes
+        C._engine_deploy_bytes = lambda p: Path(p).read_bytes()
+
+    def tearDown(self):
+        C._engine_deploy_bytes = self._canon
+
+    def _link(self, versoes, conteudo=b"velho"):
+        link, dev = make_link()
+        link.hello()
+        dev.dirs["/local/modules/celeros.game"] = list(versoes)
+        for v in versoes:
+            dev.files[f"/local/modules/celeros.game/{v}/celeros.game.js"] = conteudo
+        return link, dev
+
+    def _run(self, link, name="celeros.game", ver=None):
+        from types import SimpleNamespace
+        import contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_push_dep(link, SimpleNamespace(name=name, ver=ver))
+        return out.getvalue()
+
+    def _die(self, link, **kw):
+        import contextlib
+        err = io.StringIO()
+        with redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                self._run(link, **kw)
+        return err.getvalue()
+
+    def test_versao_unica_automatica(self):
+        link, dev = self._link(["1.0.0"])
+        texto = self._run(link)
+        cru = (self.ENGINE / "celeros.game.js").read_bytes()
+        self.assertEqual(dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"], cru)
+        self.assertIn("push-dep celeros.game 1.0.0", texto)
+        self.assertIn("verificado", texto)
+
+    def test_varias_versoes_exigem_ver(self):
+        link, dev = self._link(["1.0.0", "1.2.0"])
+        err = self._die(link)
+        self.assertIn("use --ver", err)
+        self.assertIn("1.0.0", err)
+        self.assertIn("1.2.0", err)
+        # nada foi sobrescrito
+        self.assertEqual(dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"], b"velho")
+        self.assertEqual(dev.files["/local/modules/celeros.game/1.2.0/celeros.game.js"], b"velho")
+
+    def test_versao_desconhecida_recusada(self):
+        link, dev = self._link(["1.0.0"])
+        err = self._die(link, ver="9.9.9")
+        self.assertIn("9.9.9", err)
+        self.assertIn("1.0.0", err)  # lista as existentes na dica
+        self.assertEqual(dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"], b"velho")
+
+    def test_dep_ausente_no_repo(self):
+        link, dev = make_link()
+        link.hello()
+        dev.dirs["/local/modules"] = ["celeros.naoexiste"]
+        dev.dirs["/local/modules/celeros.naoexiste"] = ["1.0.0"]
+        dev.files["/local/modules/celeros.naoexiste/1.0.0/celeros.naoexiste.js"] = b"x"
+        err = self._die(link, name="celeros.naoexiste")
+        self.assertIn("repo", err)
+
+    def test_cache_da_dep_nao_existe_no_device(self):
+        link, dev = make_link()
+        link.hello()
+        dev.dirs["/local/modules"] = ["celeros.outra"]
+        err = self._die(link)
+        self.assertIn("instale um app que usa a dep", err)
+
+    def test_ver_escolhida_dentro_das_varias(self):
+        link, dev = self._link(["1.0.0", "1.2.0"])
+        self._run(link, ver="1.2.0")
+        cru = (self.ENGINE / "celeros.game.js").read_bytes()
+        self.assertEqual(dev.files["/local/modules/celeros.game/1.2.0/celeros.game.js"], cru)
+        self.assertEqual(dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"], b"velho")
+
+
+class TestDepsStatus(unittest.TestCase):
+    """apps deps-status: vereditos ok / DRIFT / sem no repo / SEM O ARQUIVO,
+    crc calculado dos bytes lidos do device."""
+
+    ENGINE = Path(C.__file__).resolve().parent / "sdk" / "engine"
+
+    def setUp(self):
+        self._canon = C._engine_deploy_bytes
+        C._engine_deploy_bytes = lambda p: Path(p).read_bytes()
+        self.cru = (self.ENGINE / "celeros.game.js").read_bytes()
+
+    def tearDown(self):
+        C._engine_deploy_bytes = self._canon
+
+    def _run(self, populate):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        populate(dev)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_deps_status(link, SimpleNamespace())
+        return out.getvalue(), link
+
+    def test_os_quatro_vereditos(self):
+        velho = b"engine antiga dos blocos pretos"
+
+        def populate(dev):
+            dev.dirs["/local/modules"] = ["celeros.game", "celeros.zz", "celeros.sfx"]
+            dev.dirs["/local/modules/celeros.game"] = ["1.0.0", "1.2.0"]
+            dev.dirs["/local/modules/celeros.game/1.0.0"] = ["celeros.game.js"]
+            dev.dirs["/local/modules/celeros.game/1.2.0"] = ["celeros.game.js"]
+            dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"] = self.cru
+            dev.files["/local/modules/celeros.game/1.2.0/celeros.game.js"] = velho
+            dev.dirs["/local/modules/celeros.zz"] = ["1.0.0"]
+            dev.dirs["/local/modules/celeros.zz/1.0.0"] = ["celeros.zz.js"]
+            dev.files["/local/modules/celeros.zz/1.0.0/celeros.zz.js"] = b"x"
+            dev.dirs["/local/modules/celeros.sfx"] = ["1.0.0"]  # pasta sem o .js
+
+        texto, _ = self._run(populate)
+        self.assertIn("ok", texto)
+        # DRIFT carrega o crc real dos bytes do device (e o do repo)
+        self.assertIn(f"crc {zlib.crc32(velho) & 0xFFFFFFFF:08x} x "
+                      f"{zlib.crc32(self.cru) & 0xFFFFFFFF:08x}", texto)
+        self.assertIn("push-dep celeros.game", texto)
+        self.assertIn("sem no repo", texto)             # celeros.zz
+        self.assertIn("SEM O ARQUIVO NO CACHE", texto)  # celeros.sfx
+        self.assertIn("drift: 1 arquivo(s)", texto)
+
+    def test_tudo_ok_fecha_em_sincronia(self):
+        def populate(dev):
+            dev.dirs["/local/modules"] = ["celeros.game"]
+            dev.dirs["/local/modules/celeros.game"] = ["1.0.0"]
+            dev.dirs["/local/modules/celeros.game/1.0.0"] = ["celeros.game.js"]
+            dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"] = self.cru
+        texto, _ = self._run(populate)
+        self.assertNotIn("DRIFT", texto)
+        self.assertIn("cache em sincronia com o repo", texto)
+
+    def test_falha_na_leitura_nao_crasha(self):
+        # read_file caiu no meio (conexao/perda): veredito proprio, sem contar
+        # drift — antes o f"{None:08x}" derrubava o comando em TypeError
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        dev.dirs["/local/modules"] = ["celeros.game"]
+        dev.dirs["/local/modules/celeros.game"] = ["1.0.0"]
+        dev.dirs["/local/modules/celeros.game/1.0.0"] = ["celeros.game.js"]
+        dev.files["/local/modules/celeros.game/1.0.0/celeros.game.js"] = b"qualquer"
+
+        def explode(*a, **kw):
+            raise C.CelerError("timeout lendo do dispositivo")
+        link.read_file = explode
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_deps_status(link, SimpleNamespace())
+        texto = out.getvalue()
+        self.assertIn("FALHA NA LEITURA", texto)
+        self.assertIn("timeout lendo", texto)
+        self.assertNotIn("DRIFT", texto)
+
+    def test_cache_vazio(self):
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        dev.dirs["/local/modules"] = []
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_deps_status(link, SimpleNamespace())
+        self.assertIn("cache de deps vazio", out.getvalue())
+
+
+class TestEngineCanonical(unittest.TestCase):
+    """_engine_deploy_bytes: o cache do device vive na forma ENXUTO (jsstrip,
+    o que o publish-dep sobe e o install grava) — push-dep e deps-status
+    usam esta forma, nao o cru do repo."""
+
+    ENGINE = Path(C.__file__).resolve().parent / "sdk" / "engine"
+
+    def test_e_o_enxuto_do_jsstrip(self):
+        import shutil
+        import celerhub
+        if shutil.which("node") is None:
+            self.skipTest("sem node no PATH")
+        cru = (self.ENGINE / "celeros.game.js").read_bytes()
+        canon = C._engine_deploy_bytes(self.ENGINE / "celeros.game.js")
+        self.assertEqual(canon, celerhub.strip_js(self.ENGINE / "celeros.game.js"))
+        self.assertNotEqual(len(canon), len(cru))  # enxuto ~metade do cru
+
+    def test_sem_node_cai_no_cru_sem_quebrar(self):
+        # o die() do celerhub (node ausente/jsstrip falhando) vira SystemExit:
+        # o fallback devolve o cru — push-dep e deps-status seguem consistentes
+        import celerhub
+        real = celerhub.strip_js
+
+        def morre(path):
+            raise SystemExit(1)
+        celerhub.strip_js = morre
+        try:
+            cru = (self.ENGINE / "celeros.game.js").read_bytes()
+            self.assertEqual(C._engine_deploy_bytes(self.ENGINE / "celeros.game.js"), cru)
+        finally:
+            celerhub.strip_js = real
+
+
+class TestEvalRoteiro(unittest.TestCase):
+    """debug --eval: a sequencia p/e/c/q no stdin do cliente, com as pausas
+    que cobrem o ciclo assincrono de pausa/eval/continue do Duktape."""
+
+    class Stdin:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, b):
+            self.writes.append(b)
+
+        def flush(self):
+            pass
+
+    def test_sequencia_e_tempos(self):
+        sleeps = []
+        stdin = self.Stdin()
+        C._roteiro_eval(stdin, "E.score", sleep=sleeps.append)
+        self.assertEqual(stdin.writes, [b"p\n", b"e E.score\n", b"c\nq\n"])
+        # p -> 4s (boot do app pesado), eval -> 2s (evento de pausa), c/q
+        self.assertEqual(sleeps, [4.0, 2.0, 0.6])
+
+    def test_pipe_fechado_nao_propaga(self):
+        class Fechado(self.Stdin):
+            def write(self, b):
+                raise OSError("broken pipe")
+        # cliente saiu antes: o roteiro termina em silencio (o proxy cuida)
+        C._roteiro_eval(Fechado(), "x", sleep=lambda s: None)
 
 
 if __name__ == "__main__":

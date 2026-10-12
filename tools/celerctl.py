@@ -1754,6 +1754,28 @@ def split_frames(buf, proto):
         buf = buf[head_len + length:]
 
 
+def _roteiro_eval(stdin, expr, sleep=time.sleep):
+    """Roteiro one-shot do `debug --eval` no stdin do cliente dbg.js: pausa
+    (p) -> avalia EXPR no escopo do app (pausado, o eval ve vars de modulo:
+    E, D, M...; rodando, so alcancaria os globais) -> continua (c) -> sai
+    (q). Pausa e evento de pausa sao assincronos: os sleeps cobrem o ciclo.
+    O app pesado decodifica PNGs/cria mundo nos primeiros segundos — pausar
+    cedo demais avalia num frame onde os vars do app ainda nao existem
+    (ReferenceError no require inicial)."""
+    sleep(4.0)
+    try:
+        stdin.write(b"p\n")
+        stdin.flush()
+        sleep(2.0)
+        stdin.write(f"e {expr}\n".encode())
+        stdin.flush()
+        sleep(0.6)
+        stdin.write(b"c\nq\n")
+        stdin.flush()
+    except (OSError, ValueError):
+        pass  # cliente saiu antes (pipe fechado): o proxy cuida do resto
+
+
 def cmd_debug(args):
     """Debugger do Duktape pela serial. Abre dois TCP locais — o protocolo
     dmsg cru (porta) e as linhas de log do device (porta+1) — e faz o proxy
@@ -1806,7 +1828,8 @@ def cmd_debug(args):
             cli += ["--src", args.src]
         # Ctrl-C e do cliente (pausa o app); o proxy so sai quando ele sair
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        client = subprocess.Popen(cli)
+        # --eval: stdin pipeado — o roteiro (p/e/c/q) entra depois do launch
+        client = subprocess.Popen(cli, stdin=subprocess.PIPE if args.eval else None)
     else:
         port_arg = f" --port {args.tcp_port}" if args.tcp_port != 9092 else ""
         print(f"debug: proxy em 127.0.0.1:{args.tcp_port} (logs em :{args.tcp_port + 1}) — em outro terminal:")
@@ -1868,6 +1891,13 @@ def cmd_debug(args):
         code, out = link.exec(f"run {app}")
         if code != 0 or not spawn:
             print(("debug: " if code == 0 else f"debug: run {app} falhou: ") + out.strip())
+
+    if args.eval and spawn:
+        # one-shot: o roteiro (p/e/c/q) entra pelo stdin do cliente depois do
+        # launch — thread separada, o proxy segue bombeando os frames
+        import threading
+        threading.Thread(target=_roteiro_eval, args=(client.stdin, args.eval),
+                         daemon=True).start()
 
     def emit_log(text):
         # logs vao para o cliente (porta lateral); sem cliente de logs, aqui
@@ -2774,6 +2804,119 @@ def _modules_tree(link):
     return tree
 
 
+def _engine_deploy_bytes(path):
+    """Bytes CANONICOS de um modulo do repo para o cache do device: o fonte
+    enxuto do jsstrip — o mesmo arquivo que o publish-dep sobe para o hub e
+    que o `apps install --deps-local` grava. push-dep e deps-status usam ESTA
+    forma: comparar (ou gravar) o cru do repo chamaria de DRIFT um cache
+    instalado direitinho pelo caminho normal (o enxuto e ~metade do cru)."""
+    import celerhub
+    try:
+        return celerhub.strip_js(Path(path))
+    except (SystemExit, OSError, ValueError):
+        # node/jsstrip indisponivel ou fonte que nao passa: compara/empurra o
+        # cru — push-dep e deps-status seguem CONSISTENTES entre si do mesmo
+        # jeito (o JS com comentarios e legal para o Duktape)
+        return Path(path).read_bytes()
+
+
+def _apps_push_dep(link, args):
+    """Deploy de uma dep do repo (tools/sdk/engine) direto no cache de modulos
+    do device (/local/modules/<dep>/<ver>/), na forma canonica (enxuto do
+    jsstrip, igual ao que o hub/publish entrega). O caminho da noite dos
+    "blocos pretos": o fix da engine tinha que chegar ao aparelho e o push
+    manual exigia saber o caminho de cabeca. Relance o app depois (apps run)."""
+    repo = Path(__file__).resolve().parent / "sdk" / "engine" / f"{args.name}.js"
+    if not repo.is_file():
+        die(f"dep nao encontrada no repo: {repo}")
+    base = f"/local/modules/{args.name}"
+    try:
+        vers = [e["name"] for e in link.ls(base) if e["dir"]]
+    except CelerError:
+        vers = []
+    if not vers:
+        die(f"{base} nao existe no device (instale um app que usa a dep)")
+    ver = args.ver or (vers[0] if len(vers) == 1 else None)
+    if ver is None:
+        die(f"varias versoes no cache ({', '.join(sorted(vers))}): use --ver")
+    if ver not in vers:
+        die(f"versao {ver} nao esta no cache (existentes: {', '.join(sorted(vers))})")
+    dst = f"{base}/{ver}/{args.name}.js"
+    blob = _engine_deploy_bytes(repo)
+    with tempfile.NamedTemporaryFile(delete=False) as tf:
+        tf.write(blob)
+        tmp = tf.name
+    try:
+        link.write_file(tmp, dst)
+        link.verify_file(tmp, dst)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    print(f"push-dep {args.name} {ver}: verificado -> {dst} ({len(blob)} B)")
+
+
+def _apps_deps_status(link, args):
+    """Drift repo x DEVICE do cache de dependencias: tamanho e crc32 do arquivo
+    no aparelho contra o tools/sdk/engine do repo para a MESMA versao (na forma
+    canonica — o enxuto do jsstrip, que e o que o hub/publish/install grava).
+    A versao da engine nao bumpou numa tarde inteira de mudancas e o 4848
+    rodou um celeros.game '1.0.0' velho por horas (bug dos blocos pretos) sem
+    nada apontar a divergencia."""
+    engine = Path(__file__).resolve().parent / "sdk" / "engine"
+    try:
+        deps = sorted(e["name"] for e in link.ls("/local/modules") if e["dir"])
+    except CelerError:
+        die("/local/modules nao existe neste device")
+    if not deps:
+        print("cache de deps vazio")
+        return
+    drift = 0
+    print(f"{'dep':<22} {'ver':<8} {'device':>10} {'repo':>10}  veredito")
+    for dep in deps:
+        for v in sorted(e["name"] for e in link.ls(f"/local/modules/{dep}") if e["dir"]):
+            remote = f"/local/modules/{dep}/{v}/{dep}.js"
+            local = engine / f"{dep}.js"
+            try:
+                entries = link.ls(f"/local/modules/{dep}/{v}")
+                dev_b = next((e["size"] for e in entries if e["name"] == f"{dep}.js"), None)
+            except CelerError:
+                dev_b = None
+            if dev_b is None:
+                print(f"{dep:<22} {v:<8} {'?':>10} {'':>10}  SEM O ARQUIVO NO CACHE")
+                continue
+            if not local.is_file():
+                print(f"{dep:<22} {v:<8} {dev_b:>10} {'':>10}  sem no repo")
+                continue
+            # crc do lado do device: le o arquivo e confere (37 KB pela serial ~1 s)
+            with tempfile.NamedTemporaryFile(delete=False) as tf:
+                tmp = tf.name
+            try:
+                link.read_file(remote, tmp, progress=False)
+                dev_crc = zlib.crc32(Path(tmp).read_bytes()) & 0xFFFFFFFF
+            except CelerError as e:
+                dev_crc = None
+                erro_leitura = str(e)
+            finally:
+                Path(tmp).unlink(missing_ok=True)
+            rep_blob = _engine_deploy_bytes(local)
+            rep_b = len(rep_blob)
+            rep_crc = zlib.crc32(rep_blob) & 0xFFFFFFFF
+            if dev_crc is None:
+                # leitura falhou (conexao caiu no meio): NAO e drift nem da
+                # para cravar igualdade — antes aqui crashava no {None:08x}
+                print(f"{dep:<22} {v:<8} {dev_b:>10} {rep_b:>10}  FALHA NA LEITURA ({erro_leitura})")
+                continue
+            if dev_crc == rep_crc:
+                vdt = "ok"
+            else:
+                vdt = f"DRIFT (crc {dev_crc:08x} x {rep_crc:08x}) — push-dep {dep}"
+                drift += 1
+            print(f"{dep:<22} {v:<8} {dev_b:>10} {rep_b:>10}  {vdt}")
+    if drift:
+        print(f"\ndrift: {drift} arquivo(s) — apps push-dep <dep> [--ver V] + apps run <app>")
+    else:
+        print("\ncache em sincronia com o repo")
+
+
 def _apps_deps(link, args):
     """apps deps: o que vive no cache publico /local/modules, quem usa e o
     que sobrou sem dono (versoes antigas acumulam para sempre sem isso).
@@ -2949,6 +3092,10 @@ def cmd_apps(args):
             print(f"removido: {target}")
         elif args.action == "deps":
             _apps_deps(link, args)
+        elif args.action == "push-dep":
+            _apps_push_dep(link, args)
+        elif args.action == "deps-status":
+            _apps_deps_status(link, args)
         elif args.action == "run":
             _apps_run(link, args)
     finally:
@@ -3101,6 +3248,10 @@ def main():
     p.add_argument("--serve", action="store_true",
                    help="so o proxy (cliente em outro terminal: node tools/debug/dbg.js)")
     p.add_argument("--src", help="fonte local do app para o cliente (default: data/apps, hub_apps...)")
+    p.add_argument("--eval", default=None, metavar="EXPR",
+                   help="one-shot: pausa o app, avalia EXPR no escopo dele (ve vars de "
+                        "modulo: E, D, M...), continua e sai — inspecionar estado vivo "
+                        "sem sessao interativa")
     p.set_defaults(func=cmd_debug)
 
     p = sub.add_parser("screencap", help="captura da tela -> PNG")
@@ -3181,6 +3332,13 @@ def main():
     a.add_argument("--gc", action="store_true",
                    help="remove as versoes orfas (exige --yes)")
     a.add_argument("--yes", action="store_true", help="confirma o --gc")
+    a = apps_sub.add_parser("push-dep", help="deploy de uma dep do repo "
+                         "(tools/sdk/engine) no cache do device — relance o app depois")
+    a.add_argument("name", help="nome da dep (ex: celeros.game)")
+    a.add_argument("--ver", default=None,
+                   help="versao do cache (default: a unica instalada)")
+    a = apps_sub.add_parser("deps-status", help="drift do cache de deps no DEVICE "
+                            "contra o repo (tamanho + crc32 por versao)")
     a = apps_sub.add_parser("run", help="abre um app instalado (exit + run)")
     a.add_argument("name", help="nome da pasta do app (procura /local e /sd)")
     p.set_defaults(func=cmd_apps)
@@ -3202,6 +3360,10 @@ def main():
     except OSError as e:
         # bridge TCP fora do ar / reset no meio da sessao
         die(f"conexao: {e}")
+    except PORT_GONE as e:
+        # termios.error: a CDC sumiu no meio (reboot/re-enumeracao); era
+        # traceback cru (bancada 2026-10-11, ota push logo apos o build)
+        die(f"porta serial sumiu ({e}): o device reiniciou? tente de novo")
     except KeyboardInterrupt:
         print()
         sys.exit(130)

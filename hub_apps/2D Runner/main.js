@@ -47,6 +47,7 @@ var playerLane, playerY, playerBob, playerX;   // playerX anima a troca
 var score, coins, speed, distance, entities, spawnT, newRecord;
 var rastro = null;
 var pressT = 0, marco = 0;                     // piso do toque e marco de pontos
+var RASTRO = { x: 0, y: 0 };                   // scratch da fonte do rastro
 
 var BTN_JOGAR = { x: 40, y: 216, w: 160, h: 46 };
 var BTN_AJ = { x: 40, y: 268, w: 160, h: 36 };
@@ -208,7 +209,10 @@ function paintRoad(x, y, w, h) {
 }
 
 // HUD fora da camada suja (as caixas do jogo nao sobem alem do HUD) e com
-// memo: so repinta quando um valor muda
+// memo: so repinta quando um valor muda OU quando algo tocou a faixa dele
+// (o repaint do fim do veu de transicao cobre a faixa com o fundo — sem
+// isso os restos do wipe/iris ficavam em cima do placar ate o proximo
+// ponto)
 var hudS = -1, hudF = -1, hudH = -1, hudT = -1;
 function drawHud(force) {
     var t10 = 0;
@@ -216,7 +220,8 @@ function drawHud(force) {
         try { t10 = Math.round(S.getTemperature() * 10); } catch (err) {}
     }
     var f = showFPS ? E.fps : 0;
-    if (!force && score === hudS && f === hudF && hi === hudH && t10 === hudT) return;
+    if (!force && score === hudS && f === hudF && hi === hudH && t10 === hudT &&
+        !E.dirty.touches(0, 0, W, HUD_H)) return;
     hudS = score; hudF = f; hudH = hi; hudT = t10;
     var on = E.dirty.on;
     E.dirty.on = false;
@@ -324,9 +329,14 @@ E.run({
             // o apagar/redesenho do mundo nao invade o HUD
             E.dirty.clip(0, HUD_H, W, H - HUD_H);
             drawHud(true);
-            // rastro neon que segue a prancha (fonte parada nao deixa nada)
-            rastro = E.fx.trail(function () { return { x: playerX, y: playerY + playerBob + 26 }; },
-                                 { rate: 26, life: 0.35, size: 3, color: T.accent });
+            // rastro neon que segue a prancha (fonte parada nao deixa
+            // nada; posicao em scratch — o follow rodava 26x/s e alocava
+            // um objeto por chamada)
+            rastro = E.fx.trail(function () {
+                RASTRO.x = playerX;
+                RASTRO.y = playerY + playerBob + 26;
+                return RASTRO;
+            }, { rate: 26, life: 0.35, size: 3, color: T.accent });
         },
         exit: function () {
             if (rastro) rastro.stop();

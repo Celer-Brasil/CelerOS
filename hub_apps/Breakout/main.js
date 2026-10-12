@@ -219,6 +219,12 @@ E.run({
         enter: function () {
             newGame();
             E.dirty.enable(paintField);   // 1o quadro: campo inteiro
+            // o apagar/redesenho do mundo nao sobe alem do placar: sem o
+            // recorte, o repaint integral do 1o quadro (e de cada full,
+            // ex. nivel novo) apagava o cabecalho pintado no update — ele
+            // so reaparecia no proximo ponto
+            E.dirty.clip(0, 42, W, H - 42);
+            hudKey = -1;
             drawHeader();
         },
         update: function (dt) {
@@ -234,9 +240,11 @@ E.run({
                 launch();
             }
             step(dt);
-            // placar so quando muda (sem alocar por quadro)
+            // placar so quando muda, ou quando algo tocou a faixa dele
+            // (repaint integral do fim do veu, flash de tela cheia — o
+            // memo so de valores deixava restos na faixa de cima)
             var k = hudCode();
-            if (k !== hudKey) {
+            if (k !== hudKey || E.dirty.touches(0, 0, W, 42)) {
                 hudKey = k;
                 if (state !== "over") drawHeader();
             }

@@ -208,6 +208,12 @@ function play(x, y) {
         var mc = cellCenter(x, y);
         E.fx.burst(mc.x, mc.y, { n: 20, color: T.err, speed: 120, life: 0.7,
                                  grav: 140, size: 2 });
+        // derrota revela todas as minas (classico): o board abre elas no
+        // estado, mas so a tocada vinha na lista — as demais ficavam
+        // escondidas (ninguem via onde elas estavam)
+        board.eachMine(function (mx, my) {
+            E.dirty.add(gridX + mx * CELL, gridY + my * CELL, CELL, CELL);
+        });
         finish(false);
         return;
     }

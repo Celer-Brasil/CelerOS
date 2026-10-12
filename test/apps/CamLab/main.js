@@ -40,6 +40,7 @@ if (cam === null) {
         st = Pack.status(h);
     }
     note("snap h" + h + " em " + (System.millis() - ts) + " ms: " + JSON.stringify(st));
+    Pack.close(h);  // nao concluiu no prazo: libera a sessao (o video abre outra)
     if (st && st.state === "done") {
         System.drawJPG("/local/camlab.jpg", 0, 0);
         msg("foto ok (" + (System.millis() - ts) + " ms)");

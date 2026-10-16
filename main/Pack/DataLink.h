@@ -76,7 +76,7 @@ bool ensure(bool allowWifiInit = true);
 bool up();
 void self(Self* out);
 // Troca o canal (so sem STA conectado). true = ja estava ou trocou.
-bool setChannel(uint8_t ch);
+bool setChannel(uint8_t ch, bool log = true);
 // Sessao ESP-NOW viva: segura o canal (sem scans de fundo). Contador.
 void hold(bool on);
 

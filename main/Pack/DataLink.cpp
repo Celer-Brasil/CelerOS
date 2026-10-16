@@ -324,7 +324,7 @@ void self(Self* out) {
     esp_read_mac(out->mac, ESP_MAC_WIFI_STA);
 }
 
-bool setChannel(uint8_t ch) {
+bool setChannel(uint8_t ch, bool log) {
     if (ch < 1 || ch > 14) return false;
     Self me;
     self(&me);
@@ -332,10 +332,10 @@ bool setChannel(uint8_t ch) {
     if (me.sta) return false;  // preso ao AP: quem troca e o par
     esp_err_t err = esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "canal %u: %s", ch, esp_err_to_name(err));
+        if (log) ESP_LOGW(TAG, "canal %u: %s", ch, esp_err_to_name(err));
         return false;
     }
-    ESP_LOGI(TAG, "canal %u -> %u (sessao ESP-NOW)", me.chan, ch);
+    if (log) ESP_LOGI(TAG, "canal %u -> %u (sessao ESP-NOW)", me.chan, ch);
     return true;
 }
 

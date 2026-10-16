@@ -1939,6 +1939,27 @@ static void testShScript() {
     CHECK(g_shRan.size() == 2 && g_shRan[0] == "echo oi" && g_shRan[1] == "ls /local");
 }
 
+static void testHelloHunt() {
+    using namespace resproto;
+    uint8_t b[32];
+    // sem flags: o fio de sempre (nos velhos leem igual)
+    size_t n = encodeHello(0x24, "Celer-1CAE", b, sizeof(b));
+    CHECK(n == 1 + 2 + 10 && b[0] == OP_HELLO);
+    uint8_t caps = 0, fl = 9;
+    char nm[RES_NAME_MAX + 1];
+    CHECK(decodeHello(b + 1, n - 1, &caps, nm, &fl) && caps == 0x24 && strcmp(nm, "Celer-1CAE") == 0 && fl == 0);
+    // com HELLO_HUNT: 1 byte a mais no fim; o decoder velho (sem flags) segue lendo
+    n = encodeHello(0x40, "qrnode", b, sizeof(b), HELLO_HUNT);
+    CHECK(n == 1 + 2 + 6 + 1 && b[n - 1] == HELLO_HUNT);
+    CHECK(decodeHello(b + 1, n - 1, &caps, nm) && caps == 0x40 && strcmp(nm, "qrnode") == 0);
+    CHECK(decodeHello(b + 1, n - 1, &caps, nm, &fl) && fl == HELLO_HUNT);
+    LeaseTable<4> lt;
+    CHECK(lt.count() == 0);
+    lt.open(1, 0, 0, 1000);
+    lt.open(2, 1, 0, 1000);
+    CHECK(lt.count() == 2);
+}
+
 static void testUsbJoin() {
     using namespace usbres;
     uint8_t b[96];
@@ -2106,6 +2127,7 @@ int main() {
     testResProto();
     testResMeta();
     testUsbRes();
+    testHelloHunt();
     testUsbJoin();
     testUsbVirtualNode();
     testPackId();

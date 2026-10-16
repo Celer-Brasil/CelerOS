@@ -297,6 +297,15 @@ constexpr uint16_t TOKEN_ALL = 0xFFFF;  // CTRL broadcast para todos (HELLO)
 HelloNode s_hello[HELLOS];
 // diagnostico do controle em banda (shell "res")
 uint32_t s_ctrlRx = 0, s_ctrlNotUs = 0, s_ctrlFrom0 = 0, s_helloOk = 0;
+// Caca de canal (API 41): no fora de AP (canal livre) que nao ouve a matilha
+// pelo ESP-NOW varre 1..13 com HELLO_HUNT; quem ouve responde na hora. Sem
+// isto a esp32-cam fora do AP ficava no canal 1 e as 4848 no do AP, mudas
+// uma para a outra (bancada 2026-10-16).
+volatile uint32_t s_lastPackMs = 0;  // ultimo controle autenticado da matilha (ESP-NOW)
+uint8_t s_huntCh = 0;
+uint32_t s_huntMs = 0, s_huntSweeps = 0;
+constexpr uint32_t K_HUNT_QUIET_MS = 20000;  // sem ouvir ninguem por 20 s: caca
+constexpr uint32_t K_HUNT_DWELL_MS = 400;    // por canal (a resposta vem em ~ms)
 uint8_t s_peerPos = 0;
 
 void learnPeer(uint16_t node, const uint8_t mac[6]) {
@@ -1178,6 +1187,7 @@ namespace {  // plano de dados (task res_rx) e temporizadores
 
 void tickTimers();
 void handleDataRx(const DataLink::Rx& dr);
+void sendHello(uint8_t flags);
 
 // Task do plano de dados: o quadro e tratado ao chegar (o stream de audio nao
 // espera o proximo present do app) e os temporizadores rodam a cada 100 ms.
@@ -1209,9 +1219,22 @@ void rxTask(void*) {
                 if (!forUs) s_ctrlNotUs++;
                 if (from == 0) s_ctrlFrom0++;
                 if (forUs && from != 0 && from != ourNode() && rx->len > 0) {
+                    if (rx->net == 0) s_lastPackMs = nowMs();  // a matilha esta neste canal
                     {
                         Guard g;
                         learnPeer(from, rx->mac);
+                    }
+                    // alguem cacando o canal: responde ja (o tick so despacharia
+                    // depois que ele ja pulou para o proximo canal)
+                    uint8_t hc = 0, hf = 0;
+                    char hn[RES_NAME_MAX + 1];
+                    if (rx->data[0] == OP_HELLO && decodeHello(rx->data + 1, rx->len - 1, &hc, hn, &hf) &&
+                        (hf & HELLO_HUNT)) {
+                        static uint32_t s_replyMs = 0;
+                        if (nowMs() - s_replyMs > 200) {
+                            s_replyMs = nowMs();
+                            sendHello(0);
+                        }
                     }
                     inboxPush(from, "", rx->data, rx->len);
                 }
@@ -1238,17 +1261,35 @@ void rxTaskEnsure() {
     }
 }
 
+void sendHello(uint8_t flags) {
+    char nm[RES_NAME_MAX + 1];
+    ourName(nm, sizeof(nm));
+    uint8_t b[24];
+    static const uint8_t kAll[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    const size_t n = encodeHello(Pack::myCaps(), nm, b, sizeof(b), flags);
+    if (n > 0) DataLink::send(kAll, DataLink::KIND_CTRL, ourNode(), TOKEN_ALL, 0, b, n);
+}
+
+void huntTick(uint32_t now) {
+    DataLink::Self me;
+    DataLink::self(&me);
+    if (!me.up || me.sta) return;  // preso ao AP: quem caca e o outro
+    if (now - s_lastPackMs < K_HUNT_QUIET_MS || now < K_HUNT_QUIET_MS) return;
+    if (establishedEspnow() > 0 || s_leases.count() > 0) return;  // sessao viva: nao mexe
+    if (now - s_huntMs < K_HUNT_DWELL_MS) return;
+    s_huntMs = now;
+    s_huntCh = (uint8_t)(s_huntCh % 13 + 1);
+    if (s_huntCh == 1) s_huntSweeps++;
+    if (DataLink::setChannel(s_huntCh, false)) sendHello(HELLO_HUNT);
+}
+
 void tickTimers() {
+    huntTick(nowMs());
     // HELLO pelo ESP-NOW (broadcast, todos): presenca redundante com a malha
     static uint32_t s_helloMs = 0;
     if (DataLink::up() && nowMs() - s_helloMs >= K_HELLO_MS) {
         s_helloMs = nowMs();
-        char nm[RES_NAME_MAX + 1];
-        ourName(nm, sizeof(nm));
-        uint8_t b[24];
-        static const uint8_t kAll[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-        const size_t n = encodeHello(Pack::myCaps(), nm, b, sizeof(b));
-        if (n > 0) DataLink::send(kAll, DataLink::KIND_CTRL, ourNode(), TOKEN_ALL, 0, b, n);
+        sendHello(0);
     }
     const uint32_t now = nowMs();
     // sensores em stream (rate > 0): amostra as sessoes vencidas e empurra
@@ -1862,6 +1903,9 @@ void dump(PrintFn pr, void* ctx) {
         if (hn.id == 0) continue;
         pr(ctx, "  %04X %-15s caps 0x%02X  ha %d s\r\n", hn.id, hn.name, hn.caps, (int)((now - hn.lastMs) / 1000));
     }
+    pr(ctx, "matilha no ESP-NOW: ouvida ha %u s  caca de canal: %u varreduras (canal %u)\r\n",
+       s_lastPackMs != 0 ? (unsigned)((nowMs() - s_lastPackMs) / 1000) : 0u, (unsigned)s_huntSweeps,
+       (unsigned)s_huntCh);
     pr(ctx, "pares ESP-NOW conhecidos:");
     for (int i = 0; i < PEERS; i++) {
         if (s_peers[i].node != 0) pr(ctx, " %04X", s_peers[i].node);

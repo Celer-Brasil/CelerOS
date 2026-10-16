@@ -257,24 +257,35 @@ private:
 
 // ----------------------------------------------------------- mensagens
 
-inline size_t encodeHello(uint8_t caps, const char* name, uint8_t* out, size_t cap) {
+// HELLO [caps][nlen][nome] e, desde a API 41, [flags u8] opcional no fim
+// (nos velhos param no nome e ignoram o resto). HELLO_HUNT: no fora de AP
+// cacando o canal da matilha — quem ouve responde na hora.
+constexpr uint8_t HELLO_HUNT = 0x01;
+
+inline size_t encodeHello(uint8_t caps, const char* name, uint8_t* out, size_t cap, uint8_t flags = 0) {
     const size_t nl = strnlen(name, RES_NAME_MAX);
     Writer w(out, cap);
     w.u8(OP_HELLO);
     w.u8(caps);
     w.u8((uint8_t)nl);
     w.bytes(name, nl);
+    if (flags != 0) w.u8(flags);
     return w.size();
 }
 
 // corpo depois do op; name com RES_NAME_MAX+1
-inline bool decodeHello(const uint8_t* body, size_t len, uint8_t* caps, char* name) {
+inline bool decodeHello(const uint8_t* body, size_t len, uint8_t* caps, char* name,
+                        uint8_t* flags = nullptr) {
     Reader r(body, len);
     uint8_t nl;
     const uint8_t* nm;
     if (!r.u8(caps) || !r.u8(&nl) || nl > RES_NAME_MAX || !r.bytes(&nm, nl)) return false;
     memcpy(name, nm, nl);
     name[nl] = '\0';
+    if (flags != nullptr) {
+        uint8_t f = 0;
+        *flags = r.u8(&f) ? f : 0;
+    }
     return true;
 }
 
@@ -656,6 +667,11 @@ public:
     }
 
     Lease* at(int i) { return (i >= 0 && i < N && m_l[i].used) ? &m_l[i] : nullptr; }
+    int count() const {
+        int n = 0;
+        for (int i = 0; i < N; i++) n += m_l[i].used ? 1 : 0;
+        return n;
+    }
     static constexpr int size() { return N; }
 
     void clear() {

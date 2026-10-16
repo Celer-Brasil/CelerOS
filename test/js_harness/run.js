@@ -935,7 +935,7 @@ function makeEnv() {
     },
     stop: function() { return true; },
     scan: function() {
-        return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-TEST', rssi: -55 }];
+        return [{ id: 'AA:BB:CC:DD:EE:FF', name: 'Celer-TEST', rssi: -55, node: 0xEEFF }];
     },
     connect: function(id) { return String(id).indexOf('AA:BB') >= 0; },
     disconnect: function() { return true; },
@@ -954,6 +954,7 @@ function makeEnv() {
     unpair: function() { log.push('[link] unpair'); return true; },
     status: function() {
         return { connected: linkConn && !linkPairing, peer: linkConn ? 'AA:BB:CC:DD:EE:FF' : '',
+                 node: linkConn ? 0xEEFF : 0,
                  listening: false, role: linkConn ? 'central' : '', name: 'Celer-TEST',
                  pairing: linkPairing, verified: !linkPairing,
                  code: linkPairing ? linkPairCode : '',

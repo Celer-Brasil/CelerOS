@@ -18,6 +18,7 @@
 #include "../../main/Bluetooth/NetFrame.h"
 #include "../../main/Pack/ResProto.h"
 #include "../../main/USBDevice/UsbRes.h"
+#include "../../main/Pack/PackId.h"
 #include "../../main/Utils/Rigid2D.h"
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
@@ -1938,6 +1939,30 @@ static void testShScript() {
     CHECK(g_shRan.size() == 2 && g_shRan[0] == "echo oi" && g_shRan[1] == "ls /local");
 }
 
+static void testPackId() {
+    using namespace packid;
+    const uint8_t mac[6] = {0x24, 0x0A, 0xC4, 0x12, 0x1C, 0xAE};
+    CHECK(nodeFromMac(mac) == 0x1CAE);
+    // elo bond do CelerLink -> no da malha (MAC publica, MSB primeiro)
+    CHECK(nodeFromLinkId("24:0A:C4:12:1C:AE") == 0x1CAE);
+    CHECK(nodeFromLinkId("24:0a:c4:12:1c:ae") == 0x1CAE);
+    CHECK(nodeFromLinkId("") == 0);
+    CHECK(nodeFromLinkId(nullptr) == 0);
+    CHECK(nodeFromLinkId("24:0A:C4:12:1C") == 0);
+    CHECK(nodeFromLinkId("24:0A:C4:12:1C:AE:") == 0);
+    CHECK(nodeFromLinkId("24:0A:C4:12:1C:AG") == 0);
+    // PC no gateway: faixa virtual, nunca o broadcast
+    CHECK(pcNodeOf(0x1CAE) == 0xFFAE);
+    CHECK(pcNodeOf(0x12FF) == 0xFFFE);
+    CHECK(pcNodeOf(0x0000) == 0xFF00);
+    CHECK(isVirtual(0xFFAE) && isVirtual(0xFF00) && !isVirtual(0xFFFF) && !isVirtual(0x1CAE));
+    char b[16];
+    defaultName(0x1CAE, b, sizeof(b));
+    CHECK(strcmp(b, "Celer-1CAE") == 0 && strlen(b) <= NAME_LEN);
+    pcName(0x1CAE, b, sizeof(b));
+    CHECK(strcmp(b, "pc-1CAE") == 0);
+}
+
 int main() {
     testSemVer();
     testUpdateCheck();
@@ -1958,6 +1983,7 @@ int main() {
     testResProto();
     testResMeta();
     testUsbRes();
+    testPackId();
     testRigid2D();
     testRigid2DHammer();
     testRigid2DMath();

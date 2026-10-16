@@ -1,6 +1,7 @@
 #include "JSBindings.h"
 #include "JsInternal.h"
 #include "../Bluetooth/CelerLink.h"
+#include "../Pack/PackId.h"
 #include "../Kernel/Core/CelerKernel.h"
 
 // =====================================================
@@ -56,6 +57,8 @@ duk_ret_t JSBindings::js_linkScan(duk_context *ctx) {
         putStr(ctx, "id", peers[i].id);
         putStr(ctx, "name", peers[i].name);
         putInt(ctx, "rssi", peers[i].rssi);
+        // id do no na malha (PackId): o mesmo do Pack.members() (API 40)
+        putInt(ctx, "node", packid::nodeFromLinkId(peers[i].id));
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;
@@ -150,6 +153,7 @@ duk_ret_t JSBindings::js_linkStatus(duk_context *ctx) {
     duk_push_object(ctx);
     putBool(ctx, "connected", st.connected);
     putStr(ctx, "peer", st.peer);
+    putInt(ctx, "node", packid::nodeFromLinkId(st.peer));  // 0 sem conexao (API 40)
     putBool(ctx, "listening", st.listening);
     // "central" = nos conectamos; "peripheral" = conectaram em nos
     putStr(ctx, "role", !st.connected ? "" : (st.central ? "central" : "peripheral"));

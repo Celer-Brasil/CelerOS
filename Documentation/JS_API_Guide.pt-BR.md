@@ -1075,9 +1075,10 @@ Os dois sentidos funcionam; o link é simétrico depois de conectado.
 
 #### `CelerLink.start([nome], [opcoes])` → Boolean
 Vira controlável: liga o advertising e o servidor GATT. `nome` é o nome BLE
-do device (até 29 bytes; default `Celer-XXXX`, XXXX do fim da MAC do rádio).
-A primeira chamada de qualquer função inicializa o Bluetooth (~300 ms). O nome
-volta ao default quando o app sai.
+do device (até 29 bytes). O default é o nome do aparelho na matilha — o
+mesmo que a CelerNet anuncia (`Pack.me().name`, setting `celernet_name`,
+`Celer-XXXX` até ser renomeado; API 40). A primeira chamada de qualquer função
+inicializa o Bluetooth (~300 ms). O nome volta ao default quando o app sai.
 
 `opcoes` (objeto, **API 11**): `{pairing: true}` liga o gate de pareamento —
 cada conexão nova exige o código de 6 dígitos (veja `verify()` e
@@ -1098,8 +1099,10 @@ Para o advertising (o device deixa de ser descobrível).
 
 #### `CelerLink.scan([timeoutMs])` → Array
 Escaneamento bloqueante (default 2500 ms) por CelerOS próximos. Retorna
-`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55}]`, sinal mais
-forte primeiro (até 16 devices).
+`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55, node: 0xEEFF}]`,
+sinal mais forte primeiro (até 16 devices). `node` (API 40) é o id do aparelho
+na matilha — o mesmo `id` dele em `Pack.members()`/`CelerNet.nodes()` (como
+número; a malha mostra em 4 dígitos hex).
 
 #### `CelerLink.connect(idOuNome, [timeoutMs])` → Boolean
 Conecta num device do último `scan()`, pelo `id` (MAC) ou pelo `nome`.
@@ -1146,12 +1149,13 @@ Chame no loop do app, como o `keypadPoll` — de preferência num laço até
 `null`, para não acumular comandos velhos.
 
 #### `CelerLink.status()` → Object
-`{connected, peer, listening, role, name, pairing, verified, code, mtu, rssi, pending, dropped}`:
+`{connected, peer, node, listening, role, name, pairing, verified, code, mtu, rssi, pending, dropped}`:
 
 | Campo | Significado |
 |-------|-------------|
 | `connected` | Boolean — link **autorizado** para `send()` (false durante o pareamento pendente) |
 | `peer` | `"AA:BB:CC:DD:EE:FF"` ou `""` |
+| `node` | Number (API 40) — id do peer na matilha (`0` sem conexão) |
 | `listening` | Boolean — advertising pedido via `start()` |
 | `role` | `"central"` (nós conectamos), `"peripheral"` (conectaram em nós) ou `""` |
 | `name` | nosso nome de advertising |

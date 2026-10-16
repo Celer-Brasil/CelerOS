@@ -811,9 +811,11 @@ messages. Both directions work; the link is symmetric after connecting.
 
 #### `CelerLink.start([name], [options])` → Boolean
 Becomes controllable: starts advertising and the GATT server. `name` is the
-BLE device name (up to 29 bytes; default `Celer-XXXX`, XXXX from the radio
-MAC). The first call anywhere initializes the Bluetooth stack (~300 ms). The
-name reverts to the default when the app exits.
+BLE device name (up to 29 bytes). The default is the device's pack name —
+the same one CelerNet announces (`Pack.me().name`, setting `celernet_name`,
+`Celer-XXXX` until renamed; API 40). The first call anywhere initializes the
+Bluetooth stack (~300 ms). The name reverts to the default when the app
+exits.
 
 `options` (object, **API 11**): `{pairing: true}` enables the pairing gate —
 every new connection then requires the 6-digit code (see `verify()` and
@@ -835,8 +837,10 @@ Stops advertising (the device is no longer discoverable).
 
 #### `CelerLink.scan([timeoutMs])` → Array
 Blocking scan (default 2500 ms) for nearby CelerOS devices. Returns
-`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55}]`, strongest
-signal first (up to 16 devices).
+`[{id: "AA:BB:CC:DD:EE:FF", name: "Celer-9F2A", rssi: -55, node: 0xEEFF}]`,
+strongest signal first (up to 16 devices). `node` (API 40) is the device's
+pack node id — the same `id` it has in `Pack.members()`/`CelerNet.nodes()`
+(as a number; the mesh shows it as 4 hex digits).
 
 #### `CelerLink.connect(idOrName, [timeoutMs])` → Boolean
 Connects to a device from the last `scan()`, by `id` (MAC) or `name`.
@@ -884,12 +888,13 @@ empty. Call it from your loop, like `keypadPoll` — ideally draining it until
 `null` so stale commands do not pile up.
 
 #### `CelerLink.status()` → Object
-`{connected, peer, listening, role, name, pairing, verified, code, mtu, rssi, pending, dropped}`:
+`{connected, peer, node, listening, role, name, pairing, verified, code, mtu, rssi, pending, dropped}`:
 
 | Field | Meaning |
 |-------|---------|
 | `connected` | Boolean — link **authorized** for `send()` (false while pairing is pending) |
 | `peer` | `"AA:BB:CC:DD:EE:FF"` or `""` |
+| `node` | Number (API 40) — the peer's pack node id (`0` when disconnected) |
 | `listening` | Boolean — advertising requested via `start()` |
 | `role` | `"central"` (we connected), `"peripheral"` (they connected to us) or `""` |
 | `name` | our advertising name |

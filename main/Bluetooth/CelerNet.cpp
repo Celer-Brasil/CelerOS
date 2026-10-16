@@ -8,7 +8,6 @@
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_coexist.h"
@@ -25,6 +24,7 @@
 #include "CelerLink.h"
 #include "NetFrame.h"
 #include "NetKeys.h"
+#include "../Pack/PackId.h"
 
 // No da malha CelerNet (flood de advertising; ver NetFrame.h e CelerNet.h).
 //
@@ -851,18 +851,12 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
         return false;
     }
 
-    if (name != nullptr && name[0] != '\0') {
-        snprintf(s_name, sizeof(s_name), "%.*s", (int)CelerNet::MAX_NAME, name);
-        CelerSettings::set("celernet_name", s_name);
-    } else {
-        std::string cur = CelerSettings::get("celernet_name", "");
-        if (!cur.empty()) snprintf(s_name, sizeof(s_name), "%.*s", (int)CelerNet::MAX_NAME, cur.c_str());
-    }
+    // Identidade unica da matilha (PackId): a mesma do CelerLink e dos recursos
+    if (name != nullptr && name[0] != '\0') PackId::setName(name);
+    else PackId::init();
+    PackId::name(s_name, sizeof(s_name));
     snprintf(s_net, sizeof(s_net), "%s", NetKeys::primary()->name);
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_BT);
-    s_node = (uint16_t)((mac[4] << 8) | mac[5]);
-    if (s_name[0] == '\0') snprintf(s_name, sizeof(s_name), "Celer-%04X", s_node);
+    s_node = PackId::nodeId();
     s_relay = relay;
     loadTune();
 

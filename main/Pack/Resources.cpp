@@ -10,7 +10,6 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
-#include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "sdkconfig.h"
@@ -29,6 +28,7 @@
 #include "DataLink.h"
 #include "../Utils/TaskCaps.h"
 #include "Pack.h"
+#include "PackId.h"
 #include "../USBDevice/UsbRes.h"
 
 // Recursos da matilha (ver Resources.h / ResProto.h).
@@ -311,36 +311,18 @@ const uint8_t* peerMac(uint16_t node) {
     return nullptr;
 }
 
-// Id do no = 2 ultimos bytes da MAC BT (a MESMA formula da CelerNet), lido
-// direto: com a malha ainda desligada o CelerNet::info dava 0 e o HELLO/
-// controle da esp32-cam saia com remetente 0 — os vizinhos descartavam tudo
-// (bancada 2026-10-11). Os recursos andam pelo ESP-NOW sem a malha BLE.
+// Id do no = PackId (2 ultimos bytes da MAC BT), lido direto: com a malha
+// ainda desligada o CelerNet::info dava 0 e o HELLO/controle da esp32-cam
+// saia com remetente 0 — os vizinhos descartavam tudo (bancada 2026-10-11).
+// Os recursos andam pelo ESP-NOW sem a malha BLE.
 uint16_t ourNode() {
-    static uint16_t s_me = 0;
-    if (s_me == 0) {
-        uint8_t mac[6] = {0};
-        esp_read_mac(mac, ESP_MAC_BT);
-        s_me = (uint16_t)((mac[4] << 8) | mac[5]);
-    }
-    return s_me;
+    return PackId::nodeId();
 }
 
-// Settings em cache na RAM: a task res_rx (pilha na PSRAM) NAO pode ler o
-// NVS — leitura de flash com a pilha fora da interna e assert no
-// spi_flash (bancada 2026-10-11: o relogio reiniciava no 1o HELLO, antes da
-// malha subir e o nome vir dela). O tick do servico (pilha interna) recarrega.
-char s_nameCache[CelerNet::MAX_NAME + 1] = {0};
-
-// Nome anunciado no HELLO: o da malha ou o setting, senao "Celer-XXXX"
+// Nome anunciado no HELLO: o da identidade unica (cache na RAM do PackId —
+// a task res_rx, pilha na PSRAM, NAO pode ler o NVS; o tick recarrega)
 void ourName(char* out, size_t cap) {
-    CelerNet::Info st;
-    CelerNet::info(&st);
-    if (st.name[0] != '\0') {
-        snprintf(out, cap, "%s", st.name);
-        return;
-    }
-    if (s_nameCache[0] != '\0') snprintf(out, cap, "%s", s_nameCache);
-    else snprintf(out, cap, "Celer-%04X", ourNode());
+    PackId::name(out, cap);
 }
 
 // Recursos no ar: malha BLE ligada OU o plano ESP-NOW de pe
@@ -435,8 +417,7 @@ bool policyAllows(const Local& l) {
 
 // So de pilha interna (tick do servico, init): le o NVS
 void refreshSettings() {
-    const std::string n = CelerSettings::get("celernet_name", "");
-    snprintf(s_nameCache, sizeof(s_nameCache), "%s", n.c_str());
+    PackId::init();  // nome (o "cfg celernet_name" grava direto no NVS)
     s_usbAllowed = CelerSettings::get("res_share_usb", policyDefault("res_share_usb")) == "1";
     for (int i = 0; i < LIST_MAX; i++) {
         Local& l = s_local[i];

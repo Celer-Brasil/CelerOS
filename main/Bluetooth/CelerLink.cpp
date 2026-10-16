@@ -7,7 +7,6 @@
 #include "esp_bt.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_random.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -18,6 +17,7 @@
 #include "psa/crypto.h"
 
 #include "CelerNet.h"
+#include "../Pack/PackId.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -903,10 +903,9 @@ void hostTask(void*) {
     nimble_port_freertos_deinit();
 }
 
+// Nome da identidade unica da matilha (PackId): o mesmo do BEAT da malha
 void defaultName() {
-    uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_BT);
-    snprintf(s_advName, sizeof(s_advName), "Celer-%02X%02X", mac[4], mac[5]);
+    PackId::name(s_advName, sizeof(s_advName));
 }
 
 bool parseMac(const char* s, uint8_t out[6]) {

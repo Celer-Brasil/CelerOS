@@ -1618,7 +1618,6 @@ static void testUsbRes() {
     using namespace usbres;
     using namespace resproto;
     uint8_t b[512];
-    CHECK(USB_NODE == 0xFFFE);
     // envelope do CTL: req e resp
     const size_t n = encodeReq(SUB_OPEN, 0x2A, "xyz", 3, b, sizeof(b));
     CHECK(n == 7 && b[0] == SUB_OPEN && b[1] == 0x2A && b[2] == 0 && b[3] == 3 && b[4] == 'x');
@@ -1961,6 +1960,64 @@ static void testUsbJoin() {
     CHECK(SUB_JOIN == 8 && SUB_LEAVE == 9 && SUB_NET == 10);
 }
 
+// No virtual (API 41): eventos do KL_RES_DATA sid 0, OPEN_AT e o BEAT proxy
+static void testUsbVirtualNode() {
+    using namespace usbres;
+    uint8_t b[600];
+    size_t n = encodeEvMsg(0xBB02, "W", false, "oi pc", 5, b, sizeof(b));
+    CHECK(n == 1 + 2 + 1 + 1 + 1 + 5 && b[0] == EV_MSG && b[1] == 0xBB && b[2] == 0x02 && b[3] == 1 &&
+          b[4] == 'W' && b[5] == 0 && memcmp(b + 6, "oi pc", 5) == 0);
+    n = encodeEvMsg(0xBB02, "", true, "x", 1, b, sizeof(b));
+    CHECK(n == 6 && b[3] == 0 && b[4] == 1 && b[5] == 'x');
+    CHECK(encodeEvMsg(1, "W", false, "abc", 3, b, 5) == 0);
+    n = encodeEvState(3, 2, 0, 0x1CAE, b, sizeof(b));
+    CHECK(n == 6 && b[0] == EV_STATE && b[1] == 3 && b[2] == 2 && b[4] == 0x1C && b[5] == 0xAE);
+    CHECK(encodeEvState(3, 2, 0, 1, b, 5) == 0);
+    n = encodeEvData(1, "\x02\x01", 2, b, sizeof(b));
+    CHECK(n == 4 && b[0] == EV_DATA && b[1] == 1 && b[2] == 2 && b[3] == 1);
+    // o evento viaja como DATA de sid 0 (nunca e uma sessao)
+    uint8_t f[64];
+    const size_t fl = encodeDataFrame(EVENT_SID, 9, b, n, f, sizeof(f));
+    DataHdr dh;
+    CHECK(decodeDataFrame(f, fl, &dh) && dh.sid == 0 && dh.seq == 9 && dh.data[0] == EV_DATA);
+    // OPEN_AT
+    n = encodeOpenAt(0x1CAE, "rele1", "{\"off\":1}", 9, b, sizeof(b));
+    CHECK(n == 4 + 5 + 9 && b[0] == 0x1C && b[1] == 0xAE && b[2] == 5 && b[8] == 9);
+    OpenAt oa;
+    CHECK(decodeOpenAt(b, n, &oa) && oa.node == 0x1CAE && strcmp(oa.name, "rele1") == 0 &&
+          oa.plen == 9 && oa.params[0] == '{');
+    CHECK(!decodeOpenAt(b, n - 1, &oa));
+    CHECK(encodeOpenAt(0x1CAE, "", nullptr, 0, b, sizeof(b)) == 0);
+    CHECK(encodeOpenAt(0x1CAE, "x", "0123456789012345678901234567890123456789012345678", 49, b,
+                       sizeof(b)) == 0);  // params > 48
+    n = encodeOpenAt(0xFFFF, "rele1", nullptr, 0, b, sizeof(b));
+    CHECK(n > 0 && !decodeOpenAt(b, n, &oa));  // broadcast nao e dono
+    CHECK(SUB_SEND == 11 && SUB_OPEN_AT == 12 && SUB_HWRITE == 13 && SUB_HCLOSE == 14);
+    // BEAT proxy: src = id do PC, flag BFLAG_PROXY, decifra como qualquer BEAT
+    using namespace netframe;
+    fakenet::Key k{0x5A};
+    Cipher c = fakenet::cipher(&k, 0x11);
+    const uint16_t pc = packid::pcNodeOf(0x1CAE);
+    uint8_t beat[DATA_MAX] = {CAPS_HUB, BFLAG_PROXY, 'p', 'c', '-', '1', 'C', 'A', 'E'};
+    Frame fr;
+    fr.type = TYPE_BEAT;
+    fr.src = pc;
+    fr.dst = DST_BROADCAST;
+    fr.seq = 77;
+    fr.ttl = 4;
+    fr.hops = 0;
+    fr.dlen = 9;
+    fr.data = beat;
+    uint8_t air[ADV_MAX];
+    const size_t al = encode(fr, c, air, sizeof(air));
+    Frame g;
+    uint8_t plain[DATA_MAX];
+    int net = -1;
+    CHECK(al > 0 && decode(air, al, &c, 1, &g, plain, &net) && g.src == 0xFFAE && g.type == TYPE_BEAT &&
+          g.data[1] == BFLAG_PROXY && g.data[0] == CAPS_HUB && memcmp(g.data + 2, "pc-1CAE", 7) == 0);
+    CHECK((BFLAG_PROXY & (BFLAG_UNPROV | BFLAG_ADMIN)) == 0);
+}
+
 static void testPackId() {
     using namespace packid;
     const uint8_t mac[6] = {0x24, 0x0A, 0xC4, 0x12, 0x1C, 0xAE};
@@ -2050,6 +2107,7 @@ int main() {
     testResMeta();
     testUsbRes();
     testUsbJoin();
+    testUsbVirtualNode();
     testPackId();
     testProvProto();
     testRigid2D();

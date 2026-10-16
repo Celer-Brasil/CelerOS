@@ -115,6 +115,10 @@ bool s_active = false;
 bool s_relay = true;
 uint16_t s_node = 0;               // 2 ultimos bytes da MAC BT
 char s_name[CelerNet::MAX_NAME + 1] = {0};
+// no virtual (PC no cabo do gateway, API 41): 0 = sem proxy
+volatile uint16_t s_proxyNode = 0;
+char s_proxyName[CelerNet::MAX_NAME + 1] = {0};
+uint8_t s_proxyCaps = 0;
 char s_net[16] = "celer";          // nome da rede primaria (NetKeys)
 
 uint32_t s_txDropped = 0;
@@ -337,18 +341,20 @@ void cancelRelay(uint16_t src, uint32_t seq, uint8_t type, uint8_t hopsHeard, in
     }
 }
 
-// Cifra o quadro proprio na rede primaria e poe na fila.
-bool pushOurs(netframe::Frame& f, uint32_t dueMs, uint8_t prio, uint32_t seqZero) {
+// Cifra o quadro proprio na rede primaria e poe na fila. src 0 = o nosso
+// id; o do no virtual (setProxy) usa o MESMO contador de seq — o nonce
+// inclui o src, entao nao ha reuso.
+bool pushOurs(netframe::Frame& f, uint32_t dueMs, uint8_t prio, uint32_t seqZero, uint16_t src = 0) {
     const NetKeys::Net* n = NetKeys::primary();
     if (n == nullptr) return false;
     const netframe::Cipher c = NetKeys::cipherOf(n);
     f.nid = n->nid;
-    f.src = s_node;
+    f.src = src != 0 ? src : s_node;
     f.hops = 0;
     uint8_t frame[netframe::ADV_MAX];
     const size_t len = netframe::encode(f, c, frame, sizeof(frame));
     if (len == 0) return false;
-    const Meta m = {f.type, 0, s_node, f.seq, seqZero};
+    const Meta m = {f.type, 0, f.src, f.seq, seqZero};
     return pendingPush(frame, (uint8_t)len, true, dueMs, m, prio);
 }
 
@@ -357,7 +363,7 @@ bool pushOurs(netframe::Frame& f, uint32_t dueMs, uint8_t prio, uint32_t seqZero
 // fragmentada usa total seqs consecutivos a partir de seqZero + copy*total
 // (o chamador reserva copies*total; seqZero 0 = reserva so esta copia).
 bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, uint8_t prio,
-                    uint32_t dueDelayMs = 0, uint32_t seqZero = 0, uint8_t copy = 0) {
+                    uint32_t dueDelayMs = 0, uint32_t seqZero = 0, uint8_t copy = 0, uint16_t src = 0) {
     if (len == 0 || len > CelerNet::MAX_MSG || ttl == 0) return false;
     // tudo ou nada: frags pela metade na fila so gastam ar (o destino nunca
     // remonta) e o app recebia false com a mensagem meio enviada
@@ -371,7 +377,7 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
         f.seq = NetKeys::nextSeqMesh();
         f.dlen = (uint8_t)len;
         f.data = data;
-        return pushOurs(f, now + dueDelayMs, prio, f.seq);
+        return pushOurs(f, now + dueDelayMs, prio, f.seq, src);
     }
     const uint8_t total = (uint8_t)((len + netframe::CHUNK_MAX - 1) / netframe::CHUNK_MAX);
     if (total > netframe::MAX_FRAGS) return false;
@@ -396,7 +402,7 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
         f.dlen = (uint8_t)(2 + n);
         f.data = chunk;
         f.seq = seqZero + (uint32_t)copy * total + i;
-        if (!pushOurs(f, now + dueDelayMs, prio, seqZero)) return false;
+        if (!pushOurs(f, now + dueDelayMs, prio, seqZero, src)) return false;
     }
     return true;
 }
@@ -501,10 +507,12 @@ void nodeTouch(uint16_t id, const char* name, uint8_t caps, uint8_t flags, int8_
 // so com o byte de ttl/saltos trocado — sem recifrar).
 void handleFrame(const netframe::Frame& f, int net, const uint8_t* raw, uint8_t rawLen, int8_t rssi,
                  uint32_t nowMs) {
-    if (f.src == s_node) return;  // eco do nosso proprio quadro
+    if (f.src == s_node || (s_proxyNode != 0 && f.src == s_proxyNode)) return;  // eco nosso / do proxy
     // Unicast: so o DESTINATARIO entrega (presenca inclusa); o repetidor
     // segue flooding do mesmo jeito — o filtro nao corta o relay abaixo.
-    const bool mine = f.dst == netframe::DST_BROADCAST || f.dst == s_node;
+    // O no virtual (PC no cabo) recebe por aqui: o Pack desvia ao HostLink.
+    const bool mine = f.dst == netframe::DST_BROADCAST || f.dst == s_node ||
+                      (s_proxyNode != 0 && f.dst == s_proxyNode);
     // saltos DADOS ate aqui: o quadro original sai com hops 0 e cada
     // repetidor soma 1 — o vizinho direto e 1 salto (a doc e os apps contam
     // assim; o firmware entregava 0 e o exemplo "hops: 2" virava 1)
@@ -1025,6 +1033,11 @@ bool CelerNet::resolveDest(const char* to, uint16_t* out) {
         *out = id;
         return true;
     }
+    // "pc" = o computador no cabo DESTE gateway (no virtual, API 41)
+    if (s_proxyNode != 0 && (strcasecmp(to, "pc") == 0 || strcasecmp(to, s_proxyName) == 0)) {
+        *out = s_proxyNode;
+        return true;
+    }
     if (s_heap == nullptr) return false;
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     NodeEntry* e = nullptr;
@@ -1072,7 +1085,30 @@ bool CelerNet::broadcast(const void* data, size_t len, uint8_t ttl) {
 
 bool CelerNet::sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, bool urgent,
                       uint8_t copies) {
-    if (!s_active || data == nullptr || dst == 0 || dst == s_node) return false;
+    return sendFrom(0, dst, data, len, ttl, urgent, copies);
+}
+
+void CelerNet::setProxy(uint16_t node, const char* name, uint8_t caps) {
+    xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
+    s_proxyNode = node;
+    snprintf(s_proxyName, sizeof(s_proxyName), "%s", name != nullptr ? name : "");
+    s_proxyCaps = caps;
+    s_lastBeatMs = 0;  // presenca ja no proximo tick
+    xSemaphoreGiveRecursive(lock());
+    if (node != 0) ESP_LOGI(TAG, "no virtual %04X \"%s\" na matilha", node, s_proxyName);
+    else ESP_LOGI(TAG, "no virtual fora da matilha");
+}
+
+uint16_t CelerNet::proxyNode() {
+    return s_proxyNode;
+}
+
+bool CelerNet::sendFrom(uint16_t src, uint16_t dst, const void* data, size_t len, uint8_t ttl,
+                        bool urgent, uint8_t copies) {
+    if (src == s_node) src = 0;
+    if (src != 0 && (s_proxyNode == 0 || src != s_proxyNode)) return false;  // so o proxy
+    const uint16_t me = src != 0 ? src : s_node;
+    if (!s_active || data == nullptr || dst == 0 || dst == me) return false;
     if (ttl == 0) ttl = TTL_DEFAULT;
     if (ttl > netframe::TTL_MAX) ttl = netframe::TTL_MAX;
     if (copies < 1) copies = 1;
@@ -1098,7 +1134,7 @@ bool CelerNet::sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, b
         // tinha que chegar INTEIRA (8 frags a ~75% cada: ~10% por copia;
         // bancada 2026-10-07). Quadro unico segue com seq novo por copia.
         ok = enqueueMessage(dst, (const uint8_t*)data, len, ttl, urgent ? 1 : 0, (uint32_t)c * 1500,
-                            seqZero, frag ? c : 0);
+                            seqZero, frag ? c : 0, src);
     }
     xSemaphoreGiveRecursive(lock());
     if (!ok) {
@@ -1281,6 +1317,24 @@ void CelerNet::tickBody() {
         f.data = beat;
         // fila cheia: o proximo BEAT (3 s) tenta de novo
         pushOurs(f, nowMs, 0, f.seq);
+        // no virtual (PC no cabo do gateway, API 41): BEAT proprio com o id e
+        // o nome dele — os vizinhos o listam como membro
+        if (s_proxyNode != 0) {
+            uint8_t pb[netframe::DATA_MAX];
+            pb[0] = s_proxyCaps;
+            pb[1] = netframe::BFLAG_PROXY;
+            size_t pl = strlen(s_proxyName);
+            if (pl > CelerNet::MAX_NAME) pl = CelerNet::MAX_NAME;
+            memcpy(pb + 2, s_proxyName, pl);
+            netframe::Frame pf;
+            pf.type = netframe::TYPE_BEAT;
+            pf.dst = netframe::DST_BROADCAST;
+            pf.ttl = CelerNet::TTL_DEFAULT;
+            pf.seq = NetKeys::nextSeqMesh();
+            pf.dlen = (uint8_t)(2 + pl);
+            pf.data = pb;
+            pushOurs(pf, nowMs, 0, pf.seq, s_proxyNode);
+        }
         // reserva de seq no NVS: daqui (pilha interna do servico), nunca das
         // tasks com pilha na PSRAM
         NetKeys::persistTick();

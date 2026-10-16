@@ -139,6 +139,18 @@ public:
     static bool sendTo(uint16_t dst, const void* data, size_t len, uint8_t ttl, bool urgent,
                        uint8_t copies);
 
+    // Unicast EM NOME de src: o nosso id ou o do no virtual (setProxy).
+    static bool sendFrom(uint16_t src, uint16_t dst, const void* data, size_t len, uint8_t ttl,
+                         bool urgent, uint8_t copies);
+
+    // No virtual (API 41, gateway USB): o PC ligado no cabo vira MEMBRO da
+    // matilha com id proprio (packid::pcNodeOf). node 0 desliga. Com proxy:
+    // BEAT extra com src=node e BFLAG_PROXY (os vizinhos listam o PC com o
+    // nome dado), unicast para node e entregue AQUI (o Pack desvia ao cabo)
+    // e sendFrom(node, ...) fala por ele. resolveDest("pc") = o proxy.
+    static void setProxy(uint16_t node, const char* name, uint8_t caps);
+    static uint16_t proxyNode();
+
     // Resolve um destino de unicast: id "A1B2" (4 hex) ou NOME do no ouvido
     // (match case-insensitive; nomes duplicados pegam o vizinho mais forte).
     static bool resolveDest(const char* to, uint16_t* out);

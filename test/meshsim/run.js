@@ -566,6 +566,74 @@ scenario('Matilha: convite selado pelo CelerLink e Pack.join', function() {
 });
 
 // ---------------------------------------------------------------------------
+// O PC como no virtual (API 41): o gateway com o cabo (res_share_usb=1)
+// anuncia o PC com id proprio (0xFF00 | byte baixo do gateway); os membros o
+// listam, mandam envelopes para "pc-XXXX" (chegam no cabo, nunca nos apps
+// do gateway) e recebem os dele. Outra matilha nao ve o PC; cabo fora = o
+// PC some da presenca.
+scenario('No virtual: o PC na matilha pelo gateway', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    var pack = { name: 'bancada', pass: 'senha-forte-1' };
+    function gw(env, sim) {
+            sim.at(500, function(e) { e.CelerNet.start({ name: 'Gw' }); });
+            sim.at(1500, function(e) { sim.note('pc ' + sim.pcAttach(true)); });
+            sim.at(9000, function(e) {
+                sim.pcInbox().forEach(function(m) {
+                    sim.note('pc recebeu ' + m.data + ' de ' + m.fromName + (m.raw ? ' cru' : ''));
+                });
+                var x;
+                while ((x = e.Pack.poll()) !== null) sim.note('app do gw viu ' + x.data);
+                sim.note('pcSend ' + sim.pcSend('W', 'oi do pc'));
+            });
+            sim.at(14000, function(e) { sim.pcAttach(false); });
+    }
+    function membro(env, sim) {
+            sim.at(500, function(e) { e.CelerNet.start({ name: 'W' }); });
+            sim.at(6000, function(e) {
+                var pcs = e.Pack.members().filter(function(m) { return m.name.indexOf('pc-') === 0; });
+                sim.note('membros pc ' + pcs.map(function(m) { return m.name + '/' + m.id + '/hub=' + m.caps.hub; }).join(','));
+                sim.note('send ' + e.Pack.send('pc-AA01', 'oi pc'));
+                e.CelerNet.send('pc-AA01', 'cru');
+            });
+            sim.at(13000, function(e) {
+                var x;
+                while ((x = e.Pack.poll()) !== null) sim.note('poll ' + x.data + ' de ' + x.fromName + '/' + x.from);
+            });
+            sim.at(17000, function(e) {
+                sim.note('depois ' + e.Pack.members().map(function(m) { return m.name; }).sort().join(','));
+            });
+    }
+    function fora(env, sim) {
+            sim.at(500, function(e) { e.CelerNet.start({ name: 'Fora' }); });
+            sim.at(6000, function(e) {
+                sim.note('fora ve ' + e.Pack.members().map(function(m) { return m.name; }).join(','));
+            });
+    }
+    return sim.runMesh({
+        durationMs: 18000, seed: 31,
+        nodes: [
+            { name: 'Gw', id: 'AA01', app: src, caps: 0x04, pack: pack, wire: gw },
+            { name: 'W', id: 'BB02', app: src, caps: 0x02, pack: pack, wire: membro },
+            { name: 'Fora', id: 'CC03', app: src, caps: 0x02, pack: { name: 'outra', pass: 'senha-forte-2' },
+              wire: fora }
+        ],
+        links: [['Gw', 'W', -50], ['Gw', 'Fora', -50], ['W', 'Fora', -50]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Gw'); dump(res, 'W'); dump(res, 'Fora');
+        check('id do PC derivado do gateway', has(res, 'Gw', '[sim] pc FF01'));
+        check('membro lista o PC (hub)', has(res, 'W', '[sim] membros pc pc-AA01/FF01/hub=true'));
+        check('envelope do membro chega ao PC', has(res, 'Gw', '[sim] pc recebeu oi pc de W'));
+        check('mensagem crua tambem chega ao PC', has(res, 'Gw', '[sim] pc recebeu cru de W cru'));
+        check('nada para o PC vaza aos apps do gateway', !has(res, 'Gw', 'app do gw viu'));
+        check('o PC fala com a matilha', has(res, 'Gw', '[sim] pcSend true') &&
+              has(res, 'W', '[sim] poll oi do pc de pc-AA01/FF01'));
+        check('outra matilha nao ve o PC', has(res, 'Fora', '[sim] fora ve ') && !has(res, 'Fora', 'pc-AA01'));
+        check('cabo fora: PC sai da presenca', has(res, 'W', '[sim] depois Gw'));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Recursos da matilha (API 36): DESCRIBE/LIST, canal de dados compartilhado,
 // exclusivo (busy), politica do dono, nativo sem provedor, escrita do
 // cliente, lease que vence quando o cliente some e REVOKE no unexpose

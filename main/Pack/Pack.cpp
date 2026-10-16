@@ -1,8 +1,10 @@
 #include "Pack.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
 
@@ -12,7 +14,9 @@
 #include "../Hardware/MusicEngine.h"
 #include "../Hardware/MusicSynth.h"
 #include "NetworkManager.h"
+#include "PackId.h"
 #include "Provision.h"
+#include "../USBDevice/UsbRes.h"
 #include "Resources.h"
 
 // Servico de matilha (ver Pack.h). O nome do jogo: o handler do CelerNet
@@ -57,6 +61,42 @@ uint32_t s_musicPosMs = 0;
 uint16_t s_musicSongLen = 0;
 uint8_t s_musicSong[403];
 
+// Mensagens para o PC no cabo (no virtual, API 41): o handler da malha so
+// copia; o tick manda pelo HostLink (fora do mutex da malha). Alocado no 1o
+// uso do proxy (PSRAM primeiro): placa sem cabo nao paga nada.
+constexpr size_t PC_DEPTH = 4;
+struct PcMsg {
+    uint16_t from;
+    char fromName[16];
+    bool raw;               // sem envelope Pack (CelerNet.send cru)
+    uint16_t len;
+    uint8_t data[CelerNet::MAX_MSG];
+};
+struct PcBuf {
+    PcMsg q[PC_DEPTH];
+    uint8_t ev[1 + 2 + 1 + 16 + 1 + CelerNet::MAX_MSG];  // EV_MSG montado no tick
+};
+PcBuf* s_pcBuf = nullptr;
+PcMsg* s_pc = nullptr;
+uint8_t s_pcHead = 0, s_pcCount = 0;
+
+void pcPush(uint16_t from, const char* fromName, bool raw, const uint8_t* d, size_t len) {
+    if (s_pc == nullptr || len > CelerNet::MAX_MSG) return;
+    if (s_pcCount >= PC_DEPTH) {
+        s_pcHead = (uint8_t)((s_pcHead + 1) % PC_DEPTH);
+        s_pcCount--;
+    }
+    PcMsg* c = &s_pc[(s_pcHead + s_pcCount) % PC_DEPTH];
+    c->from = from;
+    snprintf(c->fromName, sizeof(c->fromName), "%s", fromName != nullptr ? fromName : "");
+    c->raw = raw;
+    c->len = (uint16_t)len;
+    memcpy(c->data, d, len);
+    s_pcCount++;
+}
+
+void customPush(uint16_t from, const char* fromName, const uint8_t* d, size_t len);
+
 uint16_t s_msgSeq = 0;
 uint8_t s_capsBase = 0;   // do Board::profile (sem o bit HUB, dinamico)
 bool s_capsHub = false;
@@ -78,26 +118,46 @@ void memberCb(uint16_t id, const char* name, uint8_t caps, bool joined) {
     if (!joined) Resources::onMemberLeft(id);  // so enfileira (estamos no mutex da malha)
 }
 
+void customPush(uint16_t from, const char* fromName, const uint8_t* d, size_t len) {
+    if (s_customCount >= CUSTOM_DEPTH) {
+        s_customHead = (uint8_t)((s_customHead + 1) % CUSTOM_DEPTH);
+        s_customCount--;
+    }
+    CustomMsg* c = &s_custom[(s_customHead + s_customCount) % CUSTOM_DEPTH];
+    memset(c, 0, sizeof(*c));
+    c->from = from;
+    snprintf(c->fromName, sizeof(c->fromName), "%s", fromName);
+    c->len = (uint16_t)len;
+    memcpy(c->data, d, len);
+    s_customCount++;
+}
+
 bool msgHandler(const CelerNet::Msg& m) {
-    if (m.len < ENV_HDR || m.data[0] != ENV_MAGIC) return false;  // segue ao JS
+    // Para o no virtual (PC no cabo): nada vai ao JS daqui — o PC recebe o
+    // custom (dedup pelo msgId como sempre) ou a mensagem crua
+    const uint16_t pc = CelerNet::proxyNode();
+    const bool toPc = pc != 0 && m.dst == pc;
+    if (m.len < ENV_HDR || m.data[0] != ENV_MAGIC) {
+        if (!toPc) return false;  // segue ao JS
+        pcPush(m.from, m.fromName, true, m.data, m.len);
+        return true;
+    }
     const uint8_t kind = m.data[1];
     const uint16_t msgId = (uint16_t)((m.data[2] << 8) | m.data[3]);
     if (seenBefore(m.from, msgId)) return true;  // copia redundante: consumida
 
+    if (toPc) {
+        // so o custom e do PC; controle de recursos/musica para ele nao existe
+        if (kind == KIND_CUSTOM && m.len > ENV_HDR) {
+            pcPush(m.from, m.fromName, false, m.data + ENV_HDR, m.len - ENV_HDR);
+        }
+        return true;
+    }
+
     if (kind == KIND_CUSTOM) {
         const size_t len = m.len - ENV_HDR;
         if (len == 0) return true;
-        if (s_customCount >= CUSTOM_DEPTH) {
-            s_customHead = (uint8_t)((s_customHead + 1) % CUSTOM_DEPTH);
-            s_customCount--;
-        }
-        CustomMsg* c = &s_custom[(s_customHead + s_customCount) % CUSTOM_DEPTH];
-        memset(c, 0, sizeof(*c));
-        c->from = m.from;
-        snprintf(c->fromName, sizeof(c->fromName), "%s", m.fromName);
-        c->len = (uint16_t)len;
-        memcpy(c->data, m.data + ENV_HDR, len);
-        s_customCount++;
+        customPush(m.from, m.fromName, m.data + ENV_HDR, len);
         return true;
     }
     if (kind == KIND_RES) {
@@ -193,8 +253,27 @@ uint8_t myCaps() {
 }
 
 bool send(uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent) {
+    return sendAs(0, to, kind, payload, len, urgent);
+}
+
+bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent) {
     if (!CelerNet::active() || payload == nullptr || to == 0) return false;
     if (len == 0 || len > MAX_PAYLOAD) return false;
+    // entrega local entre o gateway e o PC dele (o radio nao ouve o proprio eco)
+    const uint16_t pc = CelerNet::proxyNode();
+    if (pc != 0 && kind == KIND_CUSTOM) {
+        char nm[CelerNet::MAX_NAME + 1];
+        if (src == 0 && to == pc) {
+            PackId::name(nm, sizeof(nm));
+            pcPush(PackId::nodeId(), nm, false, (const uint8_t*)payload, len);
+            return true;
+        }
+        if (src == pc && to == PackId::nodeId()) {
+            packid::pcName(PackId::nodeId(), nm, sizeof(nm));
+            customPush(pc, nm, (const uint8_t*)payload, len);
+            return true;
+        }
+    }
     uint8_t env[CelerNet::MAX_MSG];
     env[0] = ENV_MAGIC;
     env[1] = kind;
@@ -203,7 +282,7 @@ bool send(uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgen
     env[3] = (uint8_t)s_msgSeq;
     memcpy(env + ENV_HDR, payload, len);
     // 2 copias: unicast sem ACK, a redundancia e a retransmissao
-    return CelerNet::sendTo(to, env, ENV_HDR + len, CelerNet::TTL_DEFAULT, urgent, 2);
+    return CelerNet::sendFrom(src, to, env, ENV_HDR + len, CelerNet::TTL_DEFAULT, urgent, 2);
 }
 
 bool pollCustom(uint16_t* from, char* fromName, size_t nameCap, uint8_t* data, size_t* len) {
@@ -252,6 +331,22 @@ void tick() {
     if (!s_inited) init();
     Resources::tick();
     Provision::tick();
+
+    // no virtual (PC no cabo): fila alocada no 1o uso; drena para o HostLink
+    // fora do mutex da malha
+    if (CelerNet::proxyNode() != 0 && s_pcBuf == nullptr) {
+        s_pcBuf = (PcBuf*)heap_caps_calloc(1, sizeof(PcBuf), MALLOC_CAP_SPIRAM);
+        if (s_pcBuf == nullptr) s_pcBuf = (PcBuf*)calloc(1, sizeof(PcBuf));
+        if (s_pcBuf != nullptr) s_pc = s_pcBuf->q;
+    }
+    while (s_pc != nullptr && s_pcCount > 0) {
+        const PcMsg& c = s_pc[s_pcHead];
+        const size_t n = usbres::encodeEvMsg(c.from, c.fromName, c.raw, c.data, c.len, s_pcBuf->ev,
+                                             sizeof(s_pcBuf->ev));
+        if (n > 0) Resources::usbEvent(s_pcBuf->ev, n);
+        s_pcHead = (uint8_t)((s_pcHead + 1) % PC_DEPTH);
+        s_pcCount--;
+    }
 
     // CAPS_HUB dinamico: rede alcacavel muda o papel na matilha.
     const bool hub = NetworkManager::instance().isConnected();

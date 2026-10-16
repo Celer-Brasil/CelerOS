@@ -533,13 +533,16 @@ class HostLink:
         sensor, publish); drena logs que aparecerem no caminho."""
         deadline = time.time() + timeout
         while time.time() < deadline:
-            for i, (c, p) in enumerate(self.push_queue):
-                if c == KL["RES_DATA"]:
-                    del self.push_queue[i]
-                    rsid = (p[0] << 8) | p[1]
-                    if rsid == sid:
-                        return p[4:]
-                    continue  # sessao velha: descarta
+            for c, p in list(self.push_queue):
+                if c != KL["RES_DATA"]:
+                    continue
+                rsid = (p[0] << 8) | p[1]
+                if rsid == 0:
+                    continue  # evento do no virtual: fica para res_event_wait
+                self.push_queue.remove((c, p))
+                if rsid == sid:
+                    return p[4:]
+                # sessao velha: descartada
             try:
                 c, p = self._read_frame(timeout=0.4)
                 self.push_queue.append((c, p))
@@ -547,6 +550,71 @@ class HostLink:
                 if "timeout" not in str(e):
                     raise
         return None
+
+    # ------------------------------------------- no virtual (API 41)
+    # Eventos chegam como KL_RES_DATA com sid 0 (UsbRes.h EV_*).
+
+    def res_event_wait(self, match=None, timeout=3.0):
+        """Proximo evento do no virtual que casa com match(ev) (None = qualquer)."""
+        deadline = time.time() + timeout
+        while True:
+            for c, p in list(self.push_queue):
+                if c != KL["RES_DATA"] or (p[0] << 8) | p[1] != 0:
+                    continue
+                ev = parse_res_event(p[4:])
+                self.push_queue.remove((c, p))
+                if ev is not None and (match is None or match(ev)):
+                    return ev
+            if time.time() >= deadline:
+                return None
+            try:
+                c, p = self._read_frame(timeout=min(0.4, max(0.05, deadline - time.time())))
+                self.push_queue.append((c, p))
+            except CelerError as e:
+                if "timeout" not in str(e):
+                    raise
+
+    def mesh_send(self, to, data):
+        """SUB_SEND: envelope custom do PC (no virtual) para o membro `to` (u16)."""
+        if not 1 <= len(data) <= 430:
+            raise CelerError("mensagem: 1 a 430 bytes")
+        try:
+            self.res_ctl(SUB["SEND"], bytes(((to >> 8) & 0xFF, to & 0xFF)) + data)
+        except CelerError as e:
+            raise CelerError("%s: o PC so e membro com a malha ligada e res_share_usb=1 "
+                             "(celerctl shell cfg res_share_usb 1)" % e)
+
+    def res_open_at(self, node, nome, opts=None, timeout=15.0):
+        """SUB_OPEN_AT: recurso de OUTRO no por procuracao do gateway; espera o
+        EV_STATE aberto (o OPEN da malha tem retry de 2,5 s x 5). Devolve o handle."""
+        nome_b = nome.encode()
+        params = json.dumps(opts).encode() if isinstance(opts, dict) else (opts or "").encode()
+        if not 1 <= len(nome_b) <= 15 or len(params) > 48:
+            raise CelerError("nome 1..15 bytes e opts ate 48 bytes")
+        corpo = bytes(((node >> 8) & 0xFF, node & 0xFF, len(nome_b))) + nome_b + \
+            bytes((len(params),)) + params
+        h = self.res_ctl(SUB["OPEN_AT"], corpo)[0]
+        ev = self.res_event_wait(lambda e: e["ev"] == "state" and e["h"] == h and
+                                 e["state"] not in ("free", "opening"), timeout)
+        if ev is None:
+            self.res_hclose(h)
+            raise CelerError("sem resposta do dono em %.0fs" % timeout)
+        if ev["state"] != "open":
+            raise CelerError("recusado: %s (%s)" % (ev["reason"] or ev["state"], ev["state"]))
+        return h
+
+    def res_hwrite(self, h, data):
+        self.res_ctl(SUB["HWRITE"], bytes((h,)) + data)
+
+    def res_hclose(self, h):
+        try:
+            self.res_ctl(SUB["HCLOSE"], bytes((h,)))
+        except CelerError:
+            pass  # ja liberado (terminal avisado)
+
+    def res_hdata_wait(self, h, timeout=3.0):
+        ev = self.res_event_wait(lambda e: e["ev"] == "data" and e["h"] == h, timeout)
+        return ev["data"] if ev else None
 
     # ---------------------------------------------------------------- comandos
 
@@ -1558,6 +1626,38 @@ def decode_list_meta(body):
     return out
 
 
+RES_STATES = ("free", "opening", "open", "refused", "revoked", "lost", "closed", "done")
+
+
+def parse_res_event(b):
+    """Evento do no virtual (UsbRes.h): EV_MSG/EV_STATE/EV_DATA -> dict."""
+    if not b:
+        return None
+    if b[0] == 1 and len(b) >= 5:
+        nn = b[3]
+        return {"ev": "msg", "from": "%04X" % ((b[1] << 8) | b[2]),
+                "fromName": b[4:4 + nn].decode("utf-8", "replace"), "raw": bool(b[4 + nn]),
+                "data": bytes(b[5 + nn:])}
+    if b[0] == 2 and len(b) >= 6:
+        return {"ev": "state", "h": b[1],
+                "state": RES_STATES[b[2]] if b[2] < len(RES_STATES) else str(b[2]),
+                "reason": RES_REASONS.get(b[3], "") if b[3] else "",
+                "node": "%04X" % ((b[4] << 8) | b[5])}
+    if b[0] == 3 and len(b) >= 2:
+        return {"ev": "data", "h": b[1], "data": bytes(b[2:])}
+    return None
+
+
+def _node_id(link, quem):
+    """No por id hex (A1B2) ou pelo nome no catalogo da malha do gateway."""
+    if re.fullmatch(r"[0-9A-Fa-f]{4}", quem):
+        return int(quem, 16)
+    for e in decode_mesh_list(link.res_ctl(SUB["MESH"])):
+        if e["nodeName"].lower() == quem.lower():
+            return e["node"]
+    raise CelerError("no \"%s\" fora do catalogo da malha (use o id, ou res ls primeiro)" % quem)
+
+
 def decode_mesh_list(body):
     """Catalogo da malha (UsbRes.h): [n][node u16][nn][nodeName][entry+meta]."""
     n = body[0]
@@ -1611,6 +1711,23 @@ def cmd_res(args):
             print("malha (cache; repita o comando para descobrir nos novos):")
             for e in decode_mesh_list(link.res_ctl(SUB["MESH"])):
                 print("  " + _fmt_res(e))
+        elif sub == "relay" and args.no:
+            # rele de OUTRO no: o gateway abre por procuracao (no virtual, API 41)
+            link.keep_push = True  # EV_STATE/EV_DATA chegam entre os pedidos
+            h = link.res_open_at(_node_id(link, args.no), args.nome,
+                                 {"off": 1} if args.op != "state" else None)
+            try:
+                if args.op != "state":
+                    link.res_hwrite(h, b"\x01\x01" if args.op == "on" else b"\x01\x00")
+                link.res_hwrite(h, b"\x02")
+                d = link.res_hdata_wait(h, 5.0)
+                print("rele %s@%s -> %s (leitura: %s)" % (
+                    args.nome, args.no, args.op, ("estado %d" % d[1]) if d and len(d) > 1 else "sem resposta"))
+                if args.segura > 0:
+                    print("segurando %ds (auto-off ao soltar)..." % args.segura)
+                    time.sleep(args.segura)
+            finally:
+                link.res_hclose(h)
         elif sub == "relay":
             r = link.res_open(args.nome, {"off": 1} if args.op != "state" else None)
             sid = r["sid"]
@@ -1690,8 +1807,12 @@ def mesh_join_body(nome, senha):
 
 
 def cmd_mesh(args):
-    """A matilha pelo cabo (API 40): status e as portas join/leave do gateway."""
+    """A matilha pelo cabo (API 40/41): status, join/leave e o PC como no
+    virtual (send/listen)."""
     link = open_link(args)
+    # eventos do no virtual (KL_RES_DATA sid 0) chegam a qualquer hora: nao
+    # descartar entre um pedido e outro
+    link.keep_push = True
     try:
         try:
             if args.mesh_cmd == "join":
@@ -1702,6 +1823,22 @@ def cmd_mesh(args):
             st = json.loads(link.res_ctl(SUB["NET"]).decode("utf-8", "replace"))
         except CelerError as e:
             die("%s (firmware anterior a API 40? use: celerctl shell mesh join ...)" % e)
+        if args.mesh_cmd == "send":
+            to = int(st["node"], 16) if args.no.lower() == "gw" else _node_id(link, args.no)
+            link.mesh_send(to, args.msg.encode("utf-8"))
+            print("enviado como pc-%s" % st["node"])
+            return
+        if args.mesh_cmd == "listen":
+            print("ouvindo como pc-%s (%s) por %ds; nos apps: Pack.send(\"pc-%s\", ...)" % (
+                st["node"], st["pc"], args.segundos, st["node"]))
+            fim = time.time() + args.segundos
+            while time.time() < fim:
+                ev = link.res_event_wait(lambda e: e["ev"] == "msg", fim - time.time())
+                if ev:
+                    print("%s (%s)%s: %s" % (ev["fromName"] or ev["from"], ev["from"],
+                                             " [cru]" if ev["raw"] else "",
+                                             ev["data"].decode("utf-8", "replace")))
+            return
         if args.json:
             print(json.dumps(st))
             return
@@ -3413,6 +3550,8 @@ def build_parser():
     p = rr.add_parser("relay", help="aciona um rele LOCAL do gateway")
     p.add_argument("nome", help='"rele1".. (o do catalogo)')
     p.add_argument("op", choices=("on", "off", "state"))
+    p.add_argument("-n", "--no", default=None, metavar="NO",
+                   help="rele de OUTRO no da matilha (id A1B2 ou nome; o gateway abre por procuracao)")
     p.add_argument("--segura", type=int, default=0, metavar="S",
                    help="mantem a sessao N s (auto-KEEP do gateway; ao soltar, auto-off)")
     p = rr.add_parser("sensor", help="assina um sensor LOCAL do gateway")
@@ -3441,6 +3580,11 @@ def build_parser():
     p.add_argument("nome", help="1 a 15 bytes")
     p.add_argument("senha", nargs="?", default=None, help="8 a 64 bytes (omitida = pergunta)")
     mm.add_parser("leave", help="volta a rede aberta \"celer\"")
+    p = mm.add_parser("send", help="mensagem do PC (no virtual) para um membro: chega no Pack.poll")
+    p.add_argument("no", help="id A1B2, nome do no ou \"gw\" (o proprio gateway)")
+    p.add_argument("msg")
+    p = mm.add_parser("listen", help="mostra o que a matilha manda ao PC (Pack.send(\"pc-XXXX\"))")
+    p.add_argument("segundos", type=int, nargs="?", default=60)
 
     p = sub.add_parser("devices", help="lista placas conectadas (USB e WiFi)")
     p.add_argument("-l", "--long", action="store_true")

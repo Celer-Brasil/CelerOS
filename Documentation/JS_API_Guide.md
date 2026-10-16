@@ -2757,6 +2757,20 @@ connected peer that was **verified by code** (`CelerLink.connect` +
 `CelerLink.verify`). `false` outside a private pack or without a verified
 peer. The answer arrives in `Pack.inviteStatus()`.
 
+#### The computer as a pack member (API 41)
+
+With the USB cable plugged into a gateway (any device talking to
+`celerctl`) and `res_share_usb` on (`celerctl shell cfg res_share_usb 1`),
+the computer **joins the pack as a virtual member**: every device lists it
+in `Pack.members()` as `pc-XXXX` (XXXX = the gateway's id; `caps.hub` true;
+its id is in the `FFxx` range). Apps talk to it like to any member —
+`Pack.send("pc-1CAE", {...})` reaches `celerctl mesh listen` on the
+computer, and what the computer sends (`celerctl mesh send W "hi"`) arrives
+in `Pack.poll()` with `fromName: "pc-1CAE"`. On the gateway itself the alias
+`"pc"` works too. Unplug the cable and the member leaves with its presence;
+sessions the computer held are closed (relays opened with `off:1` switch
+off). No new JS calls: it is the same `Pack` contract.
+
 #### `Pack.inviteStatus()` → String
 `"idle"`, `"waiting"` (window open), `"joined"` (we joined through an
 invite), `"sent"` (invite out, waiting for the answer — up to 10 s), `"ok"`

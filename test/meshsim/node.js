@@ -393,7 +393,31 @@ env.CelerLink = {
 };
 
 // ---- caixa de entrada (do coordenador, na barreira) ---------------------
+// No virtual (API 41): o PC no cabo deste no-gateway. pcId = 0xFF00 | byte
+// baixo do gateway (packid::pcNodeOf); o que chega para ele vai a pcQ (o
+// "celerctl mesh listen" do teste), nunca aos apps daqui.
+var pc = { on: false, id: '', name: '', q: [] };
+function pcIdOf(id) {
+    var v = 0xFF00 | (parseInt(id, 16) & 0xFF);
+    if (v === 0xFFFF) v = 0xFFFE;
+    return v.toString(16).toUpperCase();
+}
+
 function deliver(ev) {
+    if (ev.t === 'rx' && ev.toPc) {
+        if (!net.active || !pc.on) return;
+        if (ev.pack) {
+            for (var k = 0; k < packSeen.length; k++) {
+                if (packSeen[k] === ev.from + ':' + ev.pack.msgId) { stats.rxDup++; return; }
+            }
+            packSeen.push(ev.from + ':' + ev.pack.msgId);
+            if (packSeen.length > 32) packSeen.shift();
+            if (ev.pack.kind === 0) pc.q.push({ from: ev.from, fromName: ev.fromName, raw: false, data: ev.data });
+            return;
+        }
+        pc.q.push({ from: ev.from, fromName: ev.fromName, raw: true, data: ev.data });
+        return;
+    }
     if (ev.t === 'rx') {
         if (!net.active) return;
         if (ev.pack) {
@@ -472,6 +496,24 @@ var sim = {
     note: function(s) { log.push('[sim] ' + s); },
     // o "usuario" lendo o codigo na tela do periferico conectado
     peerCode: function() { return link.conn ? link.conn.peerCode : ''; },
+    // gateway USB (no virtual, API 41): o cabo com res_share_usb=1
+    pcAttach: function(on) {
+        pc.on = on !== false;
+        pc.id = pcIdOf(wd.id);
+        pc.name = 'pc-' + wd.id;
+        outbox.push({ t: 'proxy', on: pc.on, id: pc.id, name: pc.name, at: S.millis() });
+        return pc.id;
+    },
+    pcSend: function(to, m) {   // SUB_SEND: envelope custom DO PC
+        var dst = resolve(to);
+        if (!pc.on || dst === null || !net.active) return false;
+        packMsgId = (packMsgId + 1) & 0xFFFF;
+        net.seq = (net.seq + 2) & 0xFFFF;
+        var s = typeof m === 'object' ? JSON.stringify(m) : String(m);
+        return enqueue({ t: 'tx', dst: dst, data: s, pack: { kind: 0, msgId: packMsgId }, ttl: 4,
+                         copies: 2, urgent: false, seq: net.seq, as: pc.id }, s.length + 4, 2);
+    },
+    pcInbox: function() { var q = pc.q; pc.q = []; return q; },
     id: wd.id,
     name: wd.name
 };

@@ -141,6 +141,9 @@ void dump(PrintFn print, void* ctx);
 // regras por tipo (gpio/mic/cam so na privada etc.).
 void usbSetSend(bool (*fn)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n));
 void usbSession(bool on);
+// Evento nao-solicitado para o PC (no virtual, API 41): KL_RES_DATA com sid
+// 0 (usbres::EV_*). false sem sessao do cabo.
+bool usbEvent(const uint8_t* d, size_t n);
 // Processa um pedido de controle do PC; devolve o tamanho do corpo da
 // resposta (-1 = recusado). Sincrono, roda na task do canal USB.
 int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t cap);

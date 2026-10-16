@@ -1011,18 +1011,20 @@ void handleResCtl(const uint8_t* payload, uint16_t len) {
         respondError(KL_RES_CTL, "ctl malformado");
         return;
     }
-    static uint8_t out[512];
-    const int n = Resources::usbCtl(rq.subop, rq.body, rq.len, out, sizeof(out));
+    // [reqId][len u16] + corpo no MESMO buffer estatico (era 512 B de corpo e
+    // outra copia de 515 B na pilha da task do canal): o catalogo da malha
+    // (16 nos com meta) estourava e voltava "vazio"
+    static uint8_t buf[3 + 1536];
+    const int n = Resources::usbCtl(rq.subop, rq.body, rq.len, buf + 3, sizeof(buf) - 3);
     if (n < 0) {
         respondError(KL_RES_CTL, "recusado");
         return;
     }
-    uint8_t hdr[3] = {rq.reqId, (uint8_t)((unsigned)n >> 8), (uint8_t)n};
+    buf[0] = rq.reqId;
+    buf[1] = (uint8_t)((unsigned)n >> 8);
+    buf[2] = (uint8_t)n;
     // respond copia data para o frame de resposta APOS o byte de status
-    uint8_t buf[3 + 512];
-    memcpy(buf, hdr, sizeof(hdr));
-    memcpy(buf + sizeof(hdr), out, (size_t)n);
-    respond(KL_RES_CTL, 0, buf, (uint16_t)(sizeof(hdr) + n));
+    respond(KL_RES_CTL, 0, buf, (uint16_t)(3 + n));
 #else
     respondError(KL_RES_CTL, "sem bluetooth neste aparelho");
 #endif

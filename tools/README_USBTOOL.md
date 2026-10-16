@@ -315,3 +315,22 @@ celerctl mesh status                  # matilha, id do gateway e o id do PC (FFx
 celerctl mesh --json status
 celerctl mesh leave                   # volta à rede aberta "celer"
 ```
+
+### O PC como membro da matilha (API 41)
+
+Com a sessão viva e `res_share_usb=1`, o gateway anuncia o PC na malha como
+`pc-XXXX` (id `0xFF00 | byte baixo do gateway`). Os apps o veem em
+`Pack.members()` e mandam `Pack.send("pc-XXXX", ...)`; o PC recebe e fala
+pelo cabo. Recursos de OUTROS nós abrem por procuração: o gateway é o
+cliente (retry, KEEP e reabertura de sempre) e o DATA do dono volta como
+evento. Eventos chegam como `KL_RES_DATA` de sid 0 (`UsbRes.h`: `EV_MSG`,
+`EV_STATE`, `EV_DATA`).
+
+```
+celerctl mesh listen 120              # o que a matilha manda ao PC
+celerctl mesh send W '{"oi":1}'       # envelope do PC para o membro W (ou id, ou "gw")
+celerctl res relay -n W rele1 on      # relé de OUTRO nó (procuração do gateway)
+celerctl res relay -n BB02 rele1 state
+```
+
+Mic/speaker/câmera de outros nós pelo cabo continuam fora (stream da B.2).

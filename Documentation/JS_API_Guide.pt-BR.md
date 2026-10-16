@@ -3039,6 +3039,20 @@ CelerLink, ao peer conectado e **verificado por código**
 (`CelerLink.connect` + `CelerLink.verify`). `false` fora de matilha privada
 ou sem peer verificado. A resposta chega em `Pack.inviteStatus()`.
 
+#### O computador como membro da matilha (API 41)
+
+Com o cabo USB num gateway (qualquer aparelho falando com o `celerctl`) e o
+`res_share_usb` ligado (`celerctl shell cfg res_share_usb 1`), o computador
+**entra na matilha como membro virtual**: todo aparelho o lista em
+`Pack.members()` como `pc-XXXX` (XXXX = id do gateway; `caps.hub` true; o
+id dele fica na faixa `FFxx`). Os apps falam com ele como com qualquer
+membro — `Pack.send("pc-1CAE", {...})` chega no `celerctl mesh listen` do
+computador, e o que o computador manda (`celerctl mesh send W "oi"`) chega
+no `Pack.poll()` com `fromName: "pc-1CAE"`. No próprio gateway o apelido
+`"pc"` também vale. Tirou o cabo, o membro sai com a presença; as sessões
+que o computador segurava fecham (relés abertos com `off:1` desligam).
+Nenhuma chamada JS nova: é o mesmo contrato do `Pack`.
+
 #### `Pack.inviteStatus()` → String
 `"idle"`, `"waiting"` (janela aberta), `"joined"` (entramos por convite),
 `"sent"` (convite enviado, esperando a resposta — até 10 s), `"ok"` (o

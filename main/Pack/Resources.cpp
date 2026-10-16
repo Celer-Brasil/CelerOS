@@ -53,10 +53,15 @@ constexpr uint8_t K_OPEN_TRIES = 5;  // 12,5 s: a malha sob stream de audio atra
 constexpr uint32_t K_CACHE_FRESH_MS = 30000;   // LIST vale 30 s
 constexpr uint32_t K_DESCRIBE_GAP_MS = 5000;   // DESCRIBE por no, no maximo 1 a cada 5 s
 // Gateway USB (Onda B): o PC com node id sintetico e o master switch dele
-constexpr uint16_t K_USB_NODE = usbres::USB_NODE;
+// id do PC nas tabelas: o no virtual derivado do gateway (packid, API 41)
+uint16_t usbNode() {
+    return PackId::pcNode();
+}
 bool s_usbSession = false;   // sessao HostLink viva (HELLO...endSession)
 bool s_usbAllowed = false;   // cache do res_share_usb (refreshSettings, 2 s)
 bool (*s_usbSend)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n) = nullptr;
+uint16_t s_evSeq = 0;        // seq dos eventos (sid 0) para o PC
+constexpr int K_USB_HANDLES = 2;  // handles por procuracao do PC (o resto e dos apps)
 // Captura do OPEN do PC: o handleOpen manda ACCEPT/REFUSE pelo sendEnv;
 // para o PC a resposta volta no proprio CTL (usbCtl), nao no radio
 uint8_t* s_capture = nullptr;
@@ -147,6 +152,8 @@ struct Handle {
     char name[RES_NAME_MAX + 1];
     uint8_t plen;
     uint8_t params[PARAMS_MAX];
+    bool usb;              // aberto PELO PC no cabo (procuracao, API 41)
+    uint8_t usbSeen;       // ultimo State avisado ao PC (EV_STATE)
 };
 
 // Tudo que e grande mora num bloco so, alocado no 1o uso (PSRAM primeiro):
@@ -163,6 +170,7 @@ struct Heap {
     Remote rs[16];
     usbres::MeshEntry me[16];
     DataLink::Rx dlRx;  // quadro ESP-NOW sendo despachado (tick, sob s_lock)
+    uint8_t usbEv[2 + 1460];  // EV_DATA da procuracao do PC (fora da RAM interna fixa)
     InMsg ctrl;         // controle em banda vindo do ESP-NOW
 };
 
@@ -819,7 +827,18 @@ CacheNode* cacheFor(uint16_t id, bool create) {
     return c;
 }
 
+bool usbEventLocked(const uint8_t* d, size_t n) {
+    if (!s_usbSession || s_usbSend == nullptr) return false;
+    return s_usbSend(usbres::EVENT_SID, s_evSeq++, d, n);
+}
+
 void rxPushData(int h, const uint8_t* d, size_t n) {
+    if (s_h[h].usb) {
+        // procuracao do PC: o DATA do dono segue direto pelo cabo
+        const size_t m = usbres::encodeEvData((uint8_t)h, d, n, s_heap->usbEv, sizeof(s_heap->usbEv));
+        if (m > 0) usbEventLocked(s_heap->usbEv, m);
+        return;
+    }
     if (s_heap->rxCount >= RX_DEPTH) {  // cheia: descarta a mais antiga (dado novo vale mais)
         s_heap->rxHead = (uint8_t)((s_heap->rxHead + 1) % RX_DEPTH);
         s_heap->rxCount--;
@@ -1228,7 +1247,7 @@ void tickTimers() {
     if (s_usbSession) {
         for (int i = 0; i < LEASES; i++) {
             LeaseTable<LEASES>::Lease* l = s_leases.at(i);
-            if (l != nullptr && l->client == K_USB_NODE) l->expiresMs = nowMs() + l->leaseMs;
+            if (l != nullptr && l->client == usbNode()) l->expiresMs = nowMs() + l->leaseMs;
         }
     }
     // leases vencidos (cliente sumiu sem CLOSE)
@@ -1387,6 +1406,36 @@ void tick() {
         Guard g;
         refreshSettings();
     }
+    // no virtual (PC no cabo, API 41): membro da matilha enquanto o cabo
+    // vive com o res_share_usb ligado (o BEAT proxy sai pela CelerNet)
+    {
+        const bool want = s_usbSession && s_usbAllowed && CelerNet::active();
+        const bool on = CelerNet::proxyNode() != 0;
+        if (want && !on) {
+            char nm[CelerNet::MAX_NAME + 1];
+            packid::pcName(PackId::nodeId(), nm, sizeof(nm));
+            CelerNet::setProxy(usbNode(), nm, netframe::CAPS_HUB);
+        } else if (!want && on) {
+            CelerNet::setProxy(0, nullptr, 0);
+        }
+    }
+    // procuracoes do PC: estado novo vira EV_STATE; terminal libera o slot
+    {
+        Guard g;
+        for (int i = 0; i < HANDLES_MAX; i++) {
+            Handle& x = s_h[i];
+            if (!x.usb || x.state == x.usbSeen) continue;
+            uint8_t ev[8];
+            const size_t n = usbres::encodeEvState((uint8_t)i, x.state, x.reason, x.node, ev, sizeof(ev));
+            if (n > 0) usbEventLocked(ev, n);
+            x.usbSeen = x.state;
+            if (x.state != ST_OPENING && x.state != ST_OPEN) {
+                handleRelease(x);
+                x.usb = false;
+                x.state = ST_FREE;
+            }
+        }
+    }
     static uint32_t s_dlTryMs = 0;
     if (!DataLink::up() && nowMs() - s_dlTryMs > 10000) {
         s_dlTryMs = nowMs();
@@ -1520,7 +1569,8 @@ int open(uint16_t node, const char* name, const uint8_t* params, size_t plen, Mo
         if (s_h[i].state == ST_FREE) h = i;
     }
     for (int i = 0; i < HANDLES_MAX && h < 0; i++) {
-        if (s_h[i].state != ST_OPEN && s_h[i].state != ST_OPENING) h = i;
+        // procuracao do PC com estado terminal ainda nao avisado: nao e do app
+        if (s_h[i].state != ST_OPEN && s_h[i].state != ST_OPENING && !s_h[i].usb) h = i;
     }
     if (h < 0) return -1;
     Handle& x = s_h[h];
@@ -1813,6 +1863,12 @@ void dump(PrintFn pr, void* ctx) {
 
 // ================================================================ gateway USB
 
+bool usbEvent(const uint8_t* d, size_t n) {
+    if (!s_inited) return false;
+    Guard g;
+    return usbEventLocked(d, n);
+}
+
 void usbSetSend(bool (*fn)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n)) {
     Guard g;
     s_usbSend = fn;
@@ -1829,9 +1885,16 @@ void usbSession(bool on) {
     if (s_usbSession == on) return;
     s_usbSession = on;
     if (on) return;
+    // procuracoes do PC fecham com o cabo (o dono aplica o auto-off)
+    for (int i = 0; i < HANDLES_MAX; i++) {
+        if (!s_h[i].usb) continue;
+        close(i);
+        s_h[i].usb = false;
+        s_h[i].state = ST_FREE;
+    }
     for (int i = 0; i < LEASES; i++) {
         LeaseTable<LEASES>::Lease* l = s_leases.at(i);
-        if (l == nullptr || l->client != K_USB_NODE) continue;
+        if (l == nullptr || l->client != usbNode()) continue;
         ESP_LOGI(TAG, "gateway USB: sessao %u morreu com o cabo (\"%s\")", (unsigned)l->sid,
                  s_local[l->rid].used ? s_local[l->rid].name : "?");
         leaseGone(*l);
@@ -1857,6 +1920,55 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             Provision::leave();
             ESP_LOGI(TAG, "gateway USB: saiu da matilha pelo cabo");
             return 0;
+        case usbres::SUB_SEND: {
+            // envelope custom DO PC (no virtual) para um membro — ou o gateway
+            if (!s_usbSession || !s_usbAllowed || CelerNet::proxyNode() == 0) return -1;
+            if (len < 3 || len - 2 > Pack::MAX_PAYLOAD) return -1;
+            const uint16_t to = (uint16_t)((body[0] << 8) | body[1]);
+            return Pack::sendAs(usbNode(), to, Pack::KIND_CUSTOM, body + 2, len - 2, false) ? 0 : -1;
+        }
+        case usbres::SUB_OPEN_AT: {
+            // recurso de OUTRO no: o gateway e o cliente por procuracao (o
+            // mesmo caminho dos apps: retry, KEEP, reabertura); a resposta e
+            // o handle, o resultado chega em EV_STATE
+            usbres::OpenAt oa;
+            if (!s_usbSession || !s_usbAllowed || !usbres::decodeOpenAt(body, len, &oa)) return -1;
+            if (oa.node == ourNode() || oa.node == usbNode()) return -1;  // os locais: SUB_OPEN
+            {
+                Guard g;
+                int busy = 0;
+                for (int i = 0; i < HANDLES_MAX; i++) busy += s_h[i].usb ? 1 : 0;
+                if (busy >= K_USB_HANDLES) return -1;
+            }
+            const int h = open(oa.node, oa.name, oa.params, oa.plen, MODE_DATA, 0);
+            if (h < 0) return -1;
+            Guard g;
+            s_h[h].usb = true;
+            s_h[h].usbSeen = ST_FREE;  // o 1o tick avisa o OPENING
+            if (cap < 1) return -1;
+            out[0] = (uint8_t)h;
+            ESP_LOGI(TAG, "gateway USB: PC abre \"%s\" em %04X (handle %d)", oa.name, oa.node, h);
+            return 1;
+        }
+        case usbres::SUB_HWRITE: {
+            if (len < 2 || body[0] >= HANDLES_MAX) return -1;
+            const int h = body[0];
+            {
+                Guard g;
+                if (!s_h[h].usb) return -1;
+            }
+            return write(h, body + 1, len - 1) ? 0 : -1;
+        }
+        case usbres::SUB_HCLOSE: {
+            if (len < 1 || body[0] >= HANDLES_MAX) return -1;
+            const int h = body[0];
+            Guard g;
+            if (!s_h[h].usb) return -1;
+            close(h);  // CLOSE ao dono (auto-off se o OPEN pediu)
+            s_h[h].usb = false;
+            s_h[h].state = ST_FREE;
+            return 0;
+        }
         case usbres::SUB_NET: {
             NetKeys::init();
             const NetKeys::Net* n = NetKeys::primary();
@@ -1924,7 +2036,9 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
                 m.e = s_heap->rs[i].e;
                 m.m = s_heap->rs[i].m;
             }
-            return (int)usbres::encodeMeshList(s_heap->me, n, out, cap);
+            const size_t r = usbres::encodeMeshList(s_heap->me, n, out, cap);
+            // estouro do buffer = erro, nunca "catalogo vazio"
+            return r > 0 ? (int)r : -1;
         }
         case usbres::SUB_OPEN: {
             // OPEN integral do ResProto; o ACCEPT/REFUSE que o handleOpen
@@ -1933,7 +2047,7 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             s_capture = out;
             s_captureCap = cap;
             s_captureLen = 0;
-            handleOpen(K_USB_NODE, body, len, true);
+            handleOpen(usbNode(), body, len, true);
             s_capture = nullptr;
             return s_captureLen;
         }
@@ -1941,7 +2055,7 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             if (len < 2) return -1;
             const uint16_t sid = (uint16_t)((body[0] << 8) | body[1]);
             LeaseTable<LEASES>::Lease* l = s_leases.find(sid);
-            if (l != nullptr && l->client == K_USB_NODE) {
+            if (l != nullptr && l->client == usbNode()) {
                 l->expiresMs = nowMs() + l->leaseMs;
                 if (cap > 0) out[0] = 1;  // renovada
                 return 1;
@@ -1954,7 +2068,7 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             if (len < 2) return -1;
             const uint16_t sid = (uint16_t)((body[0] << 8) | body[1]);
             LeaseTable<LEASES>::Lease* l = s_leases.find(sid);
-            if (l != nullptr && l->client == K_USB_NODE) {
+            if (l != nullptr && l->client == usbNode()) {
                 leaseGone(*l);  // auto-off se o OPEN pediu
                 s_leases.close(l->client, l->sid);
                 ESP_LOGI(TAG, "sessao %u: PC fechou (\"%s\")", (unsigned)sid,
@@ -1968,9 +2082,9 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             usbres::DataHdr dh;
             if (!usbres::decodeDataFrame(body, len, &dh)) return -1;
             LeaseTable<LEASES>::Lease* l = s_leases.find(dh.sid);
-            if (l == nullptr || l->client != K_USB_NODE) return -1;
+            if (l == nullptr || l->client != usbNode()) return -1;
             l->expiresMs = nowMs() + l->leaseMs;  // escrita tambem renova
-            serverDataIn(*l, K_USB_NODE, "PC", dh.data, dh.len);
+            serverDataIn(*l, usbNode(), "PC", dh.data, dh.len);
             return 0;
         }
         default:
@@ -1987,8 +2101,12 @@ void appReset() {
             s_local[i].used = false;
         }
     }
-    for (int i = 0; i < HANDLES_MAX; i++) close(i);
+    // handles do PC (procuracao) nao sao do app: sobrevivem a troca
     for (int i = 0; i < HANDLES_MAX; i++) {
+        if (!s_h[i].usb) close(i);
+    }
+    for (int i = 0; i < HANDLES_MAX; i++) {
+        if (s_h[i].usb) continue;
         const uint8_t gen = s_h[i].gen;
         memset(&s_h[i], 0, sizeof(s_h[i]));
         s_h[i].gen = gen;

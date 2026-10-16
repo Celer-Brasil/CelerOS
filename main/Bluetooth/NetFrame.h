@@ -67,6 +67,7 @@ constexpr uint8_t CAPS_CAMERA = 0x40;
 // flags do BEAT (2o byte): estado de provisionamento
 constexpr uint8_t BFLAG_UNPROV = 0x01;  // na rede aberta, aceitando matilha
 constexpr uint8_t BFLAG_ADMIN = 0x02;   // tem a chave de admin da matilha
+constexpr uint8_t BFLAG_PROXY = 0x04;   // no virtual anunciado por um gateway (PC no cabo, API 41)
 
 struct Frame {
     uint8_t type = TYPE_DATA;

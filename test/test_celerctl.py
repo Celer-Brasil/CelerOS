@@ -248,10 +248,42 @@ class FakeDevice:
             out = b""
         elif sub == S["NET"]:
             out = json.dumps(dict(net, node="1CAE", name="Celer-1CAE", pc="FFAE")).encode()
+        elif sub == S["SEND"]:
+            self.sent = getattr(self, "sent", []) + [((body[0] << 8) | body[1], body[2:])]
+            out = b""
+        elif sub == S["OPEN_AT"]:
+            node, nl = (body[0] << 8) | body[1], body[2]
+            nome = body[3:3 + nl].decode()
+            h = 3
+            self.opened = (node, nome, body[4 + nl:].decode())
+            out = bytes((h,))
+            # o EV_STATE do tick chega depois da resposta
+            self.reply(KL["RES_CTL"], bytes((req, 0, 1)) + out)
+            self.push_event(bytes((2, h, 1, 0, node >> 8, node & 0xFF)))   # opening
+            ok = nome != "ocupado"
+            self.push_event(bytes((2, h, 2 if ok else 3, 0 if ok else 2, node >> 8, node & 0xFF)))
+            return
+        elif sub == S["HWRITE"]:
+            h, d = body[0], body[1:]
+            self.relay_ops = getattr(self, "relay_ops", []) + [d]
+            if d[:1] == b"\x01":
+                self.relay_state = d[1]
+            elif d[:1] == b"\x02":
+                self.push_event(bytes((3, h, 2, getattr(self, "relay_state", 0))))
+            out = b""
+        elif sub == S["HCLOSE"]:
+            self.closed = body[0]
+            out = b""
         if out is None:
             self.reply(KL["RES_CTL"], b"recusado", 1)
             return
         self.reply(KL["RES_CTL"], bytes((req, len(out) >> 8, len(out) & 0xFF)) + out)
+
+    def push_event(self, ev, seq=0):
+        """KL_RES_DATA nao-solicitado com sid 0 (evento do no virtual)."""
+        payload = bytes((0, 0, seq >> 8, seq & 0xFF)) + ev
+        self.ser.rx += frame_v2(KL["RES_DATA"], payload) if self.proto == 2 \
+            else frame_v1(KL["RES_DATA"], payload)
 
     def op_20(self, p):  # STATS: foto de profiling (JSON)
         snap = self.stats_q.pop(0) if len(self.stats_q) > 1 else self.stats_q[0]
@@ -736,6 +768,46 @@ class TestMeshPeloCabo(unittest.TestCase):
         link.hello()
         out = self._run(link, ["res", "ls"])
         self.assertIn("Celer-1CAE (1CAE) test api 40", out)
+
+    def test_evento_parse(self):
+        ev = C.parse_res_event(b"\x01\xbb\x02\x01W\x00oi")
+        self.assertEqual(ev, {"ev": "msg", "from": "BB02", "fromName": "W", "raw": False, "data": b"oi"})
+        ev = C.parse_res_event(b"\x02\x03\x03\x02\x1c\xae")
+        self.assertEqual((ev["state"], ev["reason"], ev["node"]), ("refused", "busy", "1CAE"))
+        self.assertEqual(C.parse_res_event(b"\x03\x01\x02\x01")["data"], b"\x02\x01")
+        self.assertIsNone(C.parse_res_event(b""))
+
+    def test_mesh_send_para_o_gateway_e_id(self):
+        link, dev = make_link()
+        link.hello()
+        self._run(link, ["mesh", "send", "gw", "oi"])
+        self._run(link, ["mesh", "send", "BB02", "ola"])
+        self.assertEqual(dev.sent, [(0x1CAE, b"oi"), (0xBB02, b"ola")])
+
+    def test_mesh_listen_mostra_eventos(self):
+        link, dev = make_link()
+        link.hello()
+        dev.push_event(b"\x01\xbb\x02\x01W\x00oi pc")
+        dev.push_event(b"\x01\xbb\x02\x01W\x01cru")
+        out = self._run(link, ["mesh", "listen", "1"])
+        self.assertIn("W (BB02): oi pc", out)
+        self.assertIn("W (BB02) [cru]: cru", out)
+
+    def test_rele_de_outro_no_por_procuracao(self):
+        link, dev = make_link()
+        link.hello()
+        out = self._run(link, ["res", "relay", "-n", "BB02", "rele1", "on"])
+        self.assertEqual(dev.opened, (0xBB02, "rele1", '{"off": 1}'))
+        self.assertEqual(dev.relay_ops, [b"\x01\x01", b"\x02"])
+        self.assertIn("leitura: estado 1", out)
+        self.assertEqual(dev.closed, 3)
+
+    def test_recusa_do_dono_vira_erro(self):
+        link, dev = make_link()
+        link.hello()
+        with self.assertRaises(C.CelerError) as cm:
+            link.res_open_at(0xBB02, "ocupado")
+        self.assertIn("busy", str(cm.exception))
 
     def test_firmware_antigo_orienta_o_shell(self):
         link, dev = make_link()

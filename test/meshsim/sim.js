@@ -74,7 +74,8 @@ function runMesh(spec) {
             relayPending: 0, relayDropped: 0,
             waiting: false, barrier: 0, done: null,
             lastReach: {}, lastInfo: {},
-            ladv: false, lpairing: true, lname: '', session: null, bonds: {}, wrong: 0
+            ladv: false, lpairing: true, lname: '', session: null, bonds: {}, wrong: 0,
+            proxy: null          // no virtual (PC no cabo, API 41): {id, name}
         };
         byName[n.name] = st;
         return st;
@@ -144,10 +145,12 @@ function runMesh(spec) {
         // junta frags de qualquer uma e entrega UMA vez (o relay segue)
         var dup = msg.group && node.delivered[msg.group];
         if (msg.group) node.delivered[msg.group] = true;
-        if (!dup && (msg.dst === null || msg.dst === node.id)) {
-            node.inbox.push({ at: t, ev: { t: 'rx', from: msg.src.id, fromName: msg.src.netName,
+        var toPc = !!(node.proxy && msg.dst === node.proxy.id);   // no virtual do gateway
+        if (!dup && (msg.dst === null || msg.dst === node.id || toPc)) {
+            node.inbox.push({ at: t, ev: { t: 'rx', from: msg.fromId || msg.src.id,
+                                           fromName: msg.fromName || msg.src.netName,
                                            data: msg.data, unicast: msg.dst !== null, hops: hops,
-                                           rssi: rssi, pack: msg.pack || null } });
+                                           rssi: rssi, pack: msg.pack || null, toPc: toPc } });
             air.push({ t: t, kind: 'rx', to: node.name, from: msg.src.name, data: msg.data, hops: hops });
         }
         if (node.relay && ttl > 1) {
@@ -183,7 +186,9 @@ function runMesh(spec) {
         air.push({ t: ev.at, kind: 'tx', from: n.name, dst: ev.dst, data: ev.data, frames: frames(len),
                    copies: ev.copies, pack: ev.pack ? ev.pack.kind : null });
         for (var c = 0; c < ev.copies; c++) {
+            var asPc = ev.as && n.proxy && n.proxy.id === ev.as;  // SUB_SEND: em nome do PC
             var msg = { key: n.id + ':' + ((ev.seq - c) & 0xFFFF), src: n, dst: ev.dst, data: ev.data,
+                        fromId: asPc ? n.proxy.id : null, fromName: asPc ? n.proxy.name : null,
                         len: len, wireLen: ev.wireLen ? len : 0, pack: ev.pack || null,
                         group: len > 16 && ev.copies > 1 ? n.id + ':g' + ev.seq : null };
             (function(msg, c) {
@@ -301,6 +306,11 @@ function runMesh(spec) {
                                                : Math.floor((T - lr) / 1000) + 2;
             out.push({ id: m.id, name: m.netName, caps: m.caps, rssi: n.lastInfo[m.id].rssi,
                        hops: n.lastInfo[m.id].hops, lastSeen: age });
+            // BEAT proxy do gateway alcancavel agora: o PC dele e membro (caps HUB)
+            if (m.proxy && dist[m.id] !== undefined) {
+                out.push({ id: m.proxy.id, name: m.proxy.name, caps: 0x20, rssi: n.lastInfo[m.id].rssi,
+                           hops: n.lastInfo[m.id].hops, lastSeen: age });
+            }
         });
         out.sort(function(a, b) { return b.rssi - a.rssi; });
         return out;
@@ -380,6 +390,7 @@ function runMesh(spec) {
                 if (m.t === 'sync') {
                     m.out.forEach(function(ev) {
                         if (ev.t === 'tx') onTx(n, ev);
+                        else if (ev.t === 'proxy') n.proxy = ev.on ? { id: ev.id, name: ev.name } : null;
                         else if (ev.t === 'netkey') {
                             // Pack.join / convite (API 40): chave nova e, como o
                             // CelerNet::netChanged, a presenca propria zera

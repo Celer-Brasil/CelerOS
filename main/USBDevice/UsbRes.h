@@ -16,11 +16,24 @@
 //          sensor, publish de canal; chunks grandes seguem com seq++)
 //
 // O PC e um CLIENTE do servidor de recursos do gateway com node id
-// sintetico USB_NODE: o gateway renova os leases dele (auto-KEEP) enquanto
+// sintetico (packid::pcNodeOf do gateway, faixa 0xFF00..0xFFFE — API 41;
+// era 0xFFFE fixo): o gateway renova os leases dele (auto-KEEP) enquanto
 // a sessao HostLink viver; caiu o cabo (idle de 8 s na UART, desconexao
 // CDC), a sessao morre e os leases vencem — o auto-off do rele e o mesmo
 // de sempre. Policy: master res_share_usb (default "0") + as regras por
 // tipo de sempre (gpio exige matilha privada etc.).
+//
+// No virtual (API 41): com a sessao viva e res_share_usb=1 o PC e MEMBRO da
+// matilha — o gateway anuncia um BEAT proxy com o id dele (pc-XXXX, flag
+// BFLAG_PROXY), entrega ao PC os envelopes enderecados a ele e manda os
+// do PC (SUB_SEND); o PC abre recursos de OUTROS nos com o gateway como
+// cliente por procuracao (SUB_OPEN_AT). Tudo que chega sem pedido sai como
+// EVENTO no KL_RES_DATA com sid 0 (nunca e uma sessao — 0 e o "livre"):
+//   [0x0000][seq u16][ev u8][corpo]
+//     EV_MSG   [from u16][nn u8][fromName][raw u8][payload]   (raw=1: sem
+//              envelope Pack — CelerNet.send cru de um app)
+//     EV_STATE [h u8][state u8][reason u8][node u16]           (Resources::State)
+//     EV_DATA  [h u8][bytes]                                    (DATA do dono)
 //
 // Header-only puro (compila no host; test/cpp exercita o codec).
 
@@ -32,9 +45,6 @@
 
 namespace usbres {
 
-// node id sintetico do PC nas tabelas do servidor (doc §8.1: faixa
-// 0xFF00..0xFFFE; ids reais derivam da MAC BT)
-constexpr uint16_t USB_NODE = 0xFFFE;
 // link sintetico do lease do PC (o gateway sobrescreve o que vier no OPEN)
 constexpr uint8_t USB_LINK_FLAGS = resproto::LINK_UP | resproto::LINK_LOCKED;
 constexpr uint8_t USB_MAC[6] = {0x02, 'U', 'S', 'B', 0x00, 0x00};
@@ -52,6 +62,16 @@ constexpr uint8_t SUB_WRITE = 7;     // [sid u16][seq u16][bytes] — ops do gpi
 constexpr uint8_t SUB_JOIN = 8;      // [nlen u8][nome 1..15][plen u8][senha 8..64]
 constexpr uint8_t SUB_LEAVE = 9;     // vazio -> volta a rede aberta "celer"
 constexpr uint8_t SUB_NET = 10;      // -> JSON {net, prov, node, name, pc}
+// No virtual (API 41): exigem a sessao do cabo e o res_share_usb
+constexpr uint8_t SUB_SEND = 11;     // [to u16][payload 1..430] envelope custom DO PC
+constexpr uint8_t SUB_OPEN_AT = 12;  // [node u16][nlen][nome][plen][params] -> [h u8]
+constexpr uint8_t SUB_HWRITE = 13;   // [h u8][bytes] DATA no recurso remoto
+constexpr uint8_t SUB_HCLOSE = 14;   // [h u8]
+
+constexpr uint16_t EVENT_SID = 0;    // sid dos eventos no KL_RES_DATA
+constexpr uint8_t EV_MSG = 1;
+constexpr uint8_t EV_STATE = 2;
+constexpr uint8_t EV_DATA = 3;
 
 constexpr size_t JOIN_NAME_MAX = 15;
 constexpr size_t JOIN_PASS_MIN = 8;
@@ -126,6 +146,79 @@ inline bool decodeJoin(const uint8_t* p, size_t n, char name[JOIN_NAME_MAX + 1],
     pass[pl] = '\0';
     // NUL no meio cortaria a string: o nome/senha seriam outros
     return strlen(name) == nl && strlen(pass) == pl;
+}
+
+// ------------------------------------------------- no virtual (API 41)
+
+inline size_t encodeEvMsg(uint16_t from, const char* fromName, bool raw, const void* payload,
+                          size_t len, uint8_t* out, size_t cap) {
+    const size_t nn = fromName != nullptr ? strnlen(fromName, resproto::RES_NAME_MAX) : 0;
+    const size_t n = 1 + 2 + 1 + nn + 1 + len;
+    if (n > cap) return 0;
+    out[0] = EV_MSG;
+    out[1] = (uint8_t)(from >> 8);
+    out[2] = (uint8_t)from;
+    out[3] = (uint8_t)nn;
+    if (nn > 0) memcpy(out + 4, fromName, nn);
+    out[4 + nn] = raw ? 1 : 0;
+    if (len > 0) memcpy(out + 5 + nn, payload, len);
+    return n;
+}
+
+inline size_t encodeEvState(uint8_t h, uint8_t state, uint8_t reason, uint16_t node, uint8_t* out,
+                            size_t cap) {
+    if (cap < 6) return 0;
+    out[0] = EV_STATE;
+    out[1] = h;
+    out[2] = state;
+    out[3] = reason;
+    out[4] = (uint8_t)(node >> 8);
+    out[5] = (uint8_t)node;
+    return 6;
+}
+
+inline size_t encodeEvData(uint8_t h, const void* d, size_t len, uint8_t* out, size_t cap) {
+    if (2 + len > cap) return 0;
+    out[0] = EV_DATA;
+    out[1] = h;
+    if (len > 0) memcpy(out + 2, d, len);
+    return 2 + len;
+}
+
+// SUB_OPEN_AT: [node u16][nlen][nome 1..15][plen][params <= 48]
+struct OpenAt {
+    uint16_t node = 0;
+    char name[resproto::RES_NAME_MAX + 1] = {0};
+    const uint8_t* params = nullptr;
+    uint8_t plen = 0;
+};
+
+inline size_t encodeOpenAt(uint16_t node, const char* name, const void* params, size_t plen,
+                           uint8_t* out, size_t cap) {
+    const size_t nl = strnlen(name, resproto::RES_NAME_MAX + 1);
+    if (nl == 0 || nl > resproto::RES_NAME_MAX || plen > resproto::PARAMS_MAX) return 0;
+    if (4 + nl + plen > cap) return 0;
+    out[0] = (uint8_t)(node >> 8);
+    out[1] = (uint8_t)node;
+    out[2] = (uint8_t)nl;
+    memcpy(out + 3, name, nl);
+    out[3 + nl] = (uint8_t)plen;
+    if (plen > 0) memcpy(out + 4 + nl, params, plen);
+    return 4 + nl + plen;
+}
+
+inline bool decodeOpenAt(const uint8_t* p, size_t n, OpenAt* out) {
+    if (p == nullptr || n < 4) return false;
+    out->node = (uint16_t)((p[0] << 8) | p[1]);
+    const size_t nl = p[2];
+    if (nl == 0 || nl > resproto::RES_NAME_MAX || n < 4 + nl) return false;
+    memcpy(out->name, p + 3, nl);
+    out->name[nl] = '\0';
+    if (strlen(out->name) != nl) return false;
+    out->plen = p[3 + nl];
+    if (out->plen > resproto::PARAMS_MAX || n != 4 + nl + out->plen) return false;
+    out->params = p + 4 + nl;
+    return out->node != 0 && out->node != 0xFFFF;
 }
 
 // corpo do SUB_WRITE (e o formato do KL_RES_DATA): [sid u16][seq u16][bytes]

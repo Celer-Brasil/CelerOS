@@ -56,6 +56,10 @@ uint8_t myCaps();
 // Envelope unicast (msgId deduplica as copias no destino). Nao bloqueia.
 bool send(uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent);
 
+// Envelope EM NOME de src (0 = nos; o no virtual do PC no cabo, API 41).
+// to == o proprio no ou o PC daqui: entrega local, sem radio.
+bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent);
+
 // Envelope custom pendente para o JS (fila 4, cheia descarta a antiga).
 bool pollCustom(uint16_t* from, char* fromName, size_t nameCap, uint8_t* data, size_t* len);
 

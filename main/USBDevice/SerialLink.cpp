@@ -234,6 +234,10 @@ void linkTask(void*) {
                 s_link->feed(b);
             }
         }
+        // o tempo DENTRO do handler (convite pelo CelerLink, PBKDF2, flash
+        // da OTA) nao e ociosidade do host: sem isto um comando de 8 s+
+        // respondia e a sessao caia no idle logo em seguida
+        if (n > 0 && s_mode == MODE_LINK) s_lastFrame = xTaskGetTickCount();
     }
 }
 

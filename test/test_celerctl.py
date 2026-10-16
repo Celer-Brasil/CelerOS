@@ -337,6 +337,9 @@ class FakeDevice:
             self.reply(KL["WRITE_END"], struct.pack("<I", total))
 
     def op_05(self, p):  # READ: path\0 + u32 offset + u32 want
+        if getattr(self, "event_on_read", False):
+            # o gateway empurra um evento do no virtual no meio do pull
+            self.push_event(b"\x01\xbb\x02\x01W\x00ping")
         z = p.index(b"\0")
         path = p[:z].decode()
         off, want = struct.unpack("<II", p[z + 1:z + 9])
@@ -510,6 +513,38 @@ class TestProto2(unittest.TestCase):
                 self.assertEqual(f.read(), payload)
         finally:
             os.unlink(path)
+
+    def test_pull_com_evento_do_no_virtual_no_meio(self):
+        # bancada 2026-10-16: o gateway empurra KL_RES_DATA a qualquer hora e
+        # os lacos de pull/screencap abortavam com "frame inesperado"
+        link, dev = make_link()
+        link.hello()
+        dev.event_on_read = True
+        payload = bytes((i * 7) & 0xFF for i in range(20000))
+        dev.files["/local/x.bin"] = payload
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            link.read_file("/local/x.bin", path, progress=False)
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), payload)
+            self.assertTrue(any(c == KL["RES_DATA"] for c, _ in link.push_queue))
+        finally:
+            os.unlink(path)
+
+    def test_hold_mantem_a_sessao(self):
+        link, dev = make_link()
+        link.hello()
+        n0 = getattr(dev, "hellos", 0)
+        orig = dev.op_01
+
+        def contando(p):
+            dev.hellos = getattr(dev, "hellos", 0) + 1
+            orig(p)
+        dev.op_01 = contando
+        link.KEEPALIVE_S = 0.2
+        link.hold(1.0)
+        self.assertGreaterEqual(getattr(dev, "hellos", 0) - n0, 3)
 
     def test_caminho_legado_proto1(self):
         # --proto 1 do CLI: host fala v1 de proposito com firmware novo

@@ -120,6 +120,11 @@ def load_opcodes():
 
 KL = load_opcodes()
 
+# Frames que o device manda SEM pedido (logcat, espelho de tela, debugger,
+# gateway de recursos / eventos do no virtual): qualquer laco que espera uma
+# resposta guarda estes na push_queue em vez de abortar ("frame inesperado").
+PUSH_CMDS = frozenset(KL[k] for k in ("LOG_DATA", "SCR_DATA", "DEBUG_DATA", "RES_DATA") if k in KL)
+
 
 def load_usbres_subops():
     """Subops do gateway USB (KL_RES_CTL) do UsbRes.h do firmware (fonte unica,
@@ -470,7 +475,7 @@ class HostLink:
                 self.ser.write(frame)
                 cmd_r, payload_r = self._read_frame(timeout=timeout)
                 while cmd_r != cmd:
-                    if cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"], KL["RES_DATA"]):
+                    if cmd_r in PUSH_CMDS:
                         self.push_queue.append((cmd_r, payload_r))
                     elif not (self.keep_push and cmd_r != 0x00):
                         break  # resposta de erro (0x00) ou inesperada: decide abaixo
@@ -533,6 +538,7 @@ class HostLink:
         sensor, publish); drena logs que aparecerem no caminho."""
         deadline = time.time() + timeout
         while time.time() < deadline:
+            self.keep_session()
             for c, p in list(self.push_queue):
                 if c != KL["RES_DATA"]:
                     continue
@@ -554,10 +560,36 @@ class HostLink:
     # ------------------------------------------- no virtual (API 41)
     # Eventos chegam como KL_RES_DATA com sid 0 (UsbRes.h EV_*).
 
+    # A UART/USJ encerra a sessao HostLink com 8 s sem frames do host (e com
+    # ela o no virtual e os leases do PC): quem so ESPERA (listen, --segura)
+    # manda um pedido barato a cada KEEPALIVE_S.
+    KEEPALIVE_S = 3.0
+
+    def keep_session(self):
+        """keepalive() (o HELLO de sempre) no maximo a cada KEEPALIVE_S, sem
+        descartar DATA/eventos que ja chegaram."""
+        if time.time() - getattr(self, "_last_ka", 0) < self.KEEPALIVE_S:
+            return
+        self._last_ka = time.time()
+        keep = self.keep_push
+        self.keep_push = True
+        try:
+            self.keepalive()
+        finally:
+            self.keep_push = keep
+
+    def hold(self, seconds):
+        """Dorme mantendo a sessao viva (o gateway segue renovando os leases)."""
+        fim = time.time() + seconds
+        while time.time() < fim:
+            self.keep_session()
+            time.sleep(min(0.25, max(0.0, fim - time.time())))
+
     def res_event_wait(self, match=None, timeout=3.0):
         """Proximo evento do no virtual que casa com match(ev) (None = qualquer)."""
         deadline = time.time() + timeout
         while True:
+            self.keep_session()
             for c, p in list(self.push_queue):
                 if c != KL["RES_DATA"] or (p[0] << 8) | p[1] != 0:
                     continue
@@ -721,7 +753,7 @@ class HostLink:
         # screenshot/coredump)
         while len(out) < out_len:
             cmd, more = self._read_frame(timeout=self.exec_timeout)
-            if cmd in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
+            if cmd in PUSH_CMDS:
                 self.push_queue.append((cmd, more))
                 continue
             if cmd != KL["EXEC_CONT"]:
@@ -796,7 +828,7 @@ class HostLink:
                 start, n = pendings.pop(seq)
                 applied = start + n
                 last_ack = time.monotonic()
-            elif cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
+            elif cmd_r in PUSH_CMDS:
                 self.push_queue.append((cmd_r, payload_r))
                 last_ack = time.monotonic()
             elif cmd_r is not None:
@@ -905,7 +937,7 @@ class HostLink:
                     done.add(off)
                     tries = 0
                     last_frame = time.monotonic()
-                elif cmd in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
+                elif cmd in PUSH_CMDS:
                     self.push_queue.append((cmd, payload))
                     last_frame = time.monotonic()
                 elif cmd is not None:
@@ -1064,7 +1096,7 @@ class HostLink:
         pending = bytearray()
         while len(data) < need:
             cmd, more = self._read_frame(timeout=30.0)
-            if cmd == KL["LOG_DATA"]:  # log do logcat no meio: guarda e segue
+            if cmd in PUSH_CMDS and cmd != KL["SCR_DATA"]:  # log/evento no meio: guarda e segue
                 self.push_queue.append((cmd, more))
                 continue
             if cmd != KL["SCR_DATA"]:
@@ -1092,7 +1124,7 @@ class HostLink:
         data = bytearray(payload[5:])
         while len(data) < size:
             cmd, more = self._read_frame(timeout=30.0)
-            if cmd == KL["LOG_DATA"]:  # log do logcat no meio: guarda e segue
+            if cmd in PUSH_CMDS:  # log/evento no meio: guarda e segue
                 self.push_queue.append((cmd, more))
                 continue
             if cmd != KL["COREDUMP_DATA"]:
@@ -1725,7 +1757,7 @@ def cmd_res(args):
                     args.nome, args.no, args.op, ("estado %d" % d[1]) if d and len(d) > 1 else "sem resposta"))
                 if args.segura > 0:
                     print("segurando %ds (auto-off ao soltar)..." % args.segura)
-                    time.sleep(args.segura)
+                    link.hold(args.segura)
             finally:
                 link.res_hclose(h)
         elif sub == "relay":
@@ -1752,7 +1784,7 @@ def cmd_res(args):
                 # ao sair, o fim do processo derruba o cabo e o auto-off age
                 print("segurando %ds (auto-off ao soltar)..." % args.segura)
                 try:
-                    time.sleep(args.segura)
+                    link.hold(args.segura)
                 finally:
                     link.res_close(sid)
         elif sub == "sensor":

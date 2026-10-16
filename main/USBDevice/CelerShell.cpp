@@ -21,6 +21,7 @@
 #include "Utils/AppGrants.h"
 #include "Utils/AppPerms.h"
 #include "Utils/ShellLogic.h"
+#include "../Utils/CelerSettings.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -1988,6 +1989,32 @@ int cmdRes(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 }
 #endif
 
+// cfg — settings persistentes do aparelho (NVS ns "settings", CelerSettings):
+// o interruptor do dono dos recursos da matilha (res_share_gpio/mic/cam/spk/
+// sens), o nome do no (celernet_name) e afins — sem app e sem UI. `cfg chave`
+// le; `cfg chave valor` grava (valor vazio apaga). Teto de chave do NVS: 15
+// chars — e por isso res_share_sens e nao res_share_sensor.
+int cmdCfg(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 2) {
+        print(ctx, "uso: cfg <chave> [valor]  (chave ate 15 chars)\r\n");
+        return 1;
+    }
+    if (strlen(argv[1]) > 15) {
+        print(ctx, "cfg: chave acima de 15 chars (teto do NVS)\r\n");
+        return 1;
+    }
+    if (argc >= 3) {
+        std::string v = argv[2];
+        for (int i = 3; i < argc; i++) v += std::string(" ") + argv[i];
+        if (!CelerSettings::set(argv[1], v.c_str())) {
+            print(ctx, "cfg: falhou ao gravar\r\n");
+            return 1;
+        }
+    }
+    print(ctx, "%s=%s\r\n", argv[1], CelerSettings::get(argv[1], "").c_str());
+    return 0;
+}
+
 struct ShellCmd {
     const char* name;
     int (*fn)(int argc, char** argv, CelerShell::PrintFn print, void* ctx);
@@ -2026,6 +2053,7 @@ const ShellCmd kCommands[] = {
     {"date", cmdDate},     {"clear", cmdClear},   {"uname", cmdUname},
     {"dmesg", cmdDmesg},   {"true", cmdTrue},     {"false", cmdFalse},
     {"sh", cmdSh},         {"set", cmdSet},       {"unset", cmdUnset},
+    {"cfg", cmdCfg},
     {"[", cmdTest},        {"test", cmdTest},
 };
 

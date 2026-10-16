@@ -145,6 +145,10 @@ struct Link {
 
 constexpr uint8_t TRANSPORT_MESH = 0;
 constexpr uint8_t TRANSPORT_ESPNOW = 1;
+// Onda B: a sessao do PC (gateway USB, doc de design §8) — o cabo substitui
+// o radio; o quadro de dados sai como KL_RES_DATA do HostLink e a MAC/token
+// do lease nao sao usados no ar
+constexpr uint8_t TRANSPORT_USB = 2;
 
 // Decisao do servidor: ESP-NOW se os dois tem e existe um canal comum. Canal
 // preso (AP/sessoes) manda; os dois presos em canais diferentes = malha.
@@ -338,6 +342,35 @@ inline bool getF32(Reader& r, float* f) {
     return true;
 }
 
+// Tamanho dos TLVs de metadados de UMA entrada (0 se nao ha nada) — usam
+// encodeListMeta e o catalogo da malha do gateway USB (UsbRes.h)
+inline size_t metaTlvsLen(const Meta* M) {
+    if (M == nullptr) return 0;
+    const size_t ul = strnlen(M->unit, sizeof(M->unit));
+    const size_t sl = strnlen(M->schema, sizeof(M->schema));
+    size_t ml = 0;
+    if (ul > 0) ml += 2 + ul;
+    if (M->hasRange) ml += 2 + 8;
+    if (sl > 0) ml += 2 + sl;
+    if (M->ver != 0) ml += 2 + 1;
+    return ml;
+}
+
+// Escreve SO os TLVs (sem o mlen) de uma entrada. false se o Writer falhou.
+inline bool writeMetaTlvs(Writer& w, const Meta* M) {
+    if (M == nullptr) return true;
+    const size_t ul = strnlen(M->unit, sizeof(M->unit));
+    const size_t sl = strnlen(M->schema, sizeof(M->schema));
+    if (ul > 0 && !(w.u8(TAG_UNIT) && w.u8((uint8_t)ul) && w.bytes(M->unit, ul))) return false;
+    if (M->hasRange && !(w.u8(TAG_RANGE) && w.u8(8) && putF32(w, M->rangeMin) &&
+                         putF32(w, M->rangeMax))) {
+        return false;
+    }
+    if (sl > 0 && !(w.u8(TAG_SCHEMA) && w.u8((uint8_t)sl) && w.bytes(M->schema, sl))) return false;
+    if (M->ver != 0 && !(w.u8(TAG_VER) && w.u8(1) && w.u8(M->ver))) return false;
+    return true;
+}
+
 // LIST_META: [op][n] n x { [type][flags][nlen][nome][mlen u8] mlen x TLV },
 // TLV = [tag u8][len u8][valor]; so entram os campos nao vazios. O mlen
 // cobre so os TLVs. Nao coube no envelope -> 0 (o servidor cai para o LIST
@@ -350,43 +383,13 @@ inline size_t encodeListMeta(const Entry* e, const Meta* m, int n, uint8_t* out,
     for (int i = 0; i < n; i++) {
         const size_t nl = strnlen(e[i].name, RES_NAME_MAX);
         const Meta* M = m != nullptr ? &m[i] : nullptr;
-        const size_t ul = M != nullptr ? strnlen(M->unit, sizeof(M->unit)) : 0;
-        const size_t sl = M != nullptr ? strnlen(M->schema, sizeof(M->schema)) : 0;
-        size_t ml = 0;
-        if (M != nullptr) {
-            if (ul > 0) ml += 2 + ul;
-            if (M->hasRange) ml += 2 + 8;
-            if (sl > 0) ml += 2 + sl;
-            if (M->ver != 0) ml += 2 + 1;
-        }
+        const size_t ml = metaTlvsLen(M);
         w.u8(e[i].type);
         w.u8(e[i].flags);
         w.u8((uint8_t)nl);
         w.bytes(e[i].name, nl);
         w.u8((uint8_t)ml);  // meta cheio de uma entrada ~45 B: cabe em u8
-        if (M != nullptr) {
-            if (ul > 0) {
-                w.u8(TAG_UNIT);
-                w.u8((uint8_t)ul);
-                w.bytes(M->unit, ul);
-            }
-            if (M->hasRange) {
-                w.u8(TAG_RANGE);
-                w.u8(8);
-                putF32(w, M->rangeMin);
-                putF32(w, M->rangeMax);
-            }
-            if (sl > 0) {
-                w.u8(TAG_SCHEMA);
-                w.u8((uint8_t)sl);
-                w.bytes(M->schema, sl);
-            }
-            if (M->ver != 0) {
-                w.u8(TAG_VER);
-                w.u8(1);
-                w.u8(M->ver);
-            }
-        }
+        if (!writeMetaTlvs(w, M)) return 0;
     }
     return w.size();
 }

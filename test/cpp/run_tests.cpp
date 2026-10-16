@@ -17,6 +17,7 @@
 #include "../../main/Utils/JsonMap.h"
 #include "../../main/Bluetooth/NetFrame.h"
 #include "../../main/Pack/ResProto.h"
+#include "../../main/USBDevice/UsbRes.h"
 #include "../../main/Utils/Rigid2D.h"
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
@@ -1610,6 +1611,61 @@ static void testResMeta() {
     CHECK(encodeListMeta(e, m, 2, small, sizeof(small)) == 0);
 }
 
+// Onda B: o tunel ResProto pelo cabo (USBDevice/UsbRes.h)
+static void testUsbRes() {
+    using namespace usbres;
+    using namespace resproto;
+    uint8_t b[512];
+    CHECK(USB_NODE == 0xFFFE);
+    // envelope do CTL: req e resp
+    const size_t n = encodeReq(SUB_OPEN, 0x2A, "xyz", 3, b, sizeof(b));
+    CHECK(n == 7 && b[0] == SUB_OPEN && b[1] == 0x2A && b[2] == 0 && b[3] == 3 && b[4] == 'x');
+    Req rq;
+    CHECK(decodeReq(b, n, &rq) && rq.subop == SUB_OPEN && rq.reqId == 0x2A && rq.len == 3 &&
+          rq.body[0] == 'x');
+    CHECK(!decodeReq(b, 3, &rq));  // curto
+    CHECK(!decodeReq(b, 6, &rq));  // len maior que o resto
+    CHECK(encodeReq(SUB_KEEP, 1, "aaaa", 5, b, 8) == 0);  // nao coube
+    const size_t m = encodeResp(0, 0x2A, "ok", 2, b, sizeof(b));
+    CHECK(m == 6 && b[0] == 0 && b[1] == 0x2A && b[2] == 0 && b[3] == 2 && b[4] == 'o');
+    // DATA: [sid u16][seq u16][bytes] (o mesmo do KL_RES_DATA)
+    const size_t d = encodeDataFrame(0x1234, 7, "oi", 2, b, sizeof(b));
+    CHECK(d == 6 && b[0] == 0x12 && b[1] == 0x34 && b[2] == 0 && b[3] == 7);
+    DataHdr dh;
+    CHECK(decodeDataFrame(b, d, &dh) && dh.sid == 0x1234 && dh.seq == 7 && dh.len == 2 &&
+          dh.data[0] == 'o');
+    CHECK(!decodeDataFrame(b, 3, &dh));
+    // catalogo da malha: no + entrada + meta (schema e unit/range)
+    MeshEntry me[2];
+    me[0].node = 0x1CAE;
+    snprintf(me[0].nodeName, sizeof(me[0].nodeName), "Celer-1CAE");
+    me[0].e.type = TYPE_GPIO;
+    snprintf(me[0].e.name, sizeof(me[0].e.name), "rele1");
+    snprintf(me[0].m.schema, sizeof(me[0].m.schema), "{\"off\":0|1}");
+    me[0].m.ver = 1;
+    me[1].node = 0xAB3E;
+    snprintf(me[1].nodeName, sizeof(me[1].nodeName), "Sensor");
+    me[1].e.type = TYPE_SENSOR;
+    me[1].e.flags = FLAG_SHARED | FLAG_READY;
+    snprintf(me[1].e.name, sizeof(me[1].e.name), "lum");
+    snprintf(me[1].m.unit, sizeof(me[1].m.unit), "%%");
+    me[1].m.rangeMin = 0.0f;
+    me[1].m.rangeMax = 100.0f;
+    me[1].m.hasRange = true;
+    const size_t g = encodeMeshList(me, 2, b, sizeof(b));
+    CHECK(g > 0 && b[0] == 2);
+    MeshEntry gm[4];
+    CHECK(decodeMeshList(b, g, gm, 4) == 2);
+    CHECK(gm[0].node == 0x1CAE && strcmp(gm[0].nodeName, "Celer-1CAE") == 0 &&
+          gm[0].e.type == TYPE_GPIO && strcmp(gm[0].e.name, "rele1") == 0 &&
+          strcmp(gm[0].m.schema, "{\"off\":0|1}") == 0 && gm[0].m.ver == 1);
+    CHECK(gm[1].node == 0xAB3E && strcmp(gm[1].e.name, "lum") == 0 &&
+          gm[1].e.flags == (FLAG_SHARED | FLAG_READY) && gm[1].m.hasRange &&
+          gm[1].m.rangeMax == 100.0f && strcmp(gm[1].m.unit, "%") == 0);
+    CHECK(decodeMeshList(b, g - 1, gm, 4) == -1);  // truncado
+    CHECK(decodeMeshList(b, g, gm, 1) == 1);       // max respeitado
+}
+
 // ------------------------------------------------------------- shell (shl)
 
 #include <cstdarg>
@@ -1901,6 +1957,7 @@ int main() {
     testNetFrame();
     testResProto();
     testResMeta();
+    testUsbRes();
     testRigid2D();
     testRigid2DHammer();
     testRigid2DMath();

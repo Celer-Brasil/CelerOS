@@ -555,6 +555,8 @@ lease/keep/expiração é **reaproveitada sem mudança**.
 | Recursos de OUTROS nós, dados (stream 1-hop ESP-NOW) | ⚠️ só se o gateway dividir canal ESP-NOW com o nó; senão `REASON_NO_LINK` (a regra que os apps já vivem) | §12-e: gateway puxa e re-chunka por USB |
 | PC como destino de `Pack.sendTo` | ✅ (nó virtual + `KL_RES_DATA` de evento) | subscrição filtrada |
 
+**Status (Onda B.1, API 39):** a B.1 pousou com o fio desta seção — `KL_RES_CTL=0x21`/`KL_RES_DATA=0x22`, subops `DESCRIBE/LIST/MESH/OPEN/KEEP/CLOSE/WRITE` (os TLVs do `POLL`/`CONFIG` ficaram para a B.2: o `RES_DATA` não-solicitado cobre o poll e o auto-KEEP do gateway é fixo), PC como cliente com node `0xFFFE` e transporte `TRANSPORT_USB`, auto-KEEP no gateway, queda do cabo = `usbSession(false)` = leases mortos (auto-off), master `res_share_usb` (default "0", `cfg res_share_usb 1`). O catálogo da malha vem do cache (`SUB_MESH`). **Ficou para a B.2**: OPEN de recursos de OUTROS nós proxyado pela malha (controle) e mic/speaker/câmera em stream pelo cabo — ambos recusam com `noLink` hoje. A CLI do `celerctl` (`res ls/relay/sensor/...`) é o veículo de bancada da B.1; a crate Rust segue sendo a onda C.
+
 ---
 
 ## 9. [PROPOSTA] API Rust — crate `celernet`
@@ -746,7 +748,7 @@ RAM interna antes (a lição de 2026-10-07: RAM interna é o recurso escasso).
 | Onda | Escopo | Gates |
 |---|---|---|
 | **A — Recursos genéricos** | `TYPE_GPIO/SENSOR` + `OP_*_META` (TLV) + `GpioRes`/`SensorRes` nativos + `res_share_gpio` default 0 + auto-off no lease | `test/cpp` (codec LIST_META, lease+auto-off), `meshsim` (cenário relé 2 nós), bench 4848 (relés físicos) |
-| **B — Gateway USB** | `KL_RES_CTL/DATA` + nó virtual + `res_share_usb` + proxy DESCRIBE da malha | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
+| **B — Gateway USB** | B.1 ✅ `KL_RES_CTL/DATA` + transporte USB + auto-KEEP + `res_share_usb` (B.2: nó virtual, proxy de OPEN da malha, mic/cam pelo cabo) | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
 | **C — crate `celernet`** | transport trait + framing + ResProto client + API alto nível + fake device p/ CI (+ `cnet`, mDNS, hash-HELLO se julgado) | cargo test, integração vs sim, bancada 1 h de stream |
 | **D — Confiança** | ACL adminKey + consentimento + eventos/threshold + UI de join | meshsim (ACL negando nó), bench de RAM interna |
 | **E/F — Fronteira** | re-chunking, Rust-BLE, rules engine, handoff | desenho próprio, uma onda cada |

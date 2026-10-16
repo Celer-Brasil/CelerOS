@@ -2796,7 +2796,10 @@ desliga o compartilhamento por recurso com os settings `res_share_mic`,
 `res_share_gpio` — que nasce **`"0"`**: acionar um relé de outro cômodo é
 diferente de ouvir um mic, o dono liga de propósito (`"0"` = recusa com
 `denied`). Abrir `gpio`/`sensor` remotos exige a permissão `"gpio"` do
-app.json. O tráfego ESP-NOW também vai cifrado com a chave da matilha.
+app.json.
+Pelo cabo vale o mesmo regime: um computador ligado na USB do gateway é
+outro cliente dos recursos, com o interruptor mestre `res_share_usb`
+(default `"0"`, liga com `cfg res_share_usb 1` no shell). O tráfego ESP-NOW também vai cifrado com a chave da matilha.
 
 #### `Pack.resources([tipo])` → Array
 O que os vizinhos expõem: `[{node, nodeName, name, type, busy, shared, ready}]`,

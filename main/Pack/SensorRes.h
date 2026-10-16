@@ -24,6 +24,13 @@
 // ("%" para lum/bat). Chamado sob o mutex do Resources.
 namespace SensorRes {
 
+// Saida das amostras, registrada pelo Resources no init: o hook decide o
+// transporte por lease (DataLink para sessao ESP-NOW, KL_RES_DATA para a
+// sessao do PC no gateway USB — so o Resources sabe o lease de cada sid)
+typedef void (*SendHook)(uint16_t sid, const uint8_t mac[6], uint32_t token,
+                         const uint8_t* d, size_t n);
+void setSendHook(SendHook h);
+
 bool serveStart(uint16_t sid, const uint8_t mac[6], uint32_t token, int sensorIdx, int rateMs);
 void serveStop(uint16_t sid);
 bool busy(uint16_t sid);

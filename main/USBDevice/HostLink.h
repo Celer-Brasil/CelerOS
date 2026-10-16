@@ -72,6 +72,13 @@ public:
     // logcat — chamado pela task do app dentro do write callback.
     static bool sendDebugFrame(const uint8_t* data, size_t n);
 
+    // Envia um frame KL_RES_DATA (device->host nao-solicitado) pelo canal
+    // ativo: o DATA de sessao do gateway USB (Onda B, UsbRes.h) — resposta
+    // de READ do gpio, amostra de sensor, publish. Mesma rota thread-safe
+    // do logcat/debug (mutex proprio); a saida e o registrador
+    // Resources::usbSetSend.
+    static bool sendResFrame(uint16_t sid, uint16_t seq, const uint8_t* data, size_t n);
+
     // Parametros anunciados no HELLO proto 2.
     uint8_t window() const { return m_window; }
     bool v2() const { return m_parser.v2(); }
@@ -143,6 +150,11 @@ constexpr uint8_t KL_DEBUG_DATA = 0x1F;   // payload binario do debugger Duktape
 constexpr uint8_t KL_STATS = 0x20;        // -> JSON de profiling (celerctl top/stats): heap, tasks com
                                           //    watermark/runtime acumulado e carga do loop/present. Taxas
                                           //    (CPU%, fps) sao calculadas pelo host por delta de 2 fotos
+constexpr uint8_t KL_RES_CTL = 0x21;      // tunel ResProto do gateway USB (Onda B; formatos no
+                                          //    UsbRes.h): req [subop][reqId][len u16][corpo] ->
+                                          //    resp [status][reqId][len u16][corpo]
+constexpr uint8_t KL_RES_DATA = 0x22;     // DATA de sessao do gateway USB (device->host, nao-
+                                          //    solicitado, como o LOG_DATA): [sid u16][seq u16][bytes]
 
 // --- opcodes device -> host ---
 constexpr uint8_t KL_EXEC_CONT = 0x0E;    // continuacao da saida do EXEC (dados puros)

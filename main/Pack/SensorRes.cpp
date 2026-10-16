@@ -30,6 +30,7 @@ struct Sess {
 constexpr int MAX = 4;
 constexpr uint16_t RATE_MIN = 250, RATE_MAX = 60000;
 Sess s_s[MAX];
+SendHook s_send = nullptr;  // registrado pelo Resources (DataLink ou USB)
 
 uint32_t nowMs() { return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS); }
 
@@ -88,6 +89,8 @@ int indexOf(const char* n) {
     return -1;
 }
 
+void setSendHook(SendHook h) { s_send = h; }
+
 bool busy(uint16_t sid) { return bySid(sid) != nullptr; }
 
 bool serveStart(uint16_t sid, const uint8_t mac[6], uint32_t token, int sensorIdx, int rateMs) {
@@ -128,7 +131,13 @@ void tick() {
         s.nextMs = now + s.rateMs;
         uint8_t p[8];
         const int n = encodeSample(s.idx, p);
-        if (n > 0) DataLink::send(s.mac, DataLink::KIND_DATA, s.sid, s.token, ++s.seq, p, (size_t)n);
+        if (n > 0) {
+            if (s_send != nullptr) {
+                s_send(s.sid, s.mac, s.token, p, (size_t)n);  // o hook escolhe o cabo
+            } else {
+                DataLink::send(s.mac, DataLink::KIND_DATA, s.sid, s.token, ++s.seq, p, (size_t)n);
+            }
+        }
     }
 }
 

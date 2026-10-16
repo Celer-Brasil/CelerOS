@@ -131,6 +131,20 @@ bool pollWrite(char* res, size_t resCap, uint16_t* from, char* fromName, size_t 
 typedef void (*PrintFn)(void* ctx, const char* fmt, ...);
 void dump(PrintFn print, void* ctx);
 
+// ---- gateway USB (Onda B, doc de design §8) ----
+// O computador fala ResProto pelo cabo (KL_RES_CTL/KL_RES_DATA do
+// HostLink): e um CLIENTE do servidor daqui com node id sintetico
+// (usbres::USB_NODE) e transporte TRANSPORT_USB. O HostLink registra a
+// saida de dados (usbSetSend) e marca o va-e-vem da sessao (usbSession):
+// caiu o cabo, os leases do PC morrem — auto-off de sempre. Formatos no
+// USBDevice/UsbRes.h; policy: master res_share_usb (default "0") + as
+// regras por tipo (gpio/mic/cam so na privada etc.).
+void usbSetSend(bool (*fn)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n));
+void usbSession(bool on);
+// Processa um pedido de controle do PC; devolve o tamanho do corpo da
+// resposta (-1 = recusado). Sincrono, roda na task do canal USB.
+int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t cap);
+
 // Troca de app (JSBindings::init): canais do app saem (REVOKE "gone" para
 // os clientes) e os handles abertos pelo app fecham (CLOSE ao servidor).
 void appReset();

@@ -279,3 +279,24 @@ CDC1 celerctl) and dormant for boards whose GPIO19/20 become free. The
 SpotPear dog takes the third road: its only USB is the USB-Serial/JTAG, so
 `CONFIG_CELEROS_LINK_ON_USJ` multiplexes console+link on that same port —
 no console/OpenOCD/esptool sacrifice.
+
+## Recursos da matilha pelo cabo (Onda B, API 39)
+
+O computador fala o MESMO protocolo de recursos da matilha pelo canal
+celerctl (qualquer transporte: UART, CDC nativo, USJ ou bridge TCP) — é o
+gateway USB do design (Documentation/CelerNet_Design.pt-BR.md §8). O PC é
+um cliente com node id sintético; a policy é a de sempre por tipo, com o
+master `res_share_usb` (default "0": ligue com `celerctl shell "cfg
+res_share_usb 1"`). A sessão vive enquanto o celerctl estiver de pé: caiu
+o cabo (ou 8 s de idle na UART), os leases morrem e o auto-off do relé
+age como para qualquer cliente.
+
+```
+celerctl res ls                       # identidade + locais + catálogo da malha
+celerctl res relay rele1 on|off|state # aciona um relé local (--segura N segura a sessão)
+celerctl res sensor lum 1000 20       # assina amostras (rate ms, duração s)
+celerctl res open "rele1" '{"off":1}' # abre cru (opts = o schema do catálogo)
+celerctl res write <sid> '\x01\x01'  # DATA cru (ops do gpio)
+celerctl res read <sid>               # espera um RES_DATA da sessão
+celerctl res close <sid>              # fecha (auto-off se o OPEN pediu)
+```

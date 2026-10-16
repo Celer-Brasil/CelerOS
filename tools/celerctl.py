@@ -452,7 +452,7 @@ class HostLink:
                 self.ser.write(frame)
                 cmd_r, payload_r = self._read_frame(timeout=timeout)
                 while cmd_r != cmd:
-                    if cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"]):
+                    if cmd_r in (KL["LOG_DATA"], KL["SCR_DATA"], KL["DEBUG_DATA"], KL["RES_DATA"]):
                         self.push_queue.append((cmd_r, payload_r))
                     elif not (self.keep_push and cmd_r != 0x00):
                         break  # resposta de erro (0x00) ou inesperada: decide abaixo
@@ -466,6 +466,69 @@ class HostLink:
                 if "timeout" not in str(e):
                     raise
         raise last_err if last_err else CelerError("timeout lendo do dispositivo")
+
+    # -------------------------------------------------- gateway USB (Onda B)
+    # Formatos no UsbRes.h do firmware (subops e o fio do ResProto).
+
+    def res_ctl(self, subop, body=b"", reqid=0, timeout=None):
+        """KL_RES_CTL: req [subop][reqid][len u16 BE][corpo] ->
+        [status][reqid][len u16 BE][corpo]; devolve o corpo."""
+        payload = bytes((subop, reqid & 0xFF, (len(body) >> 8) & 0xFF, len(body) & 0xFF)) + body
+        _, p = self.xfer(KL["RES_CTL"], payload, timeout=timeout)
+        if len(p) < 4:
+            raise CelerError("resposta RES_CTL curta")
+        blen = (p[2] << 8) | p[3]
+        return p[4:4 + blen]
+
+    def res_open(self, nome, opts=None):
+        """Abre um recurso LOCAL do gateway; devolve dict com sid/lease/transp.
+        Levanta CelerError com o motivo do ResProto na recusa."""
+        nome_b = nome.encode()
+        if isinstance(opts, dict):
+            params = json.dumps(opts).encode()
+        else:
+            params = (opts or "").encode()
+        if len(params) > 48:
+            raise CelerError("opts acima de 48 bytes")
+        # corpo do OPEN sem o [op]: [req][nlen][nome][plen][params][link 8]
+        # (link sintetico: o gateway sobrescreve com o dele)
+        corpo = bytes((1, len(nome_b))) + nome_b + bytes((len(params),)) + params + \
+                bytes((0x03, 0)) + bytes((0x02, ord("U"), ord("S"), ord("B"), 0, 0))
+        r = self.res_ctl(4, corpo)  # SUB_OPEN
+        if r[0] == 5:  # REFUSE [req][motivo]
+            raise CelerError("recusado: " + RES_REASONS.get(r[2], str(r[2])))
+        if r[0] != 4:  # ACCEPT [req][sid u16][lease u16][transp][chan][mac 6][token u32]
+            raise CelerError("resposta de OPEN desconhecida (op %d)" % r[0])
+        return {"sid": (r[2] << 8) | r[3], "lease_ds": (r[4] << 8) | r[5],
+                "transp": r[6], "chan": r[7]}
+
+    def res_write(self, sid, data, seq=1):
+        """SUB_WRITE: DATA host->gateway (ops do gpio, leitura por pedido)."""
+        corpo = bytes(((sid >> 8) & 0xFF, sid & 0xFF, (seq >> 8) & 0xFF, seq & 0xFF)) + data
+        self.res_ctl(7, corpo)  # SUB_WRITE
+
+    def res_close(self, sid):
+        self.res_ctl(6, bytes(((sid >> 8) & 0xFF, sid & 0xFF)))  # SUB_CLOSE
+
+    def res_data_wait(self, sid, timeout=3.0):
+        """Espera um KL_RES_DATA do sid (resposta de READ, amostra de
+        sensor, publish); drena logs que aparecerem no caminho."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for i, (c, p) in enumerate(self.push_queue):
+                if c == KL["RES_DATA"]:
+                    del self.push_queue[i]
+                    rsid = (p[0] << 8) | p[1]
+                    if rsid == sid:
+                        return p[4:]
+                    continue  # sessao velha: descarta
+            try:
+                c, p = self._read_frame(timeout=0.4)
+                self.push_queue.append((c, p))
+            except CelerError as e:
+                if "timeout" not in str(e):
+                    raise
+        return None
 
     # ---------------------------------------------------------------- comandos
 
@@ -1431,6 +1494,172 @@ def cmd_stats(args):
         cpu = 100.0 * t["rt"] / total if total > 0 else 0.0
         lines.append(f"{t['n']:<16.16} {t['s']:>3} {t['p']:>4} {t['stk']:>7} {cpu:>6.1f}")
     print("\n".join(lines))
+
+
+
+# ---------------------------------------------------------------- gateway USB
+# Subops e constantes do UsbRes.h (firmware); opcodes KL_RES_* vem de KL.
+SUB_DESCRIBE, SUB_LIST, SUB_MESH, SUB_OPEN, SUB_KEEP, SUB_CLOSE, SUB_WRITE = 1, 2, 3, 4, 5, 6, 7
+RES_TYPES = {0: "data", 1: "mic", 2: "speaker", 3: "camera", 4: "gpio", 5: "sensor"}
+RES_REASONS = {1: "notFound", 2: "busy", 3: "denied", 4: "unsupported", 5: "full",
+               6: "local", 7: "gone", 8: "expired", 9: "noLink"}
+
+
+def _decode_meta_tlvs(e, mlen, body, i):
+    j = 0
+    while j < mlen:
+        tag, tl = body[i], body[i + 1]
+        v = body[i + 2:i + 2 + tl]
+        if tag == 1:
+            e["unit"] = v.decode("utf-8", "replace")
+        elif tag == 2 and tl == 8:
+            e["min"], e["max"] = struct.unpack("<ff", v)
+        elif tag == 3:
+            e["schema"] = v.decode("utf-8", "replace")
+        elif tag == 4 and tl == 1:
+            e["ver"] = v[0]
+        i += 2 + tl
+        j += 2 + tl
+    return i
+
+
+def decode_list_meta(body):
+    """LIST_META (ResProto.h): [n][type][flags][nlen][nome][mlen][tlvs]."""
+    n = body[0]
+    i = 1
+    out = []
+    for _ in range(n):
+        t, fl, nl = body[i], body[i + 1], body[i + 2]
+        i += 3
+        nome = body[i:i + nl].decode("utf-8", "replace")
+        i += nl
+        e = {"type": RES_TYPES.get(t, "data"), "flags": fl, "name": nome}
+        mlen = body[i]
+        i += 1
+        i = _decode_meta_tlvs(e, mlen, body, i)
+        out.append(e)
+    return out
+
+
+def decode_mesh_list(body):
+    """Catalogo da malha (UsbRes.h): [n][node u16][nn][nodeName][entry+meta]."""
+    n = body[0]
+    i = 1
+    out = []
+    for _ in range(n):
+        node = (body[i] << 8) | body[i + 1]
+        nn = body[i + 2]
+        i += 3
+        node_name = body[i:i + nn].decode("utf-8", "replace")
+        i += nn
+        t, fl, nl = body[i], body[i + 1], body[i + 2]
+        i += 3
+        nome = body[i:i + nl].decode("utf-8", "replace")
+        i += nl
+        e = {"node": node, "nodeName": node_name, "type": RES_TYPES.get(t, "data"),
+             "flags": fl, "name": nome}
+        mlen = body[i]
+        i += 1
+        i = _decode_meta_tlvs(e, mlen, body, i)
+        out.append(e)
+    return out
+
+
+def _fmt_res(e):
+    s = "%s/%s %s%s%s" % (e.get("nodeName", "-"), e["name"], e["type"],
+                          " compartilhado" if e["flags"] & 0x02 else "",
+                          " sem-provedor" if not e["flags"] & 0x04 else "")
+    if e["flags"] & 0x01:
+        s += " OCUPADO"
+    if e.get("unit"):
+        s += " [%s %s..%s]" % (e["unit"], e.get("min", "?"), e.get("max", "?"))
+    if e.get("schema"):
+        s += " %s" % e["schema"]
+    return s
+
+
+def cmd_res(args):
+    link = open_link(args)
+    try:
+        sub = args.res_cmd
+        if sub == "ls":
+            ident = json.loads(link.res_ctl(SUB_DESCRIBE).decode("utf-8", "replace"))
+            print("%s (%s) %s api %d | privada=%s usb=%s reles=%d" % (
+                ident["name"], ident["id"], ident["board"], ident["api"],
+                "sim" if ident.get("prov") else "NAO",
+                "on" if ident.get("usb") else "OFF", ident.get("relay", 0)))
+            print("locais:")
+            for e in decode_list_meta(link.res_ctl(SUB_LIST)):
+                print("  " + _fmt_res(e))
+            print("malha (cache; repita o comando para descobrir nos novos):")
+            for e in decode_mesh_list(link.res_ctl(SUB_MESH)):
+                print("  " + _fmt_res(e))
+        elif sub == "relay":
+            r = link.res_open(args.nome, {"off": 1} if args.op != "state" else None)
+            sid = r["sid"]
+            try:
+                if args.op == "state":
+                    link.res_write(sid, b"\x02")
+                    d = link.res_data_wait(sid, 3.0)
+                    print("rele %s: %s" % (args.nome, "ligado" if d and len(d) > 1 and d[1] else
+                                           "desligado" if d else "sem resposta"))
+                else:
+                    link.res_write(sid, b"\x01\x01" if args.op == "on" else b"\x01\x00")
+                    link.res_write(sid, b"\x02")
+                    d = link.res_data_wait(sid, 3.0)
+                    print("rele %s -> %s (leitura: %s)" % (
+                        args.nome, args.op,
+                        ("estado %d" % d[1]) if d and len(d) > 1 else "sem resposta"))
+            finally:
+                if args.segura <= 0:
+                    link.res_close(sid)
+            if args.segura > 0:
+                # segura a sessao: o auto-KEEP do gateway renova ate o teto;
+                # ao sair, o fim do processo derruba o cabo e o auto-off age
+                print("segurando %ds (auto-off ao soltar)..." % args.segura)
+                try:
+                    time.sleep(args.segura)
+                finally:
+                    link.res_close(sid)
+        elif sub == "sensor":
+            r = link.res_open(args.nome, {"rate": args.rate} if args.rate else None)
+            sid = r["sid"]
+            print("sensor %s sessao %d (lease %d.%ds, transp %d)" % (
+                args.nome, sid, r["lease_ds"] // 10, r["lease_ds"] % 10, r["transp"]))
+            fim = time.time() + args.segundos
+            try:
+                while time.time() < fim:
+                    d = link.res_data_wait(sid, min(2.0, max(0.5, args.segundos)))
+                    if d is None:
+                        continue
+                    if args.rate and len(d) >= 8:
+                        ts = struct.unpack("<I", d[:4])[0]
+                        v = struct.unpack("<f", d[4:8])[0]
+                        print("t=%u %.1f" % (ts, v))
+                    elif not args.rate:
+                        print(" ".join("%02x" % b for b in d))
+            finally:
+                link.res_close(sid)
+        elif sub == "open":
+            opts = json.loads(args.opts) if args.opts else None
+            r = link.res_open(args.nome, opts)
+            print("sessao %d (lease %d.%ds, transp %d, canal %d)" % (
+                r["sid"], r["lease_ds"] // 10, r["lease_ds"] % 10, r["transp"], r["chan"]))
+        elif sub == "write":
+            dados = args.dados.encode("utf-8").decode("unicode_escape").encode("latin-1")
+            link.res_write(args.sid, dados)
+            print("escrito (%d bytes); resposta sai como RES_DATA" % len(dados))
+        elif sub == "read":
+            d = link.res_data_wait(args.sid, args.timeout)
+            if d is None:
+                print("nada em %.1fs" % args.timeout)
+            else:
+                print(" ".join("%02x" % b for b in d))
+        elif sub == "close":
+            link.res_close(args.sid)
+            print("fechada (auto-off no dono se o OPEN pediu)")
+    finally:
+        link.close()
 
 
 def cmd_shell(args):
@@ -3126,6 +3355,32 @@ def main():
                         help="teto de espera por comando shell em segundos, para saida"
                              " grande (default 15)")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("res", help="recursos da matilha pelo cabo (gateway USB, Onda B)")
+    p.set_defaults(func=cmd_res)
+    rr = p.add_subparsers(dest="res_cmd", required=True)
+    rr.add_parser("ls", help="identidade do gateway + catalogo local e da malha")
+    p = rr.add_parser("relay", help="aciona um rele LOCAL do gateway")
+    p.add_argument("nome", help='"rele1".. (o do catalogo)')
+    p.add_argument("op", choices=("on", "off", "state"))
+    p.add_argument("--segura", type=int, default=0, metavar="S",
+                   help="mantem a sessao N s (auto-KEEP do gateway; ao soltar, auto-off)")
+    p = rr.add_parser("sensor", help="assina um sensor LOCAL do gateway")
+    p.add_argument("nome", help='"lum", "bat" (o do catalogo)')
+    p.add_argument("rate", type=int, nargs="?", default=0, help="ms entre amostras (0 = por pedido)")
+    p.add_argument("segundos", type=int, nargs="?", default=10)
+    p = rr.add_parser("open", help="abre um recurso local (opts = JSON do schema)")
+    p.add_argument("nome")
+    p.add_argument("opts", nargs="?", default=None)
+    p = rr.add_parser("write", help="DATA cru na sessao (\\xNN para bytes)")
+    p.add_argument("sid", type=int)
+    p.add_argument("dados")
+    p = rr.add_parser("read", help="espera um RES_DATA da sessao")
+    p.add_argument("sid", type=int)
+    p.add_argument("--timeout", type=float, default=3.0)
+    p = rr.add_parser("close", help="fecha a sessao")
+    p.add_argument("sid", type=int)
+    p.set_defaults(func=cmd_res)
 
     p = sub.add_parser("devices", help="lista placas conectadas (USB e WiFi)")
     p.add_argument("-l", "--long", action="store_true")

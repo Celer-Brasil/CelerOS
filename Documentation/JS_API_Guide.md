@@ -2521,7 +2521,10 @@ can turn sharing off per resource with the settings `res_share_mic`,
 `res_share_gpio` — which defaults to **`"0"`**: firing a relay from another
 room is not the same as listening to a mic; the owner turns it on on purpose
 (`"0"` = refuse with `denied`). Opening remote `gpio`/`sensor` resources
-needs the `"gpio"` permission in app.json. ESP-NOW traffic is encrypted with
+needs the `"gpio"` permission in app.json.
+Over the cable the same regime applies: a computer plugged into the
+gateway's USB is just another resource client, with the master switch
+`res_share_usb` (default `"0"`, enable with `cfg res_share_usb 1`). ESP-NOW traffic is encrypted with
 the pack key too.
 
 #### `Pack.resources([type])` → Array

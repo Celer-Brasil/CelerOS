@@ -29,6 +29,7 @@
 #include "DataLink.h"
 #include "../Utils/TaskCaps.h"
 #include "Pack.h"
+#include "../USBDevice/UsbRes.h"
 
 // Recursos da matilha (ver Resources.h / ResProto.h).
 //
@@ -50,6 +51,17 @@ constexpr uint32_t K_OPEN_RETRY_MS = 2500;
 constexpr uint8_t K_OPEN_TRIES = 5;  // 12,5 s: a malha sob stream de audio atrasa o ACCEPT
 constexpr uint32_t K_CACHE_FRESH_MS = 30000;   // LIST vale 30 s
 constexpr uint32_t K_DESCRIBE_GAP_MS = 5000;   // DESCRIBE por no, no maximo 1 a cada 5 s
+// Gateway USB (Onda B): o PC com node id sintetico e o master switch dele
+constexpr uint16_t K_USB_NODE = usbres::USB_NODE;
+bool s_usbSession = false;   // sessao HostLink viva (HELLO...endSession)
+bool s_usbAllowed = false;   // cache do res_share_usb (refreshSettings, 2 s)
+bool (*s_usbSend)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n) = nullptr;
+// Captura do OPEN do PC: o handleOpen manda ACCEPT/REFUSE pelo sendEnv;
+// para o PC a resposta volta no proprio CTL (usbCtl), nao no radio
+uint8_t* s_capture = nullptr;
+size_t s_captureCap = 0;
+int s_captureLen = 0;
+
 constexpr int INBOX_DEPTH = 6;
 constexpr int RX_DEPTH = 6;
 constexpr int WR_DEPTH = 4;
@@ -146,6 +158,9 @@ struct Heap {
     WrMsg wr[WR_DEPTH];
     uint8_t wrHead, wrCount;
     CacheNode cache[CACHE_NODES];
+    // catalogo do gateway USB (usbCtl SUB_MESH): remotes() + encode em bloco
+    Remote rs[16];
+    usbres::MeshEntry me[16];
     DataLink::Rx dlRx;  // quadro ESP-NOW sendo despachado (tick, sob s_lock)
     InMsg ctrl;         // controle em banda vindo do ESP-NOW
 };
@@ -335,6 +350,13 @@ bool linkAlive() {
 
 bool sendEnv(uint16_t to, const uint8_t* p, size_t n, bool urgent) {
     if (n == 0) return false;
+    // gateway USB: o controle do OPEN do PC nao vai ao radio — captura
+    if (s_capture != nullptr) {
+        const size_t c = n < s_captureCap ? n : s_captureCap;
+        memcpy(s_capture, p, c);
+        s_captureLen = (int)c;
+        return true;
+    }
     // controle (tudo menos DATA) tambem pelo ESP-NOW quando o par e conhecido
     bool viaNow = false;
     // o sid do quadro CTRL leva o NOSSO id de no: o par aprende (id, MAC) ja
@@ -395,7 +417,9 @@ int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
 // compartilhada; ATUADOR (gpio/relé) nasce DESLIGADO — acionar fisica
 // remota e diferente de expor um mic, o dono decide de proposito
 const char* policyDefault(const char* key) {
-    return key != nullptr && strcmp(key, "res_share_gpio") == 0 ? "0" : "1";
+    if (key == nullptr) return "1";
+    // atuador e a porta USB do PC nascem DESLIGADOS; leitura nasce "1"
+    return (strcmp(key, "res_share_gpio") == 0 || strcmp(key, "res_share_usb") == 0) ? "0" : "1";
 }
 
 bool policyAllows(const Local& l) {
@@ -413,6 +437,7 @@ bool policyAllows(const Local& l) {
 void refreshSettings() {
     const std::string n = CelerSettings::get("celernet_name", "");
     snprintf(s_nameCache, sizeof(s_nameCache), "%s", n.c_str());
+    s_usbAllowed = CelerSettings::get("res_share_usb", policyDefault("res_share_usb")) == "1";
     for (int i = 0; i < LIST_MAX; i++) {
         Local& l = s_local[i];
         if (l.used && l.policyKey != nullptr) {
@@ -536,15 +561,17 @@ void handleDescribeMeta(uint16_t from) {
     sendEnv(from, b, len, true);
 }
 
-void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
+void handleOpen(uint16_t from, const uint8_t* body, size_t len, bool usb) {
     OpenReq rq;
     if (!decodeOpen(body, len, &rq)) return;
-    if (rq.link.flags & LINK_UP) learnPeer(from, rq.link.mac);
+    if (!usb && (rq.link.flags & LINK_UP)) learnPeer(from, rq.link.mac);
     uint8_t b[32];
     const int rid = localFind(rq.name);
     uint8_t reason = 0;
     if (rid < 0) {
         reason = REASON_NOT_FOUND;
+    } else if (usb && !s_usbAllowed) {
+        reason = REASON_POLICY;  // master res_share_usb (default "0")
     } else if (!policyAllows(s_local[rid])) {
         reason = REASON_POLICY;
     } else if (!s_local[rid].ready) {
@@ -565,7 +592,12 @@ void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
             ac.req = rq.req;
             ac.sid = l->sid;
             ac.leaseDs = LEASE_DS_DEFAULT;
-            if (l->transport == TRANSPORT_ESPNOW) {
+            if (usb) {
+                // o cabo e o transporte (doc §8): sem radio, sem hold; a
+                // MAC/token do lease nao sao usados no ar
+                l->transport = TRANSPORT_USB;
+                ac.transport = TRANSPORT_USB;
+            } else if (l->transport == TRANSPORT_ESPNOW) {
                 // OPEN repetido (ACCEPT perdido): mesma decisao, mesmo token
                 DataLink::Self me;
                 DataLink::self(&me);
@@ -590,14 +622,20 @@ void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
                 }
             }
             // recursos de stream: so com ESP-NOW, e com a ponta nativa de pe.
-            // Exceto o sensor POR PEDIDO ({"rate":0}): a leitura unica cabe
-            // no DATA da propria malha, e o valor nao precisa do canal
+            // Exceto o sensor POR PEDIDO ({"rate":0}), que cabe no DATA da
+            // propria malha. Pelo cabo (TRANSPORT_USB) a onda B.1 leva data/
+            // gpio/sensor — mic/speaker/camera em stream ficam para a B.2
             const uint8_t type = s_local[rid].type;
             uint8_t fail = 0;
-            if (type != TYPE_DATA && ac.transport != TRANSPORT_ESPNOW &&
-                !(type == TYPE_SENSOR && paramInt(rq.params, rq.plen, "rate", 0) == 0)) {
+            if (ac.transport == TRANSPORT_USB) {
+                if (!(type == TYPE_DATA || type == TYPE_GPIO || type == TYPE_SENSOR)) {
+                    fail = REASON_NO_LINK;
+                }
+            } else if (type != TYPE_DATA && ac.transport != TRANSPORT_ESPNOW &&
+                       !(type == TYPE_SENSOR && paramInt(rq.params, rq.plen, "rate", 0) == 0)) {
                 fail = REASON_NO_LINK;
-            } else if (!providerStart(*l, rq.params, rq.plen)) {
+            }
+            if (fail == 0 && !providerStart(*l, rq.params, rq.plen)) {
                 fail = REASON_BUSY;  // mic/speaker em uso aqui (app local, outra fala)
             }
             if (fail != 0) {
@@ -609,21 +647,25 @@ void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
                 sendEnv(from, b, encodeRefuse(rq.req, fail, b, sizeof(b)), true);
                 return;
             }
-            {
-                char who[16];
-                snprintf(who, sizeof(who), "%04X", from);
+            char who[16];
+            snprintf(who, sizeof(who), usb ? "PC" : "%04X", from);
+            if (!usb) {
                 Pack::Member ms[CelerNet::NODES_MAX];
                 const int nm = Pack::members(ms, CelerNet::NODES_MAX);
                 for (int i = 0; i < nm; i++) {
-                    if (ms[i].id == from && ms[i].name[0] != '\0') snprintf(who, sizeof(who), "%s", ms[i].name);
+                    if (ms[i].id == from && ms[i].name[0] != '\0') {
+                        snprintf(who, sizeof(who), "%s", ms[i].name);
+                    }
                 }
-                noteUse(type, who, true, type == TYPE_GPIO ? s_local[rid].name : nullptr);
             }
-            if (ac.transport == TRANSPORT_ESPNOW) {
-                ESP_LOGI(TAG, "sessao %u: %04X abriu \"%s\" via ESP-NOW (canal %u)", (unsigned)l->sid,
-                         from, rq.name, ac.chan);
+            noteUse(type, who, true, type == TYPE_GPIO ? s_local[rid].name : nullptr);
+            if (ac.transport == TRANSPORT_USB) {
+                ESP_LOGI(TAG, "sessao %u: %s abriu \"%s\" via cabo", (unsigned)l->sid, who, rq.name);
+            } else if (ac.transport == TRANSPORT_ESPNOW) {
+                ESP_LOGI(TAG, "sessao %u: %s abriu \"%s\" via ESP-NOW (canal %u)", (unsigned)l->sid,
+                         who, rq.name, ac.chan);
             } else {
-                ESP_LOGI(TAG, "sessao %u: %04X abriu \"%s\" via malha", (unsigned)l->sid, from, rq.name);
+                ESP_LOGI(TAG, "sessao %u: %s abriu \"%s\" via malha", (unsigned)l->sid, who, rq.name);
             }
             sendEnv(from, b, encodeAccept(ac, b, sizeof(b)), true);
             return;
@@ -655,11 +697,29 @@ void pushWrite(const Local& l, uint16_t from, const char* fromName, const uint8_
     s_heap->wrCount++;
 }
 
+// Amostras do SensorRes (registrada no init): o transporte vem do LEASE —
+// DataLink para a sessao ESP-NOW, cabo (KL_RES_DATA) para a do PC
+void sensorSend(uint16_t sid, const uint8_t mac[6], uint32_t token, const uint8_t* d, size_t n) {
+    static uint16_t s_sensorSeq = 0;
+    s_sensorSeq++;
+    LeaseTable<LEASES>::Lease* l = s_leases.find(sid);
+    if (l != nullptr && l->transport == TRANSPORT_USB) {
+        if (s_usbSend != nullptr) s_usbSend(sid, s_sensorSeq, d, n);
+        return;
+    }
+    DataLink::send(mac, DataLink::KIND_DATA, sid, token, s_sensorSeq, d, n);
+}
+
 // Servidor -> cliente num lease (resposta do gpio/sensor). O caminho e o
 // mesmo do publish: ESP-NOW quando o lease tem, senao o DATA do envelope.
 void serverSendData(const LeaseTable<LEASES>::Lease& l, const uint8_t* d, size_t n) {
     static uint16_t s_seq = 0;
     s_seq++;
+    if (l.transport == TRANSPORT_USB) {
+        // o cabo: sai como KL_RES_DATA (sendResFrame registrada pelo HostLink)
+        if (s_usbSend != nullptr) s_usbSend(l.sid, s_seq, d, n);
+        return;
+    }
     if (l.transport == TRANSPORT_ESPNOW) {
         DataLink::send(l.mac, DataLink::KIND_DATA, l.sid, l.token, s_seq, d, n);
         return;
@@ -840,7 +900,7 @@ void dispatch(const InMsg& m) {
             return;
         }
         case OP_OPEN:
-            handleOpen(m.from, m.data + 1, m.len - 1);
+            handleOpen(m.from, m.data + 1, m.len - 1, false);
             return;
         case OP_ACCEPT: {
             Accept ac;
@@ -1085,6 +1145,7 @@ void init() {
     s_inLock = xSemaphoreCreateMutex();
     if (s_lock == nullptr || s_inLock == nullptr) return;
     s_leases.seed((uint16_t)(esp_random() & 0xFFFF));
+    SensorRes::setSendHook(sensorSend);
     registerNatives();
     s_inited = true;
     // Ordem de boot da RAM interna (esp32-cam: depois do WiFi sobram ~74 KB e
@@ -1179,6 +1240,15 @@ void tickTimers() {
     const uint32_t now = nowMs();
     // sensores em stream (rate > 0): amostra as sessoes vencidas e empurra
     SensorRes::tick();
+    // leases do PC (gateway USB): renovados enquanto a sessao do cabo vive —
+    // a queda (idle 8 s na UART, desconexao CDC) derruba a sessao
+    // (usbSession(false)) e dai o lease vence como o de qualquer cliente
+    if (s_usbSession) {
+        for (int i = 0; i < LEASES; i++) {
+            LeaseTable<LEASES>::Lease* l = s_leases.at(i);
+            if (l != nullptr && l->client == K_USB_NODE) l->expiresMs = nowMs() + l->leaseMs;
+        }
+    }
     // leases vencidos (cliente sumiu sem CLOSE)
     LeaseTable<LEASES>::Lease dead;
     while (s_leases.expireOne(now, &dead)) {
@@ -1757,6 +1827,143 @@ void dump(PrintFn pr, void* ctx) {
     AudioRes::stats(&as);
     pr(ctx, "audio: mic->par %u blocos (%u sem fila)  tocados %u  gravados %u\r\n", (unsigned)as.srcFrames,
        (unsigned)as.srcFail, (unsigned)as.playFrames, (unsigned)as.recFrames);
+}
+
+// ================================================================ gateway USB
+
+void usbSetSend(bool (*fn)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n)) {
+    Guard g;
+    s_usbSend = fn;
+}
+
+// HELLO do HostLink = PC na porta; endSession (idle de 8 s, cabo) = fora.
+// Sem sessao os leases do PC morrem AGORA (auto-off no atuador de sempre).
+void usbSession(bool on) {
+    if (!s_inited) {
+        s_usbSession = on;  // malha nem no ar: so anota
+        return;
+    }
+    Guard g;
+    if (s_usbSession == on) return;
+    s_usbSession = on;
+    if (on) return;
+    for (int i = 0; i < LEASES; i++) {
+        LeaseTable<LEASES>::Lease* l = s_leases.at(i);
+        if (l == nullptr || l->client != K_USB_NODE) continue;
+        ESP_LOGI(TAG, "gateway USB: sessao %u morreu com o cabo (\"%s\")", (unsigned)l->sid,
+                 s_local[l->rid].used ? s_local[l->rid].name : "?");
+        leaseGone(*l);
+        s_leases.close(l->client, l->sid);
+    }
+}
+
+int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t cap) {
+    if (!s_inited) return -1;
+    Guard g;
+    switch (subop) {
+        case usbres::SUB_DESCRIBE: {
+            // identidade do gateway (JSON curto, como o KL_INFO)
+            CelerNet::Info st;
+            CelerNet::info(&st);
+            char j[176];
+            snprintf(j, sizeof(j),
+                     "{\"id\":\"%04X\",\"name\":\"%s\",\"board\":\"%s\",\"api\":%d,"
+                     "\"prov\":%d,\"usb\":%d,\"relay\":%d}",
+                     st.node, st.name[0] != '\0' ? st.name : "Celer", Board::profile().id,
+                     CELEROS_API_LEVEL, NetKeys::provisioned() ? 1 : 0, s_usbAllowed ? 1 : 0,
+                     Board::profile().relay.count);
+            snprintf((char*)out, cap, "%s", j);
+            return (int)strlen((char*)out);
+        }
+        case usbres::SUB_LIST: {
+            // o mesmo fio do DESCRIBE_META, direto na resposta
+            Entry list[LIST_MAX];
+            Meta metas[LIST_MAX];
+            int n = 0;
+            for (int i = 0; i < LIST_MAX && n < LIST_MAX; i++) {
+                const Local& l = s_local[i];
+                if (!l.used) continue;
+                Entry& e = list[n];
+                e.type = l.type;
+                e.flags = (uint8_t)((l.shared ? FLAG_SHARED : 0) | (l.ready ? FLAG_READY : 0) |
+                                    (!l.shared && s_leases.countRid((uint8_t)i) > 0 ? FLAG_BUSY : 0));
+                snprintf(e.name, sizeof(e.name), "%s", l.name);
+                metas[n] = l.m;
+                n++;
+            }
+            size_t r = encodeListMeta(list, metas, n, out, cap);
+            if (r == 0) r = encodeList(list, n, out, cap);
+            if (r == 0) return -1;
+            // o encode inclui o byte de op (OP_LIST_META/OP_LIST) — no tunel
+            // o corpo ja diz qual subop e: strip para o PC ler [n] direto
+            memmove(out, out + 1, r - 1);
+            return (int)(r - 1);
+        }
+        case usbres::SUB_MESH: {
+            // catalogo dos vizinhos (cache do cliente; a 1a chamada dispara
+            // DESCRIBE_META e volta vazia — o PC reconsulta, como os apps)
+            if (!heapEnsure()) return -1;
+            const int n = remotes(s_heap->rs, 16);
+            for (int i = 0; i < n; i++) {
+                usbres::MeshEntry& m = s_heap->me[i];
+                const Remote& r = s_heap->rs[i];
+                m.node = r.node;
+                memcpy(m.nodeName, r.nodeName, sizeof(m.nodeName));  // char[16] p/ char[16]
+                m.e = s_heap->rs[i].e;
+                m.m = s_heap->rs[i].m;
+            }
+            return (int)usbres::encodeMeshList(s_heap->me, n, out, cap);
+        }
+        case usbres::SUB_OPEN: {
+            // OPEN integral do ResProto; o ACCEPT/REFUSE que o handleOpen
+            // mandaria pelo radio e capturado no sendEnv e vira resposta
+            if (!heapEnsure()) return -1;
+            s_capture = out;
+            s_captureCap = cap;
+            s_captureLen = 0;
+            handleOpen(K_USB_NODE, body, len, true);
+            s_capture = nullptr;
+            return s_captureLen;
+        }
+        case usbres::SUB_KEEP: {
+            if (len < 2) return -1;
+            const uint16_t sid = (uint16_t)((body[0] << 8) | body[1]);
+            LeaseTable<LEASES>::Lease* l = s_leases.find(sid);
+            if (l != nullptr && l->client == K_USB_NODE) {
+                l->expiresMs = nowMs() + l->leaseMs;
+                if (cap > 0) out[0] = 1;  // renovada
+                return 1;
+            }
+            // sessao desconhecida (lease venceu na queda do cabo, reboot):
+            // REVOKE expired — o cliente reabre, como os apps
+            return (int)encodeRevoke(sid, REASON_EXPIRED, out, cap);
+        }
+        case usbres::SUB_CLOSE: {
+            if (len < 2) return -1;
+            const uint16_t sid = (uint16_t)((body[0] << 8) | body[1]);
+            LeaseTable<LEASES>::Lease* l = s_leases.find(sid);
+            if (l != nullptr && l->client == K_USB_NODE) {
+                leaseGone(*l);  // auto-off se o OPEN pediu
+                s_leases.close(l->client, l->sid);
+                ESP_LOGI(TAG, "sessao %u: PC fechou (\"%s\")", (unsigned)sid,
+                         s_local[l->rid].used ? s_local[l->rid].name : "?");
+            }
+            return 0;
+        }
+        case usbres::SUB_WRITE: {
+            // DATA do PC: roteia igual ao radio (gpio ops, leitura de sensor
+            // por pedido, canal de app); a resposta sai como KL_RES_DATA
+            usbres::DataHdr dh;
+            if (!usbres::decodeDataFrame(body, len, &dh)) return -1;
+            LeaseTable<LEASES>::Lease* l = s_leases.find(dh.sid);
+            if (l == nullptr || l->client != K_USB_NODE) return -1;
+            l->expiresMs = nowMs() + l->leaseMs;  // escrita tambem renova
+            serverDataIn(*l, K_USB_NODE, "PC", dh.data, dh.len);
+            return 0;
+        }
+        default:
+            return -1;
+    }
 }
 
 void appReset() {

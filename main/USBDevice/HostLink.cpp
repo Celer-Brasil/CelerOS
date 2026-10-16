@@ -1,4 +1,8 @@
 #include "HostLink.h"
+#include "UsbRes.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Pack/Resources.h"
+#endif
 #include "esp_attr.h"
 #include "../Display/ScreenCapture.h"
 #include "CelerShell.h"
@@ -62,12 +66,18 @@ uint8_t s_logFrame[8 + 1 + kLogChunk];
 // frame de saida do debugger Duktape (KL_DEBUG_DATA, binario puro)
 SemaphoreHandle_t s_dbgFrameMutex = nullptr;
 constexpr size_t kDbgChunk = 1024;
+// frame de saida do gateway USB (KL_RES_DATA): [sid u16][seq u16][dados]
+SemaphoreHandle_t s_resFrameMutex = nullptr;
+constexpr size_t kResChunk = 512;
+uint8_t* s_resFrame = nullptr;
+constexpr size_t kResFrameSize = 8 + 4 + kResChunk;
 // alocado na 1a sessao de debug (PSRAM quando ha): estatico custava 1 KB
 // de RAM interna em todo boot — a mesma que o BLE precisa
 uint8_t* s_dbgFrame = nullptr;
 constexpr size_t kDbgFrameSize = 8 + kDbgChunk;
 
 HostLink::WriteFn linkWriter() { return s_ctxWriter; }
+
 HostLink::BaudFn linkBaud() { return s_ctxBaud; }
 HostLink* linkCtx() { return s_ctxLink; }
 
@@ -257,6 +267,14 @@ void handleHello(const uint8_t* payload, uint16_t len) {
     }
     respond(KL_HELLO, 0, id, (uint16_t)strlen(id));
     if (linkCtx() != nullptr) linkCtx()->enableV2(v2);
+#if CONFIG_CELEROS_BLUETOOTH
+    // gateway USB (Onda B): o canal que abriu a sessao passa a carregar o
+    // KL_RES_DATA do PC; Resources derruba os leases dele no endSession
+    Resources::usbSetSend([](uint16_t sid, uint16_t seq, const uint8_t* d, size_t n) -> bool {
+        return HostLink::sendResFrame(sid, seq, d, n);
+    });
+    Resources::usbSession(true);
+#endif
 }
 
 void handleInfo() {
@@ -986,6 +1004,30 @@ void handleCoredump(const uint8_t* payload, uint16_t len) {
     }
 }
 
+void handleResCtl(const uint8_t* payload, uint16_t len) {
+#if CONFIG_CELEROS_BLUETOOTH
+    usbres::Req rq;
+    if (!usbres::decodeReq(payload, len, &rq)) {
+        respondError(KL_RES_CTL, "ctl malformado");
+        return;
+    }
+    static uint8_t out[512];
+    const int n = Resources::usbCtl(rq.subop, rq.body, rq.len, out, sizeof(out));
+    if (n < 0) {
+        respondError(KL_RES_CTL, "recusado");
+        return;
+    }
+    uint8_t hdr[3] = {rq.reqId, (uint8_t)((unsigned)n >> 8), (uint8_t)n};
+    // respond copia data para o frame de resposta APOS o byte de status
+    uint8_t buf[3 + 512];
+    memcpy(buf, hdr, sizeof(hdr));
+    memcpy(buf + sizeof(hdr), out, (size_t)n);
+    respond(KL_RES_CTL, 0, buf, (uint16_t)(sizeof(hdr) + n));
+#else
+    respondError(KL_RES_CTL, "sem bluetooth neste aparelho");
+#endif
+}
+
 void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
     switch (cmd) {
         case KL_HELLO: handleHello(payload, len); break;
@@ -1016,6 +1058,9 @@ void dispatch(uint8_t cmd, const uint8_t* payload, uint16_t len) {
         case KL_DEBUG_CTL: handleDebugCtl(payload, len); break;
         case KL_DEBUG_DATA: handleDebugData(payload, len); break;
         case KL_STATS: handleStats(); break;
+        case KL_RES_CTL: handleResCtl(payload, len); break;
+        case KL_RES_DATA:  // so sai do device (como o LOG_DATA); host->device nao existe
+            respondError(cmd, "KL_RES_DATA e device->host; use KL_RES_CTL"); break;
         default: respondError(cmd, "opcode desconhecido"); break;
     }
 }
@@ -1028,6 +1073,7 @@ HostLink::HostLink(WriteFn writer, BaudFn baudHook, uint8_t window, uint32_t sil
     if (s_dispatchMutex == nullptr) s_dispatchMutex = xSemaphoreCreateMutex();
     if (s_logFrameMutex == nullptr) s_logFrameMutex = xSemaphoreCreateMutex();
     if (s_dbgFrameMutex == nullptr) s_dbgFrameMutex = xSemaphoreCreateMutex();
+    if (s_resFrameMutex == nullptr) s_resFrameMutex = xSemaphoreCreateMutex();
 }
 
 void HostLink::trampoline(void* ctx, uint8_t cmd, const uint8_t* payload, uint16_t len) {
@@ -1123,6 +1169,9 @@ bool HostLink::endSession() {
         // host sumiu sem DEBUG_CTL 0 (proxy morto a forca, cabo): um app
         // pausado no debugger ficaria esperando comando para sempre
         JsDebugger::setClient(false);
+#if CONFIG_CELEROS_BLUETOOTH
+        Resources::usbSession(false);  // leases do PC morrem (auto-off)
+#endif
     }
     // Canal ocioso (chamado pela task dele, sem frame em curso): o buffer
     // grande volta ao heap; o frame de resposta tambem, se nao resta sessao
@@ -1137,6 +1186,37 @@ bool HostLink::endSession() {
     }
     if (s_dispatchMutex != nullptr) xSemaphoreGive(s_dispatchMutex);
     return was;
+}
+
+// Tunel ResProto do PC (Onda B, UsbRes.h): decodifica o pedido, roda no
+// Resources e devolve [status][reqId][len u16][corpo] no mesmo opcode.
+// O corpo grande (catalogo da malha) mora em static sob o mutex do
+// dispatch: uma sessao so, uma task de canal por vez.
+bool HostLink::sendResFrame(uint16_t sid, uint16_t seq, const uint8_t* data, size_t n) {
+    HostLink* a = s_active;  // leitura simples: trocas de sessao sao raras
+    if (a == nullptr || data == nullptr || n == 0) return false;
+    if (s_resFrameMutex != nullptr) xSemaphoreTake(s_resFrameMutex, portMAX_DELAY);
+    if (s_resFrame == nullptr) {
+        s_resFrame = (uint8_t*)heap_caps_malloc(kResFrameSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_resFrame == nullptr) s_resFrame = (uint8_t*)malloc(kResFrameSize);
+    }
+    bool ok = s_resFrame != nullptr;
+    while (ok && n > 0) {
+        const size_t part = n > kResChunk ? kResChunk : n;
+        // payload: [sid u16][seq u16][dados] (big-endian, o fio do ResProto)
+        s_resFrame[8] = (uint8_t)(sid >> 8);
+        s_resFrame[9] = (uint8_t)sid;
+        s_resFrame[10] = (uint8_t)(seq >> 8);
+        s_resFrame[11] = (uint8_t)seq;
+        memcpy(s_resFrame + 12, data, part);
+        size_t total = hostframe::build(s_resFrame, kResFrameSize, a->m_parser.v2(),
+                                        KL_RES_DATA, s_resFrame + 8, (uint16_t)(4 + part));
+        ok = total > 0 && a->m_writer != nullptr && a->m_writer(s_resFrame, total);
+        data += part;
+        n -= part;
+    }
+    if (s_resFrameMutex != nullptr) xSemaphoreGive(s_resFrameMutex);
+    return ok;
 }
 
 bool HostLink::sendLogFrame(const char* line, size_t n) {

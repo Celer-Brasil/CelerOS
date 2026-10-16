@@ -368,7 +368,9 @@ function runMesh(spec) {
                     app: n.spec.app, autoStart: n.spec.autoStart !== false,
                     wire: n.spec.wire ? n.spec.wire.toString() : null,
                     settings: n.spec.settings || null,
-                    pack: n.spec.pack || null
+                    pack: n.spec.pack || null,
+                    relays: n.spec.relays || 0,      // API 38: reles do no
+                    sensors: n.spec.sensors || null  // API 38: sensores de placa
                 },
                 transferList: [ch.port2]
             });

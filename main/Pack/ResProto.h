@@ -55,11 +55,26 @@ constexpr uint8_t OP_DATA = 9;
 // divide o canal com ele
 constexpr uint8_t OP_HELLO = 10;
 
+// DESCRIBE_META/LIST_META (API 38, recursos genericos): o cliente moderno
+// pede o catalogo COM metadados (unidade/faixa de sensor, esquema de params
+// de atuador) e o servidor responde o LIST com TLVs por entrada (abaixo).
+// Um servidor velho ignora o op desconhecido e nao responde: o cliente
+// repete uma vez e cai para o DESCRIBE simples (Resources::remotes).
+// Firmware <= 37 so fala DESCRIBE/LIST.
+constexpr uint8_t OP_DESCRIBE_META = 11;
+constexpr uint8_t OP_LIST_META = 12;
+
 // Tipos de recurso (o que o JS ve em type)
 constexpr uint8_t TYPE_DATA = 0;
 constexpr uint8_t TYPE_MIC = 1;
 constexpr uint8_t TYPE_SPEAKER = 2;
 constexpr uint8_t TYPE_CAMERA = 3;
+// API 38: feature do hardware como recurso. GPIO e ATUADOR: exclusivo, so
+// matilha privada, interruptor do dono res_share_gpio (default "0") e
+// auto-off no fim do lease (params {"off":1}). SENSOR e leitura passiva:
+// compartilhado, rate no params {"rate":ms} (0 = so quando o cliente pede).
+constexpr uint8_t TYPE_GPIO = 4;
+constexpr uint8_t TYPE_SENSOR = 5;
 
 // flags do LIST
 constexpr uint8_t FLAG_BUSY = 0x01;    // ja ha sessao aberta (exclusivo)
@@ -97,6 +112,8 @@ inline const char* typeName(uint8_t t) {
         case TYPE_MIC: return "mic";
         case TYPE_SPEAKER: return "speaker";
         case TYPE_CAMERA: return "camera";
+        case TYPE_GPIO: return "gpio";
+        case TYPE_SENSOR: return "sensor";
         default: return "data";
     }
 }
@@ -149,6 +166,25 @@ struct Entry {
     char name[RES_NAME_MAX + 1] = {0};
 };
 
+// Metadados de um recurso (API 38): viajam no LIST_META como TLVs depois do
+// nome; o struct e o mesmo do lado servidor (Local), do cache do cliente e
+// do que o JS/PC veem. Tamanho enxuto de proposito: 12 entradas de LIST_MAX
+// com meta cheio NAO cabem num envelope (430 B) — o servidor que nao couber
+// cai para o LIST simples (handleDescribeMeta).
+constexpr uint8_t TAG_UNIT = 1;    // ASCII curto: "%", "C", "kPa"
+constexpr uint8_t TAG_RANGE = 2;   // [min f32][max f32] LE
+constexpr uint8_t TAG_SCHEMA = 3;  // ASCII: JSON dos params do OPEN
+constexpr uint8_t TAG_VER = 4;     // u8: versao do esquema
+
+struct Meta {
+    char unit[6] = {0};        // "" = sem unidade
+    float rangeMin = 0.0f;
+    float rangeMax = 0.0f;
+    bool hasRange = false;
+    char schema[24] = {0};     // "" = params livres
+    uint8_t ver = 0;           // 0 = sem TAG_VER no fio
+};
+
 // --------------------------------------------------------------- escrita
 
 class Writer {
@@ -197,6 +233,12 @@ public:
     bool bytes(const uint8_t** p, size_t n) {
         if (m_pos + n > m_len) return false;
         *p = m_b + m_pos;
+        m_pos += n;
+        return true;
+    }
+    // TLV do futuro (tag desconhecido): pula sem interpretar
+    bool skip(size_t n) {
+        if (m_pos + n > m_len) return false;
         m_pos += n;
         return true;
     }
@@ -268,6 +310,142 @@ inline int decodeList(const uint8_t* body, size_t len, Entry* out, int max) {
         memcpy(e.name, nm, nl);
         e.name[nl] = '\0';
         if (got < max) out[got++] = e;
+    }
+    return got;
+}
+
+// ------------------------------------------------- metadados (API 38)
+
+inline size_t encodeDescribeMeta(uint8_t* out, size_t cap) {
+    Writer w(out, cap);
+    w.u8(OP_DESCRIBE_META);
+    return w.size();
+}
+
+// f32 LE por bits (o codec e u16/u8; o float atravessa por memcpy — as
+// pontas sao LE: ESP32 e host dos testes)
+inline bool putF32(Writer& w, float f) {
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    return w.u16((uint16_t)(u & 0xFFFF)) && w.u16((uint16_t)(u >> 16));
+}
+
+inline bool getF32(Reader& r, float* f) {
+    uint16_t lo, hi;
+    if (!r.u16(&lo) || !r.u16(&hi)) return false;
+    const uint32_t u = (uint32_t)lo | ((uint32_t)hi << 16);
+    memcpy(f, &u, 4);
+    return true;
+}
+
+// LIST_META: [op][n] n x { [type][flags][nlen][nome][mlen u8] mlen x TLV },
+// TLV = [tag u8][len u8][valor]; so entram os campos nao vazios. O mlen
+// cobre so os TLVs. Nao coube no envelope -> 0 (o servidor cai para o LIST
+// simples; o cliente aceita os dois).
+inline size_t encodeListMeta(const Entry* e, const Meta* m, int n, uint8_t* out, size_t cap) {
+    if (n < 0 || n > LIST_MAX) return 0;
+    Writer w(out, cap);
+    w.u8(OP_LIST_META);
+    w.u8((uint8_t)n);
+    for (int i = 0; i < n; i++) {
+        const size_t nl = strnlen(e[i].name, RES_NAME_MAX);
+        const Meta* M = m != nullptr ? &m[i] : nullptr;
+        const size_t ul = M != nullptr ? strnlen(M->unit, sizeof(M->unit)) : 0;
+        const size_t sl = M != nullptr ? strnlen(M->schema, sizeof(M->schema)) : 0;
+        size_t ml = 0;
+        if (M != nullptr) {
+            if (ul > 0) ml += 2 + ul;
+            if (M->hasRange) ml += 2 + 8;
+            if (sl > 0) ml += 2 + sl;
+            if (M->ver != 0) ml += 2 + 1;
+        }
+        w.u8(e[i].type);
+        w.u8(e[i].flags);
+        w.u8((uint8_t)nl);
+        w.bytes(e[i].name, nl);
+        w.u8((uint8_t)ml);  // meta cheio de uma entrada ~45 B: cabe em u8
+        if (M != nullptr) {
+            if (ul > 0) {
+                w.u8(TAG_UNIT);
+                w.u8((uint8_t)ul);
+                w.bytes(M->unit, ul);
+            }
+            if (M->hasRange) {
+                w.u8(TAG_RANGE);
+                w.u8(8);
+                putF32(w, M->rangeMin);
+                putF32(w, M->rangeMax);
+            }
+            if (sl > 0) {
+                w.u8(TAG_SCHEMA);
+                w.u8((uint8_t)sl);
+                w.bytes(M->schema, sl);
+            }
+            if (M->ver != 0) {
+                w.u8(TAG_VER);
+                w.u8(1);
+                w.u8(M->ver);
+            }
+        }
+    }
+    return w.size();
+}
+
+// corpo depois do op; devolve quantas entradas (-1 = malformado). mout pode
+// ser nullptr (so as Entries). TLV de tag desconhecido e pulado pelo len.
+inline int decodeListMeta(const uint8_t* body, size_t len, Entry* out, Meta* mout, int max) {
+    Reader r(body, len);
+    uint8_t n;
+    if (!r.u8(&n) || n > LIST_MAX) return -1;
+    int got = 0;
+    for (int i = 0; i < n; i++) {
+        Entry e;
+        Meta m;
+        uint8_t nl, ml;
+        const uint8_t* nm;
+        if (!r.u8(&e.type) || !r.u8(&e.flags) || !r.u8(&nl)) return -1;
+        if (nl > RES_NAME_MAX || !r.bytes(&nm, nl)) return -1;
+        memcpy(e.name, nm, nl);
+        e.name[nl] = '\0';
+        if (!r.u8(&ml)) return -1;
+        size_t left = ml;
+        while (left > 0) {
+            uint8_t tag, tl;
+            if (!r.u8(&tag) || !r.u8(&tl) || (size_t)tl + 2 > left) return -1;
+            switch (tag) {
+                case TAG_UNIT: {
+                    const uint8_t* u;
+                    if (!r.bytes(&u, tl)) return -1;
+                    const size_t c = tl < sizeof(m.unit) - 1 ? tl : sizeof(m.unit) - 1;
+                    memcpy(m.unit, u, c);
+                    m.unit[c] = '\0';
+                    break;
+                }
+                case TAG_RANGE:
+                    if (tl != 8 || !getF32(r, &m.rangeMin) || !getF32(r, &m.rangeMax)) return -1;
+                    m.hasRange = true;
+                    break;
+                case TAG_SCHEMA: {
+                    const uint8_t* s;
+                    if (!r.bytes(&s, tl)) return -1;
+                    const size_t c = tl < sizeof(m.schema) - 1 ? tl : sizeof(m.schema) - 1;
+                    memcpy(m.schema, s, c);
+                    m.schema[c] = '\0';
+                    break;
+                }
+                case TAG_VER:
+                    if (tl != 1 || !r.u8(&m.ver)) return -1;
+                    break;
+                default:
+                    if (!r.skip(tl)) return -1;
+            }
+            left -= 2 + tl;
+        }
+        if (got < max) {
+            out[got] = e;
+            if (mout != nullptr) mout[got] = m;
+            got++;
+        }
     }
     return got;
 }

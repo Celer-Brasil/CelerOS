@@ -1,4 +1,4 @@
-// meshsim/resources.js — recursos da matilha (API 36) num no simulado:
+// meshsim/resources.js — recursos da matilha (API 36/38) num no simulado:
 // porta JS de main/Pack/Resources.cpp com os mesmos tempos (lease 20 s,
 // KEEP urgente a cada lease/4, reabertura no "expired", OPEN com 3 tentativas a cada 2,5 s, LIST fresco por
 // 30 s, DESCRIBE no maximo 1 a cada 5 s por no) e os mesmos estados/motivos.
@@ -9,21 +9,40 @@
 var LEASE_MS = 20000, OPEN_RETRY_MS = 2500, OPEN_TRIES = 3;
 var CACHE_FRESH_MS = 30000, DESCRIBE_GAP_MS = 5000;
 var HANDLES = 8, LEASES = 8, RX_DEPTH = 6, WR_DEPTH = 4, NAME_MAX = 15, MAX_DATA = 425;
-var TYPES = ['data', 'mic', 'speaker', 'camera'];
+var TYPES = ['data', 'mic', 'speaker', 'camera', 'gpio', 'sensor'];
 
-// caps do BEAT -> nativos anunciados (sem FLAG_READY ate a R2/R3)
-function natives(caps) {
+// caps do BEAT -> nativos anunciados (sem FLAG_READY ate a R2/R3).
+// API 38: relés do no (deps.relays, exclusivos, interruptor res_share_gpio
+// default "0") e sensores de placa (deps.sensors, compartilhados, leitura
+// passiva com unidade/faixa no catalogo)
+function natives(caps, deps) {
     var l = [];
     if (caps & 0x02) l.push({ name: 'mic', type: 1, shared: false, ready: false, policy: 'res_share_mic' });
     if (caps & 0x01) l.push({ name: 'speaker', type: 2, shared: false, ready: false, policy: 'res_share_spk' });
     if (caps & 0x40) l.push({ name: 'camera', type: 3, shared: false, ready: false, policy: 'res_share_cam' });
+    var nr = deps.relays || 0;
+    for (var i = 1; i <= nr; i++) {
+        l.push({ name: 'rele' + i, type: 4, shared: false, ready: true, policy: 'res_share_gpio',
+                 schema: '{"off":0|1}' });
+    }
+    (deps.sensors || []).forEach(function(s) {
+        l.push({ name: s, type: 5, shared: true, ready: true, policy: 'res_share_sensor',
+                 unit: '%', range: [0, 100] });
+    });
     return l;
 }
+
 
 function wireLen(o) {
     switch (o.op) {
         case 'describe': return 1;
-        case 'list': return 2 + o.list.reduce(function(a, e) { return a + 3 + e.name.length; }, 0);
+        case 'list': return 2 + o.list.reduce(function(a, e) {
+            var n = 3 + e.name.length + 1;  // + mlen do LIST_META (API 38)
+            if (e.unit) n += 2 + e.unit.length;
+            if (e.range) n += 2 + 8;
+            if (e.schema) n += 2 + e.schema.length;
+            return a + n;
+        }, 0);
         case 'open': return 4 + o.name.length + (o.params ? o.params.length : 0) + 8;  // + enlace ESP-NOW
         case 'accept': return 18;  // + transporte/canal/MAC/token
         case 'refuse': return 3;
@@ -38,7 +57,19 @@ function wireLen(o) {
 //        log(s), caps, setting(key) -> string}
 function create(deps) {
     var S = deps.S;
-    var local = natives(deps.caps).map(function(n) { n.app = false; return n; });
+    var local = natives(deps.caps, deps).map(function(n) { n.app = false; return n; });
+    var hw = {};   // "fisico" simulado: estado dos reles por nome (0/1)
+    // default do interruptor do dono (Resources.cpp/policyDefault): o atuador
+    // nasce DESLIGADO; leitura nasce compartilhada. deps.setting volta null
+    // quando o no nao definiu
+    function policyVal(k) {
+        var v = deps.setting(k);
+        if (v === null || v === undefined) return k === 'res_share_gpio' ? '0' : '1';
+        return String(v);
+    }
+    function sample() {  // leitura que muda com o tempo (prova amostras novas)
+        return 40 + (Math.floor(now() / 3000) % 20);
+    }
     var leases = [];       // {sid, client, name, expires}
     var nextSid = Math.floor(Math.random() * 0xFFFF);
     var h = [];            // handles
@@ -56,7 +87,11 @@ function create(deps) {
     function leasesOf(name) { return leases.filter(function(l) { return l.name === name; }); }
     function revokeAll(name, reason) {
         leasesOf(name).forEach(function(l) { send(l.client, { op: 'revoke', sid: l.sid, reason: reason }, true); });
-        leases = leases.filter(function(l) { return l.name !== name; });
+        leases = leases.filter(function(l) {
+            if (l.name !== name) return true;
+            if (l.autoOff) { hw[l.name] = 0; deps.log('[res] ' + l.name + ' desligou (fim da sessao)'); }
+            return false;
+        });
     }
     function bySid(node, sid) {
         for (var i = 0; i < HANDLES; i++) {
@@ -77,8 +112,12 @@ function create(deps) {
         switch (o.op) {
             case 'describe':
                 send(from, { op: 'list', list: local.map(function(x) {
-                    return { name: x.name, type: x.type, shared: x.shared, ready: x.ready,
-                             busy: !x.shared && leasesOf(x.name).length > 0 };
+                    var e = { name: x.name, type: x.type, shared: x.shared, ready: x.ready,
+                              busy: !x.shared && leasesOf(x.name).length > 0 };
+                    if (x.unit) e.unit = x.unit;
+                    if (x.range) e.range = x.range;
+                    if (x.schema) e.schema = x.schema;
+                    return e;
                 }) });
                 return;
             case 'list':
@@ -90,9 +129,10 @@ function create(deps) {
             case 'open': {
                 var x = findLocal(o.name), reason = '';
                 if (!x) reason = 'notFound';
-                // v3: mic e camera so na matilha privada
-                else if ((x.type === 1 || x.type === 3) && !deps.secure) reason = 'denied';
-                else if (x.policy && deps.setting(x.policy) === '0') reason = 'denied';
+                // v3: mic e camera so na matilha privada; gpio (API 38) idem —
+                // na aberta qualquer vizinho acenderia o rele
+                else if ((x.type === 1 || x.type === 3 || x.type === 4) && !deps.secure) reason = 'denied';
+                else if (x.policy && policyVal(x.policy) === '0') reason = 'denied';
                 else if (!x.ready) reason = 'unsupported';
                 else if (!x.shared && leasesOf(x.name).some(function(q) { return q.client !== from; })) reason = 'busy';
                 if (!reason) {
@@ -107,6 +147,13 @@ function create(deps) {
                             deps.log('[res] sessao ' + l.sid + ': ' + from + ' abriu "' + x.name + '"');
                         }
                         l.expires = now() + LEASE_MS;
+                        // API 38: gpio com auto-off (fim do lease desliga) e
+                        // sensor com taxa de amostragem (0 = so por pedido)
+                        var pp = {};
+                        try { pp = JSON.parse(o.params || '{}'); } catch (e2) { pp = {}; }
+                        l.autoOff = x.type === 4 && pp.off === 1;
+                        l.rate = x.type === 5 ? Math.max(0, pp.rate | 0) : 0;
+                        l.nextSample = 0;
                         send(from, { op: 'accept', req: o.req, sid: l.sid, leaseDs: LEASE_MS / 100 }, true);
                         return;
                     }
@@ -142,7 +189,11 @@ function create(deps) {
                 send(from, { op: 'revoke', sid: o.sid, reason: 'expired' }, true);
                 return;
             case 'close': {
-                leases = leases.filter(function(q) { return !(q.sid === o.sid && q.client === from); });
+                leases = leases.filter(function(q) {
+                    if (!(q.sid === o.sid && q.client === from)) return true;
+                    if (q.autoOff) { hw[q.name] = 0; deps.log('[res] ' + q.name + ' desligou (fim da sessao)'); }
+                    return false;
+                });
                 return;  // CLOSE so cliente -> servidor (Resources.cpp)
             }
             case 'revoke':
@@ -171,8 +222,23 @@ function create(deps) {
                     l = leases[k];
                     if (l.sid === o.sid && l.client === from) {
                         l.expires = now() + LEASE_MS;
-                        wr.push({ res: l.name, from: from, fromName: fromName, data: o.data });
-                        if (wr.length > WR_DEPTH) wr.shift();
+                        var x2 = findLocal(l.name);
+                        // o write do cliente chega como string JSON
+                        var d2 = o.data || {};
+                        if (typeof d2 === 'string') { try { d2 = JSON.parse(d2); } catch (e3) { d2 = {}; } }
+                        if (x2 && x2.type === 4) {  // gpio: atuacao na hora
+                            if (d2.w !== undefined) hw[l.name] = d2.w ? 1 : 0;
+                            else if (d2.r !== undefined) {
+                                send(from, { op: 'data', sid: l.sid, data: { r: hw[l.name] || 0 } });
+                            }
+                        } else if (x2 && x2.type === 5) {  // sensor por pedido
+                            if (d2.r !== undefined) {
+                                send(from, { op: 'data', sid: l.sid, data: { v: sample(), ts: now() } });
+                            }
+                        } else {
+                            wr.push({ res: l.name, from: from, fromName: fromName, data: o.data });
+                            if (wr.length > WR_DEPTH) wr.shift();
+                        }
                     }
                 }
                 return;
@@ -182,8 +248,19 @@ function create(deps) {
     function tick() {
         var t = now();
         leases = leases.filter(function(l) {
-            if (t - l.expires > 0) { deps.log('[res] sessao ' + l.sid + ': lease de ' + l.client + ' venceu'); return false; }
+            if (t - l.expires > 0) {
+                deps.log('[res] sessao ' + l.sid + ': lease de ' + l.client + ' venceu');
+                if (l.autoOff) { hw[l.name] = 0; deps.log('[res] ' + l.name + ' desligou (fim da sessao)'); }
+                return false;
+            }
             return true;
+        });
+        // sensor em stream (rate > 0): amostra as sessoes vencidas
+        leases.forEach(function(l) {
+            if (l.rate > 0 && t - (l.nextSample || 0) >= 0) {
+                l.nextSample = t + l.rate;
+                send(l.client, { op: 'data', sid: l.sid, data: { v: sample(), ts: t } });
+            }
         });
         for (var i = 0; i < HANDLES; i++) {
             var x = h[i];
@@ -225,8 +302,12 @@ function create(deps) {
                 c.list.forEach(function(e) {
                     var type = TYPES[e.type] || 'data';
                     if (only && only !== type) return;
-                    out.push({ node: m.id, nodeName: m.name || c.name, name: e.name, type: type,
-                               busy: !!e.busy, shared: !!e.shared, ready: !!e.ready });
+                    var r = { node: m.id, nodeName: m.name || c.name, name: e.name, type: type,
+                              busy: !!e.busy, shared: !!e.shared, ready: !!e.ready };
+                    if (e.unit) r.unit = e.unit;
+                    if (e.range) { r.min = e.range[0]; r.max = e.range[1]; }
+                    if (e.schema) r.schema = e.schema;
+                    out.push(r);
                 });
             });
             return out;
@@ -283,6 +364,7 @@ function create(deps) {
             return x ? leasesOf(x.name).length : -1;
         },
         pollWrite: function() { return wr.length ? wr.shift() : null; },
+        relayState: function(name) { return hw[name] === undefined ? -1 : hw[name]; },
         MAX_DATA: MAX_DATA
     };
     return { api: api, onEnvelope: onEnvelope, tick: tick, memberLeft: memberLeft };

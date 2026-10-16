@@ -2792,13 +2792,19 @@ que o `Mic`/`Camera` local exigiria (`"mic"`/`"camera"` no app.json), e **só
 funciona dentro de uma matilha privada** (API 37): um nó na rede aberta
 `"celer"` recusa com `denied` (veja a nota de segurança em `CelerNet`). O dono
 desliga o compartilhamento por recurso com os settings `res_share_mic`,
-`res_share_cam`, `res_share_spk` (`"0"` = recusa com `denied`). O tráfego
-ESP-NOW também vai cifrado com a chave da matilha.
+`res_share_cam`, `res_share_spk`, `res_share_sens` (todos nascem `"1"`) e
+`res_share_gpio` — que nasce **`"0"`**: acionar um relé de outro cômodo é
+diferente de ouvir um mic, o dono liga de propósito (`"0"` = recusa com
+`denied`). Abrir `gpio`/`sensor` remotos exige a permissão `"gpio"` do
+app.json. O tráfego ESP-NOW também vai cifrado com a chave da matilha.
 
 #### `Pack.resources([tipo])` → Array
 O que os vizinhos expõem: `[{node, nodeName, name, type, busy, shared, ready}]`,
-`type` é `"mic" | "speaker" | "camera" | "data"`. Vem de um cache; o nó ainda
-sem cache é consultado em segundo plano — chame de novo ~1 s depois.
+`type` é `"mic" | "speaker" | "camera" | "gpio" | "sensor" | "data"`. Vem de um
+cache; o nó ainda sem cache é consultado em segundo plano — chame de novo ~1 s
+depois. Nós na API 38+ trazem também os **metadados** do recurso: `unit`
+(unidade, ex. `"%"`), `min`/`max` (faixa de sensor) e `schema` (JSON dos
+parâmetros que o `open` aceita, ex. `{"off":0|1}` num relé).
 
 #### `Pack.open(no, nome, [opts])` → Number
 Abre o recurso `nome` no `no` (id ou nome). Devolve o handle (0..7) ou `-1`
@@ -2823,7 +2829,8 @@ Fecha a sessão. Os handles fecham sozinhos quando o app sai.
 #### `Pack.expose(nome, [opts])` → Boolean
 Cria um canal de dados do app (nome ≤ 15 caracteres). `opts.shared` (padrão
 `true`) aceita várias sessões; `false` = exclusivo (o 2º cliente recebe
-`busy`).
+`busy`). `opts.unit`, `opts.min`, `opts.max` (API 38) publicam metadados que
+os consumidores veem no `Pack.resources()`.
 
 #### `Pack.unexpose(nome)` → Boolean
 Tira o canal e revoga as sessões abertas (`"gone"`); a saída do app faz o
@@ -2910,3 +2917,72 @@ while (Pack.status(h).state === "open" || Pack.status(h).state === "opening") Sy
 if (Pack.status(h).state === "done") System.drawJPG("/local/foto.jpg", 0, 0);
 ```
 
+
+## 42. Nível de API 38 — Recursos genéricos: relés, GPIO e sensores da matilha
+
+A ideia do produto: **qualquer feature do hardware vira recurso publicado**.
+A API 38 acrescenta dois tipos ao catálogo da matilha e os primeiros
+provedores nativos:
+
+| Recurso | Tipo | Arbitragem | O que faz |
+|---|---|---|---|
+| `rele1`..`rele3` | `gpio` | exclusivo, matilha **privada**, `res_share_gpio` (default `"0"`) | aciona as linhas de relé da placa (SKUs com L1..L3) |
+| `gpio` | `gpio` | idem | um pino de saída digital livre (`{"pin":N}` no `open`) |
+| `lum` | `sensor` | compartilhado, `res_share_sens` | sensor de luz da placa, 0..100 `%` |
+| `bat` | `sensor` | compartilhado, `res_share_sens` | carga da bateria, 0..100 `%` |
+
+`Pack.resources()` mostra a unidade e a faixa dos sensores e o esquema de
+parâmetros dos atuadores (`schema`).
+
+#### Abrir um relé (auto-off)
+
+O `open` recebe `{"off":1}` para pedir **auto-off**: quando a sessão acaba
+(lease vencido, `close`, revogação — inclusive o dono local usando
+`System.relay`, que ganha na hora), o relé **desliga sozinho**. Uma matilha
+inteira pode cair que o atuador volta ao repouso.
+
+```javascript
+// (app com "gpio" no app.json)
+var r = Pack.resources("gpio").filter(function (x) { return x.name === "rele1"; })[0];
+var h = Pack.open(r.node, "rele1", { off: 1 });
+while (Pack.status(h).state === "opening") System.delay(100);
+if (Pack.status(h).state !== "open") throw new Error("rele1: " + Pack.status(h).reason);
+Pack.write(h, "\u0001\u0001");   // [1][1] = liga
+System.delay(30000);               // ...rega...
+Pack.write(h, "\u0001\u0000");   // [1][0] = desliga
+Pack.close(h);                     // sessao acaba: o auto-off garante 0
+```
+
+O protocolo de dados do `gpio` é binário, 1 byte de operação:
+`[1][0|1]` escreve, `[2]` lê (o dono responde `[2][0|1]`). Ops futuros
+(pulso/PWM) respondem `[255]`.
+
+#### Sensor com taxa ou por pedido
+
+`Pack.open(no, "lum", { rate: ms })` assina um **stream**: o dono amostra
+sozinho e empurra mensagens de 8 bytes `[ts u32][f32 LE]` (o valor na unidade
+do `unit` do catálogo). Com `rate` omitido (ou 0) a leitura é **por pedido**:
+`Pack.write(h, "\x02")` pede uma amostra e ela chega no `Pack.read`. Com
+taxa, a sessão exige ESP-NOW (como o áudio); por pedido funciona também na
+malha pura.
+
+```javascript
+var t = Pack.open(no, "bat", { rate: 60000 });   // 1 amostra por minuto
+while (true) {
+  var d = Pack.read(t);
+  if (d) mostra(decodifica(d));                  // 8 bytes: ts u32 + f32 LE
+  System.delay(1000);
+}
+```
+
+Dica de decodificação: os 8 bytes são `ts` (u32 little-endian) seguido do
+valor float32 little-endiano — `d.charCodeAt(4)` & 0xff é o byte baixo do
+float. Quem só quer o número pode ler o `unit`/`min`/`max` do catálogo e
+tratar o `read` como opaco, exibindo o valor decodificado pelo próprio app
+com `TypedArray` (suportado no Duktape).
+
+Segurança do atuador, resumida: exclusivo (uma mão na bomba por vez),
+privada (a rede aberta recusa com `denied`), `res_share_gpio` default `"0"`
+(o dono liga de propósito), notificação no dono a cada sessão ("rele1 em uso
+por X") e **o uso local sempre ganha** — `System.relay` no próprio nó revoga
+a sessão remota no mesmo instante.

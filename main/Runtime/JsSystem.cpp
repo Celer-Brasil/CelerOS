@@ -32,6 +32,9 @@
 #include "driver/ledc.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
+#if CONFIG_CELEROS_BLUETOOTH
+#include "../Pack/Resources.h"  // localClaim do rele (o dono ganha do remoto)
+#endif
 
 // =====================================================
 // Touch Input
@@ -428,6 +431,12 @@ duk_ret_t JSBindings::js_lightLevel(duk_context *ctx) {
 duk_ret_t JSBindings::js_relay(duk_context *ctx) {
     int n = duk_require_int(ctx, 0);
     bool on = duk_require_boolean(ctx, 1) ? true : false;
+#if CONFIG_CELEROS_BLUETOOTH
+    // o dono vem primeiro: sessao remota no nosso rele (Pack.open("releN")
+    // de outro no, API 38) e revogada — o fisico nao pode ter dois
+    // comandantes (mesmo contrato do Mic.start com o mic)
+    Resources::localClaim(resproto::TYPE_GPIO);
+#endif
     duk_push_boolean(ctx, BoardIO::setRelay(n, on) ? 1 : 0);
     return 1;
 }

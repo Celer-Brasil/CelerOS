@@ -600,6 +600,117 @@ scenario('Recursos: descoberta, sessoes, leases e revogacao', function() {
 });
 
 // ---------------------------------------------------------------------------
+// Recursos API 38: gpio/relé como recurso (privada + interruptor do dono
+// default "0", atuacao na hora, leitura de volta) com AUTO-OFF no fim do
+// lease, e sensor com metadados no catalogo (unidade/faixa) + stream por
+// taxa + leitura por pedido
+scenario('Recursos Onda A: rele com auto-off e sensor com meta', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    return sim.runMesh({
+        durationMs: 52000, seed: 7,
+        nodes: [
+            { name: 'Releiro', id: 'F1F1', app: src, caps: 0x01, relays: 2,
+              pack: { name: 'fazenda', pass: 'senhaforte' },
+              settings: { res_share_gpio: '1' },
+              wire: function(env, sim) {
+                // oraculo do "fisico": o estado do rele na placa simulada
+                sim.at(13000, function(e) { sim.note('rele1=' + e.Pack.relayState('rele1')); });
+                sim.at(40000, function(e) { sim.note('rele1=' + e.Pack.relayState('rele1')); });
+                sim.at(43000, function(e) { sim.note('rele1=' + e.Pack.relayState('rele1')); });
+              } },
+            { name: 'Fechado', id: 'F4F4', app: src, caps: 0x01, relays: 1,
+              pack: { name: 'fazenda', pass: 'senhaforte' } },  // policy default "0"
+            { name: 'Sensor', id: 'F2F2', app: src, caps: 0x04, sensors: ['lum', 'bat'],
+              pack: { name: 'fazenda', pass: 'senhaforte' } },
+            { name: 'Cli', id: 'F3F3', app: src, caps: 0x04,
+              pack: { name: 'fazenda', pass: 'senhaforte' },
+              wire: function(env, sim) {
+                var h = {};
+                sim.at(4200, function(e) { e.Pack.resources(); });  // primao DESCRIBE
+                sim.at(5500, function(e) {
+                    var meta = e.Pack.resources().filter(function(r) {
+                        return r.type === 'gpio' || r.type === 'sensor';
+                    }).map(function(r) {
+                        return r.nodeName + '/' + r.name + (r.schema ? '/sch:' + r.schema : '') +
+                               (r.unit ? '/' + r.unit + ':' + r.min + '-' + r.max : '');
+                    }).join(',');
+                    sim.note('meta ' + meta);
+                });
+                sim.at(6000, function(e) {
+                    h.rel = e.Pack.open('Releiro', 'rele1', { off: 1 });
+                    h.neg = e.Pack.open('Fechado', 'rele1');
+                    h.lum = e.Pack.open('Sensor', 'lum', { rate: 5000 });
+                    h.bat = e.Pack.open('Sensor', 'bat');  // rate 0: so por pedido
+                });
+                sim.at(9000, function(e) {
+                    ['rel', 'neg', 'lum', 'bat'].forEach(function(k) {
+                        var st = e.Pack.status(h[k]);
+                        sim.note('st ' + k + ' ' + st.state + (st.reason ? '/' + st.reason : ''));
+                    });
+                });
+                sim.at(10000, function(e) { sim.note('liga ' + e.Pack.write(h.rel, '{"w":1}')); });
+                sim.at(12000, function(e) { e.Pack.write(h.bat, '{"r":1}'); });
+                sim.at(14000, function(e) { e.Pack.write(h.rel, '{"r":1}'); });
+                sim.at(16000, function(e) {
+                    var d, got = [];
+                    while ((d = e.Pack.read(h.rel)) !== null) got.push(JSON.stringify(d));
+                    sim.note('volta rele ' + got.join('|'));
+                    d = null; got = [];
+                    while ((d = e.Pack.read(h.bat)) !== null) got.push(String(d.v));
+                    sim.note('sob pedido ' + got.join('|'));
+                    d = null; got = [];
+                    while ((d = e.Pack.read(h.lum)) !== null) got.push(String(d.v));
+                    sim.note('stream ' + got.join('|'));
+                });
+                // sai do ar: o lease vence ~20 s depois do ultimo KEEP e o
+                // auto-off tem que desligar o rele sozinho
+                sim.at(18500, function(e) { e.Pack.close(h.lum); e.Pack.close(h.bat); });
+              } },
+            { name: 'C2', id: 'F5F5', app: src, caps: 0x04,
+              pack: { name: 'fazenda', pass: 'senhaforte' },
+              wire: function(env, sim) {
+                var h2 = {};
+                sim.at(12000, function(e) { h2.b = e.Pack.open('Releiro', 'rele1'); });
+                sim.at(15000, function(e) {
+                    var st = e.Pack.status(h2.b);
+                    sim.note('c2 rele ' + st.state + '/' + st.reason);
+                });
+                sim.at(38500, function(e) { h2.c = e.Pack.open('Releiro', 'rele1', { off: 1 }); });
+                sim.at(40500, function(e) { sim.note('c2 volta ' + e.Pack.status(h2.c).state); });
+                sim.at(41000, function(e) { e.Pack.write(h2.c, '{"w":1}'); });
+              } }
+        ],
+        links: [['Releiro', 'Cli', -50], ['Fechado', 'Cli', -55], ['Sensor', 'Cli', -55],
+                ['C2', 'Cli', -60], ['Releiro', 'C2', -65]],
+        events: [{ at: 18000, offline: 'Cli' }]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Cli'); dump(res, 'Releiro'); dump(res, 'C2');
+        var meta = last(res, 'Cli', /\[sim\] meta /) || '';
+        check('catalogo traz meta de rele e sensor', /Releiro\/rele1\/sch:\{\"off\":0\|1\}/.test(meta) &&
+              /Sensor\/lum\/%:0-100/.test(meta), meta);
+        check('gpio sem o sim do dono = denied', has(res, 'Cli', '[sim] st neg refused/denied'));
+        check('rele abre com auto-off', has(res, 'Cli', '[sim] st rel open'));
+        check('sensor abre (stream e por pedido)', has(res, 'Cli', '[sim] st lum open') &&
+              has(res, 'Cli', '[sim] st bat open'));
+        check('escrita liga o fisico', has(res, 'Cli', '[sim] liga true') &&
+              has(res, 'Releiro', '[sim] rele1=1'));
+        check('rele responde leitura', has(res, 'Cli', '[sim] volta rele {"r":1}'));
+        check('sensor por pedido responde', !!last(res, 'Cli', /\[sim\] sob pedido \d+/));
+        var st = (last(res, 'Cli', /\[sim\] stream /) || '').replace('[sim] stream ', '');
+        check('sensor em stream chega com taxa', st.split(',').filter(function(x) { return x; }).length >= 1, st);
+        check('exclusivo ocupado para o 2o', has(res, 'C2', '[sim] c2 rele refused/busy'));
+        check('lease vencido desliga o rele (auto-off)', has(res, 'Releiro', 'rele1 desligou (fim da sessao)') &&
+              /\[sim\] rele1=1[\s\S]*rele1=0/.test(res.nodes.Releiro.log.join('\n')));
+        check('rele liberado volta a abrir e liga', has(res, 'C2', '[sim] c2 volta open') &&
+              has(res, 'Releiro', '[sim] rele1=1'));
+        var fins = res.nodes.Releiro.log.filter(function(l) { return l.indexOf('rele1=') >= 0; });
+        check('ciclo completo 0 -> 1 -> 0 -> 1',
+              fins.join(' ') === '[sim] rele1=1 [sim] rele1=0 [sim] rele1=1', fins.join(' | '));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Transporte: TTL corta o alcance, no so-escuta (relay:false) nao repete,
 // presenca expira 15 s depois de perder o caminho e volta, fila de TX cheia
 scenario('CelerNet: TTL, so-escuta, presenca que vai e volta, fila cheia', function() {

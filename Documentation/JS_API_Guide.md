@@ -2517,13 +2517,20 @@ the local `Mic`/`Camera` would (`"mic"`/`"camera"` in app.json), and **only
 works inside a private pack** (API 37): a node in the open network `"celer"`
 refuses them with `denied` (see the security note in `CelerNet`). The owner
 can turn sharing off per resource with the settings `res_share_mic`,
-`res_share_cam`, `res_share_spk` (`"0"` = refuse with `denied`). ESP-NOW
-traffic is encrypted with the pack key too.
+`res_share_cam`, `res_share_spk`, `res_share_sens` (all default `"1"`) and
+`res_share_gpio` — which defaults to **`"0"`**: firing a relay from another
+room is not the same as listening to a mic; the owner turns it on on purpose
+(`"0"` = refuse with `denied`). Opening remote `gpio`/`sensor` resources
+needs the `"gpio"` permission in app.json. ESP-NOW traffic is encrypted with
+the pack key too.
 
 #### `Pack.resources([type])` → Array
 What the neighbours expose: `[{node, nodeName, name, type, busy, shared, ready}]`,
-`type` is `"mic" | "speaker" | "camera" | "data"`. Comes from a cache; a node
-not cached yet is asked in the background — call again ~1 s later.
+`type` is `"mic" | "speaker" | "camera" | "gpio" | "sensor" | "data"`. Comes
+from a cache; a node not cached yet is asked in the background — call again
+~1 s later. Nodes on API 38+ also carry the resource **metadata**: `unit`
+(e.g. `"%"`), `min`/`max` (sensor range) and `schema` (JSON of the params
+`open` accepts, e.g. `{"off":0|1}` on a relay).
 
 #### `Pack.open(node, name, [opts])` → Number
 Opens resource `name` on `node` (id or name). Returns the handle (0..7) or
@@ -2633,3 +2640,64 @@ while (Pack.status(h).state === "open" || Pack.status(h).state === "opening") Sy
 if (Pack.status(h).state === "done") System.drawJPG("/local/photo.jpg", 0, 0);
 ```
 
+
+## 42. API Level 38 — Generic resources: pack relays, GPIO and sensors
+
+The product idea: **any hardware feature becomes a published resource**.
+API 38 adds two types to the pack catalog and the first native providers:
+
+| Resource | Type | Arbitration | What it does |
+|---|---|---|---|
+| `rele1`..`rele3` | `gpio` | exclusive, **private** pack, `res_share_gpio` (default `"0"`) | drives the board's relay lines (SKUs with L1..L3) |
+| `gpio` | `gpio` | same | one free digital output pin (`{"pin":N}` in `open`) |
+| `lum` | `sensor` | shared, `res_share_sens` | board light sensor, 0..100 `%` |
+| `bat` | `sensor` | shared, `res_share_sens` | battery charge, 0..100 `%` |
+
+`Pack.resources()` shows the sensor unit and range plus the actuator params
+schema (`schema`).
+
+#### Opening a relay (auto-off)
+
+Pass `{"off":1}` in `open` to request **auto-off**: when the session ends
+(lease expires, `close`, revocation — including the local owner using
+`System.relay`, which always wins), the relay **switches off by itself**. The
+whole pack can go down and the actuator still returns to rest.
+
+```javascript
+// (app declares "gpio" in app.json)
+var r = Pack.resources("gpio").filter(function (x) { return x.name === "rele1"; })[0];
+var h = Pack.open(r.node, "rele1", { off: 1 });
+while (Pack.status(h).state === "opening") System.delay(100);
+if (Pack.status(h).state !== "open") throw new Error("rele1: " + Pack.status(h).reason);
+Pack.write(h, "\u0001\u0001");   // [1][1] = on
+System.delay(30000);               // ...water the plants...
+Pack.write(h, "\u0001\u0000");   // [1][0] = off
+Pack.close(h);                     // session ends: auto-off guarantees 0
+```
+
+The `gpio` data protocol is binary, 1 opcode byte: `[1][0|1]` writes, `[2]`
+reads (the owner answers `[2][0|1]`). Future ops (pulse/PWM) answer `[255]`.
+
+#### Sensor: stream or on demand
+
+`Pack.open(node, "lum", { rate: ms })` subscribes to a **stream**: the owner
+samples by itself and pushes 8-byte messages `[ts u32][f32 LE]` (the value in
+the catalog's `unit`). With `rate` omitted (or 0) the reading is **on
+demand**: `Pack.write(h, "\x02")` asks for one sample and it arrives in
+`Pack.read`. With a rate the session needs ESP-NOW (like audio); on demand
+also works over the plain mesh.
+
+```javascript
+var t = Pack.open(node, "bat", { rate: 60000 });   // one sample per minute
+while (true) {
+  var d = Pack.read(t);
+  if (d) show(decode(d));                          // 8 bytes: ts u32 + f32 LE
+  System.delay(1000);
+}
+```
+
+Actuator safety, in short: exclusive (one hand on the pump at a time),
+private pack (the open network refuses with `denied`), `res_share_gpio`
+defaults `"0"` (the owner turns it on on purpose), a notification on the
+owner for every session ("rele1 in use by X") and **local use always wins** —
+`System.relay` on the owner itself revokes the remote session instantly.

@@ -174,9 +174,9 @@ const char* stateName(Resources::State s) {
 }  // namespace
 
 duk_ret_t JSBindings::js_packResources(duk_context *ctx) {
-    // filtro opcional: tipo ("mic", "speaker", "camera", "data")
+    // filtro opcional: tipo ("mic", "speaker", "camera", "gpio", "sensor", "data")
     const char* only = duk_is_string(ctx, 0) ? duk_get_string(ctx, 0) : nullptr;
-    static Resources::Remote list[24];  // 24 x ~40 B: fora da pilha do app
+    static Resources::Remote list[24];  // fora da pilha do app
     int n = Resources::remotes(list, 24);
     duk_push_array(ctx);
     duk_uarridx_t k = 0;
@@ -191,6 +191,16 @@ duk_ret_t JSBindings::js_packResources(duk_context *ctx) {
         putBool(ctx, "busy", (list[i].e.flags & resproto::FLAG_BUSY) != 0);
         putBool(ctx, "shared", (list[i].e.flags & resproto::FLAG_SHARED) != 0);
         putBool(ctx, "ready", (list[i].e.flags & resproto::FLAG_READY) != 0);
+        // metadados (API 38; nos velhos nao mandam): unidade/faixa de sensor,
+        // esquema dos params do OPEN
+        if (list[i].m.unit[0] != '\0') putStr(ctx, "unit", list[i].m.unit);
+        if (list[i].m.hasRange) {
+            duk_push_number(ctx, list[i].m.rangeMin);
+            duk_put_prop_string(ctx, -2, "min");
+            duk_push_number(ctx, list[i].m.rangeMax);
+            duk_put_prop_string(ctx, -2, "max");
+        }
+        if (list[i].m.schema[0] != '\0') putStr(ctx, "schema", list[i].m.schema);
         duk_put_prop_index(ctx, -2, k++);
     }
     return 1;
@@ -200,9 +210,14 @@ duk_ret_t JSBindings::js_packOpen(duk_context *ctx) {
     const char* to = duk_require_string(ctx, 0);
     const char* name = duk_require_string(ctx, 1);
     // o dado do mic/camera de outro no e tao sensivel quanto o local: pede a
-    // MESMA permissao que o Mic/Camera daqui pediriam
+    // MESMA permissao que o Mic/Camera daqui pediriam. gpio/sensor (API 38)
+    // idem: e o dominio de pinos — o analogRead local tambem pede "gpio"
+    const bool gpioName = strncasecmp(name, "rele", 4) == 0 || strcasecmp(name, "gpio") == 0 ||
+                          strcasecmp(name, "lum") == 0 || strcasecmp(name, "bat") == 0 ||
+                          strncasecmp(name, "adc", 3) == 0;
     if ((strcasecmp(name, "mic") == 0 && !perm(celer::PERM_MIC)) ||
-        (strcasecmp(name, "camera") == 0 && !perm(celer::PERM_CAMERA))) {
+        (strcasecmp(name, "camera") == 0 && !perm(celer::PERM_CAMERA)) ||
+        (gpioName && !perm(celer::PERM_GPIO))) {
         duk_push_int(ctx, -1);
         return 1;
     }
@@ -272,12 +287,36 @@ duk_ret_t JSBindings::js_packClose(duk_context *ctx) {
 duk_ret_t JSBindings::js_packExpose(duk_context *ctx) {
     const char* name = duk_require_string(ctx, 0);
     bool shared = true;
+    resproto::Meta meta;
+    bool hasMeta = false;
     if (duk_is_object(ctx, 1)) {
         duk_get_prop_string(ctx, 1, "shared");
         if (duk_is_boolean(ctx, -1)) shared = duk_get_boolean(ctx, -1) != 0;
         duk_pop(ctx);
+        // metadados do catalogo (API 38): {unit, min, max} — quem consome o
+        // canal de outro no ve a unidade e a faixa no Pack.resources()
+        duk_get_prop_string(ctx, 1, "unit");
+        if (duk_is_string(ctx, -1)) {
+            snprintf(meta.unit, sizeof(meta.unit), "%s", duk_get_string(ctx, -1));
+            hasMeta = true;
+        }
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, 1, "min");
+        if (duk_is_number(ctx, -1)) {
+            meta.rangeMin = (float)duk_get_number(ctx, -1);
+            meta.hasRange = true;
+            hasMeta = true;
+        }
+        duk_pop(ctx);
+        duk_get_prop_string(ctx, 1, "max");
+        if (duk_is_number(ctx, -1)) {
+            meta.rangeMax = (float)duk_get_number(ctx, -1);
+            meta.hasRange = true;
+            hasMeta = true;
+        }
+        duk_pop(ctx);
     }
-    duk_push_boolean(ctx, Resources::expose(name, shared) ? 1 : 0);
+    duk_push_boolean(ctx, Resources::expose(name, shared, hasMeta ? &meta : nullptr) ? 1 : 0);
     return 1;
 }
 

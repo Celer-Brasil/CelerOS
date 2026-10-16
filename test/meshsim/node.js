@@ -172,8 +172,12 @@ var res = Res.create({
     members: function() { return view.nodes; },
     log: function(m) { log.push(m); },
     caps: wd.caps || 0,
+    relays: wd.relays || 0,      // API 38: reles do no (cenario gpio/sensor)
+    sensors: wd.sensors || [],   // API 38: sensores de placa do no
     secure: !!wd.pack,
-    setting: function(k) { return settings.hasOwnProperty(k) ? String(settings[k]) : '1'; }
+    // null = setting nao definido (resources.js aplica o default por chave:
+    // res_share_gpio nasce '0', as outras '1')
+    setting: function(k) { return settings.hasOwnProperty(k) ? String(settings[k]) : null; }
 });
 env.Pack = {
     me: function() {
@@ -210,6 +214,7 @@ env.Pack = {
         return res.api.write(h, s);
     },
     close: function(h) { res.api.close(h); },
+    relayState: function(name) { return res.api.relayState(name); },  // oraculo do cenario gpio
     expose: function(name, opts) {
         return res.api.expose(String(name), !(opts && opts.shared === false));
     },

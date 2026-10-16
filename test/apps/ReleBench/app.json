@@ -1,0 +1,13 @@
+{
+  "name": "ReleBench",
+  "packageName": "test.relebench",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bancada do rele remoto (API 38, recursos genericos da matilha): descobre o rele do vizinho pelo catalogo com metadados, abre com auto-off, liga/le de volta e segura a sessao para o teste de lease vencido. Resultados em /local/relebench.log. App de bancada, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 38,
+  "permissions": ["gpio", "fs"],
+  "topbar": false,
+  "changelog": "1.0.0 - primeira bancada do rele (Onda A)"
+}

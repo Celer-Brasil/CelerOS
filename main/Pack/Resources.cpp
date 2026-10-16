@@ -19,9 +19,12 @@
 #include "../Bluetooth/NetKeys.h"
 #include "../Kernel/Notifications.h"
 #include "../Boards/Board.h"
+#include "../Hardware/BoardIO.h"
 #include "../Utils/CelerSettings.h"
 #include "AudioRes.h"
 #include "CamRes.h"
+#include "GpioRes.h"
+#include "SensorRes.h"
 #include "../Runtime/CameraCore.h"
 #include "DataLink.h"
 #include "../Utils/TaskCaps.h"
@@ -90,7 +93,10 @@ struct CacheNode {
     uint32_t fetchedMs;    // 0 = nunca respondeu
     uint32_t askedMs;      // ultimo DESCRIBE enviado
     uint8_t n;
+    uint8_t asks;          // DESCRIBE_META sem resposta (servidor velho apos 2)
+    bool legacy;           // so fala DESCRIBE/LIST simples (firmware <= 37)
     Entry e[LIST_MAX];
+    Meta m[LIST_MAX];
 };
 
 struct Local {
@@ -101,6 +107,8 @@ struct Local {
     bool ready;            // provedor existe neste firmware
     const char* policyKey; // setting do dono (nativos); nullptr = sem politica
     bool allowed;          // cache do policyKey (refreshSettings)
+    bool autoOff;          // TYPE_GPIO: params {"off":1} — fim do lease desliga
+    Meta m;                // metadados do LIST_META (API 38)
     char name[RES_NAME_MAX + 1];
 };
 
@@ -204,24 +212,29 @@ Link ownLink(bool allowWifiInit = true) {
 
 void providerStop(const LeaseTable<LEASES>::Lease& l);  // abaixo (precisa de s_local)
 
-// Aviso de uso (privacidade): mic/camera aberto por outro no aparece na
-// central de notificacoes do dono e some no fim da sessao. A notificacao
+// Aviso de uso (privacidade): mic/camera/gpio aberto por outro no aparece
+// na central de notificacoes do dono e some no fim da sessao. A notificacao
 // grava na flash: so o tick (pilha interna) mexe nela — o fim da sessao pode
 // vir da res_rx (lease vencido), que so marca o pedido.
 constexpr uint32_t K_NOTE_BASE = 0x52455300;  // 'RES' + tipo
 struct UseNote {
     bool show = false, hide = false;
     char who[16] = {0};
+    char what[20] = {0};   // "Microfone em uso" / nome do recurso (gpio)
 };
-UseNote s_note[4];  // por TYPE_*
+UseNote s_note[6];  // por TYPE_* (1..5)
 
-void noteUse(uint8_t type, const char* who, bool on) {
-    if (type != TYPE_MIC && type != TYPE_CAMERA) return;
+void noteUse(uint8_t type, const char* who, bool on, const char* what) {
+    if (type != TYPE_MIC && type != TYPE_CAMERA && type != TYPE_GPIO) return;
     UseNote& n = s_note[type];
     if (on) {
         n.show = true;
         n.hide = false;
         snprintf(n.who, sizeof(n.who), "%s", who != nullptr ? who : "");
+        if (what == nullptr) {
+            what = type == TYPE_MIC ? "Microfone em uso" : "Câmera em uso";
+        }
+        snprintf(n.what, sizeof(n.what), "%s", what);
     } else {
         n.show = false;
         n.hide = true;
@@ -354,8 +367,10 @@ int localFind(const char* name) {
     return -1;
 }
 
+const char* policyDefault(const char* key);  // abaixo (junto da politica)
+
 int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
-             const char* policyKey) {
+             const char* policyKey, const Meta* meta = nullptr) {
     if (localFind(name) >= 0) return -1;
     for (int i = 0; i < LIST_MAX; i++) {
         if (!s_local[i].used) {
@@ -367,7 +382,8 @@ int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
             l->shared = shared;
             l->ready = ready;
             l->policyKey = policyKey;
-            l->allowed = policyKey == nullptr || CelerSettings::get(policyKey, "1") == "1";
+            l->allowed = policyKey == nullptr || CelerSettings::get(policyKey, policyDefault(policyKey)) == "1";
+            if (meta != nullptr) l->m = *meta;
             snprintf(l->name, sizeof(l->name), "%s", name);
             return i;
         }
@@ -375,10 +391,21 @@ int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
     return -1;
 }
 
+// Default do interruptor do dono: leitura (mic/speaker/camera/sensor) nasce
+// compartilhada; ATUADOR (gpio/relé) nasce DESLIGADO — acionar fisica
+// remota e diferente de expor um mic, o dono decide de proposito
+const char* policyDefault(const char* key) {
+    return key != nullptr && strcmp(key, "res_share_gpio") == 0 ? "0" : "1";
+}
+
 bool policyAllows(const Local& l) {
     // CelerNet v3: mic e camera so na matilha PRIVADA — na "celer" aberta
-    // qualquer vizinho entraria (a chave dela e publica)
-    if ((l.type == TYPE_MIC || l.type == TYPE_CAMERA) && !NetKeys::provisioned()) return false;
+    // qualquer vizinho entraria (a chave dela e publica). O gpio idem: na
+    // aberta qualquer vizinho acenderia o rele
+    if ((l.type == TYPE_MIC || l.type == TYPE_CAMERA || l.type == TYPE_GPIO) &&
+        !NetKeys::provisioned()) {
+        return false;
+    }
     return l.policyKey == nullptr || l.allowed;
 }
 
@@ -388,7 +415,9 @@ void refreshSettings() {
     snprintf(s_nameCache, sizeof(s_nameCache), "%s", n.c_str());
     for (int i = 0; i < LIST_MAX; i++) {
         Local& l = s_local[i];
-        if (l.used && l.policyKey != nullptr) l.allowed = CelerSettings::get(l.policyKey, "1") == "1";
+        if (l.used && l.policyKey != nullptr) {
+            l.allowed = CelerSettings::get(l.policyKey, policyDefault(l.policyKey)) == "1";
+        }
     }
 }
 
@@ -432,6 +461,20 @@ bool providerStart(const LeaseTable<LEASES>::Lease& l, const uint8_t* params, si
         case TYPE_SPEAKER:
             if (AudioRes::playActive()) return true;
             return AudioRes::playStart(l.sid);
+        case TYPE_GPIO: {
+            if (GpioRes::busy(l.sid)) return true;  // OPEN repetido
+            // auto-off: o fim do lease (CLOSE, vencido, revogado) devolve o
+            // pino ao nivel baixo — a sessao inteira pode morrer que o
+            // atuador desliga (o dono local sempre pode de volta, e ganha)
+            s_local[l.rid].autoOff = paramInt(params, plen, "off", 0) != 0;
+            return GpioRes::serveStart(l.sid, s_local[l.rid].name, params, plen);
+        }
+        case TYPE_SENSOR: {
+            if (SensorRes::busy(l.sid)) return true;
+            const int idx = SensorRes::indexOf(s_local[l.rid].name);
+            const int rate = paramInt(params, plen, "rate", 0);
+            return SensorRes::serveStart(l.sid, l.mac, l.token, idx, rate);
+        }
         default:
             return true;  // canal de dados: nada nativo
     }
@@ -439,11 +482,16 @@ bool providerStart(const LeaseTable<LEASES>::Lease& l, const uint8_t* params, si
 
 void providerStop(const LeaseTable<LEASES>::Lease& l) {
     if (!s_local[l.rid].used) return;
-    noteUse(s_local[l.rid].type, nullptr, false);
+    noteUse(s_local[l.rid].type, nullptr, false, nullptr);
     switch (s_local[l.rid].type) {
         case TYPE_MIC: AudioRes::sourceStop(l.sid); break;
         case TYPE_SPEAKER: AudioRes::playStop(l.sid); break;
         case TYPE_CAMERA: CamRes::serveStop(l.sid); break;
+        case TYPE_GPIO:
+            GpioRes::serveStop(l.sid, s_local[l.rid].autoOff);
+            s_local[l.rid].autoOff = false;
+            break;
+        case TYPE_SENSOR: SensorRes::serveStop(l.sid); break;
         default: break;
     }
 }
@@ -462,6 +510,30 @@ void handleDescribe(uint16_t from) {
     }
     uint8_t b[ENV_PAYLOAD];
     sendEnv(from, b, encodeList(list, n, b, sizeof(b)), true);  // controle: fura a fila de dados
+}
+
+// Pedido do cliente moderno (API 38): o mesmo catalogo COM metadados. Se os
+// TLVs nao couberem no envelope, cai para o LIST simples (cliente aceita os
+// dois; ele perde so a unidade/faixa)
+void handleDescribeMeta(uint16_t from) {
+    Entry list[LIST_MAX];
+    Meta metas[LIST_MAX];
+    int n = 0;
+    for (int i = 0; i < LIST_MAX && n < LIST_MAX; i++) {
+        const Local& l = s_local[i];
+        if (!l.used) continue;
+        Entry& e = list[n];
+        e.type = l.type;
+        e.flags = (uint8_t)((l.shared ? FLAG_SHARED : 0) | (l.ready ? FLAG_READY : 0) |
+                            (!l.shared && s_leases.countRid((uint8_t)i) > 0 ? FLAG_BUSY : 0));
+        snprintf(e.name, sizeof(e.name), "%s", l.name);
+        metas[n] = l.m;
+        n++;
+    }
+    uint8_t b[ENV_PAYLOAD];
+    size_t len = encodeListMeta(list, metas, n, b, sizeof(b));
+    if (len == 0) len = encodeList(list, n, b, sizeof(b));
+    sendEnv(from, b, len, true);
 }
 
 void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
@@ -517,10 +589,13 @@ void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
                     ac.token = l->token;
                 }
             }
-            // recursos de stream: so com ESP-NOW, e com a ponta nativa de pe
+            // recursos de stream: so com ESP-NOW, e com a ponta nativa de pe.
+            // Exceto o sensor POR PEDIDO ({"rate":0}): a leitura unica cabe
+            // no DATA da propria malha, e o valor nao precisa do canal
             const uint8_t type = s_local[rid].type;
             uint8_t fail = 0;
-            if (type != TYPE_DATA && ac.transport != TRANSPORT_ESPNOW) {
+            if (type != TYPE_DATA && ac.transport != TRANSPORT_ESPNOW &&
+                !(type == TYPE_SENSOR && paramInt(rq.params, rq.plen, "rate", 0) == 0)) {
                 fail = REASON_NO_LINK;
             } else if (!providerStart(*l, rq.params, rq.plen)) {
                 fail = REASON_BUSY;  // mic/speaker em uso aqui (app local, outra fala)
@@ -542,7 +617,7 @@ void handleOpen(uint16_t from, const uint8_t* body, size_t len) {
                 for (int i = 0; i < nm; i++) {
                     if (ms[i].id == from && ms[i].name[0] != '\0') snprintf(who, sizeof(who), "%s", ms[i].name);
                 }
-                noteUse(type, who, true);
+                noteUse(type, who, true, type == TYPE_GPIO ? s_local[rid].name : nullptr);
             }
             if (ac.transport == TRANSPORT_ESPNOW) {
                 ESP_LOGI(TAG, "sessao %u: %04X abriu \"%s\" via ESP-NOW (canal %u)", (unsigned)l->sid,
@@ -578,6 +653,43 @@ void pushWrite(const Local& l, uint16_t from, const char* fromName, const uint8_
     w->len = (uint16_t)n;
     memcpy(w->data, d, n);
     s_heap->wrCount++;
+}
+
+// Servidor -> cliente num lease (resposta do gpio/sensor). O caminho e o
+// mesmo do publish: ESP-NOW quando o lease tem, senao o DATA do envelope.
+void serverSendData(const LeaseTable<LEASES>::Lease& l, const uint8_t* d, size_t n) {
+    static uint16_t s_seq = 0;
+    s_seq++;
+    if (l.transport == TRANSPORT_ESPNOW) {
+        DataLink::send(l.mac, DataLink::KIND_DATA, l.sid, l.token, s_seq, d, n);
+        return;
+    }
+    if (n > MAX_DATA) return;
+    uint8_t b[ENV_PAYLOAD];
+    sendEnv(l.client, b, encodeData(l.sid, s_seq, d, n, b, sizeof(b)), false);
+}
+
+// DATA do cliente chegando num NOSSO lease: gpio/sensor falam com o provedor
+// nativo (atuacao NA HORA, resposta de volta); canal de app vai a fila do
+// JS (pollWrite). O lease ja veio renovado pelo chamador.
+void serverDataIn(const LeaseTable<LEASES>::Lease& l, uint16_t from, const char* fromName,
+                  const uint8_t* d, size_t n) {
+    const Local& loc = s_local[l.rid];
+    if (!loc.used) return;
+    uint8_t reply[8];
+    size_t rlen = 0;
+    if (loc.type == TYPE_GPIO) {
+        if (GpioRes::data(l.sid, d, n, reply, &rlen) && rlen > 0) serverSendData(l, reply, rlen);
+        return;
+    }
+    if (loc.type == TYPE_SENSOR) {
+        if (n >= 1 && d[0] == 2) {  // pedido de leitura (o caso {"rate":0})
+            rlen = (size_t)SensorRes::sampleOnce(SensorRes::indexOf(loc.name), reply);
+            if (rlen > 0) serverSendData(l, reply, rlen);
+        }
+        return;  // stream periodico so sai do servidor; escrita nao se aplica
+    }
+    pushWrite(loc, from, fromName, d, n);
 }
 
 // ------------------------------------------------------------- cliente
@@ -703,11 +815,25 @@ void dispatch(const InMsg& m) {
         case OP_DESCRIBE:
             handleDescribe(m.from);
             return;
+        case OP_DESCRIBE_META:
+            handleDescribeMeta(m.from);
+            return;
         case OP_LIST: {
             CacheNode* c = cacheFor(m.from, true);
             int n = decodeList(m.data + 1, m.len - 1, c->e, LIST_MAX);
             if (n < 0) return;
             c->n = (uint8_t)n;
+            c->fetchedMs = nowMs();
+            if (c->fetchedMs == 0) c->fetchedMs = 1;
+            snprintf(c->name, sizeof(c->name), "%s", m.fromName);
+            return;
+        }
+        case OP_LIST_META: {  // catalogo com metadados (API 38)
+            CacheNode* c = cacheFor(m.from, true);
+            int n = decodeListMeta(m.data + 1, m.len - 1, c->e, c->m, LIST_MAX);
+            if (n < 0) return;
+            c->n = (uint8_t)n;
+            c->asks = 0;
             c->fetchedMs = nowMs();
             if (c->fetchedMs == 0) c->fetchedMs = 1;
             snprintf(c->name, sizeof(c->name), "%s", m.fromName);
@@ -864,7 +990,7 @@ void dispatch(const InMsg& m) {
             LeaseTable<LEASES>::Lease* l = s_leases.find(sid);
             if (l != nullptr && l->client == m.from && s_local[l->rid].used) {
                 l->expiresMs = nowMs() + l->leaseMs;  // escrita tambem renova
-                pushWrite(s_local[l->rid], m.from, m.fromName, r.rest(), n);
+                serverDataIn(*l, m.from, m.fromName, r.rest(), n);
             }
             return;
         }
@@ -902,6 +1028,24 @@ void inboxPush(uint16_t from, const char* fromName, const uint8_t* p, size_t len
     xSemaphoreGive(s_inLock);
 }
 
+// Metadados fixos dos nativos (vao para a flash, o Local copia)
+Meta relayMeta() {
+    Meta m;
+    snprintf(m.schema, sizeof(m.schema), "{\"off\":0|1}");
+    m.ver = 1;
+    return m;
+}
+
+Meta percentMeta() {
+    Meta m;
+    snprintf(m.unit, sizeof(m.unit), "%%");
+    m.rangeMin = 0.0f;
+    m.rangeMax = 100.0f;
+    m.hasRange = true;
+    m.ver = 1;
+    return m;
+}
+
 void registerNatives() {
     const BoardProfile& bp = Board::profile();
     // Provedores nativos (exclusivos: um mic, um speaker). Audio pronto (R3)
@@ -914,6 +1058,21 @@ void registerNatives() {
 #if CONFIG_CELEROS_JS_CAMERA
     if (bp.camera.present()) localAdd("camera", TYPE_CAMERA, false, CamRes::available(), false, "res_share_cam");
 #endif
+    // GPIO/atuador (API 38): cada rele do perfil vira recurso exclusivo
+    // ("rele1"..). O interruptor res_share_gpio nasce DESLIGADO (o dono
+    // liga de proposito) e o acesso so existe na matilha privada.
+    const Meta rm = relayMeta();
+    if (GpioRes::available()) {
+        for (int i = 0; i < bp.relay.count && i < 3; i++) {
+            char nm[RES_NAME_MAX + 1];
+            snprintf(nm, sizeof(nm), "rele%d", i + 1);
+            localAdd(nm, TYPE_GPIO, false, true, false, "res_share_gpio", &rm);
+        }
+    }
+    // Sensores de placa (API 38): leitura passiva, compartilhada
+    const Meta pm = percentMeta();
+    if (BoardIO::hasLightSensor()) localAdd("lum", TYPE_SENSOR, true, true, false, "res_share_sens", &pm);
+    if (bp.batteryPin >= 0) localAdd("bat", TYPE_SENSOR, true, true, false, "res_share_sens", &pm);
 }
 
 }  // namespace
@@ -1018,6 +1177,8 @@ void tickTimers() {
         if (n > 0) DataLink::send(kAll, DataLink::KIND_CTRL, ourNode(), TOKEN_ALL, 0, b, n);
     }
     const uint32_t now = nowMs();
+    // sensores em stream (rate > 0): amostra as sessoes vencidas e empurra
+    SensorRes::tick();
     // leases vencidos (cliente sumiu sem CLOSE)
     LeaseTable<LEASES>::Lease dead;
     while (s_leases.expireOne(now, &dead)) {
@@ -1154,7 +1315,7 @@ void handleDataRx(const DataLink::Rx& dr) {
         for (int j = 0; j < nm; j++) {
             if (who[j].id == l->client) nmName = who[j].name;
         }
-        pushWrite(s_local[l->rid], l->client, nmName, dr.data, dr.len);
+        serverDataIn(*l, l->client, nmName, dr.data, dr.len);
     }
 }
 
@@ -1190,12 +1351,11 @@ void tick() {
     for (int i = 0; i < INBOX_DEPTH && inboxPop(&m); i++) dispatch(m);
 
     // avisos de uso pendentes (flash: so aqui, pilha interna)
-    for (uint8_t t = TYPE_MIC; t <= TYPE_CAMERA; t++) {
+    for (uint8_t t = TYPE_MIC; t <= TYPE_SENSOR; t++) {
         UseNote& n = s_note[t];
         if (n.show) {
             n.show = false;
-            const char* what = t == TYPE_MIC ? "Microfone em uso" : "Câmera em uso";
-            Notifications::push(what, std::string("por ") + n.who + " (matilha)", "matilha", K_NOTE_BASE + t);
+            Notifications::push(n.what, std::string("por ") + n.who + " (matilha)", "matilha", K_NOTE_BASE + t);
         } else if (n.hide) {
             n.hide = false;
             Notifications::removeById(K_NOTE_BASE + t);
@@ -1268,15 +1428,27 @@ int remotes(Remote* out, int max) {
         const bool fresh = c != nullptr && c->fetchedMs != 0 && now - c->fetchedMs < K_CACHE_FRESH_MS;
         if (!fresh && (c == nullptr || now - c->askedMs >= K_DESCRIBE_GAP_MS || c->askedMs == 0)) {
             c = cacheFor(ms[i].id, true);
+            // moderno primeiro (DESCRIBE_META, com metadados): um servidor
+            // velho ignora o op e nao responde — apos 2 tentativas sem
+            // resposta o no vira legacy e segue com o DESCRIBE de sempre
+            if (!c->legacy) {
+                c->asks++;
+                if (c->asks >= 2) c->legacy = true;
+            }
             c->askedMs = now;
             uint8_t b[4];
-            sendEnv(ms[i].id, b, encodeDescribe(b, sizeof(b)), true);
+            if (c->legacy) {
+                sendEnv(ms[i].id, b, encodeDescribe(b, sizeof(b)), true);
+            } else {
+                sendEnv(ms[i].id, b, encodeDescribeMeta(b, sizeof(b)), true);
+            }
         }
         if (c == nullptr || c->fetchedMs == 0) continue;
         for (int k = 0; k < c->n && n < max; k++) {
             out[n].node = c->id;
             snprintf(out[n].nodeName, sizeof(out[n].nodeName), "%s", ms[i].name[0] ? ms[i].name : c->name);
             out[n].e = c->e[k];
+            out[n].m = c->m[k];
             n++;
         }
     }
@@ -1451,10 +1623,10 @@ void close(int h) {
     }
 }
 
-bool expose(const char* name, bool shared) {
+bool expose(const char* name, bool shared, const resproto::Meta* meta) {
     if (!s_inited || name == nullptr || name[0] == '\0' || strlen(name) > RES_NAME_MAX) return false;
     Guard g;
-    return localAdd(name, TYPE_DATA, shared, true, true, nullptr) >= 0;
+    return localAdd(name, TYPE_DATA, shared, true, true, nullptr, meta) >= 0;
 }
 
 bool unexpose(const char* name) {
@@ -1533,8 +1705,10 @@ void dump(PrintFn pr, void* ctx) {
     for (int i = 0; i < LIST_MAX; i++) {
         const Local& l = s_local[i];
         if (!l.used) continue;
-        pr(ctx, "  %-15s %-8s %s%s%s sessoes %d\r\n", l.name, typeName(l.type), l.ready ? "pronto" : "sem provedor",
-           l.shared ? " compartilhado" : "", l.app ? " (app)" : "", s_leases.countRid((uint8_t)i));
+        pr(ctx, "  %-15s %-8s %s%s%s%s%s%s sessoes %d\r\n", l.name, typeName(l.type),
+           l.ready ? "pronto" : "sem provedor", l.shared ? " compartilhado" : "",
+           l.app ? " (app)" : "", l.m.unit[0] ? " unidade " : "", l.m.unit[0] ? l.m.unit : "",
+           l.autoOff ? " auto-off" : "", s_leases.countRid((uint8_t)i));
     }
     pr(ctx, "leases (servidor):\r\n");
     const uint32_t now = nowMs();

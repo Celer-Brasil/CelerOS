@@ -1545,6 +1545,71 @@ static void testResProto() {
     CHECK(!decodeHello(b + 1, n - 2, &hc, hn));
 }
 
+// API 38 (recursos genericos): metadados no catalogo (LIST_META/TLV) e os
+// tipos novos gpio/sensor
+static void testResMeta() {
+    using namespace resproto;
+    uint8_t b[ENV_PAYLOAD];
+    // round-trip cheio: sensor com unidade+faixa, gpio com esquema
+    Entry e[2];
+    Meta m[2];
+    e[0].type = TYPE_SENSOR;
+    e[0].flags = FLAG_SHARED | FLAG_READY;
+    snprintf(e[0].name, sizeof(e[0].name), "lum");
+    snprintf(m[0].unit, sizeof(m[0].unit), "%%");
+    m[0].rangeMin = 0.0f;
+    m[0].rangeMax = 100.0f;
+    m[0].hasRange = true;
+    m[0].ver = 1;
+    e[1].type = TYPE_GPIO;
+    snprintf(e[1].name, sizeof(e[1].name), "rele1");
+    snprintf(m[1].schema, sizeof(m[1].schema), "{\"off\":0|1}");
+    m[1].ver = 1;
+    const size_t n = encodeListMeta(e, m, 2, b, sizeof(b));
+    CHECK(n == 2 + (3 + 3 + 1 + (2 + 1) + (2 + 8) + (2 + 1)) + (3 + 5 + 1 + (2 + 11) + (2 + 1)));
+    CHECK(b[0] == OP_LIST_META);
+    Entry got[4];
+    Meta gm[4];
+    CHECK(decodeListMeta(b + 1, n - 1, got, gm, 4) == 2);
+    CHECK(got[0].type == TYPE_SENSOR && strcmp(got[0].name, "lum") == 0);
+    CHECK(strcmp(gm[0].unit, "%") == 0 && gm[0].hasRange && gm[0].rangeMin == 0.0f &&
+          gm[0].rangeMax == 100.0f && gm[0].ver == 1);
+    CHECK(got[1].type == TYPE_GPIO && strcmp(got[1].name, "rele1") == 0);
+    CHECK(gm[1].unit[0] == '\0' && !gm[1].hasRange && strcmp(gm[1].schema, "{\"off\":0|1}") == 0 &&
+          gm[1].ver == 1);
+    CHECK(decodeListMeta(b + 1, n - 2, got, gm, 4) == -1);   // truncado
+    CHECK(decodeListMeta(b + 1, n - 1, got, gm, 1) == 1);    // max respeitado
+    CHECK(decodeListMeta(b + 1, n - 1, got, nullptr, 4) == 2);  // sem Meta (so Entries)
+    // servidor sem metas: encodeListMeta(nullptr) e o mesmo fio, meta vazio
+    const size_t n0 = encodeListMeta(e, nullptr, 2, b, sizeof(b));
+    CHECK(n0 > 0 && decodeListMeta(b + 1, n0 - 1, got, gm, 4) == 2 && !gm[0].hasRange);
+    // TLV de tag desconhecido e pulado (o futuro nao quebra o presente):
+    // 1 entrada "x" com TAG_UNIT e um 0x7F de 2 bytes desconhecido
+    const uint8_t hand[] = {1,  TYPE_SENSOR, 0, 1, 'x',
+                            7,  TAG_UNIT,   1, 'C', 0x7F, 2, 0xAB, 0xCD};
+    CHECK(decodeListMeta(hand, sizeof(hand), got, gm, 4) == 1);
+    CHECK(strcmp(got[0].name, "x") == 0 && strcmp(gm[0].unit, "C") == 0 && !gm[0].hasRange);
+    // TLV com len maior que o resto da entrada: malformado
+    const uint8_t bad[] = {1, (uint8_t)TYPE_GPIO, 0, 1, 'g', 1, TAG_VER, 4};
+    CHECK(decodeListMeta(bad, sizeof(bad), got, gm, 4) == -1);
+    // DESCRIBE_META e os nomes dos tipos novos
+    CHECK(encodeDescribeMeta(b, sizeof(b)) == 1 && b[0] == OP_DESCRIBE_META);
+    CHECK(strcmp(typeName(TYPE_GPIO), "gpio") == 0 && strcmp(typeName(TYPE_SENSOR), "sensor") == 0);
+    // catalogo inteiro com esquema nao cabe no envelope: 0 = cai para o LIST
+    Entry many[LIST_MAX];
+    Meta mm[LIST_MAX];
+    for (int i = 0; i < LIST_MAX; i++) mm[i] = Meta{};
+    for (int i = 0; i < LIST_MAX; i++) {
+        many[i].type = TYPE_DATA;
+        many[i].flags = FLAG_READY;
+        snprintf(many[i].name, sizeof(many[i].name), "canal%02dxxxxx", i);
+        snprintf(mm[i].schema, sizeof(mm[i].schema), "{\"a\":1,\"b\":\"padding\"}");
+    }
+    CHECK(encodeListMeta(many, mm, LIST_MAX, b, sizeof(b)) == 0);
+    uint8_t small[8];
+    CHECK(encodeListMeta(e, m, 2, small, sizeof(small)) == 0);
+}
+
 // ------------------------------------------------------------- shell (shl)
 
 #include <cstdarg>
@@ -1835,6 +1900,7 @@ int main() {
     testJsonMap();
     testNetFrame();
     testResProto();
+    testResMeta();
     testRigid2D();
     testRigid2DHammer();
     testRigid2DMath();

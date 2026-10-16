@@ -61,6 +61,7 @@ struct Remote {
     uint16_t node;
     char nodeName[16];
     resproto::Entry e;
+    resproto::Meta m;  // metadados do LIST_META (API 38); vazio se o no e velho
 };
 
 struct HandleInfo {
@@ -113,7 +114,9 @@ void close(int h);
 
 // ---- servidor (canais de dados do app) ----
 // Canal de dados do app corrente: shared = varias sessoes ao mesmo tempo.
-bool expose(const char* name, bool shared);
+// meta (API 38): unidade/faixa/esquema que viaja no LIST_META (pode ser
+// null). O nome do canal e a chave no fio, como sempre foi.
+bool expose(const char* name, bool shared, const resproto::Meta* meta = nullptr);
 bool unexpose(const char* name);
 // DATA para todas as sessoes do canal; devolve quantas receberam.
 int publish(const char* name, const void* data, size_t len);

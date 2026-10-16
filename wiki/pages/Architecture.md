@@ -25,7 +25,8 @@ for each kind of change.
 |   WebManager   httpd + file manager + OTA upload + portal    |
 |   OTA          OtaManager: update.json v2 + download Range   |
 |   USBDevice    CelerShell, HostLink (celerctl), SerialLink  |
-|   Bluetooth    CelerLink: BLE between devices (Celer Link)  |
+|   Bluetooth    CelerLink (pairing) + CelerNet (mesh)        |
+|   Pack         PackId, Provision, Resources: the pack       |
 |   Boards/<b>/  per-board HAL (pins, display, traits)         |
 +------------------------------^-------------------------------+
                                | includes/REQUIRES
@@ -108,8 +109,27 @@ The main loop runs on the main task: `Navigator::tick()`,
 | Gestures/touch | `UI/Kui.cpp` (TouchPump; touches injected by celerctl go through the TouchInjector) |
 | Device side of celerctl | `USBDevice/HostLink.cpp` (opcodes), `SerialLink.cpp` (UART) |
 | Celer Link (BLE between devices) | `Bluetooth/CelerLink.cpp` + `Runtime/JsLink.cpp` (`CelerLink` global) |
+| The pack (mesh, resources, joining) | `Pack/` (`PackId`, `Provision`, `Resources`) + `Bluetooth/CelerNet.cpp`; design in `Documentation/CelerNet_Design.pt-BR.md` |
 | Web pages | `WebManager/*.html` (re-embedded as gzipped headers at build time) |
 | Wi-Fi radio / credentials | `components/Connection` (`NetworkManager` singleton) |
+
+## The pack: three pillars, one system
+
+Devices form a private network — the **pack** — where each one publishes its
+hardware (mic, camera, speaker, relays, sensors) as resources the others use.
+Three technologies are three pillars of it:
+
+| Pillar | Role | Code |
+|---|---|---|
+| **CelerLink** | trust: pair by a 6-digit code; the bond then carries the pack key (sealed invite) | `Bluetooth/CelerLink.cpp`, `Pack/Provision.cpp` |
+| **CelerNet** + resources | the mesh: encrypted BLE flooding, presence, leases, ESP-NOW data plane | `Bluetooth/CelerNet.cpp`, `Pack/Resources.cpp` |
+| **HostLink** | the gateway: the computer joins over the USB cable as a virtual member `pc-XXXX` | `USBDevice/HostLink.cpp`, `USBDevice/UsbRes.h` |
+
+They share one identity (`Pack/PackId`: node id from the BT MAC, one
+persistent name) and one key with three doors: password (`Pack.join`, shell
+`mesh join`, `celerctl mesh join`), the CelerLink invite (`Pack.invite`, the
+Matilha app) and the cable. Apps use `Pack.*` as the facade (JS API guide,
+section 43).
 
 ## Conventions worth knowing
 

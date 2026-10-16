@@ -1,6 +1,6 @@
 # CelerNet — Design de produto da matilha CelerOS
 
-**Português (BR)** · 2026-10-16 · Estado do código: API 37 (CelerNet v3) / API 36 (recursos)
+**Português (BR)** · 2026-10-16 · Estado do código: API 41 (três pilares integrados) — CelerNet v3 na 37, recursos na 36/38, gateway USB na 39
 
 Este documento define o CelerOS **como produto**: uma rede privada de
 dispositivos — a **matilha** — na qual cada aparelho publica as features do
@@ -27,17 +27,26 @@ Três partes convivem aqui, e o texto separa com clareza:
 > de rede. O computador entra pela porta USB como mais um membro, com uma
 > API Rust de primeira classe. Nada disso depende de nuvem.
 
-O produto se apoia em três pilares já construídos e em três extensões
-propostas:
+O produto se apoia em **três pilares de um mesmo sistema** (integrados na
+API 40/41), cada um com um papel só:
 
-1. **CelerLink** (existe): o elo BLE ponto a ponto — pareamento por código,
-   bond persistente, canal selado.
-2. **CelerNet v3** (existe): a malha — flooding por advertising BLE cifrado
-   (AES-CCM), presença por BEAT com caps, unicast multi-hop com cópias,
-   chave de rede derivada de nome+senha (PBKDF2+HKDF) e anti-replay.
-3. **Recursos da matilha** (existe, API 36): protocolo de controle ResProto
-   com leases, plano de dados ESP-NOW e provedores nativos de mic/speaker/
-   câmera.
+| Pilar | Papel | Peça |
+|---|---|---|
+| **CelerLink** | **confiança**: pareia por código de 6 dígitos e, a partir do bond, entrega a chave da matilha (convite selado) | `main/Bluetooth/CelerLink`, `main/Pack/Provision` |
+| **CelerNet** + recursos | **malha**: flooding BLE cifrado (AES-CCM), presença por BEAT com caps, unicast multi-hop; recursos com lease (ResProto) e plano de dados ESP-NOW | `main/Bluetooth/CelerNet`, `main/Pack/Resources` |
+| **HostLink** | **gateway**: o computador entra pelo cabo como **membro virtual** (`pc-XXXX`) e como cliente de recursos | `main/USBDevice/HostLink`, `UsbRes.h` |
+
+O que os amarra:
+
+- **Identidade única** (`main/Pack/PackId`): id do nó = 2 últimos bytes da
+  MAC BT, nome persistente (`celernet_name`) — o mesmo no advertising do
+  CelerLink, no BEAT da malha, no HELLO dos recursos e no `node` que o
+  `CelerLink.scan()` devolve; o PC no cabo ganha `pcNodeOf(gateway)`.
+- **Uma chave, três portas** (`Provision`): senha (`Pack.join`, `mesh join`,
+  `celerctl mesh join`), convite selado pelo CelerLink (`Pack.invite`) e o
+  cabo — todas terminam em `NetKeys` + `netChanged` (§5.7).
+- **Pack como fachada JS**: `Pack.*` é a API do sistema; `CelerLink.*` e
+  `CelerNet.*` seguem como camadas baixas (nada quebrou).
 
 Extensões propostas neste documento:
 
@@ -84,13 +93,14 @@ Extensões propostas neste documento:
    │  CelerNet v3 (malha BLE)     │◄─────►│  CelerNet v3                 │
    │   flood 31 B, BEAT, unicast  │       │                              │
    ├──────────────────────────────┤       ├──────────────────────────────┤
-   │  CelerLink (host NimBLE)     │       │  CelerLink                   │
+   │  CelerLink (host NimBLE)     │◄─────►│  CelerLink                   │
+   │   código + bond -> convite   │ GATT  │   janela de convite          │
    └──────────────┬───────────────┘       └──────────────────────────────┘
-                  │ USB device (S3: CDC/USJ)
-   ┌──────────────┴───────────────┐
-   │  HostLink proto 2 + KL_RES_* │   ← [PROPOSTA] seção 8
+                  │ USB / UART / bridge TCP          PackId: a mesma identidade
+   ┌──────────────┴───────────────┐                 nos três pilares
+   │  HostLink proto 2 + KL_RES_* │   gateway: PC = nó virtual pc-XXXX (§8.5)
    ├──────────────────────────────┤
-   │  crate Rust `celernet`       │   ← [PROPOSTA] seção 9
+   │  celerctl mesh/res · Rust    │   ← crate Rust [PROPOSTA] seção 9
    └──────────────────────────────┘
 ```
 
@@ -266,11 +276,28 @@ salt do HKDF: "celernet-v3"
 
 ### 5.6 Entrada no produto
 
-- Hoje: shell serial `mesh join <nome> <senha≥8>`, `mesh leave`,
-  `mesh selftest`, `mesh replay` (`CelerShell.cpp:1910-1987`) — não há UI
-  de app para join (lacuna de produto; ver §12-d).
+- Shell serial `mesh join <nome> <senha≥8>`, `mesh leave`, `mesh selftest`,
+  `mesh replay`; desde a API 40 o app **Matilha** tem a tela Entrar (nome +
+  senha, aguardar convite, convidar) e o cabo tem `celerctl mesh join` —
+  ver §5.7.
 - JS: `CelerNet.{start, stop, broadcast, sendTo, poll, nodes, status}`
   (`JsMesh.cpp`); envelopes de kernel via `Pack.*` (`JsPack.cpp`).
+
+### 5.7 As três portas da matilha (API 40)
+
+`main/Pack/Provision.{h,cpp}` é o caminho único da chave:
+
+| Porta | Quem usa | Como |
+|---|---|---|
+| **Senha** | `Pack.join(nome, senha)` (perm `system`), shell `mesh join`, cabo `SUB_JOIN` | `joinPassword` = `NetKeys::join` (PBKDF2) + `CelerNet/Resources::netChanged` |
+| **Convite** | app Matilha nos dois aparelhos | o novo abre a janela (`Pack.acceptInvite`, 10 min: CelerLink anunciando com gate de código); o membro conecta, digita o código e chama `Pack.invite()` — INVITE selado com o bond (`ProvProto.h`: nome + netKey + adminKey, ≤ 53 B) → `joinWithKeys` → ACK selado |
+| **Cabo** | `celerctl mesh join` (placas sem tela) | `KL_RES_CTL SUB_JOIN` → `joinPassword`; ato de dono, independe do `res_share_usb` |
+
+- A chave nunca passa pelo JS nem volta ao PC. O tap selado do CelerLink
+  (`setSealedTap`) consome todo quadro `CNJ` antes do `pollSealed` do app.
+- O convidador acha o novo pelo **scan do CelerLink** (nome na janela de
+  convite). A rede aberta secundária com `BFLAG_UNPROV` segue reservada.
+- Headless (devkit, esp32-cam) não mostra o código: entram pelo cabo.
 
 ---
 
@@ -355,8 +382,9 @@ no launcher).
 3. Sem autorização por identidade: qualquer membro da matilha privada passa;
    política = 1 bit global por tipo.
 4. Streams são 1-hop ESP-NOW; a malha multi-hop não leva mídia.
-5. O PC não participa: `tools/matilha/` fala NetFrame **v2 em claro**
-   (driftado da v3) e só como nó BLE, sem acesso a recursos.
+5. ~~O PC não participa~~ — resolvido pelo gateway USB (B.1, API 39) e
+   pelo nó virtual (§8.5, API 41). Segue o drift do `tools/matilha/`
+   (NetFrame **v2 em claro**, nó BLE direto; §12-f).
 
 ---
 
@@ -514,8 +542,15 @@ SUB_OPEN     =4  → corpo = OPEN ResProto integral (com link sintético)
 SUB_KEEP     =5  → [sid u16]
 SUB_CLOSE    =6  → [sid u16]
 SUB_WRITE    =7  → DATA host→gateway: [sid u16][seq u16][bytes ≤8100]
-SUB_POLL     =8  → drena eventos pendentes p/ o PC (alternativa ao 0x22)
-SUB_CONFIG   =9  → [bits u8]: p.ex. auto-KEEP no firmware (§8.4)
+SUB_JOIN     =8  → [nlen][nome][plen][senha] entra na matilha (API 40)
+SUB_LEAVE    =9  → volta à rede aberta (API 40)
+SUB_NET      =10 → JSON {net, prov, node, name, pc} (API 40)
+SUB_SEND     =11 → [to u16][payload] envelope DO PC (nó virtual, API 41)
+SUB_OPEN_AT  =12 → [node u16][nlen][nome][plen][params] -> [h] (API 41)
+SUB_HWRITE   =13 → [h][bytes] DATA no recurso remoto (API 41)
+SUB_HCLOSE   =14 → [h] (API 41)
+SUB_POLL     =15 → [OPÇÃO] drena eventos pendentes (o RES_DATA cobre)
+SUB_CONFIG   =16 → [OPÇÃO] [bits u8]: p.ex. auto-KEEP configurável
 ```
 
 **`KL_RES_DATA`** — payload: `[sid u16][seq u16][bytes]` (formato DATA do
@@ -554,6 +589,36 @@ lease/keep/expiração é **reaproveitada sem mudança**.
 | Recursos de OUTROS nós, controle | ✅ (OPEN/KEEP/CLOSE proxyados pela malha) | — |
 | Recursos de OUTROS nós, dados (stream 1-hop ESP-NOW) | ⚠️ só se o gateway dividir canal ESP-NOW com o nó; senão `REASON_NO_LINK` (a regra que os apps já vivem) | §12-e: gateway puxa e re-chunka por USB |
 | PC como destino de `Pack.sendTo` | ✅ (nó virtual + `KL_RES_DATA` de evento) | subscrição filtrada |
+
+### 8.5 O PC como nó virtual (API 41)
+
+Com a sessão HostLink viva **e** `res_share_usb=1`, o gateway põe o PC na
+matilha (`Resources::tick` → `CelerNet::setProxy`):
+
+- **Id e nome**: `packid::pcNodeOf(gateway) = 0xFF00 | byte baixo` (0xFFFF
+  vira 0xFFFE), nome `pc-XXXX` (XXXX = id do gateway). Substitui o 0xFFFE
+  fixo da B.1 — dois gateways na mesma matilha não colidem (salvo bytes
+  baixos iguais).
+- **Presença**: BEAT extra com `src = pc`, caps `HUB` e `BFLAG_PROXY = 0x04`;
+  mesmo contador de seq do gateway (o nonce inclui o src: sem reuso). Os
+  vizinhos listam `pc-XXXX` em `Pack.members()`. Cabo fora = BEAT para e o
+  membro expira.
+- **Para o PC**: `mine` da CelerNet inclui o id do proxy; o Pack desvia
+  envelope custom (dedup por msgId) ou mensagem crua para uma fila (PSRAM,
+  no 1º uso) e o tick manda pelo cabo — nunca chega aos apps do gateway.
+  No gateway, `"pc"` resolve para o proxy e a entrega é local.
+- **Do PC**: `SUB_SEND` → `Pack::sendAs(pc, ...)` → `CelerNet::sendFrom`.
+- **Recursos de outros nós** (controle da B.2): `SUB_OPEN_AT` faz o gateway
+  ser **cliente por procuração** (`Resources::open`, retry/KEEP/reabertura
+  de sempre; até 2 handles do PC). Resposta = handle; resultado e DATA
+  chegam como eventos. A troca de app não fecha procurações; a queda do
+  cabo fecha (auto-off no dono).
+- **Eventos** (`KL_RES_DATA` com sid 0 — 0 é o "livre" das sessões):
+  `EV_MSG [from][nn][nome][raw][payload]`, `EV_STATE [h][state][reason][node]`,
+  `EV_DATA [h][bytes]`.
+- CLI: `celerctl mesh status|join|leave|send|listen`, `celerctl res relay -n
+  <nó> rele1 on`. Fora ainda: mic/speaker/câmera de outros nós pelo cabo
+  (stream da B.2).
 
 **Status (Onda B.1, API 39):** a B.1 pousou com o fio desta seção — `KL_RES_CTL=0x21`/`KL_RES_DATA=0x22`, subops `DESCRIBE/LIST/MESH/OPEN/KEEP/CLOSE/WRITE` (os TLVs do `POLL`/`CONFIG` ficaram para a B.2: o `RES_DATA` não-solicitado cobre o poll e o auto-KEEP do gateway é fixo), PC como cliente com node `0xFFFE` e transporte `TRANSPORT_USB`, auto-KEEP no gateway, queda do cabo = `usbSession(false)` = leases mortos (auto-off), master `res_share_usb` (default "0", `cfg res_share_usb 1`). O catálogo da malha vem do cache (`SUB_MESH`). **Ficou para a B.2**: OPEN de recursos de OUTROS nós proxyado pela malha (controle) e mic/speaker/câmera em stream pelo cabo — ambos recusam com `noLink` hoje. A CLI do `celerctl` (`res ls/relay/sensor/...`) é o veículo de bancada da B.1; a crate Rust segue sendo a onda C.
 
@@ -728,7 +793,7 @@ destrava e o custo honesto.
 | a | **Metadados TLV no catálogo** (§7.2) | unidade/faixa/esquema no PC e nos apps; base de TUDO abaixo | baixo: 2 opcodes + TLV no servidor | A |
 | b | **Eventos/subscrição de sensor** (threshold → push na matilha) | automação sem app: "escuro → acende luz"; o PC vira painel | médio: avaliador no SensorRes + envelope `KIND_EVENT` | D |
 | c | **ACL por peer** assinada com `adminKey` (allowlist de node ids por recurso) | fecha a lacuna "qualquer membro abre tudo"; provisioning sem senha vira real (`joinWithKeys` + ACL) | médio: NVS por recurso + campo no OPEN | D |
-| d | **Consentimento por pedido**: diálogo no dono ("PC quer a câmera — permitir 5 min?") + **UI de join da matilha** (app de sistema com QR do nome+senha) | produto para gente não-técnica; hoje join é só shell | médio: tela nativa no dono + fila de pedidos | D |
+| d | **Consentimento por pedido**: diálogo no dono ("PC quer a câmera — permitir 5 min?") (a UI de join pousou na API 40: app Matilha, convite pelo CelerLink) | produto para gente não-técnica | médio: tela nativa no dono + fila de pedidos | D |
 | e | **Streams multi-hop por re-chunking**: gateway/nó intermediário puxa o stream e re-envia (USB ou malha) | câmera/mic de qualquer nó no PC sem ESP-NOW comum | alto (latência/buffer na PSRAM) | E |
 | f | **Rust direto no BLE** (`btleplug`) + porte do NetFrame v3 no host: o PC vira nó REAL da malha sem gateway | PC fala com nós sem cabo; hoje `tools/matilha` está driftado em v2 | médio-alto; mata o drift do porte Python | E |
 | g | **Rules engine na matilha** (reflexos: `se sensor X > Y então relay Z`) | automação local permanente, sobrevive ao PC | alto: parser+runner residente na PSRAM | F |
@@ -748,7 +813,8 @@ RAM interna antes (a lição de 2026-10-07: RAM interna é o recurso escasso).
 | Onda | Escopo | Gates |
 |---|---|---|
 | **A — Recursos genéricos** | `TYPE_GPIO/SENSOR` + `OP_*_META` (TLV) + `GpioRes`/`SensorRes` nativos + `res_share_gpio` default 0 + auto-off no lease | `test/cpp` (codec LIST_META, lease+auto-off), `meshsim` (cenário relé 2 nós), bench 4848 (relés físicos) |
-| **B — Gateway USB** | B.1 ✅ `KL_RES_CTL/DATA` + transporte USB + auto-KEEP + `res_share_usb` (B.2: nó virtual, proxy de OPEN da malha, mic/cam pelo cabo) | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
+| **Pilares (API 40/41)** | ✅ PackId (identidade única), Provision (senha · convite selado CelerLink · cabo), app Matilha com Entrar, nó virtual `pc-XXXX` com BEAT proxy, `SUB_SEND`, procuração `SUB_OPEN_AT` | `test/cpp` (PackId, ProvProto, JOIN, eventos, BEAT proxy), `meshsim` (convite + 3 portas; nó virtual), `test_celerctl` (mesh, procuração); bancada pendente |
+| **B — Gateway USB** | B.1 ✅ `KL_RES_CTL/DATA` + transporte USB + auto-KEEP + `res_share_usb`; B.2 ✅ nó virtual e proxy de OPEN da malha (API 41); falta mic/cam pelo cabo | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
 | **C — crate `celernet`** | transport trait + framing + ResProto client + API alto nível + fake device p/ CI (+ `cnet`, mDNS, hash-HELLO se julgado) | cargo test, integração vs sim, bancada 1 h de stream |
 | **D — Confiança** | ACL adminKey + consentimento + eventos/threshold + UI de join | meshsim (ACL negando nó), bench de RAM interna |
 | **E/F — Fronteira** | re-chunking, Rust-BLE, rules engine, handoff | desenho próprio, uma onda cada |
@@ -771,7 +837,7 @@ candidatas); `celer.js types` regenera junto quando superfície JS muda.
 | TTL_DEFAULT / TTL_MAX | 4 / 8 |
 | Tipos | BEAT=0, DATA=1, FRAG=2 |
 | CAPS | SPK 01, MIC 02, DISP 04, MOT 08, LED 10, HUB 20, CAM 40 |
-| BFLAG | UNPROV 01, ADMIN 02 |
+| BFLAG | UNPROV 01, ADMIN 02, PROXY 04 (nó virtual, API 41) |
 | Token bucket | 16 rajada, 8/s |
 | Fila TX/RX | 96 / 8 |
 | Nós / expiração | 16 / 15 s (teto 4×) |
@@ -791,7 +857,7 @@ candidatas); `celer.js types` regenera junto quando superfície JS muda.
 | LEASE_DS_DEFAULT | 200 (20 s) |
 | Envelope Pack | 'P' + kind + msgId u16; KIND_MUSIC/RES=3/CUSTOM |
 | DataLink | frame 1470 B (1449 úteis); kinds DATA/STREAM/BULK/BULK_ACK/CTRL |
-| Transportes | MESH=0, ESPNOW=1 (+ USB=2 proposto) |
+| Transportes | MESH=0, ESPNOW=1, USB=2 |
 
 ### C. HostLink proto 2 (`HostLink.h:115-151`, `HostFrame.h`)
 
@@ -802,7 +868,7 @@ candidatas); `celer.js types` regenera junto quando superfície JS muda.
 | Resposta | mesmo opcode; byte 0 = status (0 OK) |
 | MAX_PAYLOAD | 8192 (S3) / 4096 (ESP32) |
 | Janelas | USJ 4, UART S3 4, CDC 2, CYD 1, TCP 4 |
-| Opcodes | 0x01 HELLO … 0x20 STATS; **0x21 KL_RES_CTL, 0x22 KL_RES_DATA propostos** |
+| Opcodes | 0x01 HELLO … 0x20 STATS, 0x21 KL_RES_CTL, 0x22 KL_RES_DATA (subops 1..14 no `UsbRes.h`; eventos do nó virtual com sid 0) |
 | Velocidades | UART 78 KB/s @921600 · USJ ~113 · CDC ~110 KB/s |
 | Canais USB | watch = CDC nativo (TinyUSB, CDC1) · dog = USJ · smartdisplay = UART CH340 · ESP32 clássicos = UART |
 | DebugBridge | TCP/UDP 5555, `CELERBRIDGE 1 …`, `AUTH <token>`, probe `CELERPROBE1` |

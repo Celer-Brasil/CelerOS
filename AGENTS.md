@@ -51,6 +51,7 @@ CelerOS/
 | `PowerPolicy` | class | `main/Hardware/` | DFS + light sleep when screen is off, idle WiFi off |
 | `ScreenPower` | class | `main/Display/` | dim/AOD/off state ladder, raise-to-wake, glance on notification |
 | `CelerLink`, `PhoneLink` | classes | `main/Bluetooth/` | NimBLE host: device-to-device link; Gadgetbridge (Bangle.js) phone link |
+| `PackId`, `Provision`, `Resources` | namespaces | `main/Pack/` | the pack's three pillars glue: one identity, one key with three doors (password / CelerLink sealed invite / cable), resources + the PC as virtual member `pc-XXXX` (design: `Documentation/CelerNet_Design.pt-BR.md`) |
 | `WatchPanels`, `AlarmScreen` | classes | `main/Launcher/` | edge-gesture panels (quick settings, notification center); full-screen alarm ring |
 | `JSBindings::init` | fn | `main/Runtime/JSBindings.cpp` | registers the JS API from `kFnsN[]` tables |
 | `Kui` | class | `main/UI/` | immediate-mode UI: Canvas/Screen/Widget/TouchPump/Navigator |

@@ -25,7 +25,8 @@ cada tipo de mudança.
 |   WebManager   httpd + file manager + upload OTA + portal    |
 |   OTA          OtaManager: update.json v2 + download Range   |
 |   USBDevice    CelerShell, HostLink (celerctl), SerialLink  |
-|   Bluetooth    CelerLink: BLE entre aparelhos (Celer Link) |
+|   Bluetooth    CelerLink (pareamento) + CelerNet (malha)   |
+|   Pack         PackId, Provision, Resources: a matilha      |
 |   Boards/<b>/  HAL por placa (pinos, display, traits)        |
 +------------------------------^-------------------------------+
                                | inclui/REQUIRES
@@ -109,8 +110,27 @@ O loop principal roda na task main: `Navigator::tick()`,
 | Gestos/toque | `UI/Kui.cpp` (TouchPump; toques injetados pelo celerctl passam pelo TouchInjector) |
 | Lado dispositivo do celerctl | `USBDevice/HostLink.cpp` (opcodes), `SerialLink.cpp` (UART) |
 | Celer Link (BLE entre aparelhos) | `Bluetooth/CelerLink.cpp` + `Runtime/JsLink.cpp` (global `CelerLink`) |
+| A matilha (malha, recursos, entrar) | `Pack/` (`PackId`, `Provision`, `Resources`) + `Bluetooth/CelerNet.cpp`; design em `Documentation/CelerNet_Design.pt-BR.md` |
 | Página web do file manager e do espelho de tela | `WebManager/*.html` (re-embutidas como headers gzipped na build) |
 | Radio Wi-Fi / credenciais | `components/Connection` (`NetworkManager` singleton) |
+
+## A matilha: três pilares, um sistema
+
+Os aparelhos formam uma rede privada — a **matilha** — em que cada um publica
+o seu hardware (mic, câmera, alto-falante, relés, sensores) como recursos que
+os outros usam. Três tecnologias são três pilares dela:
+
+| Pilar | Papel | Código |
+|---|---|---|
+| **CelerLink** | confiança: pareia por código de 6 dígitos; o bond então leva a chave da matilha (convite selado) | `Bluetooth/CelerLink.cpp`, `Pack/Provision.cpp` |
+| **CelerNet** + recursos | a malha: flooding BLE cifrado, presença, leases, plano de dados ESP-NOW | `Bluetooth/CelerNet.cpp`, `Pack/Resources.cpp` |
+| **HostLink** | o gateway: o computador entra pelo cabo USB como membro virtual `pc-XXXX` | `USBDevice/HostLink.cpp`, `USBDevice/UsbRes.h` |
+
+Eles dividem uma identidade (`Pack/PackId`: id do nó pela MAC BT, um nome
+persistente) e uma chave com três portas: senha (`Pack.join`, `mesh join` no
+shell, `celerctl mesh join`), o convite pelo CelerLink (`Pack.invite`, app
+Matilha) e o cabo. Os apps usam o `Pack.*` como fachada (guia da API JS,
+seção 43).
 
 ## Convenções que valem a pena conhecer
 

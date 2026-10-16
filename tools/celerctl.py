@@ -141,6 +141,15 @@ def load_usbres_subops():
 SUB = load_usbres_subops()
 
 
+def load_usbres_paths():
+    """Arquivos de troca da midia pelo cabo (PC_*_PATH do UsbRes.h)."""
+    header = Path(__file__).resolve().parent.parent / "main" / "USBDevice" / "UsbRes.h"
+    return dict(re.findall(r'constexpr const char\* (PC_\w+_PATH) = "([^"]+)"', header.read_text()))
+
+
+PC_PATHS = load_usbres_paths()
+
+
 def read_exact(ser, n, timeout):
     """Le exatamente n bytes (bloqueando ate timeout)."""
     buf = b""
@@ -634,6 +643,19 @@ class HostLink:
         if ev["state"] != "open":
             raise CelerError("recusado: %s (%s)" % (ev["reason"] or ev["state"], ev["state"]))
         return h
+
+    def res_media(self, subop, node, arg=None, timeout=30.0):
+        """SUB_SNAP_AT/REC_AT/PLAY_AT: abre por procuracao e espera o fim
+        (EV_STATE done). Levanta CelerError com o motivo se nao terminou."""
+        corpo = bytes(((node >> 8) & 0xFF, node & 0xFF)) + (bytes((arg,)) if arg is not None else b"")
+        h = self.res_ctl(subop, corpo)[0]
+        ev = self.res_event_wait(lambda e: e["ev"] == "state" and e["h"] == h and
+                                 e["state"] not in ("free", "opening", "open"), timeout)
+        if ev is None:
+            self.res_hclose(h)
+            raise CelerError("sem fim em %.0fs" % timeout)
+        if ev["state"] != "done":
+            raise CelerError("recusado: %s (%s)" % (ev["reason"] or ev["state"], ev["state"]))
 
     def res_hwrite(self, h, data):
         self.res_ctl(SUB["HWRITE"], bytes((h,)) + data)
@@ -1713,6 +1735,45 @@ def parse_res_event(b):
     return None
 
 
+def wav_to_pcm16k(path):
+    """WAV PCM (8/16 bits, mono/estereo, qualquer taxa) -> PCM16 LE mono 16 kHz,
+    o formato do stream de audio da matilha. O device nao parseia WAV: um
+    parser so (o do PC)."""
+    import wave
+    import array
+    with wave.open(path, "rb") as w:
+        ch, sw, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+        raw = w.readframes(n)
+    if sw == 2:
+        a = array.array("h")
+        a.frombytes(raw)
+        if sys.byteorder == "big":
+            a.byteswap()
+        s = list(a)
+    elif sw == 1:
+        s = [(b - 128) << 8 for b in raw]
+    else:
+        raise CelerError("WAV de %d bits: use 8 ou 16" % (sw * 8))
+    if ch > 1:
+        s = [sum(s[i:i + ch]) // ch for i in range(0, len(s) - ch + 1, ch)]
+    if rate != 16000 and s:
+        out_n = max(1, int(len(s) * 16000 / rate))
+        step = rate / 16000.0
+        r = []
+        for i in range(out_n):
+            x = i * step
+            j = int(x)
+            f = x - j
+            a0 = s[j] if j < len(s) else s[-1]
+            a1 = s[j + 1] if j + 1 < len(s) else a0
+            r.append(int(a0 + (a1 - a0) * f))
+        s = r
+    out = array.array("h", [max(-32768, min(32767, v)) for v in s])
+    if sys.byteorder == "big":
+        out.byteswap()
+    return out.tobytes()
+
+
 def _codigo_do_novo(args):
     """Le o codigo do convite pelo cabo do aparelho NOVO (sem tela)."""
     sub = argparse.Namespace(**vars(args))
@@ -1735,9 +1796,14 @@ def _node_id(link, quem):
     """No por id hex (A1B2) ou pelo nome no catalogo da malha do gateway."""
     if re.fullmatch(r"[0-9A-Fa-f]{4}", quem):
         return int(quem, 16)
-    for e in decode_mesh_list(link.res_ctl(SUB["MESH"])):
-        if e["nodeName"].lower() == quem.lower():
-            return e["node"]
+    # o catalogo enche sob demanda: a 1a consulta dispara o DESCRIBE dos
+    # vizinhos e volta sem eles — reconsulta como os apps fazem
+    for tentativa in range(4):
+        for e in decode_mesh_list(link.res_ctl(SUB["MESH"])):
+            if e["nodeName"].lower() == quem.lower():
+                return e["node"]
+        if tentativa < 3:
+            link.hold(1.5)
     raise CelerError("no \"%s\" fora do catalogo da malha (use o id, ou res ls primeiro)" % quem)
 
 
@@ -1811,6 +1877,40 @@ def cmd_res(args):
                     link.hold(args.segura)
             finally:
                 link.res_hclose(h)
+        elif sub in ("snap", "rec", "play"):
+            # midia de OUTRO no pelo cabo (API 41): por arquivo no gateway
+            link.keep_push = True
+            node = _node_id(link, args.no)
+            if sub == "snap":
+                print("foto de %s (q %d)..." % (args.no, args.q))
+                link.res_media(SUB["SNAP_AT"], node, args.q, timeout=40)
+                remoto, local = PC_PATHS["PC_SNAP_PATH"], args.saida
+            elif sub == "rec":
+                print("gravando %d s do mic de %s..." % (args.segundos, args.no))
+                link.res_media(SUB["REC_AT"], node, args.segundos, timeout=args.segundos + 25)
+                remoto, local = PC_PATHS["PC_REC_PATH"], args.saida
+            else:
+                pcm = wav_to_pcm16k(args.arquivo)
+                if len(pcm) > 30 * 32000:
+                    raise CelerError("audio acima de 30 s")
+                fd, tmp = tempfile.mkstemp(suffix=".pcm")
+                os.write(fd, pcm)
+                os.close(fd)
+                try:
+                    link.write_file(tmp, PC_PATHS["PC_PLAY_PATH"], progress=False)
+                finally:
+                    os.unlink(tmp)
+                print("tocando %.1f s em %s..." % (len(pcm) / 32000.0, args.no))
+                try:
+                    link.res_media(SUB["PLAY_AT"], node, None, timeout=len(pcm) / 32000.0 + 20)
+                finally:
+                    link.delete(PC_PATHS["PC_PLAY_PATH"])
+                print("tocou")
+                remoto = None
+            if remoto:
+                link.read_file(remoto, local, progress=False)
+                link.delete(remoto)
+                print("salvo em %s (%d bytes)" % (local, os.path.getsize(local)))
         elif sub == "relay":
             r = link.res_open(args.nome, {"off": 1} if args.op != "state" else None)
             sid = r["sid"]
@@ -3655,6 +3755,17 @@ def build_parser():
                    help="rele de OUTRO no da matilha (id A1B2 ou nome; o gateway abre por procuracao)")
     p.add_argument("--segura", type=int, default=0, metavar="S",
                    help="mantem a sessao N s (auto-KEEP do gateway; ao soltar, auto-off)")
+    p = rr.add_parser("snap", help="foto da camera de OUTRO no (procuracao do gateway)")
+    p.add_argument("-n", "--no", required=True, metavar="NO", help="id A1B2 ou nome do no com camera")
+    p.add_argument("saida", nargs="?", default="foto.jpg")
+    p.add_argument("-q", type=int, default=12, help="qualidade JPEG 5..63 (menor = melhor)")
+    p = rr.add_parser("rec", help="grava o mic de OUTRO no (WAV 16 kHz)")
+    p.add_argument("-n", "--no", required=True, metavar="NO")
+    p.add_argument("segundos", type=int, help="1..10")
+    p.add_argument("saida", nargs="?", default="mic.wav")
+    p = rr.add_parser("play", help="toca um WAV no alto-falante de OUTRO no (ate 30 s)")
+    p.add_argument("-n", "--no", required=True, metavar="NO")
+    p.add_argument("arquivo", help="WAV PCM 8/16 bits, qualquer taxa (vira 16 kHz mono)")
     p = rr.add_parser("sensor", help="assina um sensor LOCAL do gateway")
     p.add_argument("nome", help='"lum", "bat" (o do catalogo)')
     p.add_argument("rate", type=int, nargs="?", default=0, help="ms entre amostras (0 = por pedido)")

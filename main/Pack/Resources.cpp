@@ -61,6 +61,13 @@ bool s_usbSession = false;   // sessao HostLink viva (HELLO...endSession)
 bool s_usbAllowed = false;   // cache do res_share_usb (refreshSettings, 2 s)
 bool (*s_usbSend)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n) = nullptr;
 uint16_t s_evSeq = 0;        // seq dos eventos (sid 0) para o PC
+// SUB_PLAY_AT: o PCM que o PC mandou, tocando no speaker do outro no
+struct UsbPlay {
+    int16_t* pcm = nullptr;
+    size_t n = 0;   // amostras
+    int h = -1;
+};
+UsbPlay s_usbPlay;
 constexpr int K_USB_HANDLES = 2;  // handles por procuracao do PC (o resto e dos apps)
 // Captura do OPEN do PC: o handleOpen manda ACCEPT/REFUSE pelo sendEnv;
 // para o PC a resposta volta no proprio CTL (usbCtl), nao no radio
@@ -951,7 +958,12 @@ void dispatch(const InMsg& m) {
             if (x.mode != MODE_DATA) {
                 bool ok = x.transport == TRANSPORT_ESPNOW;
                 if (ok && x.mode == MODE_PLAY) ok = AudioRes::playStart(x.sid);
-                else if (ok && x.mode == MODE_SPEAK) ok = AudioRes::sourceStart(x.mac, x.sid, x.token);
+                else if (ok && x.mode == MODE_SPEAK) {
+                    // o PC no cabo toca o PCM dele (SUB_PLAY_AT); o app, o mic daqui
+                    ok = x.usb && s_usbPlay.h == h && s_usbPlay.pcm != nullptr
+                             ? AudioRes::sourceStartBuffer(x.mac, x.sid, x.token, s_usbPlay.pcm, s_usbPlay.n)
+                             : AudioRes::sourceStart(x.mac, x.sid, x.token);
+                }
                 else if (ok && x.mode == MODE_REC) ok = AudioRes::recStart(x.sid, x.maxMs);
                 else if (ok && (x.mode == MODE_SNAP || x.mode == MODE_VIEW)) {
                     CamRes::clientBegin(h, x.mode == MODE_VIEW);
@@ -1445,6 +1457,8 @@ void handleDataRx(const DataLink::Rx& dr) {
 
 }  // namespace
 
+void usbMediaTick(int i);  // gateway USB (mais abaixo)
+
 void tick() {
     if (!s_inited) return;
     // A caixa so existe depois do 1o uso; o handler da malha precisa dela
@@ -1477,7 +1491,9 @@ void tick() {
         Guard g;
         for (int i = 0; i < HANDLES_MAX; i++) {
             Handle& x = s_h[i];
-            if (!x.usb || x.state == x.usbSeen) continue;
+            if (!x.usb) continue;
+            usbMediaTick(i);  // gravacao/toque por procuracao terminou -> ST_DONE
+            if (x.state == x.usbSeen) continue;
             uint8_t ev[8];
             const size_t n = usbres::encodeEvState((uint8_t)i, x.state, x.reason, x.node, ev, sizeof(ev));
             if (n > 0) usbEventLocked(ev, n);
@@ -1486,6 +1502,10 @@ void tick() {
                 handleRelease(x);
                 x.usb = false;
                 x.state = ST_FREE;
+                if (s_usbPlay.h == i) {
+                    heap_caps_free(s_usbPlay.pcm);
+                    s_usbPlay = UsbPlay();
+                }
             }
         }
     }
@@ -1931,6 +1951,44 @@ bool sendEnvelope(uint16_t from, uint16_t to, const uint8_t* env, size_t n) {
     return DataLink::send(mac, DataLink::KIND_ENV, from, to, 0, env, n);
 }
 
+// Grava no /local de forma atomica (tmp + rename), como o recordStop do JS
+bool writeFileAtomic(const char* path, const void* d, size_t n) {
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE* f = fopen(tmp, "wb");
+    if (f == nullptr) return false;
+    const bool ok = fwrite(d, 1, n, f) == n;
+    fclose(f);
+    if (!ok) {
+        unlink(tmp);
+        return false;
+    }
+    unlink(path);
+    return rename(tmp, path) == 0;
+}
+
+// Fim de midia por procuracao do PC (tick, pilha interna — grava a flash):
+// gravacao do mic remoto que encheu/venceu vira WAV em PC_REC_PATH; o PCM
+// do PC que terminou de tocar fecha a sessao. Ambos viram ST_DONE.
+void usbMediaTick(int i) {
+    Handle& x = s_h[i];
+    if (x.state != ST_OPEN || !x.local) return;
+    if (x.mode == MODE_REC && !AudioRes::recActive(x.sid)) {
+        size_t len = 0;
+        uint32_t ms = 0;
+        char* wav = recStop(i, false, &len, &ms);  // fecha a sessao no dono
+        const bool ok = wav != nullptr && writeFileAtomic(usbres::PC_REC_PATH, wav, len);
+        free(wav);
+        ESP_LOGI(TAG, "gateway USB: gravacao de %04X para o PC (%u ms, %s)", x.node, (unsigned)ms,
+                 ok ? "ok" : "falhou");
+        x.state = ok ? ST_DONE : ST_LOST;
+    } else if (x.mode == MODE_SPEAK && s_usbPlay.h == i && !AudioRes::sourceActive()) {
+        close(i);  // tocou ate o fim: CLOSE ao dono
+        x.state = ST_DONE;
+        ESP_LOGI(TAG, "gateway USB: PC tocou %u ms em %04X", (unsigned)(s_usbPlay.n / 16), x.node);
+    }
+}
+
 bool usbEvent(const uint8_t* d, size_t n) {
     if (!s_inited) return false;
     Guard g;
@@ -2015,6 +2073,67 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             memcpy(code, body, 6);
             code[6] = '\0';
             return Provision::inviteCode(code) ? 0 : -1;
+        }
+        case usbres::SUB_SNAP_AT:
+        case usbres::SUB_REC_AT:
+        case usbres::SUB_PLAY_AT: {
+            uint16_t node = 0;
+            uint8_t arg = 0;
+            if (!s_usbSession || !s_usbAllowed ||
+                !usbres::decodeMediaAt(body, len, subop != usbres::SUB_PLAY_AT, &node, &arg) ||
+                node == ourNode() || node == usbNode()) {
+                return -1;
+            }
+            {
+                Guard g;
+                int busy = 0;
+                for (int i = 0; i < HANDLES_MAX; i++) busy += s_h[i].usb ? 1 : 0;
+                if (busy >= K_USB_HANDLES || (subop == usbres::SUB_PLAY_AT && s_usbPlay.pcm != nullptr)) return -1;
+            }
+            int h = -1;
+            if (subop == usbres::SUB_SNAP_AT) {
+                unlink(usbres::PC_SNAP_PATH);  // o PC so ve a foto NOVA
+                const int q = arg < 5 ? 12 : (arg > 63 ? 63 : arg);
+                h = openCamera(node, false, 0, q, usbres::PC_SNAP_PATH);
+            } else if (subop == usbres::SUB_REC_AT) {
+                unlink(usbres::PC_REC_PATH);
+                const int s = arg < 1 ? 1 : (arg > 10 ? 10 : arg);
+                h = open(node, "mic", nullptr, 0, MODE_REC, (uint32_t)s * 1000);
+            } else {
+                // o PCM que o PC acabou de mandar (celerctl converte o WAV)
+                FILE* f = fopen(usbres::PC_PLAY_PATH, "rb");
+                if (f == nullptr) return -1;
+                fseek(f, 0, SEEK_END);
+                const long sz = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                if (sz < 2 || (size_t)sz > usbres::PC_PLAY_MAX) {
+                    fclose(f);
+                    return -1;
+                }
+                int16_t* pcm = (int16_t*)heap_caps_malloc((size_t)sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                const bool rd = pcm != nullptr && fread(pcm, 1, (size_t)sz, f) == (size_t)sz;
+                fclose(f);
+                if (!rd) {
+                    heap_caps_free(pcm);
+                    return -1;
+                }
+                Guard g;
+                h = open(node, "speaker", nullptr, 0, MODE_SPEAK, 0);
+                if (h < 0) {
+                    heap_caps_free(pcm);
+                    return -1;
+                }
+                s_usbPlay.pcm = pcm;
+                s_usbPlay.n = (size_t)sz / 2;
+                s_usbPlay.h = h;
+            }
+            if (h < 0) return -1;
+            Guard g;
+            s_h[h].usb = true;
+            s_h[h].usbSeen = ST_FREE;
+            if (cap < 1) return -1;
+            out[0] = (uint8_t)h;
+            return 1;
         }
         case usbres::SUB_SEND: {
             // envelope custom DO PC (no virtual) para um membro — ou o gateway

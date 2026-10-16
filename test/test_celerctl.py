@@ -280,6 +280,17 @@ class FakeDevice:
         elif sub == S["INVITE_CODE"]:
             out = b"" if body == b"123456" else None
             self.code_used = body
+        elif sub in (S["SNAP_AT"], S["REC_AT"], S["PLAY_AT"]):
+            node = (body[0] << 8) | body[1]
+            self.media = (sub, node, body[2:])
+            h = 4
+            self.reply(KL["RES_CTL"], bytes((req, 0, 1, h)))
+            caminho = {S["SNAP_AT"]: C.PC_PATHS["PC_SNAP_PATH"], S["REC_AT"]: C.PC_PATHS["PC_REC_PATH"]}.get(sub)
+            if caminho:
+                self.files[caminho] = b"JPEGouWAV" * 10
+            self.push_event(bytes((2, h, 1, 0, node >> 8, node & 0xFF)))
+            self.push_event(bytes((2, h, 7, 0, node >> 8, node & 0xFF)))   # done
+            return
         elif sub == S["HCLOSE"]:
             self.closed = body[0]
             out = b""
@@ -883,6 +894,36 @@ class TestMeshPeloCabo(unittest.TestCase):
         self.assertTrue(dev.accepting)
         self._run(link, ["mesh", "accept", "off"])
         self.assertFalse(dev.accepting)
+
+    def test_snap_por_procuracao_baixa_e_apaga(self):
+        link, dev = make_link()
+        link.hello()
+        fd, saida = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        try:
+            self._run(link, ["res", "snap", "-n", "5C26", saida, "-q", "20"])
+            self.assertEqual(dev.media, (C.SUB["SNAP_AT"], 0x5C26, b"\x14"))
+            with open(saida, "rb") as f:
+                self.assertEqual(f.read(), b"JPEGouWAV" * 10)
+        finally:
+            os.unlink(saida)
+
+    def test_wav_vira_pcm16k_mono(self):
+        import wave
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            with wave.open(path, "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(32000)
+                w.writeframes(struct.pack("<" + "hh" * 320, *([1000, 3000] * 320)))
+            pcm = C.wav_to_pcm16k(path)
+            amostras = struct.unpack("<%dh" % (len(pcm) // 2), pcm)
+            self.assertEqual(len(amostras), 160)          # 32 kHz -> 16 kHz
+            self.assertTrue(all(a == 2000 for a in amostras))  # media do estereo
+        finally:
+            os.unlink(path)
 
     def test_firmware_antigo_orienta_o_shell(self):
         link, dev = make_link()

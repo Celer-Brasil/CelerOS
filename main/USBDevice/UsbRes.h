@@ -72,6 +72,35 @@ constexpr uint8_t SUB_HCLOSE = 14;   // [h u8]
 constexpr uint8_t SUB_ACCEPT = 15;       // [on u8] janela de convite (novo); codigo sai no SUB_NET
 constexpr uint8_t SUB_INVITE = 16;       // [tlen][alvo] membro conecta no novo -> [done u8] (1 = bond, ja entrou)
 constexpr uint8_t SUB_INVITE_CODE = 17;  // [codigo 6 ASCII] digita, manda a chave, espera o ACK
+// Midia de OUTRO no pelo cabo (API 41), no padrao do celerctl: por ARQUIVO
+// no gateway, que o PC baixa/envia pelo READ/WRITE de sempre. O gateway e o
+// cliente por procuracao (handle do SUB_OPEN_AT); o fim chega em EV_STATE
+// (done = arquivo pronto / tocou ate o fim). Exigem res_share_usb.
+constexpr uint8_t SUB_SNAP_AT = 18;  // [node u16][q u8 5..63] foto -> PC_SNAP_PATH
+constexpr uint8_t SUB_REC_AT = 19;   // [node u16][s u8 1..10] mic -> WAV em PC_REC_PATH
+constexpr uint8_t SUB_PLAY_AT = 20;  // [node u16] PCM16 16 kHz mono de PC_PLAY_PATH no speaker dele
+
+constexpr const char* PC_SNAP_PATH = "/local/.pc_snap.jpg";
+constexpr const char* PC_REC_PATH = "/local/.pc_rec.wav";
+constexpr const char* PC_PLAY_PATH = "/local/.pc_play.pcm";
+constexpr size_t PC_PLAY_MAX = 30u * 16000u * 2u;  // 30 s de PCM16 16 kHz
+
+inline size_t encodeMediaAt(uint16_t node, int arg, uint8_t* out, size_t cap) {
+    const size_t n = arg >= 0 ? 3 : 2;
+    if (cap < n) return 0;
+    out[0] = (uint8_t)(node >> 8);
+    out[1] = (uint8_t)node;
+    if (arg >= 0) out[2] = (uint8_t)arg;
+    return n;
+}
+
+// arg = -1 quando o subop nao leva argumento (SUB_PLAY_AT)
+inline bool decodeMediaAt(const uint8_t* p, size_t n, bool withArg, uint16_t* node, uint8_t* arg) {
+    if (p == nullptr || n != (withArg ? 3u : 2u)) return false;
+    *node = (uint16_t)((p[0] << 8) | p[1]);
+    if (withArg) *arg = p[2];
+    return *node != 0 && *node != 0xFFFF;
+}
 
 constexpr uint16_t EVENT_SID = 0;    // sid dos eventos no KL_RES_DATA
 constexpr uint8_t EV_MSG = 1;

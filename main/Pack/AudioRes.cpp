@@ -24,6 +24,8 @@ const char* TAG = "celer.audio";
 
 // ---- fonte (mic -> par) ----
 struct Source {
+    const int16_t* buf = nullptr;  // fonte de buffer (nullptr = mic)
+    size_t bufN = 0;
     volatile bool run = false;
     volatile bool alive = false;   // task ainda no loop (stop espera ela sair)
     uint16_t sid = 0;
@@ -66,6 +68,27 @@ void srcTask(void*) {
     vTaskSuspend(nullptr);
 }
 
+// Fonte de buffer: mesmo quadro STREAM do mic, no ritmo do relogio (o
+// speaker do outro lado tem 160 ms de colchao contra o jitter do ar)
+void bufTask(void*) {
+    uint16_t seq = 0;
+    size_t off = 0;
+    TickType_t next = xTaskGetTickCount();
+    while (s_src.run && off < s_src.bufN) {
+        const size_t n = s_src.bufN - off < 256 ? s_src.bufN - off : 256;
+        if (DataLink::send(s_src.mac, DataLink::KIND_STREAM, s_src.sid, s_src.token, ++seq, s_src.buf + off,
+                           n * 2)) {
+            s_srcFrames++;
+        } else {
+            s_srcFail++;
+        }
+        off += n;
+        vTaskDelayUntil(&next, pdMS_TO_TICKS(16));
+    }
+    s_src.alive = false;
+    vTaskSuspend(nullptr);  // sourceStop/o proximo start apagam
+}
+
 // ---- tocar (stream -> speaker) ----
 AudioPlayer::PcmFeed* s_feed = nullptr;
 uint16_t s_playSid = 0;
@@ -105,8 +128,32 @@ bool speakerAvailable() {
     return Board::profile().i2s.dout >= 0;  // PcmFeed precisa do I2S (buzzer LEDC nao toca PCM)
 }
 
+bool sourceStartBuffer(const uint8_t mac[6], uint16_t sid, uint32_t token, const int16_t* pcm, size_t n) {
+    if (s_src.alive || pcm == nullptr || n == 0) return false;
+    if (s_src.task != nullptr) {
+        celerTaskDelete(s_src.task);
+        s_src.task = nullptr;
+    }
+    memcpy(s_src.mac, mac, 6);
+    s_src.sid = sid;
+    s_src.token = token;
+    s_src.buf = pcm;
+    s_src.bufN = n;
+    s_src.run = true;
+    s_src.alive = true;
+    if (celerTaskCreate(bufTask, "res_play", 3072, 3072, nullptr, 5, &s_src.task) != pdPASS) {
+        s_src.run = false;
+        s_src.alive = false;
+        return false;
+    }
+    ESP_LOGI(TAG, "buffer -> sessao %u (%u ms de PCM)", (unsigned)sid, (unsigned)(n / (RATE / 1000)));
+    return true;
+}
+
 bool sourceStart(const uint8_t mac[6], uint16_t sid, uint32_t token) {
     if (!micAvailable() || s_src.alive) return false;
+    s_src.buf = nullptr;
+    s_src.bufN = 0;
     if (s_src.task != nullptr) {  // task da sessao anterior estacionada
         celerTaskDelete(s_src.task);
         s_src.task = nullptr;

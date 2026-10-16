@@ -27,6 +27,11 @@ bool speakerAvailable();   // placa com I2S de saida (PcmFeed)
 
 // ---- fonte: mic local -> par (mac, sid, token) ----
 bool sourceStart(const uint8_t mac[6], uint16_t sid, uint32_t token);
+// Fonte de BUFFER (API 41, o PC tocando no alto-falante de outro no pelo
+// cabo): PCM16 mono 16 kHz ja carregado; sai no ritmo do tempo real (16 ms
+// por bloco) e a task encerra sozinha no fim (sourceActive() vira false).
+// O buffer e do chamador e precisa viver ate sourceActive() == false.
+bool sourceStartBuffer(const uint8_t mac[6], uint16_t sid, uint32_t token, const int16_t* pcm, size_t n);
 void sourceStop(uint16_t sid);   // so para se for a fonte desta sessao
 bool sourceActive();
 

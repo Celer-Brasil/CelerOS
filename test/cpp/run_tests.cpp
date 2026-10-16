@@ -1960,6 +1960,22 @@ static void testHelloHunt() {
     CHECK(lt.count() == 2);
 }
 
+static void testUsbMedia() {
+    using namespace usbres;
+    uint8_t b[4];
+    CHECK(encodeMediaAt(0x5C26, 12, b, sizeof(b)) == 3 && b[0] == 0x5C && b[1] == 0x26 && b[2] == 12);
+    uint16_t node = 0;
+    uint8_t arg = 0;
+    CHECK(decodeMediaAt(b, 3, true, &node, &arg) && node == 0x5C26 && arg == 12);
+    CHECK(!decodeMediaAt(b, 2, true, &node, &arg));   // faltou o argumento
+    CHECK(encodeMediaAt(0xAB3E, -1, b, sizeof(b)) == 2);
+    CHECK(decodeMediaAt(b, 2, false, &node, &arg) && node == 0xAB3E);
+    CHECK(!decodeMediaAt(b, 3, false, &node, &arg));  // play nao leva argumento
+    CHECK(encodeMediaAt(0xFFFF, -1, b, sizeof(b)) == 2 && !decodeMediaAt(b, 2, false, &node, &arg));
+    CHECK(SUB_SNAP_AT == 18 && SUB_REC_AT == 19 && SUB_PLAY_AT == 20);
+    CHECK(PC_PLAY_MAX == 960000u);
+}
+
 static void testUsbJoin() {
     using namespace usbres;
     uint8_t b[96];
@@ -2128,6 +2144,7 @@ int main() {
     testResMeta();
     testUsbRes();
     testHelloHunt();
+    testUsbMedia();
     testUsbJoin();
     testUsbVirtualNode();
     testPackId();

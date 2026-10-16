@@ -491,6 +491,81 @@ scenario('CelerNet v3: matilhas isoladas e mic so na privada', function() {
 });
 
 // ---------------------------------------------------------------------------
+// Entrar na matilha (API 40): os tres pilares juntos. O aparelho novo abre a
+// janela de convite (CelerLink anunciando com codigo); o membro conecta,
+// digita o codigo e manda a chave pelo selo do bond (Pack.invite). O novo
+// passa a ouvir a matilha e o mic dele sai do "denied" da rede aberta. Um
+// terceiro entra pela porta da senha (Pack.join) e o convite fora da janela
+// e ignorado.
+scenario('Matilha: convite selado pelo CelerLink e Pack.join', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    var pack = { name: 'bancada', pass: 'senha-forte-1' };
+    function membro(env, sim) {
+            sim.at(500, function(e) { e.CelerNet.start({}); });
+            sim.at(2000, function(e) {
+                var ps = e.CelerLink.scan(2000);
+                var alvo = null;
+                for (var i = 0; i < ps.length; i++) if (ps[i].name === 'Novo') alvo = ps[i];
+                if (!alvo || !e.CelerLink.connect(alvo.id, 4000)) { sim.note('sem alvo'); return; }
+                sim.note('verify ' + e.CelerLink.verify(sim.peerCode()));
+                sim.note('invite ' + e.Pack.invite());
+            });
+            sim.at(9000, function(e) { sim.note('convite ' + e.Pack.inviteStatus()); });
+            sim.at(16000, function(e) {
+                sim.note('nos ' + e.CelerNet.nodes().map(function(n) { return n.name; }).sort().join(','));
+            });
+    }
+    function novo(env, sim) {
+            sim.at(500, function(e) {
+                e.CelerNet.start({ name: 'Novo' });
+                e.CelerLink.start('Novo');
+                sim.note('antes ' + e.Pack.me().net + ' prov=' + e.Pack.me().provisioned);
+                e.Pack.acceptInvite(true);
+            });
+            sim.at(9000, function(e) {
+                var me = e.Pack.me();
+                sim.note('depois ' + me.net + ' prov=' + me.provisioned + ' st=' + e.Pack.inviteStatus());
+                sim.note('selados p/ app ' + (e.CelerLink.pollSealed() === null ? 'nenhum' : 'vazou'));
+            });
+            sim.at(16000, function(e) {
+                sim.note('nos ' + e.CelerNet.nodes().map(function(n) { return n.name; }).sort().join(','));
+            });
+    }
+    function senha(env, sim) {
+            sim.at(500, function(e) { e.CelerNet.start({ name: 'Senha' }); });
+            sim.at(3000, function(e) {
+                sim.note('curta ' + e.Pack.join('bancada', 'curta'));
+                sim.note('join ' + e.Pack.join('bancada', 'senha-forte-1'));
+            });
+            sim.at(16000, function(e) {
+                sim.note('nos ' + e.CelerNet.nodes().map(function(n) { return n.name; }).sort().join(','));
+            });
+    }
+    return sim.runMesh({
+        durationMs: 18000, seed: 21,
+        nodes: [
+            { name: 'A', id: 'AAAA', app: src, caps: 0x02, pack: pack, wire: membro },
+            { name: 'Novo', id: 'B0B0', app: src, caps: 0x04, wire: novo },
+            { name: 'Senha', id: 'C0C0', app: src, caps: 0x04, wire: senha }
+        ],
+        links: [['A', 'Novo', -50], ['A', 'Senha', -50], ['Novo', 'Senha', -50]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'A'); dump(res, 'Novo'); dump(res, 'Senha');
+        check('novo comeca na rede aberta', has(res, 'Novo', '[sim] antes celer prov=false'));
+        check('membro verifica o codigo e convida', has(res, 'A', '[sim] verify true') &&
+              has(res, 'A', '[sim] invite true'));
+        check('novo entra pelo convite', has(res, 'Novo', '[sim] depois bancada prov=true st=joined'));
+        check('ACK volta ao membro', has(res, 'A', '[sim] convite ok'));
+        check('quadro do convite nunca chega ao app', has(res, 'Novo', '[sim] selados p/ app nenhum'));
+        check('senha curta recusada', has(res, 'Senha', '[sim] curta false'));
+        check('porta da senha', has(res, 'Senha', '[sim] join true'));
+        check('as tres portas na mesma matilha', has(res, 'A', '[sim] nos Novo,Senha') &&
+              has(res, 'Novo', '[sim] nos A,Senha') && has(res, 'Senha', '[sim] nos A,Novo'));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Recursos da matilha (API 36): DESCRIBE/LIST, canal de dados compartilhado,
 // exclusivo (busy), politica do dono, nativo sem provedor, escrita do
 // cliente, lease que vence quando o cliente some e REVOKE no unexpose

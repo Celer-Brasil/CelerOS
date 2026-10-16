@@ -145,6 +145,7 @@ SemaphoreHandle_t s_syncSem = nullptr;
 EventGroupHandle_t s_evt = nullptr;
 QueueHandle_t s_rxQueue = nullptr;
 QueueHandle_t s_sealedQueue = nullptr;  // mensagens seladas que autenticaram
+CelerLink::SealedTap volatile s_sealedTap = nullptr;  // kernel (convite da matilha)
 Msg s_rxScratch;  // so a task do host usa (pushRx)
 Msg s_sealScratch;  // idem (abertura do selo)
 
@@ -252,6 +253,11 @@ void pushRx(const struct os_mbuf* om) {
             return;
         }
         s_sealScratch.len = (uint16_t)plain;
+        const CelerLink::SealedTap tap = s_sealedTap;
+        if (tap != nullptr && tap(s_sealScratch.data, plain)) {
+            memset(s_sealScratch.data, 0, sizeof(s_sealScratch.data));  // segredo nao fica no rascunho
+            return;
+        }
         if (xQueueSend(s_sealedQueue, &s_sealScratch, 0) != pdTRUE) {
             static Msg dropS;
             xQueueReceive(s_sealedQueue, &dropS, 0);
@@ -1419,6 +1425,10 @@ bool CelerLink::sendSealed(const void* data, size_t len) {
     const bool ok = send(frame, sizeof(K_SEAL_HDR) + K_SEAL_NONCE + ctLen);
     memset(frame, 0, sizeof(frame));
     return ok;
+}
+
+void CelerLink::setSealedTap(SealedTap tap) {
+    s_sealedTap = tap;
 }
 
 bool CelerLink::pollSealed(void* buf, size_t cap, size_t* len) {

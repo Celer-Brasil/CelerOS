@@ -3,12 +3,23 @@
 // rede) e os envelopes do OS: mensagem direta por membro e a FESTA que
 // viaja — a música chiptune em curso continua no vizinho com alto-falante,
 // do mesmo ponto. Em placa sem Bluetooth mostra um aviso e sai.
+//
+// API 40: a tela "Entrar" junta os tres pilares — a matilha privada por
+// nome+senha (Pack.join), o CONVITE pelo CelerLink (o aparelho novo mostra
+// o codigo de 6 digitos; quem ja e membro conecta, digita e manda a chave
+// selada com Pack.invite) e o status da rede. O cabo (celerctl mesh join) e
+// a terceira porta, fora do app.
 
 var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
 var rx = [];               // log do que chega (mais novo primeiro)
 var members = [];
 var membersAt = -10000;
 var me = null;
+var tela = "painel";       // painel | entrar | aguardar | convidar
+var achados = [];          // scan do CelerLink na tela convidar
+var sairAt = 0;            // 2 toques para sair da matilha
+var hasJoin = hasMesh && typeof CelerLink !== "undefined" &&
+              typeof Pack.join === "function";  // firmware API 40+
 
 function pushRx(quem, texto) {
     rx.unshift(quem + ": " + texto);
@@ -60,8 +71,132 @@ function sendAll(myName) {
     }
 }
 
+function entrarComSenha() {
+    var nome = System.prompt("Nome da matilha (1 a 15)", "", { nullOnCancel: true });
+    if (nome === null || nome === "") return;
+    var senha = System.prompt("Senha de " + nome + " (8+)", "", { mask: true, nullOnCancel: true });
+    if (senha === null) return;
+    if (senha.length < 8) { UI.toast("Senha curta: use 8 ou mais"); return; }
+    if (Pack.join(nome, senha)) UI.toast("Na matilha " + nome);
+    else UI.toast("Não deu (sem permissão ou erro)");
+}
+
+// lado do membro: escolhe o aparelho que esta aguardando, conecta, pede o
+// codigo que aparece na tela DELE e manda o convite selado
+function convidar(peer) {
+    if (!CelerLink.connect(peer.id, 6000)) { UI.toast("Não conectou"); return; }
+    var c = System.prompt("Código na tela de " + peer.name, "", { hint: "num", nullOnCancel: true });
+    if (c === null || !CelerLink.verify(c)) {
+        CelerLink.disconnect();
+        UI.toast("Código recusado");
+        return;
+    }
+    if (!Pack.invite()) {
+        CelerLink.disconnect();
+        UI.toast("Convite não saiu");
+    }
+}
+
+function telaEntrar() {
+    if (UI.header("Entrar na matilha", { back: true })) { tela = "painel"; return; }
+    var y = 56;
+    UI.card(10, y, 220, 50);
+    UI.text(me.provisioned ? "Matilha " + me.net : "Rede aberta (sem matilha)", 20, y + 8,
+            { w: 200, lines: 1 });
+    UI.text(me.provisioned ? "mic, câmera e relés podem ser compartilhados"
+                           : "entre numa matilha para compartilhar recursos",
+            20, y + 28, { role: "caption", w: 200, lines: 1 });
+    UI.cardEnd();
+    y += 60;
+    if (UI.button("Nome e senha", 10, y, 220, 34, { style: "primary" })) entrarComSenha();
+    y += 42;
+    if (UI.button("Aguardar convite", 10, y, 220, 34, { style: "solid" })) {
+        if (Pack.acceptInvite(true)) tela = "aguardar";
+        else UI.toast("Bluetooth indisponível");
+    }
+    y += 42;
+    if (UI.button("Convidar aparelho", 10, y, 220, 34,
+                  { style: me.provisioned ? "solid" : "ghost", disabled: !me.provisioned })) {
+        achados = [];
+        tela = "convidar";
+    }
+    y += 42;
+    if (me.provisioned) {
+        var confirma = System.millis() - sairAt < 3000;
+        if (UI.button(confirma ? "Toque de novo para sair" : "Sair da matilha", 10, y, 220, 30,
+                      { style: "ghost" })) {
+            if (confirma) {
+                Pack.leave();
+                sairAt = 0;
+                UI.toast("De volta à rede aberta");
+            } else {
+                sairAt = System.millis();
+            }
+        }
+    }
+}
+
+function telaAguardar() {
+    if (UI.header("Aguardar convite", { back: true })) {
+        Pack.acceptInvite(false);
+        tela = "entrar";
+        return;
+    }
+    var est = Pack.inviteStatus();
+    var lk = CelerLink.status();
+    UI.card(10, 56, 220, 120);
+    if (est === "joined") {
+        UI.text("Entrou na matilha " + me.net + "!", 20, 70, { w: 200, lines: 2 });
+    } else if (lk.pairing && lk.code) {
+        UI.text("Digite no outro aparelho:", 20, 66, { role: "caption" });
+        UI.text(lk.code, 120, 104, { role: "display", align: "center" });
+    } else if (est === "waiting") {
+        UI.text("Visível como " + lk.name + ". No aparelho da matilha: Entrar > Convidar.",
+                20, 70, { w: 200, lines: 4 });
+    } else {
+        UI.text("Janela fechada. Volte e abra de novo.", 20, 70, { w: 200, lines: 2 });
+    }
+    UI.cardEnd();
+    UI.invalidate();  // o codigo e o estado mudam sem toque
+}
+
+function telaConvidar() {
+    if (UI.header("Convidar", { back: true })) {
+        CelerLink.disconnect();
+        tela = "entrar";
+        return;
+    }
+    var est = Pack.inviteStatus();
+    if (est === "sent") {
+        UI.text("Enviando a chave...", 10, 60);
+        UI.invalidate();
+        return;
+    }
+    if (est === "ok") UI.text("Convidado entrou!", 10, 60, { role: "caption" });
+    else if (est === "fail") UI.text("Convite falhou", 10, 60, { role: "caption" });
+    if (UI.button("Procurar aparelhos", 10, 80, 220, 32, { style: "primary" })) {
+        achados = CelerLink.scan(3000);
+    }
+    var it = [];
+    for (var i = 0; i < achados.length; i++) {
+        it.push({ label: achados[i].name, right: achados[i].rssi + " dBm" });
+    }
+    if (it.length === 0) it.push({ label: "Abra \"Aguardar convite\" no novo", enabled: false });
+    var h = UI.list("achados", 10, 120, 220, 150, it, { rowH: 32 });
+    if (h >= 0 && achados[h]) convidar(achados[h]);
+}
+
 while (true) {
     UI.begin();
+
+    if (hasMesh && tela !== "painel") {
+        me = Pack.me();
+        if (tela === "entrar") telaEntrar();
+        else if (tela === "aguardar") telaAguardar();
+        else telaConvidar();
+        UI.end();
+        continue;
+    }
 
     if (UI.header("Matilha", { back: true })) {
         System.exitApp();
@@ -86,6 +221,10 @@ while (true) {
     UI.card(10, y, 220, 64);
     var on = UI.toggle(20, y + 8, st.active);
     UI.text("Malha " + (on ? "ativa" : "desligada"), 74, y + 8);
+    if (hasJoin && UI.button("Entrar", 168, y + 6, 54, 24, { style: "ghost" })) {
+        tela = "entrar";
+        UI.invalidate();
+    }
     if (on !== st.active) {
         var ok = on ? CelerNet.start({}) : CelerNet.stop();
         if (!ok && on) UI.toast("Sem RAM para o rádio agora");
@@ -93,7 +232,7 @@ while (true) {
     }
     st = CelerNet.status();
     UI.text(me.name + " · " + roleStr(me.caps), 20, y + 32, { role: "caption", w: 200, lines: 1 });
-    UI.text("rede " + st.net + " · " + st.heard + " ouvidos", 20, y + 46,
+    UI.text((me.provisioned ? "matilha " : "rede ") + st.net + " · " + st.heard + " ouvidos", 20, y + 46,
             { role: "caption", w: 200, lines: 1 });
     UI.cardEnd();
     y += 72;

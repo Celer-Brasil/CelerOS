@@ -1573,11 +1573,17 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // sem capability (mesma porta do CelerNet: o filtro e o ID da rede) ---
     duk_push_object(ctx);  // Pack
     static const JsFn kFnsPack[] = {
-        {"me", js_packMe, 0},                        // {id, name, caps}
+        {"me", js_packMe, 0},                        // {id, name, caps, net, provisioned}
         {"members", js_packMembers, 0},              // bando ouvido (caps decodificados)
         {"send", js_packSend, 3},                    // to (id/nome), msg, opts {urgent}
         {"poll", js_packPoll, 0},                    // envelopes custom | null
         {"handoffMusic", js_packHandoffMusic, 1},    // [to] passa a musica em curso
+        // entrar na matilha (API 40, perm "system"): senha ou convite do CelerLink
+        {"join", js_packJoin, 2},                    // nome, senha -> bool
+        {"leave", js_packLeave, 0},                  // volta a rede aberta "celer"
+        {"acceptInvite", js_packAcceptInvite, 1},    // [on] janela de convite (10 min)
+        {"invite", js_packInvite, 0},                // convida o peer do CelerLink verificado
+        {"inviteStatus", js_packInviteStatus, 0},    // idle|waiting|joined|sent|ok|fail
         // recursos da matilha (API 36): handles numericos, nada bloqueia
         {"resources", js_packResources, 1},          // [tipo] recursos dos vizinhos (cache + DESCRIBE)
         {"open", js_packOpen, 3},                    // no, nome, [opts] -> handle | -1

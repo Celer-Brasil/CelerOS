@@ -455,6 +455,11 @@ private:
     static duk_ret_t js_packDrawFrame(duk_context *ctx);
     static duk_ret_t js_packPoll(duk_context *ctx);
     static duk_ret_t js_packHandoffMusic(duk_context *ctx);
+    static duk_ret_t js_packJoin(duk_context *ctx);
+    static duk_ret_t js_packLeave(duk_context *ctx);
+    static duk_ret_t js_packAcceptInvite(duk_context *ctx);
+    static duk_ret_t js_packInvite(duk_context *ctx);
+    static duk_ret_t js_packInviteStatus(duk_context *ctx);
 
     // Phone (API 15, CONFIG_CELEROS_PHONE_LINK): celular via Gadgetbridge
     static duk_ret_t js_phoneStatus(duk_context *ctx);

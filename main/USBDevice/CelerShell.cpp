@@ -4,6 +4,7 @@
 #include "../Bluetooth/CelerNet.h"
 #include "../Bluetooth/NetKeys.h"
 #include "../Pack/Resources.h"
+#include "../Pack/Provision.h"
 #endif
 #include "FileSystem/FileSystem.h"
 #include "JsDebugger.h"
@@ -1939,19 +1940,17 @@ int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
             print(ctx, "uso: mesh join <nome 1..15> <senha >= 8>\r\n");
             return 1;
         }
-        NetKeys::init();
+        // a mesma porta do Pack.join e do cabo (Provision): chave + netChanged
         bool ok = true;
         if (join) {
-            ok = NetKeys::join(argv[2], argv[3]);
+            ok = Provision::joinPassword(argv[2], argv[3]);
         } else {
-            NetKeys::leave();
+            Provision::leave();
         }
         if (!ok) {
             print(ctx, "falhou (PSA/NVS)\r\n");
             return 1;
         }
-        CelerNet::netChanged();
-        Resources::netChanged();
         const NetKeys::Net* n = NetKeys::primary();
         print(ctx, "rede \"%s\" nid %02X (%s)\r\n", n->name, n->nid, n->open ? "aberta" : "privada");
         return 0;

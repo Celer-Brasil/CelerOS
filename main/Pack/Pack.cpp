@@ -12,6 +12,7 @@
 #include "../Hardware/MusicEngine.h"
 #include "../Hardware/MusicSynth.h"
 #include "NetworkManager.h"
+#include "Provision.h"
 #include "Resources.h"
 
 // Servico de matilha (ver Pack.h). O nome do jogo: o handler do CelerNet
@@ -168,6 +169,7 @@ void init() {
     CelerNet::subscribe(msgHandler);
     CelerNet::setCaps(caps);
     Resources::init();
+    Provision::init();  // convite selado pelo CelerLink (API 40)
     ESP_LOGI(TAG, "matilha: caps 0x%02X (%s)", caps, bp.name);
 }
 
@@ -249,6 +251,7 @@ bool handoffMusic(uint16_t to) {
 void tick() {
     if (!s_inited) init();
     Resources::tick();
+    Provision::tick();
 
     // CAPS_HUB dinamico: rede alcacavel muda o papel na matilha.
     const bool hub = NetworkManager::instance().isConnected();

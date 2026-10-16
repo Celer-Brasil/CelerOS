@@ -1007,11 +1007,31 @@ function makeEnv() {
     var resList = [], resHandles = [], resExposed = {}, resWrites = [];
     var packCaps = { speaker: true, mic: false, display: true, motors: false,
                  leds: false, hub: false };
+    // API 40: matilha privada e convite (estado so no host)
+    var packNet = 'celer', packInvite = 'idle';
     env.Pack = {
     me: function() {
         return { id: 'A1B2', name: 'Celer-TEST', caps: packCaps,
-                 meshActive: meshOn };
+                 meshActive: meshOn, net: packNet, provisioned: packNet !== 'celer' };
     },
+    join: function(name, pass) {
+        if (!name || String(name).length > 15 || !pass || String(pass).length < 8) return false;
+        packNet = String(name);
+        log.push('[pack] join ' + packNet);
+        return true;
+    },
+    leave: function() { packNet = 'celer'; log.push('[pack] leave'); return true; },
+    acceptInvite: function(on) {
+        packInvite = on === false ? 'idle' : 'waiting';
+        return true;
+    },
+    invite: function() {
+        if (packNet === 'celer' || !linkConn || linkPairing) return false;
+        packInvite = 'ok';  // o convidado "entra" na hora no host
+        log.push('[pack] invite');
+        return true;
+    },
+    inviteStatus: function() { return packInvite; },
     members: function() { return meshNodes.slice(0); },
     send: function(to, m, opts) {
         if (!meshOn) return false;

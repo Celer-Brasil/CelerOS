@@ -2380,9 +2380,10 @@ roda com ou sem app aberto.
 #### `Pack.me()` → Object
 Quem somos na matilha: `{id: "9F2A", name: "Celer-Dog",
 caps: {speaker: true, mic: true, display: false, motors: true,
-leds: true, hub: false}, meshActive: true}` — `caps` decodificado do
-bitmask que o firmware deriva da placa (`hub` segue o estado da rede ao
-vivo).
+leds: true, hub: false}, meshActive: true, net: "casa",
+provisioned: true}` — `caps` decodificado do bitmask que o firmware deriva
+da placa (`hub` segue o estado da rede ao vivo). `net` e `provisioned` são
+da API 40 (seção 43).
 
 #### `Pack.members()` → Array
 A matilha ouvida nos últimos 15 s, mais forte primeiro — mesmo formato
@@ -2993,3 +2994,67 @@ privada (a rede aberta recusa com `denied`), `res_share_gpio` default `"0"`
 (o dono liga de propósito), notificação no dono a cada sessão ("rele1 em uso
 por X") e **o uso local sempre ganha** — `System.relay` no próprio nó revoga
 a sessão remota no mesmo instante.
+
+## 43. Nível de API 40 — Entrar na matilha: `Pack.join` e o convite pelo CelerLink
+
+A matilha se apoia em três pilares e, desde a API 40, eles dividem uma
+identidade só (`Pack.me().id`/`name` são os mesmos nos três):
+
+| Pilar | Papel | JS |
+|---|---|---|
+| **CelerLink** | confiança: pareia por código de 6 dígitos e entrega a chave da matilha | `CelerLink.*` (camada baixa) |
+| **CelerNet** + recursos | a malha: presença, mensagens, recursos | `Pack.*` (fachada), `CelerNet.*` (camada baixa) |
+| **HostLink** | o gateway: o computador entra pelo cabo USB | `celerctl` / a crate Rust (sem JS) |
+
+Um aparelho só compartilha mic, câmera e relés numa **matilha privada**
+(veja a seção 41). São três portas de entrada, todas chegando na mesma
+chave: a senha (`Pack.join`, `mesh join` no shell, `celerctl mesh join`), o
+**convite** por um pareamento CelerLink (nenhuma senha digitada no aparelho
+novo) e o cabo. Essas chamadas trocam a chave de rede do aparelho, então
+exigem a permissão `"system"` no `app.json` (a mesma do `Net.wifiConnect`);
+sem ela devolvem `false`. A chave em si nunca chega ao JS.
+
+`Pack.me()` ganha `net` (nome da matilha; `"celer"` = rede aberta) e
+`provisioned` (Boolean: numa matilha privada). `CelerLink.scan()` e
+`status()` ganham `node`, o id do peer na matilha (seção do CelerLink).
+
+#### `Pack.join(nome, senha)` → Boolean
+Entra (ou cria) a matilha privada `nome` (1–15 caracteres) com `senha`
+(≥ 8 caracteres; prefira 12+). Outro aparelho que digitar o mesmo par cai
+na mesma matilha — nada para sincronizar. Bloqueia ~0,3 s (derivação da
+chave). `false` com argumento inválido, sem permissão ou erro de gravação.
+
+#### `Pack.leave()` → Boolean
+Esquece a matilha e volta à rede aberta `"celer"`.
+
+#### `Pack.acceptInvite([on])` → Boolean
+Lado do aparelho novo: abre (padrão) ou fecha a **janela de convite** por
+10 minutos. O aparelho passa a anunciar pelo CelerLink com o gate de código;
+mostre `CelerLink.status().code` enquanto `CelerLink.status().pairing` for
+true. A janela fecha sozinha ao entrar, em 10 minutos ou quando o app sai.
+
+#### `Pack.invite()` → Boolean
+Lado de quem já é membro: manda a chave da matilha, selada com o bond do
+CelerLink, ao peer conectado e **verificado por código**
+(`CelerLink.connect` + `CelerLink.verify`). `false` fora de matilha privada
+ou sem peer verificado. A resposta chega em `Pack.inviteStatus()`.
+
+#### `Pack.inviteStatus()` → String
+`"idle"`, `"waiting"` (janela aberta), `"joined"` (entramos por convite),
+`"sent"` (convite enviado, esperando a resposta — até 10 s), `"ok"` (o
+convidado entrou) ou `"fail"`.
+
+### Exemplo — convidando um aparelho novo
+
+```javascript
+// no aparelho NOVO (app Matilha -> "Aguardar convite"):
+Pack.acceptInvite(true);
+// a cada quadro: se CelerLink.status().pairing, mostre CelerLink.status().code
+// quando Pack.inviteStatus() === "joined": Pack.me().provisioned === true
+
+// num aparelho que JÁ está na matilha:
+var peers = CelerLink.scan(3000);
+if (peers.length && CelerLink.connect(peers[0].id) && CelerLink.verify(codigoDigitado)) {
+    Pack.invite();                       // depois: Pack.inviteStatus() === "ok"
+}
+```

@@ -19,6 +19,7 @@
 #include "../../main/Pack/ResProto.h"
 #include "../../main/USBDevice/UsbRes.h"
 #include "../../main/Pack/PackId.h"
+#include "../../main/Pack/ProvProto.h"
 #include "../../main/Utils/Rigid2D.h"
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
@@ -1963,6 +1964,50 @@ static void testPackId() {
     CHECK(strcmp(b, "pc-1CAE") == 0);
 }
 
+static void testProvProto() {
+    using namespace provproto;
+    Invite iv;
+    memset(&iv, 0, sizeof(iv));
+    snprintf(iv.name, sizeof(iv.name), "bancada");
+    for (int i = 0; i < 16; i++) {
+        iv.netKey[i] = (uint8_t)i;
+        iv.adminKey[i] = (uint8_t)(0xA0 + i);
+    }
+    uint8_t b[INVITE_MAX + 4];
+    const size_t n = encodeInvite(iv, b, sizeof(b));
+    CHECK(n == HDR + 1 + 7 + 32 && b[0] == 'C' && b[1] == 'N' && b[2] == 'J' && b[3] == VERSION &&
+          b[4] == OP_INVITE && b[5] == 7);
+    CHECK(n <= 209);  // cabe no selo do CelerLink (MAX_SEALED)
+    CHECK(isProv(b, n));
+    Invite out;
+    CHECK(decodeInvite(b, n, &out) && strcmp(out.name, "bancada") == 0 &&
+          memcmp(out.netKey, iv.netKey, 16) == 0 && memcmp(out.adminKey, iv.adminKey, 16) == 0);
+    CHECK(!decodeInvite(b, n - 1, &out));  // truncado
+    uint8_t bad[sizeof(b)];
+    memcpy(bad, b, n);
+    bad[3] = 2;
+    CHECK(!isProv(bad, n) && !decodeInvite(bad, n, &out));  // versao errada
+    memcpy(bad, b, n);
+    bad[5] = 0;
+    CHECK(!decodeInvite(bad, n, &out));  // nome vazio
+    memcpy(bad, b, n);
+    bad[7] = 0;
+    CHECK(!decodeInvite(bad, n, &out));  // NUL no meio do nome
+    CHECK(encodeInvite(iv, b, n - 1) == 0);  // nao coube
+    Invite longo;
+    memset(&longo, 0, sizeof(longo));
+    memset(longo.name, 'x', sizeof(longo.name));  // 16 sem NUL: > 15
+    CHECK(encodeInvite(longo, b, sizeof(b)) == 0);
+    // ACK
+    uint8_t a[ACK_LEN];
+    CHECK(encodeAck(ACK_OK, a, sizeof(a)) == ACK_LEN);
+    uint8_t st = 9;
+    CHECK(decodeAck(a, ACK_LEN, &st) && st == ACK_OK);
+    CHECK(!decodeInvite(a, ACK_LEN, &out));
+    CHECK(!decodeAck(b, n, &st));
+    CHECK(!isProv((const uint8_t*)"hello", 5));  // selado comum do app passa direto
+}
+
 int main() {
     testSemVer();
     testUpdateCheck();
@@ -1984,6 +2029,7 @@ int main() {
     testResMeta();
     testUsbRes();
     testPackId();
+    testProvProto();
     testRigid2D();
     testRigid2DHammer();
     testRigid2DMath();

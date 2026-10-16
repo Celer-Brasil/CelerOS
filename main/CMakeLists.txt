@@ -137,7 +137,7 @@ endif()
 # exemplos NimBLE do IDF): os headers do host entram no include path do main.
 set(CELEROS_BT_REQUIRES)
 if(CONFIG_CELEROS_BLUETOOTH)
-    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Bluetooth/CelerNet.cpp" "Bluetooth/NetKeys.cpp" "Pack/Pack.cpp" "Pack/PackId.cpp" "Pack/Resources.cpp" "Pack/DataLink.cpp" "Pack/AudioRes.cpp" "Pack/CamRes.cpp" "Pack/GpioRes.cpp" "Pack/SensorRes.cpp" "Runtime/JsLink.cpp" "Runtime/JsMesh.cpp" "Runtime/JsPack.cpp")
+    list(APPEND CELEROS_SRCS "Bluetooth/CelerLink.cpp" "Bluetooth/CelerNet.cpp" "Bluetooth/NetKeys.cpp" "Pack/Pack.cpp" "Pack/PackId.cpp" "Pack/Provision.cpp" "Pack/Resources.cpp" "Pack/DataLink.cpp" "Pack/AudioRes.cpp" "Pack/CamRes.cpp" "Pack/GpioRes.cpp" "Pack/SensorRes.cpp" "Runtime/JsLink.cpp" "Runtime/JsMesh.cpp" "Runtime/JsPack.cpp")
     list(APPEND CELEROS_BT_REQUIRES bt esp_ringbuf)  # esp_ringbuf: RX do ESP-NOW (Pack/DataLink)
     if(CONFIG_CELEROS_PHONE_LINK)
         list(APPEND CELEROS_SRCS "Bluetooth/PhoneLink.cpp" "Runtime/JsPhone.cpp" "Launcher/PhoneScreens.cpp")

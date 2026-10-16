@@ -48,6 +48,15 @@ var TOKENS_PER_S = 8;
 // v3: a rede e a matilha do no (spec.pack), nunca a do app
 var net = { active: false, relay: true, name: '', net: wd.pack ? wd.pack.name : 'celer', seq: (wd.seed & 0xFFFF),
             txDropped: 0, rxDropped: 0, relayed: 0, relayDropped: 0 };
+// matilha do no (API 40: muda em tempo de execucao pelo Pack.join/leave ou
+// pelo convite selado do CelerLink — o coordenador troca a chave do ar)
+var pack = wd.pack ? { name: wd.pack.name, key: wd.pack.name + '\u0000' + wd.pack.pass } : null;
+var invite = { st: 'idle', at: 0 };
+function setPack(p) {
+    pack = p;
+    net.net = p ? p.name : 'celer';
+    outbox.push({ t: 'netkey', key: p ? p.key : 'celer', at: S.millis() });
+}
 var rxQ = [];             // CelerNet.poll (8, cheia descarta a mais antiga)
 var packQ = [];           // Pack.poll (4)
 var packSeen = [];        // dedup de msgId por origem (32 entradas, igual ao firmware)
@@ -142,7 +151,7 @@ env.CelerNet = {
     status: function() {
         drainBacklog();
         return { active: net.active, relay: net.relay, node: myId(), name: net.name || ('Celer-' + myId()),
-                 net: net.net, secure: !!wd.pack, provisioned: !!wd.pack,
+                 net: net.net, secure: !!pack, provisioned: !!pack,
                  txQueued: Math.ceil(backlog), txDropped: net.txDropped,
                  rxDropped: net.rxDropped, relayed: net.relayed, relayDropped: net.relayDropped,
                  heard: view.nodes.length, rxAuthFail: 0, rxReplay: 0 };
@@ -174,7 +183,7 @@ var res = Res.create({
     caps: wd.caps || 0,
     relays: wd.relays || 0,      // API 38: reles do no (cenario gpio/sensor)
     sensors: wd.sensors || [],   // API 38: sensores de placa do no
-    secure: !!wd.pack,
+    get secure() { return !!pack; },   // a matilha pode mudar (Pack.join / convite)
     // null = setting nao definido (resources.js aplica o default por chave:
     // res_share_gpio nasce '0', as outras '1')
     setting: function(k) { return settings.hasOwnProperty(k) ? String(settings[k]) : null; }
@@ -182,7 +191,35 @@ var res = Res.create({
 env.Pack = {
     me: function() {
         return { id: myId(), name: net.name || ('Celer-' + myId()), caps: decodeCaps(wd.caps),
-                 meshActive: net.active };
+                 meshActive: net.active, net: net.net, provisioned: !!pack };
+    },
+    // API 40 (main/Pack/Provision.cpp): a chave e o par nome+senha (o sim nao
+    // deriva PBKDF2); o convite leva a chave pelo selo do CelerLink
+    join: function(name, pass) {
+        name = String(name); pass = String(pass);
+        if (!name || name.length > 15 || pass.length < 8) return false;
+        setPack({ name: name, key: name + '\u0000' + pass });
+        return true;
+    },
+    leave: function() { setPack(null); return true; },
+    acceptInvite: function(on) {
+        if (on === false) { if (invite.st === 'waiting') invite.st = 'idle'; return true; }
+        // CelerLink::start(nullptr): anuncia com o nome da matilha (PackId)
+        env.CelerLink.start(link.name || net.name || undefined);
+        invite = { st: 'waiting', at: S.millis() };
+        return true;
+    },
+    invite: function() {
+        if (!pack || !linkOk() || !link.bonds[link.conn.peer]) return false;
+        invite = { st: 'sent', at: S.millis() };
+        outbox.push({ t: 'ltx', data: 'CNJ' + JSON.stringify({ n: pack.name, k: pack.key }), sealed: true,
+                      at: S.millis() });
+        return true;
+    },
+    inviteStatus: function() {
+        if (invite.st === 'sent' && S.millis() - invite.at > 10000) invite.st = 'fail';
+        if (invite.st === 'waiting' && (S.millis() - invite.at > 600000 || !link.listening)) invite.st = 'idle';
+        return invite.st;
     },
     members: function() {
         return view.nodes.map(function(n) {
@@ -316,6 +353,9 @@ env.CelerLink = {
             link.conn.verified = true;
             link.conn.needCode = false;
             link.bonds[link.conn.peer] = true;
+            // o verify do firmware so volta com o "liberado" do periferico:
+            // um selo logo depois ja encontra o bond do outro lado
+            S.delay(200);
         } else if (++link.conn.wrong >= 3) {
             link.conn = null;
         }
@@ -401,6 +441,19 @@ function deliver(ev) {
         if (!link.conn) return;
         if (ev.sealed) {
             if (!link.bonds[link.conn.peer]) return;
+            // tap do kernel (Provision): quadro "CNJ" nunca chega ao app
+            if (String(ev.data).indexOf('CNJ') === 0) {
+                var d = String(ev.data).slice(3);
+                if (d === '!ok' || d === '!fail') {
+                    if (invite.st === 'sent') invite.st = d === '!ok' ? 'ok' : 'fail';
+                } else if (invite.st === 'waiting') {
+                    var iv = JSON.parse(d);
+                    setPack({ name: iv.n, key: iv.k });
+                    invite.st = 'joined';
+                    outbox.push({ t: 'ltx', data: 'CNJ!ok', sealed: true, at: S.millis() });
+                }
+                return;
+            }
             link.sealed.push(ev.data);
             if (link.sealed.length > 2) link.sealed.shift();
         } else {

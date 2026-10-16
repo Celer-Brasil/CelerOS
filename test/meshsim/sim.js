@@ -380,6 +380,13 @@ function runMesh(spec) {
                 if (m.t === 'sync') {
                     m.out.forEach(function(ev) {
                         if (ev.t === 'tx') onTx(n, ev);
+                        else if (ev.t === 'netkey') {
+                            // Pack.join / convite (API 40): chave nova e, como o
+                            // CelerNet::netChanged, a presenca propria zera
+                            n.netKey = ev.key;
+                            n.lastReach = {};
+                            n.lastInfo = {};
+                        }
                         else if (ev.t === 'net') {
                             if (ev.active && !n.netActive) n.netSince = ev.at;
                             n.netActive = ev.active;

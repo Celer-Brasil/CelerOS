@@ -104,6 +104,13 @@ public:
     // poll() comum nunca ve quadros selados; selo invalido e descartado).
     static bool pollSealed(void* buf, size_t cap, size_t* len);
 
+    // Desvio de mensagens seladas para o kernel (API 40: o convite da
+    // matilha, Pack/Provision). Roda na task do host NimBLE com o texto ja
+    // aberto e autenticado: so copia e sinaliza. true = consumida (nao vai
+    // para o pollSealed do app). nullptr desliga.
+    using SealedTap = bool (*)(const uint8_t* data, size_t len);
+    static void setSealedTap(SealedTap tap);
+
     // Id do peer conectado ("" sem conexao).
     static void peerId(char* out, size_t cap);
     static void info(Info* out);

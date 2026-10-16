@@ -8,6 +8,8 @@
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Pack/Pack.h"
 #include "../Pack/Resources.h"
+#include "../Pack/Provision.h"
+#include "../Bluetooth/NetKeys.h"
 #include "../Boards/Board.h"
 #include "../Utils/AppPerms.h"
 
@@ -50,6 +52,64 @@ duk_ret_t JSBindings::js_packMe(duk_context *ctx) {
     pushCaps(ctx, Pack::myCaps());
     duk_put_prop_string(ctx, -2, "caps");
     putBool(ctx, "meshActive", st.active);
+    // API 40: em que matilha estou (a aberta "celer" = nao provisionado)
+    NetKeys::init();
+    const NetKeys::Net* net = NetKeys::primary();
+    putStr(ctx, "net", net != nullptr ? net->name : "");
+    putBool(ctx, "provisioned", NetKeys::provisioned());
+    return 1;
+}
+
+// --- Entrar na matilha (API 40): as portas da senha e do convite ---
+// Mexem na chave da rede do aparelho: perm "system" (a mesma do
+// wifiConnect/OTA). A chave nunca passa pelo JS.
+
+duk_ret_t JSBindings::js_packJoin(duk_context *ctx) {
+    const char* name = duk_require_string(ctx, 0);
+    const char* pass = duk_require_string(ctx, 1);
+    const size_t nl = strlen(name);
+    if (!perm(celer::PERM_SYSTEM) || nl == 0 || nl > 15 || strlen(pass) < 8) {
+        duk_push_false(ctx);
+        return 1;
+    }
+    // PBKDF2 ~0,3 s: a tela segue viva
+    const int ok = jsBlocking([&] { return Provision::joinPassword(name, pass) ? 1 : 0; });
+    duk_push_boolean(ctx, ok ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_packLeave(duk_context *ctx) {
+    if (!perm(celer::PERM_SYSTEM)) {
+        duk_push_false(ctx);
+        return 1;
+    }
+    Provision::leave();
+    duk_push_true(ctx);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_packAcceptInvite(duk_context *ctx) {
+    const bool on = duk_is_null_or_undefined(ctx, 0) ? true : duk_to_boolean(ctx, 0) != 0;
+    if (!perm(celer::PERM_SYSTEM)) {
+        duk_push_false(ctx);
+        return 1;
+    }
+    present();  // a 1a chamada pode inicializar o NimBLE (~300 ms)
+    duk_push_boolean(ctx, Provision::acceptInvite(on) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_packInvite(duk_context *ctx) {
+    if (!perm(celer::PERM_SYSTEM)) {
+        duk_push_false(ctx);
+        return 1;
+    }
+    duk_push_boolean(ctx, Provision::invite() ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_packInviteStatus(duk_context *ctx) {
+    duk_push_string(ctx, Provision::stateName(Provision::state()));
     return 1;
 }
 

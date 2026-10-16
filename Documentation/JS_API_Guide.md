@@ -2122,7 +2122,10 @@ firmware — duplicates from the redundant copies never reach you). `to`
 is id or name (same rules as `CelerNet.send` — a vanished destination
 returns `false`); `message` is a string or object-as-JSON, 1–430 bytes
 (`RangeError` outside). `options.urgent` moves it ahead of presence
-traffic. The receiver drains it with `Pack.poll()`.
+traffic. The receiver drains it with `Pack.poll()`. Since API 41 every
+envelope also travels as an ESP-NOW copy when the data plane is up (the
+mesh alone loses many frames when WiFi shares the radio); duplicates are
+dropped by message id, so the receiver still sees it once.
 
 #### `Pack.poll()` → Object|null
 A custom envelope that arrived: `{from: "9F2A", fromName: "Celer-Dog",

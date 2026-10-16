@@ -2397,7 +2397,10 @@ do `me()` mais `{rssi, hops, lastSeen}` por membro:
 `false`); `mensagem` é string ou objeto-como-JSON, 1–430 bytes
 (`RangeError` fora disso).
 `opcoes.urgent` fura a fila da presença. Quem recebe drena com
-`Pack.poll()`.
+`Pack.poll()`. Desde a API 41 todo envelope também viaja numa cópia
+ESP-NOW quando o plano de dados está de pé (só a malha perde muitos
+quadros quando o WiFi divide o rádio); as duplicatas caem pelo id da
+mensagem, então quem recebe vê uma vez só.
 
 #### `Pack.poll()` → Object|null
 Envelope custom que chegou: `{from: "9F2A", fromName: "Celer-Dog",

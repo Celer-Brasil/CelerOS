@@ -316,6 +316,19 @@ celerctl mesh --json status
 celerctl mesh leave                   # volta à rede aberta "celer"
 ```
 
+Convite pelo cabo (o aparelho novo pode não ter tela; o código de 6 dígitos
+só nasce quando o membro conecta, então o celerctl o lê pelo cabo do novo):
+
+```
+celerctl -p NOVO mesh accept                        # novo: abre a janela (10 min)
+celerctl -p MEMBRO mesh invite Celer-AB3E --de NOVO # membro: conecta, le o codigo, manda a chave
+celerctl -p MEMBRO mesh invite Celer-AB3E --codigo 123456   # ou o codigo da tela do novo
+```
+
+Peer já pareado antes (bond) entra sem código. Placas cujo adaptador USB
+segura o EN/IO0 (esp32-cam no CH340 clone) falam com `--linhas-baixas` (ou
+`CELEROS_LOW_LINES=1`).
+
 ### O PC como membro da matilha (API 41)
 
 Com a sessão viva e `res_share_usb=1`, o gateway anuncia o PC na malha como
@@ -333,4 +346,13 @@ celerctl res relay -n W rele1 on      # relé de OUTRO nó (procuração do gate
 celerctl res relay -n BB02 rele1 state
 ```
 
-Mic/speaker/câmera de outros nós pelo cabo continuam fora (stream da B.2).
+Mídia de outros nós, por arquivo no gateway (o celerctl baixa/envia sozinho):
+
+```
+celerctl res snap -n qrnode foto.jpg [-q 12]   # foto da camera de outro no
+celerctl res rec -n relogio 5 mic.wav          # 5 s do mic de outro no (WAV 16 kHz)
+celerctl res play -n AB3E alerta.wav           # toca um WAV (ate 30 s) no speaker dele
+```
+
+O WAV de entrada pode ter qualquer taxa (8/16 bits, mono/estéreo): o
+celerctl converte para PCM 16 kHz mono antes de mandar.

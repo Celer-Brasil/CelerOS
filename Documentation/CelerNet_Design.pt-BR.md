@@ -297,7 +297,15 @@ salt do HKDF: "celernet-v3"
   (`setSealedTap`) consome todo quadro `CNJ` antes do `pollSealed` do app.
 - O convidador acha o novo pelo **scan do CelerLink** (nome na janela de
   convite). A rede aberta secundária com `BFLAG_UNPROV` segue reservada.
-- Headless (devkit, esp32-cam) não mostra o código: entram pelo cabo.
+- **Convite sem tela** (API 41), nos mesmos 2 passos da UI (o código só
+  nasce quando o membro conecta): `mesh accept` no novo (shell ou
+  `celerctl mesh accept`, o código sai no `mesh`/`SUB_NET`) e `mesh invite
+  <alvo>` + `mesh code <6>` no membro (`celerctl mesh invite <alvo> --de
+  <porta do novo>` lê o código pelo cabo). Peer com **bond** de um
+  pareamento anterior entra sem código (a reconexão é pelo desafio do bond).
+- A esp32-cam **não usa o convite**: com a câmera aquecida sobram ~35 KB de
+  RAM interna e o NimBLE pede 39 KB — ela é membro só por ESP-NOW e entra
+  pela senha (cabo ou console).
 
 ---
 
@@ -383,8 +391,9 @@ no launcher).
    política = 1 bit global por tipo.
 4. Streams são 1-hop ESP-NOW; a malha multi-hop não leva mídia.
 5. ~~O PC não participa~~ — resolvido pelo gateway USB (B.1, API 39) e
-   pelo nó virtual (§8.5, API 41). Segue o drift do `tools/matilha/`
-   (NetFrame **v2 em claro**, nó BLE direto; §12-f).
+   pelo nó virtual (§8.5, API 41). O `matilha mesh` (nó BLE cru em
+   NetFrame v2, sem a cripto da v3) saiu na API 41: um caminho só para o PC
+   na malha, o gateway. O `tools/matilha` ficou como cliente do CelerLink.
 
 ---
 
@@ -616,11 +625,33 @@ matilha (`Resources::tick` → `CelerNet::setProxy`):
 - **Eventos** (`KL_RES_DATA` com sid 0 — 0 é o "livre" das sessões):
   `EV_MSG [from][nn][nome][raw][payload]`, `EV_STATE [h][state][reason][node]`,
   `EV_DATA [h][bytes]`.
-- CLI: `celerctl mesh status|join|leave|send|listen`, `celerctl res relay -n
-  <nó> rele1 on`. Fora ainda: mic/speaker/câmera de outros nós pelo cabo
-  (stream da B.2).
+- CLI: `celerctl mesh status|join|leave|accept|invite|send|listen`,
+  `celerctl res relay -n <nó> rele1 on`.
+- **Mídia de outros nós pelo cabo** (API 41), no padrão do celerctl — por
+  arquivo no gateway: `SUB_SNAP_AT` (foto → `PC_SNAP_PATH`), `SUB_REC_AT`
+  (mic → WAV em `PC_REC_PATH`), `SUB_PLAY_AT` (o PC manda PCM16 16 kHz em
+  `PC_PLAY_PATH` e o gateway toca no speaker do outro nó, no ritmo do tempo
+  real). O fim chega em `EV_STATE done`; o celerctl baixa/envia pelo
+  READ/WRITE de sempre (`res snap|rec|play -n <nó>`). O WAV é convertido no
+  PC: o device não tem um segundo parser de WAV.
+- **Robustez do cabo**: o tempo dentro de um handler longo não conta como
+  ócio do host; quem só espera (listen, `--segura`) manda keepalive a cada
+  3 s; todo laço do celerctl guarda os frames sem pedido (`PUSH_CMDS`, os
+  eventos do nó virtual inclusive).
 
-**Status (Onda B.1, API 39):** a B.1 pousou com o fio desta seção — `KL_RES_CTL=0x21`/`KL_RES_DATA=0x22`, subops `DESCRIBE/LIST/MESH/OPEN/KEEP/CLOSE/WRITE` (os TLVs do `POLL`/`CONFIG` ficaram para a B.2: o `RES_DATA` não-solicitado cobre o poll e o auto-KEEP do gateway é fixo), PC como cliente com node `0xFFFE` e transporte `TRANSPORT_USB`, auto-KEEP no gateway, queda do cabo = `usbSession(false)` = leases mortos (auto-off), master `res_share_usb` (default "0", `cfg res_share_usb 1`). O catálogo da malha vem do cache (`SUB_MESH`). **Ficou para a B.2**: OPEN de recursos de OUTROS nós proxyado pela malha (controle) e mic/speaker/câmera em stream pelo cabo — ambos recusam com `noLink` hoje. A CLI do `celerctl` (`res ls/relay/sensor/...`) é o veículo de bancada da B.1; a crate Rust segue sendo a onda C.
+### 8.6 Transporte padronizado: malha + ESP-NOW (API 41)
+
+- **Todo envelope do Pack** (custom, música — e as mensagens do e para o
+  PC) sai pela malha BLE **e** por uma cópia ESP-NOW (`KIND_ENV`, token =
+  destino) quando o ESP-NOW está de pé — como o controle dos recursos já
+  fazia. O `msgId` deduplica. Bancada: com WiFi no AP, a malha entregou ~25%
+  dos quadros entre duas 4848; com a cópia, 19/19 pings ao PC.
+- **Caça de canal**: nó fora de AP (canal livre), sem sessão ESP-NOW e sem
+  ouvir a matilha há 20 s varre 1..13 (400 ms) com `HELLO` + `HELLO_HUNT`;
+  quem ouve responde na hora e o caçador fica no canal. Bancada: a esp32-cam
+  fora do AP achou o canal 9 das 4848 sozinha e serviu foto e vídeo.
+
+**Status (Onda B.1, API 39):** a B.1 pousou com o fio desta seção — `KL_RES_CTL=0x21`/`KL_RES_DATA=0x22`, subops `DESCRIBE/LIST/MESH/OPEN/KEEP/CLOSE/WRITE` (os TLVs do `POLL`/`CONFIG` ficaram para a B.2: o `RES_DATA` não-solicitado cobre o poll e o auto-KEEP do gateway é fixo), PC como cliente com node `0xFFFE` e transporte `TRANSPORT_USB`, auto-KEEP no gateway, queda do cabo = `usbSession(false)` = leases mortos (auto-off), master `res_share_usb` (default "0", `cfg res_share_usb 1`). O catálogo da malha vem do cache (`SUB_MESH`). **A B.2 pousou na API 41**: OPEN de recursos de OUTROS nós proxyado pelo gateway (`SUB_OPEN_AT`) e mídia por arquivo (`SUB_SNAP_AT`/`SUB_REC_AT`/`SUB_PLAY_AT` — foto, mic e speaker de outro nó, §8.5). A CLI do `celerctl` (`res ls/relay/sensor/...`) é o veículo de bancada da B.1; a crate Rust segue sendo a onda C.
 
 ---
 
@@ -795,7 +826,7 @@ destrava e o custo honesto.
 | c | **ACL por peer** assinada com `adminKey` (allowlist de node ids por recurso) | fecha a lacuna "qualquer membro abre tudo"; provisioning sem senha vira real (`joinWithKeys` + ACL) | médio: NVS por recurso + campo no OPEN | D |
 | d | **Consentimento por pedido**: diálogo no dono ("PC quer a câmera — permitir 5 min?") (a UI de join pousou na API 40: app Matilha, convite pelo CelerLink) | produto para gente não-técnica | médio: tela nativa no dono + fila de pedidos | D |
 | e | **Streams multi-hop por re-chunking**: gateway/nó intermediário puxa o stream e re-envia (USB ou malha) | câmera/mic de qualquer nó no PC sem ESP-NOW comum | alto (latência/buffer na PSRAM) | E |
-| f | **Rust direto no BLE** (`btleplug`) + porte do NetFrame v3 no host: o PC vira nó REAL da malha sem gateway | PC fala com nós sem cabo; hoje `tools/matilha` está driftado em v2 | médio-alto; mata o drift do porte Python | E |
+| f | **Rust direto no BLE** (`btleplug`) + porte do NetFrame v3 no host: o PC vira nó REAL da malha sem gateway | PC fala com nós sem cabo (o porte Python v2 foi aposentado na API 41) | médio-alto: NetFrame v3 + chaves no host | E |
 | g | **Rules engine na matilha** (reflexos: `se sensor X > Y então relay Z`) | automação local permanente, sobrevive ao PC | alto: parser+runner residente na PSRAM | F |
 | h | **Handoff de sessão**: lease migra de nó (PC→watch) sem reabrir | continuar assistindo a câmera saindo de casa | médio: REVOKE+migração assistida | F |
 | i | **mDNS/DNS-SD no bridge** + `celernet` como serviço do sistema | `cnet devices` acha pela rede sem probe próprio | baixo | C |
@@ -814,7 +845,7 @@ RAM interna antes (a lição de 2026-10-07: RAM interna é o recurso escasso).
 |---|---|---|
 | **A — Recursos genéricos** | `TYPE_GPIO/SENSOR` + `OP_*_META` (TLV) + `GpioRes`/`SensorRes` nativos + `res_share_gpio` default 0 + auto-off no lease | `test/cpp` (codec LIST_META, lease+auto-off), `meshsim` (cenário relé 2 nós), bench 4848 (relés físicos) |
 | **Pilares (API 40/41)** | ✅ PackId (identidade única), Provision (senha · convite selado CelerLink · cabo), app Matilha com Entrar, nó virtual `pc-XXXX` com BEAT proxy, `SUB_SEND`, procuração `SUB_OPEN_AT` | `test/cpp` (PackId, ProvProto, JOIN, eventos, BEAT proxy), `meshsim` (convite + 3 portas; nó virtual), `test_celerctl` (mesh, procuração); bancada pendente |
-| **B — Gateway USB** | B.1 ✅ `KL_RES_CTL/DATA` + transporte USB + auto-KEEP + `res_share_usb`; B.2 ✅ nó virtual e proxy de OPEN da malha (API 41); falta mic/cam pelo cabo | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
+| **B — Gateway USB** | B.1 ✅ `KL_RES_CTL/DATA` + transporte USB + auto-KEEP + `res_share_usb`; B.2 ✅ nó virtual, proxy de OPEN e mídia de outros nós pelo cabo (API 41) | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
 | **C — crate `celernet`** | transport trait + framing + ResProto client + API alto nível + fake device p/ CI (+ `cnet`, mDNS, hash-HELLO se julgado) | cargo test, integração vs sim, bancada 1 h de stream |
 | **D — Confiança** | ACL adminKey + consentimento + eventos/threshold + UI de join | meshsim (ACL negando nó), bench de RAM interna |
 | **E/F — Fronteira** | re-chunking, Rust-BLE, rules engine, handoff | desenho próprio, uma onda cada |

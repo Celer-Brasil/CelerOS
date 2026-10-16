@@ -60,6 +60,10 @@ bool send(uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgen
 // to == o proprio no ou o PC daqui: entrega local, sem radio.
 bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent);
 
+// Envelope que chegou pelo ESP-NOW (task res_rx, API 41): o mesmo despacho
+// do handler da malha (dedup por msgId cobre as copias dos dois caminhos).
+void onDirectEnvelope(uint16_t from, uint16_t dst, const uint8_t* data, size_t len);
+
 // Envelope custom pendente para o JS (fila 4, cheia descarta a antiga).
 bool pollCustom(uint16_t* from, char* fromName, size_t nameCap, uint8_t* data, size_t* len);
 

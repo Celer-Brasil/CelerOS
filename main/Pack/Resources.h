@@ -144,6 +144,11 @@ void usbSession(bool on);
 // Evento nao-solicitado para o PC (no virtual, API 41): KL_RES_DATA com sid
 // 0 (usbres::EV_*). false sem sessao do cabo.
 bool usbEvent(const uint8_t* d, size_t n);
+
+// Copia de um envelope do Pack pelo ESP-NOW (API 41): unicast se a MAC do
+// destino e conhecida, senao broadcast; o token leva o destino (o PC no
+// cabo inclusive). false sem ESP-NOW.
+bool sendEnvelope(uint16_t from, uint16_t to, const uint8_t* env, size_t n);
 // Processa um pedido de controle do PC; devolve o tamanho do corpo da
 // resposta (-1 = recusado). Sincrono, roda na task do canal USB.
 int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t cap);

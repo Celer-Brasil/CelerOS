@@ -7,6 +7,8 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 #include "../Bluetooth/CelerNet.h"
 #include "../Bluetooth/NetFrame.h"
@@ -18,6 +20,7 @@
 #include "Provision.h"
 #include "../USBDevice/UsbRes.h"
 #include "Resources.h"
+#include "DataLink.h"
 
 // Servico de matilha (ver Pack.h). O nome do jogo: o handler do CelerNet
 // roda DENTRO do mutex da malha — so copia para slots e seta flags; quem
@@ -97,6 +100,15 @@ void pcPush(uint16_t from, const char* fromName, bool raw, const uint8_t* d, siz
 
 void customPush(uint16_t from, const char* fromName, const uint8_t* d, size_t len);
 
+// As filas (custom, PC, musica) sao escritas por DUAS tasks: o handler da
+// malha (tick da CelerNet, sob o mutex dela) e a res_rx (envelope pelo
+// ESP-NOW, API 41). So copias curtas sob este mutex.
+SemaphoreHandle_t s_qLock = nullptr;
+struct QLock {
+    QLock() { if (s_qLock != nullptr) xSemaphoreTake(s_qLock, portMAX_DELAY); }
+    ~QLock() { if (s_qLock != nullptr) xSemaphoreGive(s_qLock); }
+};
+
 uint16_t s_msgSeq = 0;
 uint8_t s_capsBase = 0;   // do Board::profile (sem o bit HUB, dinamico)
 bool s_capsHub = false;
@@ -132,66 +144,70 @@ void customPush(uint16_t from, const char* fromName, const uint8_t* d, size_t le
     s_customCount++;
 }
 
-bool msgHandler(const CelerNet::Msg& m) {
+// Um envelope chegou (malha OU ESP-NOW): dedup por msgId cobre as copias dos
+// dois transportes. false = mensagem crua que segue ao JS.
+bool handleEnv(uint16_t from, const char* fromName, uint16_t dst, const uint8_t* data, size_t len) {
+    QLock q;
     // Para o no virtual (PC no cabo): nada vai ao JS daqui — o PC recebe o
     // custom (dedup pelo msgId como sempre) ou a mensagem crua
     const uint16_t pc = CelerNet::proxyNode();
-    const bool toPc = pc != 0 && m.dst == pc;
-    if (m.len < ENV_HDR || m.data[0] != ENV_MAGIC) {
+    const bool toPc = pc != 0 && dst == pc;
+    if (len < ENV_HDR || data[0] != ENV_MAGIC) {
         if (!toPc) return false;  // segue ao JS
-        pcPush(m.from, m.fromName, true, m.data, m.len);
+        pcPush(from, fromName, true, data, len);
         return true;
     }
-    const uint8_t kind = m.data[1];
-    const uint16_t msgId = (uint16_t)((m.data[2] << 8) | m.data[3]);
-    if (seenBefore(m.from, msgId)) return true;  // copia redundante: consumida
+    const uint8_t kind = data[1];
+    const uint16_t msgId = (uint16_t)((data[2] << 8) | data[3]);
+    if (seenBefore(from, msgId)) return true;  // copia redundante: consumida
 
     if (toPc) {
         // so o custom e do PC; controle de recursos/musica para ele nao existe
-        if (kind == KIND_CUSTOM && m.len > ENV_HDR) {
-            pcPush(m.from, m.fromName, false, m.data + ENV_HDR, m.len - ENV_HDR);
-        }
+        if (kind == KIND_CUSTOM && len > ENV_HDR) pcPush(from, fromName, false, data + ENV_HDR, len - ENV_HDR);
         return true;
     }
 
     if (kind == KIND_CUSTOM) {
-        const size_t len = m.len - ENV_HDR;
-        if (len == 0) return true;
-        customPush(m.from, m.fromName, m.data + ENV_HDR, len);
+        if (len == ENV_HDR) return true;
+        customPush(from, fromName, data + ENV_HDR, len - ENV_HDR);
         return true;
     }
     if (kind == KIND_RES) {
-        Resources::onEnvelope(m.from, m.fromName, m.data + ENV_HDR, m.len - ENV_HDR);
+        Resources::onEnvelope(from, fromName, data + ENV_HDR, len - ENV_HDR);
         return true;
     }
     if (kind == KIND_MUSIC) {
         // [posMs u32][songLen u16][song]
-        if (m.len < ENV_HDR + 6) {
-            ESP_LOGW(TAG, "hop: curto (%u B)", (unsigned)m.len);
+        if (len < ENV_HDR + 6) {
+            ESP_LOGW(TAG, "hop: curto (%u B)", (unsigned)len);
             return true;
         }
-        const uint32_t pos = ((uint32_t)m.data[4] << 24) | ((uint32_t)m.data[5] << 16) |
-                             ((uint32_t)m.data[6] << 8) | m.data[7];
-        const uint16_t songLen = (uint16_t)((m.data[8] << 8) | m.data[9]);
+        const uint32_t pos = ((uint32_t)data[4] << 24) | ((uint32_t)data[5] << 16) |
+                             ((uint32_t)data[6] << 8) | data[7];
+        const uint16_t songLen = (uint16_t)((data[8] << 8) | data[9]);
         if (songLen == 0 || songLen > sizeof(s_musicSong)) {
             ESP_LOGW(TAG, "hop: songLen %u invalido", (unsigned)songLen);
             return true;
         }
-        if ((size_t)ENV_HDR + 4 + 2 + songLen != m.len) {
-            ESP_LOGW(TAG, "hop: len %u != 10+%u", (unsigned)m.len, (unsigned)songLen);
+        if ((size_t)ENV_HDR + 4 + 2 + songLen != len) {
+            ESP_LOGW(TAG, "hop: len %u != 10+%u", (unsigned)len, (unsigned)songLen);
             return true;
         }
         if (s_musicPend) return true;  // uma festa por vez
         s_musicPosMs = pos;
         s_musicSongLen = songLen;
-        memcpy(s_musicSong, m.data + ENV_HDR + 6, songLen);
-        snprintf(s_musicFrom, sizeof(s_musicFrom), "%s", m.fromName[0] ? m.fromName : "");
+        memcpy(s_musicSong, data + ENV_HDR + 6, songLen);
+        snprintf(s_musicFrom, sizeof(s_musicFrom), "%s", fromName[0] ? fromName : "");
         s_musicPend = true;
         ESP_LOGI(TAG, "hop rx: festa de \"%s\" pos=%u song=%u B pendente", s_musicFrom,
                  (unsigned)pos, (unsigned)songLen);
         return true;
     }
     return true;  // kind desconhecido (futuro): consumido, nao e do JS
+}
+
+bool msgHandler(const CelerNet::Msg& m) {
+    return handleEnv(m.from, m.fromName, m.dst, m.data, m.len);
 }
 
 uint16_t pickSpeaker() {
@@ -208,6 +224,7 @@ uint16_t pickSpeaker() {
 void init() {
     if (s_inited) return;
     s_inited = true;
+    if (s_qLock == nullptr) s_qLock = xSemaphoreCreateMutex();
     // msgId aleatorio no boot: comecando em 0, as primeiras mensagens depois
     // de um reboot repetiam ids que o dedup do vizinho ainda lembrava e eram
     // descartadas como copias (custom ou o proprio handoff de musica)
@@ -257,7 +274,7 @@ bool send(uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgen
 }
 
 bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent) {
-    if (!CelerNet::active() || payload == nullptr || to == 0) return false;
+    if ((!CelerNet::active() && !DataLink::up()) || payload == nullptr || to == 0) return false;
     if (len == 0 || len > MAX_PAYLOAD) return false;
     // entrega local entre o gateway e o PC dele (o radio nao ouve o proprio eco)
     const uint16_t pc = CelerNet::proxyNode();
@@ -265,11 +282,13 @@ bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t
         char nm[CelerNet::MAX_NAME + 1];
         if (src == 0 && to == pc) {
             PackId::name(nm, sizeof(nm));
+            QLock q;
             pcPush(PackId::nodeId(), nm, false, (const uint8_t*)payload, len);
             return true;
         }
         if (src == pc && to == PackId::nodeId()) {
             packid::pcName(PackId::nodeId(), nm, sizeof(nm));
+            QLock q;
             customPush(pc, nm, (const uint8_t*)payload, len);
             return true;
         }
@@ -282,10 +301,25 @@ bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t
     env[3] = (uint8_t)s_msgSeq;
     memcpy(env + ENV_HDR, payload, len);
     // 2 copias: unicast sem ACK, a redundancia e a retransmissao
-    return CelerNet::sendFrom(src, to, env, ENV_HDR + len, CelerNet::TTL_DEFAULT, urgent, 2);
+    const bool viaMesh = CelerNet::sendFrom(src, to, env, ENV_HDR + len, CelerNet::TTL_DEFAULT, urgent, 2);
+    // e a copia pelo ESP-NOW (API 41), como o controle dos recursos sempre
+    // teve: com WiFi ligado o coex deixa a malha BLE em ~25-60% por quadro
+    // (bancada 2026-10-16); o msgId deduplica as copias dos dois caminhos.
+    // KIND_RES ja sai pelo CTRL do Resources.
+    const bool viaNow = kind != KIND_RES &&
+                        Resources::sendEnvelope(src != 0 ? src : PackId::nodeId(), to, env, ENV_HDR + len);
+    return viaMesh || viaNow;
+}
+
+void onDirectEnvelope(uint16_t from, uint16_t dst, const uint8_t* data, size_t len) {
+    if (!s_inited) return;
+    char name[CelerNet::MAX_NAME + 1] = {0};
+    CelerNet::nameOf(from, name, sizeof(name));
+    handleEnv(from, name, dst, data, len);
 }
 
 bool pollCustom(uint16_t* from, char* fromName, size_t nameCap, uint8_t* data, size_t* len) {
+    QLock q;
     if (s_customCount == 0) return false;
     const CustomMsg* c = &s_custom[s_customHead];
     if (from != nullptr) *from = c->from;
@@ -339,13 +373,17 @@ void tick() {
         if (s_pcBuf == nullptr) s_pcBuf = (PcBuf*)calloc(1, sizeof(PcBuf));
         if (s_pcBuf != nullptr) s_pc = s_pcBuf->q;
     }
-    while (s_pc != nullptr && s_pcCount > 0) {
-        const PcMsg& c = s_pc[s_pcHead];
-        const size_t n = usbres::encodeEvMsg(c.from, c.fromName, c.raw, c.data, c.len, s_pcBuf->ev,
-                                             sizeof(s_pcBuf->ev));
+    while (s_pc != nullptr) {
+        size_t n = 0;
+        {
+            QLock q;  // monta o evento sob o lock; manda pelo cabo fora dele
+            if (s_pcCount == 0) break;
+            const PcMsg& c = s_pc[s_pcHead];
+            n = usbres::encodeEvMsg(c.from, c.fromName, c.raw, c.data, c.len, s_pcBuf->ev, sizeof(s_pcBuf->ev));
+            s_pcHead = (uint8_t)((s_pcHead + 1) % PC_DEPTH);
+            s_pcCount--;
+        }
         if (n > 0) Resources::usbEvent(s_pcBuf->ev, n);
-        s_pcHead = (uint8_t)((s_pcHead + 1) % PC_DEPTH);
-        s_pcCount--;
     }
 
     // CAPS_HUB dinamico: rede alcacavel muda o papel na matilha.

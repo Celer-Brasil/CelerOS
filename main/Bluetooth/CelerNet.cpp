@@ -1104,6 +1104,16 @@ void CelerNet::setProxy(uint16_t node, const char* name, uint8_t caps) {
     else ESP_LOGI(TAG, "no virtual fora da matilha");
 }
 
+bool CelerNet::nameOf(uint16_t id, char* out, size_t cap) {
+    if (out == nullptr || cap == 0) return false;
+    out[0] = '\0';
+    if (s_heap == nullptr) return false;
+    xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
+    snprintf(out, cap, "%s", nodeName(id));
+    xSemaphoreGiveRecursive(lock());
+    return out[0] != '\0';
+}
+
 uint16_t CelerNet::proxyNode() {
     return s_proxyNode;
 }

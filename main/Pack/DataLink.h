@@ -41,6 +41,7 @@ enum Kind : uint8_t {
     KIND_BULK = 3,     // bloco de transferencia confiavel (foto) — R3
     KIND_BULK_ACK = 4, // bitmask de blocos recebidos — R3
     KIND_CTRL = 5,     // op de controle dos recursos (ResProto) em banda
+    KIND_ENV = 6,      // envelope do Pack (custom/musica) em banda (API 41): sid = origem, token = destino
 };
 
 struct Self {

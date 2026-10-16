@@ -1189,7 +1189,19 @@ void rxTask(void*) {
     uint32_t lastTimers = 0;
     for (;;) {
         if (rx != nullptr && DataLink::pollWait(rx, 50)) {
-            if (rx->kind == DataLink::KIND_CTRL) {
+            if (rx->kind == DataLink::KIND_ENV) {
+                // envelope do Pack em banda (API 41): token = destino
+                const uint16_t from = rx->sid;
+                const uint16_t pc = CelerNet::proxyNode();
+                const bool forUs = rx->token == ourNode() || (pc != 0 && rx->token == pc);
+                if (forUs && from != 0 && from != ourNode() && rx->len > 0) {
+                    {
+                        Guard g;
+                        learnPeer(from, rx->mac);
+                    }
+                    Pack::onDirectEnvelope(from, (uint16_t)rx->token, rx->data, rx->len);
+                }
+            } else if (rx->kind == DataLink::KIND_CTRL) {
                 s_ctrlRx++;
                 const uint16_t from = rx->sid;  // id do no remetente (ver sendEnv)
                 // broadcast: o token leva o destino (0 = unicast, ja e nosso)
@@ -1862,6 +1874,18 @@ void dump(PrintFn pr, void* ctx) {
 }
 
 // ================================================================ gateway USB
+
+bool sendEnvelope(uint16_t from, uint16_t to, const uint8_t* env, size_t n) {
+    if (!s_inited || !DataLink::up() || n == 0 || n > DataLink::PAYLOAD_MAX) return false;
+    static const uint8_t kBcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t mac[6];
+    {
+        Guard g;
+        const uint8_t* m = peerMac(to);
+        memcpy(mac, m != nullptr ? m : kBcast, 6);
+    }
+    return DataLink::send(mac, DataLink::KIND_ENV, from, to, 0, env, n);
+}
 
 bool usbEvent(const uint8_t* d, size_t n) {
     if (!s_inited) return false;

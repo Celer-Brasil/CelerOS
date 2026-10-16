@@ -1,0 +1,13 @@
+{
+  "name": "PcLab",
+  "packageName": "test.pclab",
+  "version": "1.0.0",
+  "author": "bench",
+  "description": "Bench do PC como no virtual da matilha (API 41): lista os membros (o pc-XXXX do gateway), manda um envelope ao PC a cada 3 s e registra o que o PC manda. Alvo em /local/pclab_cfg.txt (ex.: pc-AB3E). Log em /local/pclab.txt. App de teste, nao instalar na fabrica.",
+  "type": "App",
+  "category": "Utility",
+  "api": 41,
+  "permissions": ["fs"],
+  "topbar": false,
+  "changelog": "1.0.0 - bench do no virtual"
+}

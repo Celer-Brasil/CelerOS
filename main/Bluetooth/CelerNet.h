@@ -154,6 +154,8 @@ public:
     // Resolve um destino de unicast: id "A1B2" (4 hex) ou NOME do no ouvido
     // (match case-insensitive; nomes duplicados pegam o vizinho mais forte).
     static bool resolveDest(const char* to, uint16_t* out);
+    // Nome do no pelo id (presenca da malha); "" e false se nao ouvido.
+    static bool nameOf(uint16_t id, char* out, size_t cap);
 
     // Mensagem recebida (fila RX_DEPTH, cheia descarta a mais antiga).
     static bool poll(Msg* out);

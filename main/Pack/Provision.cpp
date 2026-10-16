@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -10,6 +11,7 @@
 #include "../Bluetooth/CelerLink.h"
 #include "../Bluetooth/CelerNet.h"
 #include "../Bluetooth/NetKeys.h"
+#include "PackId.h"
 #include "ProvProto.h"
 #include "Resources.h"
 
@@ -158,6 +160,75 @@ void tick() {
         default:
             break;
     }
+}
+
+bool sendAndWait() {
+    bool ok = invite();
+    if (ok) {
+        // o ACK chega pelo tap e o tick do Pack muda o estado (outra task)
+        const uint32_t t0 = nowMs();
+        while (s_state == SENT && nowMs() - t0 < K_ACK_MS + 500) vTaskDelay(pdMS_TO_TICKS(50));
+        ok = s_state == OK;
+    }
+    CelerLink::disconnect();
+    return ok;
+}
+
+bool inviteConnect(const char* target, bool* done) {
+    if (done != nullptr) *done = false;
+    if (target == nullptr || target[0] == '\0' || !NetKeys::provisioned()) return false;
+    // O anuncio conectavel do novo divide o radio com os bursts da malha:
+    // um scan de 3 s as vezes nao o pega (bancada 2026-10-16) — ate 3 varreduras
+    CelerLink::Peer peers[8];
+    int n = 0;
+    const char* id = nullptr;
+    for (int tent = 0; tent < 3 && id == nullptr; tent++) {
+        n = CelerLink::scan(3000, peers, 8);
+        for (int i = 0; i < n && id == nullptr; i++) {
+            char hex[5];
+            snprintf(hex, sizeof(hex), "%04X", packid::nodeFromLinkId(peers[i].id));
+            if (strcasecmp(peers[i].name, target) == 0 || strcasecmp(peers[i].id, target) == 0 ||
+                strcasecmp(hex, target) == 0) {
+                id = peers[i].id;
+            }
+        }
+    }
+    if (id == nullptr) {
+        ESP_LOGW(TAG, "convite: \"%s\" fora do scan (%d anuncios; janela aberta la?)", target, n);
+        return false;
+    }
+    if (!CelerLink::connect(id, 6000)) {
+        ESP_LOGW(TAG, "convite: conexao com %s falhou", id);
+        return false;
+    }
+    CelerLink::Info li;
+    CelerLink::info(&li);
+    if (li.verified) {
+        // bond de um pareamento anterior: sem codigo, a chave vai agora
+        ESP_LOGI(TAG, "convite: %s ja pareado (bond), mandando a chave", id);
+        if (done != nullptr) *done = true;
+        return sendAndWait();
+    }
+    ESP_LOGI(TAG, "convite: conectado a %s, aguardando o codigo", id);
+    return true;
+}
+
+bool inviteCode(const char* code) {
+    if (code == nullptr || strlen(code) != 6) return false;
+    if (!CelerLink::verify(code)) {
+        ESP_LOGW(TAG, "convite: codigo recusado");
+        CelerLink::disconnect();
+        return false;
+    }
+    return sendAndWait();
+}
+
+void pendingCode(char out[7]) {
+    out[0] = '\0';
+    if (s_state != WAITING) return;
+    CelerLink::Info li;
+    CelerLink::info(&li);
+    if (li.pairing) snprintf(out, 7, "%s", li.code);
 }
 
 State state() {

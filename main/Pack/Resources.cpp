@@ -1928,6 +1928,26 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             Provision::leave();
             ESP_LOGI(TAG, "gateway USB: saiu da matilha pelo cabo");
             return 0;
+        case usbres::SUB_ACCEPT:
+            return len >= 1 && Provision::acceptInvite(body[0] != 0) ? 0 : -1;
+        case usbres::SUB_INVITE: {
+            char target[32];
+            if (len < 2 || body[0] == 0 || body[0] >= sizeof(target) || len != 1u + body[0]) return -1;
+            memcpy(target, body + 1, body[0]);
+            target[body[0]] = '\0';
+            // resposta [done u8]: 1 = peer com bond, a chave ja foi (sem codigo)
+            bool done = false;
+            if (!Provision::inviteConnect(target, &done) || cap < 1) return -1;
+            out[0] = done ? 1 : 0;
+            return 1;
+        }
+        case usbres::SUB_INVITE_CODE: {
+            char code[7];
+            if (len != 6) return -1;
+            memcpy(code, body, 6);
+            code[6] = '\0';
+            return Provision::inviteCode(code) ? 0 : -1;
+        }
         case usbres::SUB_SEND: {
             // envelope custom DO PC (no virtual) para um membro — ou o gateway
             if (!s_usbSession || !s_usbAllowed || CelerNet::proxyNode() == 0) return -1;
@@ -1982,10 +2002,13 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             const NetKeys::Net* n = NetKeys::primary();
             char nm[CelerNet::MAX_NAME + 1];
             ourName(nm, sizeof(nm));
+            char code[7];
+            Provision::pendingCode(code);  // aparelho sem tela: o codigo do convite sai por aqui
             snprintf((char*)out, cap,
-                     "{\"net\":\"%s\",\"prov\":%d,\"node\":\"%04X\",\"name\":\"%s\",\"pc\":\"%04X\"}",
+                     "{\"net\":\"%s\",\"prov\":%d,\"node\":\"%04X\",\"name\":\"%s\",\"pc\":\"%04X\","
+                     "\"invite\":\"%s\",\"code\":\"%s\"}",
                      n != nullptr ? n->name : "", NetKeys::provisioned() ? 1 : 0, ourNode(), nm,
-                     PackId::pcNode());
+                     PackId::pcNode(), Provision::stateName(Provision::state()), code);
             return (int)strlen((char*)out);
         }
         default:

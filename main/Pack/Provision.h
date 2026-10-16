@@ -44,6 +44,23 @@ bool acceptInvite(bool on);
 // recusar. O resultado chega em state(): SENT -> OK | FAIL.
 bool invite();
 
+// Convite sem tela (shell "mesh invite", cabo SUB_INVITE/SUB_INVITE_CODE,
+// API 41) — os mesmos 2 passos da UI, porque o codigo so nasce na conexao:
+//   inviteConnect: scan do CelerLink e conecta no alvo (nome do anuncio, id
+//     "AA:BB:.." ou id da malha "1CAE"); o novo passa a exibir o codigo
+//     (tela, ou pendingCode() pelo cabo dele).
+//   inviteCode: digita o codigo, manda o INVITE e espera o ACK (10 s);
+//     desconecta no fim, deu certo ou nao.
+// Bloqueantes (ate ~10 s): so de task que pode esperar (shell/canal USB).
+// Peer com bond (ja pareado antes): a reconexao entra pelo desafio do bond,
+// sem codigo — inviteConnect manda a chave na hora e *done = true.
+bool inviteConnect(const char* target, bool* done);
+bool inviteCode(const char* code);
+
+// Codigo de 6 digitos da janela aberta (convidado com pareamento pendente)
+// ou "" — a tela mostra; num aparelho SEM tela o dono le pelo cabo.
+void pendingCode(char out[7]);
+
 State state();
 const char* stateName(State s);
 

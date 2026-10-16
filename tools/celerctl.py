@@ -1144,12 +1144,32 @@ class HostLink:
 
 # ------------------------------------------------------------------ utilidades
 
+# --linhas-baixas: abre com DTR/RTS em 0. Placas cujo adaptador segura o EN/IO0
+# com as linhas no estado padrao do pyserial (ambas ativas) — a esp32-cam no
+# CH340 clone da bancada so fala HostLink assim. A 1a abertura reseta a placa
+# (o open_link espera o boot).
+LOW_LINES = False
+
+
 def open_serial(port, baud, timeout):
     """Abre a porta em modo EXCLUSIVO (flock): dois celerctl na mesma porta
     (um terminal com logcat + uma OTA, um monitor em loop) intercalavam bytes
     e a OTA morria em 'device reports readiness to read but returned no data'
     no meio da gravacao. Agora o segundo falha logo, com mensagem clara."""
     try:
+        if LOW_LINES:
+            s = serial.Serial(timeout=timeout, write_timeout=timeout, exclusive=True)
+            s.port, s.baudrate = port, baud
+            s.dtr = False
+            s.rts = False
+            for tentativa in range(5):  # CH340 clone: Errno 71 aleatorio no ioctl
+                try:
+                    s.open()
+                    return s
+                except OSError:
+                    if tentativa == 4:
+                        raise
+                    time.sleep(1)
         return serial.Serial(port, baud, timeout=timeout, write_timeout=timeout, exclusive=True)
     except serial.SerialException as e:
         if "lock" in str(e).lower() or "busy" in str(e).lower() or "Resource temporarily" in str(e):
@@ -1299,7 +1319,20 @@ def open_link(args):
             reason.append(str(e))
             return None
         try:
-            link.hello()
+            if LOW_LINES and not is_net_addr(port):
+                # a abertura com as linhas baixas pode ter resetado a placa:
+                # HELLO ate o boot terminar (~8 s na esp32-cam)
+                fim = time.time() + 12
+                while True:
+                    try:
+                        link.hello()
+                        break
+                    except (CelerError, serial.SerialException, OSError):
+                        if time.time() > fim:
+                            raise
+                        time.sleep(1)
+            else:
+                link.hello()
             return link
         except (CelerError, serial.SerialException, OSError) as e:
             if any(r in str(e) for r in _REASONS):
@@ -1680,6 +1713,24 @@ def parse_res_event(b):
     return None
 
 
+def _codigo_do_novo(args):
+    """Le o codigo do convite pelo cabo do aparelho NOVO (sem tela)."""
+    sub = argparse.Namespace(**vars(args))
+    sub.port = args.de
+    novo = open_link(sub)
+    try:
+        fim = time.time() + 10
+        while time.time() < fim:
+            st = json.loads(novo.res_ctl(SUB["NET"]).decode("utf-8", "replace"))
+            if st.get("code"):
+                print("codigo lido de %s: %s" % (args.de, st["code"]))
+                return st["code"]
+            time.sleep(0.5)
+        raise CelerError("%s sem codigo pendente (rodou 'mesh accept' nele?)" % args.de)
+    finally:
+        novo.close()
+
+
 def _node_id(link, quem):
     """No por id hex (A1B2) ou pelo nome no catalogo da malha do gateway."""
     if re.fullmatch(r"[0-9A-Fa-f]{4}", quem):
@@ -1852,6 +1903,19 @@ def cmd_mesh(args):
                 link.res_ctl(SUB["JOIN"], mesh_join_body(args.nome, senha), timeout=10)
             elif args.mesh_cmd == "leave":
                 link.res_ctl(SUB["LEAVE"])
+            elif args.mesh_cmd == "accept":
+                link.res_ctl(SUB["ACCEPT"], b"\x00" if args.off else b"\x01")
+            elif args.mesh_cmd == "invite":
+                print("conectando em %s pelo CelerLink..." % args.alvo)
+                r = link.res_ctl(SUB["INVITE"], bytes((len(args.alvo.encode()),)) + args.alvo.encode(), timeout=30)
+                if r[:1] == b"\x01":
+                    print("convite aceito: %s ja era pareado (bond), entrou sem codigo" % args.alvo)
+                else:
+                    codigo = args.codigo or (_codigo_do_novo(args) if args.de else
+                                             input("codigo na tela do novo: ").strip())
+                    print("enviando a chave (codigo %s)..." % codigo)
+                    link.res_ctl(SUB["INVITE_CODE"], codigo.encode()[:6], timeout=20)
+                    print("convite aceito: %s entrou na matilha" % args.alvo)
             st = json.loads(link.res_ctl(SUB["NET"]).decode("utf-8", "replace"))
         except CelerError as e:
             die("%s (firmware anterior a API 40? use: celerctl shell mesh join ...)" % e)
@@ -1874,6 +1938,8 @@ def cmd_mesh(args):
         if args.json:
             print(json.dumps(st))
             return
+        if st.get("invite", "idle") != "idle":
+            print("convite: %s%s" % (st["invite"], ("  codigo " + st["code"]) if st.get("code") else ""))
         print("%s (%s) na %s \"%s\" | PC aqui = %s" % (
             st["name"], st["node"], "matilha" if st.get("prov") else "rede aberta",
             st["net"], st["pc"]))
@@ -3563,6 +3629,9 @@ def build_parser():
                              "CELEROS_BRIDGE_TOKEN ou o cache do 'celerctl pair')")
     parser.add_argument("-b", "--baud", type=int, default=DEFAULT_BAUD,
                         help="negocia este baud com o firmware (ex: 921600 acelera push/pull)")
+    parser.add_argument("--linhas-baixas", dest="low_lines", action="store_true",
+                        help="abre a serial com DTR/RTS em 0 (adaptadores que seguram o EN/IO0, "
+                             "ex.: esp32-cam no CH340 clone); a 1a abertura reseta a placa")
     parser.add_argument("--proto", type=int, choices=(1, 2), default=2,
                         help="forca o formato do protocolo (default 2 = CRC32 + janela;"
                              " 1 valida o caminho legado)")
@@ -3612,6 +3681,13 @@ def build_parser():
     p.add_argument("nome", help="1 a 15 bytes")
     p.add_argument("senha", nargs="?", default=None, help="8 a 64 bytes (omitida = pergunta)")
     mm.add_parser("leave", help="volta a rede aberta \"celer\"")
+    p = mm.add_parser("accept", help="aparelho NOVO: abre a janela de convite (10 min)")
+    p.add_argument("off", nargs="?", choices=("off",), help="fecha a janela")
+    p = mm.add_parser("invite", help="membro convida o novo pelo CelerLink (pareamento por codigo)")
+    p.add_argument("alvo", help="nome do anuncio do novo, id A1B2 ou AA:BB:CC:DD:EE:FF")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--codigo", help="codigo de 6 digitos da tela do novo")
+    g.add_argument("--de", metavar="PORTA", help="le o codigo pelo cabo do novo (sem tela)")
     p = mm.add_parser("send", help="mensagem do PC (no virtual) para um membro: chega no Pack.poll")
     p.add_argument("no", help="id A1B2, nome do no ou \"gw\" (o proprio gateway)")
     p.add_argument("msg")
@@ -3840,8 +3916,9 @@ def main():
     args = build_parser().parse_args()
     if args.command == "pull" and args.local is None:
         args.local = os.path.basename(args.remote) or "celer_pull.bin"
-    global FORCE_PROTO1
+    global FORCE_PROTO1, LOW_LINES
     FORCE_PROTO1 = args.proto == 1
+    LOW_LINES = bool(args.low_lines) or os.environ.get("CELEROS_LOW_LINES") == "1"
     global WIN_CAP
     WIN_CAP = args.win if args.win > 0 else 0
 

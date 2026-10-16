@@ -85,8 +85,10 @@ function entrarComSenha() {
 // codigo que aparece na tela DELE e manda o convite selado
 function convidar(peer) {
     if (!CelerLink.connect(peer.id, 6000)) { UI.toast("Não conectou"); return; }
-    var c = System.prompt("Código na tela de " + peer.name, "", { hint: "num", nullOnCancel: true });
-    if (c === null || !CelerLink.verify(c)) {
+    // ja pareados antes (bond): a reconexao dispensa o codigo
+    var c = CelerLink.status().verified ? "" :
+            System.prompt("Código na tela de " + peer.name, "", { hint: "num", nullOnCancel: true });
+    if (c === null || (c !== "" && !CelerLink.verify(c))) {
         CelerLink.disconnect();
         UI.toast("Código recusado");
         return;

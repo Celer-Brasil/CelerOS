@@ -1913,6 +1913,9 @@ int cmdSh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 //   mesh join <nome> <senha>  entra (ou cria) a matilha privada
 //   mesh leave                volta para a "celer" aberta
 //   mesh selftest             vetores dos RFCs (CCM/HKDF/PBKDF2) + quadro v3
+//   mesh accept [off]         abre a janela de convite (aparelho novo, 10 min)
+//   mesh invite <alvo>        membro conecta no novo pelo CelerLink
+//   mesh code <6 digitos>     membro digita o codigo e manda a chave selada
 //   mesh replay               reinjeta o ultimo quadro ouvido (RPL descarta)
 int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc >= 2 && strcmp(argv[1], "selftest") == 0) {
@@ -1932,6 +1935,34 @@ int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         const bool ok = b.rxReplay > a.rxReplay;
         print(ctx, "replay: %s (repetidos %u -> %u)\r\n", ok ? "descartado pelo RPL" : "NAO descartado",
               (unsigned)a.rxReplay, (unsigned)b.rxReplay);
+        return ok ? 0 : 1;
+    }
+    // convite sem tela (API 41): o novo abre a janela e mostra o codigo aqui;
+    // o membro conecta (invite) e digita (code) — os 2 passos da UI
+    if (argc >= 2 && strcmp(argv[1], "accept") == 0) {
+        const bool on = !(argc >= 3 && strcmp(argv[2], "off") == 0);
+        if (!Provision::acceptInvite(on)) {
+            print(ctx, "falhou (Bluetooth indisponivel?)\r\n");
+            return 1;
+        }
+        print(ctx, on ? "janela de convite aberta (10 min); o codigo aparece em \"mesh\" quando o membro conectar\r\n"
+                      : "janela de convite fechada\r\n");
+        return 0;
+    }
+    if (argc >= 3 && strcmp(argv[1], "invite") == 0) {
+        bool done = false;
+        const bool ok = Provision::inviteConnect(argv[2], &done);
+        if (ok && done) {
+            print(ctx, "convite: %s ja era pareado (bond) e entrou na matilha\r\n", argv[2]);
+            return 0;
+        }
+        print(ctx, ok ? "conectado a %s: leia o codigo no novo e rode \"mesh code <6 digitos>\"\r\n"
+                      : "nao conectou em %s (janela aberta la? matilha privada aqui?)\r\n", argv[2]);
+        return ok ? 0 : 1;
+    }
+    if (argc >= 3 && strcmp(argv[1], "code") == 0) {
+        const bool ok = Provision::inviteCode(argv[2]);
+        print(ctx, "convite: %s\r\n", ok ? "o novo entrou na matilha" : "falhou (codigo errado ou sem resposta)");
         return ok ? 0 : 1;
     }
     if (argc >= 2 && (strcmp(argv[1], "join") == 0 || strcmp(argv[1], "leave") == 0)) {
@@ -1955,6 +1986,13 @@ int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "rede \"%s\" nid %02X (%s)\r\n", n->name, n->nid, n->open ? "aberta" : "privada");
         return 0;
     }
+    // convite em curso (API 41): o codigo aparece aqui num aparelho sem tela
+    const Provision::State pst = Provision::state();
+    if (pst != Provision::IDLE) {
+        char code[7];
+        Provision::pendingCode(code);
+        print(ctx, "convite: %s%s%s\r\n", Provision::stateName(pst), code[0] ? "  codigo " : "", code);
+    }
     CelerNet::Info st;
     CelerNet::info(&st);
     if (!st.active) {
@@ -1973,7 +2011,10 @@ int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     print(ctx, "nos ouvidos: %d\r\n", n);
     for (int i = 0; i < n; i++) {
         print(ctx, "  %04X %-15s caps 0x%02X%s  rssi %d  saltos %u  ha %u s\r\n", nodes[i].id, nodes[i].name,
-              nodes[i].caps, (nodes[i].flags & netframe::BFLAG_UNPROV) ? " nao-configurado" : "",
+              nodes[i].caps,
+              (nodes[i].flags & netframe::BFLAG_PROXY)    ? " pc-no-cabo"
+              : (nodes[i].flags & netframe::BFLAG_UNPROV) ? " nao-configurado"
+                                                           : "",
               nodes[i].rssi, nodes[i].hops, (unsigned)(nodes[i].lastSeenMs / 1000));
     }
     return 0;

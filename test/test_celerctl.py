@@ -271,6 +271,15 @@ class FakeDevice:
             elif d[:1] == b"\x02":
                 self.push_event(bytes((3, h, 2, getattr(self, "relay_state", 0))))
             out = b""
+        elif sub == S["ACCEPT"]:
+            self.accepting = body[:1] == b"\x01"
+            out = b""
+        elif sub == S["INVITE"]:
+            self.invited = body[1:].decode()
+            out = b"\x01" if getattr(self, "bonded", False) else b"\x00"
+        elif sub == S["INVITE_CODE"]:
+            out = b"" if body == b"123456" else None
+            self.code_used = body
         elif sub == S["HCLOSE"]:
             self.closed = body[0]
             out = b""
@@ -843,6 +852,37 @@ class TestMeshPeloCabo(unittest.TestCase):
         with self.assertRaises(C.CelerError) as cm:
             link.res_open_at(0xBB02, "ocupado")
         self.assertIn("busy", str(cm.exception))
+
+    def test_convite_com_codigo(self):
+        link, dev = make_link()
+        link.hello()
+        out = self._run(link, ["mesh", "invite", "Celer-AB3E", "--codigo", "123456"])
+        self.assertEqual((dev.invited, dev.code_used), ("Celer-AB3E", b"123456"))
+        self.assertIn("entrou na matilha", out)
+
+    def test_convite_com_bond_dispensa_codigo(self):
+        # bancada 2026-10-16: 2o convite entre as mesmas placas (bond do 1o)
+        link, dev = make_link()
+        link.hello()
+        dev.bonded = True
+        out = self._run(link, ["mesh", "invite", "Celer-AB3E"])  # sem --codigo: nao pergunta
+        self.assertIn("sem codigo", out)
+        self.assertFalse(hasattr(dev, "code_used"))
+
+    def test_codigo_errado_vira_erro(self):
+        link, dev = make_link()
+        link.hello()
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            self._run(link, ["mesh", "invite", "X", "--codigo", "000000"])
+
+    def test_accept(self):
+        link, dev = make_link()
+        link.hello()
+        self._run(link, ["mesh", "accept"])
+        self.assertTrue(dev.accepting)
+        self._run(link, ["mesh", "accept", "off"])
+        self.assertFalse(dev.accepting)
 
     def test_firmware_antigo_orienta_o_shell(self):
         link, dev = make_link()

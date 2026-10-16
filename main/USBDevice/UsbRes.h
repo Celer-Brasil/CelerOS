@@ -61,12 +61,17 @@ constexpr uint8_t SUB_WRITE = 7;     // [sid u16][seq u16][bytes] — ops do gpi
 // nao depende do res_share_usb. A chave nunca volta ao PC.
 constexpr uint8_t SUB_JOIN = 8;      // [nlen u8][nome 1..15][plen u8][senha 8..64]
 constexpr uint8_t SUB_LEAVE = 9;     // vazio -> volta a rede aberta "celer"
-constexpr uint8_t SUB_NET = 10;      // -> JSON {net, prov, node, name, pc}
+constexpr uint8_t SUB_NET = 10;      // -> JSON {net, prov, node, name, pc, invite, code}
 // No virtual (API 41): exigem a sessao do cabo e o res_share_usb
 constexpr uint8_t SUB_SEND = 11;     // [to u16][payload 1..430] envelope custom DO PC
 constexpr uint8_t SUB_OPEN_AT = 12;  // [node u16][nlen][nome][plen][params] -> [h u8]
 constexpr uint8_t SUB_HWRITE = 13;   // [h u8][bytes] DATA no recurso remoto
 constexpr uint8_t SUB_HCLOSE = 14;   // [h u8]
+// Convite sem tela pelo cabo (API 41): os 2 passos da UI (o codigo so nasce
+// na conexao). Ato de dono, como o SUB_JOIN: nao depende do res_share_usb.
+constexpr uint8_t SUB_ACCEPT = 15;       // [on u8] janela de convite (novo); codigo sai no SUB_NET
+constexpr uint8_t SUB_INVITE = 16;       // [tlen][alvo] membro conecta no novo -> [done u8] (1 = bond, ja entrou)
+constexpr uint8_t SUB_INVITE_CODE = 17;  // [codigo 6 ASCII] digita, manda a chave, espera o ACK
 
 constexpr uint16_t EVENT_SID = 0;    // sid dos eventos no KL_RES_DATA
 constexpr uint8_t EV_MSG = 1;

@@ -733,7 +733,12 @@ void maybeBurst(uint32_t nowMs) {
         // 10 min com fila cheia e drops). Com a fila seca o scan fica no
         // ar ate o proximo burst.
         scanStart();
-        if (s_restoreAdv) {
+        // Devolve tambem quando o Link PEDIU o ar durante um burst nosso: o
+        // advRestart dele desiste com o anunciador ocupado e, sem o
+        // s_restoreAdv (nao fomos nos que paramos), o pedido se perdia — a
+        // janela de convite ficava "aberta" sem anuncio conectavel
+        // (bancada 2026-10-16, 3 scans vazios a 30 cm)
+        if (s_restoreAdv || (CelerLink::listening() && !ble_gap_adv_active())) {
             s_restoreAdv = false;
             CelerLink::refreshAdvertising();
         }

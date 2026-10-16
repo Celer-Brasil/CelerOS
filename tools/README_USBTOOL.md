@@ -300,3 +300,18 @@ celerctl res write <sid> '\x01\x01'  # DATA cru (ops do gpio)
 celerctl res read <sid>               # espera um RES_DATA da sessão
 celerctl res close <sid>              # fecha (auto-off se o OPEN pediu)
 ```
+
+### Entrar na matilha pelo cabo (API 40)
+
+O cabo é a terceira porta da matilha (as outras: `Pack.join` no app e o
+convite selado pelo CelerLink). Mesma derivação de chave do `mesh join` do
+shell; é ato de dono (cabo na mão), não depende do `res_share_usb`. A chave
+nunca volta ao PC. Serve para as placas sem tela (devkit, esp32-cam).
+
+```
+celerctl mesh join bancada            # pergunta a senha (8 a 64 bytes)
+celerctl mesh join bancada 'senha'    # ou na linha
+celerctl mesh status                  # matilha, id do gateway e o id do PC (FFxx)
+celerctl mesh --json status
+celerctl mesh leave                   # volta à rede aberta "celer"
+```

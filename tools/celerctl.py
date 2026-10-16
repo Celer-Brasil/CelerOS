@@ -18,6 +18,8 @@ Comandos:
                               (-w atualiza como o top; taxas = delta de fotos)
   stats [--json]              uma foto de profiling (taxas desde o boot)
   shell [cmd...]              shell interativo (ou executa um comando)
+  mesh status|join|leave      a matilha pelo cabo (API 40): entra por nome+senha
+  res ls|relay|sensor|...     recursos da matilha pelo cabo (gateway USB)
   ls [-l] CAMINHO             lista diretorio (/local ou /sd)
   cat ARQUIVO                 escreve conteudo no stdout
   rm / mkdir / mv             operacoes de arquivo
@@ -51,6 +53,7 @@ Dependencias: pyserial (pip install -r tools/requirements.txt)
 """
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
@@ -116,6 +119,21 @@ def load_opcodes():
 
 
 KL = load_opcodes()
+
+
+def load_usbres_subops():
+    """Subops do gateway USB (KL_RES_CTL) do UsbRes.h do firmware (fonte unica,
+    como os KL_* do HostLink.h)."""
+    header = Path(__file__).resolve().parent.parent / "main" / "USBDevice" / "UsbRes.h"
+    subs = {name: int(v) for name, v in
+            re.findall(r"constexpr uint8_t SUB_(\w+)\s*=\s*(\d+)\s*;", header.read_text())}
+    missing = {"DESCRIBE", "LIST", "MESH", "OPEN", "KEEP", "CLOSE", "WRITE"} - set(subs)
+    if missing:
+        raise CelerError(f"subops ausentes em {header}: {missing}")
+    return subs
+
+
+SUB = load_usbres_subops()
 
 
 def read_exact(ser, n, timeout):
@@ -494,7 +512,7 @@ class HostLink:
         # (link sintetico: o gateway sobrescreve com o dele)
         corpo = bytes((1, len(nome_b))) + nome_b + bytes((len(params),)) + params + \
                 bytes((0x03, 0)) + bytes((0x02, ord("U"), ord("S"), ord("B"), 0, 0))
-        r = self.res_ctl(4, corpo)  # SUB_OPEN
+        r = self.res_ctl(SUB["OPEN"], corpo)
         if r[0] == 5:  # REFUSE [req][motivo]
             raise CelerError("recusado: " + RES_REASONS.get(r[2], str(r[2])))
         if r[0] != 4:  # ACCEPT [req][sid u16][lease u16][transp][chan][mac 6][token u32]
@@ -505,10 +523,10 @@ class HostLink:
     def res_write(self, sid, data, seq=1):
         """SUB_WRITE: DATA host->gateway (ops do gpio, leitura por pedido)."""
         corpo = bytes(((sid >> 8) & 0xFF, sid & 0xFF, (seq >> 8) & 0xFF, seq & 0xFF)) + data
-        self.res_ctl(7, corpo)  # SUB_WRITE
+        self.res_ctl(SUB["WRITE"], corpo)
 
     def res_close(self, sid):
-        self.res_ctl(6, bytes(((sid >> 8) & 0xFF, sid & 0xFF)))  # SUB_CLOSE
+        self.res_ctl(SUB["CLOSE"], bytes(((sid >> 8) & 0xFF, sid & 0xFF)))
 
     def res_data_wait(self, sid, timeout=3.0):
         """Espera um KL_RES_DATA do sid (resposta de READ, amostra de
@@ -1498,8 +1516,7 @@ def cmd_stats(args):
 
 
 # ---------------------------------------------------------------- gateway USB
-# Subops e constantes do UsbRes.h (firmware); opcodes KL_RES_* vem de KL.
-SUB_DESCRIBE, SUB_LIST, SUB_MESH, SUB_OPEN, SUB_KEEP, SUB_CLOSE, SUB_WRITE = 1, 2, 3, 4, 5, 6, 7
+# Subops em SUB (extraidos do UsbRes.h); opcodes KL_RES_* vem de KL.
 RES_TYPES = {0: "data", 1: "mic", 2: "speaker", 3: "camera", 4: "gpio", 5: "sensor"}
 RES_REASONS = {1: "notFound", 2: "busy", 3: "denied", 4: "unsupported", 5: "full",
                6: "local", 7: "gone", 8: "expired", 9: "noLink"}
@@ -1583,16 +1600,16 @@ def cmd_res(args):
     try:
         sub = args.res_cmd
         if sub == "ls":
-            ident = json.loads(link.res_ctl(SUB_DESCRIBE).decode("utf-8", "replace"))
+            ident = json.loads(link.res_ctl(SUB["DESCRIBE"]).decode("utf-8", "replace"))
             print("%s (%s) %s api %d | privada=%s usb=%s reles=%d" % (
                 ident["name"], ident["id"], ident["board"], ident["api"],
                 "sim" if ident.get("prov") else "NAO",
                 "on" if ident.get("usb") else "OFF", ident.get("relay", 0)))
             print("locais:")
-            for e in decode_list_meta(link.res_ctl(SUB_LIST)):
+            for e in decode_list_meta(link.res_ctl(SUB["LIST"])):
                 print("  " + _fmt_res(e))
             print("malha (cache; repita o comando para descobrir nos novos):")
-            for e in decode_mesh_list(link.res_ctl(SUB_MESH)):
+            for e in decode_mesh_list(link.res_ctl(SUB["MESH"])):
                 print("  " + _fmt_res(e))
         elif sub == "relay":
             r = link.res_open(args.nome, {"off": 1} if args.op != "state" else None)
@@ -1658,6 +1675,39 @@ def cmd_res(args):
         elif sub == "close":
             link.res_close(args.sid)
             print("fechada (auto-off no dono se o OPEN pediu)")
+    finally:
+        link.close()
+
+
+def mesh_join_body(nome, senha):
+    """Corpo do SUB_JOIN: [nlen][nome][plen][senha] (regras do UsbRes.h)."""
+    n, s = nome.encode("utf-8"), senha.encode("utf-8")
+    if not 1 <= len(n) <= 15:
+        raise CelerError("nome da matilha: 1 a 15 bytes")
+    if not 8 <= len(s) <= 64:
+        raise CelerError("senha da matilha: 8 a 64 bytes")
+    return bytes((len(n),)) + n + bytes((len(s),)) + s
+
+
+def cmd_mesh(args):
+    """A matilha pelo cabo (API 40): status e as portas join/leave do gateway."""
+    link = open_link(args)
+    try:
+        try:
+            if args.mesh_cmd == "join":
+                senha = args.senha if args.senha is not None else getpass.getpass("senha da matilha: ")
+                link.res_ctl(SUB["JOIN"], mesh_join_body(args.nome, senha), timeout=10)
+            elif args.mesh_cmd == "leave":
+                link.res_ctl(SUB["LEAVE"])
+            st = json.loads(link.res_ctl(SUB["NET"]).decode("utf-8", "replace"))
+        except CelerError as e:
+            die("%s (firmware anterior a API 40? use: celerctl shell mesh join ...)" % e)
+        if args.json:
+            print(json.dumps(st))
+            return
+        print("%s (%s) na %s \"%s\" | PC aqui = %s" % (
+            st["name"], st["node"], "matilha" if st.get("prov") else "rede aberta",
+            st["net"], st["pc"]))
     finally:
         link.close()
 
@@ -3333,7 +3383,7 @@ def cmd_apps(args):
 
 # ---------------------------------------------------------------------- main
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(prog="celerctl", description="ferramenta USB do CelerOS (estilo adb)")
     parser.add_argument("-p", "--port",
                         help="porta serial do canal celerctl (ex: /dev/ttyUSB0), "
@@ -3381,6 +3431,16 @@ def main():
     p = rr.add_parser("close", help="fecha a sessao")
     p.add_argument("sid", type=int)
     p.set_defaults(func=cmd_res)
+
+    p = sub.add_parser("mesh", help="a matilha pelo cabo: status, join, leave (API 40)")
+    p.set_defaults(func=cmd_mesh)
+    p.add_argument("--json", action="store_true", help="status cru em JSON")
+    mm = p.add_subparsers(dest="mesh_cmd", required=True)
+    mm.add_parser("status", help="matilha do gateway, id e o id do PC")
+    p = mm.add_parser("join", help="entra/cria a matilha (mesma porta do mesh join do shell)")
+    p.add_argument("nome", help="1 a 15 bytes")
+    p.add_argument("senha", nargs="?", default=None, help="8 a 64 bytes (omitida = pergunta)")
+    mm.add_parser("leave", help="volta a rede aberta \"celer\"")
 
     p = sub.add_parser("devices", help="lista placas conectadas (USB e WiFi)")
     p.add_argument("-l", "--long", action="store_true")
@@ -3597,8 +3657,11 @@ def main():
     a = apps_sub.add_parser("run", help="abre um app instalado (exit + run)")
     a.add_argument("name", help="nome da pasta do app (procura /local e /sd)")
     p.set_defaults(func=cmd_apps)
+    return parser
 
-    args = parser.parse_args()
+
+def main():
+    args = build_parser().parse_args()
     if args.command == "pull" and args.local is None:
         args.local = os.path.basename(args.remote) or "celer_pull.bin"
     global FORCE_PROTO1

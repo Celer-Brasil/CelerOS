@@ -46,6 +46,16 @@ constexpr uint8_t SUB_OPEN = 4;      // corpo = OPEN do ResProto integral
 constexpr uint8_t SUB_KEEP = 5;      // [sid u16] (o gateway tambem auto-renova)
 constexpr uint8_t SUB_CLOSE = 6;     // [sid u16] (fim pedido; auto-off no dono)
 constexpr uint8_t SUB_WRITE = 7;     // [sid u16][seq u16][bytes] — ops do gpio/sensor
+// Entrar na matilha pelo cabo (API 40): a porta da senha do Provision — o
+// mesmo caminho do "mesh join" e do Pack.join. Ato de dono (cabo na mao),
+// nao depende do res_share_usb. A chave nunca volta ao PC.
+constexpr uint8_t SUB_JOIN = 8;      // [nlen u8][nome 1..15][plen u8][senha 8..64]
+constexpr uint8_t SUB_LEAVE = 9;     // vazio -> volta a rede aberta "celer"
+constexpr uint8_t SUB_NET = 10;      // -> JSON {net, prov, node, name, pc}
+
+constexpr size_t JOIN_NAME_MAX = 15;
+constexpr size_t JOIN_PASS_MIN = 8;
+constexpr size_t JOIN_PASS_MAX = 64;
 
 // ---------------------------------------------------------- envelope CTL
 
@@ -86,6 +96,36 @@ inline bool decodeReq(const uint8_t* p, size_t n, Req* out) {
     if (4 + (size_t)out->len > n) return false;
     out->body = p + 4;
     return true;
+}
+
+// ------------------------------------------------------- SUB_JOIN (matilha)
+
+inline size_t encodeJoin(const char* name, const char* pass, uint8_t* out, size_t cap) {
+    const size_t nl = strnlen(name, JOIN_NAME_MAX + 1);
+    const size_t pl = strnlen(pass, JOIN_PASS_MAX + 1);
+    if (nl == 0 || nl > JOIN_NAME_MAX || pl < JOIN_PASS_MIN || pl > JOIN_PASS_MAX) return 0;
+    if (2 + nl + pl > cap) return 0;
+    out[0] = (uint8_t)nl;
+    memcpy(out + 1, name, nl);
+    out[1 + nl] = (uint8_t)pl;
+    memcpy(out + 2 + nl, pass, pl);
+    return 2 + nl + pl;
+}
+
+// Strings saem com NUL (o corpo nao tem); false = fora das regras do join
+inline bool decodeJoin(const uint8_t* p, size_t n, char name[JOIN_NAME_MAX + 1],
+                       char pass[JOIN_PASS_MAX + 1]) {
+    if (p == nullptr || n < 1) return false;
+    const size_t nl = p[0];
+    if (nl == 0 || nl > JOIN_NAME_MAX || n < 2 + nl) return false;
+    const size_t pl = p[1 + nl];
+    if (pl < JOIN_PASS_MIN || pl > JOIN_PASS_MAX || n != 2 + nl + pl) return false;
+    memcpy(name, p + 1, nl);
+    name[nl] = '\0';
+    memcpy(pass, p + 2 + nl, pl);
+    pass[pl] = '\0';
+    // NUL no meio cortaria a string: o nome/senha seriam outros
+    return strlen(name) == nl && strlen(pass) == pl;
 }
 
 // corpo do SUB_WRITE (e o formato do KL_RES_DATA): [sid u16][seq u16][bytes]

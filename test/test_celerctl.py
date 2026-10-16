@@ -224,6 +224,35 @@ class FakeDevice:
         self.reply(KL["HELLO"], ident.encode())
         self.proto = 2 if v2 else 1
 
+    def op_21(self, p):  # RES_CTL: gateway USB (espelho do Resources::usbCtl)
+        sub, req, ln = p[0], p[1], (p[2] << 8) | p[3]
+        body = bytes(p[4:4 + ln])
+        S = C.SUB
+        net = getattr(self, "net", {"net": "celer", "prov": 0})
+        out = None
+        if sub == S["DESCRIBE"]:
+            out = json.dumps({"id": "1CAE", "name": "Celer-1CAE", "board": "test", "api": 40,
+                              "prov": net["prov"], "usb": 1, "relay": 0}).encode()
+        elif sub in (S["LIST"], S["MESH"]):
+            out = b"\x00"
+        elif sub == S["JOIN"]:
+            nl = body[0]
+            nome, pl = body[1:1 + nl], body[1 + nl]
+            senha = body[2 + nl:]
+            if 1 <= nl <= 15 and 8 <= pl <= 64 and len(senha) == pl:
+                self.net = {"net": nome.decode(), "prov": 1}
+                self.joined = (nome, senha)
+                out = b""
+        elif sub == S["LEAVE"]:
+            self.net = {"net": "celer", "prov": 0}
+            out = b""
+        elif sub == S["NET"]:
+            out = json.dumps(dict(net, node="1CAE", name="Celer-1CAE", pc="FFAE")).encode()
+        if out is None:
+            self.reply(KL["RES_CTL"], b"recusado", 1)
+            return
+        self.reply(KL["RES_CTL"], bytes((req, len(out) >> 8, len(out) & 0xFF)) + out)
+
     def op_20(self, p):  # STATS: foto de profiling (JSON)
         snap = self.stats_q.pop(0) if len(self.stats_q) > 1 else self.stats_q[0]
         self.reply(KL["STATS"], json.dumps(snap).encode())
@@ -657,6 +686,65 @@ class TestStats(unittest.TestCase):
         with redirect_stderr(err), self.assertRaises(SystemExit):
             C._poll_stats(link)
         self.assertIn("firmware antigo", err.getvalue())
+
+
+class TestMeshPeloCabo(unittest.TestCase):
+    """API 40: a matilha pelo cabo (KL_RES_CTL SUB_JOIN/LEAVE/NET) e os
+    subops lidos do UsbRes.h (fonte unica, como os KL_*)."""
+
+    def test_subops_do_header(self):
+        self.assertEqual(C.SUB["DESCRIBE"], 1)
+        self.assertEqual(C.SUB["WRITE"], 7)
+        self.assertEqual((C.SUB["JOIN"], C.SUB["LEAVE"], C.SUB["NET"]), (8, 9, 10))
+
+    def test_corpo_do_join(self):
+        self.assertEqual(C.mesh_join_body("ab", "12345678"), b"\x02ab\x0812345678")
+        with self.assertRaises(C.CelerError):
+            C.mesh_join_body("", "12345678")
+        with self.assertRaises(C.CelerError):
+            C.mesh_join_body("x" * 16, "12345678")
+        with self.assertRaises(C.CelerError):
+            C.mesh_join_body("ab", "curta")
+
+    def _run(self, link, argv):
+        args = C.build_parser().parse_args(argv)
+        orig = C.open_link
+        C.open_link = lambda a: link
+        try:
+            out = io.StringIO()
+            from contextlib import redirect_stdout
+            with redirect_stdout(out):
+                args.func(args)
+            return out.getvalue()
+        finally:
+            C.open_link = orig
+
+    def test_join_status_leave(self):
+        link, dev = make_link()
+        link.hello()
+        out = self._run(link, ["mesh", "join", "bancada", "senha-forte-1"])
+        self.assertEqual(dev.joined, (b"bancada", b"senha-forte-1"))
+        self.assertIn('matilha "bancada"', out)
+        self.assertIn("PC aqui = FFAE", out)
+        st = json.loads(self._run(link, ["mesh", "--json", "status"]))
+        self.assertEqual((st["net"], st["prov"]), ("bancada", 1))
+        out = self._run(link, ["mesh", "leave"])
+        self.assertIn('rede aberta "celer"', out)
+
+    def test_res_ls_usa_os_subops(self):
+        link, dev = make_link()
+        link.hello()
+        out = self._run(link, ["res", "ls"])
+        self.assertIn("Celer-1CAE (1CAE) test api 40", out)
+
+    def test_firmware_antigo_orienta_o_shell(self):
+        link, dev = make_link()
+        link.hello()
+        dev.op_21 = lambda p: dev.reply(KL["RES_CTL"], b"recusado", 1)
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit):
+            self._run(link, ["mesh", "status"])
+        self.assertIn("shell mesh join", err.getvalue())
 
 
 # ---------------------------------------------------------------- bridge WiFi

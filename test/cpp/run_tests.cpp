@@ -1940,6 +1940,27 @@ static void testShScript() {
     CHECK(g_shRan.size() == 2 && g_shRan[0] == "echo oi" && g_shRan[1] == "ls /local");
 }
 
+static void testUsbJoin() {
+    using namespace usbres;
+    uint8_t b[96];
+    const size_t n = encodeJoin("bancada", "senha-forte-1", b, sizeof(b));
+    CHECK(n == 2 + 7 + 13 && b[0] == 7 && b[8] == 13);
+    char nm[JOIN_NAME_MAX + 1], pw[JOIN_PASS_MAX + 1];
+    CHECK(decodeJoin(b, n, nm, pw) && strcmp(nm, "bancada") == 0 && strcmp(pw, "senha-forte-1") == 0);
+    CHECK(!decodeJoin(b, n - 1, nm, pw));        // senha truncada
+    CHECK(!decodeJoin(b, 0, nm, pw));
+    CHECK(encodeJoin("", "12345678", b, sizeof(b)) == 0);
+    CHECK(encodeJoin("x123456789012345", "12345678", b, sizeof(b)) == 0);  // 16 > 15
+    CHECK(encodeJoin("ab", "curta", b, sizeof(b)) == 0);
+    CHECK(encodeJoin("ab", "12345678", b, 5) == 0);                        // nao coube
+    uint8_t bad[96];
+    memcpy(bad, b, n);
+    const size_t m = encodeJoin("ab", "12345678", bad, sizeof(bad));
+    bad[4] = 0;                                  // NUL no meio da senha
+    CHECK(!decodeJoin(bad, m, nm, pw));
+    CHECK(SUB_JOIN == 8 && SUB_LEAVE == 9 && SUB_NET == 10);
+}
+
 static void testPackId() {
     using namespace packid;
     const uint8_t mac[6] = {0x24, 0x0A, 0xC4, 0x12, 0x1C, 0xAE};
@@ -2028,6 +2049,7 @@ int main() {
     testResProto();
     testResMeta();
     testUsbRes();
+    testUsbJoin();
     testPackId();
     testProvProto();
     testRigid2D();

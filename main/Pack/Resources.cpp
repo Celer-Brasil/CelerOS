@@ -29,6 +29,7 @@
 #include "../Utils/TaskCaps.h"
 #include "Pack.h"
 #include "PackId.h"
+#include "Provision.h"
 #include "../USBDevice/UsbRes.h"
 
 // Recursos da matilha (ver Resources.h / ResProto.h).
@@ -1840,6 +1841,36 @@ void usbSession(bool on) {
 
 int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t cap) {
     if (!s_inited) return -1;
+    // Entrar na matilha (API 40): fora do Guard — o Provision chama o
+    // netChanged daqui, que trava o mesmo mutex
+    switch (subop) {
+        case usbres::SUB_JOIN: {
+            char name[usbres::JOIN_NAME_MAX + 1];
+            char pass[usbres::JOIN_PASS_MAX + 1];
+            if (!usbres::decodeJoin(body, len, name, pass)) return -1;
+            const bool ok = Provision::joinPassword(name, pass);  // PBKDF2 ~0,3 s
+            memset(pass, 0, sizeof(pass));
+            ESP_LOGI(TAG, "gateway USB: matilha \"%s\" pelo cabo: %s", name, ok ? "ok" : "falhou");
+            return ok ? 0 : -1;
+        }
+        case usbres::SUB_LEAVE:
+            Provision::leave();
+            ESP_LOGI(TAG, "gateway USB: saiu da matilha pelo cabo");
+            return 0;
+        case usbres::SUB_NET: {
+            NetKeys::init();
+            const NetKeys::Net* n = NetKeys::primary();
+            char nm[CelerNet::MAX_NAME + 1];
+            ourName(nm, sizeof(nm));
+            snprintf((char*)out, cap,
+                     "{\"net\":\"%s\",\"prov\":%d,\"node\":\"%04X\",\"name\":\"%s\",\"pc\":\"%04X\"}",
+                     n != nullptr ? n->name : "", NetKeys::provisioned() ? 1 : 0, ourNode(), nm,
+                     PackId::pcNode());
+            return (int)strlen((char*)out);
+        }
+        default:
+            break;
+    }
     Guard g;
     switch (subop) {
         case usbres::SUB_DESCRIBE: {

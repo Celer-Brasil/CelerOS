@@ -1870,6 +1870,14 @@ bool usbEvent(const uint8_t* d, size_t n) {
 }
 
 void usbSetSend(bool (*fn)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n)) {
+    // O HELLO do HostLink chega a qualquer hora — inclusive no boot, antes do
+    // Pack::init criar o mutex (o celerctl reconecta logo apos o reboot do
+    // OTA): Guard com s_lock nulo era assert e o OTA voltava no rollback
+    // (bancada 2026-10-16). Sem init, ninguem le o ponteiro ainda.
+    if (!s_inited) {
+        s_usbSend = fn;
+        return;
+    }
     Guard g;
     s_usbSend = fn;
 }

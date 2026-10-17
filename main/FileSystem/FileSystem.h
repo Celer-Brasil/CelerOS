@@ -53,6 +53,10 @@ public:
     
     // Directory Operations
     static bool mkdir(const char* path);
+    // mkdir com pais ("mkdir -p"): cria cada componente que falta; um
+    // componente existente tem que ser pasta (lstat: symlink NAO e seguido).
+    // Teto de 10 niveis criados por chamada (jail de alocacao/caminho).
+    static bool mkdirs(const char* path);
     static bool rmdir(const char* path);
     // Remove a pasta e tudo dentro (desinstalar app); false no primeiro erro
     static bool removeTree(const char* path);

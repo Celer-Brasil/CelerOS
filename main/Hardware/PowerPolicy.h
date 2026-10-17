@@ -12,6 +12,14 @@
 // WiFi ocioso com a tela apagada desliga depois de "wifi_sleep_min" (NVS;
 // padrao BoardProfile::wifiSleepMin, 0 = nunca) e volta ao acender.
 // Sem CONFIG_PM_ENABLE (demais placas) tudo vira no-op.
+//
+// Interacao com o svchost (API 42, servicos JS de apps): a decisao de
+// dormencia NAO precisa saber deles. O pump (CelerServices, appsvc inclusive)
+// roda a cada volta do loop e o loop continua a 5/20/50 ms mesmo dormindo —
+// o tickless idle acorda a cada delay, entao timer JS de 1 s toca normalmente
+// com a tela apagada/AOD. Quem o WiFi idle-off atinge e servico JS de REDE
+// (o radio cai apos wifi_sleep_min com a tela apagada): wifi_sleep_min=0
+// desativa a politica e o servico de rede nao e afetado.
 
 namespace PowerPolicy {
 

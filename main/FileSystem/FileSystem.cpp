@@ -483,7 +483,10 @@ struct CopyProgress {
 };
 
 bool copyTree(const std::string& srcDir, const std::string& dstDir, CopyProgress& pr) {
-    if (!FileSystem::mkdir(dstDir.c_str())) return false;
+    // mkdirs: o destino pode ser uma arvore nova inteira (backup/restaurar
+    // para pasta que ainda nao existe) — o mkdir de um nivel so cobria o
+    // ultimo componente
+    if (!FileSystem::mkdirs(dstDir.c_str())) return false;
     DIR* dir = opendir(srcDir.c_str());
     if (dir == nullptr) return false;
 
@@ -582,6 +585,35 @@ int FileSystem::parseJsonStringMap(const std::string& json, JsonStringPair* out,
 bool FileSystem::mkdir(const char* path) {
     if (!pathOk(path)) return false;
     return ::mkdir(path, 0775) == 0 || errno == EEXIST;
+}
+
+bool FileSystem::mkdirs(const char* path) {
+    if (!pathOk(path)) return false;
+    // Caminha componente a componente ("/local/data/pkg/sub"): o que existe
+    // tem que ser pasta DE VERDADE (o que falta nasce com 0775). O teto
+    // conta so os CRIADOS: pais pre-existentes nao consomem o orcamento.
+    // stat e nao lstat: o VFS do ESP-IDF nao implementa lstat, e os pontos
+    // de montagem (LittleFS/FATFS/SD) nao tem symlink — no device o stat
+    // e o lstat sao o mesmo teste.
+    const size_t len = strlen(path);
+    if (len == 0 || len >= 128) return false;
+    char cur[128];
+    memcpy(cur, path, len + 1);
+    int created = 0;
+    for (size_t i = 1; i <= len; i++) {
+        if (cur[i] != '/' && cur[i] != '\0') continue;
+        const char saved = cur[i];
+        cur[i] = '\0';
+        struct stat st;
+        if (stat(cur, &st) == 0) {
+            if (!S_ISDIR(st.st_mode)) return false;
+        } else {
+            if (++created > 10) return false;
+            if (::mkdir(cur, 0775) != 0 && errno != EEXIST) return false;
+        }
+        cur[i] = saved;
+    }
+    return true;
 }
 
 bool FileSystem::rmdir(const char* path) {

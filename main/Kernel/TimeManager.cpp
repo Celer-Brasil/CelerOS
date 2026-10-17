@@ -21,11 +21,17 @@ static const char* PREF_FILE = "/local/config_time.txt";
 void TimeManager::loadPreferences() {
     if (FileSystem::exists(PREF_FILE)) {
         std::string content = FileSystem::readTextFile(PREF_FILE);
+        // Edicao manual pode deixar newline/espaco no fim: sem o trim, o
+        // "1\n" do NTP comparava falso a "1" e o NTP nascia desligado
+        while (!content.empty() &&
+               (content.back() == '\n' || content.back() == '\r' || content.back() == ' '))
+            content.pop_back();
         // Format: TZ|24H|NTP (e.g. "UTC-5|1|1")
         int sep1 = kstr::indexOf(content, '|');
         int sep2 = kstr::indexOf(content, '|', sep1 + 1);
         if (sep1 != -1 && sep2 != -1) {
-            currentTimezone = content.substr(0, sep1);
+            std::string tz = content.substr(0, sep1);
+            if (!tz.empty()) currentTimezone = tz;  // vazio = linha quebrada: fica o padrao
             use24hFormat = (content.substr(sep1 + 1, sep2 - sep1 - 1) == "1");
             ntpEnabled = (content.substr(sep2 + 1) == "1");
         }
@@ -43,18 +49,21 @@ void TimeManager::savePreferences() {
 // ajuste manual / troca de fuso). A hora gravada e LOCAL — mktime/localtime_r
 // sob o TZ ja carregado fazem a conversao.
 
-static void syncExternalRtc(const char* motivo) {
+// true gravou (o chamador decide se vale retentar); false sem RTC na placa
+// ou escrita falhou (I2C engasgado: o proximo chamador tenta de novo)
+static bool syncExternalRtc(const char* motivo) {
     const BoardProfile& bp = Board::profile();
-    if (!bp.writeRtc) return;
+    if (!bp.writeRtc) return false;
     time_t now;
     time(&now);
     struct tm t;
     localtime_r(&now, &t);
     if (bp.writeRtc(t)) {
         ESP_LOGI("celer.time", "RTC externo gravado (%s)", motivo);
-    } else {
-        ESP_LOGW("celer.time", "RTC externo nao gravou (%s)", motivo);
+        return true;
     }
+    ESP_LOGW("celer.time", "RTC externo nao gravou (%s)", motivo);
+    return false;
 }
 
 static void restoreExternalRtc() {
@@ -103,6 +112,18 @@ void TimeManager::syncNTP() {
         return;
     }
     esp_netif_sntp_start();  // reconexao: pede nova sincronizacao ja
+}
+
+// NTP desligado pelo usuario para de sincronizar DE VERDADE: sem o stop o
+// SNTP ja iniciado seguia reajustando o relogio a cada intervalo (a hora
+// "congelada" de quem testou sem rede voltava sozinha). A parada thread-safe
+// e o deinit (o stop cru do esp_sntp roda fora do lock do lwIP — era a causa
+// do relogio que nunca sincronizava); religar refaz o init inteiro no syncNTP.
+static void sntpStopIfRunning() {
+    if (!s_sntpStarted) return;
+    esp_netif_sntp_deinit();
+    s_sntpStarted = false;
+    ESP_LOGI("celer.time", "SNTP parado (NTP desativado)");
 }
 
 bool TimeManager::isTimeValid() {
@@ -191,12 +212,24 @@ void TimeManager::tick(bool networkUp) {
             lastSaveMs = now2;
             saveEpoch();
         }
-        // Primeira hora valida da sessao (SNTP seta async): grava no RTC
-        // externo uma unica vez — o oscilador dele corre sozinho daqui.
+    }
+    // RTC externo e DEVER do kernel (nao existe binding JS que o grave —
+    // System.persistTime so toca o NVS): antes da API 42 rodava com qualquer
+    // hora valida; o gate svcStale da migracao o engoliu e o watch com
+    // servico vivo perdia a hora no reboot sem rede. Volta a ser
+    // incondicional. Primeira hora valida da sessao (SNTP seta async) grava
+    // uma unica vez — o oscilador dele corre sozinho daqui. Falha de I2C nao
+    // trava para sempre: retenta a cada 30 s (RTC parado e o pior cenario no
+    // reboot sem rede, e gravar de novo e barato).
+    if (isTimeValid()) {
         static bool rtcWritten = false;
+        static uint32_t rtcTryMs = 0;
         if (!rtcWritten) {
-            rtcWritten = true;
-            syncExternalRtc("hora valida");
+            uint32_t now3 = millis();
+            if (rtcTryMs == 0 || now3 - rtcTryMs >= 30000) {
+                rtcTryMs = now3;
+                if (syncExternalRtc("hora valida")) rtcWritten = true;
+            }
         }
     }
 
@@ -265,7 +298,10 @@ void TimeManager::setTimeFormat(bool use24h) {
 void TimeManager::setNTPEnabled(bool enabled) {
     ntpEnabled = enabled;
     savePreferences();
-    if (enabled) syncNTP();
+    if (enabled)
+        syncNTP();
+    else
+        sntpStopIfRunning();
 }
 
 std::string TimeManager::getFormattedTime() {

@@ -282,6 +282,21 @@ void clockChanged() {
     std::lock_guard<std::mutex> lock(s_mux);
     time_t now;
     time(&now);
+    // Timer e contagem regressiva: o salto de relogio (ajuste manual, epoch
+    // do celular) NAO consome o que falta — sem o rebase, acertar o relogio
+    // para frente disparava o timer na hora do salto. O restante vem da
+    // amostra do ultimo tick ANTES do salto (s_prevNow, ~1 s de atras);
+    // sem amostra ainda (boot) nao ha de onde tirar o restante: segue como
+    // esta. Mesma regra do rebase invalido->valido do tick.
+    if (s_timerAt != 0 && s_prevNow != 0) {
+        time_t rest = s_timerAt - s_prevNow;
+        if (rest < 0) rest = 0;
+        if (rest > 86400) rest = 86400;  // teto do setTimer
+        s_timerAt = now + rest;
+        persistTimer();
+        ESP_LOGI("celer.alarm", "relogio trocado: timer rebaseado (%lld s restantes)",
+                 (long long)rest);
+    }
     s_lastCheck = now;
     // Soneca marcada com o relogio ainda invalido (epoch do boot): quando a
     // hora real chega por NTP/celular, o resto absurdamente atrasado

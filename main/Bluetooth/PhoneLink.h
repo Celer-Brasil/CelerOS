@@ -56,7 +56,10 @@ bool callInfo(std::string& name, std::string& number);
 // 0 = recusar, 1 = atender, 2 = ignorar (so silencia no celular)
 void callAnswer(int action);
 
-// Apaga os bonds do NimBLE e derruba o celular (pareamento novo).
+// Apaga os bonds do NimBLE e derruba o celular (pareamento novo). Derruba o
+// enlace mesmo que ele nunca tenha criptografado (ENC_CHANGE falho) e
+// garante o advertising conectavel de volta. Com o NimBLE ainda fora do ar,
+// a limpeza fica pendente e e aplicada antes do proximo anuncio.
 void forget();
 
 struct Music {
@@ -76,6 +79,8 @@ bool weather(Weather& out);
 const ble_gatt_svc_def* gattServices();
 const char* advName();
 const void* advUuid128();   // ble_uuid128_t* do servico NUS
+// Pode anunciar agora (ligado, sem conexao e fora do backoff de quedas
+// rapidas — o Gadgetbridge em laco de reconexao).
 bool wantAdvertise();
 void onConnect(uint16_t conn);
 void onDisconnect();

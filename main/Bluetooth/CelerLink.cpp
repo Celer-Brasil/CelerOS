@@ -456,9 +456,37 @@ bool ctEqual(const uint8_t* a, const uint8_t* b, size_t n) {
 
 int onGapEvent(ble_gap_event* event, void* arg);  // usado pelo advRestart
 
+// Serializa o (re)inicio do advertising entre a task do host (eventos,
+// onSync) e a do app (start/stop/tick do Phone Link). Sem isso, dois
+// advRestart simultaneos podiam iniciar anuncios diferentes (duas passadas
+// por "nao ha adv ativo") e o perdedor ficava com o estado trocado — o
+// s_advPhone em particular mentia, e a conexao do celular era classificada
+// como link de app. Recursivo de proposito: ble_gap_adv_stop pode entregar
+// ADV_COMPLETE para o onGapEvent no meio da troca, e ele chama advRestart.
+// Criado no ensureStarted (antes da task do host existir).
+SemaphoreHandle_t s_advMutex = nullptr;
+
+struct AdvGuard {
+    bool held = false;
+    AdvGuard() {
+        if (s_advMutex != nullptr) {
+            // Nunca portMAX_DELAY: a task do host nao pode ficar parada
+            // esperando um start do app (os eventos de conexao atrasariam).
+            // Em disputa, quem chega depois desiste e o proximo evento/tick
+            // re-tenta.
+            held = xSemaphoreTakeRecursive(s_advMutex, pdMS_TO_TICKS(100)) == pdTRUE;
+        }
+    }
+    ~AdvGuard() {
+        if (held) xSemaphoreGiveRecursive(s_advMutex);
+    }
+};
+
 // (Re)liga o advertising se o app pediu e o radio esta livre. Chamado
 // da task do host (eventos) e da do app (start).
 void advRestart() {
+    AdvGuard lock;
+    if (!lock.held) return;
     if (s_connActive || s_connecting) return;
 #if CONFIG_CELEROS_PHONE_LINK
     // Sem app usando o Celer Link: o relogio anuncia o Phone Link
@@ -483,9 +511,20 @@ void advRestart() {
         // intervalo longo (~1 s): economia; o Gadgetbridge reconecta sozinho
         p.itvl_min = 1600;
         p.itvl_max = 1760;
-        if (ble_gap_adv_set_fields(&f) != 0 || ble_gap_adv_rsp_set_fields(&r) != 0) return;
+        if (ble_gap_adv_set_fields(&f) != 0 || ble_gap_adv_rsp_set_fields(&r) != 0) {
+            ESP_LOGW(TAG, "adv do celular: fields recusados");
+            return;
+        }
         int rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, nullptr, BLE_HS_FOREVER, &p, onGapEvent, nullptr);
-        if (rc == 0) s_advPhone = true;
+        // So assume a posse quando o anuncio comecou de fato. EALREADY aqui
+        // e o burst da malha (que nao passa por este lock): continua sem
+        // posse e o CelerNet devolve o ar no fim — marcar s_advPhone agora
+        // faria a proxima conexao ser classificada como celular.
+        if (rc == 0) {
+            s_advPhone = true;
+        } else if (rc != BLE_HS_EALREADY) {
+            ESP_LOGW(TAG, "adv do celular: start rc=%d", rc);
+        }
         return;
     }
     if (s_advPhone && ble_gap_adv_active()) ble_gap_adv_stop();  // app tem prioridade
@@ -596,7 +635,12 @@ int onPairAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void*
         s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
     }
     if (s_pairFails >= K_PAIR_MAX_FAILS && s_connActive) {
-        ble_gap_terminate(s_conn, K_CONN_TERM);  // async: o DISCONNECT limpa
+        // async: o DISCONNECT limpa. Se o handle ja sumiu, limpa aqui —
+        // sem isso o s_connActive fica preso e o anuncio nao volta.
+        if (ble_gap_terminate(s_conn, K_CONN_TERM) != 0) {
+            clearConnState();
+            advRestart();
+        }
     }
     return 0;
 }
@@ -759,8 +803,30 @@ int onGapEvent(ble_gap_event* event, void* arg) {
             s_conn = event->connect.conn_handle;
             s_connActive = true;
 #if CONFIG_CELEROS_PHONE_LINK
-            if (!s_isCentral && s_advPhone) {
-                // conexao veio do advertising do Phone Link: e do celular
+            // Conexao de entrada (peripheral): e do celular quando o
+            // anuncio no ar era o do Phone Link OU quando nenhum app pediu
+            // o anuncio — o Android reconecta DIRETO pelo endereco salvo
+            // (autoConnect do Gadgetbridge), sem esperar scan, e o anuncio
+            // do celular e o unico conectavel que temos. Sem este segundo
+            // criterio, um CONNECT que chegasse entre o stop do burst da
+            // malha e o re-anuncio caia no ramo do app: o Phone Link nao
+            // via a conexao (nem o forget a derrubava) e a conexao ficava
+            // muda segurando o unico slot.
+            // Terceiro criterio: endereco de peer ALEATORIO. O CelerOS
+            // sempre usa endereco publico (scan/connect e advertising); o
+            // Android com bond usa RPA. Assim a reconexao direta do
+            // Gadgetbridge tambem e reconhecida quando o anuncio no ar e o
+            // do app (s_wantAdvertise), caso em que nem `s_advPhone` nem
+            // `wantAdvertise` valem.
+            bool randPeer = false;
+            struct ble_gap_conn_desc cdesc;
+            if (ble_gap_conn_find(s_conn, &cdesc) == 0) {
+                randPeer = cdesc.peer_ota_addr.type == BLE_ADDR_RANDOM;
+            }
+            const bool phone = !s_isCentral &&
+                               (s_advPhone || (PhoneLink::wantAdvertise() && !s_wantAdvertise) ||
+                                (PhoneLink::enabled() && randPeer));
+            if (phone) {
                 s_advPhone = false;
                 s_phoneConn = true;
                 s_ready = false;  // canal do Celer Link segue fechado
@@ -834,7 +900,25 @@ int onGapEvent(ble_gap_event* event, void* arg) {
         case BLE_GAP_EVENT_PASSKEY_ACTION:
         case BLE_GAP_EVENT_ENC_CHANGE:
         case BLE_GAP_EVENT_REPEAT_PAIRING:
-            return PhoneLink::onGapSecurity(event);
+            // So o enlace do celular pode mexer no estado de seguranca do
+            // Phone Link. Num link de app (CelerLink) a seguranca do NimBLE
+            // nao e usada: uma falha de criptografia ali e terminal (o peer
+            // nao consegue usar nada e a conexao segura o unico slot), e o
+            // REPEAT_PAIRING segue o tratamento padrao do NimBLE.
+            if (s_phoneConn) return PhoneLink::onGapSecurity(event);
+            if (event->type == BLE_GAP_EVENT_ENC_CHANGE &&
+                event->enc_change.status != 0) {
+                ESP_LOGW(TAG, "criptografia falhou em link de app (status=%d): derrubando",
+                         event->enc_change.status);
+                ble_gap_terminate(event->enc_change.conn_handle, K_CONN_TERM);
+            } else if (event->type == BLE_GAP_EVENT_REPEAT_PAIRING) {
+                struct ble_gap_conn_desc desc;
+                if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+                    ble_store_util_delete_peer(&desc.peer_id_addr);
+                }
+                return BLE_GAP_REPEAT_PAIRING_RETRY;
+            }
+            return 0;
 #endif
         case BLE_GAP_EVENT_SUBSCRIBE:
 #if CONFIG_CELEROS_PHONE_LINK
@@ -1009,7 +1093,9 @@ bool CelerLink::ensureStarted(bool latchFailure) {
     if (s_evt == nullptr) s_evt = xEventGroupCreate();
     if (s_rxQueue == nullptr) s_rxQueue = xQueueCreate(RX_DEPTH, sizeof(Msg));
     if (s_sealedQueue == nullptr) s_sealedQueue = xQueueCreate(K_SEALED_DEPTH, sizeof(Msg));
-    if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr || s_sealedQueue == nullptr) {
+    if (s_advMutex == nullptr) s_advMutex = xSemaphoreCreateRecursiveMutex();
+    if (s_syncSem == nullptr || s_evt == nullptr || s_rxQueue == nullptr || s_sealedQueue == nullptr ||
+        s_advMutex == nullptr) {
         ESP_LOGE(TAG, "sem memoria para as primitivas do link");
         if (latchFailure) s_initFail = true;
         return false;
@@ -1068,6 +1154,8 @@ bool CelerLink::ensureStarted(bool latchFailure) {
     return true;
 }
 
+bool CelerLink::started() { return s_started; }
+
 bool CelerLink::start(const char* name, bool requirePairing) {
     if (!ensureStarted()) return false;
     bool rename = false;
@@ -1084,14 +1172,20 @@ bool CelerLink::start(const char* name, bool requirePairing) {
     // Gadgetbridge reconecta quando o app sair (appReset re-anuncia)
     if (s_phoneConn) dropConnection(K_DISC_WAIT_MS);
     // Nome novo so entra no ar reiniciando o advertising.
-    if (rename && ble_gap_adv_active()) ble_gap_adv_stop();
+    if (rename) {
+        AdvGuard lock;
+        if (ble_gap_adv_active()) ble_gap_adv_stop();
+    }
     advRestart();
     return true;
 }
 
 bool CelerLink::stop() {
     s_wantAdvertise = false;
-    if (s_started && ble_gap_adv_active()) ble_gap_adv_stop();
+    {
+        AdvGuard lock;
+        if (s_started && ble_gap_adv_active()) ble_gap_adv_stop();
+    }
     if (s_started) advRestart();  // Phone Link volta ao ar (no-op sem ele)
     return true;
 }
@@ -1102,9 +1196,30 @@ void CelerLink::refreshAdvertising() {
 
 void CelerLink::dropPhone() {
     if (!s_started) return;
-    if (s_advPhone && ble_gap_adv_active()) ble_gap_adv_stop();
-    s_advPhone = false;
-    if (s_phoneConn && s_connActive) ble_gap_terminate(s_conn, K_CONN_TERM);  // DISCONNECT limpa
+    {
+        AdvGuard lock;
+        if (s_advPhone && ble_gap_adv_active()) ble_gap_adv_stop();
+        s_advPhone = false;
+    }
+    if (!s_phoneConn || !s_connActive) return;
+    // O DISCONNECT limpa o estado. Mas se o handle ja nao existe (evento
+    // perdido, host resetado sem onReset), nenhum DISCONNECT vai chegar e o
+    // s_connActive ficaria preso para sempre: o advRestart desiste em toda
+    // chamada (conexao eterna) e o anuncio conectavel nunca volta — era o
+    // "esqueci o pareamento e o celular ficou num laco surdo". Nesse caso
+    // limpa e re-anuncia aqui mesmo.
+    int rc = ble_gap_terminate(s_conn, K_CONN_TERM);
+    if (rc == 0 || rc == BLE_HS_EALREADY) return;
+    ESP_LOGW(TAG, "dropPhone: terminate rc=%d; limpando estado local", rc);
+    s_phoneConn = false;
+    clearConnState();
+#if CONFIG_CELEROS_PHONE_LINK
+    PhoneLink::onDisconnect();
+#endif
+    // Quem chamou decide o re-anuncio (start/appReset/forget chamam
+    // refreshAdvertising; o tick do Phone Link tambem cobre o caso). Nao
+    // anunciar aqui evita a janela em que o celular reconectaria ANTES de o
+    // forget apagar o bond.
 }
 
 bool CelerLink::listening() {
@@ -1302,6 +1417,9 @@ bool CelerLink::disconnect() {
     if (!s_started || !s_connActive) return false;
     bool ok = dropConnection(K_DISC_WAIT_MS);
     s_isCentral = false;
+    // Sem confirmacao de DISCONNECT o estado foi limpo a forca: devolve o
+    // advertising (se o evento chegar depois, o handler re-anuncia de novo).
+    if (!ok) advRestart();
     return ok;
 }
 
@@ -1475,7 +1593,11 @@ void CelerLink::info(Info* out) {
         (int32_t)(xTaskGetTickCount() - s_pairDeadline) >= 0) {
         s_pairPending = false;
         ESP_LOGW(TAG, "codigo de pareamento nao digitado em %u s", (unsigned)(K_PAIR_TIMEOUT_MS / 1000));
-        if (ble_gap_terminate(s_conn, K_CONN_TERM) != 0) clearConnState();
+        if (ble_gap_terminate(s_conn, K_CONN_TERM) != 0) {
+            clearConnState();
+            s_isCentral = false;
+            advRestart();  // handle ja sumiu: nenhum DISCONNECT vai voltar
+        }
     }
     out->connected = s_ready && s_pairVerified;
     out->listening = s_wantAdvertise;
@@ -1498,8 +1620,16 @@ void CelerLink::info(Info* out) {
 
 void CelerLink::appReset() {
     if (!s_started) return;
+    const bool hadAdv = s_wantAdvertise;
     s_wantAdvertise = false;
-    if (ble_gap_adv_active()) ble_gap_adv_stop();
+    {
+        AdvGuard lock;
+        // So derruba o anuncio quando ERA o do app: com o Phone Link no ar
+        // (nenhum app usando o link), parar/religar a cada troca de app e
+        // churn de advertising de graca — o controlador ja teve IWDT nesse
+        // ciclo (ver CelerNet) e o Gadgetbridge perde a janela de reconexao.
+        if (hadAdv && ble_gap_adv_active()) ble_gap_adv_stop();
+    }
     if (ble_gap_disc_active()) ble_gap_disc_cancel();
     // conexao do celular (Phone Link) sobrevive a saida do app
     if (s_connActive && !s_phoneConn) dropConnection(K_DISC_WAIT_MS);

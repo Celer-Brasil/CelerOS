@@ -68,6 +68,17 @@ volatile uint16_t s_mtu = 23;
 volatile uint32_t s_passkey = 0;
 volatile bool s_greet = false;  // conexao pronta: manda o status inicial
 
+// Backoff do advertising: o Gadgetbridge reconecta em laco depois de uma
+// queda (bond velho, pareamento recusado). Re-anunciar na hora alimenta a
+// tempestade; uma espera crescente da tempo do Android limpar o bond e
+// evita um CONNECT/DISCONNECT (com eventos de SM) por centenas de ms.
+volatile uint32_t s_connAtMs = 0;      // inicio da conexao corrente
+volatile uint32_t s_advHoldUntil = 0;  // 0/passado = pode anunciar
+volatile uint8_t s_rapidDrops = 0;     // quedas com < 3 s de conexao
+volatile uint32_t s_secRetryAt = 0;    // re-tenta security_initiate no tick
+volatile uint8_t s_secRetries = 0;
+volatile uint32_t s_passkeyAt = 0;     // quando o codigo apareceu
+
 char s_advName[24] = {0};
 
 std::mutex s_mux;  // fila de linhas + estado de musica/clima
@@ -142,11 +153,17 @@ bool sendRaw(const std::string& line) {
     while (off < line.size()) {
         size_t n = line.size() - off < chunk ? line.size() - off : chunk;
         int rc = BLE_HS_ENOMEM;
+        // Orcamento de 20 ms por chunk: send() roda no pump (UI/app) e a
+        // espera antiga (20 x 5 ms por chunk) congelava a tela por ate 5 s
+        // numa linha de 1 KB com o MTU default. Sem buffer, melhor perder a
+        // linha (o proximo status re-sincroniza) do que travar o loop.
+        const uint32_t until = millis() + 20;
         for (int tries = 0; tries < 20; tries++) {
             struct os_mbuf* om = ble_hs_mbuf_from_flat(line.data() + off, (uint16_t)n);
             rc = om == nullptr ? BLE_HS_ENOMEM : ble_gatts_notify_custom(s_connHandle, s_txHandle, om);
             if (rc == 0 || (rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY)) break;
-            vTaskDelay(pdMS_TO_TICKS(5));
+            if ((int32_t)(millis() - until) >= 0) break;
+            vTaskDelay(pdMS_TO_TICKS(2));
         }
         if (rc != 0) {
             ESP_LOGW(TAG, "notify rc=%d", rc);
@@ -356,6 +373,7 @@ void init() {
 namespace {
 bool s_bleUp = false;
 uint32_t s_bleNextTryMs = 0;
+volatile bool s_forgetPending = false;  // forget pedido antes do NimBLE subir
 }
 
 static void bringUpBle() {
@@ -368,6 +386,13 @@ static void bringUpBle() {
     // pela sessao inteira (bancada 2026-10-06: 38,0 K livres x 38,9 K).
     if (CelerLink::ensureStarted(false)) {
         s_bleUp = true;
+        // forget com o host ainda fora do ar (RAM apertada no boot, Phone
+        // desligado): apaga agora que o store existe, ANTES de anunciar.
+        if (s_forgetPending) {
+            s_forgetPending = false;
+            ble_store_clear();
+            ESP_LOGI(TAG, "forget pendente aplicado (bonds apagados)");
+        }
         CelerLink::refreshAdvertising();
         ESP_LOGI(TAG, "Phone Link no ar (\"%s\", Gadgetbridge: Bangle.js)", s_advName);
     } else {
@@ -393,6 +418,43 @@ void tick(bool inApp) {
         handleLine(line);
     }
     const uint32_t now = millis();
+    // Enlace de pe mas sem criptografia: re-tenta o security request. Se o
+    // primeiro pedido se perdeu (EBUSY na conexao, celular ainda subindo o
+    // perfil), o link ficava mudo para sempre — conectado, sem canal, e o
+    // anuncio parado (o Gadgetbridge acha que esta tudo bem). Teto de 5
+    // tentativas para nao virar enxurrada de eventos de SM.
+    if (s_conn && !s_encrypted && s_passkey == 0 && s_secRetryAt != 0 &&
+        (int32_t)(now - s_secRetryAt) >= 0) {
+        s_secRetryAt = 0;
+        // 60 s de enlace sem criptografia e sem codigo na tela: nem o
+        // pareamento mais lento leva isso. O enlace mudo nao serve para
+        // nada e segura o unico slot (o anuncio fica parado e o
+        // Gadgetbridge "acha" que esta conectado).
+        const bool tooLong = s_connAtMs != 0 && now - s_connAtMs > 60000;
+        if (tooLong || s_secRetries >= 5) {
+            ESP_LOGW(TAG, "enlace sem criptografia (%s): derrubando",
+                     tooLong ? "60 s" : "5 pedidos");
+            // Mesmo caminho do forget: derruba e, se o handle ja sumiu,
+            // limpa o estado do CelerLink (senao o anuncio nao volta).
+            CelerLink::dropPhone();
+        } else {
+            int rc = ble_gap_security_initiate(s_connHandle);
+            if (rc == BLE_HS_EALREADY) {
+                // Ja existe procedimento SM em andamento (inclusive o
+                // passkey na tela): nao conta tentativa, so confere depois.
+                s_secRetryAt = now + 5000;
+            } else {
+                s_secRetries = s_secRetries + 1;
+                // Mesmo com rc=0 o pedido pode ter sido ignorado pelo
+                // celular: confere de novo em 3 s (ENC_CHANGE cancela).
+                s_secRetryAt = now + (rc == 0 ? 3000 : 1500);
+                if (rc != 0) ESP_LOGD(TAG, "security_initiate rc=%d (tenta de novo)", rc);
+            }
+        }
+    }
+    // Codigo de pareamento orfao (o SM desistiu sem ENC_CHANGE): a PairScreen
+    // ficaria presa na tela para sempre.
+    if (s_passkey != 0 && now - s_passkeyAt > 120000) s_passkey = 0;
     if (s_greet) {
         s_greet = false;
         s_statusAt = now;
@@ -433,6 +495,18 @@ void tick(bool inApp) {
         }
     }
     if (!s_conn) s_callActive = false;  // caiu o link: nao fica tocando
+    // Rede de seguranca do advertising: o re-anuncio e dirigido por eventos
+    // (DISCONNECT, ADV_COMPLETE do burst da malha, onSync) e um pedido pode
+    // se perder na disputa pelo radio. Com o link ocioso e NADA no ar,
+    // re-pede o ar (no maximo 1x/s); ble_gap_adv_active() e leitura atomica.
+    if (s_bleUp && s_enabled && !s_conn && !CelerLink::listening() && !CelerLink::linkActive()) {
+        static uint32_t s_advHealMs = 0;
+        if ((int32_t)(now - s_advHoldUntil) >= 0 && !ble_gap_adv_active() &&
+            now - s_advHealMs >= 1000) {
+            s_advHealMs = now;
+            CelerLink::refreshAdvertising();
+        }
+    }
     // "encontrar relogio" / chamada: bipa ate o prazo ou um toque
     if (s_findUntil != 0) {
         if ((int32_t)(now - s_findUntil) >= 0 || Backlight::lastActivity() != s_findActivity) {
@@ -451,6 +525,8 @@ void setEnabled(bool on) {
     CelerSettings::set("phone_on", on ? "1" : "0");
     if (on) {
         s_bleUp = false;  // o proximo tick sobe/re-anuncia
+        s_advHoldUntil = 0;
+        s_rapidDrops = 0;
     } else {
         CelerLink::dropPhone();
     }
@@ -493,9 +569,34 @@ void callAnswer(int action) {
 }
 
 void forget() {
+    // Ordem importa: para o anuncio do celular (o Android nao reconecta
+    // enquanto ele nao estiver no ar), derruba o enlace e so entao apaga a
+    // seguranca. Sem o terminate, um enlace que nunca chegou a criptografar
+    // (ENC_CHANGE falho) continuava de pe segurando o unico slot: o
+    // advertising conectavel nao voltava e o Gadgetbridge ficava num laco de
+    // reconexao surda.
     CelerLink::dropPhone();
-    ble_store_clear();  // bonds do NimBLE (o celular tambem precisa esquecer)
-    s_bleUp = false;    // o proximo tick re-anuncia
+    // dropPhone pode ter deixado o estado local preso se o terminate nao
+    // encontrou o handle (ver CelerLink::dropPhone); este terminate direto
+    // cobre a divergencia entre os dois lados.
+    if (s_conn && ble_gap_terminate(s_connHandle, BLE_ERR_REM_USER_CONN_TERM) == 0) {
+        ESP_LOGI(TAG, "enlace do celular derrubado no forget");
+    }
+    s_rapidDrops = 0;
+    s_advHoldUntil = 0;
+    s_passkey = 0;
+    s_greet = false;
+    if (CelerLink::started()) {
+        ble_store_clear();  // bonds/CCCDs do NimBLE (o celular tambem precisa esquecer)
+        // Se nao havia conexao (ou o DISCONNECT ja chegou), recoloca o
+        // anuncio agora; com o enlace ainda de pe o DISCONNECT faz isso.
+        CelerLink::refreshAdvertising();
+    } else {
+        // NimBLE ainda nao subiu: o store nao existe. Aplica no bringUpBle,
+        // ANTES de o advertising comecar (senao o bond velho voltaria).
+        s_forgetPending = true;
+    }
+    s_bleUp = false;  // o proximo tick re-anuncia (ou sobe o host)
     ESP_LOGI(TAG, "pareamento com o celular apagado");
 }
 
@@ -524,7 +625,10 @@ const char* advName() {
 
 const void* advUuid128() { return &kNusSvc; }
 
-bool wantAdvertise() { return s_enabled && !s_conn; }
+bool wantAdvertise() {
+    if (!s_enabled || s_conn) return false;
+    return (int32_t)(millis() - s_advHoldUntil) >= 0;
+}
 
 void onConnect(uint16_t conn) {
     s_conn = true;
@@ -532,20 +636,50 @@ void onConnect(uint16_t conn) {
     s_encrypted = false;
     s_subscribed = false;
     s_mtu = 23;
+    s_connAtMs = millis();
+    s_secRetries = 0;
+    s_secRetryAt = 0;
     {
         std::lock_guard<std::mutex> lock(s_mux);
         s_asm.reset();
     }
-    // bond existente: pede a criptografia ja (sem esperar a 1a escrita)
-    ble_gap_security_initiate(conn);
+    // bond existente: pede a criptografia ja (sem esperar a 1a escrita).
+    // Se o pedido falhar (EBUSY enquanto a conexao assenta) ou for ignorado,
+    // o tick re-tenta e, apos 5 tentativas sem ENC_CHANGE, derruba o enlace
+    // mudo — sem isso ele ficava de pe segurando o unico slot para sempre.
+    int rc = ble_gap_security_initiate(conn);
+    s_secRetryAt = s_connAtMs + (rc == 0 ? 3000 : 300);
+    if (rc != 0) ESP_LOGW(TAG, "security_initiate rc=%d (re-tenta no tick)", rc);
     ESP_LOGI(TAG, "celular conectou (conn=%u)", conn);
 }
 
 void onDisconnect() {
+    const uint32_t now = millis();
+    const uint32_t lived = now - s_connAtMs;
     s_conn = false;
     s_encrypted = false;
     s_subscribed = false;
     s_passkey = 0;
+    s_greet = false;
+    s_secRetryAt = 0;
+    s_secRetries = 0;
+    // Backoff: conexao que morre em < 3 s e retry storm (bond velho no
+    // Android, pareamento recusado). A 1a queda ainda re-anuncia na hora (o
+    // caso comum e o celular ter se afastado); da 2a em diante espera
+    // 1, 2, 4... ate 8 s, dando tempo do Android limpar o bond.
+    if (s_connAtMs != 0 && lived < 3000) {
+        if (s_rapidDrops < 6) s_rapidDrops = s_rapidDrops + 1;
+    } else {
+        s_rapidDrops = 0;
+    }
+    if (s_rapidDrops > 1) {
+        uint32_t hold = 1000u << (s_rapidDrops - 2);
+        if (hold > 8000) hold = 8000;
+        s_advHoldUntil = now + hold;
+        ESP_LOGW(TAG, "quedas rapidas seguidas (%u): re-anuncia em %u ms", s_rapidDrops,
+                 (unsigned)hold);
+    }
+    s_connAtMs = 0;
     ESP_LOGI(TAG, "celular desconectou");
 }
 
@@ -558,6 +692,15 @@ void onSubscribe(uint16_t attr, bool notify) {
 void onMtu(uint16_t mtu) { s_mtu = mtu; }
 
 int onGapSecurity(ble_gap_event* event) {
+    // So o enlace do celular: um evento de seguranca de link de app (nao
+    // roteado para ca, mas defensivo) nao pode acender s_encrypted nem
+    // derrubar a conexao errada.
+    const uint16_t evConn =
+        event->type == BLE_GAP_EVENT_PASSKEY_ACTION ? event->passkey.conn_handle :
+        event->type == BLE_GAP_EVENT_ENC_CHANGE    ? event->enc_change.conn_handle :
+        event->type == BLE_GAP_EVENT_REPEAT_PAIRING ? event->repeat_pairing.conn_handle : 0;
+    if (!s_conn || evConn != s_connHandle) return 0;
+
     switch (event->type) {
         case BLE_GAP_EVENT_PASSKEY_ACTION: {
             if (event->passkey.params.action != BLE_SM_IOACT_DISP) return 0;
@@ -566,6 +709,7 @@ int onGapSecurity(ble_gap_event* event) {
             pk.action = BLE_SM_IOACT_DISP;
             pk.passkey = 100000 + esp_random() % 900000;
             s_passkey = pk.passkey;
+            s_passkeyAt = millis();
             ble_sm_inject_io(event->passkey.conn_handle, &pk);
             // So os digitos: o toast e estreito no watch e cortava o codigo
             // o codigo aparece GRANDE na PairScreen (PhoneScreens::service)
@@ -575,16 +719,20 @@ int onGapSecurity(ble_gap_event* event) {
         }
         case BLE_GAP_EVENT_ENC_CHANGE:
             s_passkey = 0;
+            s_secRetryAt = 0;
+            s_secRetries = 0;
             if (event->enc_change.status == 0) {
                 s_encrypted = true;
                 if (s_subscribed) s_greet = true;
                 ESP_LOGI(TAG, "enlace criptografado");
             } else {
+                s_encrypted = false;
                 ESP_LOGW(TAG, "criptografia falhou (status=%d)", event->enc_change.status);
                 // Derruba a conexao MUDA: mantida aberta, o Gadgetbridge nao
                 // refaz o pareamento (o enlace existe, so nao criptografa) e
                 // fica num laco de reconexao surdo. O DISCONNECT limpa o
-                // estado e re-anuncia; a proxima conexao tenta de novo.
+                // estado e re-anuncia; o backoff do onDisconnect evita a
+                // tempestade de reconexao imediata.
                 ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
             }
             return 0;

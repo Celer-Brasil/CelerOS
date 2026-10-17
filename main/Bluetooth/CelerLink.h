@@ -56,6 +56,9 @@ public:
     // init para sempre — quem chama de novo mais tarde (tick/timeout)
     // tenta de novo; o padrao (apps, Phone Link) mantem o latch historico.
     static bool ensureStarted(bool latchFailure = true);
+    // Host NimBLE ja inicializado nesta sessao (as APIs de store/seguranca
+    // so podem ser chamadas depois disto).
+    static bool started();
 
     // Papel peripheral: advertising + servidor GATT. name nullptr mantem o
     // atual (default "Celer-XXXX", XXXX = fim da MAC BT). requirePairing
@@ -66,6 +69,9 @@ public:
     // Phone Link (API 15): reavalia o advertising (sem app no Celer Link o
     // relogio anuncia o NUS do Gadgetbridge) e derruba o celular.
     static void refreshAdvertising();
+    // Para o anuncio do celular e encerra o enlace do Phone Link (mesmo sem
+    // criptografia). Se o handle ja sumiu, limpa o estado local — senao o
+    // s_connActive preso impede qualquer advertising para sempre.
     static void dropPhone();
     static bool stop();
     static bool listening();

@@ -643,9 +643,20 @@ bool CaptivePortal::startHttpServer() {
             
             // Read POST data — o corpo pode chegar em varios pedacos: um recv
             // unico truncava corpos > 255 B em silencio (senha pela metade =
-            // falha de autenticacao sem pista)
-            char buf[256];
+            // falha de autenticacao sem pista). 512 B: ssid de 32 + senha de
+            // 64 urlencoded no pior caso (%XX em cada byte) passa de 256 B e
+            // o teto antigo recusava senha legitima com 413.
+            char buf[512];
             if (req->content_len >= sizeof(buf)) {
+                // Drena o que vier (corpo pequeno por definicao da rota) para
+                // nao deixar bytes no meio da conexao keep-alive do httpd.
+                char sink[128];
+                size_t left = req->content_len;
+                while (left > 0) {
+                    int n = httpd_req_recv(req, sink, left < sizeof(sink) ? left : sizeof(sink));
+                    if (n <= 0) break;  // cliente sumiu / timeout do httpd
+                    left -= (size_t)n;
+                }
                 httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Payload too large");
                 return ESP_FAIL;
             }

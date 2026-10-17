@@ -236,19 +236,32 @@ void WifiConnection::disconnect() {
         return;
     }
 
+    // Conexao EM CURSO tambem e cancelavel: o caminho antigo so chamava
+    // esp_wifi_disconnect() quando ja associado — um "desligar WiFi" dado
+    // durante o connect deixava a maquina interna tentando associar e o
+    // aparelho conectava DEPOIS do disable (o toggle e o wifi_sleep_min do
+    // PowerPolicy nao pegavam quando a janela caia no meio de um connect).
+    const bool wasConnecting = (_state == WiFiConnectionState::Connecting);
+
     setState(WiFiConnectionState::Disconnecting);
 
     if (isConnected()) {
         WiFiConnectionEvent event = makeEvent(CommonErrorCodes::None);
 
         esp_wifi_disconnect();
-        
+
         _isConnected = false;
         ESP_LOGI(TAG, "Disconnected from WiFi network.");
-        
+
         onDisconnected.trigger(this, event);
+    } else if (wasConnecting) {
+        // Aborta a associacao em curso (sem AP: devolve erro inofensivo) e
+        // acorda o waiter bloqueante do connect() — sem o bit ele ficaria
+        // preso ate o timeout cheio achando que a tentativa seguia viva.
+        esp_wifi_disconnect();
+        xEventGroupSetBits(_wifiEventGroup, WIFI_FAIL_BIT);
     }
-    
+
     setState(WiFiConnectionState::Idle);
     _ssid.clear();
     _ipAddress = IPAddress();

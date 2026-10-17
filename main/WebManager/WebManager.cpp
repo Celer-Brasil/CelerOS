@@ -28,6 +28,7 @@
 #include "../Display/ScreenCapture.h"
 #include "../UI/Kui.h"
 #include "../Boards/Board.h"
+#include "../USBDevice/DebugBridge.h"
 #include "WebAuth.h"
 
 static const char* WM_TAG = "celer.web";
@@ -56,6 +57,14 @@ static bool s_nmEventsBound = false;
 // atomico: com o service ALWAYS, o drain roda nos dois pumps — no build
 // padrao a mesma task, com CELEROS_APP_TASK tasks distintas
 static std::atomic_bool s_rebootPending{false};
+// Start do servidor diferido para o tick: o handler do evento roda na task
+// sys_evt sob o mutex do Event (components/Utility — um so, global) e o
+// httpd_start aloca e cria task na hora; dentro do trigger isso segurava o
+// Event inteiro do firmware. O handler so seta a flag.
+static std::atomic_bool s_serverStartPending{false};
+// Porta 80 de outro dono (captive portal de configuracao): bloqueia o start
+// automatico enquanto o portal vive.
+static std::atomic_bool s_serverSuppressed{false};
 
 // ---------------------------------------------------------------------------
 // NetworkManager (componente Connection) glue
@@ -70,14 +79,13 @@ static bool cfgFlag(const char* key) { return CelerSettings::get(key) == "1"; }
 WifiConnection& WebManager::wifi() { return *nm().getWifiConnection(); }
 
 // Estado de rede: NTP na conexao e (re)subida do servidor quando habilitado.
-// Handlers so tocam estado/acoes leves — o Event do componente dispara sob mutex.
+// Handlers so setam flags — o Event do componente dispara sob o mutex global
+// e nada pesado (httpd_start) roda dentro dele; o tick efetiva.
 void WebManager::onNetworkStateChanged(NetworkState /*oldState*/, NetworkState newState) {
     if (newState == NetworkState::Connected) {
         ESP_LOGI(WM_TAG, "WiFi conectado, IP=%s", nm().getIpAddress().c_str());
-        TimeManager::syncNTP();
-        if (cfgFlag("web_on")) {
-            startWebServerIfNeeded();
-        }
+        TimeManager::syncNTP();  // leve por design (esp_netif_sntp, thread-safe)
+        s_serverStartPending = true;
     }
 }
 
@@ -155,8 +163,16 @@ bool WebManager::init() {
         return false;
     }
 
+    // GATE do servidor web ("web server OFF nessa fw", bancada 2026-10-09):
+    // o CONFIG_CELEROS_WEB_SERVER (Kconfig, default y) apenas COMPILA o
+    // servidor; em execucao ele SOBE somente com a flag NVS web_on=1
+    // (migrada de /local/web_on.txt; o app Web Server / System.webSetActive
+    // liga e desliga ao vivo). Default desligado e proposital: httpd + rotas
+    // custam RAM interna propria (stack de 10 KB + alocacoes do esp_http_
+    // server) que a CYD de 4 MB nao paga de graca — e um servidor de
+    // arquivos com senha nao deve acordar ligado de fabrica.
     if (!cfgFlag("web_on")) {
-        celer_log_println("Web Server disabled by user (web_on.txt not found).");
+        celer_log_println("Web Server desligado (flag web_on ausente; app Web Server liga).");
         return true;  // WiFi conectado, servidor nao sobe
     }
 
@@ -221,6 +237,16 @@ void WebManager::stopWebServer() {
     }
 }
 
+void WebManager::suppressServerStart(bool on) {
+    s_serverSuppressed = on;
+    if (!on && nm().isConnected() && cfgFlag("web_on")) {
+        // Portal acabou (conectou ou foi cancelado) com o WiFi ja de pe:
+        // re-arma o start — o tick efetiva na proxima passada. Sem isto o
+        // servidor so voltava na PROXIMA transicao Connected.
+        s_serverStartPending = true;
+    }
+}
+
 
 bool WebManager::isServerRunning() {
     return s_server != nullptr;
@@ -228,13 +254,29 @@ bool WebManager::isServerRunning() {
 
 void WebManager::tick() {
     // (Re)conexao e responsabilidade da background task do NetworkManager;
-    // aqui so o reboot diferido do upload web de firmware.
+    // aqui: start diferido do servidor, reboot diferido do upload web de
+    // firmware e modo de baixa latencia da sessao bridge.
     //
     // Service ALWAYS: com o app preso no foreground apos o evictRunningApp
     // esgotar os 2 s, o pump LOOP nao volta a rodar — o reboot prometido ao
     // navegador ficava pendente ate o app fechar. O PRESENT drena tambem; o
     // exchange garante que so um contexto reinicia (com CELEROS_APP_TASK os
     // pumps sao tasks distintas).
+
+    // Conectou (flag do handler do evento): sobe o servidor se habilitado e
+    // a porta 80 nao for de outro dono (captive portal).
+    if (s_serverStartPending.exchange(false)) {
+        if (!s_serverSuppressed && cfgFlag("web_on")) {
+            startWebServerIfNeeded();
+        }
+    }
+
+    // Shell/OTA por TCP engasga com o modem dormindo entre beacons (DTIM do
+    // AP): enquanto ha cliente bridge autenticado, radio acordado (custo de
+    // corrente so durante a sessao; ve NetworkManager::setLowLatency).
+#if CONFIG_CELEROS_DEBUG_BRIDGE
+    nm().setLowLatency(DebugBridge::sessionActive());
+#endif
 
     if (s_rebootPending.exchange(false)) {
         celer_log_println("Rebooting after web OTA...");
@@ -403,28 +445,118 @@ static bool getQueryParam(httpd_req_t* req, const char* key, std::string& out) {
     return true;
 }
 
-// Le o corpo inteiro (urlencoded, ate limit bytes)
-static std::string readBody(httpd_req_t* req, size_t limit = 8192) {
-    size_t remaining = req->content_len;
-    if (remaining > limit) return "";
-    std::string body(remaining, '\0');
-    size_t got = 0;
-    while (got < remaining) {
-        int r = httpd_req_recv(req, &body[got], remaining - got);
-        if (r <= 0) return "";
-        got += (size_t)r;
-    }
-    return body;
+// ---------------------------------------------------------------------------
+// Corpo urlencoded em buffer mallocado (nothrow)
+// ---------------------------------------------------------------------------
+
+// Corpo do POST em buffer mallocado: um std::string de ate 8 KB no heap
+// apertado da CYD aborta o device quando o new falha (-fno-exceptions:
+// operator new sem excecao = abort). Mesmo padrao do HttpClient::setBodySink
+// para caminhos sem PSRAM.
+struct BodyBuf {
+    char* data = nullptr;  // NUL-terminado (quando len>0)
+    size_t len = 0;
+    ~BodyBuf() { free(data); }
+};
+
+static int hexVal(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
 }
 
-static bool bodyParam(const std::string& body, const char* key, std::string& out) {
-    std::string needle = std::string(key) + "=";
-    int idx = kstr::indexOf(body, needle);
-    if (idx < 0) return false;
-    std::string val = body.substr(idx + needle.length());
-    int amp = kstr::indexOf(val, '&');
-    if (amp >= 0) val = val.substr(0, amp);
-    out = CaptivePortal::urlDecode(val);
+// Le o corpo inteiro (urlencoded, ate limit bytes).
+// Retorna 0 = ok; 1 = corpo acima do limite (drenado ate 64 KB — cliente
+// legitimo recebe resposta limpa sem envenenar a conexao keep-alive; acima
+// disso o httpd fecha a sessao sozinho ao parser o lixo seguinte);
+// 2 = heap recusou o buffer ou a leitura caiu no meio.
+static int readBody(httpd_req_t* req, BodyBuf& out, size_t limit = 8192) {
+    size_t remaining = req->content_len;
+    if (remaining > limit) {
+        char sink[512];
+        size_t drained = 0;
+        while (drained < 65536 && remaining > 0) {
+            size_t want = remaining < sizeof(sink) ? remaining : sizeof(sink);
+            int r = httpd_req_recv(req, sink, want);
+            if (r <= 0) break;  // cliente sumiu / timeout do httpd
+            drained += (size_t)r;
+            remaining -= (size_t)r;
+        }
+        return 1;
+    }
+    out.data = (char*)malloc(remaining + 1);
+    if (out.data == nullptr) return 2;
+    size_t got = 0;
+    while (got < remaining) {
+        int r = httpd_req_recv(req, out.data + got, remaining - got);
+        if (r <= 0) return 2;
+        got += (size_t)r;
+    }
+    out.data[got] = '\0';
+    out.len = got;
+    return 0;
+}
+
+// Parametro urlencoded do corpo para buffer de capacidade fixa: acha "key="
+// no inicio do corpo ou logo apos um '&', recorta ate o '&' seguinte e
+// decodifica %XX/'+' direto no destino (decodificado nunca e maior que o
+// cru — a escrita corre atras da leitura, entao out pode ser o PROPRIO
+// buffer do corpo: decodificacao in place, sem copia). false = ausente,
+// nao cabe no destino ou valor vazio.
+static bool bodyParam(const BodyBuf& body, const char* key, char* out, size_t cap) {
+    size_t keyLen = strlen(key);
+    if (body.data == nullptr || keyLen == 0 || cap == 0) return false;
+
+    size_t i = 0;
+    bool found = false;
+    while (i + keyLen + 1 <= body.len) {
+        if ((i == 0 || body.data[i - 1] == '&') &&
+            memcmp(body.data + i, key, keyLen) == 0 && body.data[i + keyLen] == '=') {
+            found = true;
+            break;
+        }
+        i++;
+    }
+    if (!found) return false;
+
+    size_t start = i + keyLen + 1;
+    size_t end = start;
+    while (end < body.len && body.data[end] != '&') end++;
+
+    size_t o = 0;
+    for (size_t p = start; p < end; p++) {
+        char c = body.data[p];
+        char dec;
+        int step = 1;
+        if (c == '%' && p + 2 < end) {
+            int hi = hexVal(body.data[p + 1]);
+            int lo = hexVal(body.data[p + 2]);
+            if (hi >= 0 && lo >= 0) {
+                dec = (char)((hi << 4) | lo);
+                step = 3;
+            } else {
+                dec = c;
+            }
+        } else if (c == '+') {
+            dec = ' ';
+        } else {
+            dec = c;
+        }
+        if (o + 1 >= cap) return false;  // nao cabe no destino
+        out[o++] = dec;
+        p += (size_t)(step - 1);
+    }
+    out[o] = '\0';
+    return o > 0;
+}
+
+// Variante para os campos pequenos (path/type/oldPath/newPath): teto de 300
+// no valor — path maior que isso e hostile e vira 400 no chamador.
+static bool bodyParam(const BodyBuf& body, const char* key, std::string& out) {
+    char buf[300];
+    if (!bodyParam(body, key, buf, sizeof(buf))) return false;
+    out = buf;
     return true;
 }
 
@@ -432,17 +564,34 @@ static void sendText(httpd_req_t* req, int code, const char* text) {
     httpd_resp_set_status(req, code == 200 ? "200 OK" :
                                 code == 400 ? "400 Bad Request" :
                                 code == 404 ? "404 Not Found" :
+                                code == 413 ? "413 Content Too Large" :
                                 code == 500 ? "500 Server Error" : "418 I'm a teapot");
     httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
     addCORS(req);
     httpd_resp_send(req, text, strlen(text));
 }
 
+// Segmento ".." no caminho: o VFS entrega o resto literal ao driver (FATFS
+// resolve ".."; LittleFS nao tem entrada "."/".." mas aceita o nome) —
+// nenhum uso legitimo no file manager e a defesa custa uma passada. Nome
+// COM ".." no meio ("a..b.txt") segue valido.
+static bool hasDotDot(const std::string& p) {
+    size_t pos = 0;
+    while ((pos = p.find("..", pos)) != std::string::npos) {
+        bool startOk = (pos == 0 || p[pos - 1] == '/');
+        bool endOk = (pos + 2 >= p.size() || p[pos + 2] == '/');
+        if (startOk && endOk) return true;
+        pos += 2;
+    }
+    return false;
+}
+
 // Prologo comum das rotas de arquivo: normaliza e valida o segmento do
-// caminho; fora das montagens permitidas ja responde 400 e devolve false.
+// caminho; fora das montagens permitidas (ou com segmento "..") responde
+// 400 e devolve false.
 static bool safePath(httpd_req_t* req, std::string& path) {
     path = normalizePath(path);
-    if (pathAllowed(path)) return true;
+    if (pathAllowed(path) && !hasDotDot(path)) return true;
     sendText(req, 400, "Invalid storage");
     return false;
 }
@@ -458,12 +607,19 @@ static bool queryPath(httpd_req_t* req, const char* key, std::string& path) {
 }
 
 // Prologo das rotas POST de arquivo (corpo urlencoded): le o body, extrai
-// "path" e o campo extra informado (400 "Missing parameters" se algo faltar)
-// e valida a montagem com safePath.
+// "path" e o campo extra informado (400 "Missing parameters" se algo faltar
+// ou nao couber; 413 corpo acima do limite; 500 heap recusou o buffer) e
+// valida a montagem com safePath. O BodyBuf vive so no escopo: liberado ao
+// voltar (o conteudo que o handler usa ja foi copiado/gravado).
 static bool bodyPath(httpd_req_t* req, const char* extraKey, std::string& path, std::string& extra) {
-    std::string body = readBody(req);
-    if (body.empty() || !bodyParam(body, "path", path) || !bodyParam(body, extraKey, extra)) {
-        sendText(req, 400, "Missing parameters");
+    BodyBuf body;
+    int rc = readBody(req, body);
+    if (rc == 1) {
+        sendText(req, 413, "Body too large");
+        return false;
+    }
+    if (rc != 0 || !bodyParam(body, "path", path) || !bodyParam(body, extraKey, extra)) {
+        sendText(req, rc != 0 ? 500 : 400, rc != 0 ? "sem memoria" : "Missing parameters");
         return false;
     }
     return safePath(req, path);
@@ -487,6 +643,11 @@ static void sendFile(httpd_req_t* req, const std::string& path, const char* type
         std::string basename = path;
         int slash = kstr::lastIndexOf(basename, '/');
         if (slash >= 0) basename = basename.substr(slash + 1);
+        // Aspas/CR/LF no nome do arquivo (criado pelo proprio upload) eram
+        // injecao de cabecalho na resposta; qualquer controle vira '_'.
+        for (char& c : basename) {
+            if (c == '"' || (unsigned char)c < 0x20) c = '_';
+        }
         std::string cd = "attachment; filename=\"" + basename + "\"";
         httpd_resp_set_hdr(req, "Content-Disposition", cd.c_str());
     }
@@ -564,11 +725,28 @@ static esp_err_t handler_edit_get(httpd_req_t* req) {
 }
 
 static esp_err_t handler_edit_post(httpd_req_t* req) {
-    std::string path, content;
-    if (!bodyPath(req, "content", path, content)) {
+    BodyBuf body;
+    int rc = readBody(req, body);
+    if (rc != 0) {
+        // 1 = corpo acima do limite (drenado); 2 = heap/leitura falhou
+        sendText(req, rc == 1 ? 413 : 500, rc == 1 ? "Body too large" : "sem memoria");
         return ESP_OK;
     }
-    bool ok = FileSystem::writeTextFile(path.c_str(), content.c_str());
+    // "path" vai para std::string ANTES do decode in place do "content":
+    // o decode reescreve o proprio buffer do corpo.
+    std::string path;
+    if (!bodyParam(body, "path", path) || !safePath(req, path)) {
+        sendText(req, 400, "Missing parameters");
+        return ESP_OK;
+    }
+    // Conteudo decodificado DENTRO do buffer do corpo (nunca cresce) e
+    // gravado como const char*: nenhum std::string grande no caminho —
+    // o post de 8 KB do editor nao aposta o device num malloc falho.
+    if (!bodyParam(body, "content", body.data, body.len + 1)) {
+        sendText(req, 400, "Missing parameters");
+        return ESP_OK;
+    }
+    bool ok = FileSystem::writeTextFile(path.c_str(), body.data);
     replyOk(req, ok, "Failed to write file");
     return ESP_OK;
 }
@@ -621,9 +799,14 @@ static esp_err_t handler_create(httpd_req_t* req) {
 static esp_err_t handler_rename(httpd_req_t* req) {
     // Prologo manual (nao encaixa no bodyPath): extrai e valida DOIS
     // caminhos — old e new
-    std::string body = readBody(req);
+    BodyBuf body;
+    int rc = readBody(req, body);
+    if (rc != 0) {
+        sendText(req, rc == 1 ? 413 : 500, rc == 1 ? "Body too large" : "sem memoria");
+        return ESP_OK;
+    }
     std::string oldPath, newPath;
-    if (body.empty() || !bodyParam(body, "oldPath", oldPath) || !bodyParam(body, "newPath", newPath)) {
+    if (!bodyParam(body, "oldPath", oldPath) || !bodyParam(body, "newPath", newPath)) {
         sendText(req, 400, "Missing parameters");
         return ESP_OK;
     }
@@ -648,7 +831,13 @@ static esp_err_t handler_rename(httpd_req_t* req) {
 
 struct MultipartCtx {
     std::string boundary;      // ja com "--" prefixo
+    std::string dataMarker;    // "\r\n" + boundary, montado UMA vez: construir
+                               // por chunk (2 KB) alocava a cada pacote do upload
     std::string tail;
+    bool firmwareRoute = false;  // POST /update: qualquer parte com arquivo e
+                                 // firmware (a pagina manda campo "update" com
+                                 // filename relativo — "CelerOS.bin")
+    bool opened = false;         // alguma parte de arquivo/firmware apareceu?
     enum State { PREAMBLE, HEADERS, DATA, DONE } state = PREAMBLE;
 
     // destino
@@ -669,8 +858,9 @@ struct MultipartCtx {
         }
     }
 
-    void openDest(const std::string& fieldName, std::string fname) {
-        if (fieldName == "firmware") {
+    void openDest(std::string fname) {
+        opened = true;  // parte de arquivo reconhecida (mesmo que falhe depois)
+        if (firmwareRoute) {
             isFirmware = true;
             if (!OtaGuard::acquire()) {  // celerctl push em curso: nao pisa
                 fail("another OTA write in progress (celerctl?)");
@@ -791,25 +981,24 @@ static void multipartFeed(MultipartCtx& ctx, const char* data, size_t len) {
             std::string headers = ctx.tail.substr(0, sep);
             ctx.tail.erase(0, sep + 4);
 
-            // Content-Disposition: form-data; name="x"; filename="y"
-            std::string fieldName, fileName;
+            // Content-Disposition: form-data; name="x"; filename="y".
+            // O "name" do campo nao decide mais nada (a rota decide: /update
+            // trata qualquer parte com arquivo como firmware; /api/upload
+            // exige filename absoluto) — so o filename e lido.
+            std::string fileName;
             int cd = kstr::indexOf(headers, "Content-Disposition:");
             if (cd < 0) cd = kstr::indexOf(headers, "content-disposition:");
             if (cd < 0) { ctx.fail("no content-disposition"); return; }
 
-            int nq = kstr::indexOf(headers, "name=\"", cd);
-            if (nq >= 0) {
-                int endq = kstr::indexOf(headers, '"', nq + 6);
-                if (endq > 0) fieldName = headers.substr(nq + 6, endq - nq - 6);
-            }
             int fq = kstr::indexOf(headers, "filename=\"", cd);
             if (fq >= 0) {
                 int endf = kstr::indexOf(headers, '"', fq + 10);
                 if (endf > 0) fileName = headers.substr(fq + 10, endf - fq - 10);
             }
 
-            if (fieldName == "firmware" || (!fileName.empty() && fileName[0] == '/')) {
-                ctx.openDest(fieldName, fileName);
+            if ((ctx.firmwareRoute && !fileName.empty()) ||
+                (!ctx.firmwareRoute && !fileName.empty() && fileName[0] == '/')) {
+                ctx.openDest(fileName);
                 ctx.state = MultipartCtx::DATA;
             } else {
                 // campo sem arquivo (ex: submit) — descarta ate o proximo boundary
@@ -818,7 +1007,7 @@ static void multipartFeed(MultipartCtx& ctx, const char* data, size_t len) {
             }
 
         } else if (ctx.state == MultipartCtx::DATA) {
-            std::string marker = "\r\n" + ctx.boundary;
+            const std::string& marker = ctx.dataMarker;
             int pos = kstr::indexOf(ctx.tail, marker);
             if (pos < 0) {
                 // mantem apenas um tail suficiente p/ conter o marker parcial
@@ -849,8 +1038,10 @@ static void multipartFeed(MultipartCtx& ctx, const char* data, size_t len) {
     }
 }
 
-// Consome o corpo inteiro de um POST multipart
-static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg) {
+// Consome o corpo inteiro de um POST multipart. firmwareRoute: POST /update
+// (qualquer parte com arquivo vai para o slot OTA); false: /api/upload
+// (filename absoluto e caminho no fs).
+static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg, bool firmwareRoute) {
     char ct[160];
     if (httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct)) != ESP_OK) {
         sendText(req, 400, "Missing Content-Type");
@@ -865,9 +1056,22 @@ static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg) {
     int bend = kstr::indexOf(bval, ';');
     if (bend > 0) bval = bval.substr(0, bend);
     bval = kstr::trim(bval);
+    // RFC 2046 permite boundary entre aspas (curl/custom fazem; browsers nao):
+    // sem tirar as aspas o parser nunca casa e o corpo inteiro era descartado.
+    if (bval.size() >= 2 && bval.front() == '"' && bval.back() == '"') {
+        bval = bval.substr(1, bval.size() - 2);
+    }
+    // 70 = teto do RFC 2046; boundary vazio/absurdo viraria "--" e casaria
+    // com qualquer coisa (ou varreria o buffer sem achar nada)
+    if (bval.empty() || bval.size() > 70) {
+        sendText(req, 400, "Bad boundary");
+        return ESP_OK;
+    }
 
     MultipartCtx ctx;
+    ctx.firmwareRoute = firmwareRoute;
     ctx.boundary = "--" + bval;
+    ctx.dataMarker = "\r\n" + ctx.boundary;
 
     size_t remaining = req->content_len;
     char buf[2048];
@@ -884,6 +1088,10 @@ static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg) {
 
     if (ctx.errored) {
         sendText(req, 500, ctx.error.c_str());
+    } else if (!ctx.opened) {
+        // Corpo sem NENHUMA parte de arquivo: resposta 200 aqui era sucesso
+        // falso (o /update "flasava" sem escrever um byte).
+        sendText(req, 400, "No file in body");
     } else {
         sendText(req, 200, okMsg);
     }
@@ -891,7 +1099,7 @@ static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg) {
 }
 
 static esp_err_t handler_upload(httpd_req_t* req) {
-    return handleMultipart(req, "Upload Complete");
+    return handleMultipart(req, "Upload Complete", false);
 }
 
 // ---------------------------------------------------------------------------
@@ -957,7 +1165,7 @@ static esp_err_t handler_update_get(httpd_req_t* req) {
 }
 
 static esp_err_t handler_update_post(httpd_req_t* req) {
-    return handleMultipart(req, "OK - rebooting");
+    return handleMultipart(req, "OK - rebooting", true);
 }
 
 // ---------------------------------------------------------------------------

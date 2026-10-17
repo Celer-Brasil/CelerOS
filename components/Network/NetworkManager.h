@@ -239,6 +239,19 @@ public:
     bool channelHeld() const { return _channelHolds > 0; }
 
     /**
+     * @brief Modo de baixa latencia (RAM-only; CelerOS). Com true, o modem
+     * do radio NAO dorme entre beacons (WIFI_PS_NONE): o TCP interativo
+     * (shell/OTA do Debug Bridge) para de engasgar no intervalo do DTIM do
+     * AP. Custo: corrente de RX maior enquanto durar — por isso o pedido e
+     * do consumidor interativo (WebManager::tick enquanto ha sessao bridge)
+     * e o PowerPolicy ja desliga o WiFi inteiro apos o wifi_sleep_min com a
+     * tela apagada. Estado e reafirmado a cada conexao (esp_wifi_stop/start
+     * do disable/enable volta ao default do IDF).
+     */
+    void setLowLatency(bool on);
+    bool isLowLatency() const { return _lowLatency; }
+
+    /**
      * @brief Check if auto-reconnect is enabled.
      * @return True if enabled.
      */
@@ -408,6 +421,12 @@ private:
     void absorbScanResults(const wifi_ap_record_t* ap_list, int count);
     void absorbScanResults(const std::vector<ScannedNetwork>& networks);
 
+    /**
+     * @brief Aplica o modo de economia do modem conforme _lowLatency (dono
+     *        do radio: unico lugar que chama esp_wifi_set_ps).
+     */
+    void applyPowerSave();
+
     WifiConnection* _wifiConnection;        /**< WiFi connection handler (heap allocated) */
     NetworkConfig _config;                   /**< Configuration */
     NetworkState _state;                     /**< Current state */
@@ -421,6 +440,7 @@ private:
     SemaphoreHandle_t _mutex;                /**< Thread safety mutex */
     volatile bool _backgroundTaskRunning;    /**< Background task flag */
     volatile int _channelHolds = 0;  // holdChannel(): scans de fundo suspensos
+    volatile bool _lowLatency = false;       // setLowLatency(): WIFI_PS_NONE pedido
     volatile bool _initialized;              /**< Initialization flag */
     uint32_t _lastScanTime;                  /**< Timestamp of last scan */
     uint32_t _connectionStartTime;           /**< When current connection started */

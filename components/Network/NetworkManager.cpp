@@ -244,6 +244,8 @@ ErrorCode NetworkManager::connectToKnown() {
     }
 
     // Connect to selected network
+    _lastScanTime = nowSeconds();  // o scan inline conta p/ roaming (sem isto
+                                   // o 1o ciclo conectado re-escaneava na hora)
     return connect(bestNetwork->ssid, bestNetwork->password, false);
 }
 
@@ -511,6 +513,31 @@ void NetworkManager::holdChannel(bool on) {
     }
 }
 
+// Dono do radio: esp_wifi_set_ps mora aqui. Default do IDF = WIFI_PS_MIN_MODEM
+// (acorda por DTIM): o TCP interativo engasga no intervalo do beacon do AP
+// (100-500 ms tipico, pior com APs que acumulam buffer) — bancada 2026-10-09,
+// shell do celerctl por WiFi. WIFI_PS_NONE mantem o radio acordado: latencia
+// de rede a nivel de cabo. Trade-off medido em bancada (nota do JsAi,
+// 2026-10-05): com BT ligado a coexistencia acorda o radio de todo jeito
+// ("Coexist!!! only keep waked"), entao o NONE nao piora o cenario BLE; sem
+// BT custa mais corrente de RX — o pedido fica com quem precisa de latencia
+// (sessao bridge ativa, via WebManager::tick) e o PowerPolicy desliga o
+// WiFi inteiro apos wifi_sleep_min com a tela apagada, limitando a janela.
+void NetworkManager::applyPowerSave() {
+    if (_wifiConnection == nullptr) {
+        return;  // radio nem iniciado: esp_wifi_set_ps falharia sem pista
+    }
+    esp_wifi_set_ps(_lowLatency ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+}
+
+void NetworkManager::setLowLatency(bool on) {
+    if (_lowLatency == on) {
+        return;  // chamado a cada tick do pump: idempotente e barato
+    }
+    _lowLatency = on;
+    applyPowerSave();
+}
+
 void NetworkManager::backgroundTaskFunc(void* param) {
     NetworkManager* self = static_cast<NetworkManager*>(param);
     
@@ -594,7 +621,18 @@ void NetworkManager::backgroundTaskFunc(void* param) {
             uint32_t backoffDelay = 5 * (1 << failuresForCalc);  // 5, 10, 20, 40, 80...
             delaySeconds = (backoffDelay > MAX_BACKOFF_SECONDS) ? MAX_BACKOFF_SECONDS : backoffDelay;
         }
-        
+
+        // AP fora do alcance: o ciclo acabou de varrer TODOS os canais e nao
+        // achou nenhuma rede conhecida — repetir o scan de ~2-4 s a cada 5 s
+        // nao traz o AP mais rapido, so queima bateria e interrompe o light
+        // sleep (tempestade de retry da bancada). Piso de 15 s NESTE caso
+        // (ultima rede vazia = o ciclo foi de scan completo); quem caiu do AP
+        // e tenta o _lastSsid segue no backoff normal. Custo: ate 15 s a mais
+        // para achar um AP que acabou de ligar.
+        if (!self->isConnected() && self->_lastSsid.empty()) {
+            if (delaySeconds < 15) delaySeconds = 15;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
     }
 
@@ -755,6 +793,10 @@ void NetworkManager::onWifiStateChanged(WifiConnection* conn, WiFiConnectionStat
 void NetworkManager::onWifiConnected(WifiConnection* conn, const WiFiConnectionEvent& event) {
     ESP_LOGI(TAG, "WiFi connected: %s (IP: %s, RSSI: %d)",
              event.ssid.c_str(), event.ip.toString().c_str(), event.rssi);
+
+    // esp_wifi_stop/start (disable/enable do PowerPolicy) devolve o PS ao
+    // default do IDF: reafirma o modo pedido a cada conexao.
+    applyPowerSave();
 
     _activeNetwork = _wifiConnection->getNetworkInfo();
     _connectionStartTime = nowSeconds();

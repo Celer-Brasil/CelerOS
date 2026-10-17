@@ -44,6 +44,13 @@ public:
     // abrir o captive portal, que precisa da porta 80
     static void stopWebServer();
 
+    // Suspende o start automatico do servidor enquanto a porta 80 e de outro
+    // dono (captive portal): sem isto, a transicao Connected do connect do
+    // portal reabria o servidor em cima do portal (bind falha e o servidor
+    // ficava fora ate a proxima reconexao). No off, re-arma o start se o
+    // WiFi ja estiver conectado e web_on ativo (o tick efetiva).
+    static void suppressServerStart(bool on);
+
     // Deve ser chamado no loop principal: consumir o reboot diferido do
     // upload web de firmware
     static void tick();

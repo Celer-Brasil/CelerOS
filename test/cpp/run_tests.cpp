@@ -259,8 +259,12 @@ static void testHostFrame() {
     CHECK(p2.takeReject() == FrameParser::REJ_CRC);
     frame[n - 1] ^= 0xFF;
 
-    // payload grande (limite do parser)
-    for (size_t i = 0; i < sizeof(pbuf); i++) payload[i] = (uint8_t)(i * 7);
+    // payload grande (limite do parser). A cauda vai a ZERO de proposito: o
+    // TOO_BIG rejeita no comprimento e o parser re-escaneia os bytes do
+    // payload como stream — lixo nao inicializado (ou 0x43 do padrao i*7)
+    // podia re-sincronizar um frame falso e entregar count>1 de vez em
+    // quando (flake 2/150 com ASLR; zero nunca tem MAGIC).
+    for (size_t i = 0; i < sizeof(payload); i++) payload[i] = i < sizeof(pbuf) ? (uint8_t)(i * 7) : 0;
     n = build(frame, sizeof(frame), true, 0x07, payload, sizeof(pbuf));
     CHECK(n == 8 + sizeof(pbuf));
     p2.setV2(true);

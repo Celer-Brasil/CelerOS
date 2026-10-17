@@ -21,8 +21,12 @@ constexpr uint32_t kShowMs = 8000;    // sem toque: volta a dormir
 constexpr int kTitleLines = 2;
 constexpr int kBodyLines = 6;
 
+// Par pedido/idade escrito pela task do BLE e consumido pela UI: sob
+// portMUX (mesmo padrao do WatchPanels::request) — sem ele a UI podia ler
+// o s_req novo com o s_reqAt velho e matar o alerta como "pedido velho".
+portMUX_TYPE s_reqMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_req = false;
-volatile uint32_t s_reqAt = 0;  // escrito/lido de tasks diferentes (BLE -> UI)
+volatile uint32_t s_reqAt = 0;
 
 class AlertScreen : public kui::Screen {
 public:
@@ -171,16 +175,24 @@ AlertScreen s_alert;
 namespace NotificationAlert {
 
 void request() {
+    portENTER_CRITICAL(&s_reqMux);
     s_reqAt = millis();
     s_req = true;
+    portEXIT_CRITICAL(&s_reqMux);
 }
 
 void service(bool inApp) {
-    if (!s_req) return;
-    if (millis() - s_reqAt > kStaleMs) {
+    if (!s_req) return;  // fast path; o par (pedido, idade) e lido no mux
+    // Pedido velho morre sozinho: lidos e consumidos atomicamente, para nao
+    // ler o s_req novo com o s_reqAt antigo.
+    bool stale = false;
+    portENTER_CRITICAL(&s_reqMux);
+    if (s_req && millis() - s_reqAt > kStaleMs) {
         s_req = false;
-        return;
+        stale = true;
     }
+    portEXIT_CRITICAL(&s_reqMux);
+    if (stale) return;
     if (inApp) {
         // tela acesa e usuario dentro de um app: nao interrompe e nao fica
         // pendente (sai do app = sem alerta surpresa depois) — mas tambem
@@ -204,7 +216,9 @@ void service(bool inApp) {
     // ate kStaleMs, o alerta sobe; alem disso, morre pelo caminho normal de
     // pedido velho — a notificacao segue na central.
     if (Alarms::ringing() && AlarmScreen::onTop()) return;
-    s_req = false;
+    portENTER_CRITICAL(&s_reqMux);
+    s_req = false;  // consumido: sobe o alerta ou renova o que ja esta nele
+    portEXIT_CRITICAL(&s_reqMux);
     if (kui::Navigator::top() == &s_alert) {
         s_alert.refresh();
         return;

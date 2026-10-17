@@ -113,7 +113,10 @@ const char* KeyboardScreen::modeLabel() const {
 // Hit-test com snap: a tecla mais proxima vence se o toque cair a ate ~1
 // unidade/4 fora dela (perdoa gap de 2px e beirada do bloco — zona morta
 // nao existe); alem disso (ex.: eco do Terminal acima do teclado) = nada.
+// ACIMA do bloco (field/cabecalho) o snap nunca alcanca: o tap no campo de
+// senha nao pode digitar a tecla da linha de cima.
 int KeyboardScreen::keyAt(int x, int y) const {
+    if (y < m_keysTop) return -1;
     const int snap = m_keyW / 4 + UI::sx(3);
     int best = -1;
     int bestD = snap + 1;

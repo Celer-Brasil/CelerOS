@@ -12,11 +12,18 @@ namespace ScreenCapture {
 
 namespace {
 TaskHandle_t s_uiTask = nullptr;
-SemaphoreHandle_t s_reqLock = nullptr;  // um pedinte por vez
+SemaphoreHandle_t s_reqLock = nullptr;  // um pedinte por vez (sessao inteira)
 SemaphoreHandle_t s_done = nullptr;     // UI -> pedinte: bloco lido
 
-// pedido corrente (escrito pelo pedinte sob s_reqLock, lido pela UI)
-volatile bool s_pending = false;
+// Ciclo de vida do pedido (estado escrito/lido sob s_reqMux — SMP: os
+// nucleos compartilham a DRAM, mas o volatile sozinho nao ordena; e o mux
+// que da o happens-before dos PARAMETROS lidos pela UI):
+//   kIdle    -> nenhum pedido
+//   kQueued  -> pedido postado, a UI ainda nao pegou
+//   kClaimed -> a UI esta lendo (readDirect) escrevendo no s_dst do pedinte
+enum : uint8_t { kIdle = 0, kQueued = 1, kClaimed = 2 };
+portMUX_TYPE s_reqMux = portMUX_INITIALIZER_UNLOCKED;
+volatile uint8_t s_reqState = kIdle;
 uint16_t s_y = 0, s_n = 0;
 uint16_t* s_dst = nullptr;
 int s_got = 0;
@@ -41,26 +48,54 @@ int readRows(uint16_t y, uint16_t n, uint16_t* dst, uint32_t timeoutMs) {
     if (s_uiTask == nullptr || xTaskGetCurrentTaskHandle() == s_uiTask) return readDirect(y, n, dst);
     if (xSemaphoreTake(s_reqLock, pdMS_TO_TICKS(timeoutMs)) != pdTRUE) return 0;
     xSemaphoreTake(s_done, 0);  // descarta sinal velho (pedido anterior que expirou)
+    portENTER_CRITICAL(&s_reqMux);
     s_y = y;
     s_n = n;
     s_dst = dst;
     s_got = 0;
-    s_pending = true;
+    s_reqState = kQueued;
+    portEXIT_CRITICAL(&s_reqMux);
     int got = 0;
     if (xSemaphoreTake(s_done, pdMS_TO_TICKS(timeoutMs)) == pdTRUE) {
         got = s_got;
     } else {
-        s_pending = false;  // UI nao atendeu (app travado?): desiste
+        // A UI nao atendeu a tempo (app preso?). Cancela: em kQueued a UI nem
+        // chega a pegar o pedido; em kClaimed ela esta COM o nosso buffer em
+        // maos — espera o fim do readDirect dela, porque o buffer so pode ser
+        // devolvido/liberado pelo chamador quando ninguem mais escreve nele
+        // (antes o write-after-free acontecia: a UI atendia um pedido que o
+        // pedinte ja havia abandonado).
+        bool claimed = false;
+        portENTER_CRITICAL(&s_reqMux);
+        if (s_reqState == kQueued) {
+            s_reqState = kIdle;
+        } else if (s_reqState == kClaimed) {
+            claimed = true;
+        }
+        portEXIT_CRITICAL(&s_reqMux);
+        if (claimed) xSemaphoreTake(s_done, pdMS_TO_TICKS(2000));
     }
     xSemaphoreGive(s_reqLock);
     return got;
 }
 
 void service() {
-    if (!s_pending) return;
+    if (s_reqState != kQueued) return;  // fast path sem lock (confirmado abaixo)
     if (xTaskGetCurrentTaskHandle() != s_uiTask) return;
-    s_got = readDirect(s_y, s_n, s_dst);
-    s_pending = false;
+    portENTER_CRITICAL(&s_reqMux);
+    if (s_reqState != kQueued) {  // pedinte cancelou entre o fast path e aqui
+        portEXIT_CRITICAL(&s_reqMux);
+        return;
+    }
+    s_reqState = kClaimed;
+    portEXIT_CRITICAL(&s_reqMux);
+    // Leitura lenta FORA do spinlock; os parametros sao os postados sob o
+    // mesmo mux do claim (happens-before).
+    const int got = readDirect(s_y, s_n, s_dst);
+    portENTER_CRITICAL(&s_reqMux);
+    s_got = got;
+    s_reqState = kIdle;
+    portEXIT_CRITICAL(&s_reqMux);
     xSemaphoreGive(s_done);
 }
 

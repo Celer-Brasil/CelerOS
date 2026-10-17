@@ -34,6 +34,7 @@ private:
     uint32_t m_beepAccum = 0;
     bool m_done = false;
     bool m_canSnooze = true;
+    bool m_wasAsleep = false;  // vidro dormia quando o alarme empilhou
     std::string m_label;
     std::string m_kind;
 };

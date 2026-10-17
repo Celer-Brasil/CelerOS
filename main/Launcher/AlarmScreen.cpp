@@ -39,6 +39,7 @@ void AlarmScreen::onEnter() {
     m_startMs = millis();
     m_beepAccum = kBeepEveryMs;  // bipa ja no primeiro tick
     m_done = false;
+    m_wasAsleep = ScreenPower::state() <= 2;  // o alarme e quem acordou o vidro
     Backlight::noteActivity();
 }
 
@@ -101,6 +102,12 @@ void AlarmScreen::onTick(uint32_t dtMs) {
     ScreenPower::keepAwakeFor(3000);  // sem dim/AOD enquanto toca
     if (millis() - m_startMs >= kAutoSnoozeMs) {
         finish(m_canSnooze);
+        // Ninguem respondeu em 2 min (device no pulso, dono dormindo): o
+        // alarme FOI quem acordou o vidro, entao ele devolve o sono — sem
+        // isso a tela ficava acesa ate o timeout de tela (mesmo contrato do
+        // m_wasAsleep do alerta de notificacao). Toque em Parar/Soneca sai
+        // pelo onTouch e a tela segue acesa (usuario presente).
+        if (m_wasAsleep) ScreenPower::sleepNow();
         return;
     }
     m_beepAccum += dtMs;

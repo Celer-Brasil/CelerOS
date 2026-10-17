@@ -21,7 +21,9 @@ void init();
 
 // Qualquer task: le `n` linhas a partir de `y` em `dst` (RGB565, n*w px).
 // Na task da UI le direto; nas outras espera a UI atender (ate timeoutMs).
-// Devolve as linhas lidas (0 = timeout).
+// Devolve as linhas lidas (0 = timeout). Ao retornar, a UI nao escreve mais
+// em `dst` (o pedido e cancelado ou concluido) — o chamador pode liberar o
+// buffer logo em seguida.
 int readRows(uint16_t y, uint16_t n, uint16_t* dst, uint32_t timeoutMs = 2000);
 
 // Task da UI, em ponto seguro: atende o pedido pendente (barato sem pedido).

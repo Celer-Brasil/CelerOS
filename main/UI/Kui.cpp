@@ -745,9 +745,9 @@ void Slider::draw(Canvas& c) {
 }
 
 bool Slider::onTouch(const TouchEvent& ev, Rect myRect) {
-    bool inside = myRect.contains(ev.startX, ev.startY);
-    if (!inside && ev.type != TouchEvent::Drag) return false;
-    if (!inside) return false;
+    // Arrasto vivo so se o gesto COMECOU no slider (Drag de outro canto nao
+    // mexe o valor); o release confirma.
+    if (!myRect.contains(ev.startX, ev.startY)) return false;
     if (ev.type == TouchEvent::Press || ev.type == TouchEvent::Drag) {
         int v = (int)((long)(ev.x - myRect.x) * 100 / myRect.w);
         if (v < 0) v = 0;
@@ -864,10 +864,14 @@ bool TouchInjector::take(Sample& out) {
 // ============================================================ TouchPump =====
 
 namespace {
-uint32_t s_quarantineUntilMs = 0;
+uint32_t s_quarantineStartMs = 0;  // inicio da janela (0 = sem quarentena)
+uint32_t s_quarantineDurMs = 0;
 }  // namespace
 
-void TouchPump::quarantine(uint32_t ms) { s_quarantineUntilMs = millis() + ms; }
+void TouchPump::quarantine(uint32_t ms) {
+    s_quarantineStartMs = millis();
+    s_quarantineDurMs = ms;
+}
 
 void TouchPump::reset() {
     m_down = false;
@@ -906,13 +910,15 @@ void TouchPump::poll(const Handler& onEvent) {
 
     // Quarentena: descarta tudo ate a janela vencer com o vidro limpo. Zerar
     // m_down evita um release fantasma do toque que motivou a quarentena.
-    if (s_quarantineUntilMs != 0) {
-        if (millis() < s_quarantineUntilMs || down) {
+    // (Comparacao RELATIVA: somar ao millis() estourava no wrap de 49 dias
+    // e a janela virava zero.)
+    if (s_quarantineDurMs != 0) {
+        if (millis() - s_quarantineStartMs < s_quarantineDurMs || down) {
             m_down = false;
             s_touch = {};
             return;
         }
-        s_quarantineUntilMs = 0;
+        s_quarantineDurMs = 0;
         // o frame desenhado durante a quarentena pode ter o realce do toque
         // que fechou o app (ex.: WiFi sob o X): redesenha ja com o vidro limpo
         Navigator::repaint();

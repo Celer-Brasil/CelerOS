@@ -31,9 +31,13 @@ static const BoardProfile s_profile = {
     .relay = {},
     .servo = {},
     .mic = {},
-    .strips = {},               // sem reles
+    .strips = {},               // sem fitas WS2812
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
-    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3),  // GPIO1/3: UART0 = console/celerctl (CH340)
+    // 1/3: UART0 (console/celerctl do CH340); 6..11: SPI flash do modulo
+    // (o IDF ja reserva no boot, mas o perfil documenta e cobre um boot
+    // atipico — nunca sao GPIO de app).
+    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
+                      (1ULL << 9) | (1ULL << 10) | (1ULL << 11),
 };
 
 void init() {

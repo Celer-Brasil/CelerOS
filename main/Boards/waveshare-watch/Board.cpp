@@ -85,7 +85,11 @@ static const BoardProfile s_profile = {
     .ulpArm = WatchUlp::arm,   // sentinela ULP no deep sleep: PEK acorda,
     .ulpWake = WatchUlp::wake, // raise filtrado e VBAT (ulp/ulp_main.c)
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
-    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8); 43/44: UART0 do SerialLink
+    // I2C0 (14/15) e o barramento do touch FT3168, do PMU AXP2101, do RTC
+    // PCF85063 e do IMU QMI8658: um app reconfigurando-o derruba os quatro.
+    // 19/20 sao o USB OTG nativo (CDC do celerctl); 43/44 a UART0 de fallback.
+    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 14) | (1ULL << 15) | (1ULL << 19) | (1ULL << 20) |
+                      (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8)
 };
 
 void init() {

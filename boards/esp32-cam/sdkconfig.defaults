@@ -1,7 +1,9 @@
 # ESP32-CAM AI-Thinker (modulo ESP32-S: ESP32 classico 4MB + 4MB PSRAM quad,
-# OV2640, microSD, sem display). Base = perfil apertado do devkit/CYD (unicore
-# + IRAM-as-heap, slot OTA e o limite), em cima dele: PSRAM, NimBLE (CelerNet)
-# e a particao propria (apps no SD → littlefs enxuto, slots maiores).
+# OV2640, microSD, sem display). Base = perfil apertado do devkit/CYD (stacks
+# medidos, bundle CMN, checks silenciosos, slot OTA como limite), em cima
+# dele: PSRAM quad, NimBLE (CelerNet) e a particao propria (apps no SD →
+# littlefs enxuto, slots maiores). ATENCAO: a cam e DUAL-CORE (ver bloco
+# abaixo) — o IRAM-as-heap da CYD/devkit nao existe aqui.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
@@ -71,7 +73,12 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
 # throughput menor, heap maior (OTA, web server, malha).
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+# Com PSRAM + TRY_ALLOCATE_WIFI_LWIP o choice do IDF so oferece TX ESTATICO
+# (o dinamico depende de !(SPIRAM_TRY_ALLOCATE_WIFI_LWIP && !IGNORE_NOTFOUND)
+# e nao existe neste alvo). 16 buffers e o default do alvo, explicito para o
+# sdkconfig_check.
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER=y
+CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=16
 # CONFIG_ESP_WIFI_AMPDU_RX_ENABLED is not set
 # CONFIG_ESP_WIFI_AMPDU_TX_ENABLED is not set
 
@@ -85,18 +92,21 @@ CONFIG_ESP_TIMER_TASK_STACK_SIZE=2560
 # INT_WDT; interruptos bloqueados: coexist WiFi x NimBLE no nucleo unico).
 # A CYD aguenta unicore porque nao tem BT; a cam tem. Segundo nucleo tambem
 # ajuda a captura (ISR da camera longe do Duktape).
-CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y
-CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
-# (o root defaults pede EXTERNAL=y das placas PSRAM S3; aqui o choice do
-# mbedtls e o IRAM de 8 bits, como na CYD/devkit — explicito para o
-# sdkconfig_check nao acusar a resolucao do choice como divergencia)
-# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set
+# SEM IRAM-as-heap: ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY e
+# MBEDTLS_IRAM_8BIT_MEM_ALLOC dependem de ESP_SYSTEM_SINGLE_CORE_MODE
+# (Kconfig.memory do esp32) e as linhas antigas eram descartadas em silencio.
+# Em troca, os buffers TLS vao para a PSRAM (root defaults das placas com
+# PSRAM): ~40 KB internos livres para WiFi/BT e o DMA da camera.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
-# Buffers TLS FIXOS (16KB RX + 4KB TX): o modo IRAM so desvia alocacoes >= 4KB.
+# Buffers TLS FIXOS (16KB RX + 4KB TX), como nas outras placas: o modo
+# dinamico fragmenta o handshake em alocacoes menores.
 # CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set
 
-# IRAM livre = heap: codigo que so esta na IRAM por desempenho vai para a
-# flash (WiFi perde throughput de pico; a cam baixa JSON/OTA, nao video).
+# Codigo do WiFi fora da IRAM: com a cam em dual-core NAO existe IRAM-as-heap,
+# entao a IRAM liberada nao vira heap de dados — ela fica para as ISRs/
+# IRAM_ATTR do WiFi/BT e do driver da camera. A vazao de pico cai um pouco; a
+# cam baixa JSON/OTA, nao video.
 # CONFIG_ESP_WIFI_IRAM_OPT is not set
 # CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
 
@@ -125,3 +135,10 @@ CONFIG_ESP_IPC_TASK_STACK_SIZE=2048
 CONFIG_CAMERA_DMA_BUFFER_SIZE_MAX=16384
 # CONFIG_CAMERA_CORE0 is not set
 CONFIG_CAMERA_CORE1=y
+
+# API 42: servicos de apps em segundo plano (svchost) LIGADOS; app em task
+# propria (F3) DESLIGADO — o Kconfig torna as duas opcoes exclusivas. Com
+# PSRAM o heap do svchost segue vivo enquanto um app esta em foreground.
+# A imagem de fabrica nao leva app com servico (ver data-exclude.txt).
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set

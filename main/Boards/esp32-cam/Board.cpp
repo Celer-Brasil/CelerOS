@@ -58,13 +58,16 @@ static const BoardProfile s_profile = {
     .headless = true,   // sem vidro: splash pulado, getInfo().hasDisplay = false
     .buttonToApp = false,  // sem botao fisico util (GPIO0 e XCLK/strap de gravacao)
     // Camera (OV2640) + slot SD + PSRAM (16/17) + UART0 (1/3, console) + XCLK
-    // (0) + strap MTD (12): o que sobra p/ apps e o LED flash (GPIO4), o LED
-    // vermelho (GPIO33) e as leituras dos input-only 34-39.
+    // (0) + strap MTD (12) + SPI flash do modulo (6..11): o que sobra p/ apps
+    // e o LED flash (GPIO4), o LED vermelho (GPIO33) e as leituras dos
+    // input-only 34-39.
     .gpioDeniedMask = (1ULL << 0) | (1ULL << 1) | (1ULL << 2) | (1ULL << 3) |
-                      (1ULL << 5) | (1ULL << 12) | (1ULL << 13) | (1ULL << 14) |
-                      (1ULL << 15) | (1ULL << 16) | (1ULL << 17) | (1ULL << 18) |
-                      (1ULL << 19) | (1ULL << 21) | (1ULL << 22) | (1ULL << 23) |
-                      (1ULL << 25) | (1ULL << 26) | (1ULL << 27) | (1ULL << 32),
+                      (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
+                      (1ULL << 9) | (1ULL << 10) | (1ULL << 11) | (1ULL << 12) |
+                      (1ULL << 13) | (1ULL << 14) | (1ULL << 15) | (1ULL << 16) |
+                      (1ULL << 17) | (1ULL << 18) | (1ULL << 19) | (1ULL << 21) |
+                      (1ULL << 22) | (1ULL << 23) | (1ULL << 25) | (1ULL << 26) |
+                      (1ULL << 27) | (1ULL << 32),
 };
 
 void init() {

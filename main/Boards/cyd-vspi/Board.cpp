@@ -12,7 +12,11 @@ static const BoardProfile s_profile = {
     .id = "cyd-vspi",
     .otaChannel = "esp32",
     .name = "cyd-vspi (CYD pinout VSPI — nao testada)",
-    .sd = {.cs = 15, .sck = 14, .miso = 26, .mosi = 13, .freqKhz = 0},  // HSPI dedicado (0 = default do driver)
+    // Slot microSD da placa fisica: mesmo VSPI do TFT (SCK18/MOSI23/MISO19)
+    // com CS=5 — compartilhar o bus exige o caminho multi-device do mount
+    // (FileSystem.cpp), o mesmo da CYD classica, no host do display (SPI3).
+    // Fica INATIVO enquanto CONFIG_CELEROS_SD_CARD=n (variante nao testada).
+    .sd = {.cs = 5, .sck = 18, .miso = 19, .mosi = 23, .freqKhz = 10000, .spiHost = SPI3_HOST},
     .hasPsram = false,
     .backlightPwm = true,   // GPIO22 via Light_PWM (antes era fixo 100%)
     .capacitiveTouch = false,
@@ -24,9 +28,11 @@ static const BoardProfile s_profile = {
     .relay = {},
     .servo = {},
     .mic = {},
-    .strips = {},  // sem reles
+    .strips = {},  // sem fitas WS2812
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
-    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3),  // GPIO1/3: UART0 = console/celerctl (CH340)
+    // 1/3: UART0 (console/celerctl do CH340); 6..11: SPI flash do modulo.
+    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
+                      (1ULL << 9) | (1ULL << 10) | (1ULL << 11),
 };
 
 void init() {

@@ -41,7 +41,11 @@ static const BoardProfile s_profile = {
     .touchPad = 10,    // pad capacitivo: 1 toque = tap, segurar = hold
     .ulpArm = DogUlp::arm,  // watchdog de bateria por ULP no deep sleep
     .homeApp = "celeros.dogface",  // a cara do cao e a casa do robô
-    .gpioDeniedMask = 0x3E00000000ULL,  // GPIO33..37: DQ4..7/DQS da PSRAM octal (S3R8)
+    // 4/5/6: I2S1 RX do microfone (4 e o clock — reconfigura-lo como ADC
+    // desconecta a matriz GPIO e mata o mic, ver Board.h); 19/20: USJ do
+    // console/celerctl; 41/42: I2C0 do OLED SH1106.
+    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 4) | (1ULL << 5) | (1ULL << 6) |
+                      (1ULL << 19) | (1ULL << 20) | (1ULL << 41) | (1ULL << 42),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8)
 };
 
 void init() {

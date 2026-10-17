@@ -3,7 +3,7 @@
 
 // Traços de compilacao da CYD (240x320). Constantes constexpr: o codigo comum
 // escolhe por elas com ramos que o compilador descarta — as fontes da tela
-// grande nem entram no binario (slot OTA de 1.75MB).
+// grande nem entram no binario (slot OTA de 0x190000 = 1.638.400 B).
 namespace BoardTraits {
 constexpr bool largeUi = false;
 }

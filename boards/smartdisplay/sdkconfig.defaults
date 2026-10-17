@@ -69,3 +69,9 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 # interna (sobra ~70 KB no pior caso). NAO mexer na linha do cache de
 # DADOS: 64 B fez a UI inteira tremer (o Panel_RGB varre a PSRAM direto).
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# API 42: servicos de apps em segundo plano (svchost) LIGADOS; app em task
+# propria (F3) DESLIGADO — o Kconfig torna as duas opcoes exclusivas. Com
+# PSRAM o heap do svchost segue vivo enquanto um app esta em foreground.
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set

@@ -98,3 +98,9 @@ CONFIG_ULP_COPROC_RESERVE_MEM=4096
 
 # Ring de logs maior (tem PSRAM): historico do boot inteiro no logcat --dump
 CONFIG_CELEROS_LOG_RING=8192
+
+# API 42: servicos de apps em segundo plano (svchost) LIGADOS; app em task
+# propria (F3) DESLIGADO — o Kconfig torna as duas opcoes exclusivas. Com
+# PSRAM o heap do svchost segue vivo enquanto um app esta em foreground.
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set

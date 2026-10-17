@@ -1,6 +1,7 @@
 # Devkit barebone (ESP32 classico 4MB, sem PSRAM): mesmo perfil apertado da
 # CYD — unicore com IRAM-as-heap e stacks medidos — pois a RAM interna e o
-# slot OTA de 1.56MB sao os mesmos. Sem slot SD (o FAT/SDSPI sai do binario).
+# slot OTA de 1,56MB (0x190000 = 1.638.400 B) sao os mesmos. Sem slot SD (o
+# FAT/SDSPI sai do binario).
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
@@ -8,7 +9,7 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4MB.csv"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # Sem vidro, mas o logcat do celerctl segue completo (nao passa por ESP_LOG).
-# ESP_LOGI/D de componentes fora do binario: slot de 1.56MB e apertado.
+# ESP_LOGI/D de componentes fora do binario: slot de 1,56MB e apertado.
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 # CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
 CONFIG_LOG_DEFAULT_LEVEL_WARN=y
@@ -61,7 +62,7 @@ CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # CONFIG_ESP_WIFI_IRAM_OPT is not set
 # CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
 
-# Slot de 1,6MB: mensagens dos macros ESP_RETURN_ON_*/ESP_GOTO_ON_* do IDF
+# Slot de 1,56MB: mensagens dos macros ESP_RETURN_ON_*/ESP_GOTO_ON_* do IDF
 # (265 strings "%s(%d): ..." + o codigo das chamadas de log) saem; o erro
 # segue sendo devolvido, so sem o texto. Junto: SAE-PK (WPA3 com chave
 # publica, so hotspots raros; SAE comum segue), logs do coredump no boot
@@ -71,3 +72,10 @@ CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y
 # CONFIG_ESP_WIFI_ENABLE_SAE_PK is not set
 # CONFIG_ESP_COREDUMP_LOGS is not set
 # CONFIG_ESP_PHY_ENABLE_VERSION_PRINT is not set
+
+# API 42: servicos de apps em segundo plano (svchost) LIGADOS; app em task
+# propria (F3) DESLIGADO — o Kconfig torna as duas opcoes exclusivas. Sem
+# PSRAM o heap do svchost so nasce com >=44 KB livres (AppServices).
+# A imagem de fabrica nao leva app com servico (ver data-exclude.txt).
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set

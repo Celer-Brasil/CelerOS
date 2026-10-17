@@ -97,3 +97,9 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 # .bss marcado com EXT_RAM_BSS_ATTR (HostLink, ring de logs de 8 KB, buffers
 # da musica, slots da UI JS) vai para a PSRAM, como no watch: ~14 KB internos.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# API 42: servicos de apps em segundo plano (svchost) LIGADOS; app em task
+# propria (F3) DESLIGADO — o Kconfig torna as duas opcoes exclusivas. Com
+# PSRAM o heap do svchost segue vivo enquanto um app esta em foreground.
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set

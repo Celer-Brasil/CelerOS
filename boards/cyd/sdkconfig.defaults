@@ -5,9 +5,9 @@ CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4MB.csv"
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
-# Slot OTA de 1.75MB: logs ESP_LOGD/V ficam fora do binario (o VERBOSE do
-# sdkconfig.defaults comum foi para depurar o touch I2C da SmartDisplay e
-# custava dezenas de KB de strings aqui).
+# Slot OTA de 1,56MB (0x190000 = 1.638.400 B): logs ESP_LOGD/V ficam fora do
+# binario (o VERBOSE do sdkconfig.defaults comum foi para depurar o touch I2C
+# da SmartDisplay e custava dezenas de KB de strings aqui).
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 # CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
 # Logs ESP_LOGI (IDF + componentes) tambem ficam fora: o logcat do CelerOS
@@ -23,14 +23,14 @@ CONFIG_LOG_DEFAULT_LEVEL_ERROR=y
 
 # Bundle de CAs "comum" (~45 raizes que cobrem a grande maioria dos sites:
 # GitHub, Let's Encrypt, DigiCert...) em vez do completo: ~35 KB a menos no
-# slot de 1.75MB. A SmartDisplay (16MB) segue com o bundle completo.
+# slot de 1,56MB. A SmartDisplay (16MB) segue com o bundle completo.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y
 # CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL is not set
 
 # Slot microSD compartilhando o HSPI do TFT (CS=5): o mount anexa o cartao
 # como segundo dispositivo do bus do display (multi-device do driver IDF —
 # ver FileSystem.cpp/mountSD). FAT/SDSPI voltam ao binario (~30KB no slot
-# de 1.75MB): em troca, apps/configs ganham giagas de cartao em vez dos
+# de 1,56MB): em troca, apps/configs ganham giagas de cartao em vez dos
 # 768KB do /local.
 CONFIG_CELEROS_SD_CARD=y
 
@@ -79,7 +79,7 @@ CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # malloc/free ficam na IRAM: com o heap em flash o compile do Duktape
 # (milhares de alocacoes) ficou 2x mais lento (Settings 1,6s -> 3,1s)
 
-# Slot de 1,6MB: mensagens dos macros ESP_RETURN_ON_*/ESP_GOTO_ON_* do IDF
+# Slot de 1,56MB: mensagens dos macros ESP_RETURN_ON_*/ESP_GOTO_ON_* do IDF
 # (265 strings "%s(%d): ..." + o codigo das chamadas de log) saem; o erro
 # segue sendo devolvido, so sem o texto. Junto: SAE-PK (WPA3 com chave
 # publica, so hotspots raros; SAE comum segue), logs do coredump no boot
@@ -89,3 +89,10 @@ CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y
 # CONFIG_ESP_WIFI_ENABLE_SAE_PK is not set
 # CONFIG_ESP_COREDUMP_LOGS is not set
 # CONFIG_ESP_PHY_ENABLE_VERSION_PRINT is not set
+
+# API 42: servicos de apps em segundo plano (svchost) LIGADOS; app em task
+# propria (F3) DESLIGADO — o Kconfig torna as duas opcoes exclusivas. Sem
+# PSRAM o heap do svchost so nasce com >=44 KB livres (AppServices), entao
+# ele espera o app de foreground sair em vez de competir com ele.
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set

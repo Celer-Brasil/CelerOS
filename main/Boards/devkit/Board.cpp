@@ -33,7 +33,10 @@ static const BoardProfile s_profile = {
     .strips = {},
     .headless = true,     // sem vidro: splash pulado, getInfo().hasDisplay = false
     .buttonToApp = true,  // BOOT e input do app (System.button); longo sai, curto no launcher relanca o homeApp
-    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3),  // GPIO1/3: UART0 = console/celerctl
+    // 1/3: UART0 (console/celerctl); 6..11: SPI flash do modulo (o IDF
+    // reserva no boot; o perfil documenta e cobre um boot atipico).
+    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
+                      (1ULL << 9) | (1ULL << 10) | (1ULL << 11),
 };
 
 void init() {

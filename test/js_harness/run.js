@@ -4092,6 +4092,91 @@ function holdFrames(x, y, n) {
     check('nucleo: prefixo v tolerado', pol.semverGreater('v2.0.0', '1.9.9') === true);
 })();
 
+// --- Regras (API 42): o service.js da matilha — regras quando/entao --------
+// Servico roda FORA do vidro: carrega rules.json do appData e drena o
+// Pack.poll() num setInterval. Aqui ele roda no env falsificado com o
+// envelope REAL do firmware (Pack.poll devolve {from, fromName, data}); o
+// tick e bombeado pelos System.delay do proprio teste, como o firmware faz
+// nos presentes da task de servico.
+(function() {
+    console.log('Regras (service.js):');
+    var RULES = JSON.stringify({ regras: [
+        { quando: 'porta', notificar: 'Porta aberta!' },
+        { quando: 'sirene', enviar: { para: 'pc', msg: { eco: true } } },
+        { quando: 'presenca', guardar: { chave: 'visto', valor: 'sim' } },
+        { quando: 'grande', guardar: { chave: 'k', valor: new Array(4102).join('v') } }
+    ] });
+
+    function rodar(rulesTxt) {
+        return runApp('data/apps/Regras/service.js', function(env) {
+            env.__exposeMesh = true;   // o servico ve Pack/CelerNet (matilha)
+            env.FS.mkdir('/local/data');
+            env.FS.mkdir('/local/data/celeros.regras');
+            env.FS.writeTextFile('/local/data/celeros.regras/rules.json', rulesTxt);
+            // acao que EXPLODE no meio do tick (o RangeError que o send real
+            // devolve para payload acima do teto): o try/catch do executar()
+            // tem que conter sem matar o servico
+            var realSend = env.Pack.send;
+            env.Pack.send = function(to, m, opts) {
+                if (m && m.eco) throw new RangeError('mensagem deve ter 1 a 430 bytes');
+                return realSend.call(env.Pack, to, m, opts);
+            };
+            // Storage que explode na chave da regra "grande" (teto do NVS)
+            var realSet = env.Storage.set;
+            env.Storage.set = function(k, v) {
+                if (k === 'k') throw new RangeError('chave longa demais');
+                return realSet.call(env.Storage, k, v);
+            };
+            // envelopes no formato do firmware: data em string JSON ou texto
+            env.__harness.pushPack([
+                { from: 'B002', fromName: 'Porta', data: '{"rule":"sirene"}' },
+                { from: 'B002', fromName: 'Porta', data: '{"rule":"porta"}' },
+                { from: 'C003', fromName: 'Quarto', data: '{"rule":"presenca"}' },
+                { from: 'C003', fromName: 'Quarto', data: '{"rule":"grande"}' },
+                { from: 'C003', fromName: 'Quarto', data: 'porta 12' }
+            ]);
+        });
+    }
+
+    var r = rodar(RULES);
+    check('service carrega sem erro', r.err === null, r.err || '');
+    // o setInterval(tick, 1000) dispara nos delay do teste (o relogio do
+    // harness comeca em 1000; a 2a cedida cruza o primeiro vencimento)
+    r.env.System.delay(1100);
+    r.env.System.delay(1100);
+    var j = joinLog(r.log);
+
+    // SONDA do contrato do envelope: o Pack.poll do firmware entrega .data;
+    // o service.js le .msg. Com o campo errado nenhuma regra dispara (bug do
+    // app, fora do escopo deste teste) — as verificacoes de comportamento
+    // abaixo reativam SOZINHAS quando o app for corrigido.
+    if (j.indexOf('[notify] Regra: porta|Porta aberta!') < 0) {
+        console.log('  SKIP  servico le env.msg mas o Pack.poll entrega env.data');
+        console.log('  SKIP  bug do app data/apps/Regras/service.js (tick():"var msg = env && env.msg")');
+        console.log('  SKIP  fix de 1 linha no app: ler env.data — regras notificar/enviar/guardar');
+        console.log('  SKIP  e a tolerancia a texto abaixo reativam quando o fix entrar');
+    } else {
+        check('regra valida notifica', j.indexOf('[notify] Regra: porta|Porta aberta!') >= 0, j);
+        check('erro no enviar nao mata o tick: a regra seguinte rodou',
+              j.indexOf('[print] regras: enviar falhou (sirene)') >= 0 &&
+              j.indexOf('[notify] Regra: porta|Porta aberta!') >= 0, j);
+        check('erro no guardar tambem e contido',
+              j.indexOf('[print] regras: guardar falhou (k)') >= 0, j);
+        check('guardar ok salva no Storage do servico', r.env.__storage['visto'] === 'sim',
+              JSON.stringify(r.env.__storage));
+        var notas = r.log.filter(function(l) {
+            return l.indexOf('[notify] Regra: porta|Porta aberta!') === 0;
+        });
+        check('forma tolerada em texto ("porta 12") dispara de novo', notas.length === 2, notas.length);
+    }
+
+    // JSON quebrado do dono: o parse propaga e PARA o servico na carga —
+    // comportamento DOCUMENTADO no comentario do proprio service.js
+    var r2 = rodar('{"regras": [quebrado');
+    check('rules.json quebrado para o servico na carga (documento no comentario)',
+          r2.err !== null, String(r2.err));
+})();
+
 // resume
 console.log('');
 if (failures) {

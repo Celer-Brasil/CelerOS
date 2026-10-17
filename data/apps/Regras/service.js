@@ -57,7 +57,8 @@ function tick() {
     var env;
     while ((env = Pack.poll()) !== null) {
         servidas++;
-        var msg = env && env.msg;
+        // Pack.poll() entrega {from, fromName, data} — o dado e "data"
+        var msg = env && env.data;
         var nome = "";
         if (msg && typeof msg === "object" && msg.rule) nome = String(msg.rule);
         else if (typeof msg === "string") {

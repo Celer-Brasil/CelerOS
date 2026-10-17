@@ -93,6 +93,11 @@ const SharedDep* findSharedDep(const char* mod) {
 
 }  // namespace
 
+// Identidade do servico no svchost (API 42): o dispatch do AppServices troca
+// a pasta base do require() para a do servico corrente e restaura depois.
+void jsModulesSetAppDir(const char* appDir) { s_appDir = appDir ? appDir : ""; }
+const std::string& jsModulesGetAppDir() { return s_appDir; }
+
 void jsLoadAppDeps(const char* appDir) {
     // Mapa nome->versao do deps.json (gravado pelo installer com a versao
     // RESOLVIDA do range do app.json). Chamado no runFile junto com o

@@ -5,6 +5,7 @@
 #include "../USBDevice/LogSink.h"
 #include "../Runtime/JSBindings.h"
 #include "../Kernel/AppRunner.h"
+#include "../Kernel/AppServices.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Display/Layout.h"
@@ -21,6 +22,7 @@ CelerDisplay *LauncherUI::tftInstance = nullptr;
 std::vector<LauncherUI::AppEntry> LauncherUI::apps;
 int LauncherUI::appCount = 0;
 bool LauncherUI::needsRescan = true;
+bool LauncherUI::svcDirty = true;  // svchost redescobre no 1o giro
 
 
 void LauncherUI::requestRescan() {
@@ -210,6 +212,7 @@ void LauncherUI::idleHomeTick() {
 void LauncherUI::scanLocalApps() {
     appCount = 0;
     apps.clear();
+    svcDirty = true;  // svchost (API 42): quem declara "service" pode ter mudado
 #if CONFIG_CELEROS_UI
     Icon::invalidateFileIcons();  // app reinstalado pode ter trocado a arte
 #endif
@@ -550,10 +553,14 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
 
     // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
     // deixa a faixa retratil com o app em tela cheia
+    // svchost (API 42): sem PSRAM o app e dono da RAM — servicos suspensos
+    // ate a saida; com PSRAM seguem rodando
+    AppServices::suspendForApp();
     s_appRunning = true;
     CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed,
                          appPkg.c_str(), perms);
     s_appRunning = false;
+    AppServices::resumeAfterApp();
     // pedido de saida que o app nao chegou a consumir (saiu sozinho) morre
     // aqui: nao pode derrubar o proximo app
     portENTER_CRITICAL(&s_appExitMux);

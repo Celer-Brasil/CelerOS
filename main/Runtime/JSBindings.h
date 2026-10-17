@@ -9,6 +9,11 @@
 #include "../Utils/AppPerms.h"  // enum AppPerm/PERM_* (header testavel no host)
 using celer::PERM_ALL;
 
+// Superficie dos servicos (JsSvc.cpp, API 42) — amiga da classe
+namespace SvcApi {
+void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* appDir);
+}  // namespace SvcApi
+
 class JSBindings {
 public:
     // Fim do app (CelerKernel::runFile, depois do pcall): solta o keepAwake
@@ -96,8 +101,16 @@ private:
     static duk_ret_t js_setInterval(duk_context *ctx);
     static duk_ret_t js_clearTimeout(duk_context *ctx);
     static duk_ret_t js_clearInterval(duk_context *ctx);
-    static void timersTick(duk_context *ctx);   // chamado pelo present()
     static void timersResetAll();               // reset por app
+public:
+    // Host do svchost (API 42): zera os slots do servico e troca o host
+    // CORRENTE dos bindings (app <-> servicos) durante o dispatch.
+    // timersTick e o drain: present() (host do app) e AppServices (servicos)
+    static void timersTick(duk_context *ctx);
+    static void timersResetSvc();
+    static void timersUseSvcHost(bool svc);
+    // Um servico parou: mata os timers DAQUELA thread (interval nao refire)
+    static void timersClearCtx(duk_context* ctx);
 
     // Modulos JS (API 23): require("nome") carrega <pasta do app>/nome.js
     // embrulhado como funcao(module, exports, require) — CommonJS enxuto
@@ -470,6 +483,46 @@ private:
     static duk_ret_t js_phoneWeather(duk_context *ctx);
     static duk_ret_t js_phoneFind(duk_context *ctx);
     static duk_ret_t js_phoneForget(duk_context *ctx);
+
+public:
+    // ---- Superficie dos SERVICOS em segundo plano (API 42, JsSvc.cpp) ----
+    // putFns publica para os modulos que montam superficie propria (JsSvc)
+    struct JsFn {
+        const char* name;
+        duk_c_function fn;
+        duk_idx_t nargs;
+    };
+    static void putFns(duk_context *ctx, const JsFn* fns, int n);
+    // forma de tabela estatica (a usada em init()): herda o N do array
+    template <size_t N>
+    static void putFns(duk_context* ctx, const JsFn (&fns)[N]) {
+        putFns(ctx, fns, (int)N);
+    }
+
+    // Troca de identidade para o svchost (API 42): o dispatch de um servico
+    // roda os MESMOS bindings com pkg/perms/pasta/ctx dele (single task, sem
+    // corrida); restore devolve a identidade do app antes do dispatch.
+    static void svcIdentity(duk_context* thr, const char* appPkg, uint32_t perms, const char* appDir);
+    static void svcIdentityRestore();
+
+    // Getters de gate para a politica dos servicos (API 42, PERM_SYSTEM)
+    static duk_ret_t js_appOpen(duk_context *ctx);
+    static duk_ret_t js_updateBusy(duk_context *ctx);
+    static duk_ret_t js_shellActive(duk_context *ctx);
+    static duk_ret_t js_syncTime(duk_context *ctx);
+    static duk_ret_t js_timeValid(duk_context *ctx);
+    static duk_ret_t js_persistTime(duk_context *ctx);
+    static duk_ret_t js_svcStop(duk_context *ctx);
+
+    friend void SvcApi::install(duk_context* thr, const char* appPkg, uint32_t perms,
+                                const char* appDir);
 };
+
+// Superficie dos servicos (JsSvc.cpp): registra o subconjunto sem UI na
+// thread do servico e media o Service.stop() pedido dentro do pcall.
+namespace SvcApi {
+void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* appDir);
+bool consumeStopRequest();
+}  // namespace SvcApi
 
 #endif // JS_BINDINGS_H

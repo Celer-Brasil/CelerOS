@@ -8,6 +8,7 @@
 #include "../../WebManager/WebManager.h"
 #include "../../Kernel/TimeManager.h"
 #include "../../Kernel/Alarms.h"
+#include "../../Kernel/AppServices.h"
 #include "../../Display/Backlight.h"
 #if CONFIG_CELEROS_UI
 #include "../../Display/ScreenCapture.h"
@@ -156,6 +157,12 @@ const CelerServices::Service kServices[] = {
 #if CONFIG_CELEROS_BLUETOOTH
     {"celernet", svcCelerNet, CelerServices::ALWAYS},
     {"pack", svcPack, CelerServices::ALWAYS},
+#endif
+#if CONFIG_CELEROS_APP_SERVICES
+    // Servicos em segundo plano de APPS instalados (API 42): depois do pack
+    // — consome no mesmo giro o que a malha acabou de receber (Regras), com
+    // orcamento de ms para nao roubar o vidro do app em foreground.
+    {"appsvc", [](bool inApp) { AppServices::tick(inApp); }, CelerServices::ALWAYS},
 #endif
 #if CONFIG_CELEROS_UI
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},

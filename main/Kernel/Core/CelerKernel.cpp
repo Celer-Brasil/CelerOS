@@ -46,11 +46,27 @@ size_t CelerKernel::appLaunchFreeHeap = 0;
 // ---------------------------------------------------------------------------
 static uint32_t s_jsSliceStart = 0;
 static bool s_jsTimedOut = false;
+static uint32_t s_jsSliceMs = 1000;  // apps; servicos rodem com 250 (API 42)
+
+// Alocador do Duktape (definicao junto das reservas, abaixo)
+static void* my_alloc(void* udata, duk_size_t size);
+static void* my_realloc(void* udata, void* ptr, duk_size_t size);
+static void my_free(void* udata, void* ptr);
 
 void CelerKernel::noteAppYield() {
     s_jsSliceStart = millis();
     s_jsTimedOut = false;
 }
+
+void CelerKernel::setExecSliceMs(uint32_t ms) { s_jsSliceMs = ms; }
+
+// Wrappers publicos do alocador (o svchost cria o segundo heap com as
+// mesmas reservas por placa — ver AppServices)
+void* CelerKernel::heapAlloc(void* udata, duk_size_t size) { return my_alloc(udata, size); }
+void* CelerKernel::heapRealloc(void* udata, void* ptr, duk_size_t size) {
+    return my_realloc(udata, ptr, size);
+}
+void CelerKernel::heapFree(void* udata, void* ptr) { my_free(udata, ptr); }
 
 extern "C" duk_bool_t celer_exec_timeout_check(void* udata) {
     (void)udata;
@@ -68,7 +84,7 @@ extern "C" duk_bool_t celer_exec_timeout_check(void* udata) {
         s_jsSliceStart = now;  // primeira fatia desde a cedida
         return 0;
     }
-    if (now - s_jsSliceStart > 1000) {
+    if (now - s_jsSliceStart > s_jsSliceMs) {
         s_jsTimedOut = true;
         return 1;  // o executor levanta RangeError "execution timeout"
     }

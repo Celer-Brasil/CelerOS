@@ -33,6 +33,7 @@
 #endif
 #include "Kernel/Alarms.h"
 #include "Kernel/Services.h"
+#include "Kernel/AppServices.h"
 #include "Kernel/DeviceStats.h"
 #if CONFIG_CELEROS_UI
 #include "Settings/TouchCalibrator.h"
@@ -191,6 +192,7 @@ static void celerSetup() {
     LauncherUI::scanLocalApps();
     LauncherUI::applyAutostart();  // /local/autostart.txt (ex.: cara do cao)
     LauncherUI::needsRescan = false;
+    AppServices::init();  // svchost (API 42): quem declara "service"; heap lazy
     celer_log_println("DEBUG: Local Apps Scanned.");
 
     // WiFi 100% assincrono: prepara credenciais/eventos e a task de

@@ -30,6 +30,16 @@ public:
     // cortesia do interrupt do executor (loop JS puro sem ceder -> erro em
     // vez de TWDT/reboot)
     static void noteAppYield();
+    // Janela do interrupt em ms (default 1000 p/ apps; os servicos rodem com
+    // 250 — AppServices troca no dispatch e restaura depois)
+    static void setExecSliceMs(uint32_t ms);
+
+    // Alocador do heap Duktape (reservas por placa: PSRAM-first / DRAM com
+    // reserve 24KB + transbordo IRAM na CYD). Publicos para o svchost criar
+    // o SEGUNDO heap com as mesmas regras (AppServices).
+    static void* heapAlloc(void* udata, duk_size_t size);
+    static void* heapRealloc(void* udata, void* ptr, duk_size_t size);
+    static void heapFree(void* udata, void* ptr);
 
 private:
     static void checkJSError(duk_context *ctx, duk_int_t result);

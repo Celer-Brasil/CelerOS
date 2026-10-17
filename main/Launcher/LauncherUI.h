@@ -43,6 +43,9 @@ public:
     // 30 s; 0 desliga) volta para a casa. No-op sem profile.homeApp.
     static void idleHomeTick();
     static bool needsRescan;
+    // svchost (API 42): apps mudaram (install/remocao/rescan) — o
+    // AppServices::tick redescobre quem declara "service" no proximo giro
+    static bool svcDirty;
 
     // Acesso para o LauncherScreen (Kui) e telas novas. Telas de sistema
     // convertidas em JS (Settings, App Store...) sao apps normais com

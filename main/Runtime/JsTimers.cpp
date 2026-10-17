@@ -19,18 +19,42 @@
 //
 // Estado: tabela C fixa (8 slots) + referencias das funcoes num array do
 // heap stash "_tmr" (morre com o heap do app — nada atravessa apps).
+//
+// API 42: o host virou instancia (TimerHost) com DUAS vivas — a do app
+// (como sempre) e a dos servicos em segundo plano (AppServices). Cada slot
+// guarda o proprio duk_context: no svchost, um unico pool de timers atende
+// todas as threads (uma por servico). O binding (js_setTimeout...) roda no
+// host CORRENTE (s_cur), trocado pelo dispatch do svchost.
 
 namespace {
+
 struct TimerSlot {
+    duk_context* ctx = nullptr;  // thread dona do callback (app = o heap do app)
     bool used = false;
     bool repeat = false;
     uint32_t period = 0;     // ms (interval) / timeout (timeout)
     uint32_t nextFire = 0;   // ms()
     int id = 0;              // handle unico do app (>= 1); slot reusado ganha id novo
 };
-TimerSlot s_timers[8];
-bool s_inTick = false;       // callback chamou present(): adia o proximo disparo
-int s_nextId = 0;
+
+constexpr int kTimerSlots = 8;
+
+struct TimerHost {
+    TimerSlot slots[kTimerSlots];
+    bool inTick = false;   // callback chamou present(): adia o proximo disparo
+    int nextId = 0;
+};
+
+TimerHost s_appHost;   // o app em foreground (present())
+TimerHost s_svcHost;   // servicos em segundo plano (AppServices::tick)
+TimerHost* s_cur = &s_appHost;  // host que os bindings js_setTimeout... enxergam
+
+void timerHostReset(TimerHost& h) {
+    for (auto& t : h.slots) t = TimerSlot{};
+    h.nextId = 0;
+    h.inTick = false;
+    // As referencias vivem no heap stash: morrem com o heap.
+}
 
 // Ajusta a base do array "_tmr" no heap stash (cria se 1a vez). Pilha: +1
 // (o array fica no topo).
@@ -43,7 +67,7 @@ void timerStashArray(duk_context* ctx) {
     }
     duk_pop(ctx);
     duk_push_array(ctx);
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < kTimerSlots; i++) {
         duk_push_undefined(ctx);
         duk_put_prop_index(ctx, -2, i);
     }
@@ -54,21 +78,22 @@ void timerStashArray(duk_context* ctx) {
     duk_remove(ctx, -2);
 }
 
-void timersReset() {
-    for (auto& t : s_timers) t = TimerSlot{};
-    s_nextId = 0;
-    s_inTick = false;
-    // As referencias vivem no heap stash: morrem com o heap do app.
-}
 }  // namespace
 
-// Chamado pelo present(). Pode lancar (erro do callback propagando).
+namespace JSBindingsTimers {
+void setHost(TimerHost* h) { s_cur = h; }
+}
+
+// Chamado pelo present() (host do app) e pelo dispatch do svchost (host dos
+// servicos). Pode lancar (erro do callback propagando).
 void JSBindings::timersTick(duk_context* ctx) {
-    if (ctx == nullptr || s_inTick) return;
+    TimerHost& h = *s_cur;
+    if (ctx == nullptr || h.inTick) return;
     uint32_t now = millis();
-    for (int i = 0; i < 8; i++) {
-        TimerSlot& t = s_timers[i];
+    for (int i = 0; i < kTimerSlots; i++) {
+        TimerSlot& t = h.slots[i];
         if (!t.used || (int32_t)(now - t.nextFire) < 0) continue;
+        duk_context* tctx = t.ctx != nullptr ? t.ctx : ctx;
 
         // Agenda ANTES de disparar: um interval que demora mais que o
         // periodo nao dispara em rajada (pula os atrasados)
@@ -79,22 +104,22 @@ void JSBindings::timersTick(duk_context* ctx) {
             t.used = false;
         }
 
-        timerStashArray(ctx);
-        duk_get_prop_index(ctx, -1, i);
-        duk_require_callable(ctx, -1);  // slot valido sempre tem callable
+        timerStashArray(tctx);
+        duk_get_prop_index(tctx, -1, i);
+        duk_require_callable(tctx, -1);  // slot valido sempre tem callable
         // remove a referencia de one-shot JA disparado / de quem cancelou
         if (!t.used) {
-            duk_push_undefined(ctx);
-            duk_put_prop_index(ctx, -3, i);
+            duk_push_undefined(tctx);
+            duk_put_prop_index(tctx, -3, i);
         }
-        duk_remove(ctx, -2);  // tira o array; fn no topo
+        duk_remove(tctx, -2);  // tira o array; fn no topo
 
-        s_inTick = true;
+        h.inTick = true;
         esp_task_wdt_reset();  // callback pode desenhar bastante
-        duk_int_t rc = duk_pcall(ctx, 0);
-        s_inTick = false;
+        duk_int_t rc = duk_pcall(tctx, 0);
+        h.inTick = false;
         if (rc != DUK_EXEC_SUCCESS) {
-            duk_throw(ctx);  // erro do callback vira erro do app (nao retorna)
+            duk_throw(tctx);  // erro do callback vira erro do app (nao retorna)
         }
         now = millis();
     }
@@ -103,10 +128,11 @@ void JSBindings::timersTick(duk_context* ctx) {
 static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
     duk_require_callable(ctx, 0);
     duk_uint_t ms = duk_require_uint(ctx, 1);
+    TimerHost& h = *s_cur;
 
     int slot = -1;
-    for (int i = 0; i < 8; i++)
-        if (!s_timers[i].used) { slot = i; break; }
+    for (int i = 0; i < kTimerSlots; i++)
+        if (!h.slots[i].used) { slot = i; break; }
     if (slot < 0) { duk_push_int(ctx, 0); return 1; }  // sem slot
 
     timerStashArray(ctx);
@@ -114,15 +140,16 @@ static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
     duk_put_prop_index(ctx, -2, slot);
     duk_pop(ctx);  // array
 
-    TimerSlot& t = s_timers[slot];
+    TimerSlot& t = h.slots[slot];
+    t.ctx = ctx;
     t.used = true;
     t.repeat = repeat;
     t.period = ms < 10 ? 10 : ms;  // piso de 10ms: dispara no proximo present()
     t.nextFire = millis() + t.period;
     // id monotonico por app (nunca o slot): o id de um timeout que ja
     // disparou nao pode cancelar o timer novo que reusou o mesmo slot
-    if (++s_nextId <= 0) s_nextId = 1;
-    t.id = s_nextId;
+    if (++h.nextId <= 0) h.nextId = 1;
+    t.id = h.nextId;
     duk_push_int(ctx, t.id);  // >= 1 (0 = falha: sem slot)
     return 1;
 }
@@ -137,17 +164,19 @@ duk_ret_t JSBindings::js_setInterval(duk_context *ctx) {
 
 // clearTimeout e clearInterval sao o mesmo corretor: id 0/ausente nao faz nada
 static duk_ret_t timerClear(duk_context *ctx) {
+    TimerHost& h = *s_cur;
     // id = handle opaco do setTimeout/setInterval: procura o slot VIVO com
     // esse id (id de timer ja disparado/cancelado nao acha nada)
     int id = duk_is_number(ctx, 0) ? duk_require_int(ctx, 0) : 0;
     if (id < 1) return 0;
-    for (int i = 0; i < 8; i++) {
-        if (!s_timers[i].used || s_timers[i].id != id) continue;
-        s_timers[i].used = false;
-        timerStashArray(ctx);
-        duk_push_undefined(ctx);
-        duk_put_prop_index(ctx, -2, i);
-        duk_pop(ctx);  // array
+    for (int i = 0; i < kTimerSlots; i++) {
+        if (!h.slots[i].used || h.slots[i].id != id) continue;
+        duk_context* tctx = h.slots[i].ctx != nullptr ? h.slots[i].ctx : ctx;
+        h.slots[i].used = false;
+        timerStashArray(tctx);
+        duk_push_undefined(tctx);
+        duk_put_prop_index(tctx, -2, i);
+        duk_pop(tctx);  // array
         break;
     }
     return 0;
@@ -157,4 +186,32 @@ duk_ret_t JSBindings::js_clearTimeout(duk_context *ctx) { return timerClear(ctx)
 duk_ret_t JSBindings::js_clearInterval(duk_context *ctx) { return timerClear(ctx); }
 
 // Reset por app (chamado no init da fachada)
-void JSBindings::timersResetAll() { timersReset(); }
+void JSBindings::timersResetAll() {
+    timerHostReset(s_appHost);
+    JSBindingsTimers::setHost(&s_appHost);
+}
+
+// Host do svchost (API 42): zera slots e troca o corrente durante o dispatch
+void JSBindings::timersResetSvc() { timerHostReset(s_svcHost); }
+void JSBindings::timersUseSvcHost(bool svc) {
+    JSBindingsTimers::setHost(svc ? &s_svcHost : &s_appHost);
+}
+
+// Um servico parou/crashou: os timers DELE morrem (um interval repetindo
+// dispararia no GC do stash ou em thread morta). No host do app (ctx ==
+// nullptr) nao faz nada: os timers do app morrem com o heap dele.
+void JSBindings::timersClearCtx(duk_context* ctx) {
+    if (ctx == nullptr) return;
+    TimerHost& h = s_svcHost;
+    for (int i = 0; i < kTimerSlots; i++) {
+        if (!h.slots[i].used || h.slots[i].ctx != ctx) continue;
+        h.slots[i] = TimerSlot{};
+        duk_push_heap_stash(ctx);
+        duk_get_prop_string(ctx, -1, "_tmr");
+        if (duk_is_array(ctx, -1)) {
+            duk_push_undefined(ctx);
+            duk_put_prop_index(ctx, -2, i);
+        }
+        duk_pop_2(ctx);
+    }
+}

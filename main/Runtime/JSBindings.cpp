@@ -868,22 +868,47 @@ duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
 // =====================================================
 
 // Registro por tabela: {nome JS, funcao C, nargs} -> propriedade do objeto
-// no topo da pilha. Menos codigo que um push+put por binding.
-struct JsFn {
-    const char* name;
-    duk_c_function fn;
-    duk_idx_t nargs;
-};
+// no topo da pilha. Menos codigo que um push+put por binding. A struct JsFn
+// e o putFns de 3 args sao publicos no header (JsSvc.cpp monta a superficie
+// dos servicos com as mesmas tabelas).
+void JSBindings::putFns(duk_context* ctx, const JsFn* fns, int n) {
+    for (int i = 0; i < n; i++) {
+        duk_push_c_lightfunc(ctx, fns[i].fn, fns[i].nargs, fns[i].nargs, 0);
+        duk_put_prop_string(ctx, -2, fns[i].name);
+    }
+}
 
 // Lightfunc: o binding vira um valor tagged (ponteiro C + nargs) em vez de um
 // objeto funcao no heap — ~130 bindings deixam de custar ~10KB de RAM por
 // app (decisivo na CYD sem PSRAM). Unica diferenca visivel: sem .name.
-template <size_t N>
-static void putFns(duk_context* ctx, const JsFn (&fns)[N]) {
-    for (const JsFn& f : fns) {
-        duk_push_c_lightfunc(ctx, f.fn, f.nargs, f.nargs, 0);
-        duk_put_prop_string(ctx, -2, f.name);
-    }
+// (a forma de tabela estatica e o template-membro no header)
+
+// ---- Identidade do svchost (API 42): pkg/perms/ctx/pasta do servico ----
+static std::string s_savedPkg;
+static uint32_t s_savedPerms = 0;
+static std::string s_savedDir;
+static duk_context* s_savedCtx = nullptr;
+
+void JSBindings::svcIdentity(duk_context* thr, const char* appPkg, uint32_t perms,
+                             const char* appDir) {
+    extern void jsModulesSetAppDir(const char* d);        // JsModules.cpp
+    extern const std::string& jsModulesGetAppDir();       // idem
+    s_savedPkg = s_appPkg;
+    s_savedPerms = s_perms;
+    s_savedCtx = s_jsCtx;
+    s_savedDir = jsModulesGetAppDir();
+    s_appPkg = appPkg ? appPkg : "";
+    s_perms = perms;
+    s_jsCtx = thr;
+    jsModulesSetAppDir(appDir);
+}
+
+void JSBindings::svcIdentityRestore() {
+    extern void jsModulesSetAppDir(const char* d);        // JsModules.cpp
+    s_appPkg = s_savedPkg;
+    s_perms = s_savedPerms;
+    s_jsCtx = s_savedCtx;
+    jsModulesSetAppDir(s_savedDir.c_str());
 }
 
 void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,

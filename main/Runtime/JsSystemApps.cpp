@@ -33,6 +33,7 @@
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
+#include "../USBDevice/DebugBridge.h"
 #include "../Utils/AppPackage.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
@@ -354,6 +355,45 @@ duk_ret_t JSBindings::js_installZip(duk_context *ctx) {
     putBool(ctx, "ok", true);
     putInt(ctx, "files", r.files);
     putInt(ctx, "bytes", (int)r.bytes);
+    return 1;
+}
+
+// ---- Gates da politica dos servicos (API 42, PERM_SYSTEM): getters burros
+// ---- para o svchost decidir QUANDO agir sem o firmware saber de politica.
+
+duk_ret_t JSBindings::js_appOpen(duk_context *ctx) {
+    duk_push_boolean(ctx, LauncherUI::appRunning());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_updateBusy(duk_context *ctx) {
+    duk_push_boolean(ctx, OtaManager::checkBusy());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_shellActive(duk_context *ctx) {
+    duk_push_boolean(ctx, DebugBridge::sessionActive());
+    return 1;
+}
+
+// syncTime(): tenta o SNTP agora (o retry de 30s enquanto a hora e invalida
+// vira politica do servico "Nucleo"). Devolve se a hora JA e valida — o SNTP
+// em si assenta async (o servico repete no proximo tick enquanto nao).
+duk_ret_t JSBindings::js_syncTime(duk_context *ctx) {
+    if (!TimeManager::isTimeValid()) TimeManager::syncNTP();
+    duk_push_boolean(ctx, TimeManager::isTimeValid());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_timeValid(duk_context *ctx) {
+    duk_push_boolean(ctx, TimeManager::isTimeValid());
+    return 1;
+}
+
+// persistTime(): epoch -> NVS (o saveEpoch de 10 min vira politica JS)
+duk_ret_t JSBindings::js_persistTime(duk_context *ctx) {
+    TimeManager::saveEpoch();
+    duk_push_boolean(ctx, 1);
     return 1;
 }
 

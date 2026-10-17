@@ -65,6 +65,10 @@ public:
     // fetch disputaria RAM/rede com ele.
     static void tickCheck(bool inApp);
 
+    // Gate para a politica do servico JS (API 42): true com check manual ou
+    // task do fetch em curso — o servico nao dispara check em cima de check.
+    static bool checkBusy();
+
 private:
     // Corpos de checkForUpdates/performUpdate (a guarda s_busy mora no .cpp)
     static bool runCheck();

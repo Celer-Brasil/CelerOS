@@ -76,6 +76,15 @@ config CELEROS_APP_TASK
       padrao; a concorrencia nova (touch/display entre tasks) so existe com
       esta opcao ligada.
 
+config CELEROS_APP_SERVICES
+    bool "Servicos em segundo plano de apps instalados (API 42)"
+    default y
+    help
+      App com "service": "service.js" no app.json roda JS fora do foreground
+      num heap Duktape compartilhado (AppServices/svchost), bombeado pelo
+      servico "appsvc" (ALWAYS). Placas sem PSRAM suspendem o heap enquanto
+      um app esta em foreground; com PSRAM o servico segue vivo.
+
 config CELEROS_WAKE_WORD
     bool "Wake word on-device (WakeNet do esp-sr)"
     default n

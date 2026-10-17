@@ -460,6 +460,12 @@ void updchkTask(void*) {
 
 }  // namespace
 
+// Gate para a politica do servico JS (API 42): check manual ou task do
+// fetch em curso — o servico "Atualizacoes" nao dispara check em cima.
+bool OtaManager::checkBusy() {
+    return s_busy || s_taskRunning;
+}
+
 // Corpo do servico "updcheck" (ALWAYS: roda no celerLoop e no present() dos
 // apps). Nunca bloqueia: quando a politica de UpdateCheck.h diz "sim",
 // spawna a task curta acima — 16 KB de stack so enquanto o fetch vive

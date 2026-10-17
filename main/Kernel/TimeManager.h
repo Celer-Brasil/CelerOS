@@ -49,6 +49,7 @@ public:
 private:
     static void savePreferences();
     static void loadPreferences();
+public:
     static void saveEpoch();
     static void restoreEpoch();
 };

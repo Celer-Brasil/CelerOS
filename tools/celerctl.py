@@ -3220,6 +3220,13 @@ def _http_get(url, timeout=30):
         return resp.read()
 
 
+def _hub_url(hub, u):
+    """URL do catalogo: relativa (hub + path) ou ja absoluta (o hub passou a
+    servir meta/app/icon com o host) — concatenar as duas quebrava o DNS."""
+    u = str(u)
+    return u if u.startswith(("http://", "https://")) else hub + u
+
+
 def _apps_store(link, args):
     """`apps store PKG`: instala o pacote DO HUB pelo mesmo caminho da loja
     (catalogo -> app.json/main.js/files/icon -> lint/push/deps) sem tocar na
@@ -3263,8 +3270,19 @@ def _apps_store(link, args):
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / dir_name
         src.mkdir()
-        (src / "app.json").write_bytes(_http_get(hub + entry["meta"]))
-        main = _http_get(hub + entry["app"])
+        # o app.json servido pelo hub leva os campos COMPUTADOS (size, md5,
+        # published_at, publisher, zip): o lint local os recusa ("nunca
+        # setar a mao"), entao o install tira antes de gravar
+        meta_raw = _http_get(_hub_url(hub, entry["meta"]))
+        try:
+            meta = json.loads(meta_raw.decode("utf-8"))
+        except ValueError:
+            die("app.json do hub invalido")
+        for k in ("md5", "size", "published_at", "publisher", "zip"):
+            meta.pop(k, None)
+        (src / "app.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        main = _http_get(_hub_url(hub, entry["app"]))
         if entry.get("md5") and hashlib.md5(main).hexdigest() != entry["md5"]:
             die(f"main.js: md5 divergente do catalogo do hub")
         (src / "main.js").write_bytes(main)
@@ -3272,7 +3290,7 @@ def _apps_store(link, args):
         for n, fi in (entry.get("files") or {}).items():
             if n in ("app.json", "main.js", "icon.png") or "/" in n or ".." in n:
                 continue  # o que tem tratamento proprio (ou nao e caminho)
-            data = _http_get(hub + (fi.get("url") or base_url + n))
+            data = _http_get(_hub_url(hub, fi.get("url") or base_url + n))
             if fi.get("md5") and hashlib.md5(data).hexdigest() != fi["md5"]:
                 die(f"{n}: md5 divergente do catalogo do hub")
             dst = src / n
@@ -3280,7 +3298,7 @@ def _apps_store(link, args):
             dst.write_bytes(data)
         if entry.get("icon"):
             try:
-                (src / "icon.png").write_bytes(_http_get(hub + entry["icon"]))
+                (src / "icon.png").write_bytes(_http_get(_hub_url(hub, entry["icon"])))
             except Exception as e:  # noqa: BLE001 — icon e nao-fatal na loja
                 print(f"aviso: icon.png nao veio ({e})")
         args.hub = hub

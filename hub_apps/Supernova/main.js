@@ -140,7 +140,13 @@ var bgLayer = E.fx.parallax([
     { speed: 0.05, gap: 64, rowH: 64, paint: paintNebulosa },
     { speed: 0.12, gap: 32, rowH: 32, paint: paintPoeira }
 ]);
-function paintFundo(x, y, w, h) { bgLayer.draw(x, y, w, h); }
+// painter da camada suja: PRIMEIRO o preto (o contrato do painter e
+// repintar a caixa inteira; so as celulas do parallax deixariam o desenho
+// velho aparecendo — a nave virava fantasma), depois nebulosa/poeira
+function paintFundo(x, y, w, h) {
+    System.fillRect(x, y, w, h, C.espaco);
+    bgLayer.draw(x, y, w, h);
+}
 
 // Estrelas em 2 planos, cada campo guardado no E.data (sobrevive as
 // cenas). stride espalha os pontos sujos no tempo: a uniao das caixas de
@@ -196,8 +202,12 @@ var RING_CHEIO = { color: C.ouro, speed: 250 * K, life: 0.45, r0: 10 * K };
 // itens do fim (immediate-mode: desenhados e devolvidos no mesmo quadro)
 var FIM_ITENS = [{ label: "DE NOVO", value: "again" },
                  { label: "MENU", value: "menu" }];
-var FIM_Y = Math.round(H * 0.52);
+var FIM_Y = Math.round(H * 0.60);   // abaixo da linha do recorde (sem cobrir)
 var FIM_OPTS = { y: FIM_Y };
+// no 480 nativo o titulo padrao do E.ui.pause (H*0.24, ts big) encosta no
+// primeiro botao (H*0.3): o modulo desenha um espaco e o nosso vai acima
+var PAUSA_OPTS = { title: " " };
+var _pausaTitulo = { ts: "big", align: "center", color: C.branco, screen: true };
 
 // fracao alta da batida (1 logo apos o tempo forte, decai ate o proximo)
 function beatPulse() {
@@ -377,8 +387,15 @@ var hudKey = "";
 function drawHUD(s, force) {
     var key = s.score + "|" + s.wave + "|" + s.mult + "|" + s.lives + "|" +
               (s.triple > 0 ? Math.ceil(s.triple) : 0) + "|" + hi + "|" + (s.boss ? 1 : 0);
-    if (!force && key === hudKey) return;
+    // o repaint integral (1o quadro, fim de veu) cobre a faixa do HUD com
+    // o fundo: a memo tambem cede quando algo tocou o retangulo dela
+    if (!force && key === hudKey && !E.dirty.touches(0, 0, W, HUD_H)) return;
     hudKey = key;
+    // o HUD fica FORA do recorte: os desenhos dele nao entram na camada
+    // suja (as caixas nunca seriam apagadas e o touches acima passaria a
+    // ser true todo quadro, matando a memo)
+    var don = D.on;
+    D.on = false;
     E.gfx.gradient(0, 0, W, HUD_H, C.hud, C.espaco, { screen: true });
     System.drawFastHLine(0, HUD_H, W, C.cianoD);
     var pad = u(8);
@@ -410,6 +427,7 @@ function drawHUD(s, force) {
         var lx = rx - l * (ls + u(3)) - ls, ly = HUD_H - u(6);
         System.fillTriangle(lx + ls / 2, ly - ls, lx, ly, lx + ls, ly, C.ciano);
     }
+    D.on = don;
 }
 
 // ------------------------------------------------------------- cenas -----
@@ -419,7 +437,7 @@ E.run({
         static: true,
         enter: function () {
             E.cam.reset();
-            this.first = true;
+            this.paint = true;   // 1o draw (ou volta do fim) pinta tudo
             hi = E.save.num("hi", 0);
         },
         update: function () {
@@ -433,8 +451,12 @@ E.run({
             }
         },
         draw: function () {
-            if (this.first) {
-                this.first = false;
+            // durante o veu de entrada o engine redesenha a cena todo
+            // quadro; pinta-la seria fillScreen por quadro (o vidro vibra).
+            // O veu cobre tudo, entao so marcamos o repaint para o fim.
+            if (E._trans) { this.paint = true; return; }
+            if (this.paint) {
+                this.paint = false;
                 var arte = drawFundo(true);
                 var y = Math.max(Math.round(H * 0.47), arte + u(4));
                 E.gfx.text("SUPERNOVA", W / 2, y, { align: "center", px: u(21), fit: W - u(24),
@@ -450,7 +472,8 @@ E.run({
                                color: C.ouro, screen: true });
                 }
             }
-            // botoes ancorados no rodape (sempre cabem)
+            // botoes ancorados no rodape (sempre cabem) — repintados sozinhos
+            // no press quando o fundo ja esta na tela
             this.btn = botoes(H - u(27) * 2 - u(10) - u(12), "JOGAR", "SAIR", C.ciano);
         }
     },
@@ -503,10 +526,13 @@ E.run({
             _nzE.y = p.y + 34 * K;
             _nzD.x = p.x + 12 * K;
             _nzD.y = p.y + 34 * K;
-            trail.on = !s.over;
-            exE.on = !s.over;
-            exD.on = !s.over;
-            carga.on = !s.over && s.charge > 0;
+            // mesma regra do pisca da invulnerabilidade: nave invisivel
+            // nao deixa escapamento/rastro no ar
+            var vis = p.invuln <= 0 || Math.floor(System.millis() / 90) % 2 === 0;
+            trail.on = !s.over && vis;
+            exE.on = !s.over && vis;
+            exD.on = !s.over && vis;
+            carga.on = !s.over && vis && s.charge > 0;
             // medidor cheio: anel de aviso no mestre (pulsa na batida do
             // desenho, sem custo de pool — 1 anel a cada 0,5 s)
             if (s.charge >= 100 && !s.over) {
@@ -596,8 +622,11 @@ E.run({
             }
         },
         draw: function () {
-            var a = E.ui.pause();
+            var a = E.ui.pause(PAUSA_OPTS);
             if (a) this.act = a;   // a acao chega no proximo update
+            // titulo proprio acima do primeiro botao (o padrao do modulo
+            // fica coberto no 480 nativo)
+            E.gfx.text("PAUSA", W / 2, Math.round(H * 0.13), _pausaTitulo);
         }
     },
 
@@ -605,7 +634,7 @@ E.run({
         static: true,
         enter: function () {
             this.t = 0;
-            this.first = true;
+            this.paint = true;
             this.act = null;
             this.newBest = E.save.best("hi", jogo.state().score);
             if (this.newBest) {
@@ -629,8 +658,12 @@ E.run({
         },
         draw: function () {
             var s = jogo.state();
-            if (this.first) {
-                this.first = false;
+            // o veu do iris cobre a tela: durante ele nao pinta (o engine
+            // redesenha a cena todo quadro) e marca o repaint integral para
+            // quando o veu sair — sem isso o fundo/textos ficavam pretos
+            if (E._trans) { this.paint = true; return; }
+            if (this.paint) {
+                this.paint = false;
                 drawFundo(false);
                 var y = Math.round(H * 0.16);
                 E.gfx.text("NAVE PERDIDA", W / 2, y, { align: "center", px: u(21), fit: W - u(24),
@@ -640,7 +673,8 @@ E.run({
                            color: C.branco, screen: true });
                 y += u(36);
                 E.gfx.text("onda " + s.wave + "   " + s.kills + " abates", W / 2, y,
-                           { align: "center", ts: "label", color: C.cinza, screen: true });
+                           { align: "center", ts: "label", fit: W - u(16),
+                             color: C.cinza, screen: true });
                 y += u(18);
                 E.gfx.text(this.newBest ? "NOVO RECORDE!" : "recorde " + hi, W / 2, y,
                            { align: "center", ts: "label",

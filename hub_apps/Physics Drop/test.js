@@ -3,12 +3,26 @@
 // (System.verlet* do stub), Corda+Pano caem (com a colisao ponto-a-ponto),
 // PEGAR arrasta um no do pano, CORTAR remove vinculos na varredura e a
 // gravidade INVERTIDA ergue o mundo (fisica de verdade).
-// Agendamentos em env.setTimeout (relogio virtual do harness); nunca
-// embarca para o device.
+// Agendamentos em env.setTimeout (relogio virtual do harness), em CADEIA:
+// o pool tem 8 slots no firmware e a bateria agenda ~17 marcos — um timer
+// por vez mantem todos vivos (antes o pool cheio descartava os ultimos e a
+// checagem da gravidade invertida nunca rodava). Nunca embarca ao device.
 
 module.exports.wire = function (env) {
     var h = env.__harness;
-    var at = env.setTimeout;
+    var fila = [], tAnt = 0, rodando = false;
+    function at(fn, ms) {
+        fila.push({ fn: fn, ms: ms });
+        fila.sort(function (a, b) { return a.ms - b.ms; });
+        if (!rodando) { rodando = true; escorrer(); }
+    }
+    function escorrer() {
+        if (!fila.length) return;
+        var it = fila.shift();
+        env.setTimeout(function () {
+            try { it.fn(); } finally { tAnt = it.ms; escorrer(); }
+        }, Math.max(1, it.ms - tAnt));
+    }
 
     // watchdog: a rodada inteira cabe em ~12 s de relogio virtual
     var origDelay = env.System.delay;
@@ -112,14 +126,15 @@ module.exports.wire = function (env) {
         if (st >= drop.__st0) throw new Error('CORTAR nao removeu vinculos (' + st + ' vs ' + drop.__st0 + ')');
     }, 4800);
 
-    // 5300..7300ms: 5 toques no status ciclam a gravidade ate a INVERTIDA;
-    // o mundo inteiro flutua para o topo (bounds seguram, pinos ficam)
+    // 5300..7300ms: 4 toques no status ciclam a gravidade ate a INVERTIDA
+    // (5 presets: normal -> leve -> lua -> forte -> invertida); o mundo
+    // inteiro flutua para o topo (bounds seguram, pinos ficam)
     at(function () {
         need();
         drop.__topAntes = minYlivre();
         if (drop.__topAntes > 500) throw new Error('mundo vazio antes da gravidade invertida');
     }, 5300);
-    [5500, 6000, 6500, 7000, 7500].forEach(function (t) {
+    [5500, 6000, 6500, 7000].forEach(function (t) {
         at(function () { need(); h.tap(120, drop.BAR_Y + 12); }, t);
     });
     at(function () {

@@ -21,6 +21,7 @@ E.init({ dir: "Pong Duplo", fps: 60, save: "pong." });
 
 var T = E.theme, W = E.W, H = E.H, U = E.U;
 var hasLink = typeof CelerLink !== "undefined";
+var SMOOTH = E.caps.smooth;   // anti-alias de circulo quando o firmware tem
 
 // campo na mesma proporcao do Pong original (240x320 de projeto)
 var TOP = E.u(44), BOT = E.u(316);
@@ -249,7 +250,7 @@ function drawField() {
     E.gfx.rect(padX - PAD_W / 2, PAD_Y, PAD_W, PAD_H, T.accent,
                { r: Math.max(2, Math.round(PAD_H / 2)) });
     if (ball) {
-        E.gfx.circle(ball.x, ball.y, R, T.text, { smooth: true });
+        E.gfx.circle(ball.x, ball.y, R, T.text, { smooth: SMOOTH });
         E.gfx.circle(ball.x - R * 0.3, ball.y - R * 0.3,
                      Math.max(1, R * 0.35), T.accent);
     } else if (waitT > 0.7) {
@@ -271,10 +272,10 @@ function drawScan() {
         sel = peerList.draw(E.u(12), E.u(50), W - E.u(24),
                             H - E.u(50) - E.u(58));
     }
-    rescanBtn = E.gfx.button("Procurar de novo", E.u(12), H - E.u(50),
-                             E.u(116), E.u(36), { primary: false });
-    backBtn = E.gfx.button("Voltar", W - E.u(128), H - E.u(50),
-                           E.u(116), E.u(36), { primary: false });
+    rescanBtn = E.gfx.button("Procurar", E.u(12), H - E.u(50),
+                             E.u(100), E.u(36), { primary: false });
+    backBtn = E.gfx.button("Voltar", W - E.u(112), H - E.u(50),
+                           E.u(100), E.u(36), { primary: false });
 }
 
 // ------------------------------------------------------------- acoes ------
@@ -382,25 +383,24 @@ var scenes = {
             var pick = E.ui.menu(["Hospedar", "Entrar"],
                                  { y: E.u(116), row: E.u(44), w: E.u(170) });
 
-            var ab = E.gfx.button("AUTO", E.u(196), E.u(228), E.u(40), E.u(28),
+            var ab = E.gfx.button(auto ? "AUTO: ON" : "AUTO: OFF",
+                                  E.u(30), E.u(258), E.u(90), E.u(24),
                                   { primary: auto });
             if (E.hit(ab)) {
                 auto = !auto;
                 E.save.set("auto", auto ? "1" : "0");
                 E.audio.sfx("ui");
             }
-            E.gfx.text(auto ? "ligado" : "desligado", W - E.u(4), E.u(258),
-                       { ts: "tiny", align: "right", color: T.textDim });
 
             if (!hasLink) {
-                E.gfx.text("Sem Bluetooth neste firmware", W / 2, E.u(276),
-                           { ts: "small", align: "center", color: T.warn, fit: W - 20 });
+                E.gfx.text("Sem Bluetooth neste firmware", W - E.u(4), E.u(268),
+                           { ts: "small", align: "right", color: T.warn, fit: W - E.u(130) });
             } else if (note) {
-                E.gfx.text(note, W / 2, E.u(276),
-                           { ts: "small", align: "center", color: T.warn, fit: W - 20 });
+                E.gfx.text(note, W - E.u(4), E.u(268),
+                           { ts: "small", align: "right", color: T.warn, fit: W - E.u(130) });
             } else {
-                E.gfx.text("5 pontos vencem", W / 2, E.u(276),
-                           { ts: "small", align: "center", color: T.textDim });
+                E.gfx.text("5 pontos vencem", W - E.u(4), E.u(268),
+                           { ts: "small", align: "right", color: T.textDim });
             }
 
             var sb = E.gfx.button("Sair", W / 2 - E.u(35), H - E.u(30),
@@ -662,7 +662,8 @@ if (typeof __harness !== "undefined") {
         E: E,
         state: function () {
             return { scene: E.sceneName, role: role, mine: mine, theirs: theirs,
-                     auto: auto, paused: paused, over: over, hasLink: hasLink };
+                     auto: auto, paused: paused, over: over, hasLink: hasLink,
+                     ball: ball ? { x: ball.x, y: ball.y } : null };
         }
     };
 }

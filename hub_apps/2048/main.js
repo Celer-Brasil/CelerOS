@@ -76,7 +76,8 @@ function reset() {
     novoRec = false;
     merges.length = 0;
     juiceT = 0;
-    board[0] = 1024; board[1] = 1024;  // TEMP QA vitoria
+    spawn();
+    spawn();
 }
 
 function emptyCells() {
@@ -333,7 +334,8 @@ E.run({
                 var dim = E.caps.wide ? System.mixColor(T.bg, 0x0000, 62) : T.bg;
                 E.gfx.rect(0, 0, W, H, dim, { screen: true });
                 E.gfx.text("Você chegou ao 2048!", W / 2, 150,
-                           { ts: "big", align: "center", color: T.ok });
+                           { ts: "big", align: "center", color: T.ok,
+                             fit: W - 24 });
                 E.gfx.button("Continuar", BTN_CONT.x, BTN_CONT.y, BTN_CONT.w,
                              BTN_CONT.h, { primary: false });
             }

@@ -455,7 +455,8 @@ function update(dt) {
         spawnOrb();      // orbe de alivio durante o chefe
     }
 
-    // nave: tiro duplo (triplo com o poder do chefe) + rastro no motor
+    // nave: tiro duplo (triplo com o poder do chefe); o escapamento e o
+    // rastro sao emissores do main.js (fx), nao bursts por quadro
     var p = s.player;
     p.cool -= dt;
     if (p.invuln > 0) p.invuln -= dt;

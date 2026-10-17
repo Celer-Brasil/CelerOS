@@ -1205,7 +1205,7 @@ scenario('CelerNet: no sumido sai no teto 4xTTL mesmo sob fila cheia', function(
     function detonaConvidado() {
         return 'function(env, sim) {' +
             'sim.at(3000, function(e) { e.__harness.tap(240, 339); });' +    // DUELO no titulo
-            'sim.at(10000, function(e) { e.__harness.tap(240, 195); });' +   // ACEITAR o convite
+            'sim.at(10000, function(e) { e.__harness.tap(240, 142); });' +   // ACEITAR (1a linha da lista)
             'for (var t = 13000; t <= 17500; t += 350) (function(t) {' +     // planta 1 bomba no pe
             '  sim.at(t, function(e) {' +
             '    var d = e.__harness.detona;' +

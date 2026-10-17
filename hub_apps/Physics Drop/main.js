@@ -222,6 +222,12 @@ function cenaGangorra() {
         board.push(a);
         if (i > 0) linkPts(board[i - 1], a);
     }
+    // hastes de 2 em 2 e os vaos inteiros dao rigidez a tabua (sem elas a
+    // gangorra dobra em V em vez de girar no pivo)
+    for (i = 0; i < n - 2; i++) linkPts(board[i], board[i + 2]);
+    linkPts(board[0], board[4]);
+    linkPts(board[4], board[n - 1]);
+    linkPts(board[0], board[n - 1]);
     world.pin(board[4]);                 // pivo no centro
     var prev = board[0];
     for (i = 1; i <= 3; i++) {           // peso na ponta esquerda

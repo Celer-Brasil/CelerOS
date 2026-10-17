@@ -1133,12 +1133,12 @@ function joystick() {
     return Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? 1 : -1, 0] : [0, dy > 0 ? 1 : -1];
 }
 
-// dica do duelo (E.ui.dialog no lobby) — texto de UI pode ter acentos
-var TEXTO_DUELO = "Melhor de 3 rounds na mesma arena, gerada pela seed do host. " +
-    "Deslize para andar, toque para plantar bomba e segure o dedo para o detonador. " +
-    "A explosão que cai no tempo forte da trilha vale combo. " +
-    "Toque num nome para convidar; quando alguém te desafia, o toque aceita. " +
-    "Sair pelo canto superior direito desiste do round.";
+// dica do duelo (E.ui.dialog no lobby) — texto de UI pode ter acentos.
+// Curto de proposito: a caixa cresce com as linhas e precisa caber no vidro
+var TEXTO_DUELO = "Melhor de 3 rounds na mesma arena (seed do host). " +
+    "Deslize para andar, toque para a bomba e segure para detonar. " +
+    "Explosão no tempo forte da trilha vale combo. " +
+    "Toque num nome para convidar ou aceitar.";
 
 var tituloArte = false;
 E.run({
@@ -1181,17 +1181,20 @@ E.run({
                 var ty = tituloArte ? 199 : Math.round(H * 0.3);
                 E.gfx.text("DETONA!", W / 2, ty, { color: C.ouro, px: u(21), align: "center",
                            valign: "middle", screen: true });
-                var y = tituloArte ? 230 + u(14) : ty + u(30);
-                E.gfx.text("campanha " + prog.mundo + "-" + prog.nivel + "   recorde " + hi, W / 2, y,
-                           { color: C.cinza, ts: "small", align: "center", fit: W - u(16), screen: true });
-                y += u(11);
-                E.gfx.text("sobrevivencia: recorde " + E.save.num("sobre.hi", 0), W / 2, y,
+                // com a arte 480 so ha uma faixa curta abaixo da placa: os
+                // dois recordes vao numa linha so (duas linhas encostavam
+                // no JOGAR) e os botoes descem 12u
+                var y = tituloArte ? 234 : ty + u(30);
+                E.gfx.text("campanha " + prog.mundo + "-" + prog.nivel + "  rec " + hi +
+                           "   sobrevivencia rec " + E.save.num("sobre.hi", 0), W / 2, y,
                            { color: C.cinza, ts: "small", align: "center", fit: W - u(16), screen: true });
                 E.gfx.text("deslize para andar - toque para a bomba", W / 2, H - u(9),
                            { color: C.cinzaD, ts: "small", align: "center", valign: "middle",
                              fit: W - u(16), screen: true });
             }
-            this.btn = botoes(H - u(27) * 3 - u(10) * 2 - u(20),
+            // com a arte 480 a faixa do progresso: os botoes descem 12u para
+            // nao cobrirem a linha de recordes
+            this.btn = botoes(H - u(27) * 3 - u(10) * 2 - u(20) + (tituloArte ? u(12) : 0),
                               ["JOGAR", "DUELO", "SOBREVIVENCIA"], C.preto);
         }
     },
@@ -1254,7 +1257,8 @@ E.run({
                 if (!E.hit(b[i])) continue;
                 var a = b[i]._a;
                 if (a === "dica") {
-                    this.dlg = E.ui.dialog(TEXTO_DUELO, { name: "DUELO 1x1", speed: 40 });
+                    this.dlg = E.ui.dialog(TEXTO_DUELO, { name: "DUELO 1x1", speed: 45,
+                                                          px: u(11) });
                     E.audio.sfx("ok");
                 } else {
                     E.audio.sfx(a === "voltar" ? "back" : "ui");
@@ -1279,11 +1283,13 @@ E.run({
             if (this.first) {
                 this.first = false;
                 System.fillScreen(C.preto);
-                E.gfx.text("DUELO", W / 2, u(16), { color: C.ouro, px: u(16),
-                           align: "center", valign: "middle", screen: true });
-                E.gfx.text("bomberman 1x1 pela malha", W / 2, u(29),
-                           { color: C.cinza, ts: "small", align: "center", screen: true });
             }
+            // cabecalho todo quadro: o veu de transicao cobre a tela e nao
+            // devolve o que a cena nao repinta (mesmo com cena nao-static)
+            E.gfx.text("DUELO", W / 2, u(16), { color: C.ouro, px: u(16),
+                       align: "center", valign: "middle", screen: true });
+            E.gfx.text("bomberman 1x1 pela malha", W / 2, u(29),
+                       { color: C.cinza, ts: "small", align: "center", screen: true });
             // dialogo modal por cima do cabecalho (lista/botoes nao reagem)
             if (this.dlg) {
                 var dw = Math.min(u(220), W - u(16));

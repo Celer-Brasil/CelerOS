@@ -1,4 +1,4 @@
-// test.js — smoke do Supernova 2.3 no harness: titulo -> jogando -> arrasto
+// test.js — smoke do Supernova 2.5 no harness: titulo -> jogando -> arrasto
 // -> MORTE (hit deterministico via __harness.supernova.jogo) -> fim ->
 // de novo -> rajada do chefe no POOL de ebullets -> SUPERNOVA (detonacao
 // com carga furada) -> pausa -> continuar, parando no watchdog. No harness
@@ -59,9 +59,9 @@ module.exports.wire = function (env) {
     }, 2200);
 
     // fim de jogo (t > 0,5): DE NOVO no primeiro item do menu da dep ui
-    // (menu em y = H*0.52 = 250, linha de 80: 250..322), x 60..420
+    // (menu em y = H*0.60 = 288, linha de 80: 288..360), x 60..420
     at(function () {
-        h.pushTouch([{ x: 240, y: 280, touched: 1 }, { x: 240, y: 280, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 320, touched: 1 }, { x: 240, y: 320, touched: 0 }]);
     }, 3600);
 
     // carrega, solta o anel do chefe no POOL e detona a supernova (toque no

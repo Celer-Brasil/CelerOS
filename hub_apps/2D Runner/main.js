@@ -521,10 +521,11 @@ E.run({
             if (pausado) {
                 var act = E.ui.pause({ title: "PAUSA",
                                        labels: ["Continuar", "Recomecar", "Sair"] });
-                if (act === "resume") { retomar(); sfx("ui"); }
+                if (act === "resume") { retomar(); this.fps = 60; sfx("ui"); }
                 else if (act === "restart") {
                     resetGame();
                     pausado = false;
+                    this.fps = 60;
                     fxFonte(true);
                     armaJogo();
                     sfx("ui");

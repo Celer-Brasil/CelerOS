@@ -14,10 +14,16 @@ Comandos:
   provision [--wifi SSID SENHA] [--grant APP]  WiFi + token + permissoes (1a vez)
   info                        versao/board/heap/rede/filesystems
   top [-w] [--sort cpu|stack|name]  profiling: CPU% por task em janela,
-                              heap interna/PSRAM, consumo do app JS, fps
-                              (-w atualiza como o top; taxas = delta de fotos)
+                              heap interna/PSRAM, consumo do app JS, fps e a
+                              linha svchost (giros/overrun/pior) quando o
+                              firmware anuncia o bloco "svc" no KL_STATS
   stats [--json]              uma foto de profiling (taxas desde o boot)
-  shell [cmd...]              shell interativo (ou executa um comando)
+  svc list                    servicos de app em 2o plano: estado por servico
+  svc info PKG                detalhe do servico (estado, reinicios, pump)
+  svc stop|start|setup PKG    para / religa / roda o setup de novo (API 42)
+  crash [n]                   ultimo crash (lastcrash) + tail do apps.log
+  shell [cmd...]              shell interativo (ou executa um comando; o shell
+                              do device NAO trata aspas: escreva sem '...')
   mesh status|join|leave      a matilha pelo cabo (API 40): entra por nome+senha
   res ls|relay|sensor|...     recursos da matilha pelo cabo (gateway USB)
   ls [-l] CAMINHO             lista diretorio (/local ou /sd)
@@ -26,10 +32,14 @@ Comandos:
   push LOCAL REMOTO           envia arquivo para o dispositivo
   pull REMOTO [LOCAL]         baixa arquivo do dispositivo
   reboot                      reinicia a placa
-  logcat [--dump] [--ts] [--grep P]  logs: stream ao vivo ou copia o buffer (--dump)
+  logcat [--dump] [--since TS] [--grep REGEX] [--json] [--ts]
+                              logs: stream ao vivo ou copia o buffer (--dump);
+                              filtro por timestamp do device (I (1234)) e regex
   ota push FW.bin [--no-reboot]  grava firmware pela conexao (sem esptool)
   coredump [--out ARQ]        baixa coredump ELF do ultimo crash nativo
-  debug [APP] [--serve]       debugger Duktape: breakpoints, step, eval (REPL neste terminal)
+  debug [APP] [--app APP] [--serve]  debugger Duktape: breakpoints, step,
+                              eval (REPL neste terminal); --eval sem app falha
+                              na hora em vez de esperar o attach
   screencap [SAIDA.png]       captura da tela do dispositivo
   tap X Y [ms]                injeta um toque (navegar pela UI via USB)
   swipe X0 Y0 X1 Y1 [ms]      injeta um arrasto (scroll/troca de pagina)
@@ -246,6 +256,30 @@ def save_token(addr, token, devid=None):
         pass  # cache e conveniencia: sem ele, --token/env continuam valendo
 
 
+def forget_token(addr, token=None, devid=None):
+    """Tira do cache o token recusado (pelo endereco, pela identidade e por
+    qualquer chave que guarde o MESMO valor). Proximo comando volta a
+    perguntar/renovar em vez de repetir o token velho depois de um reflash
+    ou de um "bridge reset" no device."""
+    p = token_store_path()
+    try:
+        cache = load_token_cache()
+        gone = False
+        for key in (addr, ("id:" + devid) if devid else None):
+            if key and key in cache:
+                del cache[key]
+                gone = True
+        if token:
+            for key, val in list(cache.items()):
+                if val == token:
+                    del cache[key]
+                    gone = True
+        if gone:
+            p.write_text(json.dumps(cache, indent=1, sort_keys=True))
+    except OSError:
+        pass  # cache e conveniencia
+
+
 def net_token(addr, prompt=True):
     """Token do bridge: --token (caller) > env CELEROS_BRIDGE_TOKEN > cache."""
     tok = os.environ.get("CELEROS_BRIDGE_TOKEN")
@@ -294,35 +328,46 @@ class NetTransport:
             self.devid = banner_devid(banner)
             cache = load_token_cache()
             id_tok = cache.get("id:" + self.devid) if self.devid else None
-            cands = []
+            cands = []  # (token, veio_do_cache)
             if token is not None:
-                cands.append(token)
+                cands.append((token, False))
             else:
                 for t in (cache.get(self.addr), id_tok):
-                    if t and t not in cands:
-                        cands.append(t)
-            if not cands:
-                cands = [net_token(self.addr, prompt=prompt)]
+                    if t and t not in [c[0] for c in cands]:
+                        cands.append((t, True))
+                if not cands:
+                    cands.append((net_token(self.addr, prompt=prompt), False))
             # 2 tentativas no maximo: o device corta a conexao na 3a falha
             ok = False
             last = ""
-            for t in cands[:2]:
+            for t, _from_cache in cands[:2]:
                 self.sock.sendall(f"AUTH {t}\n".encode())
-                last = self._line(timeout)
+                try:
+                    last = self._line(timeout)
+                except CelerError as e:
+                    if "timeout" in str(e):
+                        # sem resposta ao AUTH: token velho pos-reflash tambem
+                        # chega assim (o bridge nao devolve NO quando nao ouve)
+                        raise CelerError(
+                            f"{e}: token velho? rode no device: shell bridge "
+                            f"(e renove com celerctl pair {self.addr})") from None
+                    raise
                 if last == "OK":
                     ok = True
                     if token is None:
                         save_token(self.addr, t, self.devid)  # IP novo: re-key
                     break
             if not ok:
-                if id_tok and id_tok in cands[:2]:
-                    hint = (" (token da identidade tambem recusado: \"bridge reset\" "
-                            "troca no device? pare de novo com celerctl pair)")
-                else:
-                    hint = ""
-                raise CelerError(f"auth do bridge recusada ({last}): conferir o "
-                                 f"token no device (shell 'bridge' ou celerctl info)"
-                                 f"{hint}")
+                # token do CACHE recusado (reflash/bridge reset): limpa para o
+                # proximo comando pedir o atual em vez de repetir o velho
+                for t, from_cache in cands[:2]:
+                    if from_cache:
+                        forget_token(self.addr, t, self.devid)
+                hint = ("" if any(fc for _, fc in cands[:2]) else
+                        " (token do --token/env tambem e conferido no device)")
+                raise CelerError(f"auth do bridge recusada ({last}): token velho? "
+                                 f"rode no device: shell bridge; depois celerctl "
+                                 f"pair {self.addr}{hint}")
         except BaseException:
             self.sock.close()
             raise
@@ -1431,23 +1476,57 @@ def resolve_port(selector):
         f"(celerctl devices lista os seriais)")
 
 
+def _cached_token_state(addr, devid=None):
+    """Valida o token guardado contra o bridge: 'ok', 'velho' (auth recusada;
+    o NetTransport ja limpou o cache), 'timeout'/'erro' — ou None sem cache.
+    Um token velho apos reflash e o caso que mais confunde: o `devices` avisa
+    na propria linha em vez de deixar o proximo comando morrer no AUTH."""
+    cache = load_token_cache()
+    if addr not in cache and not (devid and "id:" + devid in cache):
+        return None
+    try:
+        link = HostLink(addr, timeout=1.5, prompt=False)
+        link.close()
+        return "ok"
+    except CelerError as e:
+        msg = str(e).lower()
+        if "auth" in msg:
+            return "velho"
+        if "timeout" in msg:
+            return "timeout"
+        return "erro"
+    except (OSError, serial.SerialException):
+        return "erro"
+
+
 def cmd_devices(args):
     found = find_devices(verbose=True)
     net = find_net_devices()
     cache = load_token_cache()
     for ip, ident in net:
         devid = probe_devid(ident)
+        addr = f"{ip}:{BRIDGE_PORT}"
         mark = ""
-        if devid and "id:" + devid in cache:
-            addr = f"{ip}:{BRIDGE_PORT}"
-            if cache.get(addr) != cache["id:" + devid]:
+        has_cache = bool(devid and "id:" + devid in cache) or addr in cache
+        if has_cache:
+            if devid and cache.get("id:" + devid) and cache.get(addr) != cache["id:" + devid]:
                 # DHCP mudou o IP de um device ja pareado: cura o cache ja
                 # na listagem (conectar tambem cura, pelo banner)
                 save_token(addr, cache["id:" + devid], devid)
-            mark = " (pareado)"
+            state = _cached_token_state(addr, devid)
+            if state == "ok":
+                mark = " (pareado)"
+            elif state == "velho":
+                mark = (" (token VELHO: rode no device: shell bridge; "
+                        "depois celerctl pair)")
+            elif state == "timeout":
+                mark = (" (sem resposta ao token: token velho? shell bridge / "
+                        "celerctl pair)")
+            else:
+                mark = " (pareado?)"
         # o "|id ..." e maquiaria de casamento: fora do display
         ident = _BRIDGE_ID_RE.sub("", ident)
-        print(f"{ip + ':' + str(BRIDGE_PORT):<14} {'wifi':<14} {ident}{mark}")
+        print(f"{addr:<14} {'wifi':<14} {ident}{mark}")
     if not found and not net:
         # com -l tambem: saida vazia na bancada parecia travamento do comando
         print("nenhum dispositivo encontrado (USB ou WiFi)")
@@ -1459,13 +1538,27 @@ def cmd_devices(args):
 
 def cmd_pair(args):
     """Pareia com o Celer Debug Bridge: valida o token e guarda no cache
-    (pelo endereco E pela identidade do device, quando o banner traz o id)."""
+    (pelo endereco E pela identidade do device, quando o banner traz o id).
+
+    Token do cache recusado (reflash, "bridge reset") nao e beco sem saida:
+    limpa a entrada velha e pede o token atual uma vez — `pair` e justamente
+    o comando de renovacao."""
     sel = args.addr or getattr(args, "port_sel", None)
     if not sel:
         die("uso: celerctl pair [--token X] IP_OU_HOST:PORTA (ou -p)")
     addr = normalize_net_addr(sel)
-    token = args.token or net_token(addr, prompt=True)
-    link = HostLink(addr, timeout=3.0, token=token)
+    fixed = args.token if args.token is not None else os.environ.get("CELEROS_BRIDGE_TOKEN")
+    token = fixed or net_token(addr, prompt=True)
+    try:
+        link = HostLink(addr, timeout=3.0, token=token)
+    except CelerError as e:
+        if fixed or "auth" not in str(e).lower():
+            raise
+        forget_token(addr, token)
+        print("aviso: token do cache recusado — pedindo o token atual do device "
+              "(shell bridge)", file=sys.stderr)
+        token = net_token(addr, prompt=True)
+        link = HostLink(addr, timeout=3.0, token=token)
     try:
         ident = link.hello()
         info = link.info()
@@ -1603,8 +1696,33 @@ def _summary_lines(b, a=None, window_s=None):
     return lines
 
 
+def _svc_line(a, b):
+    """Linha do svchost a partir do bloco "svc" do KL_STATS (API 42).
+
+    Contadores do pump sao cumulativos desde o boot: a janela e o delta entre
+    as duas fotos e `max_ms` e o pior giro do boot. Firmware antigo nao manda
+    o bloco (o DEVICESTATS faz rollback se nao couber) — devolve None e o top
+    segue sem a linha."""
+    sb = (b or {}).get("svc")
+    if not sb:
+        return None
+    sa = (a or {}).get("svc") or {}
+    dticks = sb.get("ticks", 0) - sa.get("ticks", 0)
+    dovr = sb.get("overruns", 0) - sa.get("overruns", 0)
+    dsum = sb.get("sum_ms", 0) - sa.get("sum_ms", 0)
+    pior = sb.get("max_ms", 0)
+    if dticks <= 0:
+        return f"svchost: sem giros na janela (pior do boot {pior}ms, {dovr} overrun)"
+    media = dsum / dticks
+    return (f"svchost: {dticks} giro(s) na janela (media {media:.1f}ms, "
+            f"{dovr} overrun, pior do boot {pior}ms)")
+
+
 def _render_top(a, b, window_s, sort="cpu", limit=0):
     lines = _summary_lines(b, a, window_s)
+    svc = _svc_line(a, b)
+    if svc:
+        lines.append(svc)
     lines.append("")
     rows, _total = _task_rows(a, b)
     if sort == "stack":
@@ -1672,6 +1790,53 @@ def cmd_stats(args):
         lines.append(f"{t['n']:<16.16} {t['s']:>3} {t['p']:>4} {t['stk']:>7} {cpu:>6.1f}")
     print("\n".join(lines))
 
+
+# ------------------------------------------------------ svc / crash (API 42)
+# Atalhos para o shell do device. O shell NAO trata aspas: os argumentos vao
+# separados por espaco, como digitados (pkg e um token simples).
+
+def _exec_print(link, line):
+    """Roda `line` no shell do device e imprime a saida; devolve o exit code."""
+    code, out = link.exec(line)
+    if out:
+        sys.stdout.write(out if out.endswith("\n") else out + "\n")
+        sys.stdout.flush()
+    return code
+
+
+def cmd_svc(args):
+    """Servicos de app em segundo plano (API 42): `svc list` mostra estado,
+    reinicios e ultimo erro por servico; `svc info PKG` o detalhe; stop/start
+    param e religam; setup reroda o install.sh. Tudo pelo EXEC do HostLink,
+    sem aspas (o parser do device nao as remove)."""
+    pkg = getattr(args, "pkg", None)
+    if pkg is not None and (not pkg or re.search(r"\s", pkg)):
+        die(f"nome de servico invalido: {pkg!r} (o shell do device nao "
+            "trata aspas)")
+    line = "svc " + args.svc_cmd + (f" {pkg}" if pkg else "")
+    link = open_link(args)
+    try:
+        code = _exec_print(link, line)
+    finally:
+        link.close()
+    if code != 0:
+        sys.exit(code)
+
+
+def cmd_crash(args):
+    """Triagem do ultimo erro de app: `crash [n]` no shell devolve o header
+    do /local/lastcrash.txt + as ultimas n linhas do apps.log (o `lasterror`
+    segue com a stack inteira)."""
+    if args.n is not None and not 1 <= args.n <= 200:
+        die("crash: n entre 1 e 200")
+    line = "crash" + (f" {args.n}" if args.n is not None else "")
+    link = open_link(args)
+    try:
+        code = _exec_print(link, line)
+    finally:
+        link.close()
+    if code != 0:
+        sys.exit(code)
 
 
 # ---------------------------------------------------------------- gateway USB
@@ -2196,32 +2361,164 @@ def cmd_reboot(args):
     print("reiniciando...")
 
 
+# ------------------------------------------------------------------- logcat
+
+# Timestamp do ESP-IDF: "I (1234) tag: mensagem" (ms desde o boot).
+_LOG_TS_RE = re.compile(r"^\s*([IWEDV]) \((\d+)\)")
+
+
+def parse_log_ts(line):
+    """(nivel, ms desde o boot) de "I (1234) wifi: ..."; (None, None) se a
+    linha nao tem o prefixo do ESP-IDF (continuacao de stack, print cru)."""
+    m = _LOG_TS_RE.match(line)
+    if not m:
+        return None, None
+    return m.group(1), int(m.group(2))
+
+
+def parse_since(spec):
+    """--since: ms desde o boot ("1234", "1234ms", "90s", "2m") ou relativo ao
+    log mais novo do conjunto ("-30s"). Devolve ms; negativo = relativo."""
+    s = (spec or "").strip().lower()
+    rel = s.startswith("-")
+    if rel:
+        s = s[1:].strip()
+    m = re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*(ms|s|m|min)?", s)
+    if not m:
+        raise CelerError(f"--since invalido: {spec!r} (use 1234, 1234ms, 90s, "
+                         "2m ou -30s para os ultimos 30 s do buffer)")
+    v = float(m.group(1).replace(",", "."))
+    unit = m.group(2) or "ms"
+    ms = int(round(v * {"ms": 1, "s": 1000, "m": 60000, "min": 60000}[unit]))
+    return -ms if rel else ms
+
+
+def _grep_re(pattern):
+    try:
+        return re.compile(pattern, re.IGNORECASE) if pattern else None
+    except re.error as e:
+        raise CelerError(f"--grep invalido ({e}): use uma REGEX, ex: "
+                         '"wifi|crash"') from None
+
+
+def filter_log_lines(lines, since=None, grep=None):
+    """Filtro client-side, puro (testavel no host): --since absoluto ou
+    relativo ao log mais novo do CONJUNTO (o --dump fecha tudo antes) e
+    --grep REGEX (ignora caixa). Linhas de continuacao (stack traces, que
+    comecam com espaco) acompanham a decisao da anterior: grep no cabecalho
+    nao perde a stack."""
+    since_ms = parse_since(since) if since else None
+    pat = _grep_re(grep)
+    newest = None
+    for line in lines:
+        _, ts = parse_log_ts(line)
+        if ts is not None and (newest is None or ts > newest):
+            newest = ts
+    bound = None
+    if since_ms is not None:
+        bound = since_ms if since_ms >= 0 else (newest or 0) + since_ms
+    out = []
+    keep_prev = True
+    for line in lines:
+        _, ts = parse_log_ts(line)
+        if ts is not None:
+            keep = bound is None or ts >= bound
+            if keep and pat is not None and not pat.search(line):
+                keep = False
+            keep_prev = keep
+        elif line[:1].isspace():
+            keep = keep_prev  # continuacao: segue o cabecalho
+        else:
+            keep = keep_prev
+            if keep and pat is not None and not pat.search(line):
+                keep = False
+            keep_prev = keep
+        if keep:
+            out.append(line)
+    return out
+
+
+def _ring_rolled(lines):
+    """Heuristica de ring rolado: o dump comecou no MEIO de uma linha (nao ha
+    contador de descarte no firmware; o ring sobrescreve byte a byte). Se a
+    1a linha nao tem o prefixo "I (1234)" e logo depois aparecem linhas com
+    ele, o comeco mais antigo foi perdido."""
+    head = next((ln for ln in lines if ln.strip()), None)
+    if head is None or parse_log_ts(head)[1] is not None:
+        return False
+    return any(parse_log_ts(ln)[1] is not None for ln in lines[:6])
+
+
+def _emit_log(line, args):
+    if args.json:
+        level, ts = parse_log_ts(line)
+        rec = {"ts": ts, "level": level, "text": line}
+        if args.ts:
+            t = time.time()
+            rec["host_ts"] = (time.strftime("%H:%M:%S", time.localtime(t))
+                              + f".{int((t % 1) * 1000):03d}")
+        print(json.dumps(rec, ensure_ascii=False))
+        return
+    if args.ts:
+        t = time.time()
+        stamp = time.strftime("%H:%M:%S", time.localtime(t))
+        line = f"[{stamp}.{int((t % 1) * 1000):03d}] {line}"
+    print(line)
+
+
+class _LogFilter:
+    """Filtro incremental do stream. O --since relativo usa o maior timestamp
+    visto ate agora (no --dump o filter_log_lines conhece o conjunto todo)."""
+
+    def __init__(self, since=None, grep=None):
+        self.since = parse_since(since) if since else None
+        self.pat = _grep_re(grep)
+        self.newest = None
+        self.keep_prev = True
+
+    def keep(self, line):
+        _, ts = parse_log_ts(line)
+        if ts is not None:
+            if self.newest is None or ts > self.newest:
+                self.newest = ts
+            if self.since is None:
+                keep = True
+            elif self.since >= 0:
+                keep = ts >= self.since
+            else:
+                keep = ts >= self.newest + self.since
+            if keep and self.pat is not None and not self.pat.search(line):
+                keep = False
+            self.keep_prev = keep
+        elif line[:1].isspace():
+            keep = self.keep_prev
+        else:
+            keep = self.keep_prev
+            if keep and self.pat is not None and not self.pat.search(line):
+                keep = False
+            self.keep_prev = keep
+        return keep
+
+
+def _log_chunks(raw):
+    """Decodifica e costura os chunks do ring em linhas completas."""
+    text = raw.decode("utf-8", "replace")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 def cmd_logcat(args):
+    flt = _LogFilter(args.since, args.grep)  # valida --since/--grep ja
     link = open_link(args)
-
-    # saida com filtro/timestamp por linha: os frames trazem chunks do ring
-    # (linhas podem vir picotadas), entao um buffer costura antes do grep
-    out_buf = [""]
-
-    def out(data):
-        out_buf[0] += data.decode("utf-8", "replace")
-        *done, out_buf[0] = out_buf[0].split("\n")
-        for line in done:
-            if args.grep and args.grep.lower() not in line.lower():
-                continue
-            if args.ts:
-                t = time.time()
-                stamp = time.strftime("%H:%M:%S", time.localtime(t))
-                line = f"[{stamp}.{int((t % 1) * 1000):03d}] {line}"
-            sys.stdout.write(line + "\n")
-        sys.stdout.flush()
-
     try:
         if args.dump:
             # firmware atual: KL_LOG_DUMP copia o ring SEM consumir (dump
             # repetivel) e anuncia o total — le exatamente isso, sem janela
             # de silencio. Firmware antigo recusa o opcode: cai no fallback
             # abaixo (LOG_ON, que drena o ring, + janela de silencio)
+            raw = bytearray()
             dumped = False
             if "LOG_DUMP" in KL:
                 try:
@@ -2232,7 +2529,7 @@ def cmd_logcat(args):
                         while got < total:
                             cmd, pl = link.read_push_frame(timeout=10.0)
                             if cmd == KL["LOG_DATA"]:
-                                out(pl[1:])
+                                raw += pl[1:]
                                 got += len(pl) - 1
                         dumped = True
                 except CelerError:
@@ -2247,17 +2544,31 @@ def cmd_logcat(args):
                     except Exception:
                         continue
                     if cmd == KL["LOG_DATA"]:
-                        out(payload[1:])
+                        raw += payload[1:]
                         last = time.monotonic()
-            out(b"\n")
+            lines = _log_chunks(bytes(raw))
+            if _ring_rolled(lines):
+                print("aviso: o ring de logs pode ter rolado — o dump comecou "
+                      "no meio de uma linha e as mais antigas foram perdidas",
+                      file=sys.stderr)
+            for line in filter_log_lines(lines, args.since, args.grep):
+                _emit_log(line, args)
             return
+        if args.since and parse_since(args.since) < 0:
+            print("aviso: --since relativo so recorta o buffer no --dump; no "
+                  "stream vale a partir do anexo", file=sys.stderr)
         link.logcat_on()
         print("aguardando logs do dispositivo (Ctrl-C para sair; --dump copia o buffer e sai)",
               file=sys.stderr)
+        buf = ""
         while True:
             cmd, payload = link.read_push_frame(timeout=3600.0)
             if cmd == KL["LOG_DATA"]:
-                out(payload[1:])
+                buf += payload[1:].decode("utf-8", "replace")
+                *done, buf = buf.split("\n")
+                for line in done:
+                    if flt.keep(line):
+                        _emit_log(line, args)
     except KeyboardInterrupt:
         print()
     finally:
@@ -2423,6 +2734,34 @@ def _roteiro_eval(stdin, expr, sleep=time.sleep):
         pass  # cliente saiu antes (pipe fechado): o proxy cuida do resto
 
 
+def _app_running(link):
+    """Ha app JS aberto? Le js.active do KL_STATS; None se o firmware nao
+    responde ao STATS (ai o debug segue o caminho antigo, sem a guarda)."""
+    if "STATS" not in KL:
+        return None
+    try:
+        snap = link.stats()
+    except CelerError:
+        return None
+    return bool((snap.get("js") or {}).get("active"))
+
+
+def _debug_target(link, args):
+    """App alvo do `debug` (posicional ou --app) e a guarda do --eval.
+
+    O debugger so anexa a um app ABERTO: com --eval e sem app, abrir os
+    sockets e esperar o attach pende o terminal para sempre (o cliente nao
+    fala primeiro). Falha aqui, antes de qualquer socket, com a receita."""
+    app = getattr(args, "app", None) or getattr(args, "app_opt", None)
+    if getattr(args, "eval", None) and getattr(args, "serve", False):
+        die("--eval precisa do cliente neste terminal (nao combine com --serve)")
+    if getattr(args, "eval", None) and not app and _app_running(link) is False:
+        die("debug --eval: nenhum app aberto — o debugger so anexa a um app. "
+            "abra um (celerctl apps run NOME) ou use: "
+            "celerctl debug --app NOME --eval EXPR")
+    return app
+
+
 def cmd_debug(args):
     """Debugger do Duktape pela serial. Abre dois TCP locais — o protocolo
     dmsg cru (porta) e as linhas de log do device (porta+1) — e faz o proxy
@@ -2441,6 +2780,8 @@ def cmd_debug(args):
     link = open_link(args)
     if "DEBUG_CTL" not in KL:
         die("celerctl sem KL_DEBUG_CTL: firmware muito antigo para o debugger")
+    # --eval sem app (e sem --app): falha ANTES de abrir sockets/cliente
+    app = _debug_target(link, args)
 
     def _terminate(*_):
         raise KeyboardInterrupt  # kill/terminal fechado: roda a limpeza (DEBUG_CTL 0)
@@ -2461,7 +2802,6 @@ def cmd_debug(args):
     srv = listen(args.tcp_port)
     log_srv = listen(args.tcp_port + 1)
     log_srv.setblocking(False)
-    app = getattr(args, "app", None)
 
     client = None
     node = shutil.which("node")
@@ -2972,6 +3312,68 @@ def _app_meta(link, base, dirname):
     meta["_base"] = base
     meta["_dir"] = dirname
     return meta
+
+
+APP_BASES = ("/local/apps", "/sd/apps")
+
+
+def _norm_app_name(name):
+    """Normaliza para casar pasta x nome de exibicao x sufixo do packageName:
+    "WebPass" == "webpass", "Arrasa!" == "Arrasa"."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _pc_quote(name):
+    """Aspas do shell do PC (nao do device) so quando a pasta tem espaco: a
+    linha sugerida no terminal precisa chegar como UM argumento."""
+    return f'"{name}"' if any(c.isspace() for c in name) else name
+
+
+def _installed_apps(link):
+    """[(base, pasta, meta|None)] dos dois roots — so no caminho de erro."""
+    out = []
+    for base in APP_BASES:
+        try:
+            entries = link.ls(base)
+        except CelerError:
+            continue
+        for e in entries:
+            if e["dir"]:
+                out.append((base, e["name"], _app_meta(link, base, e["name"])))
+    return out
+
+
+def _app_not_found(link, name, action="run"):
+    """Mensagem que ensina a pasta REAL do app: o install usa o sufixo do
+    packageName (celeros.webpass -> pasta "webpass") e `apps run NOME` olha
+    a PASTA, nao o nome de exibicao ("WebPass") — o erro classico de bancada."""
+    apps = _installed_apps(link)
+    want = _norm_app_name(name)
+    achado = None
+    for base, dirname, meta in apps:
+        meta = meta or {}
+        pkg = str(meta.get("packageName") or "")
+        sufixo = pkg.rsplit(".", 1)[-1] if pkg else ""
+        cands = (dirname, sufixo, str(meta.get("name") or ""))
+        if want and any(_norm_app_name(c) == want for c in cands):
+            achado = (base, dirname, pkg)
+            break
+    msgs = [f"app '{name}' nao encontrado em /local/apps nem /sd/apps"]
+    if achado:
+        base, dirname, pkg = achado
+        extra = f" (packageName {pkg})" if pkg else ""
+        cmd = f"celerctl apps {action} {_pc_quote(dirname)}"
+        if action == "rm" and base.startswith("/sd"):
+            cmd += " --sd"
+        msgs.append(f"a pasta instalada e '{dirname}'{extra} — use: {cmd}")
+    elif apps:
+        nomes = ", ".join(sorted(d for _, d, _ in apps)[:12])
+        msgs.append(f"apps instalados: {nomes}")
+        msgs.append("`apps run` usa o nome da PASTA (o sufixo do packageName: "
+                    "celeros.webpass -> webpass), nao o nome de exibicao")
+    else:
+        msgs.append("nenhum app instalado — `apps list` / `apps install PASTA`")
+    die("\n  ".join(msgs))
 
 
 def _rm_tree(link, path):
@@ -3572,16 +3974,15 @@ def _apps_installzip(link, args):
     zp = Path(args.zipfile)
     if not zp.is_file():
         die(f"{zp} nao existe")
-    nome = args.name
-    if not nome:
-        try:
-            import zipfile
-            import json as _json
-            with zipfile.ZipFile(zp) as z:
-                meta = _json.loads(z.read("app.json").decode("utf-8"))
-            nome = str(meta.get("name") or "")
-        except (KeyError, ValueError, OSError) as e:
+    import zipfile
+    meta = {}
+    try:
+        with zipfile.ZipFile(zp) as z:
+            meta = json.loads(z.read("app.json").decode("utf-8"))
+    except (KeyError, ValueError, OSError, zipfile.BadZipFile) as e:
+        if not args.name:
             die(f"zip sem app.json valido: {e}")
+    nome = args.name or str(meta.get("name") or "")
     if not nome or "/" in nome or "\\" in nome or ".." in nome or len(nome) > 40:
         die(f"nome de pasta invalido: {nome!r}")
     remote = "/local/celeros_install.zip"
@@ -3596,6 +3997,15 @@ def _apps_installzip(link, args):
     if rc != 0:
         die(f"installzip falhou no device (rc={rc})")
     print(f"instalado: /local/apps/{nome} (rescan pedido)")
+    # a pasta e o que `apps run` acha — o packageName pode ter sufixo
+    # diferente do nome de exibicao (celeros.webpass -> "WebPass" no zip)
+    pkg = str(meta.get("packageName") or "")
+    sufixo = pkg.rsplit(".", 1)[-1] if pkg else ""
+    if sufixo and sufixo != nome:
+        print(f"nota: packageName {pkg}; a pasta no device e '{nome}' — "
+              f"para abrir: celerctl apps run {_pc_quote(nome)}")
+    else:
+        print(f"para abrir: celerctl apps run {_pc_quote(nome)}")
 
 
 def _apps_deps(link, args):
@@ -3668,7 +4078,7 @@ def _apps_run(link, args):
             target = f"{candidate_base}/{args.name}"
             break
     if target is None:
-        die(f"app '{args.name}' nao encontrado em /local/apps nem /sd/apps")
+        _app_not_found(link, args.name, "run")
     _relaunch(link, args.name)
     print(f"abrindo: {target}")
 
@@ -3752,7 +4162,7 @@ def cmd_apps(args):
                     target = f"{candidate_base}/{args.name}"
                     break
             if target is None:
-                die(f"app '{args.name}' nao encontrado em /local/apps nem /sd/apps")
+                _app_not_found(link, args.name, "pull")
             out_dir = Path(args.dest) if args.dest else Path(args.name)
             if out_dir.exists() and any(out_dir.iterdir()):
                 die(f"{out_dir} ja existe e nao esta vazia")
@@ -3764,7 +4174,7 @@ def cmd_apps(args):
             target = f"{base}/{args.name}"
             st = link.stat(target)
             if st is None or not st["dir"]:
-                die(f"{target} nao existe")
+                _app_not_found(link, args.name, "rm")
             meta = _app_meta(link, base, args.name)
             if meta and meta.get("system") and not args.force:
                 die(f"'{args.name}' e app do sistema; use --force para remover")
@@ -3921,7 +4331,25 @@ def build_parser():
     p.add_argument("--json", action="store_true", help="JSON puro do device")
     p.set_defaults(func=cmd_stats)
 
-    p = sub.add_parser("shell", help="shell interativo ou executa comando")
+    p = sub.add_parser("svc", help="servicos de app em 2o plano (API 42): estado, "
+                                   "stop/start/setup")
+    p.set_defaults(func=cmd_svc)
+    sv = p.add_subparsers(dest="svc_cmd", required=True)
+    sv.add_parser("list", help="estado, reinicios e ultimo erro de cada servico")
+    for _nome, _ajuda in (("info", "detalhe do servico de um app"),
+                          ("stop", "para o servico (ate `svc start` ou reboot)"),
+                          ("start", "religa um servico parado"),
+                          ("setup", "roda o setup/install.sh do servico de novo")):
+        q = sv.add_parser(_nome, help=_ajuda)
+        q.add_argument("pkg", help="packageName do app (ex: celeros.demo)")
+
+    p = sub.add_parser("crash", help="resumo do ultimo crash + ultimas linhas do apps.log")
+    p.add_argument("n", nargs="?", type=int, default=None,
+                   help="linhas do apps.log a mostrar (1..200; default do device: 20)")
+    p.set_defaults(func=cmd_crash)
+
+    p = sub.add_parser("shell", help="shell interativo ou executa comando "
+                                     "(o shell do device nao trata aspas)")
     p.add_argument("cmd", nargs="*", help="comando a executar")
     p.set_defaults(func=cmd_shell)
 
@@ -3969,10 +4397,17 @@ def build_parser():
                    help="copia o buffer acumulado no dispositivo e sai (dump repetivel)")
     p.add_argument("--quiet-ms", type=int, default=800,
                    help="janela de silencio do --dump em ms (so no firmware antigo)")
+    p.add_argument("--since", metavar="TS",
+                   help="so linhas a partir do timestamp do device (I (1234)): ms "
+                        "desde o boot (1234, 1234ms, 90s, 2m) ou relativo ao log "
+                        "mais novo (-30s = ultimos 30 s do buffer)")
     p.add_argument("--ts", action="store_true",
                    help="prefixa cada linha com hora do host (HH:MM:SS.mmm)")
-    p.add_argument("--grep", metavar="PADRAO",
-                   help="mostra so as linhas que contem o padrao (ignora caixa)")
+    p.add_argument("--grep", metavar="REGEX",
+                   help="mostra so as linhas que casam com a REGEX (ignora caixa; "
+                        "o filtro e no PC — nada de aspas no shell do device)")
+    p.add_argument("--json", action="store_true",
+                   help="uma linha JSON por log (ts/level/text; com --ts inclui host_ts)")
     p.set_defaults(func=cmd_logcat)
 
     p = sub.add_parser("ota", help="grava firmware pela conexao (sem esptool)")
@@ -3990,6 +4425,9 @@ def build_parser():
 
     p = sub.add_parser("debug", help="debugger Duktape do app (breakpoints/step/eval)")
     p.add_argument("app", nargs="?", help="app a abrir apos o cliente conectar (default: nenhum)")
+    p.add_argument("--app", dest="app_opt", metavar="NOME", default=None,
+                   help="abre este app antes de anexar (equivalente ao argumento "
+                        "posicional; com --eval evita o 'nenhum app aberto')")
     p.add_argument("--tcp-port", type=int, default=9092, dest="tcp_port",
                    help="porta TCP local do proxy (default 9092; nao confundir com -p serial)")
     p.add_argument("--serve", action="store_true",

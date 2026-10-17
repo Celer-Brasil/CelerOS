@@ -21,8 +21,10 @@ import threading
 import time
 import unittest
 import zlib
+import builtins
 import hashlib
-from contextlib import redirect_stderr
+import zipfile
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
@@ -112,6 +114,8 @@ class FakeDevice:
         self.drop_chunk = []      # seqs cujo WRITE_CHUNK some no caminho (1x cada)
         self.corrupt_chunk = []   # seqs que chegam com 1 byte virado (1x cada)
         self.execs = []           # linhas EXEC recebidas (o "rescan" do install)
+        self.exec_out = {}        # linha EXEC -> (exit, saida) para svc/crash
+        self.log_ring = b""       # bytes que o LOG_DUMP/LOG_ON entregam
         # fila de fotos de profiling: cada KL_STATS devolve a proxima (a
         # ultima repete — o celerctl top pede 2+ seguidas)
         self.stats_q = [STATS_SNAP_A]
@@ -306,9 +310,36 @@ class FakeDevice:
         self.ser.rx += frame_v2(KL["RES_DATA"], payload) if self.proto == 2 \
             else frame_v1(KL["RES_DATA"], payload)
 
+    def op_02(self, p):  # INFO: JSON do sistema (o pair imprime board/versao)
+        self.reply(KL["INFO"], json.dumps({
+            "version": "9.9", "board": "test", "api": 99, "uptime_s": 60,
+            "app_part": "app1", "app_state": "valid",
+        }).encode())
+
     def op_20(self, p):  # STATS: foto de profiling (JSON)
         snap = self.stats_q.pop(0) if len(self.stats_q) > 1 else self.stats_q[0]
         self.reply(KL["STATS"], json.dumps(snap).encode())
+
+    # ---- logcat: ring em RAM (LOG_DUMP copia; LOG_ON drena e liga o stream)
+    def _push_log_frames(self, data):
+        for i in range(0, len(data), 512):
+            payload = b"\x00" + data[i:i + 512]
+            self.ser.rx += (frame_v2(KL["LOG_DATA"], payload) if self.proto == 2
+                            else frame_v1(KL["LOG_DATA"], payload))
+
+    def op_10(self, p):  # LOG_ON
+        self.log_on = True
+        self.reply(KL["LOG_ON"])
+        self._push_log_frames(getattr(self, "log_ring", b""))
+
+    def op_11(self, p):  # LOG_OFF
+        self.log_on = False
+        self.reply(KL["LOG_OFF"])
+
+    def op_1d(self, p):  # LOG_DUMP: anuncia o total e manda o ring em frames
+        data = getattr(self, "log_ring", b"")
+        self.reply(KL["LOG_DUMP"], struct.pack("<I", len(data)))
+        self._push_log_frames(data)
 
     def op_06(self, p):  # WRITE_BEGIN
         self.wr_path = p.rstrip(b"\0").decode()
@@ -427,9 +458,13 @@ class FakeDevice:
         self.reply(KL["MKDIR"])
 
     def op_0c(self, p):  # EXEC: cmdline -> u8 exit + u32 len + saida
-        self.execs.append(p.rstrip(b"\0").decode())
-        # payload: [status u8][exit u8][len u32] — o link.exec pula o 1o byte
-        self.reply(KL["EXEC"], b"\x00\x00" + struct.pack("<I", 0))
+        line = p.rstrip(b"\0").decode()
+        self.execs.append(line)
+        rc, out = self.exec_out.get(line, (0, ""))
+        body = out.encode("utf-8") if isinstance(out, str) else out
+        # reply ja prefixa o status: payload = [exit u8][len u32][saida] e o
+        # link.exec pula exatamente o status
+        self.reply(KL["EXEC"], bytes([rc]) + struct.pack("<I", len(body)) + body)
 
 
 class FakeSerial:
@@ -475,6 +510,29 @@ def tmpfile(payload):
     f.write(payload)
     f.close()
     return f.name
+
+
+def run_cli(argv, link):
+    """Roda um comando do parser contra o link fake. Devolve
+    (stdout, stderr, exit code); SystemExit do die()/comandos vira o code."""
+    args = C.build_parser().parse_args(argv)
+    orig = C.open_link
+    C.open_link = lambda a: link
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            try:
+                args.func(args)
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+            except C.CelerError as e:
+                # mesmo tratamento do main() do celerctl: erro virou die
+                err.write(f"erro: {e}\n")
+                code = 1
+    finally:
+        C.open_link = orig
+    return out.getvalue(), err.getvalue(), code
 
 
 class TestProto2(unittest.TestCase):
@@ -1071,22 +1129,25 @@ class FakeBridge(threading.Thread):
         self.port = self.srv.getsockname()[1]
 
     def run(self):
-        try:
-            conn, _ = self.srv.accept()
-        except OSError:
-            return
-        with conn:
-            banner = f"CELERBRIDGE 1 test 127.0.0.1 {self.port}"
-            if self.devid:
-                banner += f" {self.devid}"
-            conn.sendall((banner + "\n").encode())
-            if not self._auth(conn):
+        # varias conexoes em sequencia: o pair que renova token tenta 2x e os
+        # testes de cache abrem mais de uma sessao
+        while True:
+            try:
+                conn, _ = self.srv.accept()
+            except OSError:
                 return
-            ser = SockSerial(conn)
-            dev = FakeDevice(ser, proto=self.proto, chunk=self.chunk, win=self.win)
-            ser.dev = dev
-            self.dev = dev
-            self._pipe(conn, ser)
+            with conn:
+                banner = f"CELERBRIDGE 1 test 127.0.0.1 {self.port}"
+                if self.devid:
+                    banner += f" {self.devid}"
+                conn.sendall((banner + "\n").encode())
+                if not self._auth(conn):
+                    continue
+                ser = SockSerial(conn)
+                dev = FakeDevice(ser, proto=self.proto, chunk=self.chunk, win=self.win)
+                ser.dev = dev
+                self.dev = dev
+                self._pipe(conn, ser)
 
     def _auth(self, conn):
         buf = b""
@@ -1811,6 +1872,371 @@ class TestEvalRoteiro(unittest.TestCase):
                 raise OSError("broken pipe")
         # cliente saiu antes: o roteiro termina em silencio (o proxy cuida)
         C._roteiro_eval(Fechado(), "x", sleep=lambda s: None)
+
+
+class TestSvcCrash(unittest.TestCase):
+    """svc/crash (API 42): atalhos do shell SEM aspas — o parser do device
+    nao remove quote, entao o comando tem que sair com tokens simples."""
+
+    def test_svc_list(self):
+        link, dev = make_link()
+        link.hello()
+        dev.exec_out["svc list"] = (
+            0, "svchost: heap vivo, 2 servico(s), 1 no ar, pump ha 12ms\n"
+               "  celeros.demo      no ar      2 reinicio(s)\n")
+        out, err, code = run_cli(["svc", "list"], link)
+        self.assertEqual(dev.execs, ["svc list"])
+        self.assertIn("pump ha 12ms", out)
+        self.assertIn("celeros.demo", out)
+        self.assertEqual(code, 0)
+
+    def test_svc_info_stop_start_setup_sem_aspas(self):
+        link, dev = make_link()
+        link.hello()
+        linhas = ["svc info celeros.demo", "svc stop celeros.demo",
+                  "svc start celeros.demo", "svc setup celeros.demo"]
+        for ln in linhas:
+            dev.exec_out[ln] = (0, "ok\n")
+        for argv in (["svc", "info", "celeros.demo"],
+                     ["svc", "stop", "celeros.demo"],
+                     ["svc", "start", "celeros.demo"],
+                     ["svc", "setup", "celeros.demo"]):
+            out, err, code = run_cli(argv, link)
+            self.assertEqual(code, 0)
+            self.assertIn("ok", out)
+        self.assertEqual(dev.execs, linhas)  # nada de quote/escape no fio
+
+    def test_svc_stop_nao_encontrado_sai_com_rc(self):
+        link, dev = make_link()
+        link.hello()
+        dev.exec_out["svc stop celeros.nao"] = (1, "stop: servico nao encontrado\n")
+        out, err, code = run_cli(["svc", "stop", "celeros.nao"], link)
+        self.assertEqual(code, 1)
+        self.assertIn("servico nao encontrado", out)
+
+    def test_crash_default_e_com_n(self):
+        link, dev = make_link()
+        link.hello()
+        dev.exec_out["crash"] = (0, "ultimo crash (arquivo de 2026-10-17):\n")
+        dev.exec_out["crash 5"] = (0, "ultimas 5 linhas de /local/log/apps.log:\n")
+        out, _, code = run_cli(["crash"], link)
+        self.assertIn("ultimo crash", out)
+        self.assertEqual(code, 0)
+        out, _, code = run_cli(["crash", "5"], link)
+        self.assertIn("ultimas 5 linhas", out)
+        self.assertEqual(dev.execs, ["crash", "crash 5"])
+
+    def test_help_documenta_os_comandos(self):
+        top = C.build_parser().format_help()
+        self.assertIn("svc", top)
+        self.assertIn("crash", top)
+        svc = C.build_parser().parse_args(["svc", "info", "celeros.demo"])
+        self.assertEqual((svc.svc_cmd, svc.pkg), ("info", "celeros.demo"))
+
+
+class TestTopSvc(unittest.TestCase):
+    """Bloco "svc" do KL_STATS: linha svchost com o delta da janela; firmware
+    antigo (sem o bloco, ou bloco que nao coube) segue sem a linha."""
+
+    SVC_A = dict(STATS_SNAP_A, svc={"ticks": 10, "overruns": 0,
+                                    "max_ms": 4, "sum_ms": 15})
+    SVC_B = dict(STATS_SNAP_B, svc={"ticks": 30, "overruns": 1,
+                                    "max_ms": 7, "sum_ms": 45})
+
+    def test_linha_svchost_com_delta_da_janela(self):
+        text = C._render_top(self.SVC_A, self.SVC_B, 0.3)
+        # 20 giros, (45-15)/20 = 1.5 ms de media, 1 overrun na janela e o
+        # pior giro do boot (maximo historico) em 7 ms
+        self.assertIn("svchost: 20 giro(s) na janela (media 1.5ms, "
+                      "1 overrun, pior do boot 7ms)", text)
+
+    def test_firmware_antigo_sem_bloco_nao_imprime(self):
+        text = C._render_top(STATS_SNAP_A, STATS_SNAP_B, 0.3)
+        self.assertNotIn("svchost", text)
+
+    def test_foto_anterior_sem_bloco_usa_base_zero(self):
+        text = C._render_top(STATS_SNAP_A, self.SVC_B, 0.3)
+        self.assertIn("30 giro(s)", text)
+
+    def test_sem_giros_na_janela(self):
+        iguais = dict(STATS_SNAP_B, svc=dict(self.SVC_A["svc"]))
+        text = C._render_top(self.SVC_A, iguais, 0.3)
+        self.assertIn("sem giros na janela", text)
+        self.assertIn("pior do boot 4ms", text)
+
+
+class TestLogcat(unittest.TestCase):
+    """logcat --since/--grep/--json: filtros client-side (o shell/FW nao
+    recebe regex nem timestamp) e o aviso de ring rolado."""
+
+    RING = (b"I (100) wifi: boot\n"
+            b"I (250) app: iniciando\n"
+            b"[app:demo] passo 1\n"
+            b"W (900) wifi: sinal fraco\n"
+            b"E (1000) crash: boom\n"
+            b"  at foo (main.js:1)\n")
+
+    def _link(self, ring=None):
+        link, dev = make_link()
+        link.hello()
+        dev.log_ring = self.RING if ring is None else ring
+        return link, dev
+
+    def test_parse_since(self):
+        self.assertEqual(C.parse_since("1234"), 1234)
+        self.assertEqual(C.parse_since("1234ms"), 1234)
+        self.assertEqual(C.parse_since("5s"), 5000)
+        self.assertEqual(C.parse_since("2m"), 120000)
+        self.assertEqual(C.parse_since("1,5s"), 1500)
+        self.assertEqual(C.parse_since("-30s"), -30000)
+        with self.assertRaises(C.CelerError):
+            C.parse_since("ontem")
+
+    def test_timestamp_da_linha(self):
+        self.assertEqual(C.parse_log_ts("I (1234) wifi: ok"), ("I", 1234))
+        self.assertEqual(C.parse_log_ts(" E (9) tag: y"), ("E", 9))
+        self.assertEqual(C.parse_log_ts("[app:demo] oi"), (None, None))
+        self.assertEqual(C.parse_log_ts("  at foo (main.js:1)"), (None, None))
+
+    def test_filtro_since_absoluto_e_grep_regex(self):
+        linhas = C._log_chunks(self.RING)
+        got = C.filter_log_lines(linhas, since="200", grep="wifi|crash")
+        self.assertEqual(got, [
+            "W (900) wifi: sinal fraco",
+            "E (1000) crash: boom",
+            "  at foo (main.js:1)",  # continuacao acompanha o cabecalho
+        ])
+
+    def test_filtro_since_relativo_ao_log_mais_novo(self):
+        linhas = C._log_chunks(self.RING)
+        got = C.filter_log_lines(linhas, since="-200")
+        self.assertEqual(got, ["W (900) wifi: sinal fraco",
+                               "E (1000) crash: boom",
+                               "  at foo (main.js:1)"])
+
+    def test_dump_e2e_since_grep(self):
+        link, dev = self._link()
+        out, err, code = run_cli(
+            ["logcat", "--dump", "--since", "200", "--grep", "wifi|crash"], link)
+        self.assertEqual(code, 0)
+        self.assertIn("W (900) wifi: sinal fraco", out)
+        self.assertIn("E (1000) crash: boom", out)
+        self.assertIn("  at foo (main.js:1)", out)
+        self.assertNotIn("boot", out)          # antes do --since
+        self.assertNotIn("iniciando", out)     # grep
+
+    def test_dump_json(self):
+        link, dev = self._link()
+        out, err, code = run_cli(["logcat", "--dump", "--json"], link)
+        self.assertEqual(code, 0)
+        recs = [json.loads(ln) for ln in out.splitlines()]
+        self.assertEqual(recs[0]["level"], "I")
+        self.assertEqual(recs[0]["ts"], 100)
+        self.assertEqual(recs[0]["text"], "I (100) wifi: boot")
+        sem_ts = [r for r in recs if r["ts"] is None]
+        self.assertEqual(sem_ts[0]["text"], "[app:demo] passo 1")
+
+    def test_dump_firmware_antigo_cai_no_log_on(self):
+        link, dev = self._link()
+        dev.op_1d = lambda p: dev.reply(KL["LOG_DUMP"], b"opcode?", 1)
+        out, err, code = run_cli(["logcat", "--dump", "--quiet-ms", "50"], link)
+        self.assertEqual(code, 0)
+        self.assertIn("I (100) wifi: boot", out)
+        self.assertIn("E (1000) crash: boom", out)
+
+    def test_aviso_de_ring_rolado(self):
+        link, dev = self._link(ring=b"ho restante de uma linha\n"
+                                    b"I (100) wifi: ok\n")
+        out, err, code = run_cli(["logcat", "--dump"], link)
+        self.assertEqual(code, 0)
+        self.assertIn("pode ter rolado", err)
+        self.assertIn("I (100) wifi: ok", out)
+
+    def test_grep_invalido_falha_claro(self):
+        link, dev = self._link()
+        out, err, code = run_cli(["logcat", "--dump", "--grep", "["], link)
+        self.assertEqual(code, 1)
+        self.assertIn("--grep invalido", err)
+
+
+class TestDebugEval(unittest.TestCase):
+    """debug --eval sem app: falha imediata (o attach ficaria pendurado) e
+    --app abre+anexa antes de avaliar."""
+
+    @staticmethod
+    def _args(argv):
+        return C.build_parser().parse_args(argv)
+
+    def _sem_app(self):
+        snap = dict(STATS_SNAP_A, js={"active": 0, "launch_free": 0, "now_free": 0,
+                                      "allocs": 0, "allocs_peak": 0})
+        link, dev = make_link()
+        link.hello()
+        dev.stats_q = [snap]
+        return link, dev
+
+    def test_eval_sem_app_falha_rapido_com_receita(self):
+        link, _dev = self._sem_app()
+        out, err, code = run_cli(["debug", "--eval", "E.score"], link)
+        self.assertEqual(code, 1)
+        self.assertIn("nenhum app aberto", err)
+        self.assertIn("celerctl apps run", err)
+        self.assertIn("--app", err)
+
+    def test_eval_com_stats_ativo_prossegue(self):
+        link, dev = make_link()
+        link.hello()
+        dev.stats_q = [STATS_SNAP_A]  # js.active=1
+        self.assertIsNone(C._debug_target(link, self._args(["debug", "--eval", "1"])))
+
+    def test_app_aceita_posicional_e_flag(self):
+        link, _dev = make_link()
+        arg = self._args(["debug", "--app", "MeuApp", "--eval", "1"])
+        self.assertEqual(C._debug_target(link, arg), "MeuApp")
+        arg = self._args(["debug", "Outro", "--eval", "1"])
+        self.assertEqual(C._debug_target(link, arg), "Outro")
+
+    def test_eval_com_serve_recusa(self):
+        link, _dev = make_link()
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            C._debug_target(link, self._args(["debug", "--serve", "--eval", "1"]))
+
+
+class TestAppsHint(unittest.TestCase):
+    """apps run/pull/rm por nome de exibicao: a mensagem ensina a pasta real
+    (sufixo do packageName) — o classico "WebPass nao abre, a pasta e
+    webpass"."""
+
+    META = {"name": "WebPass", "packageName": "celeros.webpass", "version": "1.0"}
+
+    def _populate(self, dev, base="/local/apps", dirname="webpass"):
+        dev.dirs[base] = [dirname]
+        dev.files[f"{base}/{dirname}/app.json"] = json.dumps(self.META).encode()
+
+    def test_run_por_nome_de_exibicao_ensina_a_pasta(self):
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        out, err, code = run_cli(["apps", "run", "WebPass"], link)
+        self.assertEqual(code, 1)
+        self.assertIn("a pasta instalada e 'webpass'", err)
+        self.assertIn("packageName celeros.webpass", err)
+        self.assertIn("celerctl apps run webpass", err)
+
+    def test_pull_idem(self):
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        out, err, code = run_cli(["apps", "pull", "WebPass"], link)
+        self.assertEqual(code, 1)
+        self.assertIn("celerctl apps pull webpass", err)
+
+    def test_rm_aponta_o_sd_quando_a_copia_esta_la(self):
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev, base="/sd/apps")
+        out, err, code = run_cli(["apps", "rm", "WebPass"], link)
+        self.assertEqual(code, 1)
+        self.assertIn("celerctl apps rm webpass --sd", err)
+
+    def test_desconhecido_lista_as_pastas_instaladas(self):
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        out, err, code = run_cli(["apps", "run", "NadaAVer"], link)
+        self.assertEqual(code, 1)
+        self.assertIn("apps instalados: webpass", err)
+        self.assertIn("nome da PASTA", err)
+
+    def test_installzip_ensina_a_pasta_e_o_run(self):
+        link, dev = make_link()
+        link.hello()
+        with tempfile.TemporaryDirectory() as td:
+            zp = Path(td) / "app.zip"
+            with zipfile.ZipFile(zp, "w") as z:
+                z.writestr("app.json", json.dumps(self.META))
+                z.writestr("main.js", "var x = 1;\n")
+            out, err, code = run_cli(["apps", "installzip", str(zp)], link)
+        self.assertEqual(code, 0)
+        self.assertIn("instalado: /local/apps/WebPass", out)
+        self.assertIn("packageName celeros.webpass", out)
+        self.assertIn("celerctl apps run WebPass", out)
+        self.assertIn("installzip /local/celeros_install.zip WebPass", dev.execs)
+
+
+class TestTokenVelho(unittest.TestCase):
+    """Token do bridge velho (reflash/bridge reset): o cache e limpo, a
+    mensagem ensina `shell bridge` e o pair renova na hora."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.old_xdg = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = self.tmp
+        self.old_env_tok = os.environ.get("CELEROS_BRIDGE_TOKEN")
+        os.environ.pop("CELEROS_BRIDGE_TOKEN", None)
+
+    def tearDown(self):
+        if self.old_xdg is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self.old_xdg
+        if self.old_env_tok is not None:
+            os.environ["CELEROS_BRIDGE_TOKEN"] = self.old_env_tok
+
+    def test_forget_token_limpa_endereco_identidade_e_valor(self):
+        addr = "192.168.0.10:5555"
+        C.save_token(addr, "velho", "aabbccddeeff")
+        C.save_token("10.0.0.9:5555", "velho")
+        C.forget_token(addr, "velho", "aabbccddeeff")
+        cache = C.load_token_cache()
+        self.assertNotIn(addr, cache)
+        self.assertNotIn("id:aabbccddeeff", cache)
+        self.assertNotIn("10.0.0.9:5555", cache)  # mesmo valor em outra chave
+        self.assertEqual(cache, {})
+
+    def test_auth_recusada_limpa_o_cache_e_orienta(self):
+        br = FakeBridge()
+        br.start()
+        addr = f"127.0.0.1:{br.port}"
+        C.save_token(addr, "velho", FakeBridge.DEVID)
+        with self.assertRaises(C.CelerError) as ctx:
+            C.HostLink(addr)
+        msg = str(ctx.exception)
+        self.assertIn("token velho?", msg)
+        self.assertIn("no device: shell bridge", msg)
+        cache = C.load_token_cache()
+        self.assertNotIn(addr, cache)
+        self.assertNotIn("id:" + FakeBridge.DEVID, cache)
+
+    def test_cached_token_state_ok_e_velho(self):
+        br = FakeBridge()
+        br.start()
+        addr = f"127.0.0.1:{br.port}"
+        C.save_token(addr, FakeBridge.TOKEN, FakeBridge.DEVID)
+        self.assertEqual(C._cached_token_state(addr, FakeBridge.DEVID), "ok")
+        C.save_token(addr, "velho", FakeBridge.DEVID)
+        self.assertEqual(C._cached_token_state(addr, FakeBridge.DEVID), "velho")
+        self.assertNotIn(addr, C.load_token_cache())
+
+    def test_pair_renova_token_do_cache_recusado(self):
+        br = FakeBridge()
+        br.start()
+        addr = f"127.0.0.1:{br.port}"
+        C.save_token(addr, "velho", FakeBridge.DEVID)
+        from types import SimpleNamespace
+        args = SimpleNamespace(addr=addr, port_sel=None, token=None)
+        old_input = builtins.input
+        builtins.input = lambda prompt="": FakeBridge.TOKEN
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                C.cmd_pair(args)
+        finally:
+            builtins.input = old_input
+        self.assertIn("pareado:", out.getvalue())
+        self.assertIn("token do cache recusado", err.getvalue())
+        self.assertEqual(C.load_token_cache().get(addr), FakeBridge.TOKEN)
+        self.assertIn("AUTH velho", br.auth_fails)
 
 
 if __name__ == "__main__":

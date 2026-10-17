@@ -109,8 +109,18 @@ public:
     static void timersTick(duk_context *ctx);
     static void timersResetSvc();
     static void timersUseSvcHost(bool svc);
+    // Hooks do dispatch do svchost: identidade do dono do slot por callback
+    // (svcIdentity/svcIdentityRestore) e o consumo do erro de callback (o
+    // ofensor para; sem isso o duk_throw sem frame protegido ia ao fatal
+    // handler do heap = reboot). begin/end/crash podem ser nullptr.
+    static void timersSvcHooks(void (*begin)(duk_context*), void (*end)(duk_context*),
+                              void (*crash)(duk_context*, const char*));
     // Um servico parou: mata os timers DAQUELA thread (interval nao refire)
     static void timersClearCtx(duk_context* ctx);
+    // O heap do app vai morrer (duk_destroy_heap): solta TODA referencia
+    // pendente a ele — s_jsCtx dangle faria o present() de um servico bombear
+    // timers do heap destruido (UAF).
+    static void heapDetaching();
 
     // Modulos JS (API 23): require("nome") carrega <pasta do app>/nome.js
     // embrulhado como funcao(module, exports, require) — CommonJS enxuto

@@ -43,6 +43,12 @@ struct TimerHost {
     TimerSlot slots[kTimerSlots];
     bool inTick = false;   // callback chamou present(): adia o proximo disparo
     int nextId = 0;
+    // svchost (API 42): identidade do DONO do slot durante o dispatch e o
+    // destino do erro de callback (o ofensor para; o aparelho e os outros
+    // servicos seguem). Nulos no host do app: erro propaga como sempre.
+    void (*slotBegin)(duk_context* tctx) = nullptr;  // troca a identidade
+    void (*slotEnd)(duk_context* tctx) = nullptr;    // restaura (+ Service.stop)
+    void (*slotCrash)(duk_context* tctx, const char* err) = nullptr;  // consome
 };
 
 TimerHost s_appHost;   // o app em foreground (present())
@@ -114,11 +120,20 @@ void JSBindings::timersTick(duk_context* ctx) {
         }
         duk_remove(tctx, -2);  // tira o array; fn no topo
 
+        if (h.slotBegin != nullptr) h.slotBegin(tctx);
         h.inTick = true;
         esp_task_wdt_reset();  // callback pode desenhar bastante
         duk_int_t rc = duk_pcall(tctx, 0);
         h.inTick = false;
+        if (h.slotEnd != nullptr) h.slotEnd(tctx);
         if (rc != DUK_EXEC_SUCCESS) {
+            if (h.slotCrash != nullptr) {
+                // svchost: o erro e CONSUMIDO aqui (sem frame protegido no
+                // pump, o duk_throw ia ao fatal handler = reboot/boot loop).
+                // O dono para (noteCrash + timersClearCtx); os outros seguem.
+                h.slotCrash(tctx, duk_safe_to_string(tctx, -1));
+                continue;
+            }
             duk_throw(tctx);  // erro do callback vira erro do app (nao retorna)
         }
         now = millis();
@@ -197,6 +212,16 @@ void JSBindings::timersUseSvcHost(bool svc) {
     JSBindingsTimers::setHost(svc ? &s_svcHost : &s_appHost);
 }
 
+// Hooks do dispatch do svchost: identidade do dono do slot (svcIdentity/
+// Restore, feitos no AppServices) e o consumo do erro de callback. Uma vez
+// na vida do processo (o reset de slots nao os toca).
+void JSBindings::timersSvcHooks(void (*begin)(duk_context*), void (*end)(duk_context*),
+                               void (*crash)(duk_context*, const char*)) {
+    s_svcHost.slotBegin = begin;
+    s_svcHost.slotEnd = end;
+    s_svcHost.slotCrash = crash;
+}
+
 // Um servico parou/crashou: os timers DELE morrem (um interval repetindo
 // dispararia no GC do stash ou em thread morta). No host do app (ctx ==
 // nullptr) nao faz nada: os timers do app morrem com o heap dele.
@@ -215,3 +240,8 @@ void JSBindings::timersClearCtx(duk_context* ctx) {
         duk_pop_2(ctx);
     }
 }
+
+// O heap do app vai morrer (duk_destroy_heap): solta a referencia pendente.
+// Sobra de app morto no s_jsCtx fazia o present() de um servico (otaCheck,
+// installZip...) bombear os timers do heap DESTRUIDO (UAF).
+void JSBindings::heapDetaching() { s_jsCtx = nullptr; }

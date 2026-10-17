@@ -50,10 +50,12 @@ bool consumeStopRequest() {
 }
 
 void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* appDir) {
-    // s_perms/s_appPkg/s_appDir valem os do servico DURANTE o install (os
-    // bindings leem os globals); o dispatch do svchost troca de novo a cada
-    // giro e restaura depois — single task, sem corrida.
-    JSBindings::svcIdentity(thr, appPkg, perms, appDir);
+    // A IDENTIDADE (pkg/perms/pasta) NAO e daqui: quem troca e o chamador —
+    // em volta do compile+top-level (AppServices::loadService) e de cada
+    // callback (hooks do host de timers). Aqui so instala a superficie.
+    (void)appPkg;
+    (void)perms;
+    (void)appDir;
 
     // ---- globais de timer (mesmas assinaturas do app) ----
     duk_push_global_object(thr);
@@ -176,8 +178,6 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
     duk_put_prop_string(thr, -2, "Pack");
     duk_pop(thr);
 #endif  // CONFIG_CELEROS_BLUETOOTH
-
-    JSBindings::svcIdentityRestore();
 }
 
 }  // namespace SvcApi

@@ -117,7 +117,12 @@ void discover() {
             FileSystem::getFileSize((path + "/install.sh").c_str()) <= 16 * 1024) {
             std::string ver = FileSystem::parseJsonValue(json, "version");
             std::string pkg = LauncherUI::appEntryPkg(i);
-            if (celer::setup::due(ver, CelerSettings::get(setupKey(pkg).c_str(), ""))) {
+            // o cd do job e textual (shell sem aspas): pasta com espaco nunca
+            // roda — recusa com motivo em vez de falhar em todo boot
+            if (path.find(' ') != std::string::npos) {
+                celer_log_printf("[setup] %s: pasta com espaco, install.sh ignorado\n",
+                                 pkg.c_str());
+            } else if (celer::setup::due(ver, CelerSettings::get(setupKey(pkg).c_str(), ""))) {
                 InstallJob j;
                 j.dir = path;
                 j.pkg = pkg;
@@ -215,6 +220,62 @@ void destroyHeap() {
     JSBindings::timersResetSvc();
 }
 
+// Solta a thread do servico: timers mortos e a referencia do stash (raiz
+// forte — sem isto o rescan acumulava thread/programa e o servico
+// desinstalado seguia executando como zumbi)
+void releaseThread(SvcApp& a) {
+    if (a.thr != nullptr) {
+        JSBindings::timersClearCtx(a.thr);
+        duk_push_heap_stash(s_heap);                 // [stash]
+        duk_get_prop_string(s_heap, -1, "svcs");     // [stash, arr?]
+        if (duk_is_array(s_heap, -1)) {
+            duk_push_undefined(s_heap);              // [stash, arr, und]
+            duk_put_prop_index(s_heap, -2, (duk_uarridx_t)a.stashIdx);
+        }
+        duk_pop_2(s_heap);
+        a.thr = nullptr;
+    }
+    a.running = false;
+}
+
+// ---- dispatch dos callbacks (hooks do host de timers, API 42) ----
+// Os bindings leem pkg/perms/pasta NO MOMENTO da chamada (Storage, jail do
+// FS, require): sem a troca por callback, o servico rodava com a identidade
+// do ultimo app em foreground — ou PERM_ALL no boot, antes do 1o launch.
+void svcSlotBegin(duk_context* tctx) {
+    for (auto& a : s_apps) {
+        if (a.thr != tctx || !a.running) continue;
+        JSBindings::svcIdentity(tctx, a.pkg.c_str(), a.perms, a.dir.c_str());
+        return;
+    }
+}
+
+void svcSlotEnd(duk_context* tctx) {
+    JSBindings::svcIdentityRestore();
+    if (SvcApi::consumeStopRequest()) {  // Service.stop() do proprio servico
+        for (auto& a : s_apps) {
+            if (a.thr != tctx) continue;
+            releaseThread(a);
+            a.stopped = true;
+            celer_log_printf("[svc] %s: Service.stop()\n", a.name.c_str());
+            break;
+        }
+    }
+}
+
+void svcSlotCrash(duk_context* tctx, const char* err) {
+    duk_pop(tctx);  // a string do erro (duk_safe_to_string empilhou)
+    for (auto& a : s_apps) {
+        if (a.thr != tctx) continue;
+        noteCrash(a, err);
+        JSBindings::timersClearCtx(tctx);  // timers do morto nao refirem
+        // solta a thread: o loadService no-opa com thr vivo, e o reinicio
+        // (system, backoff) precisa recarregar do zero
+        releaseThread(a);
+        return;
+    }
+}
+
 // Carrega o service.js do servico como PROGRAMA na thread dele. A referencia
 // da thread vive no heap stash ("svcs") — thread solta viraria GC.
 void loadService(SvcApp& a) {
@@ -245,10 +306,13 @@ void loadService(SvcApp& a) {
     duk_put_prop_index(s_heap, -2, idx);         // [stash, arr] (stash e o dono)
     duk_pop_2(s_heap);                           // []
 
-    // superficie + identidade do servico durante o compile
+    // Superficie + IDENTIDADE do servico durante o compile E o top-level:
+    // o setInterval do top-level tem que registrar no host DE SERVICOS (no
+    // host do app ele morria no 1o init de app) e os bindings chamados aqui
+    // (require, Storage, FS) tem que ver pkg/perms/pasta DO SERVICO.
     JSBindings::timersUseSvcHost(true);
+    JSBindings::svcIdentity(a.thr, a.pkg.c_str(), a.perms, a.dir.c_str());
     SvcApi::install(a.thr, a.pkg.c_str(), a.perms, a.dir.c_str());
-    JSBindings::timersUseSvcHost(false);
 
     std::string src = FileSystem::readTextFile((a.dir + "/" + a.file).c_str());
     duk_push_string(a.thr, (a.dir + "/" + a.file).c_str());
@@ -259,23 +323,23 @@ void loadService(SvcApp& a) {
         rc = duk_pcall(a.thr, 0);
         CelerKernel::setExecSliceMs(kAppSliceMs);
     }
+    JSBindings::svcIdentityRestore();
+    JSBindings::timersUseSvcHost(false);
     if (rc != DUK_EXEC_SUCCESS) {
         const char* err = duk_safe_to_string(a.thr, -1);
         noteCrash(a, err);
         JSBindings::timersClearCtx(a.thr);  // timers do morto nao refirem
         duk_pop(a.thr);                     // o erro
-        // solta a referencia da thread no stash (o GC a recolhe)
-        duk_push_heap_stash(s_heap);                 // [stash]
-        duk_get_prop_string(s_heap, -1, "svcs");     // [stash, arr?]
-        if (duk_is_array(s_heap, -1)) {
-            duk_push_undefined(s_heap);              // [stash, arr, und]
-            duk_put_prop_index(s_heap, -2, (duk_uarridx_t)a.stashIdx);  // [stash, arr]
-        }
-        duk_pop_2(s_heap);                           // []
-        a.thr = nullptr;
+        releaseThread(a);
         return;
     }
     duk_pop(a.thr);  // resultado do top-level
+    if (SvcApi::consumeStopRequest()) {  // Service.stop() no top-level
+        releaseThread(a);
+        a.stopped = true;
+        celer_log_printf("[svc] %s: Service.stop() no top-level\n", a.name.c_str());
+        return;
+    }
     a.running = true;
     a.needsLoad = false;
     celer_log_printf("[svc] %s: no ar (%s)\n", a.name.c_str(), a.file.c_str());
@@ -290,7 +354,11 @@ void drainTimers() {
     for (auto& a : s_apps) {
         if (a.running && a.thr != nullptr) { any = a.thr; break; }
     }
-    if (any != nullptr) JSBindings::timersTick(any);
+    if (any != nullptr) {
+        CelerKernel::setExecSliceMs(kSvcSliceMs);  // callback nao herda a fatia do app
+        JSBindings::timersTick(any);
+        CelerKernel::setExecSliceMs(kAppSliceMs);
+    }
     JSBindings::timersUseSvcHost(false);
 }
 
@@ -299,6 +367,7 @@ void drainTimers() {
 namespace AppServices {
 
 void init() {
+    JSBindings::timersSvcHooks(svcSlotBegin, svcSlotEnd, svcSlotCrash);
     discover();
     // o heap nasce LAZY no primeiro tick — o boot critico nao paga por ele
     celer_log_printf("[svc] %u servico(s) declarado(s)\n", (unsigned)s_apps.size());
@@ -306,10 +375,12 @@ void init() {
 
 void tick(bool inApp) {
     (void)inApp;
+    if (s_suspended) return;  // resumeAfterApp reativa; o watchdog do
+    // TimeManager assume (s_lastTickMs velho = servico "sem girar")
     s_lastTickMs = millis();
-    if (s_suspended) return;  // resumeAfterApp reativa
     if (LauncherUI::svcDirty) {
         LauncherUI::svcDirty = false;  // apps mudaram: redescobre (install/remocao)
+        for (auto& a : s_apps) releaseThread(a);  // nada de zumbi do rescan
         discover();
     }
 
@@ -321,6 +392,7 @@ void tick(bool inApp) {
         s_installs.erase(s_installs.begin());
         celer_log_printf("[setup] %s: install.sh v%s\n", j.name.c_str(), j.version.c_str());
         const std::string dataDir = "/local/data/" + j.pkg;
+        FileSystem::mkdir("/local/data");  // recem-flashado: o pai pode nao existir
         FileSystem::mkdir(dataDir.c_str());
         CelerShell::setRestrictedRoots(j.dir.c_str(), dataDir.c_str());
         CelerShell::execute(("cd " + j.dir).c_str(), logPrint, nullptr);
@@ -373,10 +445,8 @@ void resumeAfterApp() {
 bool stopService(const std::string& pkg) {
     for (auto& a : s_apps) {
         if (a.pkg != pkg) continue;
-        if (a.thr != nullptr) JSBindings::timersClearCtx(a.thr);
+        releaseThread(a);  // timers + referencia do stash (nao so o ponteiro)
         a.stopped = true;
-        a.running = false;
-        a.thr = nullptr;  // referencia solta no stash: morre no GC/rebuild
         return true;
     }
     return false;

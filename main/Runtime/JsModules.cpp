@@ -144,6 +144,12 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     char path[192];
     snprintf(path, sizeof(path), "%s/%s.js", s_appDir.c_str(), mod);
 
+    // Cache no heap stash, chaveado pela PASTA + nome: no svchost o heap e
+    // UNICO para todos os servicos — sem a pasta na chave, dois apps dando
+    // require("utils") compartilhariam a instancia (e a pasta) do primeiro.
+    char cacheKey[112];
+    snprintf(cacheKey, sizeof(cacheKey), "%s/%s", s_appDir.c_str(), mod);
+
     // Cache no heap stash do app corrente: [.. name(0) stash(1) cache(2)]
     duk_push_heap_stash(ctx);
     duk_get_prop_string(ctx, -1, "modules");
@@ -153,8 +159,8 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
         duk_dup(ctx, -1);
         duk_put_prop_string(ctx, -3, "modules");
     }
-    if (duk_has_prop_string(ctx, 2, mod)) {
-        duk_get_prop_string(ctx, 2, mod);  // cache hit: devolve direto
+    if (duk_has_prop_string(ctx, 2, cacheKey)) {
+        duk_get_prop_string(ctx, 2, cacheKey);  // cache hit: devolve direto
         duk_replace(ctx, 0);               // [hit, stash, cache] -> hit na base
         duk_pop_n(ctx, 2);
         return 1;
@@ -211,7 +217,7 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     duk_dup(ctx, 4);
     duk_put_prop_string(ctx, 3, "exports");
     duk_get_prop_string(ctx, 3, "exports");   // 5: exports (cache parcial)
-    duk_put_prop_string(ctx, 2, mod);         // cache[mod] = exports
+    duk_put_prop_string(ctx, 2, cacheKey);    // cache[<pasta>/<mod>] = exports
 
     // compile: [name stash cache module(3) exports(4)] -> fn no topo.
     // DUK_COMPILE_FUNCTION: o fonte E uma expressao de funcao. Com flags 0
@@ -222,7 +228,7 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     duk_int_t rc = duk_pcompile_lstring_filename(ctx, DUK_COMPILE_FUNCTION, src, srcLen);
     free(src);  // bytecode no heap: o fonte sai antes do eval
     if (rc != 0) {
-        duk_del_prop_string(ctx, 2, mod);  // falha nao memoiza
+        duk_del_prop_string(ctx, 2, cacheKey);  // falha nao memoiza
         return duk_throw(ctx);             // erro de sintaxe propagado ao app
     }
     // fn(5) -> vira idx 3, acima de module/exports; require por ultimo:
@@ -250,7 +256,7 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     // cache e retorno = module.exports FINAL (o modulo pode ter trocado)
     duk_get_prop_string(ctx, 3, "exports");  // final
     duk_dup(ctx, 4);
-    duk_put_prop_string(ctx, 2, mod);        // cache atualizado
+    duk_put_prop_string(ctx, 2, cacheKey);   // cache atualizado (pasta/nome)
     duk_replace(ctx, 0);                     // [final, stash, cache, module]
     duk_pop_n(ctx, 3);
     return 1;

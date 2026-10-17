@@ -599,6 +599,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     strncpy(s_crashPkg, appPkg ? appPkg : "", sizeof(s_crashPkg) - 1);
     s_crashPkg[sizeof(s_crashPkg) - 1] = 0;
     if (ctx) {
+        JSBindings::heapDetaching();  // heap morto: present() de servico nao bombeia
         duk_destroy_heap(ctx);
         ctx = nullptr;
     }
@@ -685,6 +686,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         if (rc != 0) {
             checkJSError(ctx, rc);
             JsDebugger::detach(ctx);
+            JSBindings::heapDetaching();
             duk_destroy_heap(ctx);
             ctx = nullptr;
             return;
@@ -706,6 +708,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     JsDebugger::detach(ctx);
 
     // Destroy heap after app exits to free RAM
+    JSBindings::heapDetaching();  // antes do destroy: nem um tick de servico
     duk_destroy_heap(ctx);
     ctx = nullptr;
 }

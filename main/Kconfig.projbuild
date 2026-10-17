@@ -79,11 +79,15 @@ config CELEROS_APP_TASK
 config CELEROS_APP_SERVICES
     bool "Servicos em segundo plano de apps instalados (API 42)"
     default y
+    depends on !CELEROS_APP_TASK
     help
       App com "service": "service.js" no app.json roda JS fora do foreground
       num heap Duktape compartilhado (AppServices/svchost), bombeado pelo
       servico "appsvc" (ALWAYS). Placas sem PSRAM suspendem o heap enquanto
-      um app esta em foreground; com PSRAM o servico segue vivo.
+      um app esta em foreground; com PSRAM o servico segue vivo. O estado do
+      svchost (s_apps, heap, host de timers) e de task unica: com
+      CELEROS_APP_TASK o present() corre em outra task — depends desliga a
+      combinacao até o dispatch ter guarda.
 
 config CELEROS_WAKE_WORD
     bool "Wake word on-device (WakeNet do esp-sr)"

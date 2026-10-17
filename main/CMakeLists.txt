@@ -50,6 +50,7 @@ set(CELEROS_SRCS
     "Utils/PinStore.cpp"
     "Utils/CelerSettings.cpp"
     "Utils/AppGrants.cpp"
+    "Utils/AppZip.cpp"
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
     "USBDevice/DebugBridge.cpp"

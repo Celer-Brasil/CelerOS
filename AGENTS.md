@@ -67,7 +67,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 - **Selective staging only**: `git add <explicit paths>`, never `-A`/`-u`/`.`. When one file carries two features, split it by hunks (`git apply --cached` with a crafted patch is the reliable non-interactive way) — see 317c7d3 or the API 15 commits (ed70e10/4a04292).
 - **Commit style**: Portuguese without accents, subject `Area: assunto` + a detailed body (what, why, bench evidence). One story per commit; its tests, stubs and lint updates ride along. No AI attribution footers.
 - **Push discipline**: fast-forward only, never `--force` (history was filter-repo'd once; old hashes must never come back). On rejection, fetch and rebase your own unpushed commits.
-- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests`, `python3 test/duk/run.py`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
+- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp && ./celeros_tests`, `python3 test/duk/run.py`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
 - **Releases are cut by tag**: pushing `v*` triggers `release.yml` (per-board factory zips + CelerOS Flasher). Tag deliberately after bench validation, never as a side effect.
 - **Release notes are in English** (audience: first-time flashers; the repo's public artifacts — README, wiki EN pages — are English). The annotated tag body becomes the notes' preamble, so write tag bodies in English too; the flash instructions template lives inside `release.yml` and must teach the Flasher workflow (download flasher + board zip, extract together, board -> port -> erase on first flash).
 - **Bench**: hardware validation is manual (CI has no device). Ports (the two CH340 boards swap with plug order — `celerctl devices -l` names each): `/dev/ttyUSB0` SmartDisplay, `/dev/ttyUSB1` CYD, `/dev/ttyACM0` dog or watch (flash id disambiguates: 16MB vs 32MB). The watch takes firmware over `celerctl ota push` (retry on timeout); esptool is for first load only.
@@ -114,7 +114,7 @@ node test/debug/run.js
 node test/meshsim/run.js                 # E2E da malha: apps reais em N nos simulados
 node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps
 node tools/sdk/celer.js check            # drift; `celer.js types` regenerates celer.d.ts
-g++ -std=c++17 -Wall -Wextra -o celeros_tests test/cpp/run_tests.cpp && ./celeros_tests
+g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp && ./celeros_tests
 python3 test/duk/run.py                  # require() no Duktape real (gcc)
 
 python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-library deltas (needs IDF env)

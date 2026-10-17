@@ -2127,6 +2127,236 @@ static void testProvProto() {
     CHECK(!isProv((const uint8_t*)"hello", 5));  // selado comum do app passa direto
 }
 
+// ------------------------------------------------------------------- AppZip
+// Leitor de zip do pacote de app: Utils/AppZip.cpp (POSIX + tinfl do miniz
+// vendored; as implementacoes entram na TU do AppZip via CELER_HOST_TEST).
+#include "../../main/Utils/AppZip.h"
+#include "../../components/LovyanGFX/src/lgfx/utility/lgfx_miniz.h"  // tdefl p/ gerar entrada deflada
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+static void zPush16(std::vector<uint8_t>& v, uint16_t x) {
+    v.push_back((uint8_t)(x & 0xFF));
+    v.push_back((uint8_t)(x >> 8));
+}
+static void zPush32(std::vector<uint8_t>& v, uint32_t x) {
+    for (int i = 0; i < 4; i++) v.push_back((uint8_t)((x >> (8 * i)) & 0xFF));
+}
+
+struct ZipTEntry {
+    const char* name;
+    const uint8_t* data;
+    uint32_t len;
+    bool deflate;
+    bool isDir;
+};
+
+// Escritor minimalista de zip (só para o teste; o device nunca escreve zip):
+// cabecalhos locais com tamanhos no proprio header (sem data descriptor) +
+// central directory + EOCD sem comentario.
+static bool buildZip(const char* path, const ZipTEntry* es, int n) {
+    std::vector<uint8_t> z, cd;
+    for (int i = 0; i < n; i++) {
+        const ZipTEntry& e = es[i];
+        uint32_t off = (uint32_t)z.size();
+        std::vector<uint8_t> payload;
+        uint16_t method = 0;
+        if (e.deflate) {
+            method = 8;
+            payload.resize(e.len + 64);
+            size_t got = tdefl_compress_mem_to_mem(payload.data(), payload.size(), e.data, e.len, 128);
+            if (got == 0) return false;
+            payload.resize(got);
+        } else {
+            payload.assign(e.data, e.data + e.len);
+        }
+        uint32_t crc = e.isDir ? 0 : hostframe::crc32(e.data, e.len);  // CRC do NAO comprimido
+        uint16_t nameLen = (uint16_t)strlen(e.name);
+        zPush32(z, 0x04034b50);
+        zPush16(z, 20); zPush16(z, 0); zPush16(z, method);
+        zPush16(z, 0); zPush16(z, 0x21);
+        zPush32(z, crc);
+        zPush32(z, (uint32_t)payload.size());
+        zPush32(z, e.isDir ? 0 : e.len);
+        zPush16(z, nameLen); zPush16(z, 0);
+        z.insert(z.end(), e.name, e.name + nameLen);
+        z.insert(z.end(), payload.begin(), payload.end());
+
+        zPush32(cd, 0x02014b50);
+        zPush16(cd, 20); zPush16(cd, 20); zPush16(cd, 0); zPush16(cd, method);
+        zPush16(cd, 0); zPush16(cd, 0x21);
+        zPush32(cd, crc);
+        zPush32(cd, (uint32_t)payload.size());
+        zPush32(cd, e.isDir ? 0 : e.len);
+        zPush16(cd, nameLen);
+        zPush16(cd, 0); zPush16(cd, 0); zPush16(cd, 0); zPush16(cd, 0);
+        zPush32(cd, e.isDir ? 0x10 : 0);
+        zPush32(cd, off);
+        cd.insert(cd.end(), e.name, e.name + nameLen);
+    }
+    uint32_t cdOff = (uint32_t)z.size();
+    z.insert(z.end(), cd.begin(), cd.end());
+    zPush32(z, 0x06054b50);
+    zPush16(z, 0); zPush16(z, 0);
+    zPush16(z, (uint16_t)n); zPush16(z, (uint16_t)n);
+    zPush32(z, (uint32_t)cd.size());
+    zPush32(z, cdOff);
+    zPush16(z, 0);
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr) return false;
+    fwrite(z.data(), 1, z.size(), f);
+    fclose(f);
+    return true;
+}
+
+static void testAppZip() {
+    using namespace celer::appzip;
+    bool isDir = false;
+    CHECK(nameSafe("Pkg/main.js", &isDir) && !isDir);
+    CHECK(nameSafe("Pkg/data/", &isDir) && isDir);
+    CHECK(nameSafe("main.js", nullptr));
+    CHECK(!nameSafe("", nullptr));
+    CHECK(!nameSafe("/abs.js", nullptr));
+    CHECK(!nameSafe("../x", nullptr));
+    CHECK(!nameSafe("a/../b.js", nullptr));
+    CHECK(!nameSafe("a/b/../../c", nullptr));
+    CHECK(nameSafe("a..b.js", nullptr));  // ".." so e traversal como segmento
+    CHECK(!nameSafe("a\\b.js", nullptr));
+    CHECK(!nameSafe("a//b.js", nullptr));
+    std::string longo(kMaxName, 'x');
+    CHECK(!nameSafe(longo.c_str(), nullptr));
+    CHECK(!nameSafe("acento\xe7.txt", nullptr));  // fora do ASCII imprimivel
+
+    mkdir("/tmp/celeros_zt", 0755);
+    mkdir("/tmp/celeros_zt/out", 0755);
+    static const uint8_t JS[] = "System.println('oi do pacote');\n";
+    uint8_t pad[400];
+    for (int i = 0; i < 400; i++) pad[i] = (uint8_t)('A' + (i % 26));  // repetitivo: LZ abrevia
+
+    ZipTEntry es[] = {
+        {"Pkg/", nullptr, 0, false, true},
+        {"Pkg/main.js", JS, (uint32_t)(sizeof(JS) - 1), false, false},
+        {"Pkg/padrao.bin", pad, sizeof(pad), true, false},
+        {"Pkg/vazio.bin", (const uint8_t*)"", 0, false, false},
+    };
+    const char* zpath = "/tmp/celeros_zt/app.zip";
+    CHECK(buildZip(zpath, es, 4));
+
+    Reader z;
+    CHECK(z.open(zpath));
+    CHECK(z.count() == 4);
+    Entry e;
+    CHECK(z.stat(0, &e) && e.isDir && strcmp(e.name, "Pkg/") == 0);
+    CHECK(z.stat(1, &e) && !e.isDir && e.method == 0 && e.uncompSize == sizeof(JS) - 1);
+    CHECK(z.stat(2, &e) && e.method == 8 && e.uncompSize == sizeof(pad));
+    CHECK(z.stat(3, &e) && e.uncompSize == 0 && !e.isDir);
+
+    CHECK(z.extractTo(1, "/tmp/celeros_zt/out/main.js"));
+    CHECK(z.extractTo(2, "/tmp/celeros_zt/out/padrao.bin"));
+    CHECK(z.extractTo(3, "/tmp/celeros_zt/out/vazio.bin"));
+    uint8_t back[512];
+    FILE* f = fopen("/tmp/celeros_zt/out/main.js", "rb");
+    size_t got = f ? fread(back, 1, sizeof(back), f) : 0;
+    if (f) fclose(f);
+    CHECK(got == sizeof(JS) - 1 && memcmp(back, JS, got) == 0);
+    f = fopen("/tmp/celeros_zt/out/padrao.bin", "rb");
+    got = f ? fread(back, 1, sizeof(back), f) : 0;
+    if (f) fclose(f);
+    CHECK(got == sizeof(pad) && memcmp(back, pad, got) == 0);  // deflate ida e volta
+    f = fopen("/tmp/celeros_zt/out/vazio.bin", "rb");
+    got = f ? fread(back, 1, sizeof(back), f) : 0;
+    if (f) fclose(f);
+    CHECK(got == 0);
+    z.close();
+
+    // CRC quebrado: extrai falha e NAO deixa o arquivo truncado para tras
+    CHECK(buildZip(zpath, es, 4));
+    {
+        FILE* g = fopen(zpath, "r+b");
+        fseek(g, 60, SEEK_SET);  // dentro do dado de main.js (local comeca em 41)
+        int c = fgetc(g);
+        fseek(g, 60, SEEK_SET);
+        fputc(c ^ 0xFF, g);
+        fclose(g);
+    }
+    CHECK(z.open(zpath));
+    CHECK(!z.extractTo(1, "/tmp/celeros_zt/out/main.js"));
+    struct stat st;
+    CHECK(stat("/tmp/celeros_zt/out/main.js", &st) != 0);
+    z.close();
+
+    // zip truncado (sem EOCD) nao abre
+    CHECK(buildZip(zpath, es, 4));
+    {
+        struct stat sz;
+        stat(zpath, &sz);
+        FILE* g = fopen(zpath, "r+b");
+        ftruncate(fileno(g), (off_t)sz.st_size - 10);
+        fclose(g);
+    }
+    CHECK(!z.open(zpath));
+
+    // traversal no nome rejeita na abertura
+    ZipTEntry evil[] = {{"../evil.txt", JS, (uint32_t)(sizeof(JS) - 1), false, false}};
+    CHECK(buildZip("/tmp/celeros_zt/evil.zip", evil, 1));
+    CHECK(!z.open("/tmp/celeros_zt/evil.zip"));
+
+    // metodo desconhecido (12: implosionado) rejeita na abertura
+    ZipTEntry one[] = {{"Pkg/x.js", JS, (uint32_t)(sizeof(JS) - 1), false, false}};
+    CHECK(buildZip("/tmp/celeros_zt/m.zip", one, 1));
+    {
+        FILE* g = fopen("/tmp/celeros_zt/m.zip", "r+b");
+        fseek(g, 8, SEEK_SET);           // method no cabecalho local
+        fputc(12, g);
+        fseek(g, -22 - 46 - 8 + 10, SEEK_END);  // method no central directory
+        fputc(12, g);
+        fclose(g);
+    }
+    CHECK(!z.open("/tmp/celeros_zt/m.zip"));
+
+    // mentira no tamanho declarado: bomba guardada pelo teto do uncomp
+    ZipTEntry infl[] = {{"Pkg/p.bin", pad, sizeof(pad), true, false}};
+    CHECK(buildZip("/tmp/celeros_zt/b.zip", infl, 1));
+    {
+        FILE* g = fopen("/tmp/celeros_zt/b.zip", "r+b");
+        fseek(g, -22 - 46 - 9 + 24, SEEK_END);  // uncomp no central directory ("Pkg/p.bin" = 9)
+        fputc(5, g); fputc(0, g); fputc(0, g); fputc(0, g);
+        fclose(g);
+    }
+    CHECK(z.open("/tmp/celeros_zt/b.zip"));
+    CHECK(z.count() == 1);
+    CHECK(!z.extractTo(0, "/tmp/celeros_zt/out/p.bin"));
+    z.close();
+
+    // zip vazio (so EOCD) abre com 0 entradas
+    {
+        std::vector<uint8_t> ev;
+        zPush32(ev, 0x06054b50);
+        zPush16(ev, 0); zPush16(ev, 0); zPush16(ev, 0); zPush16(ev, 0);
+        zPush32(ev, 0); zPush32(ev, 0); zPush16(ev, 0);
+        FILE* g = fopen("/tmp/celeros_zt/vazio.zip", "wb");
+        fwrite(ev.data(), 1, ev.size(), g);
+        fclose(g);
+    }
+    CHECK(z.open("/tmp/celeros_zt/vazio.zip"));
+    CHECK(z.count() == 0);
+    z.close();
+
+    // entrada demais (tetos do pacote) rejeita
+    {
+        ZipTEntry muitos[65];
+        static uint8_t dot[1] = {'x'};
+        static char nomes[65][16];
+        for (int i = 0; i < 65; i++) {
+            snprintf(nomes[i], sizeof(nomes[i]), "Pkg/f%d.js", i);
+            muitos[i] = {nomes[i], dot, 1, false, false};
+        }
+        CHECK(buildZip("/tmp/celeros_zt/muitos.zip", muitos, 65));
+        CHECK(!z.open("/tmp/celeros_zt/muitos.zip"));
+    }
+}
+
 int main() {
     testSemVer();
     testUpdateCheck();
@@ -2161,6 +2391,7 @@ int main() {
     testShellTail();
     testShellVarsArith();
     testShScript();
+    testAppZip();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

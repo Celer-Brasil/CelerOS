@@ -21,6 +21,7 @@
 #include "CommonErrorCodes.h"
 #include "Utils/AppGrants.h"
 #include "Utils/AppPerms.h"
+#include "Utils/AppPackage.h"
 #include "Utils/ShellLogic.h"
 #include "../Utils/CelerSettings.h"
 
@@ -743,6 +744,42 @@ int cmdRescan(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     (void) argc; (void) argv;
     LauncherUI::requestRescan();
     print(ctx, "launcher rescaneando apps\r\n");
+    return 0;
+}
+
+// installzip <zip> <nomeDaPasta>: pacote unico do app pela bancada (o par
+// do System.installZip na loja). O zip sobe com `celerctl apps installzip`
+// (push + este comando); extracao valida tetos, extrai em <dest>.new e
+// troca com rollback — o app antigo fica intacto se algo falhar.
+int cmdInstallZip(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc < 3) {
+        print(ctx, "uso: installzip <zip> <nomeDaPasta>\r\n");
+        return 1;
+    }
+    std::string zip = resolvePath(argv[1]);
+    if (!CelerShell::pathAllowed(zip)) {
+        print(ctx, "installzip: caminho invalido (use /local ou /sd)\r\n");
+        return 1;
+    }
+    const char* nome = argv[2];
+    // junta argumentos (nomes com espaco: installzip pacote.zip Meu App)
+    std::string nomeJoin = argv[2];
+    for (int i = 3; i < argc; i++) nomeJoin += std::string(" ") + argv[i];
+    nome = nomeJoin.c_str();
+    size_t len = strlen(nome);
+    if (len == 0 || len > 40 || strchr(nome, '/') != nullptr ||
+        strstr(nome, "..") != nullptr) {
+        print(ctx, "installzip: nome de pasta invalido\r\n");
+        return 1;
+    }
+    std::string dest = std::string("/local/apps/") + nome;
+    celer::apppkg::Result r;
+    if (!celer::apppkg::installZip(zip.c_str(), dest.c_str(), &r)) {
+        print(ctx, "installzip: pacote recusado (teto, zip invalido ou entry ausente)\r\n");
+        return 1;
+    }
+    LauncherUI::requestRescan();
+    print(ctx, "ok: %d arquivos, %u bytes em %s\r\n", r.files, (unsigned)r.bytes, dest.c_str());
     return 0;
 }
 
@@ -2069,6 +2106,7 @@ const ShellCmd kCommands[] = {
     {"lcddma", cmdLcdDma},
 #endif
     {"rescan", cmdRescan}, {"apps", cmdApps}, {"stat", cmdStat},
+    {"installzip", cmdInstallZip},
     {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
     {"lasterror", cmdLastError},

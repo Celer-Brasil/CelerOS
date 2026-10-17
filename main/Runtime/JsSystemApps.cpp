@@ -33,6 +33,7 @@
 #include "../Display/Theme.h"
 #include "../Display/Icon.h"
 #include "../OTA/OtaManager.h"
+#include "../Utils/AppPackage.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
@@ -321,6 +322,38 @@ duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
     putStr(ctx, "changelog", info.changelog.c_str());
     putStr(ctx, "guide", info.guide.c_str());
     putStr(ctx, "type", info.type.c_str());
+    return 1;
+}
+
+// installZip(zip, nome) (API 42): descompacta o pacote unico do app (o
+// mesmo app.zip que o hub produz no publish) em /local/apps/<nome> com
+// troca atomica e rollback. A App Store troca N downloads por 1 blob.
+// PERM_SYSTEM: quem chama publica app em nome de outro. Bloqueante (o
+// pacote cheio escreve centenas de KB em flash): renova a janela do
+// exec-timeout no fim. Erros sao literals (duk_error com %s de lightfunc
+// corrompe o heap); o motivo detalhado fica no retorno do Result.
+duk_ret_t JSBindings::js_installZip(duk_context *ctx) {
+    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    const char* zip = duk_require_string(ctx, 0);
+    const char* nome = duk_require_string(ctx, 1);
+    size_t nomeLen = strlen(nome);
+    if (nomeLen == 0 || nomeLen > 40 || strchr(nome, '/') != nullptr ||
+        strchr(nome, '\\') != nullptr || strstr(nome, "..") != nullptr) {
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "installZip: nome de pasta invalido");
+    }
+    if (zip[0] == '\0') duk_error(ctx, DUK_ERR_TYPE_ERROR, "installZip: zip vazio");
+
+    std::string dest = std::string("/local/apps/") + nome;
+    celer::apppkg::Result r;
+    bool ok = celer::apppkg::installZip(zip, dest.c_str(), &r);
+    CelerKernel::noteAppYield();  // extracao de pacote cheio passa de 1s
+    if (!ok) duk_error(ctx, DUK_ERR_TYPE_ERROR, "installZip: pacote recusado");
+
+    LauncherUI::requestRescan();
+    duk_push_object(ctx);
+    putBool(ctx, "ok", true);
+    putInt(ctx, "files", r.files);
+    putInt(ctx, "bytes", (int)r.bytes);
     return 1;
 }
 

@@ -2357,6 +2357,98 @@ static void testAppZip() {
     }
 }
 
+// ------------------------------------------------------------- AppPackage
+// Instalacao do pacote .zip (Utils/AppPackage.cpp): validacao, staging e
+// troca com rollback.
+#include "../../main/Utils/AppPackage.h"
+
+static bool existsPathSt(const char* p) {
+    struct stat st;
+    return stat(p, &st) == 0;
+}
+
+static std::string slurpZip(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) return "<ausente>";
+    std::string out;
+    char buf[256];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    fclose(f);
+    return out;
+}
+
+static void testAppPackage() {
+    using namespace celer::apppkg;
+    mkdir("/tmp/celeros_zt", 0755);
+    static const uint8_t JS1[] = "var v = 1;\nSystem.println('zip v1');\n";
+    static const uint8_t JS2[] = "System.println('zip v2');\n";
+    static const uint8_t BIN[] = "asset0123456789asset0123456789";
+    const char* meta =
+        "{\"name\":\"Teste Zip\",\"packageName\":\"teste.zip\",\"version\":\"1.0.0\","
+        "\"author\":\"eu\",\"description\":\"t\"}";
+    ZipTEntry es1[] = {
+        {"app.json", (const uint8_t*)meta, (uint32_t)strlen(meta), false, false},
+        {"main.js", JS1, (uint32_t)(sizeof(JS1) - 1), false, false},
+        {"arte.bin", BIN, (uint32_t)(sizeof(BIN) - 1), true, false},
+    };
+    ZipTEntry es2[] = {
+        {"app.json", (const uint8_t*)meta, (uint32_t)strlen(meta), false, false},
+        {"main.js", JS2, (uint32_t)(sizeof(JS2) - 1), false, false},
+        {"arte.bin", BIN, (uint32_t)(sizeof(BIN) - 1), true, false},
+    };
+    const char* dest = "/tmp/celeros_zt/pkg";
+    const char* zpath = "/tmp/celeros_zt/pkg.zip";
+
+    // 1a instalacao
+    CHECK(buildZip(zpath, es1, 3));
+    Result res;
+    CHECK(installZip(zpath, dest, &res));
+    CHECK(res.ok && res.files == 3);
+    CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS1);
+    CHECK(slurpZip("/tmp/celeros_zt/pkg/arte.bin") == (const char*)BIN);
+    CHECK(slurpZip("/tmp/celeros_zt/pkg/app.json") == meta);
+    CHECK(!existsPathSt("/tmp/celeros_zt/pkg.new") && !existsPathSt("/tmp/celeros_zt/pkg.old"));
+
+    // update: v2 substitui o main.js inteiro
+    CHECK(buildZip(zpath, es2, 3));
+    CHECK(installZip(zpath, dest, &res));
+    CHECK(res.ok && slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
+
+    // falha no meio (CRC do app.json): app antigo INTACTO e sem lixo de staging
+    CHECK(buildZip(zpath, es1, 3));
+    {
+        FILE* g = fopen(zpath, "r+b");
+        fseek(g, 50, SEEK_SET);  // dado do app.json (local: 30 de header + 8 de nome)
+        int c = fgetc(g);
+        fseek(g, 50, SEEK_SET);
+        fputc(c ^ 0xFF, g);
+        fclose(g);
+    }
+    CHECK(!installZip(zpath, dest, &res));
+    CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
+    CHECK(!existsPathSt("/tmp/celeros_zt/pkg.new") && !existsPathSt("/tmp/celeros_zt/pkg.old"));
+
+    // sem app.json nao e pacote
+    ZipTEntry semMeta[] = {{"main.js", JS1, (uint32_t)(sizeof(JS1) - 1), false, false}};
+    CHECK(buildZip(zpath, semMeta, 1));
+    CHECK(!installZip(zpath, dest, &res));
+    CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
+
+    // mentira no tamanho declarado: teto por arquivo rejeita ANTES de extrair
+    CHECK(buildZip(zpath, es1, 3));
+    {
+        FILE* g = fopen(zpath, "r+b");
+        // CD: 3 entradas (app.json=8, main.js=7, arte.bin=8) + EOCD 22
+        long cdStart = (long)slurpZip(zpath).size() - 22 - (46 + 8) - (46 + 7) - (46 + 8);
+        fseek(g, cdStart + (46 + 8) + (46 + 7) + 24, SEEK_SET);  // uncomp da arte.bin
+        fputc(0xFF, g); fputc(0xFF, g); fputc(0xFF, g); fputc(0x7F, g);
+        fclose(g);
+    }
+    CHECK(!installZip(zpath, dest, &res));
+    CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
+}
+
 int main() {
     testSemVer();
     testUpdateCheck();
@@ -2392,6 +2484,7 @@ int main() {
     testShellVarsArith();
     testShScript();
     testAppZip();
+    testAppPackage();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

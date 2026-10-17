@@ -51,6 +51,7 @@ set(CELEROS_SRCS
     "Utils/CelerSettings.cpp"
     "Utils/AppGrants.cpp"
     "Utils/AppZip.cpp"
+    "Utils/AppPackage.cpp"
     "USBDevice/USBDevice.cpp"
     "USBDevice/CelerShell.cpp"
     "USBDevice/DebugBridge.cpp"
@@ -310,7 +311,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.9.0"
-    CELEROS_API_LEVEL=41
+    CELEROS_API_LEVEL=42
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

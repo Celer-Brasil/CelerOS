@@ -39,7 +39,7 @@ jobs:
         run: node tools/sdk/celer.js check
       - name: C++ host tests (lógica pura de main/Utils + framer HostLink)
         run: |
-          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp
+          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp
           ./celeros_tests
       - name: celerctl tests (protocolo HostLink contra device simulado)
         run: |

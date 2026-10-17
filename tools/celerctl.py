@@ -3531,6 +3531,40 @@ def _apps_deps_status(link, args):
         print("\ncache em sincronia com o repo")
 
 
+def _apps_installzip(link, args):
+    """apps installzip: sobe o pacote unico .zip e instala com o comando
+    `installzip` do shell (extracao com tetos + troca com rollback no
+    device). O nome da pasta vem do campo name do app.json (convencao do
+    launcher: nome da pasta = display name), a menos que venha na linha."""
+    zp = Path(args.zipfile)
+    if not zp.is_file():
+        die(f"{zp} nao existe")
+    nome = args.name
+    if not nome:
+        try:
+            import zipfile
+            import json as _json
+            with zipfile.ZipFile(zp) as z:
+                meta = _json.loads(z.read("app.json").decode("utf-8"))
+            nome = str(meta.get("name") or "")
+        except (KeyError, ValueError, OSError) as e:
+            die(f"zip sem app.json valido: {e}")
+    if not nome or "/" in nome or "\\" in nome or ".." in nome or len(nome) > 40:
+        die(f"nome de pasta invalido: {nome!r}")
+    remote = "/local/celeros_install.zip"
+    link.write_file(str(zp), remote)
+    link.verify_file(str(zp), remote)
+    rc, out = link.exec(f"installzip {remote} {nome}")
+    try:
+        link.exec(f"rm {remote}")
+    except CelerError:
+        pass
+    print(out.rstrip())
+    if rc != 0:
+        die(f"installzip falhou no device (rc={rc})")
+    print(f"instalado: /local/apps/{nome} (rescan pedido)")
+
+
 def _apps_deps(link, args):
     """apps deps: o que vive no cache publico /local/modules, quem usa e o
     que sobrou sem dono (versoes antigas acumulam para sempre sem isso).
@@ -3704,6 +3738,8 @@ def cmd_apps(args):
             _rm_tree(link, target)
             link.exec("rescan")
             print(f"removido: {target}")
+        elif args.action == "installzip":
+            _apps_installzip(link, args)
         elif args.action == "deps":
             _apps_deps(link, args)
         elif args.action == "push-dep":
@@ -3999,6 +4035,11 @@ def build_parser():
                    help="pula a releitura de verificacao (crc32) de cada arquivo")
     a.add_argument("--run", action="store_true",
                    help="abre o app ao final (exit + run; encerra o anterior)")
+    a = apps_sub.add_parser("installzip", help="instala um pacote unico .zip no device "
+                                                "(o mesmo layout que o hub publica)")
+    a.add_argument("zipfile", help="caminho do .zip no PC (app.json na raiz)")
+    a.add_argument("name", nargs="?", default=None,
+                   help="nome da pasta no device (default: campo name do app.json)")
     a = apps_sub.add_parser("pull", help="baixa um app instalado para o PC")
     a.add_argument("name", help="nome da pasta do app no dispositivo")
     a.add_argument("dest", nargs="?", default=None, help="pasta de destino (default ./<nome>)")

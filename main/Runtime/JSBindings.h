@@ -345,6 +345,7 @@ private:
     static duk_ret_t js_factoryReset(duk_context *ctx);
     static duk_ret_t js_otaCheck(duk_context *ctx);
     static duk_ret_t js_otaStart(duk_context *ctx);
+    static duk_ret_t js_installZip(duk_context *ctx);
     static duk_ret_t js_setTimezone(duk_context *ctx);
     static duk_ret_t js_setManualTime(duk_context *ctx);
     static duk_ret_t js_set24hFormat(duk_context *ctx);

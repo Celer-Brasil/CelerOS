@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 36
+### API Level: 42
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2791,5 +2791,49 @@ Pack.acceptInvite(true);
 var peers = CelerLink.scan(3000);
 if (peers.length && CelerLink.connect(peers[0].id) && CelerLink.verify(typedCode)) {
     Pack.invite();                       // later: Pack.inviteStatus() === "ok"
+}
+```
+
+## 44. API Level 42 — Single-file app package: `System.installZip`
+
+The whole app fits in ONE `.zip` file — the same one the hub already
+produces on publish (`app.zip`, DEFLATE, flat layout with `app.json` at
+the root). `System.installZip` unpacks and publishes the app under
+`/local/apps/<name>` with an atomic swap: extracts into `<name>.new`,
+checks that the `app.json` entry file exists, and only then swaps in the
+new folder — if anything fails midway (truncated zip, disk full, power
+loss), the old app stays intact. The App Store uses it to replace N
+downloads with 1 blob; from the bench the counterpart is
+`celerctl apps installzip package.zip` (or the shell `installzip`
+command).
+
+Package requirements: up to 64 entries, `stored` and `deflate` methods,
+single file up to 272 KB and up to 448 KB uncompressed total (the fine
+per-category budgets remain in the publish lint). Requires the `system`
+permission.
+
+#### `System.installZip(zipPath, name)` → Object (API 42)
+
+`zipPath` is the `.zip` path on the device (typically downloaded with
+`Net.download` into `/local`); `name` becomes the folder
+`/local/apps/<name>` (no slashes, no `..`, up to 40 chars — the app
+display name, same folder convention). Blocking; refreshes the
+exec-timeout window at the end. Returns `{ok: true, files, bytes}` or
+throws `Error` (`installZip: pacote recusado` for a bad zip/budget/entry,
+`installZip: nome de pasta invalido` for a bad folder name). After
+publishing, the launcher is rescanned — the app shows up in the grid
+without a replug.
+
+### Example — installing a downloaded blob
+
+```javascript
+// download the whole package in 1 request (the hub catalog publishes
+// it.zip = {url, size, md5} once the server serves the zip)
+var ok = Net.download(it.zip.url, "/local/blob.zip", function (got, total) {
+    drawProgress(got, total);
+});
+if (ok && FS.md5("/local/blob.zip") === it.zip.md5) {
+    System.installZip("/local/blob.zip", it.name);   // {ok:true, files:N}
+    FS.remove("/local/blob.zip");
 }
 ```

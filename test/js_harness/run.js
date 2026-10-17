@@ -635,6 +635,7 @@ function makeEnv() {
                  version: '', url: '', changelog: '', guide: '', type: '' };
     },
     otaStart: function() { return false; },
+    installZip: function(zip, nome) { log.push('[installZip] ' + nome); return { ok: true, files: 0, bytes: 0 }; },
     webActive: function() { return true; },
     webSetActive: function() {},
     webAuthInfo: function() { return { user: 'admin', pass: 'senha-web' }; },

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 36
+### Nível de API: 42
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -3073,5 +3073,47 @@ Pack.acceptInvite(true);
 var peers = CelerLink.scan(3000);
 if (peers.length && CelerLink.connect(peers[0].id) && CelerLink.verify(codigoDigitado)) {
     Pack.invite();                       // depois: Pack.inviteStatus() === "ok"
+}
+```
+
+## 44. Nível de API 42 — Pacote único do app: `System.installZip`
+
+Todo o app cabe em UM arquivo `.zip` — o mesmo que o hub já produz no
+publish (`app.zip`, DEFLATE, layout flat com o `app.json` na raiz). O
+`System.installZip` descompacta e publica o app em `/local/apps/<nome>`
+com troca atômica: extrai em `<nome>.new`, confere que o entry do
+`app.json` existe e só então troca pela pasta nova — se algo falhar no
+meio (zip truncado, disco cheio, queda de energia), o app antigo fica
+intacto. A App Store usa isto para trocar N downloads por 1 blob; pela
+bancada o par é `celerctl apps installzip pacote.zip` (ou o comando
+`installzip` do shell).
+
+Requisitos do pacote: até 64 entradas, métodos `stored` e `deflate`,
+arquivo solto até 272 KB e soma não comprimida até 448 KB (os tetos
+finos por categoria continuam no lint do publish). Requer a permissão
+`system`.
+
+#### `System.installZip(zipPath, nome)` → Object (API 42)
+
+`zipPath` é o caminho do `.zip` no aparelho (tipicamente baixado com
+`Net.download` para `/local`); `nome` vira a pasta em `/local/apps/<nome>`
+(sem barra, sem `..`, até 40 caracteres — o display name do app, igual à
+convenção de pastas). Bloqueante; renova a janela do exec-timeout no fim.
+Devolve `{ok: true, files, bytes}` ou derruba com `Error` (`installZip:
+pacote recusado` para zip/teto/entry inválidos, `installZip: nome de
+pasta invalido`). Depois de publicar, o launcher é rescaneado — o app
+aparece no grid sem replug.
+
+### Exemplo — instalando de um blob baixado
+
+```javascript
+// baixa o pacote inteiro em 1 request (o catálogo do hub publica
+// it.zip = {url, size, md5} quando o servidor já serve o zip)
+var ok = Net.download(it.zip.url, "/local/blob.zip", function (got, total) {
+    drawProgress(got, total);
+});
+if (ok && FS.md5("/local/blob.zip") === it.zip.md5) {
+    System.installZip("/local/blob.zip", it.name);   // {ok:true, files:N}
+    FS.remove("/local/blob.zip");
 }
 ```

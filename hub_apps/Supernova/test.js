@@ -58,9 +58,10 @@ module.exports.wire = function (env) {
         m.jogo.debugHit();
     }, 2200);
 
-    // fim de jogo (t > 0,5): DE NOVO em y 316..370, x 90..390
+    // fim de jogo (t > 0,5): DE NOVO no primeiro item do menu da dep ui
+    // (menu em y = H*0.52 = 250, linha de 80: 250..322), x 60..420
     at(function () {
-        h.pushTouch([{ x: 240, y: 343, touched: 1 }, { x: 240, y: 343, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 280, touched: 1 }, { x: 240, y: 280, touched: 0 }]);
     }, 3600);
 
     // carrega, solta o anel do chefe no POOL e detona a supernova (toque no
@@ -79,12 +80,14 @@ module.exports.wire = function (env) {
         h.pushTouch([{ x: 60, y: 420, touched: 1 }, { x: 60, y: 420, touched: 0 }]);
     }, 5200);
 
-    // pausa (canto superior direito) e continua — cobre o ultimo estado
+    // pausa (canto superior direito) e continua — E.ui.pause desenha
+    // Continuar/Recomecar/Sair no menu padrao da engine: a 1a linha fica
+    // em y = H*0.3 = 144 com 80 de passo (144..216)
     at(function () {
         h.pushTouch([{ x: 460, y: 30, touched: 1 }, { x: 460, y: 30, touched: 0 }]);
     }, 6400);
     at(function () {
-        h.pushTouch([{ x: 240, y: 220, touched: 1 }, { x: 240, y: 220, touched: 0 }]);
+        h.pushTouch([{ x: 240, y: 180, touched: 1 }, { x: 240, y: 180, touched: 0 }]);
     }, 7200);
 
     // o fluxo de cenas tem que ter andado (coordenadas erradas = tap no

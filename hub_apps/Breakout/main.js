@@ -1,11 +1,12 @@
 // Breakout — quebre os tijolos, arraste a raquete. Porte CelerGame: a
 // camada suja E.dirty apaga o rastro da bola/raquete (o painter repinta
-// fundo e tijolos so na caixa tocada — antes era fillCircle manual das
-// posicoes anteriores), burst/popText na quebra, rastro na bola, flash ao
-// perder vida e transicao iris no fim. ES5 puro (Duktape).
+// fundo e tijolos so na caixa tocada), burst/popText na quebra e agora
+// rastro E.fx.trail na bola, anel E.fx.ring no tijolo e flash ao perder
+// vida. Titulo, pausa e fim de jogo pela celeros.game.ui. ES5 puro (Duktape).
 
-var E = require("celeros.game");       // familia CelerGame: core + fx
+var E = require("celeros.game");       // familia CelerGame: core + fx + ui
 require("celeros.game.fx");
+require("celeros.game.ui");
 
 E.init({ dir: "Breakout", fps: 60, save: "breakout." });
 var T = E.theme, W = E.W, H = E.H;
@@ -21,6 +22,14 @@ var BALL_R = 3;
 
 var ROW_COLORS = [T.err, T.warn, T.ok, T.accent, T.accentD];
 var ROW_POINTS = [50, 40, 30, 20, 10];
+
+// sons do jogo na tabela do core: paddle/brick/lose/win/record
+// (E.audio.sfx escolhe a tabela; caps.speaker falso = no-op em placa muda)
+E.audio.sfxTable.paddle = [240, 45];
+E.audio.sfxTable.brick = [[740, 30], [990, 45]];
+E.audio.sfxTable.lose = [[320, 90], [200, 160]];
+E.audio.sfxTable.win = [[523, 80], [659, 80], [784, 150]];
+E.audio.sfxTable.record = [[659, 60], [784, 60], [988, 60], [1319, 180]];
 
 // recorde: NVS do core — o valor do arquivo da 1.2 entra como migacao 1x
 // (opcional: sem a perm "fs" o runtime nao registra o objeto FS)
@@ -39,7 +48,20 @@ var bricks, score, lives, level, state;   // state: serve|play|levelup|over
 var paddleX, ball, speed;
 var nextLife = 500;                       // vida extra a cada 500 pts (max 5)
 var novoRec = false;
-var BTN = { x: 68, y: 196, w: 104, h: 34 };
+var paused = false, pauseAct = null;      // menu de pausa (acao do draw)
+var overAct = null;                       // menu de fim (acao do draw)
+var PB = { x: W - 28, y: 3, w: 22, h: 18 };   // botao de pausa no HUD
+var help = null;                          // dialogo retido do "Como jogar"
+var HELP_TXT = "Arraste o dedo para mover a raquete. Toque para lançar a bola. " +
+               "Quebre todos os tijolos para subir de nível. A cada 500 pontos " +
+               "você ganha uma vida. Não deixe a bola cair!";
+
+// rastro curto da bola: parado/serve/pausa nao semeia (follow devolve null)
+var trail = E.fx.trail(function () {
+    if (state !== "play" || paused) return null;
+    return { x: ball.x, y: ball.y };
+}, { rate: 30, life: 0.35, size: 2, color: T.textDim });
+trail.stop();
 
 function buildBricks() {
     bricks = [];
@@ -112,6 +134,7 @@ function collide() {
         var sp = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
         ball.dx = sp * Math.sin(ang);
         ball.dy = -Math.abs(sp * Math.cos(ang));
+        E.audio.sfx("paddle");
     }
 
     // tijolos
@@ -126,13 +149,16 @@ function collide() {
             lives++;
             nextLife += 500;
         }
-        // juice: estouro na cor da fileira + pontos flutuando; a caixa suja
-        // da particula ja apaga o tijolo quebrado (o painter nao o repinta)
+        // juice: estouro na cor da fileira + anel + pontos flutuando; a
+        // caixa suja da particula ja apaga o tijolo (o painter nao o repinta)
         var bc = brickRect(b);
         E.fx.burst(bc.x + bc.w / 2, bc.y + bc.h / 2,
                    { n: 10, color: ROW_COLORS[b.r], speed: 80, life: 0.4, size: 2 });
+        E.fx.ring(bc.x + bc.w / 2, bc.y + bc.h / 2,
+                  { r0: 4, speed: 160, color: ROW_COLORS[b.r], life: 0.35 });
         E.fx.popText(bc.x + bc.w / 2, bc.y, "+" + ROW_POINTS[b.r],
                      { color: ROW_COLORS[b.r], life: 0.6 });
+        E.audio.sfx("brick");
         // reflete no eixo de menor penetracao
         var cx = (b.x + BRICK_W / 2) - ball.x;
         var cy = (b.y + BRICK_H / 2) - ball.y;
@@ -145,6 +171,7 @@ function collide() {
             score += 100;
             state = "levelup";
             E.fx.popText(W / 2, 152, "Nível " + level + "!", { color: T.warn, life: 1.2 });
+            E.audio.sfx("win");
             E.after(900, function () {
                 buildBricks();
                 resetBall();
@@ -158,6 +185,7 @@ function collide() {
     if (ball.y > H + 8) {
         lives--;
         E.fx.flash(T.err, 200);
+        E.audio.sfx("lose");
         if (lives <= 0) {
             state = "over";
             if (E.save.best("hi", score)) novoRec = score > 0;
@@ -205,19 +233,53 @@ function drawHeader() {
     E.dirty.on = false;
     E.gfx.rect(0, 0, W, 40, T.card, { screen: true });
     E.gfx.text("Pontos " + score, 10, 4, { ts: "title", bg: T.card });
-    E.gfx.text("Vidas " + lives + "  ·  Rec " + hi, W - 10, 6,
+    E.gfx.text("Nível " + level, 10, 24,
+               { ts: "small", color: T.accent, bg: T.card });
+    E.gfx.text("Vidas " + lives + "  ·  Rec " + hi, W - 10, 25,
                { ts: "small", align: "right", color: T.textDim, bg: T.card });
-    E.gfx.text("Nível " + level + (state === "serve" ? "  ·  toque para lançar" : ""),
-               10, 24, { ts: "small", color: T.accent, bg: T.card });
+    // botao de pausa: card arredondado + duas barras (sem glifo/emoji)
+    E.gfx.rect(PB.x, PB.y, PB.w, PB.h, T.raised, { r: 5, screen: true });
+    E.gfx.rect(PB.x + 6, PB.y + 5, 3, PB.h - 10, T.accent, { screen: true });
+    E.gfx.rect(PB.x + PB.w - 9, PB.y + 5, 3, PB.h - 10, T.accent, { screen: true });
     E.gfx.rect(0, 40, W, 2, T.accent, { screen: true });
     E.dirty.on = on;
 }
 
 // ------------------------------------------------------------------ cenas ---
 E.run({
+    titulo: {
+        draw: function () {
+            E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
+            // faixa de tijolos decorativa no rodape (identidade do jogo)
+            var dy = H - 58;
+            for (var r = 0; r < 3; r++) {
+                for (var c = 0; c < BRICK_COLS; c++) {
+                    E.gfx.rect(FX + 8 + c * BRICK_W, dy + r * (BRICK_H + 3),
+                               BRICK_W - 2, BRICK_H,
+                               ROW_COLORS[(r + c) % ROW_COLORS.length], { screen: true });
+                }
+            }
+            var act = E.ui.title({ game: "BREAKOUT", best: hi, extra: "Como jogar" });
+            if (help) {
+                if (!help.draw(15, H * 0.42, W - 30)) help = null;
+                return;
+            }
+            if (act === "start" || (!act && E.input.tap)) {
+                // toque fora dos botoes tambem comeca: o titulo e a unica
+                // cena antes do jogo (nada de tela morta no primeiro toque)
+                E.goto("jogo", { transition: "fade", ms: 300 });
+            } else if (act === "extra") {
+                help = E.ui.dialog(HELP_TXT, { name: "Como jogar", speed: 40 });
+            }
+        }
+    },
+
     jogo: {
         enter: function () {
             newGame();
+            paused = false;
+            pauseAct = null;
+            trail.start();
             E.dirty.enable(paintField);   // 1o quadro: campo inteiro
             // o apagar/redesenho do mundo nao sobe alem do placar: sem o
             // recorte, o repaint integral do 1o quadro (e de cada full,
@@ -228,6 +290,34 @@ E.run({
             drawHeader();
         },
         update: function (dt) {
+            if (paused) {
+                var act = pauseAct;
+                pauseAct = null;
+                if (act === "resume") {
+                    paused = false;
+                    trail.start();
+                } else if (act === "restart") {
+                    paused = false;
+                    trail.start();
+                    newGame();
+                    hudKey = -1;
+                    E.dirty.full();
+                } else if (act === "quit") {
+                    paused = false;
+                    trail.stop();
+                    E.goto("titulo", { transition: "fade", ms: 300 });
+                    return;
+                } else {
+                    return;   // menu aberto: update congelado
+                }
+            }
+            // botao de pausa no HUD
+            if (E.hit(PB)) {
+                paused = true;
+                pauseAct = null;
+                trail.stop();
+                return;
+            }
             // arrasto da raquete (serve acompanha a bola na saida)
             var i = E.input;
             if (i.down) {
@@ -250,8 +340,21 @@ E.run({
             }
         },
         draw: function () {
+            if (paused) {
+                // veu de pausa por cima do jogo congelado; solta o recorte
+                // para o veu cobrir tambem a faixa do HUD
+                E.dirty.unclip();
+                var act = E.ui.pause({ title: "PAUSA" });
+                if (act) pauseAct = act;
+                return;
+            }
             // so o que se MEXE entra na camada suja (tijolos ficam no painter)
             var by = state === "levelup" ? PADDLE_Y - BALL_R - 1 : ball.y;
+            if (state === "serve") {
+                // dica dentro do campo (a camada suja apaga quando o jogo anda)
+                E.gfx.text("toque para lançar", W / 2, PADDLE_Y - 26,
+                           { ts: "small", align: "center", color: T.textDim, screen: true });
+            }
             if (state !== "over") {
                 E.gfx.circle(ball.x, by, BALL_R, T.text, { smooth: true });
                 // gradiente cru como o original (dir 4) + caixa na camada
@@ -261,22 +364,33 @@ E.run({
             }
             E.fx.draw();
         },
-        exit: function () { E.dirty.off(); }
+        exit: function () {
+            paused = false;
+            trail.stop();
+            E.dirty.off();
+        }
     },
 
     fim: {
-        static: true,
+        enter: function () {
+            overAct = null;
+            if (novoRec) E.audio.sfx("record");
+        },
         update: function () {
-            if (E.hit(BTN)) { E.goto("jogo", { transition: "wipe", ms: 300 }); }
+            if (overAct === "again") {
+                overAct = null;
+                E.goto("jogo", { transition: "wipe", ms: 300 });
+            } else if (overAct === "quit") {
+                overAct = null;
+                E.goto("titulo", { transition: "fade", ms: 300 });
+            }
         },
         draw: function () {
-            E.gfx.text("Fim de jogo", W / 2, 128,
-                       { ts: "title", align: "center", color: T.err });
-            E.gfx.text("Pontos: " + score + "   Recorde: " + hi, W / 2, 160,
-                       { ts: "body", align: "center" });
-            if (novoRec) E.gfx.text("NOVO RECORDE!", W / 2, 182,
-                                    { ts: "label", align: "center", color: T.ok });
-            E.gfx.button("Jogar de novo", BTN.x, BTN.y + 20, BTN.w, BTN.h);
+            var act = E.ui.gameOver({
+                title: "FIM DE JOGO", score: score, best: hi, isNew: novoRec,
+                labels: ["Jogar de novo", "Sair"]
+            });
+            if (act) overAct = act;
         }
     }
-}, "jogo");
+}, "titulo");

@@ -1,16 +1,17 @@
 {
   "name": "Breakout",
   "packageName": "celeros.breakout",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "author": "CelerOS",
   "description": "Quebre os tijolos com a bola: arraste a raquete, pegue os rebotes e avance de nivel. Recorde salvo no aparelho.",
   "type": "Game",
   "category": "Arcade",
   "api": 30,
   "permissions": [],
-  "changelog": "1.3.2 - o placar se repinta quando a camada suja toca a faixa dele (os restos do veu de transicao ficavam por cima do placar ate o proximo ponto); pede celeros.game 1.0.2 (ja no hub)\n1.3.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.3.0 - portado para a familia CelerGame COM melhorias: camada suja E.dirty no lugar do apagamento manual de rastro (painter repita fundo e tijolos so na caixa tocada), burst + popText na quebra, flash ao perder vida, fim de jogo com transicao iris e NOVO RECORDE, recorde migrado do txt para o NVS\n1.2.0 - visual novo (API 22): tijolos e raquete em gradiente, bola suavizada, placar com fontes do sistema e dialogo de fim de jogo\n1.1.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.1 - tijolo destruido sai da tela na hora (antes ficava pintado e a bola deixava rastro nele)\n1.1.0 - vida extra a cada 500 pts e banner de nivel; 1.0.0 - primeiro lancamento",
+  "changelog": "1.4.0 - adota a celeros.game.ui 1.0.1 (ja no hub): tela de titulo com BREAKOUT, recorde, botao JOGAR e \"Como jogar\" (dialogo datilografado), pausa pelo botao no HUD com Continuar/Recomecar/Sair congelando o update, e fim de jogo pela E.ui.gameOver com placar, recorde, NOVO RECORDE e a transicao iris; juice novo: rastro E.fx.trail na bola, anel E.fx.ring no tijolo quebrado e flash ao perder vida (burst/popText mantidos); sons de paddle, tijolo, vida perdida (lose), nivel (win) e recorde na E.audio.sfxTable via E.audio.sfx; pede celeros.game 1.0.2, celeros.game.fx 1.0.2 e celeros.game.ui 1.0.1\n1.3.2 - o placar se repinta quando a camada suja toca a faixa dele (os restos do veu de transicao ficavam por cima do placar ate o proximo ponto); pede celeros.game 1.0.2 (ja no hub)\n1.3.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.3.0 - portado para a familia CelerGame COM melhorias: camada suja E.dirty no lugar do apagamento manual de rastro (painter repita fundo e tijolos so na caixa tocada), burst + popText na quebra, flash ao perder vida, fim de jogo com transicao iris e NOVO RECORDE, recorde migrado do txt para o NVS\n1.2.0 - visual novo (API 22): tijolos e raquete em gradiente, bola suavizada, placar com fontes do sistema e dialogo de fim de jogo\n1.1.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.1 - tijolo destruido sai da tela na hora (antes ficava pintado e a bola deixava rastro nele)\n1.1.0 - vida extra a cada 500 pts e banner de nivel; 1.0.0 - primeiro lancamento",
   "deps": {
-    "celeros.game": "^1.0.0",
-    "celeros.game.fx": "^1.0.0"
+    "celeros.game": "^1.0.2",
+    "celeros.game.fx": "^1.0.2",
+    "celeros.game.ui": "^1.0.1"
   }
 }

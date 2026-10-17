@@ -1,4 +1,4 @@
-// Supernova 2.2 — atirador espacial construido sobre a game engine do SDK,
+// Supernova 2.5 — atirador espacial construido sobre a game engine do SDK,
 // tela cheia nos PIXELS NATIVOS do vidro (API 28; 480x480 no SmartDisplay
 // 4"). A trilha chiptune segue sendo o metronomo (ondas caem na batida via
 // beat clock) e a carga dos orbes detona a SUPERNOVA. SENTINELA-MOR (chefe
@@ -9,9 +9,16 @@
 // Render (engine 1.2): nada de fillScreen por quadro. Os menus sao cenas
 // `static` (desenham 1x e so repintam no press de botao) e a cena de jogo
 // usa a camada suja E.dirty — cada quadro apaga so as caixas do anterior
-// (fundo preto) dentro do recorte da arena; o HUD fica fora do recorte e
-// so repinta quando um numero muda. No firmware de caixas sujas (API 32)
-// so essas caixas vao ao vidro: o painel RGB nao treme mais.
+// dentro do recorte da arena; o HUD fica fora do recorte e so repinta
+// quando um numero muda. No firmware de caixas sujas (API 32) so essas
+// caixas vao ao vidro: o painel RGB nao treme mais.
+//
+// 2.5: fundo em profundidade (nebulosa/poeira em E.fx.parallax servidas
+// como PAINTER da camada suja + duas levas de E.fx.stars com stride),
+// rastro da nave (E.fx.trail) e escapamento continuo nos propulsores
+// (E.fx.emitter), aura da carga da supernova; pausa e fim nas telas
+// prontas da dep celeros.game.ui (static, sobre a arena congelada) e sons
+// pela E.audio.sfxTable do core (trilha/duck preservados).
 //
 // Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao). A engine e DEP
 // do hub (app.json "deps"; API 30); os projeteis vivem em pools proprios
@@ -21,6 +28,7 @@
 var E = require("celeros.game");       // familia CelerGame: adota so o que usa
 require("celeros.game.fx");
 require("celeros.game.spr");
+require("celeros.game.ui");           // pausa/fim prontos (menu do tema)
 var jogo = require("jogo");
 
 E.init({ dir: "Supernova", fps: 30, native: true, save: "supernova.", particles: 120 });
@@ -80,15 +88,116 @@ E.spr.load([
     { name: "orbe", file: USA_PNG ? "orbe" : null, w: SPR.orbe, h: SPR.orbe, paint: paintOrbe }
 ], { bases: BASES });
 
-// Campo de estrelas em 2 tons (guardado no E.data: sobrevive as cenas);
-// com a camada suja cada estrela apaga o proprio pixel antigo. stride 4:
-// so 1/4 das estrelas se move por quadro (15 em vez de 60 pontos sujos
-// espalhados pelo vidro — a uniao deles virava a tela inteira e o vidro
-// voltava a vibrar por disputa de banda da PSRAM com o DMA do painel)
+// ------------------------------------------------------------- fundo ----
+// Profundidade em camadas atras da arena: nebulosa/poeira em parallax
+// (E.fx.parallax servido como PAINTER da camada suja — cada caixa apagada
+// repinta so as celulas que toca, entao nao existe fillScreen por quadro)
+// e duas levas de estrelas em E.fx.stars com velocidades e stride
+// diferentes (cada estrela apaga/cura o proprio pixel antigo). O painter e
+// chamado no _begin antes do draw, com E.cam.x/y posicionados pela rolagem
+// da nave; o draw da cena zera a camera para o mundo/particulas nao
+// deslocarem. Tudo pre-calculado: o hot path so roda hash + primitiva.
+var bgY = 0;              // rolagem acumulada do voo (unidades de camera)
+
+function bgHash(x, y) {
+    var n = ((x | 0) * 374761393 + (y | 0) * 668265263) | 0;
+    n = (n ^ (n >>> 13)) | 0;
+    n = (n * 48271) | 0;
+    return (n ^ (n >>> 16)) >>> 0;
+}
+
+var NEB = [
+    System.mixColor(0x0000, 0x07FF, 5),    // azul
+    System.mixColor(0x0000, 0xF81F, 4),    // magenta
+    System.mixColor(0x0000, 0xFD20, 4)     // ambar
+];
+var POEIRA = [
+    System.mixColor(0x0000, 0xFFFF, 18),
+    System.mixColor(0x0000, 0x07FF, 14)
+];
+
+// bolha pequena e apagada em ~1/4 das celulas (480/64 = 8x8)
+function paintNebulosa(x, y) {
+    x = Math.round(x);
+    y = Math.round(y);
+    var n = bgHash(x, y);
+    if ((n & 3) !== 0) return;
+    System.fillCircle(x + (n >>> 8) % 7 - 3, y + (n >>> 11) % 7 - 3,
+                      3 + (n >>> 4) % 5, NEB[(n >>> 14) % NEB.length]);
+}
+
+// poeira fina: 1 px em ~1/3 das celulas (480/32 = 15x15)
+function paintPoeira(x, y) {
+    x = Math.round(x);
+    y = Math.round(y);
+    var n = bgHash(x, y);
+    if ((n & 2) === 0) return;
+    System.drawPixel(x + (n >>> 5) % 9 - 4, y + (n >>> 9) % 9 - 4,
+                     POEIRA[(n >>> 13) & 1]);
+}
+
+var bgLayer = E.fx.parallax([
+    { speed: 0.05, gap: 64, rowH: 64, paint: paintNebulosa },
+    { speed: 0.12, gap: 32, rowH: 32, paint: paintPoeira }
+]);
+function paintFundo(x, y, w, h) { bgLayer.draw(x, y, w, h); }
+
+// Estrelas em 2 planos, cada campo guardado no E.data (sobrevive as
+// cenas). stride espalha os pontos sujos no tempo: a uniao das caixas de
+// 60 estrelas por quadro virava a tela inteira e o painel RGB vibrava por
+// disputa de banda com o DMA.
 E.data.stars = E.fx.stars(Math.round(W / 8), {
-    w: W, h: H, vy: 30 * K, stride: 4,
+    w: W, h: H, vy: 34 * K, stride: 4,
     colors: [0x39E7, 0xC5F9]   // cinza-azulado longe, branco quente perto
 });
+E.data.starsFar = E.fx.stars(Math.round(W / 12), {
+    w: W, h: H, vy: 13 * K, stride: 6,
+    colors: [0x18E3, 0x4A69]   // quase apagadas: plano de tras
+});
+
+// -------------------------------------------------- emissores (fx) ------
+// Fontes REUTILIZADAS: o follow devolve sempre o mesmo objeto (atualizado
+// no update), entao o tick dos emissores nao aloca por quadro. O rastro
+// so semeia quando a nave anda; o escapamento dos dois propulsores e
+// continuo; a carga da supernova acende a aura dourada.
+var _ship = { x: 0, y: 0 };
+var _nzE = { x: 0, y: 0 };
+var _nzD = { x: 0, y: 0 };
+
+var trail = E.fx.trail(function () { return _ship; }, {
+    rate: 16, life: 0.35, size: Math.max(2, Math.round(3 * K)),
+    colors: [C.cianoD, C.ciano, C.hud]
+});
+var exE = E.fx.emitter({
+    rate: 12, life: 0.22, size: Math.max(1, Math.round(2 * K)),
+    speed: 40 * K, speed2: 95 * K, angle: Math.PI / 2, spread: 0.45,
+    colors: [C.ciano, C.cianoD, C.branco],
+    follow: function () { return _nzE; }
+});
+var exD = E.fx.emitter({
+    rate: 12, life: 0.22, size: Math.max(1, Math.round(2 * K)),
+    speed: 40 * K, speed2: 95 * K, angle: Math.PI / 2, spread: 0.45,
+    colors: [C.ciano, C.cianoD, C.branco],
+    follow: function () { return _nzD; }
+});
+var carga = E.fx.emitter({
+    rate: 9, life: 0.45, size: Math.max(1, Math.round(2 * K)),
+    speed: 14 * K, speed2: 48 * K, spread: Math.PI * 2,
+    colors: [C.ouro, C.laranja, C.branco],
+    follow: function () { return _ship; }
+});
+trail.on = false;
+exE.on = false;
+exD.on = false;
+carga.on = false;
+var cargaT = 0;
+var RING_CHEIO = { color: C.ouro, speed: 250 * K, life: 0.45, r0: 10 * K };
+
+// itens do fim (immediate-mode: desenhados e devolvidos no mesmo quadro)
+var FIM_ITENS = [{ label: "DE NOVO", value: "again" },
+                 { label: "MENU", value: "menu" }];
+var FIM_Y = Math.round(H * 0.52);
+var FIM_OPTS = { y: FIM_Y };
 
 // fracao alta da batida (1 logo apos o tempo forte, decai ate o proximo)
 function beatPulse() {
@@ -138,13 +247,22 @@ function botoes(y, rotulo1, rotulo2, cor) {
 
 var D = E.dirty;
 
+// opts compartilhados dos desenhos que rodam TODO quadro (a engine so
+// le): um literal por blit/primitiva era lixo para o GC do Duktape
+var _blitOpt = { cx: true, cy: true, key: C.espaco };
+var _barOpt = { fg: C.magenta, bg: C.cinzaD, screen: true };
+var _circOpt = { smooth: true, screen: true };
+var _screenOpt = { screen: true };
+var _toqueOpt = { align: "center", valign: "middle", ts: "tiny", color: C.branco,
+                  screen: true };
+
 function drawOrb(o, shx, shy, pulse) {
     var x = Math.round(o.x + shx), y = Math.round(o.y + shy);
     var pulso = 0.5 + 0.5 * Math.sin(o.ph);
     var r = Math.round((26 + pulso * 5 + pulse * 3) * K);
     System.fillSmoothCircle(x, y, r, System.mixColor(C.ouro, C.espaco, 55 - pulso * 25));
     D.add(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3);
-    E.spr.blit("orbe", x, y, { cx: true, cy: true, key: C.espaco });
+    E.spr.blit("orbe", x, y, _blitOpt);
 }
 
 function drawEnemy(e, shx, shy, ms) {
@@ -156,7 +274,7 @@ function drawEnemy(e, shx, shy, ms) {
         r = Math.round((60 + Math.sin(ms / 110) * 5) * K);
         System.fillSmoothCircle(x, y, r, System.mixColor(C.magenta, C.espaco, fast ? 35 : 55));
         D.add(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3);
-        E.spr.blit("olho", x, y, { cx: true, cy: true, key: C.espaco });
+        E.spr.blit("olho", x, y, _blitOpt);
         var hpk = e.hp / e.hpMax;
         System.fillCircle(x, y, Math.round(8 * K), hpk > 0.5 ? C.verde : (hpk > 0.25 ? C.ouro : C.vermelho));
         var a = ms / 300, orb = 52 * K, rr = Math.round(4 * K) + 1;
@@ -171,12 +289,13 @@ function drawEnemy(e, shx, shy, ms) {
         System.fillTriangle(x, y - t, x - l, y + 8 * K, x + l, y + 8 * K, C.laranja);
         D.add(x - l - 1, y - t - 1, l * 2 + 3, t + 8 * K + 3);
     } else {
-        E.spr.blit(e.kind === 1 ? "olho" : "inimigo", x, y, { cx: true, cy: true, key: C.espaco });
+        E.spr.blit(e.kind === 1 ? "olho" : "inimigo", x, y, _blitOpt);
         // nucleo pulsante POR CIMA do blit: animacao sem slot extra
-        var nk = e.kind === 1 ? [0, 4, 130, C.verde] :
-                 (e.kind === 3 ? [8, 4, 70, C.ouro] : [8, 3, 90, C.magenta]);
-        System.fillCircle(x, Math.round(y + nk[0] * K),
-                          Math.round((nk[1] + Math.sin(ms / nk[2] + e.ph) * 2) * K), nk[3]);
+        var nkY = 0, nkR = 3, nkP = 90, nkC = C.magenta;
+        if (e.kind === 1) { nkY = 0; nkR = 4; nkP = 130; nkC = C.verde; }
+        else if (e.kind === 3) { nkY = 8; nkR = 4; nkP = 70; nkC = C.ouro; }
+        System.fillCircle(x, Math.round(y + nkY * K),
+                          Math.round((nkR + Math.sin(ms / nkP + e.ph) * 2) * K), nkC);
     }
     if (e.flashT > 0) {   // leva tiro: pisca branco
         r = Math.round((e.kind === 2 ? 50 : 26) * K);
@@ -195,7 +314,7 @@ function drawPlayer(p, shx, shy, ms) {
     var fy = Math.round(34 * K);
     System.fillTriangle(px - 9 * K, py + fy, px + 9 * K, py + fy, px, py + fy + fl, C.ciano);
     D.add(px - mx - mr - 1, py + fy - 1, (mx + mr) * 2 + 3, Math.max(my + mr, fy + fl) - fy + 3);
-    E.spr.blit("nave", px, py, { cx: true, cy: true, key: C.espaco });
+    E.spr.blit("nave", px, py, _blitOpt);
 }
 
 function drawGame(s, pulse) {
@@ -235,7 +354,7 @@ function drawGame(s, pulse) {
 function drawBossBar(s) {
     if (!s.boss) return;
     var bw = Math.min(u(120), W - u(60)), x = Math.round((W - bw) / 2), y = HUD_H + u(5);
-    E.gfx.bar(x, y, bw, u(4), s.boss.hp / s.boss.hpMax, { fg: C.magenta, bg: C.cinzaD, screen: true });
+    E.gfx.bar(x, y, bw, u(4), s.boss.hp / s.boss.hpMax, _barOpt);
 }
 
 // medidor da supernova (canto inferior esquerdo; toque nele detona)
@@ -245,12 +364,11 @@ function drawGauge(s, pulse, ms) {
     var r = Math.round(GAUGE.r + pulso * 4 * K + pulse * 2 * K);
     // mixColor(a, b, p): p% de a ate b — vazio quase apagado, cheio pulsa
     E.gfx.circle(GAUGE.x, GAUGE.y, r, System.mixColor(C.ouro, C.espaco, cheio ? 30 + pulso * 25 : 82),
-                 { smooth: true, screen: true });
+                 _circOpt);
     E.gfx.arc(GAUGE.x, GAUGE.y, GAUGE.r * 0.6, GAUGE.r * 0.82, -90,
-              -90 + Math.round(s.charge * 3.6), C.ouro, { screen: true });
+              -90 + Math.round(s.charge * 3.6), C.ouro, _screenOpt);
     if (cheio) {
-        E.gfx.text("TOQUE", GAUGE.x, GAUGE.y, { align: "center", valign: "middle", ts: "tiny",
-                   color: C.branco, screen: true });
+        E.gfx.text("TOQUE", GAUGE.x, GAUGE.y, _toqueOpt);
     }
 }
 
@@ -341,23 +459,72 @@ E.run({
         fps: 30,   // teto de quadros: sem ele o push corre solto e cintila
         enter: function () {
             E.cam.reset();
-            // camada suja: fundo preto; o HUD fica fora do recorte da arena
-            E.dirty.enable(C.espaco);
+            // camada suja com o parallax de fundo: cada caixa apagada
+            // repinta so as celulas de nebulosa/poeira que toca (painter),
+            // e o HUD fica fora do recorte da arena
+            E.dirty.enable(paintFundo);
             E.dirty.clip(0, HUD_H + 1, W, H - HUD_H - 1);
             hudKey = "";
             var s = jogo.state();
+            var p = s.player;
+            if (p) {   // fontes dos emissores ja na posicao (1o tick do fx
+                       // roda antes do update da cena)
+                _ship.x = p.x; _ship.y = p.y + 30 * K;
+                _nzE.x = p.x - 12 * K; _nzE.y = p.y + 34 * K;
+                _nzD.x = p.x + 12 * K; _nzD.y = p.y + 34 * K;
+            }
+            trail.on = true;
+            exE.on = true;
+            exD.on = true;
+            carga.on = false;
+            cargaT = 0;
             if (E.data.musicPos !== undefined) {
                 E.audio.music(jogo.SONG, { startMs: E.data.musicPos });   // volta da pausa
                 E.data.musicPos = undefined;
-            } else if (!E.audio.playing() && !s.resumeAt) {
+            } else if (!E.audio.playing()) {
                 E.audio.music(jogo.SONG);
             }
         },
         update: function (dt) {
             var s = jogo.state();
+            var p = s.player;
+            if (!p) return;
             if (E.input.down) jogo.movePlayer(E.input.dx);
-            E.data.stars.update(dt * (1 + s.intensity * 0.12));
+            var spd = dt * (1 + s.intensity * 0.12);
+            E.data.stars.update(spd);
+            E.data.starsFar.update(spd * 0.6);   // plano de tras mais lento
             jogo.update(dt);
+
+            // fontes dos emissores (objetos fixos: zero alocacao): rastro
+            // e aura na nave, escapamento nos dois propulsores
+            _ship.x = p.x;
+            _ship.y = p.y + 30 * K;
+            _nzE.x = p.x - 12 * K;
+            _nzE.y = p.y + 34 * K;
+            _nzD.x = p.x + 12 * K;
+            _nzD.y = p.y + 34 * K;
+            trail.on = !s.over;
+            exE.on = !s.over;
+            exD.on = !s.over;
+            carga.on = !s.over && s.charge > 0;
+            // medidor cheio: anel de aviso no mestre (pulsa na batida do
+            // desenho, sem custo de pool — 1 anel a cada 0,5 s)
+            if (s.charge >= 100 && !s.over) {
+                cargaT -= dt;
+                if (cargaT <= 0) {
+                    cargaT = 0.5;
+                    E.fx.ring(_ship.x, _ship.y - 18 * K, RING_CHEIO);
+                }
+            } else {
+                cargaT = 0;
+            }
+
+            // parallax: o painter roda no _begin (antes do draw) e le a
+            // camera; a rolagem vertical vem do voo, a horizontal da nave
+            bgY += dt * 90;
+            E.cam.y = -bgY;
+            E.cam.x = -(p.x - W / 2) * 0.22;
+
             var tap = E.input.tap;
             // detonar: toque no medidor cheio
             if (tap && s.charge >= 100 &&
@@ -375,11 +542,24 @@ E.run({
             }
             if (s.over && s.overT > 0.6) E.goto("fim", { transition: "iris", ms: 450 });
         },
+        exit: function () {
+            // emissores nao semeiam na cena seguinte (o tick do fx roda
+            // mesmo com a pausa static por cima da arena congelada)
+            trail.on = false;
+            exE.on = false;
+            exD.on = false;
+            carga.on = false;
+        },
         draw: function () {
             var s = jogo.state();
             var pulse = beatPulse(), ms = System.millis();
+            // zera a camera virtual do parallax: o mundo, as particulas e
+            // os textos flutuantes seguem nas mesmas coords de sempre
+            E.cam.x = 0;
+            E.cam.y = 0;
             // (a engine ja apagou as caixas do quadro anterior)
             E.data.stars.draw();
+            E.data.starsFar.draw();
             drawGame(s, pulse);
             drawBossBar(s);
             drawGauge(s, pulse, ms);
@@ -390,38 +570,34 @@ E.run({
     },
 
     pausa: {
+        // E.ui.pause (dep celeros.game.ui) desenha o veu + Continuar/
+        // Recomecar/Sair sobre a arena congelada; a cena continue static
+        // (1 draw + repintura no press). A trilha para e volta do ponto.
         static: true,
         enter: function () {
             E.audio.stop();
-            this.first = true;
+            this.act = null;
         },
         update: function () {
-            if (!this.btn) return;
-            if (E.hit(this.btn[0])) {
+            var a = this.act;
+            if (!a) return;
+            this.act = null;
+            if (a === "resume") {
                 E.audio.sfx("ui");
                 E.goto("jogando");
-            } else if (E.hit(this.btn[1])) {
+            } else if (a === "restart") {
+                E.audio.sfx("ok");
+                E.data.musicPos = undefined;   // recomeca a trilha do zero
+                jogo.reset();
+                E.goto("jogando");
+            } else {
+                E.audio.sfx("ui");
                 System.exitApp();
             }
         },
         draw: function () {
-            var pw = Math.min(u(180), W - u(30)), ph = u(150);
-            var px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2);
-            if (this.first) {
-                this.first = false;
-                // painel por cima da arena congelada (sem limpar a tela)
-                E.gfx.panel(px, py, pw, ph, { bg: C.painel, stroke: C.cianoD, screen: true });
-                E.gfx.text("PAUSA", W / 2, py + u(26), { align: "center", valign: "middle",
-                           px: u(21), color: C.branco, screen: true });
-            }
-            var bw = pw - u(30), bh = u(27), bx = Math.round((W - bw) / 2);
-            var by = py + u(52);
-            System.fillRect(bx - 2, by - 2, bw + 4, bh * 2 + u(10) + 4, C.painel);
-            this.btn = [
-                E.gfx.button("CONTINUAR", bx, by, bw, bh, { color: C.ciano, screen: true }),
-                E.gfx.button("SAIR", bx, by + bh + u(10), bw, bh, {
-                    primary: false, bg: C.espaco, stroke: C.cianoD, textColor: C.branco, screen: true })
-            ];
+            var a = E.ui.pause();
+            if (a) this.act = a;   // a acao chega no proximo update
         }
     },
 
@@ -430,6 +606,7 @@ E.run({
         enter: function () {
             this.t = 0;
             this.first = true;
+            this.act = null;
             this.newBest = E.save.best("hi", jogo.state().score);
             if (this.newBest) {
                 hi = jogo.state().score;
@@ -438,12 +615,14 @@ E.run({
         },
         update: function (dt) {
             this.t += dt;
-            if (this.t < 0.5 || !this.btn) return;   // engole o tap do momento da morte
-            if (E.hit(this.btn[0])) {
+            if (this.t < 0.5 || !this.act) return;   // engole o tap do momento da morte
+            var a = this.act;
+            this.act = null;
+            if (a === "again") {
                 E.audio.sfx("ok");
                 jogo.reset();
                 E.goto("jogando", { transition: "wipe", ms: 300 });
-            } else if (E.hit(this.btn[1])) {
+            } else {
                 E.audio.sfx("ui");
                 E.goto("titulo", { transition: "fade", ms: 300 });
             }
@@ -467,7 +646,10 @@ E.run({
                            { align: "center", ts: "label",
                              color: this.newBest ? C.ouro : C.cinza, screen: true });
             }
-            this.btn = botoes(H - u(27) * 2 - u(10) - u(18), "DE NOVO", "MENU", C.ciano);
+            // menu immediate-mode da dep ui: mesma linguagem do pause, com
+            // o recorde/NVS decidido UMA vez no enter (nada de reavaliar)
+            var a = E.ui.menu(FIM_ITENS, FIM_OPTS);
+            if (this.t >= 0.5 && a) this.act = a;
         }
     }
 }, "titulo");

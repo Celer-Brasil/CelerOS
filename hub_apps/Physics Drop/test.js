@@ -1,7 +1,8 @@
-// test.js — smoke do Physics Drop 4.0 no harness: o caminho NATIVO do
-// P.verletFast (System.verlet* do stub), Corda+Pano caem (com a colisao
-// ponto-ponto), PEGAR arrasta um no do pano, CORTAR remove vinculos na
-// varredura e a gravidade INVERTIDA ergue o mundo (fisica de verdade).
+// test.js — smoke do Physics Drop 4.2 no harness: a tela de titulo entra
+// no sandbox pelo JOGAR (fade), o caminho NATIVO do P.verletFast
+// (System.verlet* do stub), Corda+Pano caem (com a colisao ponto-a-ponto),
+// PEGAR arrasta um no do pano, CORTAR remove vinculos na varredura e a
+// gravidade INVERTIDA ergue o mundo (fisica de verdade).
 // Agendamentos em env.setTimeout (relogio virtual do harness); nunca
 // embarca para o device.
 
@@ -40,12 +41,14 @@ module.exports.wire = function (env) {
         return best;
     }
 
-    // 300ms: o wrapper pegou o caminho NATIVO (System.verlet* do stub),
-    // nao o fallback interpretado verletFastJS
+    // 100ms: titulo -> JOGAR (o fade de 300ms troca a cena ~290ms, antes
+    // do primeiro toque da bateria no mundo) e o wrapper ja pegou o caminho
+    // NATIVO (System.verlet* do stub), nao o fallback verletFastJS
     at(function () {
         need();
         if (drop.world().native !== true) throw new Error('P.verletFast deve usar o System.verlet* (nativo)');
-    }, 300);
+        h.tap(120, 182);
+    }, 100);
 
     // 400ms: solta uma corda e um pano
     at(function () { need(); h.tap(45, drop.BAR_Y + 70); }, 400);

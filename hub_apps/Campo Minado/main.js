@@ -2,11 +2,14 @@
 // segue em board.js (require local); o desenho incremental celula-a-celula
 // vira a camada suja E.dirty — o painter repinta so as celulas da caixa
 // tocada (arquitetura do Detona), cronometro/minas no cabecalho sujo,
-// estilhaços na abertura em cadeia e flash na mina (efeitos locais sobre o
-// core — sem a dep fx o app volta a caber nos 48 KB da CYD). Melhor tempo
-// por dificuldade no NVS.
+// estilhacos na abertura em cadeia e flash na mina. Menu, ajuda e fim de
+// jogo usam o modulo compartilhado celeros.game.ui. Os efeitos seguem
+// locais: a soma enxuta de main+board+core+ui+fx passaria do teto de 48 KB
+// da CYD, entao a dep celeros.game.fx nao entra. Melhor tempo por
+// dificuldade no NVS.
 
-var E = require("celeros.game");       // familia CelerGame: core (fx e local)
+var E = require("celeros.game");       // familia CelerGame: core
+require("celeros.game.ui");            // E.ui: menu, dialogo e gameOver
 
 E.init({ dir: "Campo Minado", fps: 30, save: "minado." });
 var T = E.theme, W = E.W, H = E.H;
@@ -19,12 +22,14 @@ var modeIdx = 0;
 
 var createBoard = require("board");
 
-// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
-// o loop do jogo; firmware antigo cai no playTone (bloqueante)
-var somFn = typeof System.sfx === "function" ? System.sfx :
-            (typeof System.playTone === "function" ? System.playTone : null);
-function tone(hz, ms) { if (somFn) { try { somFn([[hz, ms]]); } catch (e) {} } }
-function tune(notes) { if (somFn) { try { somFn(notes); } catch (e) {} } }
+// Som: tabela do core + E.audio.sfx. Na API 32 o efeito e misturado por
+// cima da trilha sem travar; firmware antigo cai no playTone (o fallback
+// que o jogo ja usava vive dentro do E.audio.sfx).
+var SFX = E.audio.sfxTable;
+SFX.open = [[620, 12], [820, 18]];
+SFX.flag = [540, 30];
+SFX.boom = [[120, 400]];
+SFX.win = [[660, 90], [880, 90], [1320, 160]];
 
 // cores dos numeros por perigo (tema do sistema)
 var NUMCOL = [0, T.accent, T.ok, T.err, T.warn, T.warn, T.text, T.text, T.textDim];
@@ -34,14 +39,12 @@ var board = null;
 var gridX = 0, gridY = 30, CELL = 22, gridEnd = 0;
 var flagMode = false;
 var startMs = 0, started = false, elapsedMs = 0, lastClock = -1;
-var won = false;
 
 var BTN_MODO = { x: 8, y: 288, w: 116, h: 26 };
 var BTN_NOVO = { x: 124, y: 288, w: 108, h: 26 };
-var BTN_DNV = { x: 40, y: 218, w: 160, h: 44 };
 
 // ------------------------------------------------- efeitos locais (sem fx) ---
-// Flash de tela cheia + estilhaços: o par minimo do celeros.game.fx que o
+// Flash de tela cheia + estilhacos: o par minimo do celeros.game.fx que o
 // jogo usa, sobre as primitivas do core. Cada particular registra a caixa
 // na camada suja (E.dirty.add) — a borracha do quadro seguinte apaga.
 var FX = [];
@@ -77,23 +80,18 @@ function fxDraw() {
 
 // melhor tempo: NVS (migracao 1x dos best_*.txt da versao anterior; sem a
 // perm "fs" o runtime nao registra o objeto FS e a migracao e pulada)
-function bestKey() { return "b" + MODES[modeIdx].name; }
-function bestTime() {
-    var v = E.save.num(bestKey(), 0);
+function bestTime(i) {
+    var k = "b" + MODES[i].name;
+    var v = E.save.num(k, 0);
     var FSx = typeof FS !== "undefined" ? FS : null;
     if (!v && FSx) {
         try {
-            var r = FSx.readTextFile((FSx.appData ? FSx.appData() : "/local/") +
-                                    "best_" + MODES[modeIdx].name + ".txt");
-            var old = r ? parseInt(r, 10) : 0;
-            if (old && !isNaN(old)) { v = old; E.save.set(bestKey(), old); }
+            v = parseInt(FSx.readTextFile((FSx.appData ? FSx.appData() : "/local/") +
+                        "best_" + MODES[i].name + ".txt"), 10) || 0;
+            if (v) E.save.set(k, v);
         } catch (e) {}
     }
     return v;
-}
-function saveBest(ms) {
-    var b = E.save.num(bestKey(), 0);
-    if (!b || ms < b) E.save.set(bestKey(), ms);
 }
 
 function newGame() {
@@ -106,16 +104,13 @@ function newGame() {
     started = false;
     elapsedMs = 0;
     lastClock = -1;
-    won = false;
     FX.length = 0;
 }
 
 function fmtTime(ms) {
-    var s = Math.floor(ms / 1000);
-    var m = Math.floor(s / 60);
+    var s = Math.floor(ms / 1000), m = Math.floor(s / 60);
     s = s % 60;
-    function two(n) { return (n < 10 ? "0" : "") + n; }
-    return two(m) + ":" + two(s);
+    return (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
 }
 
 // ---------------------------------------------------------------- desenho ---
@@ -164,7 +159,7 @@ function paintHeaderRaw() {
     System.setTextDatum(2);               // TR
     System.setTextColor(T.textDim, T.card);
     System.drawString(fmtTime(elapsedMs), W - 10, 7, 1);
-    var bt = bestTime();
+    var bt = bestTime(modeIdx);
     if (bt) System.drawString("melhor " + fmtTime(bt), 118, 7, 1);
     System.setTextDatum(0);
 }
@@ -205,18 +200,20 @@ function cellCenter(x, y) {
 }
 
 // ---------------------------------------------------------------- jogada ---
-var resultado = null;   // {won, elapsedMs} — cena fim le daqui
+var resultado = null;   // {won, ms, best, novo} — a cena fim le daqui
 
 function finish(win) {
-    won = win;
+    var antes = bestTime(modeIdx);
     if (win) {
-        saveBest(elapsedMs);
-        tune([[660, 90], [880, 90], [1320, 160]]);
+        if (!antes || elapsedMs < antes) E.save.set("b" + MODES[modeIdx].name, elapsedMs);
+        E.audio.sfx("win");
     } else {
-        tone(120, 400);
+        E.audio.sfx("boom");
         fxFlash(T.err, 300);
     }
-    resultado = { won: win, ms: elapsedMs };
+    resultado = { won: win, ms: elapsedMs, best: bestTime(modeIdx),
+                  novo: win && (!antes || elapsedMs < antes) };
+    // deixa o tabuleiro (e a explosao) visivel antes da tela de fim
     E.after(600, function () {
         E.goto("fim", { transition: win ? "iris" : "fade", ms: 450 });
     });
@@ -227,8 +224,7 @@ function play(x, y) {
     if (!started) { started = true; startMs = System.millis(); }
 
     if (flagMode) {
-        if (board.toggleFlag(x, y)) tone(520, 30);
-        else tone(300, 20);
+        if (board.toggleFlag(x, y)) E.audio.sfx("flag");
         E.dirty.add(gridX + x * CELL, gridY + y * CELL, CELL, CELL);
         E.dirty.add(0, 0, 120, 26);       // contador de minas
         return;
@@ -253,36 +249,44 @@ function play(x, y) {
         finish(false);
         return;
     }
-    tone(700, 14);
+    if (r.opened.length) E.audio.sfx("open");
     if (board.won()) { finish(true); return; }
     E.dirty.add(0, 0, 120, 26);
 }
+
+var ajuda = null;
+var AJUDA = "Toque para abrir: o primeiro toque nunca é mina. Bandeira marca " +
+            "minas; tocar num número com as bandeiras certas abre os vizinhos. " +
+            "Abra todas as células sem mina para vencer. O melhor tempo fica salvo.";
 
 // ------------------------------------------------------------------ cenas ---
 E.run({
     menu: {
         static: true,
-        update: function () {
-            var seg = [{ x: 16, y: 134, w: 104, h: 36 }, { x: 124, y: 134, w: 100, h: 36 }];
-            for (var i = 0; i < 2; i++) {
-                if (E.hit(seg[i])) { modeIdx = i; E.redraw(); return; }
-            }
-            if (E.hit({ x: 40, y: 214, w: 160, h: 48 })) {
-                E.goto("jogo", { transition: "wipe", ms: 300 });
-            }
-        },
         draw: function () {
-            E.gfx.text("Campo Minado", W / 2, 56, { ts: "huge", align: "center" });
-            E.gfx.text("dificuldade", 16, 112, { ts: "label", color: T.textDim });
-            var labels = ["fácil 9x11", "duro 12x14"];
-            E.gfx.button(labels[0], 16, 134, 104, 36, { primary: modeIdx === 0, px: 12 });
-            E.gfx.button(labels[1], 124, 134, 100, 36, { primary: modeIdx === 1, px: 12 });
-            var b = bestTime();
-            E.gfx.text(b ? "melhor tempo: " + fmtTime(b) : "sem tempo nesta dificuldade",
-                       W / 2, 188, { ts: "small", align: "center", color: T.textDim });
-            E.gfx.button("Jogar", 40, 214, 160, 48, { px: Math.round(20 * E.U) });
-            E.gfx.text("toque abre · bandeira marca · numero com bandeiras certas abre vizinhos",
-                       W / 2, 282, { ts: "small", align: "center", color: T.textDim });
+            E.gfx.text("Campo Minado", W / 2, 36,
+                       { ts: "huge", align: "center", fit: W - 16 });
+            var pick = E.ui.menu(["Fácil", "Duro", "Como jogar"]);
+            if (pick === "Fácil") { modeIdx = 0; E.goto("jogo", { transition: "wipe", ms: 300 }); }
+            else if (pick === "Duro") { modeIdx = 1; E.goto("jogo", { transition: "wipe", ms: 300 }); }
+            else if (pick === "Como jogar") E.goto("ajuda", { transition: "fade", ms: 250 });
+            var b0 = bestTime(0), b1 = bestTime(1);
+            E.gfx.text("Fácil 9x11: " + (b0 ? fmtTime(b0) : "--:--"),
+                       W / 2, 226, { ts: "small", align: "center", color: b0 ? T.text : T.textDim });
+            E.gfx.text("Duro 12x14: " + (b1 ? fmtTime(b1) : "--:--"),
+                       W / 2, 242, { ts: "small", align: "center", color: b1 ? T.text : T.textDim });
+        }
+    },
+
+    ajuda: {
+        enter: function () {
+            ajuda = E.ui.dialog(AJUDA, { name: "Como jogar", speed: 50 });
+            E.dirty.enable(T.bg);
+        },
+        exit: function () { E.dirty.off(); },
+        draw: function () {
+            if (!ajuda.draw(20, 60, 200))
+                E.goto("menu", { transition: "fade", ms: 250 });
         }
     },
 
@@ -329,26 +333,20 @@ E.run({
 
     fim: {
         static: true,
-        update: function () {
-            if (E.hit(BTN_DNV)) E.goto("jogo", { transition: "wipe", ms: 300 });
-            else if (E.input.tap && E.input.tap.y > 270) E.goto("menu", { transition: "fade", ms: 300 });
-        },
         draw: function () {
-            var bt = bestTime();
-            E.gfx.text(resultado && resultado.won ? "Venceu!" : "Boom!", W / 2, 90,
-                       { ts: "huge", align: "center",
-                         color: resultado && resultado.won ? T.ok : T.err });
-            if (resultado && resultado.won) {
-                E.gfx.text("Tempo " + fmtTime(resultado.ms), W / 2, 140,
-                           { ts: "title", align: "center" });
-                if (resultado.ms <= bt) E.gfx.text("novo melhor tempo!", W / 2, 170,
-                                                   { ts: "label", align: "center", color: T.ok });
-            } else {
-                E.gfx.text("As minas venceram esta rodada.", W / 2, 140,
-                           { ts: "body", align: "center" });
-            }
-            E.gfx.button("De novo", BTN_DNV.x, BTN_DNV.y, BTN_DNV.w, BTN_DNV.h);
-            E.gfx.button("Menu", 40, 270, 160, 40, { primary: false });
+            var r = resultado;
+            var act = E.ui.gameOver({
+                title: r.won ? "VITORIA!" : "BOOM!",
+                labels: ["Jogar de novo", "Menu"]
+            });
+            E.gfx.text("Tempo " + fmtTime(r.ms), W / 2, 102,
+                       { ts: "title", align: "center", color: T.text });
+            E.gfx.text(r.novo ? "NOVO RECORDE! " + fmtTime(r.best)
+                              : "Melhor " + (r.best ? fmtTime(r.best) : "--:--"),
+                       W / 2, 138,
+                       { ts: "label", align: "center", color: r.novo ? T.accent : T.textDim });
+            if (act === "again") E.goto("jogo", { transition: "wipe", ms: 300 });
+            else if (act === "quit") E.goto("menu", { transition: "fade", ms: 300 });
         }
     }
 }, "menu");

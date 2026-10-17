@@ -4,7 +4,7 @@
 // BATIDA e as correntes cascateiam de meio tempo em meio tempo — a
 // explosao cai no compasso. Modulos: main.js (cenas/visao/HUD/rede) +
 // arena.js (simulacao) + niveis.js (geracao por seed, temas, trilhas) +
-// ia.js (bichos). Engine/sfx/grid/mesh sao deps do hub (API 30).
+// ia.js (bichos). Engine/ui/sfx/grid/mesh sao deps do hub (API 30).
 //
 // DUELO pela malha CelerNet (api 26+, dep celeros.mesh): o radio faz
 // ~8 quadros/s de ate 16 B sem ACK — o protocolo e de EVENTOS DISCRETOS
@@ -46,6 +46,7 @@ var E = require("celeros.game");       // familia CelerGame: adota so o que usa
 require("celeros.game.fx");
 require("celeros.game.spr");
 require("celeros.game.tilemap");
+require("celeros.game.ui");            // menus/listas/dialogo padrao da familia
 var arena = require("arena");
 var NV = require("niveis");
 var ia = require("ia");
@@ -736,6 +737,140 @@ function drawChama(fl, pulso) {
     }
 }
 
+// ------------------------------------------------ efeitos continuos ------
+// E.fx.emitter/trail com POOL FIXO: o sync roda 1x por quadro e NAO aloca
+// (so liga/desliga vagas ja criadas). Uma vaga por bomba acesa (faisca do
+// pavio, rate baixo), uma por bomba chutada (rastro) e 4 de respiro de fogo
+// (vento do Forno/cuspe). Emitter morto sai do registro do E.fx; a vaga so
+// recria no proximo evento — nunca por quadro.
+var FUSIVEL = [], FUSIVEL_MAX = 12;
+var RASTROS = [], RASTRO_MAX = 8;
+var FOGOS = [], FOGO_MAX = 4;
+
+function vagaLivre(lista, max) {
+    for (var i = 0; i < lista.length; i++)
+        if (!lista[i].em) return lista[i];
+    if (lista.length < max) {
+        var v = { em: null, bo: null, ate: 0 };
+        lista.push(v);
+        return v;
+    }
+    return null;
+}
+
+function bombaViva(s, bo) {
+    for (var i = 0; i < s.bombs.length; i++) if (s.bombs[i] === bo) return true;
+    return false;
+}
+
+function vagaDaBomba(lista, bo) {
+    for (var i = 0; i < lista.length; i++)
+        if (lista[i].em && lista[i].bo === bo) return lista[i];
+    return null;
+}
+
+function mataVaga(v) {
+    if (!v) return;
+    if (v.em) { v.em.stop(); v.em.dead = true; v.em = null; }
+    v.bo = null;
+    v.ate = 0;
+}
+
+// faisca do pavio: follow na bomba, 2,5 particulas/s e vida 0,22 s — com as
+// 6 bombas do jogador da ~3 particulas vivas (pool de 140 do E.fx)
+function syncFusiveis(s) {
+    var i, v, bo;
+    for (i = 0; i < FUSIVEL.length; i++) {
+        v = FUSIVEL[i];
+        if (v.em && !bombaViva(s, v.bo)) mataVaga(v);
+    }
+    for (i = 0; i < s.bombs.length; i++) {
+        bo = s.bombs[i];
+        if (vagaDaBomba(FUSIVEL, bo)) continue;
+        v = vagaLivre(FUSIVEL, FUSIVEL_MAX);
+        if (!v) break;                  // pool cheio: a bomba extra fica sem faisca
+        v.bo = bo;
+        var vv = v;                     // closure da VAGA (o bo muda a cada bomba)
+        v.em = E.fx.emitter({
+            rate: 2.5, life: 0.22, size: Math.max(1, Math.round(CELL * 0.07)),
+            colors: [C.ouro, C.laranja, C.vermelho],
+            speed: CELL * 1.4, speed2: CELL * 0.3,
+            angle: -Math.PI / 2, spread: 1.1,
+            grav: -CELL * 1.6, shape: 'spark',
+            follow: function () {
+                var b = vv.bo;
+                if (!b) return null;
+                return { x: OX + (b.fx + 0.5) * CELL,
+                         y: OY + (b.fy + 0.5) * CELL - CELL * 0.2 };
+            }
+        });
+    }
+}
+
+// rastro do chute: E.fx.trail so semeia enquanto a bomba desliza (follow
+// devolve null quando para); a vaga morre junto com o deslizamento
+function syncRastros(s) {
+    var i, v, bo;
+    for (i = 0; i < RASTROS.length; i++) {
+        v = RASTROS[i];
+        if (v.em && (!v.bo || !v.bo.desliza || !bombaViva(s, v.bo))) mataVaga(v);
+    }
+    for (i = 0; i < s.bombs.length; i++) {
+        bo = s.bombs[i];
+        if (!bo.desliza || vagaDaBomba(RASTROS, bo)) continue;
+        v = vagaLivre(RASTROS, RASTRO_MAX);
+        if (!v) break;
+        v.bo = bo;
+        var vv = v;
+        v.em = E.fx.trail(function () {
+            var b = vv.bo;
+            if (!b || !b.desliza) return null;
+            return { x: OX + (b.fx + 0.5) * CELL, y: OY + (b.fy + 0.5) * CELL };
+        }, { rate: 14, life: 0.35, size: Math.max(2, Math.round(CELL * 0.1)),
+             colors: [C.laranja, C.cinza] });
+    }
+}
+
+// respiro de fogo (vento do Forno/cuspe): vaga de vida curta controlada
+// pelo relogio — sem timer de cena (exit/pausa nao deixa emissor solto)
+function fogoEm(c, r, ms) {
+    var v = vagaLivre(FOGOS, FOGO_MAX);
+    if (!v) return;
+    if (!v.em) {
+        v.em = E.fx.emitter({
+            rate: 22, life: 0.45, size: Math.max(2, Math.round(CELL * 0.14)),
+            colors: [C.laranja, C.ouro, C.vermelho],
+            speed: CELL * 2.2, speed2: CELL * 0.8,
+            angle: -Math.PI / 2, spread: 1.4,
+            grav: -CELL * 2.5
+        });
+    } else v.em.start();
+    v.em.set(OX + (c + 0.5) * CELL, OY + (r + 0.5) * CELL);
+    v.ate = System.millis() + ms;
+}
+
+function syncFogos(now) {
+    for (var i = 0; i < FOGOS.length; i++) {
+        var v = FOGOS[i];
+        if (v.em && v.ate && now >= v.ate) mataVaga(v);
+    }
+}
+
+function syncEfeitos(s) {
+    if (!s) return;
+    syncFusiveis(s);
+    syncRastros(s);
+    syncFogos(System.millis());
+}
+
+// arena parou/saiu: todo emissor continuo morre (as particulas em voo
+// terminam sozinhas no pool do E.fx)
+function pararEfeitos() {
+    var lista = [FUSIVEL, RASTROS, FOGOS];
+    for (var l = 0; l < lista.length; l++)
+        for (var i = 0; i < lista[l].length; i++) mataVaga(lista[l][i]);
+}
+
 function drawEntidades(s, beat, pulso) {
     var i;
     // bombas: blit + faisca do pavio piscando na batida
@@ -955,6 +1090,7 @@ function drawMundo(force) {
     }
     marcaMudancas(s);
     mapa.flush();
+    syncEfeitos(s);
     drawEntidades(s, beat, pulso);
     E.fx.draw();
     if (s.intro > 0) drawIntro(s);
@@ -996,6 +1132,13 @@ function joystick() {
     if (d < JOY.dead) return [0, 0];
     return Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? 1 : -1, 0] : [0, dy > 0 ? 1 : -1];
 }
+
+// dica do duelo (E.ui.dialog no lobby) — texto de UI pode ter acentos
+var TEXTO_DUELO = "Melhor de 3 rounds na mesma arena, gerada pela seed do host. " +
+    "Deslize para andar, toque para plantar bomba e segure o dedo para o detonador. " +
+    "A explosão que cai no tempo forte da trilha vale combo. " +
+    "Toque num nome para convidar; quando alguém te desafia, o toque aceita. " +
+    "Sair pelo canto superior direito desiste do round.";
 
 var tituloArte = false;
 E.run({
@@ -1057,12 +1200,34 @@ E.run({
     // Portao proprio (o mesh.gate da dep desenha com UI.* do sistema; aqui
     // a engine manda): sem BT = carta fixa; malha off = botao LIGAR. O
     // heartbeat 'dhl' anuncia este Detona aos outros por perto.
+    //
+    // A lista de peers/convites e a E.ui.list (rolagem por arrasto; toque
+    // num nome convida ou aceita) e as regras abrem no E.ui.dialog. O
+    // protocolo da malha continua o MESMO (dhl/di/da0/da1/ds/dy/dq) — so a
+    // apresentacao mudou.
     duelo: {
         fps: 12,
         exit: function () { E.clearTimers(); },   // idem jogando: fim de round agenda E.after(900)
         enter: function () {
             this.first = true;
             this.ligaAte = 0;
+            this.dlg = null;         // dialogo modal (E.ui.dialog)
+            this.itens = [];         // itens da lista, mutados no lugar
+            this.sig = "";
+            this.lst = E.ui.list({
+                items: this.itens,
+                row: u(26),
+                onPick: function (id) {
+                    if (!id) return;
+                    if (NET.convide && NET.fase === "lobby" && NET.convide.id === id) {
+                        E.audio.sfx("ok");
+                        netAceitar(true);           // toque no convite = aceitar
+                    } else if (NET.fase === "lobby") {
+                        E.audio.sfx("ui");
+                        netConvidar(id);            // toque num peer = convidar
+                    }
+                }
+            });
             netReset();
             NET.fase = "lobby";
             NET.hbAte = 0;
@@ -1076,6 +1241,9 @@ E.run({
                 mesh.each(netMsg, now);
                 netPump(now);
             }
+            // dialogo modal: o tap completa/fecha dentro do draw; aqui o
+            // relogio da rede segue rodando e nada mais reage ao toque
+            if (this.dlg) return;
             for (var k in NET.vistos)
                 if (now - NET.vistos[k].at > 10000) delete NET.vistos[k];
             if (NET.convide && NET.fase === "lobby" && now - NET.convide.at > 12000)
@@ -1085,21 +1253,24 @@ E.run({
             for (var i = 0; i < b.length; i++) {
                 if (!E.hit(b[i])) continue;
                 var a = b[i]._a;
-                E.audio.sfx("ok");
-                if (a === "voltar") { netReset(); E.goto("titulo", { transition: "fade", ms: 300 }); }
-                else if (a === "ligar" && now >= this.ligaAte) {
-                    this.ligaAte = now + 1200;
-                    CelerNet.start({});
-                }
-                else if (a === "desafiar") netConvidar(b[i]._id);
-                else if (a === "aceitar") netAceitar(true);
-                else if (a === "recusar") netAceitar(false);
-                else if (a === "cancelar") {
-                    if (NET.fase === "aguarda" && NET.rival) netSend("dq");
-                    NET.fase = "lobby";
-                    NET.convide = null;
-                    NET.rival = null;
-                    NET.envioMsg = "";
+                if (a === "dica") {
+                    this.dlg = E.ui.dialog(TEXTO_DUELO, { name: "DUELO 1x1", speed: 40 });
+                    E.audio.sfx("ok");
+                } else {
+                    E.audio.sfx(a === "voltar" ? "back" : "ui");
+                    if (a === "voltar") { netReset(); E.goto("titulo", { transition: "fade", ms: 300 }); }
+                    else if (a === "ligar" && now >= this.ligaAte) {
+                        this.ligaAte = now + 1200;
+                        CelerNet.start({});
+                    }
+                    else if (a === "recusar") netAceitar(false);
+                    else if (a === "cancelar") {
+                        if (NET.fase === "aguarda" && NET.rival) netSend("dq");
+                        NET.fase = "lobby";
+                        NET.convide = null;
+                        NET.rival = null;
+                        NET.envioMsg = "";
+                    }
                 }
                 break;
             }
@@ -1112,6 +1283,15 @@ E.run({
                            align: "center", valign: "middle", screen: true });
                 E.gfx.text("bomberman 1x1 pela malha", W / 2, u(29),
                            { color: C.cinza, ts: "small", align: "center", screen: true });
+            }
+            // dialogo modal por cima do cabecalho (lista/botoes nao reagem)
+            if (this.dlg) {
+                var dw = Math.min(u(220), W - u(16));
+                if (!this.dlg.draw(Math.round((W - dw) / 2), u(50), dw)) {
+                    this.dlg = null;
+                    E.audio.sfx("back");
+                }
+                return;
             }
             var yTop = u(40);
             System.fillRect(0, yTop, W, H - yTop, C.preto);   // corpo muda por estado
@@ -1129,25 +1309,20 @@ E.run({
                 eu.btns.push(r);
                 return y + bh + u(8);
             }
-            var y;
+            var yDica = H - u(27) * 2 - u(8) * 2;   // COMO JOGAR
+            var yVolta = H - u(27) - u(8);          // VOLTAR
             if (!mesh.available()) {
                 E.gfx.text("esta placa nao tem bluetooth", W / 2, u(70),
                            { color: C.cinza, ts: "small", align: "center", screen: true });
-                bt("< VOLTAR", u(110), "voltar");
+                bt("< VOLTAR", yVolta, "voltar");
                 return;
             }
+            bt("COMO JOGAR", yDica, "dica", null, false);
             if (!netRadio()) {
                 E.gfx.text("ligue a malha para desafiar", W / 2, u(70),
                            { color: C.cinza, ts: "small", align: "center", screen: true });
-                y = bt("LIGAR A MALHA", u(96), "ligar");
-                bt("< VOLTAR", y + u(6), "voltar", null, false);
-                return;
-            }
-            if (NET.convide && NET.fase === "lobby") {
-                E.gfx.text((NET.convide.nome || "?") + " te desafia!", W / 2, u(62),
-                           { color: C.branco, ts: "label", align: "center", screen: true });
-                y = bt("ACEITAR", u(84), "aceitar");
-                bt("RECUSAR", y + u(6), "recusar", null, false);
+                bt("LIGAR A MALHA", yDica - u(35), "ligar");
+                bt("< VOLTAR", yVolta, "voltar", null, false);
                 return;
             }
             if (NET.fase === "convidei") {
@@ -1155,7 +1330,8 @@ E.run({
                            { color: C.cinza, ts: "small", align: "center", screen: true });
                 E.gfx.text(NET.convide ? NET.convide.nome : "?", W / 2, u(76),
                            { color: C.branco, ts: "label", align: "center", screen: true });
-                bt("CANCELAR", u(104), "cancelar", null, false);
+                bt("CANCELAR", yDica - u(35), "cancelar", null, false);
+                bt("< VOLTAR", yVolta, "voltar", null, false);
                 return;
             }
             if (NET.fase === "aguarda") {
@@ -1165,24 +1341,40 @@ E.run({
                            { color: C.branco, ts: "label", align: "center", screen: true });
                 E.gfx.text("esperando o inicio...", W / 2, u(96),
                            { color: C.cinza, ts: "small", align: "center", screen: true });
-                bt("CANCELAR", u(120), "cancelar", null, false);
+                bt("CANCELAR", yDica - u(35), "cancelar", null, false);
+                bt("< VOLTAR", yVolta, "voltar", null, false);
                 return;
             }
-            // lobby: Detonas vistos por perto (heartbeat dhl)
+            // lobby: Detonas vistos por perto (heartbeat dhl) + convite
+            // recebido, cada um com nome e status na lista
+            var sig = NET.convide && NET.fase === "lobby" ?
+                      "i" + NET.convide.id + ":" + NET.convide.nome : "";
             var ids = [];
             for (var id in NET.vistos) ids.push(id);
             ids.sort(function (a, b) { return NET.vistos[b].at - NET.vistos[a].at; });
-            y = u(58);
-            var n = 0;
-            for (var i = 0; i < ids.length && n < 3; i++) {
-                var nome = (NET.vistos[ids[i]].nome || ids[i]).substring(0, 12);
-                y = bt("DESAFIAR " + nome, y, "desafiar", { _id: ids[i] });
-                n++;
+            for (var q = 0; q < ids.length; q++)
+                sig += "|" + ids[q] + ":" + (NET.vistos[ids[q]].nome || "");
+            if (sig !== this.sig) {
+                this.sig = sig;
+                this.itens.length = 0;
+                if (NET.convide && NET.fase === "lobby")
+                    this.itens.push({ label: (NET.convide.nome || "?").substring(0, 10) +
+                                             " - te desafia", value: NET.convide.id });
+                for (var q2 = 0; q2 < ids.length; q2++) {
+                    if (NET.convide && NET.fase === "lobby" && ids[q2] === NET.convide.id) continue;
+                    this.itens.push({ label: (NET.vistos[ids[q2]].nome || ids[q2]).substring(0, 10) +
+                                             " - livre", value: ids[q2] });
+                }
             }
-            if (!n)
+            var yLista = u(58);
+            var fimLista = (NET.convide && NET.fase === "lobby" ? yDica - u(35) : yDica) - u(8);
+            this.lst.draw(u(10), yLista, W - u(20), Math.max(u(60), fimLista - yLista));
+            if (!this.itens.length)
                 E.gfx.text("procurando Detona por perto...", W / 2, u(66),
                            { color: C.cinzaD, ts: "small", align: "center", screen: true });
-            bt("< VOLTAR", H - u(27) - u(8), "voltar", null, false);
+            if (NET.convide && NET.fase === "lobby")
+                bt("RECUSAR", yDica - u(35), "recusar", null, false);
+            bt("< VOLTAR", yVolta, "voltar", null, false);
         }
     },
 
@@ -1191,7 +1383,7 @@ E.run({
         // o fim de rodada agenda E.after(900, ...) para a transicao; sair
         // da arena antes (pausa/titulo) derruba o timer pendente — sem isso
         // ele disparava E.goto("fim") em cima da proxima cena
-        exit: function () { E.clearTimers(); },
+        exit: function () { E.clearTimers(); pararEfeitos(); },
         enter: function () {
             var sobre = E.data.modo === "sobre";
             var duelo = E.data.modo === "duelo";
@@ -1321,6 +1513,7 @@ E.run({
             this.prox = false;
             this.fim = false;
             this.btn = null;
+            this.act = null;       // acao do E.ui.menu (fim do duelo)
             hudKey = "";
         },
         update: function (dt) {
@@ -1342,7 +1535,8 @@ E.run({
                 E.redraw();
             }
             if (this.ok && this.fim) {
-                if (this.btn && this.t > 0.4 && E.hit(this.btn[0])) {
+                if (this.act && this.t > 0.4) {
+                    this.act = null;
                     E.audio.sfx("ok");
                     netReset();
                     E.goto("titulo", { transition: "fade", ms: 300 });
@@ -1379,7 +1573,10 @@ E.run({
                 E.gfx.text("conferindo...", W / 2, y + u(24),
                            { color: C.cinzaD, ts: "small", align: "center", screen: true });
             } else if (this.fim) {
-                this.btn = botoes(H - u(27) - u(10) - u(18), ["MENU"], C.preto);
+                // fim do duelo: rounds/placar acima; a acao e o E.ui.menu
+                this.act = E.ui.menu([{ label: "Sair", value: 'menu' }],
+                                     { y: H - u(27) - u(10) - u(18), row: u(37),
+                                       w: Math.min(u(150), W - u(40)) });
             } else {
                 E.gfx.text(NET.host ? "proximo round..." : "esperando o host...",
                            W / 2, y + u(24), { color: C.cinza, ts: "small",
@@ -1393,29 +1590,38 @@ E.run({
         enter: function () {
             E.audio.stop();
             this.first = true;
+            this.act = null;
         },
         update: function () {
-            if (!this.btn) return;
-            if (E.hit(this.btn[0])) { E.audio.sfx("ui"); E.goto("jogando"); }   // retomar (estado vivo)
-            else if (E.hit(this.btn[1])) { arena.parar(); E.goto("titulo"); }
+            // a acao vem do E.ui.pause desenhado no draw (1 quadro antes);
+            // a cena e static, entao o toque chega no draw e sobra p/ ca
+            if (!this.act) return;
+            var act = this.act;
+            this.act = null;
+            if (act === 'resume') {
+                E.audio.sfx("ui");
+                // E.data.retomar segue true: a arena NAO e regenerada e a
+                // trilha volta do ponto exato (E.data.musicPos)
+                E.goto("jogando");
+            } else if (act === 'restart') {
+                E.audio.sfx("ok");
+                E.data.retomar = false;
+                E.data.musicPos = undefined;   // trilha recomeca do zero
+                arena.parar();
+                E.goto("jogando");
+            } else if (act === 'quit') {
+                E.audio.sfx("ui");
+                arena.parar();
+                E.goto("titulo", { transition: "fade", ms: 300 });
+            }
         },
         draw: function () {
-            var pw = Math.min(u(180), W - u(30)), ph = u(150);
-            var px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2);
             if (this.first) {
                 this.first = false;
-                // painel por cima da arena congelada (sem limpar a tela)
-                E.gfx.panel(px, py, pw, ph, { bg: C.painel, stroke: C.laranja, screen: true });
-                E.gfx.text("PAUSA", W / 2, py + u(26), { color: C.ouro, px: u(21),
-                           align: "center", valign: "middle", screen: true });
+                // sem limpar a tela: o ultimo quadro da arena e o fundo
+                // (o E.ui.pause escurece com o veu do tema)
             }
-            var bw = pw - u(30), bh = u(27), bx = Math.round((W - bw) / 2), by = py + u(52);
-            System.fillRect(bx - 2, by - 2, bw + 4, bh * 2 + u(10) + 4, C.painel);
-            this.btn = [
-                E.gfx.button("CONTINUAR", bx, by, bw, bh, { color: C.laranja, screen: true }),
-                E.gfx.button("MENU", bx, by + bh + u(10), bw, bh, {
-                    primary: false, bg: C.preto, stroke: C.laranja, textColor: C.branco, screen: true })
-            ];
+            this.act = E.ui.pause({ title: "PAUSA" });
         }
     },
 
@@ -1425,15 +1631,19 @@ E.run({
             E.audio.stop();
             this.first = true;
             this.t = 0;
+            this.act = null;       // acao vinda do E.ui.menu (desenhado no draw)
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
             E.data.novoRec = E.save.best(info.sobre ? "sobre.hi" : "hi", info.score);
             if (E.data.novoRec) E.audio.sfx("record");
         },
         update: function (dt) {
             this.t += dt;
-            if (this.t < 0.4 || !this.btn) return;   // engole o tap do momento final
+            if (this.t < 0.4) { this.act = null; return; }   // engole o tap do momento final
+            if (!this.act) return;
+            var act = this.act;
+            this.act = null;
             var info = E.data.fimInfo || { fim: 'dead', score: 0 };
-            if (E.hit(this.btn[0])) {
+            if (act === 'again') {
                 E.audio.sfx("ok");
                 E.data.retomar = false;
                 if (!info.sobre && info.fim === 'win') {
@@ -1442,7 +1652,7 @@ E.run({
                 }
                 E.data.modo = info.sobre ? "sobre" : "campanha";
                 E.goto("jogando", { transition: "wipe", ms: 300 });
-            } else if (E.hit(this.btn[1])) {
+            } else if (act === 'quit') {
                 E.audio.sfx("ui");
                 E.goto("titulo", { transition: "fade", ms: 300 });
             }
@@ -1480,7 +1690,14 @@ E.run({
             }
             var rotulo = info.sobre ? "DE NOVO" : info.zerou ? "DE NOVO"
                        : info.fim === 'win' ? "PROXIMA FASE" : "TENTAR DE NOVO";
-            this.btn = botoes(H - u(27) * 2 - u(10) - u(18), [rotulo, "MENU"], C.preto);
+            // acoes pelo E.ui.menu: mesma linguagem dos menus da familia e
+            // preserva os dados desenhados acima (pontos, bonus, recorde).
+            // row/y mantem as areas de toque de sempre (o teste toca 417)
+            this.act = E.ui.menu([
+                { label: rotulo, value: 'again' },
+                { label: "Sair", value: 'quit' }
+            ], { y: H - u(27) * 2 - u(10) - u(18), row: u(37),
+                 w: Math.min(u(150), W - u(40)) });
         }
     }
 }, "titulo");
@@ -1537,8 +1754,16 @@ function wireArena() {
             E.fx.burst(gx, gy, { n: 10, colors: [C.branco, 0xBDF7], speed: CELL * 4, life: 0.35 });
             E.fx.popText(gx, gy - CELL * 0.6, a.kind === 'chefe' ? "-1" : "BLINDAGEM!", { color: C.ciano, ts: 'small' });
         } else if (tipo === 'vento') {
-            E.fx.burst(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL,
-                       { n: 8, colors: [C.laranja, C.ouro], speed: CELL * 3, life: 0.4, grav: -CELL * 4 });
+            var vx = OX + (a.c + 0.5) * CELL, vy = OY + (a.r + 0.5) * CELL;
+            // erupcao: anel de choque + respiro de fogo continuo por ~0,65 s
+            E.fx.ring(vx, vy, { speed: CELL * 5, color: C.ouro, life: 0.45 });
+            E.fx.burst(vx, vy, { n: 8, colors: [C.laranja, C.ouro], speed: CELL * 3,
+                                 life: 0.4, grav: -CELL * 4 });
+            fogoEm(a.c, a.r, 650);
+        } else if (tipo === 'cuspe') {
+            // bola de fogo do cuspidor: anel curto no ponto de saida
+            E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL,
+                      { speed: CELL * 4, color: C.laranja, life: 0.3 });
         } else if (tipo === 'tele') {
             E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL, { speed: CELL * 6, color: C.magenta, life: 0.35 });
             E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 6, color: C.ciano, life: 0.45 });

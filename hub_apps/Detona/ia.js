@@ -222,6 +222,7 @@ function cuspePendente(e, b, cel) {
             st.flames.push({ c: cc, r: cr, tipo: 'cuspe', de: b, ate: b + 0.5,
                              dx: e.cuspeDir.dx, dy: e.cuspeDir.dy,
                              ambiente: true, dono: 'x' });
+            st.onFx('cuspe', { c: cc, r: cr });
             st.onSfx('vento');
         }
         return;

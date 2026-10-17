@@ -4,7 +4,8 @@
 //
 // Modulos: main.js (cenas, input, HUD, eventos -> efeitos), mundo.js
 // (fisica de jogo: dano, explosoes, tiros, turnos), arte.js (sprites da
-// arte gerada + pecas giradas + elastico), niveis.js (as 8 fases).
+// arte gerada + pecas giradas + elastico), niveis.js (as 8 fases) e a
+// CelerGame UI (lista de fases, pausa e menu de fim).
 //
 // Render (engine 1.2): camada suja com o cenario num sprite de tela
 // inteira (painter = pushSprite recortado). Por quadro so redesenha o que
@@ -13,6 +14,7 @@
 
 var E = require("celeros.game");       // familia CelerGame: adota so o que usa
 require("celeros.game.fx");
+require("celeros.game.ui");            // lista de fases, pausa e fim prontos
 var M = require("mundo");
 var A = require("arte");
 var NIV = require("niveis");
@@ -34,7 +36,9 @@ var G = {
     ultForca: 0,
     hudPts: -1,
     estrelasVistas: 0,
-    recorde: false
+    recorde: false,
+    trilha: null,           // emissor do rastro dos projeteis (unico)
+    fumaca: null            // emissor curto do estopim (unico)
 };
 
 if (typeof __harness !== "undefined") __harness.arrasa = { M: M, E: E, A: A, G: G };
@@ -82,6 +86,24 @@ var SND = {
     ok: [[660, 25], [880, 30]]
 };
 
+// nomes padrao da familia para os eventos-chave (o resto do jogo usa a
+// tabela SND direto). E.audio.sfxTable e a mesma tabela lida por
+// E.audio.sfx("nome").
+E.audio.sfxTable["throw"] = SND.lanca;
+E.audio.sfxTable.hit = SND.pancada;
+E.audio.sfxTable.boom = SND.boom;
+E.audio.sfxTable.win = SND.vitoria;
+E.audio.sfxTable.fail = SND.derrota;
+
+// paletas de fumaca do estopim (arrays fixos: o emitter troca a referencia
+// ao acender, sem alocar por evento)
+var FUMACA_OVO = [S.color(238, 238, 238), S.color(255, 205, 90), S.color(208, 208, 208)];
+var FUMACA_TNT = [S.color(255, 170, 60), S.color(120, 110, 100), S.color(235, 235, 235)];
+
+// rotulos da tela de fim (arrays fixos: E.ui.menu desenha a cada quadro)
+var FIM_PROX = ["PRÓXIMA", "DE NOVO", "FASES"];
+var FIM_SO = ["DE NOVO", "FASES"];
+
 // --------------------------------------------------------------- save ----
 function estrelasDe(n) { return E.save.num("est" + n, 0); }
 function recordeDe(n) { return E.save.num("pts" + n, 0); }
@@ -90,6 +112,41 @@ function totalEstrelas() {
     var t = 0;
     for (var n = 0; n < NIV.total; n++) t += estrelasDe(n);
     return t;
+}
+
+// texto da lista: nome da fase + estrelas do NVS em ASCII (as fontes cobrem
+// Latin-1; nada de emoji). Bloqueada leva "[x]" — o rotulo curto cabe na
+// largura da lista (a fonte body da UI nao encolhe sozinha)
+function rotuloFase(n) {
+    var st = estrelasDe(n), s = "";
+    for (var k = 0; k < 3; k++) s += k < st ? "*" : "-";
+    return (n + 1) + " " + NIV.fase(n).nome + " " + s;
+}
+function itensFases() {
+    var itens = [], n;
+    // desbloqueadas na frente (o progresso e sequencial: e um prefixo)
+    for (n = 0; n < NIV.total; n++) {
+        if (liberada(n)) itens.push({ label: rotuloFase(n), value: n });
+    }
+    for (n = 0; n < NIV.total; n++) {
+        if (!liberada(n)) {
+            itens.push({ label: (n + 1) + " " + NIV.fase(n).nome + " [x]",
+                         value: n, disabled: true });
+        }
+    }
+    return itens;
+}
+
+// pick da lista de fases: comeca a fase (a trava e re-checada aqui — a
+// versao 1.0.1 da lista nao filtra item disabled sozinha)
+function iniciaFase(n) {
+    if (!liberada(n)) { E.audio.sfx("bad"); return; }
+    E.audio.sfx("ok");
+    G.fase = n;
+    G.retomar = false;
+    G.fimT = -1;
+    G.rastroDesenhado = 0;
+    E.goto("jogando", { transition: "wipe", ms: 300 });
 }
 
 // ---------------------------------------------------------------- HUD ----
@@ -159,17 +216,70 @@ function poeira(x, y, n, cor) {
                life: 0.45, size: Math.max(1, A.ESC * 1.2), grav: 60 * A.ESC });
 }
 
+// rastro dos projeteis: UM emissor para a partida inteira (o follow le o
+// corpo do M.tiro) — nada de emitter novo por lance, e o pool de 140 so
+// recebe ~7 particulas vivas por vez (rate 20 x life 0,3). O ponto devolvido
+// e reaproveitado (o follow le na hora; alocar por quadro e GC no Duktape).
+var POS_TIRO = { x: 0, y: 0 };
+function posTrilha() {
+    var t = M.tiro;
+    if (!t || t.estado !== "voando" || t.idx < 0 || !M.s) return null;
+    var tipo = t.tipo;
+    if (tipo !== "bumerangue" && tipo !== "bomba" && tipo !== "pedra" && tipo !== "pedrao") return null;
+    var c = M.corpos[t.idx];
+    if (!c) return null;
+    var em = G.trilha;
+    if (em) {
+        em.opts.color = tipo === "bomba" ? S.color(255, 160, 70) :
+                        tipo === "bumerangue" ? S.color(150, 230, 90) : S.color(214, 202, 178);
+    }
+    var o = t.idx * M.NS;
+    POS_TIRO.x = A.sx(M.s[o]);
+    POS_TIRO.y = A.sy(M.s[o + 1]);
+    return POS_TIRO;
+}
+
+// fumaca curta da chocadeira/TNT: outro emissor UNICO, desligado em
+// repouso; acender so reposiciona e zera o acumulador (duration 260 ms)
+function criaEfeitos() {
+    if (!G.trilha) {
+        G.trilha = E.fx.trail(posTrilha, { rate: 20, life: 0.3,
+                           size: Math.max(1, A.ESC * 1.3) });
+    }
+    if (!G.fumaca) {
+        G.fumaca = E.fx.emitter({ x: 0, y: 0, rate: 30, duration: 260, life: 0.42,
+                     size: Math.max(1, A.ESC * 1.2), colors: FUMACA_OVO,
+                     speed: 8 * A.ESC, speed2: 34 * A.ESC, grav: -26 * A.ESC,
+                     spread: Math.PI * 2 });
+        G.fumaca.on = false;
+    }
+}
+function acende(x, y, paleta) {
+    var em = G.fumaca;
+    if (!em) return;
+    em.opts.x = A.sx(x);
+    em.opts.y = A.sy(y);
+    em.opts.colors = paleta || FUMACA_OVO;
+    em.t = 0;
+    em.acc = 0;
+    em.on = true;
+}
+
 function processa(evs) {
     var somQuebra = false;
     for (var i = 0; i < evs.length; i++) {
         var ev = evs[i];
         if (ev.t === "lancou") {
-            E.audio.sfx(SND.lanca);
+            E.audio.sfx("throw");
             G.vib = 7; G.vibT = 0;
             G.filaSuja = true;
         } else if (ev.t === "impacto") {
-            E.audio.sfx(SND.pancada);
+            E.audio.sfx("hit");
             poeira(ev.x, ev.y, 7, S.color(170, 150, 120));
+            E.fx.ring(A.sx(ev.x), A.sy(ev.y), { r0: 3 * A.ESC, speed: 80 * A.ESC,
+                       color: C.texto, life: 0.28 });
+            // a bomba acende o estopim no primeiro toque (a TNT tem o dela)
+            if (M.tiro && M.tiro.tipo === "bomba") acende(ev.x, ev.y, FUMACA_TNT);
         } else if (ev.t === "quebra") {
             boxDe(ev.c, ev.x, ev.y, ev.a);
             var cor = A.corMat(ev.mat);
@@ -202,7 +312,7 @@ function processa(evs) {
                        speed: 120 * A.ESC, life: 0.6, size: Math.max(2, A.ESC * 2.4), grav: 80 * A.ESC });
             E.fx.ring(A.sx(ev.x), A.sy(ev.y), { r0: 6 * A.ESC, speed: ev.r * 3 * A.ESC, color: C.amarelo, life: 0.3 });
             E.fx.flash(S.color(255, 170, 60), 160);
-            E.audio.sfx(SND.boom);
+            E.audio.sfx("boom");
         } else if (ev.t === "fimvoo") {
             // o rastro some quando o voo acaba (nao fica preso na tela)
             apagaRastro();
@@ -218,23 +328,26 @@ function processa(evs) {
             E.audio.sfx(SND.bota);
             E.fx.burst(A.sx(ev.x), A.sy(ev.y), { n: 8, colors: [C.texto, S.color(255, 200, 120)],
                        speed: 45 * A.ESC, life: 0.4, size: Math.max(1, A.ESC * 1.6) });
+            acende(ev.x, ev.y, FUMACA_OVO);
         } else if (ev.t === "racha") {
             E.audio.sfx(SND.racha);
             E.fx.ring(A.sx(ev.x), A.sy(ev.y), { r0: 3 * A.ESC, speed: 70 * A.ESC, color: S.color(90, 200, 255), life: 0.25 });
         } else if (ev.t === "pancada") {
             if (ev.dv > 160) poeira(ev.x, ev.y, 3, A.corMat(ev.mat));
+            // TNT levando pancada: estopim aceso (fumaca curta no ponto)
+            if (ev.mat === "tnt" && ev.dv > 200) acende(ev.x, ev.y, FUMACA_TNT);
         } else if (ev.t === "arma") {
             G.filaSuja = true;
         } else if (ev.t === "vitoria") {
             G.fimT = 0;
-            E.audio.sfx(SND.vitoria);
+            E.audio.sfx("win");
             if (ev.bonus > 0) {
                 E.fx.popText(A.sx(30), A.sy(M.GROUND - 30), "+" + ev.bonus, { color: C.ouro, ts: "label", life: 1.4 });
             }
             G.filaSuja = true;
         } else if (ev.t === "derrota") {
             G.fimT = 0;
-            E.audio.sfx(SND.derrota);
+            E.audio.sfx("fail");
         }
     }
 }
@@ -559,58 +672,32 @@ E.run({
 
     mapa: {
         static: true,
-        enter: function () { this.btn = null; },
+        enter: function () {
+            this.voltar = null;
+            // itens montados na entrada (estrelas frescas do NVS); a lista e
+            // retida e o draw devolve o tap no mesmo quadro
+            this.lst = E.ui.list({ items: itensFases(), row: u(28),
+                                   onPick: function (v) { iniciaFase(v); } });
+        },
         update: function () {
-            if (!this.btn) return;
-            for (var n = 0; n < NIV.total; n++) {
-                if (E.hit(this.btn[n]) && liberada(n)) {
-                    E.audio.sfx(SND.ok);
-                    G.fase = n;
-                    G.retomar = false;
-                    E.goto("jogando", { transition: "wipe", ms: 300 });
-                    return;
-                }
+            // lista retida e cena static: sem pedir redraw no toque ela nao
+            // recebe o justDown/justUp (o arrasto precisa do down todo)
+            if (E.input.down || E.input.justUp) E.redraw();
+            if (this.voltar && E.hit(this.voltar)) {
+                E.audio.sfx("ok");
+                E.goto("titulo", { transition: "fade", ms: 250 });
             }
-            if (E.hit(this.voltar)) { E.audio.sfx(SND.ok); E.goto("titulo", { transition: "fade", ms: 250 }); }
         },
         draw: function () {
             A.fundoInteiro();
-            var cols = 5, gap = u(8), rows = Math.ceil(NIV.total / cols);
-            var pw = Math.min(W - u(16), u(224));
-            var bs = Math.min(Math.floor((pw - u(24) - gap * (cols - 1)) / cols), u(46));
-            var ph = u(36) + rows * bs + (rows - 1) * gap + u(12);
-            var px = Math.round((W - pw) / 2), py = Math.round(Math.max(u(8), (H - ph - u(40)) / 2));
-            painel(px, py, pw, ph);
-            E.gfx.text("ESCOLHA A FASE", W / 2, py + u(17), { align: "center", valign: "middle",
+            E.gfx.text("ESCOLHA A FASE", W / 2, u(26), { align: "center", valign: "middle",
                        ts: "label", color: C.ouro, screen: true });
-            var gx0 = px + Math.round((pw - cols * bs - (cols - 1) * gap) / 2);
-            this.btn = [];
-            for (var n = 0; n < NIV.total; n++) {
-                var cx = gx0 + (n % cols) * (bs + gap);
-                var cy = py + u(34) + Math.floor(n / cols) * (bs + gap);
-                var ok = liberada(n);
-                S.fillSmoothRoundRect(cx, cy, bs, bs, u(8), ok ? C.painelClaro : S.mixColor(C.painel, 0x0000, 30));
-                S.drawRoundRect(cx, cy, bs, bs, u(8), ok ? C.ouro : C.painelClaro);
-                if (ok) {
-                    E.gfx.text(String(n + 1), cx + bs / 2, cy + bs * 0.42, { align: "center", valign: "middle",
-                               px: Math.round(bs * 0.45), color: C.texto, screen: true });
-                    var st = estrelasDe(n);
-                    for (var k = 0; k < 3; k++) {
-                        A.estrela(cx + bs / 2 + (k - 1) * bs * 0.29, cy + bs * 0.78, bs * 0.13,
-                                  k < st ? C.ouro : S.mixColor(C.painel, C.texto, 25));
-                    }
-                } else {
-                    // cadeado
-                    var lx = cx + bs / 2, ly = cy + bs / 2;
-                    S.drawWideLine(lx - u(5), ly - u(2), lx - u(5), ly - u(8), Math.max(2, u(2.5)), C.painelClaro);
-                    S.drawWideLine(lx + u(5), ly - u(2), lx + u(5), ly - u(8), Math.max(2, u(2.5)), C.painelClaro);
-                    S.drawWideLine(lx - u(5), ly - u(8), lx + u(5), ly - u(8), Math.max(2, u(2.5)), C.painelClaro);
-                    S.fillSmoothRoundRect(lx - u(8), ly - u(3), u(16), u(12), u(2), C.painelClaro);
-                }
-                this.btn.push({ x: cx, y: cy, w: bs, h: bs });
-            }
+            E.gfx.text(totalEstrelas() + "/" + (NIV.total * 3) + " estrelas", W / 2, u(43),
+                       { align: "center", valign: "middle", ts: "tiny", color: C.texto, screen: true });
+            var y0 = u(56), lh = H - y0 - u(54);
+            this.lst.draw(u(10), y0, W - u(20), lh);
             var bw = Math.min(u(120), W - u(40));
-            this.voltar = botao("VOLTAR", Math.round((W - bw) / 2), py + ph + u(10), bw, u(26), false);
+            this.voltar = botao("VOLTAR", Math.round((W - bw) / 2), H - u(42), bw, u(26), false);
         }
     },
 
@@ -630,6 +717,8 @@ E.run({
             }
             G.retomar = false;
             G.hudPts = -1;
+            criaEfeitos();
+            if (G.fumaca) G.fumaca.on = false;
             D.enable(A.painter);
             E.cam.reset();
             if (E.data.musicPos !== undefined) {
@@ -698,23 +787,32 @@ E.run({
 
     pausa: {
         static: true,
-        enter: function () { E.audio.stop(); this.btn = null; },
+        enter: function () { E.audio.stop(); this.act = null; },
         update: function () {
-            if (!this.btn) return;
-            if (E.hit(this.btn[0])) { E.audio.sfx(SND.ok); G.retomar = true; E.goto("jogando"); }
-            else if (E.hit(this.btn[1])) { E.audio.sfx(SND.ok); G.retomar = false; E.data.musicPos = undefined; E.goto("jogando"); }
-            else if (E.hit(this.btn[2])) { E.audio.sfx(SND.ok); G.retomar = false; E.goto("mapa"); }
+            // o veu/menu e desenhado no draw (immediate): a cena static
+            // precisa do redraw enquanto o dedo esta na tela
+            if (E.input.down || E.input.justUp) E.redraw();
+            var act = this.act;
+            if (!act) return;
+            this.act = null;
+            E.audio.sfx("ok");
+            if (act === "resume") {
+                G.retomar = true;
+                E.goto("jogando");
+            } else if (act === "restart") {
+                G.retomar = false;
+                E.data.musicPos = undefined;
+                E.goto("jogando");
+            } else if (act === "quit") {
+                G.retomar = false;
+                E.data.musicPos = undefined;
+                E.goto("mapa", { transition: "fade", ms: 250 });
+            }
         },
         draw: function () {
-            var pw = Math.min(u(180), W - u(30)), ph = u(150);
-            var px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2);
-            painel(px, py, pw, ph);
-            E.gfx.text("PAUSA", W / 2, py + u(20), { align: "center", valign: "middle",
-                       px: u(20), color: C.ouro, screen: true });
-            var bw = pw - u(30), bh = u(26), bx = Math.round((W - bw) / 2), by = py + u(40);
-            this.btn = [botao("CONTINUAR", bx, by, bw, bh, true),
-                        botao("REINICIAR", bx, by + bh + u(8), bw, bh, false),
-                        botao("FASES", bx, by + (bh + u(8)) * 2, bw, bh, false)];
+            // E.ui.pause: veu escuro sobre o jogo congelado + Continuar/
+            // Recomecar/Sair; devolve a acao no quadro do tap
+            this.act = E.ui.pause();
         }
     },
 
@@ -723,7 +821,7 @@ E.run({
         enter: function () {
             E.audio.stop();
             this.t = 0;
-            this.btn = null;
+            this.act = null;
             G.estrelasVistas = 0;
             var est = M.estrelas();
             G.recorde = false;
@@ -744,50 +842,44 @@ E.run({
         },
         update: function (dt) {
             this.t += dt;
-            if (this.t < 0.6 || !this.btn) return;   // engole o toque do lance
+            if (this.t < 0.6 || !this.act) return;   // engole o toque do lance
+            var act = this.act;
+            this.act = null;
+            E.audio.sfx("ok");
             var prox = M.venceu && G.fase + 1 < NIV.total;
-            if (E.hit(this.btn[0])) {
-                E.audio.sfx(SND.ok);
+            if (act === FIM_PROX[0]) {               // PROXIMA
                 G.retomar = false;
-                if (prox) G.fase++;
+                G.fase++;
                 E.goto("jogando", { transition: "wipe", ms: 300 });
-            } else if (this.btn[1] && E.hit(this.btn[1])) {
-                E.audio.sfx(SND.ok);
-                if (prox) { G.retomar = false; E.goto("jogando", { transition: "wipe", ms: 300 }); }
+            } else if (act === FIM_SO[0]) {          // DE NOVO
+                G.retomar = false;
+                if (prox) E.goto("jogando", { transition: "wipe", ms: 300 });
                 else E.goto("mapa", { transition: "fade", ms: 300 });
-            } else if (this.btn[2] && E.hit(this.btn[2])) {
-                E.audio.sfx(SND.ok);
+            } else if (act === FIM_SO[1]) {          // FASES
                 E.goto("mapa", { transition: "fade", ms: 300 });
             }
         },
         draw: function () {
-            var pw = Math.min(u(200), W - u(24)), ph = u(196);
+            var pw = Math.min(u(200), W - u(24)), ph = u(210);
             var px = Math.round((W - pw) / 2), py = Math.round((H - ph) / 2);
             painel(px, py, pw, ph);
             var ok = M.venceu;
-            E.gfx.text(ok ? "FASE LIMPA!" : "OS GOBLINS VENCERAM", W / 2, py + u(20), { align: "center",
+            E.gfx.text(ok ? "FASE LIMPA!" : "OS GOBLINS VENCERAM", W / 2, py + u(18), { align: "center",
                        valign: "middle", px: u(18), fit: pw - u(16), color: ok ? C.ouro : S.color(255, 120, 90), screen: true });
-            var est = M.estrelas();
             for (var k = 0; k < 3; k++) {
                 var cor = ok && k < G.estrelasVistas ? C.ouro : S.mixColor(C.painel, C.texto, 22);
-                A.estrela(W / 2 + (k - 1) * u(34), py + u(56) - (k === 1 ? u(6) : 0), u(k === 1 ? 15 : 12), cor, C.sombra);
+                A.estrela(W / 2 + (k - 1) * u(34), py + u(52) - (k === 1 ? u(6) : 0), u(k === 1 ? 15 : 12), cor, C.sombra);
             }
-            E.gfx.text(String(M.pontos), W / 2, py + u(92), { align: "center", valign: "middle",
+            E.gfx.text(String(M.pontos), W / 2, py + u(90), { align: "center", valign: "middle",
                        px: u(24), color: C.texto, screen: true });
-            E.gfx.text(G.recorde ? "NOVO RECORDE!" : "recorde " + recordeDe(G.fase), W / 2, py + u(110),
+            E.gfx.text(G.recorde ? "NOVO RECORDE!" : "recorde " + recordeDe(G.fase), W / 2, py + u(108),
                        { align: "center", valign: "middle", ts: "small",
                          color: G.recorde ? C.ouro : S.mixColor(C.painel, C.texto, 60), screen: true });
-            var bw = pw - u(30), bh = u(24), bx = Math.round((W - bw) / 2), by = py + u(124);
-            var prox = ok && G.fase + 1 < NIV.total;
-            if (prox) {
-                this.btn = [botao("PRÓXIMA", bx, by, bw, bh, true),
-                            botao("DE NOVO", bx, by + bh + u(6), (bw - u(6)) / 2, bh, false),
-                            botao("FASES", bx + (bw + u(6)) / 2, by + bh + u(6), (bw - u(6)) / 2, bh, false)];
-            } else {
-                this.btn = [botao("DE NOVO", bx, by, bw, bh, true),
-                            botao("FASES", bx, by + bh + u(6), bw, bh, false)];
-            }
-            if (est === 0 && !ok) this.btn.length = 2;
+            // botoes pela E.ui.menu: mesmo item da lista/pausa e o tap volta
+            // no proprio quadro do draw (o update da cena aplica no seguinte)
+            var bw = pw - u(30), bx = Math.round((W - bw) / 2), by = py + u(126);
+            this.act = E.ui.menu(ok && G.fase + 1 < NIV.total ? FIM_PROX : FIM_SO,
+                                 { x: bx, y: by, w: bw, row: u(28) });
         }
     }
 }, "titulo");

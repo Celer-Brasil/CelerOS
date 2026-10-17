@@ -25,17 +25,23 @@ var CIANO = 0x07FF, CIANOD = 0x03EF, MAGENTA = 0xF81F, LARANJA = 0xFD20,
 
 var BPM = 132;
 
-// efeitos (System.sfx misturado por cima da trilha na API 32; um por vez —
-// o mais novo vence, entao os frequentes sao curtissimos)
-var SND = {
-    pop: [[880, 18], [520, 30]],
-    boom: [[180, 40], [110, 70], [70, 110]],
-    orbe: [[988, 35], [1319, 60]],
-    dano: [[300, 60], [180, 90], [120, 120]],
-    alerta: [[660, 90], [0, 40], [660, 90], [0, 40], [880, 160]],
-    chefe: [[523, 70], [659, 70], [784, 70], [1047, 220]],
-    supernova: [[90, 60], [140, 60], [220, 60], [330, 80], [494, 90], [740, 120], [1109, 220]]
-};
+// Sons na tabela do core (E.audio.sfxTable): os eventos chamam
+// E.audio.sfx pelo NOME. As entradas padrao shot/hit/boom/power/record
+// sao revistas para o jogo; as outras sao chaves proprias na mesma
+// tabela. Firmware com mistura (API 32) toca por cima da trilha; no
+// antigo um efeito por vez rouba o canal — a supernova usa E.audio.duck
+// para a trilha voltar do ponto onde parou.
+var SND = E.audio.sfxTable;
+SND.shot = [[1500, 16], [1050, 20]];            // tiro da nave
+SND.hit = [[900, 18], [620, 26]];               // bala acerta, inimigo vivo
+SND.boom = [[190, 45], [120, 85], [70, 130]];   // explosao grande
+SND.power = [[784, 35], [988, 35], [1319, 80]]; // orbe de carga
+SND.record = [[659, 60], [784, 60], [988, 60], [1319, 180]];
+SND.pop = [[880, 18], [520, 30]];
+SND.dano = [[300, 60], [180, 90], [120, 120]];
+SND.alerta = [[660, 90], [0, 40], [660, 90], [0, 40], [880, 160]];
+SND.chefe = [[523, 70], [659, 70], [784, 70], [1047, 220]];
+SND.supernova = [[90, 60], [140, 60], [220, 60], [330, 80], [494, 90], [740, 120], [1109, 220]];
 
 // Lá menor, 2 compassos de loop (bumbo/caixa/chimbal GM, baixo triangular,
 // melodia quadrada e arpejo sq25 no contratempo).
@@ -97,6 +103,10 @@ function removeAt(i) {
 var PB_CAP = 24, EB_CAP = 64;
 var PB = [], PBn = 0;    // tiros da nave
 var EB = [], EBn = 0;    // tiros inimigos
+// visao dos pools para o desenho: MESMO objeto por quadro (o main.js le
+// pbn/ebn no hot path; devolver um literal novo a cada draw era lixo para
+// o GC do Duktape)
+var _bview = { pb: PB, pbn: 0, eb: EB, ebn: 0 };
 
 function clampX(x) {
     var m = 30 * K;
@@ -122,7 +132,7 @@ function reset() {
         streak: 0, streakT: 0, mult: 1, multPulse: 0,
         wave: 0, spawns: 0, intensity: 0,
         boss: null, bossNext: 5, bossAlt: 0, triple: 0,
-        over: false, overT: 0, resumeAt: 0
+        over: false, overT: 0
     };
     var p = addBody({ cat: 'player', x: W / 2, y: H * 0.8, r: 24 * K });
     p.cool = 0;
@@ -221,7 +231,7 @@ function spawnBoss() {
     b.upd = updBoss;
     S.boss = b;
     E.fx.popText(W / 2, H * 0.3, "SENTINELA-MOR", { color: MAGENTA, life: 1.6, ts: 'big' });
-    E.audio.sfx(SND.alerta);
+    E.audio.sfx("alerta");
 }
 
 // ------------------------------------------------------ roteiro/movimento ---
@@ -297,7 +307,7 @@ function pickupOrb(o) {
     S.score += 15;
     E.fx.ring(o.x, o.y, { color: OURO, speed: 300 * K, life: 0.5 });
     E.fx.popText(o.x, o.y - 14 * K, "+CARGA", { color: OURO, ts: 'small' });
-    E.audio.sfx(SND.orbe);
+    E.audio.sfx("power");
 }
 
 // inimigo que ramming a nave: explode junto
@@ -370,6 +380,7 @@ function updateBullets(dt) {
                     dead = true;
                     e.hp -= 1;
                     e.flashT = 0.09;
+                    E.audio.sfx("hit");
                     E.fx.burst(b.x, b.y + 6 * K, { n: 3, color: BRANCO, speed: 80 * K, life: 0.3, size: 1 });
                     if (e.hp <= 0) e.killed = true;
                     break;
@@ -456,11 +467,7 @@ function update(dt) {
             pbullet(p.x, p.y - 30 * K, -130 * K, -600 * K);
             pbullet(p.x, p.y - 30 * K, 130 * K, -600 * K);
         }
-    }
-    if (Math.random() < 0.7) {
-        E.fx.burst(p.x + (Math.random() * 10 - 5) * K, p.y + 34 * K,
-                   { n: 1, color: CIANO, speed: 50 * K, speed2: 100 * K,
-                     angle: Math.PI / 2, spread: 0.5, life: 0.28, size: 1 });
+        E.audio.sfx("shot");
     }
 
     // roteia os corpos; ram de inimigo e orbe colhem por distancia direta
@@ -490,11 +497,6 @@ function update(dt) {
             s.mult = 1;
         }
     }
-    // retoma a trilha depois do boom da supernova
-    if (s.resumeAt && s.t > s.resumeAt) {
-        s.resumeAt = 0;
-        E.audio.music(SONG);
-    }
 }
 
 // varre os corpos: mortos, marcados como abate e fora da tela (projeteis
@@ -523,7 +525,7 @@ function explosionFx(e) {
     // tremor so em evento grande: drone comum abatido em serie sacudia a
     // tela o tempo todo (a "vibracao" que o player sentia)
     if (big) E.cam.shake(4 * K, 0.25);
-    E.audio.sfx(big ? SND.boom : SND.pop);
+    E.audio.sfx(big ? "boom" : "pop");
 }
 
 function killEnemy(e) {
@@ -561,7 +563,7 @@ function bossDown(e) {
     spawnOrb(e.x + 50 * K);
     E.fx.popText(W / 2, H * 0.4, "CHEFE AO CHAO!", { color: MAGENTA, life: 1.4, ts: 'big' });
     E.fx.popText(W / 2, H * 0.4 + 30 * K, "TIRO TRIPLO", { color: VERDE, life: 1.4, ts: 'label' });
-    E.audio.sfx(SND.chefe);
+    E.audio.sfx("chefe");
 }
 
 function hitPlayer() {
@@ -581,7 +583,7 @@ function hitPlayer() {
     } else {
         // a trilha segue (sfx misturado): perder vida nao corta a musica
         p.invuln = 2.2;
-        E.audio.sfx(SND.dano);
+        E.audio.sfx("dano");
     }
 }
 
@@ -626,11 +628,12 @@ function detonate() {
     E.cam.shake(8 * K, 0.45);
     E.fx.popText(W / 2, H / 2 - 30 * K, "SUPERNOVA! +" + gained, { color: OURO, life: 1.4, ts: 'big' });
     if (E.caps.mix) {
-        E.audio.sfx(SND.supernova);   // por cima da trilha
+        E.audio.sfx("supernova");     // por cima da trilha
     } else {
-        E.audio.stop();               // firmware velho: canal unico
-        E.audio.sfx("boom");
-        s.resumeAt = s.t + 1.6;
+        // firmware velho, canal unico: o duck para a trilha, deixa o
+        // estrondo soar na janela e a retoma do MESMO ponto
+        E.audio.duck(1700);
+        E.audio.sfx("supernova");
     }
     return true;
 }
@@ -639,9 +642,11 @@ function startMusic() {
     E.audio.music(SONG);
 }
 
-// pools para o desenho (main.js) e para o teste
+// pools para o desenho (main.js) e para o teste — objeto reaproveitado
 function bullets() {
-    return { pb: PB, pbn: PBn, eb: EB, ebn: EBn };
+    _bview.pbn = PBn;
+    _bview.ebn = EBn;
+    return _bview;
 }
 
 // testes deterministcos (harness): tiro inimigo em cima da nave e anel do

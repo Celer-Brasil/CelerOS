@@ -275,7 +275,14 @@ bool Reader::extractTo(int idx, const char* destPath) const {
                         dictFill = 0;
                         continue;
                     }
-                    if (st == TINFL_STATUS_HAS_MORE_OUTPUT) {
+                    // HAS_MORE_OUTPUT com janela PARCIAL esvazia o que o tinfl
+                    // produziu; com dictFill == 0 ele parou porque a passada
+                    // ANTERIOR encheu a janela inteira (o flush de cima ja
+                    // descarregou) — voltar ao decompress com a mesma janela
+                    // (a referencia retroativa continua valida no buffer), nao
+                    // esvaziar 0 byte para sempre: entrada deflate > 32 KB
+                    // pendurava a extracao em loop infinito
+                    if (st == TINFL_STATUS_HAS_MORE_OUTPUT && dictFill > 0) {
                         ok = writeAll(out, dict, dictFill);
                         if (ok) crc = zipCrc32(crc, dict, dictFill);
                         done += (uint32_t)dictFill;

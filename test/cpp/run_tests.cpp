@@ -2336,6 +2336,206 @@ static void testAppZip() {
     }
 }
 
+// ------------------------------------------------------------- AppZip adversarial
+// O leitor de zip e um parser de entrada NAO CONFIavel (vem do hub, do OTA e
+// do cabo): cada caso aqui mente de um jeito diferente e espera a recusa
+// EXATA que o AppZip.cpp promete no header — sem estouro de alocacao, sem
+// escrita fora do lugar e sem arquivo truncado deixado para tras.
+
+// Escritor de zip de UMA entrada a partir de um payload CRU (o buildZip
+// comprime sempre; aqui o teste controla o stream exato que vai no ar,
+// para poder truncar o deflate no meio de um bloco)
+static bool buildZipRaw(const char* path, const char* name, const uint8_t* payload,
+                        uint32_t plen, uint32_t uncomp, uint32_t crc) {
+    std::vector<uint8_t> z;
+    uint16_t nameLen = (uint16_t)strlen(name);
+    zPush32(z, 0x04034b50);
+    zPush16(z, 20); zPush16(z, 0); zPush16(z, 8);   // metodo 8 (deflate)
+    zPush16(z, 0); zPush16(z, 0x21);
+    zPush32(z, crc);
+    zPush32(z, plen);
+    zPush32(z, uncomp);
+    zPush16(z, nameLen); zPush16(z, 0);
+    z.insert(z.end(), name, name + nameLen);
+    z.insert(z.end(), payload, payload + plen);
+    uint32_t cdOff = (uint32_t)z.size();
+    zPush32(z, 0x02014b50);
+    zPush16(z, 20); zPush16(z, 20); zPush16(z, 0); zPush16(z, 8);
+    zPush16(z, 0); zPush16(z, 0x21);
+    zPush32(z, crc);
+    zPush32(z, plen);
+    zPush32(z, uncomp);
+    zPush16(z, nameLen);
+    zPush16(z, 0); zPush16(z, 0); zPush16(z, 0); zPush16(z, 0);
+    zPush32(z, 0);
+    zPush32(z, 0);
+    z.insert(z.end(), name, name + nameLen);
+    uint32_t cdSize = (uint32_t)z.size() - cdOff;
+    zPush32(z, 0x06054b50);
+    zPush16(z, 0); zPush16(z, 0);
+    zPush16(z, 1); zPush16(z, 1);
+    zPush32(z, cdSize);
+    zPush32(z, cdOff);
+    zPush16(z, 0);
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr) return false;
+    fwrite(z.data(), 1, z.size(), f);
+    fclose(f);
+    return true;
+}
+
+// Patch de um uint32 LE em offset absoluto (o zip mentiroso do teste)
+static void zipPatch32(const char* path, long off, uint32_t v) {
+    FILE* g = fopen(path, "r+b");
+    if (g == nullptr) return;
+    fseek(g, off, SEEK_SET);
+    for (int i = 0; i < 4; i++) fputc((int)((v >> (8 * i)) & 0xFF), g);
+    fclose(g);
+}
+
+// Inicio do central directory de um zip de 1 entrada sem comentario
+// (buildZip/buildZipRaw): local + CD + EOCD de 22 no fim
+static long zipCdOff(const char* path, long nameLen) {
+    struct stat st;
+    return stat(path, &st) == 0 ? (long)st.st_size - 22 - (46 + nameLen) : -1;
+}
+
+static bool zipAbsent(const char* p) {
+    struct stat st;
+    return stat(p, &st) != 0;
+}
+
+static void testAppZipAdversarial() {
+    using namespace celer::appzip;
+    mkdir("/tmp/celeros_zt", 0755);
+    mkdir("/tmp/celeros_zt/out", 0755);
+    static uint8_t PAD[400];  // padrao LZ-friendly, igual ao pad do testAppZip
+    for (int i = 0; i < 400; i++) PAD[i] = (uint8_t)('A' + (i % 26));
+    static uint8_t big[100 * 1024];
+    for (size_t i = 0; i < sizeof(big); i++) big[i] = (uint8_t)('a' + (i % 7));
+    static uint8_t back[100 * 1024 + 16];
+    ZipTEntry one[] = {{"Pkg/x.js", PAD, sizeof(PAD), true, false}};
+    const char* zpath = "/tmp/celeros_zt/adv.zip";
+    const char* out = "/tmp/celeros_zt/out/adv.bin";
+    Reader z;
+
+    // ---- metodo desconhecido (6 = implode, 7 = reservado) rejeita na
+    // abertura, com a mentira gravada nos DOIS cabecalhos (local e CD)
+    for (int method = 6; method <= 7; method++) {
+        CHECK(buildZip(zpath, one, 1));
+        long cd = zipCdOff(zpath, 8);
+        CHECK(cd > 0);
+        FILE* g = fopen(zpath, "r+b");
+        fseek(g, 8, SEEK_SET); fputc(method, g);        // method do cabecalho local
+        fseek(g, cd + 10, SEEK_SET); fputc(method, g);  // method do central directory
+        fclose(g);
+        CHECK(!z.open(zpath));
+    }
+
+    // ---- nomes venenosos no central directory: nameSafe recusa na abertura
+    // (barra inicial, barra invertida, nao-ASCII; o ".." em segmento ja tem
+    // caso proprio no testAppZip com o evil.zip)
+    const char* evilNames[] = {"/absoluto.txt", "Pkg\\x.js", "acento\xe7.txt"};
+    for (int i = 0; i < 3; i++) {
+        ZipTEntry evil[] = {{evilNames[i], PAD, sizeof(PAD), true, false}};
+        CHECK(buildZip(zpath, evil, 1));
+        CHECK(!z.open(zpath));
+    }
+
+    // ---- zip truncado no meio do deflate: cabecalhos HONESTOS com um stream
+    // que acaba antes da hora (falta o fim do bloco final). A abertura passa
+    // (o CD nao mente) e a extracao falha sem deixar o destino para tras
+    {
+        uint8_t stream[1024];
+        size_t clen = tdefl_compress_mem_to_mem(stream, sizeof(stream), PAD, sizeof(PAD), 128);
+        CHECK(clen > 12 && clen < sizeof(stream));
+        CHECK(buildZipRaw(zpath, "Pkg/t.bin", stream, (uint32_t)(clen - 6), sizeof(PAD),
+                          hostframe::crc32(PAD, sizeof(PAD))));
+        CHECK(z.open(zpath));
+        Entry e;
+        CHECK(z.stat(0, &e) && e.uncompSize == sizeof(PAD) && e.method == 8);
+        CHECK(!z.extractTo(0, out));
+        CHECK(zipAbsent(out));  // truncado: nada de lixo parcial
+        z.close();
+    }
+
+    // ---- compSize passado do fim do arquivo (so o CD mente): abre, a
+    // extracao bate no EOF do dado comprimido e falha limpa
+    CHECK(buildZip(zpath, one, 1));
+    zipPatch32(zpath, zipCdOff(zpath, 8) + 20, 100000);  // comp no CD
+    CHECK(z.open(zpath));
+    CHECK(!z.extractTo(0, out));
+    CHECK(zipAbsent(out));
+    z.close();
+
+    // ---- EOCD depois de comentario de 4 KB EXATOS: a janela de busca
+    // (kEocdScan = 22 + 4096) pega na borda; um byte a mais rejeita
+    CHECK(buildZip(zpath, one, 1));
+    {
+        struct stat st;
+        stat(zpath, &st);
+        long base = (long)st.st_size;
+        FILE* g = fopen(zpath, "ab");
+        for (int i = 0; i < 4096; i++) fputc('A', g);
+        fclose(g);
+        zipPatch32(zpath, base - 2, 4096);  // comment length do EOCD
+    }
+    CHECK(z.open(zpath));
+    CHECK(z.count() == 1);
+    z.close();
+    CHECK(buildZip(zpath, one, 1));
+    {
+        struct stat st;
+        stat(zpath, &st);
+        long base = (long)st.st_size;
+        FILE* g = fopen(zpath, "ab");
+        for (int i = 0; i < 4097; i++) fputc('A', g);
+        fclose(g);
+        zipPatch32(zpath, base - 2, 4097);  // fora da janela de 4 KB: sem EOCD
+    }
+    CHECK(!z.open(zpath));
+
+    // ---- stored com compSize != uncompSize: o CRC do conteudo BATE (os
+    // bytes sao os mesmos); so a conferencia dos tamanhos pega a mentira
+    ZipTEntry stored[] = {{"Pkg/s.bin", PAD, sizeof(PAD), false, false}};
+    CHECK(buildZip(zpath, stored, 1));
+    zipPatch32(zpath, zipCdOff(zpath, 9) + 24, sizeof(PAD) + 1);  // uncomp no CD
+    CHECK(z.open(zpath));
+    {
+        Entry e;
+        CHECK(z.stat(0, &e) && e.uncompSize == sizeof(PAD) + 1);  // stat reflete a mentira do CD
+        CHECK(!z.extractTo(0, out));
+        CHECK(zipAbsent(out));
+    }
+    z.close();
+
+    // ---- bomba pela mentira ALTA no uncomp (deflate honesto de 400 B que
+    // "descomprimiria" 15 MB): o streaming nunca aloca pelo declarado; a
+    // extracao falha no done != uncompSize, sem estourar nada
+    CHECK(buildZip(zpath, one, 1));
+    zipPatch32(zpath, zipCdOff(zpath, 8) + 24, 0x00F00000u);
+    CHECK(z.open(zpath));
+    CHECK(!z.extractTo(0, out));
+    CHECK(zipAbsent(out));
+    z.close();
+
+    // ---- streaming acima da janela de 32 KB (entrada de 100 KB): o dicionario
+    // LZ descarrega e recomeca no meio da entrada — round-trip integral
+    {
+        ZipTEntry Grande[] = {{"Pkg/big.bin", big, sizeof(big), true, false}};
+        CHECK(buildZip(zpath, Grande, 1));
+        CHECK(z.open(zpath));
+        Entry e;
+        CHECK(z.stat(0, &e) && e.uncompSize == sizeof(big));
+        CHECK(z.extractTo(0, out));
+        FILE* f = fopen(out, "rb");
+        size_t got = f ? fread(back, 1, sizeof(back), f) : 0;
+        if (f) fclose(f);
+        CHECK(got == sizeof(big) && memcmp(back, big, sizeof(big)) == 0);
+        z.close();
+    }
+}
+
 // ------------------------------------------------------------- AppPackage
 // Instalacao do pacote .zip (Utils/AppPackage.cpp): validacao, staging e
 // troca com rollback.
@@ -2473,6 +2673,7 @@ int main() {
     testShellVarsArith();
     testShScript();
     testAppZip();
+    testAppZipAdversarial();
     testAppPackage();
     testInstallMarker();
     if (g_failed == 0) {

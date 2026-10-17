@@ -190,6 +190,19 @@ Local s_local[LIST_MAX];
 LeaseTable<LEASES> s_leases;
 Handle s_h[HANDLES_MAX];
 
+// Handle usb descartado FORA do tick normal (HCLOSE do PC, cabo morto):
+// solta a midia dele — sem isso o PCM do play (ate 937 KB de PSRAM) e o
+// buffer da gravacao ficam orfaos e o proximo SUB_PLAY_AT recusa ate o
+// reboot. Quem chama ja esta sob o Guard; o recDiscard so age se a
+// gravacao for desta sessao.
+void usbProxyDrop(int i) {
+    if (s_usbPlay.h == i) {
+        heap_caps_free(s_usbPlay.pcm);
+        s_usbPlay = UsbPlay();
+    }
+    AudioRes::recDiscard(s_h[i].sid);
+}
+
 uint32_t nowMs() {
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
@@ -1516,10 +1529,7 @@ void tick() {
                 handleRelease(x);
                 x.usb = false;
                 x.state = ST_FREE;
-                if (s_usbPlay.h == i) {
-                    heap_caps_free(s_usbPlay.pcm);
-                    s_usbPlay = UsbPlay();
-                }
+                usbProxyDrop(i);
             }
         }
     }
@@ -2039,6 +2049,7 @@ void usbSession(bool on) {
         close(i);
         s_h[i].usb = false;
         s_h[i].state = ST_FREE;
+        usbProxyDrop(i);  // o PCM do play/gravacao morre com o cabo
     }
     for (int i = 0; i < LEASES; i++) {
         LeaseTable<LEASES>::Lease* l = s_leases.at(i);
@@ -2196,6 +2207,7 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             close(h);  // CLOSE ao dono (auto-off se o OPEN pediu)
             s_h[h].usb = false;
             s_h[h].state = ST_FREE;
+            usbProxyDrop(h);  // o PC nao colhe mais: solta a midia dele
             return 0;
         }
         case usbres::SUB_NET: {

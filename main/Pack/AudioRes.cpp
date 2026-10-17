@@ -314,6 +314,17 @@ char* recStop(bool base64, size_t* lenOut, uint32_t* msOut) {
     return out;
 }
 
+void recDiscard(uint16_t sid) {
+    if (s_rec.pcm == nullptr || s_rec.sid != sid) return;
+    s_rec.on = false;
+    heap_caps_free(s_rec.pcm);
+    s_rec.pcm = nullptr;
+    s_rec.n = s_rec.cap = 0;
+    s_rec.sid = 0;
+    s_rec.level = -1;
+    ESP_LOGI(TAG, "gravacao da sessao %u descartada (sem quem colha)", (unsigned)sid);
+}
+
 void stats(Stats* out) {
     out->srcFrames = s_srcFrames;
     out->srcFail = s_srcFail;

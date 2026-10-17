@@ -48,6 +48,9 @@ bool recActive(uint16_t sid);   // true ate encher o teto (ou parar)
 int recLevel();                 // RMS 0..100 do ultimo bloco (-1 = parado)
 // Encerra e devolve o WAV (ou base64) em buffer malloc do chamador.
 char* recStop(bool base64, size_t* lenOut, uint32_t* msOut);
+// Descarta a gravacao DESTA sessao sem montar o WAV (quem colhia sumiu:
+// cabo do PC morto, HCLOSE) — devolve o buffer da PSRAM
+void recDiscard(uint16_t sid);
 
 // telemetria de bancada (log a cada fim de sessao)
 struct Stats {

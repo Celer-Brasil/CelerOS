@@ -76,6 +76,7 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         {"getMonth", JSBindings::js_getMonth, 0},
         {"getDay", JSBindings::js_getDay, 0},
         {"getWeekday", JSBindings::js_getWeekday, 0},
+        {"millis", JSBindings::js_millis, 0},
         {"getTimezone", JSBindings::js_getTimezone, 0},
         {"syncTime", JSBindings::js_syncTime, 0},          // API 42
         {"timeValid", JSBindings::js_timeValid, 0},        // API 42
@@ -95,7 +96,7 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         {"updateBusy", JSBindings::js_updateBusy, 0},      // API 42
         {"shellActive", JSBindings::js_shellActive, 0},    // API 42
     };
-    JSBindings::putFns(thr, kSvcSys, 25);
+    JSBindings::putFns(thr, kSvcSys, 26);
     duk_put_prop_string(thr, -2, "System");
 
     // ---- Service: controle do proprio servico ----

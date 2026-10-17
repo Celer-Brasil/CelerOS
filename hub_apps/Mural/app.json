@@ -1,15 +1,18 @@
 {
   "name": "Mural",
   "packageName": "celeros.mural",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
   "description": "Mural de recados da casa pela malha CelerNet: o recado chega a todo aparelho com o Mural aberto — até nos que estavam desligados ou longe na hora, porque cada mural guarda os recados e sincroniza com os vizinhos (algoritmo Trickle: silêncio quando todos concordam, rapidez quando alguém volta atrasado).",
   "type": "App",
   "category": "Utility",
-  "api": 30,
-  "permissions": [],
-  "changelog": "1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: recados persistidos (24), resumo m# de vizinho direto com intervalo Trickle 4..32 s, refofoca m+ com supressao e indicador de sincronia",
+  "api": 42,
+  "permissions": [
+    "system"
+  ],
+  "changelog": "1.2.0 - o Trickle continua com o app FECHADO: servico em segundo plano (API 42) sincroniza o mural e notifica recado novo; dorme com app aberto (o app da vez drena a malha)\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: recados persistidos (24), resumo m# de vizinho direto com intervalo Trickle 4..32 s, refofoca m+ com supressao e indicador de sincronia",
   "deps": {
     "celeros.mesh": "^1.0.0"
-  }
+  },
+  "service": "service.js"
 }

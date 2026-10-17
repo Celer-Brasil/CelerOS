@@ -1584,6 +1584,16 @@ static void testResMeta() {
     CHECK(encodeListMeta(many, mm, LIST_MAX, b, sizeof(b)) == 0);
     uint8_t small[8];
     CHECK(encodeListMeta(e, m, 2, small, sizeof(small)) == 0);
+    // paramInt (copia unica no ResProto.h): valor colado no fim do params,
+    // valor ausente, params que acaba na chave e lixo depois do numero
+    const uint8_t p1[] = "{\"pin\":21}";
+    CHECK(paramInt(p1, sizeof(p1) - 1, "pin", -1) == 21);   // fim exato: sem NUL
+    const uint8_t p2[] = "{\"q\":12,\"x\":1}";
+    CHECK(paramInt(p2, sizeof(p2) - 1, "q", 0) == 12 && paramInt(p2, sizeof(p2) - 1, "pin", -5) == -5);
+    const uint8_t p3[] = "a\"rate\":";
+    CHECK(paramInt(p3, sizeof(p3) - 1, "rate", 7) == 7);    // chave sem valor
+    const uint8_t p4[] = "{\"off\":1xxx";
+    CHECK(paramInt(p4, sizeof(p4) - 1, "off", 0) == 1);     // atoi para no lixo
 }
 
 // Onda B: o tunel ResProto pelo cabo (USBDevice/UsbRes.h)

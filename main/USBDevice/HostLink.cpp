@@ -1011,11 +1011,22 @@ void handleResCtl(const uint8_t* payload, uint16_t len) {
         respondError(KL_RES_CTL, "ctl malformado");
         return;
     }
-    // [reqId][len u16] + corpo no MESMO buffer estatico (era 512 B de corpo e
-    // outra copia de 515 B na pilha da task do canal): o catalogo da malha
-    // (16 nos com meta) estourava e voltava "vazio"
-    static uint8_t buf[3 + 1536];
-    const int n = Resources::usbCtl(rq.subop, rq.body, rq.len, buf + 3, sizeof(buf) - 3);
+    // [reqId][len u16] + corpo no MESMO buffer (era 512 B de corpo e outra
+    // copia de 515 B na pilha da task do canal): o catalogo da malha (16 nos
+    // com meta) estourava e voltava "vazio". Alocacao preguicosa na PSRAM
+    // (padrao do s_dbgFrame): 1,5 KB estatico em RAM interna pesava no
+    // relogio em todo boot. dispatch segura o mutex: uma task por vez.
+    constexpr size_t kResCtlBuf = 3 + 1536;
+    static uint8_t* buf = nullptr;
+    if (buf == nullptr) {
+        buf = (uint8_t*)heap_caps_malloc(kResCtlBuf, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (buf == nullptr) buf = (uint8_t*)malloc(kResCtlBuf);
+    }
+    if (buf == nullptr) {
+        respondError(KL_RES_CTL, "sem memoria");
+        return;
+    }
+    const int n = Resources::usbCtl(rq.subop, rq.body, rq.len, buf + 3, kResCtlBuf - 3);
     if (n < 0) {
         respondError(KL_RES_CTL, "recusado");
         return;

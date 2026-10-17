@@ -36,6 +36,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 namespace resproto {
@@ -526,6 +528,25 @@ inline size_t encodeAccept(const Accept& a, uint8_t* out, size_t cap) {
     w.u16((uint16_t)(a.token >> 16));
     w.u16((uint16_t)a.token);
     return w.size();
+}
+
+// "chave":valor no JSON de params do OPEN (sem parser: o cliente monta;
+// "fps":3 / "q":12 / {"pin":N} / {"off":1} / {"rate":ms}). Unica copia,
+// compartilhada pelas pontas nativas (Resources, GpioRes...). params NAO e
+// NUL-terminado: a copia com NUL antes do atoi e obrigatoria.
+inline int paramInt(const uint8_t* params, size_t plen, const char* key, int def) {
+    char k[16];
+    snprintf(k, sizeof(k), "\"%s\":", key);
+    const size_t kl = strlen(k);
+    for (size_t i = 0; i + kl < plen; i++) {
+        if (memcmp(params + i, k, kl) != 0) continue;
+        char v[16];
+        const size_t left = plen - (i + kl);
+        snprintf(v, sizeof(v), "%.*s", (int)(left < sizeof(v) - 1 ? left : sizeof(v) - 1),
+                 (const char*)params + i + kl);
+        return atoi(v);
+    }
+    return def;
 }
 
 // corpo depois do op

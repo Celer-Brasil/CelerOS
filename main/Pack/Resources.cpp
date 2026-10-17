@@ -479,22 +479,7 @@ void revokeRid(int rid, uint8_t reason) {
 
 // Ponta nativa do recurso aberto (servidor). OPEN repetido da mesma sessao
 // (ACCEPT perdido) chega aqui de novo: as pontas sao idempotentes por sid.
-// "fps":3 / "q":12 no JSON de params do OPEN (sem parser: o cliente monta)
-int paramInt(const uint8_t* params, size_t plen, const char* key, int def) {
-    char k[16];
-    snprintf(k, sizeof(k), "\"%s\":", key);
-    const size_t kl = strlen(k);
-    for (size_t i = 0; i + kl < plen; i++) {
-        if (memcmp(params + i, k, kl) != 0) continue;
-        // params nao e NUL-terminado: o atoi poderia varrer alem do fim
-        char v[16];
-        const size_t left = plen - (i + kl);
-        snprintf(v, sizeof(v), "%.*s", (int)(left < sizeof(v) - 1 ? left : sizeof(v) - 1),
-                 (const char*)params + i + kl);
-        return atoi(v);
-    }
-    return def;
-}
+// "fps":3 / "q":12 no JSON de params do OPEN — parse unico no ResProto.h.
 
 bool providerStart(const LeaseTable<LEASES>::Lease& l, const uint8_t* params, size_t plen) {
     switch (s_local[l.rid].type) {

@@ -1,4 +1,5 @@
 #include "GpioRes.h"
+#include "ResProto.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,23 +22,8 @@ namespace {
 
 const char* TAG = "celer.gpio";
 
-// "chave":valor no JSON de params do OPEN (sem parser: o cliente monta;
-// mesma forma do paramInt do Resources)
-int paramInt(const uint8_t* params, size_t plen, const char* key, int def) {
-    char k[16];
-    snprintf(k, sizeof(k), "\"%s\":", key);
-    const size_t kl = strlen(k);
-    for (size_t i = 0; i + kl < plen; i++) {
-        if (memcmp(params + i, k, kl) != 0) continue;
-        // params nao e NUL-terminado: o atoi poderia varrer alem do fim
-        char v[16];
-        const size_t left = plen - (i + kl);
-        snprintf(v, sizeof(v), "%.*s", (int)(left < sizeof(v) - 1 ? left : sizeof(v) - 1),
-                 (const char*)params + i + kl);
-        return atoi(v);
-    }
-    return def;
-}
+// parse de params do OPEN ({"pin":N}) e o paramInt unico do ResProto.h
+using resproto::paramInt;
 
 struct Sess {
     bool used;

@@ -247,6 +247,7 @@ class FakeDevice:
             self.net = {"net": "celer", "prov": 0}
             out = b""
         elif sub == S["NET"]:
+            self.net_flags = getattr(self, "net_flags", []) + [body]
             out = json.dumps(dict(net, node="1CAE", name="Celer-1CAE", pc="FFAE")).encode()
         elif sub == S["SEND"]:
             self.sent = getattr(self, "sent", []) + [((body[0] << 8) | body[1], body[2:])]
@@ -847,6 +848,10 @@ class TestMeshPeloCabo(unittest.TestCase):
         out = self._run(link, ["mesh", "listen", "1"])
         self.assertIn("W (BB02): oi pc", out)
         self.assertIn("W (BB02) [cru]: cru", out)
+        # so o listen pede para entrar como no virtual (o status nao pisca o pc-XXXX)
+        self.assertEqual(dev.net_flags, [bytes([C.NET_ENTER])])
+        self._run(link, ["mesh", "status"])
+        self.assertEqual(dev.net_flags[-1], b"")
 
     def test_rele_de_outro_no_por_procuracao(self):
         link, dev = make_link()

@@ -139,6 +139,10 @@ def load_usbres_subops():
 
 
 SUB = load_usbres_subops()
+# flag do SUB_NET: o PC entra como no virtual (mesh listen)
+NET_ENTER = int(re.search(r"constexpr uint8_t NET_ENTER\s*=\s*(\w+)\s*;",
+                          (Path(__file__).resolve().parent.parent / "main" / "USBDevice" /
+                           "UsbRes.h").read_text()).group(1), 0)
 
 
 def load_usbres_paths():
@@ -2043,7 +2047,9 @@ def cmd_mesh(args):
                     print("enviando a chave (codigo %s)..." % codigo)
                     link.res_ctl(SUB["INVITE_CODE"], codigo.encode(), timeout=20)
                     print("convite aceito: %s entrou na matilha" % args.alvo)
-            st = json.loads(link.res_ctl(SUB["NET"]).decode("utf-8", "replace"))
+            # listen so espera: pede para entrar como no virtual
+            entra = bytes([NET_ENTER]) if args.mesh_cmd == "listen" else b""
+            st = json.loads(link.res_ctl(SUB["NET"], entra).decode("utf-8", "replace"))
         except CelerError as e:
             die("%s (firmware anterior a API 40? use: celerctl shell mesh join ...)" % e)
         if args.mesh_cmd == "send":

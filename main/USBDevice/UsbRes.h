@@ -61,7 +61,11 @@ constexpr uint8_t SUB_WRITE = 7;     // [sid u16][seq u16][bytes] — ops do gpi
 // nao depende do res_share_usb. A chave nunca volta ao PC.
 constexpr uint8_t SUB_JOIN = 8;      // [nlen u8][nome 1..15][plen u8][senha 8..64]
 constexpr uint8_t SUB_LEAVE = 9;     // vazio -> volta a rede aberta "celer"
-constexpr uint8_t SUB_NET = 10;      // -> JSON {net, prov, node, name, pc, invite, code}
+constexpr uint8_t SUB_NET = 10;      // [flags u8]? -> JSON {net, prov, node, name, pc, invite, code}
+// flags do SUB_NET: o PC entra como no virtual pc-XXXX (o "mesh listen", que
+// so espera). SEND/OPEN_AT/SNAP/REC/PLAY_AT entram sozinhos; sem nenhum
+// deles a sessao do cabo NAO vira membro (um "celerctl info" nao pisca)
+constexpr uint8_t NET_ENTER = 0x01;
 // No virtual (API 41): exigem a sessao do cabo e o res_share_usb
 constexpr uint8_t SUB_SEND = 11;     // [to u16][payload 1..430] envelope custom DO PC
 constexpr uint8_t SUB_OPEN_AT = 12;  // [node u16][nlen][nome][plen][params] -> [h u8]

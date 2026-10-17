@@ -58,6 +58,10 @@ uint16_t usbNode() {
     return PackId::pcNode();
 }
 bool s_usbSession = false;   // sessao HostLink viva (HELLO...endSession)
+// O PC pediu para ser membro (SEND/OPEN_AT/midia/NET com o bit "entra"):
+// so a sessao viva nao basta — cada "celerctl info" de 1 s fazia o
+// pc-XXXX entrar e sair da matilha nos vizinhos (bancada 2026-10-17)
+bool s_usbPack = false;
 bool s_usbAllowed = false;   // cache do res_share_usb (refreshSettings, 2 s)
 bool (*s_usbSend)(uint16_t sid, uint16_t seq, const uint8_t* d, size_t n) = nullptr;
 uint16_t s_evSeq = 0;        // seq dos eventos (sid 0) para o PC
@@ -1290,6 +1294,26 @@ void rxTaskEnsure() {
     }
 }
 
+// no virtual (PC no cabo, API 41): membro da matilha enquanto o cabo vive
+// com o res_share_usb ligado E o PC pediu para entrar (o BEAT proxy sai
+// pela CelerNet). Do tick e na hora do pedido (o SEND exige o proxy no ar).
+void usbProxySync() {
+    const bool want = s_usbSession && s_usbPack && s_usbAllowed && CelerNet::active();
+    const bool on = CelerNet::proxyNode() != 0;
+    if (want && !on) {
+        char nm[CelerNet::MAX_NAME + 1];
+        packid::pcName(PackId::nodeId(), nm, sizeof(nm));
+        CelerNet::setProxy(usbNode(), nm, netframe::CAPS_HUB);
+    } else if (!want && on) {
+        CelerNet::setProxy(0, nullptr, 0);
+    }
+}
+
+void usbJoinPack() {
+    s_usbPack = true;
+    usbProxySync();
+}
+
 void sendHello(uint8_t flags) {
     char nm[RES_NAME_MAX + 1];
     ourName(nm, sizeof(nm));
@@ -1490,19 +1514,7 @@ void tick() {
         Guard g;
         refreshSettings();
     }
-    // no virtual (PC no cabo, API 41): membro da matilha enquanto o cabo
-    // vive com o res_share_usb ligado (o BEAT proxy sai pela CelerNet)
-    {
-        const bool want = s_usbSession && s_usbAllowed && CelerNet::active();
-        const bool on = CelerNet::proxyNode() != 0;
-        if (want && !on) {
-            char nm[CelerNet::MAX_NAME + 1];
-            packid::pcName(PackId::nodeId(), nm, sizeof(nm));
-            CelerNet::setProxy(usbNode(), nm, netframe::CAPS_HUB);
-        } else if (!want && on) {
-            CelerNet::setProxy(0, nullptr, 0);
-        }
-    }
+    usbProxySync();
     // procuracoes do PC: estado novo vira EV_STATE; terminal libera o slot
     {
         Guard g;
@@ -2033,6 +2045,7 @@ void usbSession(bool on) {
     if (s_usbSession == on) return;
     s_usbSession = on;
     if (on) return;
+    s_usbPack = false;  // a proxima sessao pede de novo (o tick tira o proxy)
     // procuracoes do PC fecham com o cabo (o dono aplica o auto-off)
     for (int i = 0; i < HANDLES_MAX; i++) {
         if (!s_h[i].usb) continue;
@@ -2099,6 +2112,7 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
                 node == ourNode() || node == usbNode()) {
                 return -1;
             }
+            usbJoinPack();
             {
                 Guard g;
                 int busy = 0;
@@ -2152,8 +2166,9 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
         }
         case usbres::SUB_SEND: {
             // envelope custom DO PC (no virtual) para um membro — ou o gateway
-            if (!s_usbSession || !s_usbAllowed || CelerNet::proxyNode() == 0) return -1;
-            if (len < 3 || len - 2 > Pack::MAX_PAYLOAD) return -1;
+            if (!s_usbSession || !s_usbAllowed || len < 3 || len - 2 > Pack::MAX_PAYLOAD) return -1;
+            usbJoinPack();
+            if (CelerNet::proxyNode() == 0) return -1;  // malha fora do ar
             const uint16_t to = (uint16_t)((body[0] << 8) | body[1]);
             return Pack::sendAs(usbNode(), to, Pack::KIND_CUSTOM, body + 2, len - 2, false) ? 0 : -1;
         }
@@ -2164,6 +2179,7 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             usbres::OpenAt oa;
             if (!s_usbSession || !s_usbAllowed || !usbres::decodeOpenAt(body, len, &oa)) return -1;
             if (oa.node == ourNode() || oa.node == usbNode()) return -1;  // os locais: SUB_OPEN
+            usbJoinPack();
             {
                 Guard g;
                 int busy = 0;
@@ -2201,6 +2217,9 @@ int usbCtl(uint8_t subop, const uint8_t* body, size_t len, uint8_t* out, size_t 
             return 0;
         }
         case usbres::SUB_NET: {
+            // [flags u8] opcional: NET_ENTER = o PC entra como no virtual
+            // (o "mesh listen" so espera — sem isto ninguem o veria)
+            if (len >= 1 && (body[0] & usbres::NET_ENTER) && s_usbSession && s_usbAllowed) usbJoinPack();
             NetKeys::init();
             const NetKeys::Net* n = NetKeys::primary();
             char nm[CelerNet::MAX_NAME + 1];

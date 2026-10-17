@@ -557,7 +557,7 @@ SUB_CLOSE    =6  → [sid u16]
 SUB_WRITE    =7  → DATA host→gateway: [sid u16][seq u16][bytes ≤8100]
 SUB_JOIN     =8  → [nlen][nome][plen][senha] entra na matilha (API 40)
 SUB_LEAVE    =9  → volta à rede aberta (API 40)
-SUB_NET      =10 → JSON {net, prov, node, name, pc} (API 40)
+SUB_NET      =10 → [flags]? → JSON {net, prov, node, name, pc, invite, code} (API 40; flag NET_ENTER = o PC entra como nó virtual)
 SUB_SEND     =11 → [to u16][payload] envelope DO PC (nó virtual, API 41)
 SUB_OPEN_AT  =12 → [node u16][nlen][nome][plen][params] -> [h] (API 41)
 SUB_HWRITE   =13 → [h][bytes] DATA no recurso remoto (API 41)
@@ -605,8 +605,12 @@ lease/keep/expiração é **reaproveitada sem mudança**.
 
 ### 8.5 O PC como nó virtual (API 41)
 
-Com a sessão HostLink viva **e** `res_share_usb=1`, o gateway põe o PC na
-matilha (`Resources::tick` → `CelerNet::setProxy`):
+Com a sessão HostLink viva, `res_share_usb=1` **e** o PC tendo pedido
+(`SUB_SEND`, `SUB_OPEN_AT`, `SUB_SNAP/REC/PLAY_AT` ou `SUB_NET` com
+`NET_ENTER` — o `mesh listen`), o gateway põe o PC na matilha
+(`Resources::usbProxySync` → `CelerNet::setProxy`). Só a sessão não basta:
+cada `celerctl info` fazia o `pc-XXXX` entrar e sair nos vizinhos. O pedido
+vale até a sessão acabar.
 
 - **Id e nome**: `packid::pcNodeOf(gateway) = 0xFF00 | byte baixo` (0xFFFF
   vira 0xFFFE), nome `pc-XXXX` (XXXX = id do gateway). Substitui o 0xFFFE

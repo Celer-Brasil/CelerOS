@@ -331,8 +331,9 @@ segura o EN/IO0 (esp32-cam no CH340 clone) falam com `--linhas-baixas` (ou
 
 ### O PC como membro da matilha (API 41)
 
-Com a sessão viva e `res_share_usb=1`, o gateway anuncia o PC na malha como
-`pc-XXXX` (id `0xFF00 | byte baixo do gateway`). Os apps o veem em
+Com a sessão viva, `res_share_usb=1` e um comando que use a matilha
+(`mesh send`, `mesh listen`, `res relay|snap|rec|play -n`), o gateway anuncia
+o PC na malha como `pc-XXXX` (id `0xFF00 | byte baixo do gateway`). Os apps o veem em
 `Pack.members()` e mandam `Pack.send("pc-XXXX", ...)`; o PC recebe e fala
 pelo cabo. Recursos de OUTROS nós abrem por procuração: o gateway é o
 cliente (retry, KEEP e reabertura de sempre) e o DATA do dono volta como

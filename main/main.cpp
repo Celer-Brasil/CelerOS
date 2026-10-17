@@ -333,7 +333,7 @@ static void celerLoop() {
                               (uint32_t)(esp_timer_get_time() - iterStart));
 }
 
-// Entry point ESP-IDF: setup + loop na main task (stack 32KB via sdkconfig)
+// Entry point ESP-IDF: setup + loop na main task (stack 24576/20480 via sdkconfig por placa)
 extern "C" void app_main(void) {
     celerSetup();
     while (true) {

@@ -1,7 +1,7 @@
 # Name,   Type, SubType,  Offset,  Size,     Flags
 nvs,      data, nvs,      0x9000,  0x5000,
 otadata,  data, ota,      0xe000,  0x2000,
-# Slots OTA de 0x1A0000 (1,66MB): binario 1,38MB sobrava ~250KB. A littlefs
+# Slots OTA de 0x190000 (1.638.400 B): binario ~1,38MB sobrava ~250KB. A littlefs
 # de 640KB lotou com a imagem de fabrica (Help/Watchface/icones) — 0B livres
 # e todo push "disco cheio" (bancada 2026-10-02). 64KB de cada slot viram
 # +128KB de littlefs (768KB); o binario ainda tem ~190KB de folga por slot.

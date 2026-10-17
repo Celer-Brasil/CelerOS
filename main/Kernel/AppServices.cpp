@@ -16,6 +16,7 @@
 #include "DeviceStats.h"
 #include <duktape.h>
 #include <esp_heap_caps.h>
+#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <vector>

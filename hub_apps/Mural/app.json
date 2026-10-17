@@ -6,7 +6,7 @@
   "description": "Mural de recados da casa pela malha CelerNet: o recado chega a todo aparelho com o Mural aberto — até nos que estavam desligados ou longe na hora, porque cada mural guarda os recados e sincroniza com os vizinhos (algoritmo Trickle: silêncio quando todos concordam, rapidez quando alguém volta atrasado).",
   "type": "App",
   "category": "Utility",
-  "api": 42,
+  "api": 30,
   "permissions": [
     "system"
   ],

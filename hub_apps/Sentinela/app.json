@@ -6,7 +6,7 @@
   "description": "Alarme da casa feito dos seus aparelhos CelerOS pela malha CelerNet: arme um como vigia (dispara com movimento, barulho ou pânico) e todo aparelho com a Sentinela aberta toca o alarme com o nome da zona. Antissabotagem: vigia armada que some do ar também dispara. Desarmar pede o PIN.",
   "type": "App",
   "category": "Utility",
-  "api": 42,
+  "api": 30,
   "permissions": [
     "system"
   ],

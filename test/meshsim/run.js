@@ -634,6 +634,180 @@ scenario('No virtual: o PC na matilha pelo gateway', function() {
 });
 
 // ---------------------------------------------------------------------------
+// Dedup de envelopes (a semantica do duplo transporte): o Pack.send do
+// firmware sai sempre com 2 copias (cada uma com seq propria no fio) e a
+// MESMA msgId no envelope — o destino tem que enxergar as 2 copias no ar e
+// entregar 1 vez so (a 2a vira rxDup contado, como o seenBefore do Pack.cpp)
+scenario('Pack: 2 copias no ar, 1 entrega (dedup por msgId)', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    return sim.runMesh({
+        durationMs: 14000, seed: 51,
+        nodes: [
+            { name: 'Em', id: 'A111', app: src, wire: function(env, sim) {
+                sim.at(5000, function(e) { sim.note('envio ' + e.Pack.send('Rec', 'oi')); });
+            } },
+            { name: 'Rec', id: 'B222', app: src, wire: function(env, sim) {
+                sim.at(10000, function(e) {
+                    var m, got = [];
+                    while ((m = e.Pack.poll()) !== null) got.push(m.data + ' de ' + m.fromName);
+                    sim.note('poll ' + got.join('|'));
+                });
+                sim.at(12500, function(e) {
+                    sim.note('poll2 ' + (e.Pack.poll() === null ? 'vazio' : 'denovo'));
+                });
+            } }
+        ],
+        links: [['Em', 'Rec', -50]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Rec');
+        check('o envio saiu com as 2 copias de fabrica', has(res, 'Em', '[sim] envio true'));
+        var rx = res.air.filter(function(a) { return a.kind === 'rx' && a.to === 'Rec' && a.data === 'oi'; });
+        check('as 2 copias chegaram de verdade no destino', rx.length === 2, rx.length);
+        check('o app viu a mensagem 1 vez so', has(res, 'Rec', '[sim] poll oi de Em'));
+        check('a 2a copia foi consumida como duplicata (rxDup)', res.nodes.Rec.stats.rxDup === 1,
+              res.nodes.Rec.stats.rxDup);
+        check('a fila do Pack nao guardou fantasma', last(res, 'Rec', /\[sim\] poll2/) === '[sim] poll2 vazio',
+              last(res, 'Rec', /\[sim\] poll2/));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Politica do dono fechada (a semantica da recusa de midia/recurso): o
+// interruptor "0" recusa TODOS os nativos com o motivo certo (denied), mesmo
+// os prontos e compartilhados — a politica fala antes do driver (na vaza se
+// o dono tem o hardware) e antes do busy. Recusa e no USO: o catalogo
+// continua listando. E o handle recusado e terminal: o cliente nao reteia.
+scenario('Recursos: politica fechada recusa com o motivo certo e sem re-tentativa', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    var pack = { name: 'fechada', pass: 'senha-forte-3' };
+    return sim.runMesh({
+        durationMs: 26000, seed: 53,
+        nodes: [
+            { name: 'Fechado', id: 'B0B0', app: src, caps: 0x43, relays: 1, sensors: ['lum'],
+              pack: pack,
+              settings: { res_share_mic: '0', res_share_spk: '0', res_share_cam: '0',
+                          res_share_gpio: '0', res_share_sensor: '0' } },
+            { name: 'Cli', id: 'C0C0', app: src, caps: 0x04, pack: pack,
+              wire: function(env, sim) {
+                  var h = {};
+                  sim.at(4200, function(e) { e.Pack.resources(); });  // primao DESCRIBE
+                  sim.at(5500, function(e) {
+                      sim.note('catalogo ' + e.Pack.resources().map(function(r) {
+                          return r.nodeName + '/' + r.name;
+                      }).sort().join(','));
+                      h.mic = e.Pack.open('Fechado', 'mic');
+                      h.spk = e.Pack.open('Fechado', 'speaker');
+                      h.cam = e.Pack.open('Fechado', 'camera');
+                      h.rel = e.Pack.open('Fechado', 'rele1');
+                      h.lum = e.Pack.open('Fechado', 'lum');
+                  });
+                  sim.at(9000, function(e) {
+                      ['mic', 'spk', 'cam', 'rel', 'lum'].forEach(function(k) {
+                          var st = e.Pack.status(h[k]);
+                          sim.note('st ' + k + ' ' + st.state + (st.reason ? '/' + st.reason : ''));
+                      });
+                  });
+                  sim.at(24000, function(e) {
+                      var st = e.Pack.status(h.mic);
+                      sim.note('fim ' + st.state + '/' + st.reason);
+                  });
+              } }
+        ],
+        links: [['Fechado', 'Cli', -50]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Cli'); dump(res, 'Fechado');
+        var catalogo = last(res, 'Cli', /\[sim\] catalogo /) || '';
+        check('catalogo lista os fechados (a recusa e no uso, nao na vitrine)',
+              catalogo.indexOf('Fechado/mic') >= 0 && catalogo.indexOf('Fechado/rele1') >= 0 &&
+              catalogo.indexOf('Fechado/lum') >= 0, catalogo);
+        check('mic fechado = denied', has(res, 'Cli', '[sim] st mic refused/denied'));
+        check('speaker fechado = denied', has(res, 'Cli', '[sim] st spk refused/denied'));
+        check('camera fechada = denied', has(res, 'Cli', '[sim] st cam refused/denied'));
+        check('rele fechado = denied', has(res, 'Cli', '[sim] st rel refused/denied'));
+        check('sensor pronto e compartilhado TAMBEM denied (politica fala antes)',
+              has(res, 'Cli', '[sim] st lum refused/denied'));
+        var pediu = res.nodes.Fechado.log.filter(function(l) { return /pediu "/.test(l); });
+        check('um pedido por recurso, sem re-tentativa da recusa', pediu.length === 5 &&
+              ['mic', 'speaker', 'camera', 'rele1', 'lum'].every(function(n) {
+                  return pediu.filter(function(l) { return l.indexOf('"' + n + '"') >= 0; }).length === 1;
+              }), pediu.join(' | '));
+        check('handle recusado fica terminal ate o fim', has(res, 'Cli', '[sim] fim refused/denied'));
+    });
+});
+
+// ---------------------------------------------------------------------------
+// O no virtual quando a sessao acaba (o ciclo inteiro do cabo): ligado, o PC
+// e membro e recebe envelopes; o cabo cai, ele SAI da presenca e o send para
+// o id dele passa a falhar (nada do PC falido vai ao ar nem vira fantasma);
+// o cabo volta e o PC retorna com a conversa retomando. O gateway nunca ve
+// o trafego do PC (o cabo nao e do app).
+scenario('No virtual: cabo cai, PC sai da presenca; cabo volta, PC retorna', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    var pack = { name: 'bancada', pass: 'senha-forte-1' };
+    function gw(env, sim) {
+            sim.at(1500, function(e) { sim.note('pc ' + sim.pcAttach(true)); });
+            sim.at(5000, function(e) {
+                sim.note('caixa ' + sim.pcInbox().map(function(m) {
+                    return m.data + ' de ' + m.fromName;
+                }).join('|'));
+                var x, vazou = false;
+                while ((x = e.Pack.poll()) !== null) vazou = true;
+                sim.note('vazou ' + vazou);
+            });
+            sim.at(6000, function(e) { sim.pcAttach(false); });
+            sim.at(12000, function(e) { sim.pcAttach(true); });
+            sim.at(15500, function(e) {
+                sim.note('caixa2 ' + sim.pcInbox().map(function(m) { return m.data; }).join('|'));
+            });
+    }
+    function membro(env, sim) {
+            sim.at(4000, function(e) {
+                sim.note('membros1 ' + e.Pack.members().map(function(m) { return m.name; }).sort().join(','));
+                sim.note('envio1 ' + e.Pack.send('pc-AA01', 'antes'));
+            });
+            sim.at(8000, function(e) {
+                sim.note('membros2 ' + e.Pack.members().map(function(m) { return m.name; }).sort().join(','));
+                sim.note('envio2 ' + e.Pack.send('pc-AA01', 'depois'));
+                sim.note('envio3 ' + e.CelerNet.send('pc-AA01', 'cru'));
+            });
+            sim.at(9500, function(e) {
+                sim.note('poll ' + (e.Pack.poll() === null ? 'vazio' : 'fantasma'));
+            });
+            sim.at(13500, function(e) {
+                sim.note('membros3 ' + e.Pack.members().map(function(m) { return m.name; }).sort().join(','));
+                sim.note('envio4 ' + e.Pack.send('pc-AA01', 'volta'));
+            });
+    }
+    return sim.runMesh({
+        durationMs: 18000, seed: 37,
+        nodes: [
+            { name: 'Gw', id: 'AA01', app: src, caps: 0x04, pack: pack, wire: gw },
+            { name: 'W', id: 'BB02', app: src, caps: 0x02, pack: pack, wire: membro }
+        ],
+        links: [['Gw', 'W', -50]]
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Gw'); dump(res, 'W');
+        check('PC e membro com o cabo ligado', has(res, 'W', '[sim] membros1 Gw,pc-AA01'));
+        check('envelope chega ao PC (dedup deixou 1 copia na caixa)',
+              has(res, 'Gw', '[sim] caixa antes de W'));
+        check('trafego do PC nunca vaza para o app do gateway', has(res, 'Gw', '[sim] vazou false'));
+        check('cabo fora: PC sai da presenca', has(res, 'W', '[sim] membros2 Gw'));
+        check('send para o PC sumido falha (envelope e cru)', has(res, 'W', '[sim] envio2 false') &&
+              has(res, 'W', '[sim] envio3 false'));
+        check('nada do PC falido foi ao ar', !res.air.some(function(a) {
+            return a.kind === 'tx' && (a.data === 'depois' || a.data === 'cru');
+        }));
+        check('nenhuma mensagem fantasma no poll com o cabo fora', has(res, 'W', '[sim] poll vazio'));
+        check('cabo de volta: PC retorna a presenca', has(res, 'W', '[sim] membros3 Gw,pc-AA01'));
+        check('a conversa com o PC retoma', has(res, 'W', '[sim] envio4 true') &&
+              has(res, 'Gw', '[sim] caixa2 volta'));
+    });
+});
+
+// ---------------------------------------------------------------------------
 // Recursos da matilha (API 36): DESCRIBE/LIST, canal de dados compartilhado,
 // exclusivo (busy), politica do dono, nativo sem provedor, escrita do
 // cliente, lease que vence quando o cliente some e REVOKE no unexpose

@@ -35,10 +35,21 @@ function executar(r, envelope) {
     }
     if (r.enviar && r.enviar.para) {
         var alvo = r.enviar.para === "pc" ? "pc" : r.enviar.para;
-        Pack.send(alvo, r.enviar.msg !== undefined ? r.enviar.msg : { eco: r.quando });
+        // o JSON e do dono e pode passar do teto (RangeError do send) ou
+        // vir chave comprida demais para o Storage: um regra ruim nao pode
+        // derrubar o servico inteiro (promessa do cabecalho)
+        try {
+            Pack.send(alvo, r.enviar.msg !== undefined ? r.enviar.msg : { eco: r.quando });
+        } catch (e) {
+            System.print("regras: enviar falhou (" + r.quando + "): " + e);
+        }
     }
     if (r.guardar && r.guardar.chave) {
-        Storage.set(r.guardar.chave, r.guardar.valor !== undefined ? String(r.guardar.valor) : String(envelope));
+        try {
+            Storage.set(r.guardar.chave, r.guardar.valor !== undefined ? String(r.guardar.valor) : String(envelope));
+        } catch (e) {
+            System.print("regras: guardar falhou (" + r.guardar.chave + "): " + e);
+        }
     }
 }
 

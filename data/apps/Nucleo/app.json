@@ -1,7 +1,7 @@
 {
   "name": "Nucleo",
   "packageName": "celeros.nucleo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "CelerOS",
   "description": "Servicos do OS em segundo plano: check de atualizacao e relogio (API 42)",
   "api": 42,
@@ -9,5 +9,6 @@
   "order": 1,
   "topbar": false,
   "permissions": ["system"],
-  "service": "service.js"
+  "service": "service.js",
+  "changelog": "1.0.1 - tela em 10 fps: UI.end(120) era clampado ao maximo de 60 e a tela estatica (que le Storage e wifiStatus por frame) rodava a 60 fps"
 }

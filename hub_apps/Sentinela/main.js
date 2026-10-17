@@ -41,6 +41,7 @@ var lastPhase = -1;          // pisca do alarme
 
 var guards = {};             // id -> {name, armed, at, missing}
 var seen = {};               // "origem:n" de alarmes já tratados
+var meshWasActive = false;   // malha ligada no frame anterior
 var ringing = null;          // {zone, kind, at}
 var history = [];            // ["zona: tipo", ...]
 var resend = [];             // [{msg, at}] segunda via dos alarmes
@@ -189,10 +190,19 @@ while (true) {
     var full = UI.begin(ringing ? (flash ? T.err : T.bg) : T.bg);
     if (UI.header("Sentinela", { back: true })) { led(0, 0, 0); System.exitApp(); }
     if (!mesh.gate("Ligue a malha (app Matilha): a Sentinela fala pela CelerNet.")) {
+        meshWasActive = false;   // desligou: ao religar, ciclo de graca
         UI.end();
         continue;
     }
     me = mesh.me();
+    if (!meshWasActive) {
+        // malha (re)ligada: os "at" das vigias pararam no passado e o
+        // watchdog dispararia "sumiu" para todas as armadas de uma vez
+        meshWasActive = true;
+        for (var gid in guards) {
+            if (guards.hasOwnProperty(gid)) { guards[gid].at = now; guards[gid].missing = false; }
+        }
+    }
     mesh.each(onMsg, now);
     for (var r = 0; r < resend.length; r++) {
         if (now >= resend[r].at) { CelerNet.broadcast(resend[r].msg, 8); resend.splice(r--, 1); }
@@ -237,7 +247,9 @@ while (true) {
     if (useImu) sens.push("movimento");
     if (useMic) sens.push("barulho");
     sens.push("pânico");
-    UI.text((armed ? "ARMADA · " : "") + "dispara com: " + sens.join(", "), 20, 126,
+    // "dispara:" (nao "dispara com:") para a lista de sensores nao truncar
+    // em 200 px quando a vigia esta ARMADA
+    UI.text((armed ? "ARMADA · " : "") + "dispara: " + sens.join(", "), 20, 126,
             { role: "caption", color: armed ? T.ok : T.textDim, w: 200, id: "sens" });
     UI.cardEnd();
     UI.list("guards", 10, 158, 220, 90, guardItems(now), { rowH: 44 });

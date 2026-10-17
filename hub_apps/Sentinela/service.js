@@ -13,6 +13,7 @@ var guards = {};             // id -> {name, armed, at, missing}
 var seen = {};               // "origem:n" e "v:id" já tratados
 var alarmN = parseInt(Storage.get("n", "0"), 10) || 0;
 var wasOpen = true;
+var wasActive = false;       // malha ligada no giro anterior
 
 function nameOf(id) { return guards[id] ? guards[id].name : id; }
 
@@ -70,18 +71,37 @@ function watchdog(now) {
     }
 }
 
+// feature-detect: um firmware com servico mas sem o gate nao derruba o tick
+function appOpen() {
+    return typeof System.appOpen === "function" && System.appOpen() === true;
+}
+
 function tick() {
     var now = System.millis();
-    if (System.appOpen() === true) { wasOpen = true; return; }  // o app da vez drena
+    if (appOpen()) { wasOpen = true; return; }  // o app da vez drena
     if (wasOpen) {
         wasOpen = false;
-        // sinal estava congelado enquanto dormimos: um ciclo de graça para
-        // as vigias renovarem (senão a primeira volta era "sumiu" fantasma)
+        // o Mural/app aberto pode ter incrementado o contador no Storage:
+        // sem recarregar, o servico reusaria um numero ja visto e as outras
+        // centrais descartariam o alarme como duplicata (dedup "from:n")
+        alarmN = parseInt(Storage.get("n", "0"), 10) || 0;
+        // sinal estava congelado enquanto dormimos: um ciclo de graca para
+        // as vigias renovarem (senao a primeira volta era "sumiu" fantasma)
         for (var id in guards) {
             if (guards.hasOwnProperty(id)) { guards[id].at = now; guards[id].missing = false; }
         }
     }
-    if (!mesh.available() || !CelerNet.status().active) return;
+    if (!mesh.available()) return;
+    if (!CelerNet.status().active) { wasActive = false; return; }
+    if (!wasActive) {
+        // malha religada depois de um tempo desligada: os "at" pararam no
+        // passado e o watchdog dispararia "sumiu" para toda vigia armada.
+        // Um ciclo de graca, igual ao despertar do app em foreground.
+        wasActive = true;
+        for (var gid in guards) {
+            if (guards.hasOwnProperty(gid)) { guards[gid].at = now; guards[gid].missing = false; }
+        }
+    }
     mesh.each(onMsg, now);
     watchdog(now);
 }

@@ -5,11 +5,11 @@
  * fila se roubam recados). Ao acordar, o estado recarrega do Storage —
  * o Mural aberto pode ter mudado o mural. Requer firmware API 42. */
 var mesh = require("celeros.mesh");
-var MAX_POSTS = 24, MAX_TXT = 48, IMIN = 4000, IMAX = 32000;
+var MAX_POSTS = 24, MAX_TXT = 48, MAX_ID = 24, MAX_BY = 16;
+var IMIN = 4000, IMAX = 32000;
 
 var posts = [];            // [{id, by, txt}] mais novo primeiro
 var known = {};            // id -> true
-var mySeq = parseInt(Storage.get("seq", "0"), 10) || 0;
 var wasOpen = true;        // 1o giro recarrega do Storage
 var notifyAt = -999999;
 
@@ -101,9 +101,12 @@ function onMsg(m, now) {
     if (op === "+") {
         var p1 = a.indexOf("|"), p2 = a.indexOf("|", p1 + 1);
         if (p1 < 1 || p2 < 0) return;
-        var id = a.substring(0, p1);
+        // id/autor vem da rede: corta no teto para um vizinho com texto
+        // gigante nao encher o Storage do mural (24 posts * valor)
+        var id = a.substring(0, p1).substring(0, MAX_ID);
         lastHeard[id] = now;
-        if (addPost(id, a.substring(p1 + 1, p2), a.substring(p2 + 1).substring(0, MAX_TXT), now)) {
+        if (addPost(id, a.substring(p1 + 1, p2).substring(0, MAX_BY),
+                    a.substring(p2 + 1).substring(0, MAX_TXT), now)) {
             inconsistent(now);     // novidade: acelera o Trickle
         }
     } else if (op === "#") {
@@ -118,9 +121,14 @@ function onMsg(m, now) {
     }
 }
 
+// feature-detect: um firmware com servico mas sem o gate nao derruba o tick
+function appOpen() {
+    return typeof System.appOpen === "function" && System.appOpen() === true;
+}
+
 function tick() {
     var now = System.millis();
-    if (System.appOpen() === true) { wasOpen = true; return; }  // o app da vez drena
+    if (appOpen()) { wasOpen = true; return; }  // o app da vez drena
     if (wasOpen) {
         wasOpen = false;
         posts = []; known = {};

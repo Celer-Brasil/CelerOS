@@ -1,7 +1,7 @@
 {
   "name": "Qwen",
   "packageName": "celeros.qwen",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "CelerOS",
   "description": "Assistente de voz: fale no microfone e leia a resposta",
   "type": "App",
@@ -10,5 +10,5 @@
   "permissions": ["net", "fs", "mic"],
   "icon": "qwen",
   "topbar": false,
-  "changelog": "1.1.0 - conversa em baloes e botao de voz redesenhado (toolkit UI, API 22)\n1.0.0 - primeira versao: voz no cao e no relogio, teclado nas placas com touch"
+  "changelog": "1.1.1 - AI.chat em try/catch: WiFi caindo entre o check e a chamada (ou chave removida) vira nota de erro e libera busy, em vez de derrubar o app\n1.1.0 - conversa em baloes e botao de voz redesenhado (toolkit UI, API 22)\n1.0.0 - primeira versao: voz no cao e no relogio, teclado nas placas com touch"
 }

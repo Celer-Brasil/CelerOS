@@ -21,7 +21,7 @@ function start() {
                     LX, 172, { role: "caption", color: T.dim });
             if (UI.button("Fechar", 60, 260, 120, 32, {})) System.exitApp();
         }
-        UI.end(120);
+        UI.end(10);   // tela estatica: 10 fps (o 120 era clampado a 60)
     }
 }
 start();

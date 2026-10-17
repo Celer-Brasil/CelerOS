@@ -18,6 +18,8 @@ var me = null;
 var tela = "painel";       // painel | entrar | aguardar | convidar
 var achados = [];          // scan do CelerLink na tela convidar
 var sairAt = 0;            // 2 toques para sair da matilha
+var entrarSig = "";        // estado desenhado da tela Aguardar (repaint so na mudanca)
+var convSig = "";          // idem na tela Convidar
 var hasJoin = hasMesh && typeof CelerLink !== "undefined" &&
               typeof Pack.join === "function";  // firmware API 40+
 
@@ -159,7 +161,10 @@ function telaAguardar() {
         UI.text("Janela fechada. Volte e abra de novo.", 20, 70, { w: 200, lines: 2 });
     }
     UI.cardEnd();
-    UI.invalidate();  // o codigo e o estado mudam sem toque
+    // o codigo e o estado mudam sem toque: repinta so quando a assinatura
+    // muda (invalidate por frame forcava redesenho total a 30 fps)
+    var sig = est + "|" + (lk.pairing ? 1 : 0) + "|" + (lk.code || "") + "|" + (lk.name || "");
+    if (sig !== entrarSig) { entrarSig = sig; UI.invalidate(); }
 }
 
 function telaConvidar() {
@@ -169,9 +174,9 @@ function telaConvidar() {
         return;
     }
     var est = Pack.inviteStatus();
+    if (est !== convSig) { convSig = est; UI.invalidate(); }
     if (est === "sent") {
         UI.text("Enviando a chave...", 10, 60);
-        UI.invalidate();
         return;
     }
     if (est === "ok") UI.text("Convidado entrou!", 10, 60, { role: "caption" });

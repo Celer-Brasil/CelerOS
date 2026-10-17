@@ -1,16 +1,14 @@
 {
   "name": "Sentinela",
   "packageName": "celeros.sentinela",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "CelerOS",
   "description": "Alarme da casa feito dos seus aparelhos CelerOS pela malha CelerNet: arme um como vigia (dispara com movimento, barulho ou pânico) e todo aparelho com a Sentinela aberta toca o alarme com o nome da zona. Antissabotagem: vigia armada que some do ar também dispara. Desarmar pede o PIN.",
   "type": "App",
   "category": "Utility",
   "api": 30,
-  "permissions": [
-    "system"
-  ],
-  "changelog": "1.2.0 - a CENTRAL vigia com o app fechado: servico em segundo plano (API 42) ouve as vigias, notifica alarme e denuncia vigia sumida; dorme com app aberto\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: vigia por IMU (Sensors.accel) e microfone (micLevel), botao de panico, sinal de vigia a cada 5 s (a^), alarme com ttl 8 em duas vias (a!), vigia sumida apos 16 s, desarme por PIN (a-)",
+  "permissions": [],
+  "changelog": "1.2.1 - sem a permissao system: o app e o servico usam Storage/CelerNet/Pack/Sensors/notify, nenhuma chamada gated (era um chip de consentimento a mais); o servico recarrega o contador de alarmes do Storage ao acordar (o app aberto podia te-lo incrementado e o numero repetido era descartado como duplicata pelas outras centrais) e da um ciclo de graca as vigias quando a malha e religada (sem rajada de 'sumiu' fantasma)\n1.2.0 - a CENTRAL vigia com o app fechado: servico em segundo plano (API 42) ouve as vigias, notifica alarme e denuncia vigia sumida; dorme com app aberto\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: vigia por IMU (Sensors.accel) e microfone (micLevel), botao de panico, sinal de vigia a cada 5 s (a^), alarme com ttl 8 em duas vias (a!), vigia sumida apos 16 s, desarme por PIN (a-)",
   "deps": {
     "celeros.mesh": "^1.0.0"
   },

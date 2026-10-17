@@ -23,7 +23,7 @@ function start() {
             UI.text("o servico executa sem esta tela aberta", 12, 210, { role: "caption", color: "#8a8a8a" });
             if (UI.button("Fechar", 60, 260, 120, 32, {})) System.exitApp();
         }
-        UI.end(120);
+        UI.end(10);   // tela estatica: 10 fps (o 120 era clampado a 60)
     }
 }
 start();

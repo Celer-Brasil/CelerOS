@@ -12,8 +12,11 @@
 //                rodape "Atualizar tudo" (a propria loja vai por ultimo)
 //   Instalados:  instalados, com Desinstalar no detalhe (dupla confirmacao
 //                p/ app de sistema)
-// Instalacao: main.js em <pkg>/main.js.new via Net.download (streaming, sem
-// teto de 32KB), MD5 do catalogo conferido, rename atomico no mesmo FS; a
+// Instalacao: quando o hub publica it.zip = {url, size, md5} e o firmware
+// tem System.installZip (API 42), o pacote inteiro vem em 1 download e a
+// pasta e trocada de uma vez; senao, arquivo a arquivo: main.js em
+// <pkg>/main.js.new via Net.download (streaming, sem teto de 32KB), MD5 do
+// catalogo conferido e rename em lote (app.json incluido) no mesmo FS. A
 // pasta alvo e RESOLVIDA por packageName (primeira vista na ordem do
 // listDir, mesma regra do launcher) — updates in-place nao criam copias
 // sombreadas de apps preinstalados ("App Store" vs celeros.appstore) e as
@@ -29,6 +32,9 @@ var HUB_BASE = INDEX_URL.substring(0, INDEX_URL.indexOf("/store/"));
 // (61KB roda, 82KB nao compila -> (appRAM - 60000) * 0,4 = ~66KB).
 var HWINFO = System.getInfo ? System.getInfo() : null;
 var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
+// so tenta o all.json inteiro (dezenas de KB no heap) quando o PSRAM existe
+// de fato; totalPSRAM ausente (firmware antigo) = caminho conservador
+var HAS_PSRAM = !!(HWINFO && HWINFO.totalPSRAM > 0);
 var PSRAM_MAX_JS = !NO_PSRAM ? Infinity
     : HWINFO.appRAM ? Math.max(4096, Math.floor((HWINFO.appRAM - 60000) * 0.4))
     : Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7));
@@ -182,7 +188,10 @@ function installDeps(it, resolved, index) {
             try { FS.deleteFile(tmp); } catch (e3) {}
             return "Verificação falhou (" + nm + ")";
         }
-        if (!FS.renameFile(tmp, dst)) return "Erro ao gravar " + nm;
+        if (!FS.renameFile(tmp, dst)) {
+            try { FS.deleteFile(tmp); } catch (e8) {}  // nao deixa .new orfao
+            return "Erro ao gravar " + nm;
+        }
     }
     return "";
 }
@@ -377,7 +386,8 @@ function entryToItem(pkg, e) {
         published: e.published_at || "",
         req: e.requires || [],
         files: e.files || null,
-        deps: e.deps || null
+        deps: e.deps || null,
+        zip: e.zip || null      // {url, size, md5} quando o hub serve o pacote
     };
 }
 
@@ -441,20 +451,33 @@ function loadCatalog() {
         return "err";
     }
 
-    // atalho "Todos" (all.json): todos os apps em 1 request; sem ele (hubs
-    // antigos) ou se ele nao couber na RAM (placa sem PSRAM: o JSON inteiro
-    // + o parse de uma vez), categoria a categoria — pedacos menores
+    // atalho "Todos" (all.json): todos os apps em 1 request. O hub de hoje
+    // publica ~58 KB e o Net.getJSON CORTA em 32 KB (JSON.parse quebrado ->
+    // fetch nulo): o atalho nunca funcionava e o download truncado era pago
+    // em todo load. No PSRAM ele vai por Net.download + leitura do FS (sem
+    // teto, 1 request em vez de 5 categorias); sem PSRAM (ou total
+    // desconhecido) vai direto nas categorias, pedacos menores.
     var entries = [];
     var catsIdx = idx.categories;
     var gotAll = false;
-    if (catsIdx["Todos"]) {
+    if (catsIdx["Todos"] && HAS_PSRAM) {
         drawLoading("Baixando catálogo...", "todos os apps");
         System.delay(30);
-        var all = fetchJSON(catsIdx["Todos"]);
-        // o parse do all.json (~50 KB no Duktape) conta na janela do
-        // exec-timeout: cede AQUI, antes do processamento da lista (um
-        // trecho so de parse+sort+stringify ja derrubou o app no device)
-        System.delay(1);
+        var allPath = "/local/appstore_all.json";
+        var all = null;
+        var allOk = false;
+        try { allOk = Net.download(catsIdx["Todos"], allPath); } catch (eA) { allOk = false; }
+        if (allOk) {
+            var body = FS.readTextFile(allPath);
+            try { FS.deleteFile(allPath); } catch (eB) {}
+            // o parse do all.json (~58 KB no Duktape) conta na janela do
+            // exec-timeout: cede AQUI, antes do processamento da lista (um
+            // trecho so de parse+sort+stringify ja derrubou o app no device)
+            System.delay(1);
+            if (body) { try { all = JSON.parse(body); } catch (eC) { all = null; } }
+        } else {
+            try { FS.deleteFile(allPath); } catch (eD) {}
+        }
         if (all && all.apps) {
             gotAll = true;
             for (var pkg in all.apps) {
@@ -494,7 +517,9 @@ function loadCatalog() {
     var seenPkg = {};
     for (var k = 0; k < n; k++) {
         var it = entryToItem(entries[k].pkg, entries[k].e);
-        if ((it.api || 1) > API) continue;
+        // app que exige API futura ENTRA na lista com o estado "API": o
+        // detalhe explica que o firmware precisa atualizar. Filtrar aqui
+        // escondia o app e o dono nunca sabia por que ele nao aparecia.
         if (!it.name && it.metaUrl) {
             drawLoading("Carregando apps...", (k + 1) + "/" + n);
             System.delay(30);
@@ -917,6 +942,38 @@ function pkgTotal(it) {
     for (var n in (it.files || {})) t += (it.files[n] || {}).size || 0;
     return t;
 }
+// bytes da copia instalada: o update mantem a antiga no disco enquanto
+// baixa a nova (.new) — o pico e a soma das duas
+function installedBytes(dir) {
+    var total = 0;
+    try {
+        var list = FS.listDir(dir) || [];
+        for (var i = 0; i < list.length; i++) {
+            if (FS.isDirectory(list[i])) continue;  // pacotes sao flat
+            total += FS.getFileSize(list[i]) || 0;
+        }
+    } catch (e) { total = 0; }
+    return total;
+}
+// Pacote unico (API 42): o hub publica it.zip = {url, size, md5} quando o
+// servidor ja serve o app.zip. Exige checksum E o System.installZip do
+// firmware: qualquer ausencia cai no caminho por arquivo.
+function zipInfo(it) {
+    if (!it || !it.zip || !it.zip.url || !it.zip.md5) return null;
+    if (typeof System.installZip !== "function") return null;
+    return it.zip;
+}
+function zipNameOk(n) {
+    n = String(n || "");
+    return n.length > 0 && n.length <= 40 && n.indexOf("/") < 0 && n.indexOf("..") < 0;
+}
+function writeDepsFile(dir, resolved) {
+    var dj = [], dn;
+    for (dn in resolved) if (resolved.hasOwnProperty(dn)) {
+        dj.push('"' + dn + '":"' + resolved[dn] + '"');
+    }
+    return FS.writeTextFile(dir + "/deps.json", "{" + dj.join(",") + "}");
+}
 function installApp() {
     var it = selIt;
     if (it && stateInfo(it).code === "hw") {
@@ -933,11 +990,15 @@ function installApp() {
     var dir = resolveInstalledDir(it.pkg);
     if (!dir) dir = (installOnSd() ? "/sd/apps" : "/local/apps") + "/" + it.pkg;
     var root = dirName(dir);
+    var zip = zipInfo(it);
 
     if (!Net.isConnected()) {
         fail = "Sem conexão WiFi";
     } else {
+        // update: a copia ativa continua no disco enquanto a nova e baixada
         var need = pkgTotal(it) + 16384;
+        if (zip) need += (zip.size || 0) + 8192;
+        if (FS.isDirectory(dir)) need += installedBytes(dir);
         var free = 0;
         try { free = FS.getFreeSpace(root); } catch (e) { free = 0; }
         if (free > 0 && free < need) fail = "Sem espaço no disco";
@@ -984,6 +1045,57 @@ function installApp() {
     if (!fail && depResolved) fail = installDeps(it, depResolved, depIndex);
 
     if (!fail && !FS.isDirectory(root) && !FS.mkdir(root)) fail = "Erro no disco";
+
+    // Pacote unico (API 42): 1 download + System.installZip troca
+    // /local/apps/<nome> inteiro (atomico: falha mantem a versao antiga).
+    // So no /local (o installZip nao escreve no SD), com nome valido e
+    // livre; o caminho por arquivo segue como fallback (firmware antigo,
+    // zip corrompido ou nome ocupado por outro pacote).
+    if (!fail && zip && !installOnSd() && dir.indexOf("/local/apps/") === 0 &&
+        zipNameOk(it.name)) {
+        var zdir = "/local/apps/" + it.name;
+        var zBusy = false;
+        if (FS.isDirectory(zdir)) {
+            var zj = null;
+            try { zj = JSON.parse(FS.readTextFile(zdir + "/app.json")); } catch (e0) { zj = null; }
+            zBusy = !!(zj && zj.packageName && zj.packageName !== it.pkg);
+        }
+        if (!zBusy) {
+            var zpath = "/local/appstore_install.zip";
+            drawDownload(it.name, "pacote", true);
+            System.delay(30);
+            var zok = false;
+            try {
+                zok = Net.download(zip.url, zpath, function (got, total) {
+                    drawProgress(got, total);
+                });
+            } catch (e1) { zok = false; }
+            var zmd = "";
+            if (zok) { try { zmd = FS.getFileMD5(zpath); } catch (e2) { zmd = ""; } }
+            if (zok && zmd === zip.md5) {
+                var zres = null;
+                try { zres = System.installZip(zpath, it.name); } catch (e3) { zres = null; }
+                try { FS.deleteFile(zpath); } catch (e4) {}
+                if (zres && zres.ok) {
+                    if (depResolved && !writeDepsFile(zdir, depResolved)) {
+                        errMsg = "Erro ao gravar deps.json";
+                        errHint = it.name;
+                        return "err";
+                    }
+                    try { removeShadowed(it.pkg, zdir); } catch (e5) {}
+                    System.rescanApps();
+                    refresh();
+                    if (it.pkg === STORE_PKG) selfUpdated = true;
+                    return "done";
+                }
+                // installZip recusou: limpa o staging que ele possa ter deixado
+                try { FS.removeDirectory(zdir + ".new"); } catch (e6) {}
+            } else {
+                try { FS.deleteFile(zpath); } catch (e7) {}
+            }
+        }
+    }
+
     if (!fail && !FS.isDirectory(dir) && !FS.mkdir(dir)) fail = "Erro no disco";
 
     var staged = [];
@@ -1012,6 +1124,13 @@ function installApp() {
             }
             staged.push({ tmp: ftmp, dst: dir + "/" + fe.name });
         }
+        // app.json entra no MESMO lote: a versao nova so aparece no disco
+        // junto com os arquivos (o rename dele vem por ultimo)
+        if (!fail && json) {
+            var jtmp = dir + "/app.json.new";
+            if (!FS.writeTextFile(jtmp, json)) fail = "Erro ao gravar app.json";
+            else staged.push({ tmp: jtmp, dst: dir + "/app.json" });
+        }
         if (fail) {
             // nada de meia versao: .new fora e a ativa segue sendo a antiga
             for (var si = 0; si < staged.length; si++) {
@@ -1027,20 +1146,11 @@ function installApp() {
                 fail = "Erro ao gravar " + baseName(staged[ri].dst);
         }
     }
-    if (!fail && json && !FS.writeTextFile(dir + "/app.json", json)) {
-        fail = "Erro ao gravar app.json";
-    }
     // deps resolvidas (a fonte do require no device e do GC do launcher):
     // gravado por ULTIMO — app + cache prontos, este e o commit do conjunto.
     // Update sem deps deixa a limpeza de orfaos abaixo remover o antigo.
-    if (!fail && depResolved) {
-        var dj = [], dn2;
-        for (dn2 in depResolved) if (depResolved.hasOwnProperty(dn2)) {
-            dj.push('"' + dn2 + '":"' + depResolved[dn2] + '"');
-        }
-        if (!FS.writeTextFile(dir + "/deps.json", "{" + dj.join(",") + "}")) {
-            fail = "Erro ao gravar deps.json";
-        }
+    if (!fail && depResolved && !writeDepsFile(dir, depResolved)) {
+        fail = "Erro ao gravar deps.json";
     }
     if (!fail) {
         if (it.icon) {

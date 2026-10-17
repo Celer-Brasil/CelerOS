@@ -15,11 +15,16 @@ var state = "list"; // list | detail
 var apps = [];
 var sdOk = false;
 var detail = null;
+var detailNeed = 0;  // bytes do pacote aberto (medido 1x no openApp)
 
 // ---- logica de instalacao ---------------------------------------------------
 function baseName(p) {
     var i = p.lastIndexOf("/");
     return i >= 0 ? p.substring(i + 1) : p;
+}
+function parentOf(p) {
+    var i = p.lastIndexOf("/");
+    return i > 0 ? p.substring(0, i) : p;
 }
 function flagSD() { return FS.exists(SD_FLAG); }
 function destBase() {
@@ -119,6 +124,20 @@ function scanApps() {
 
 // ---- telas ------------------------------------------------------------------
 function kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB"; }
+// tamanho real do pacote (main + extras + assets). Os pacotes sao flat; a
+// profundidade 4 e so uma guarda contra pasta malformada.
+function pkgBytes(dir, depth) {
+    var total = 0;
+    if ((depth || 0) > 4) return 0;
+    try {
+        var list = FS.listDir(dir) || [];
+        for (var i = 0; i < list.length; i++) {
+            if (FS.isDirectory(list[i])) total += pkgBytes(list[i], (depth || 0) + 1);
+            else total += FS.getFileSize(list[i]) || 0;
+        }
+    } catch (e) { total = 0; }
+    return total;
+}
 
 // Frame avulso (fora do laco): "buscando" e "instalando" antes das chamadas
 // bloqueantes de FS
@@ -188,12 +207,7 @@ function drawDetail() {
     else { stTxt = "Instalado v" + (inst.version ? String(inst.version) : "?"); stCol = T.ok; }
     UI.badge(stTxt, LX, TOP + 160, { color: T.raised, textColor: stCol });
 
-    var need = 0;
-    try {
-        need = (FS.getFileSize(app.folder + "/main.js") || 0) +
-               (FS.getFileSize(app.folder + "/app.json") || 0) +
-               (FS.getFileSize(app.folder + "/icon.png") || 0);
-    } catch (e2) { need = 0; }
+    var need = detailNeed;
     UI.text("Destino: " + destBase() + "/" + app.pkg, LX + 2, TOP + 188, { role: "caption", color: T.textDim, w: LW - 4 });
     UI.text("Pacote: " + kb(need) + "  ·  Livre: " + kb(FS.getFreeSpace(destBase())), LX + 2, TOP + 206,
             { role: "caption", color: T.textDim });
@@ -228,6 +242,7 @@ function openApp(i) {
         return;
     }
     detail = app;
+    detailNeed = pkgBytes(app.folder);  // 1x por abertura: nao relê o SD por frame
     state = "detail";
     UI.invalidate();
 }
@@ -238,24 +253,40 @@ function tryInstall(app) {
     }
     var base = destBase();
     var dest = base + "/" + app.pkg;
+    // Espaco ANTES de tocar no disco: a copia nova fica AO LADO da antiga,
+    // entao o pico e o tamanho do pacote (update reusa esse espaco livre).
+    // Antes, a falta de espaco caia num fallback que APAGAVA a versao
+    // instalada e tentava copiar de novo — disco cheio deixava o usuario
+    // sem nenhuma das duas. Sem espaco agora: falha limpa, antiga intacta.
+    var need = pkgBytes(app.folder);
+    var livre = 0;
+    try { livre = FS.getFreeSpace(base); } catch (e0) { livre = 0; }
+    if (livre > 0 && need > 0 && livre < need) {
+        showAlert("Sem espaço", ["O pacote precisa de " + kb(need) +
+                  " e o destino tem " + kb(livre) + " livres. A versão instalada foi mantida."], true);
+        return;
+    }
     busyFrame("Instalando...", app.name + " - não desligue o aparelho");  // copia bloqueante
     FS.mkdir(base);
-    // Transacional: copia para <pkg>.inst e so entao troca pela versao antiga.
-    // Antes a antiga era apagada ANTES da copia — disco cheio no meio deixava
-    // o usuario sem nenhuma das duas (e com uma copia pela metade no disco).
-    var tmp = dest + ".inst";
-    if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);  // sobra de falha anterior
+    // Transacional: copia para um staging FORA de apps/ (o launcher varre
+    // /local/apps e /sd/apps: um <pkg>.inst pela metade com app.json
+    // aparecia como app duplicado depois de uma queda de energia) e so
+    // entao troca pela versao antiga. Mesma particao do destino: rename
+    // entre /local e /sd nao funciona.
+    var tmp = parentOf(base) + "/.inst-" + app.pkg;
+    var legado = dest + ".inst";
+    if (FS.isDirectory(legado)) FS.removeDirectory(legado);  // staging da versao antiga
+    if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);        // sobra de falha anterior
     var ok = FS.copyDirectory(app.folder, tmp);
-    if (ok) {
-        if (FS.isDirectory(dest)) ok = FS.removeDirectory(dest);
-        if (ok) ok = FS.renameFile(tmp, dest);
-    } else if (FS.isDirectory(dest)) {
-        // sem espaco para duas copias: cai no modo antigo (remove e copia)
-        if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);
-        ok = FS.removeDirectory(dest) && FS.copyDirectory(app.folder, dest);
-        if (!ok && FS.isDirectory(dest)) FS.removeDirectory(dest);
+    if (ok && FS.isDirectory(dest)) ok = FS.removeDirectory(dest);
+    if (ok && !FS.renameFile(tmp, dest)) {
+        // rename falhou DEPOIS de remover a antiga: o .inst e a UNICA copia
+        // — nao apaga. O dono ve o aviso e reinicia (o launcher reescaneia).
+        showAlert("Falhou", ["A troca da pasta falhou depois da cópia. " +
+                  "A versão nova ficou em " + tmp + "; reinicie e tente de novo."], true);
+        return;
     }
-    if (FS.isDirectory(tmp)) FS.removeDirectory(tmp);
+    if (!ok && FS.isDirectory(tmp)) FS.removeDirectory(tmp);  // copia incompleta: descarta
     if (ok) {
         System.rescanApps();
         if (typeof System.playTone === "function") {
@@ -263,8 +294,9 @@ function tryInstall(app) {
         }
         showAlert("Instalado!", [app.name + " v" + app.version + " em " + dest + "."], false);
     } else {
-        var livre = Math.round(FS.getFreeSpace(base) / 1024);
-        showAlert("Falhou", ["Não foi possível copiar o app. Espaço livre: " + livre + " KB."], true);
+        var livreAgora = 0;
+        try { livreAgora = Math.round(FS.getFreeSpace(base) / 1024); } catch (e4) { livreAgora = 0; }
+        showAlert("Falhou", ["Não foi possível copiar o app. Espaço livre: " + livreAgora + " KB."], true);
     }
 }
 function rescan() {

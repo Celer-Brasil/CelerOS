@@ -106,23 +106,32 @@ function request(audioB64, isRetry) {
         max_tokens: 300,               // teto curto: resposta rapida, longe do timeout do gateway
         reasoning: { effort: "low" }   // omni e raciocinador: low corta latencia
     };
-    var started = AI.chat(opts,
-        function (r) {
-            busy = false;
-            if (!isRetry && r && !r.ok &&
-                (r.status === 502 || r.status === 504 || r.status === 429)) {
-                if (answerSink) answerSink({ ok: false, retrying: true });
-                setTimeout(function () { request(audioB64, true); }, 2000);
-                return;
-            }
-            cue(1320, 60);
-            if (r && r.ok && r.content) {
-                msgs.push({ r: "assistant", s: fit(r.content) });
-                if (msgs.length > MAX_MSGS) msgs.shift();
-                saveHist();
-            }
-            if (answerSink) answerSink(r || { ok: false, error: "sem resposta" });
-        });
+    var started = false;
+    // AI.chat LANCA (WiFi caiu entre o check e a chamada, chave sumiu):
+    // sem o catch o app morria na tela de erro com busy preso
+    try {
+        started = AI.chat(opts,
+            function (r) {
+                busy = false;
+                if (!isRetry && r && !r.ok &&
+                    (r.status === 502 || r.status === 504 || r.status === 429)) {
+                    if (answerSink) answerSink({ ok: false, retrying: true });
+                    setTimeout(function () { request(audioB64, true); }, 2000);
+                    return;
+                }
+                cue(1320, 60);
+                if (r && r.ok && r.content) {
+                    msgs.push({ r: "assistant", s: fit(r.content) });
+                    if (msgs.length > MAX_MSGS) msgs.shift();
+                    saveHist();
+                }
+                if (answerSink) answerSink(r || { ok: false, error: "sem resposta" });
+            });
+    } catch (e) {
+        busy = false;
+        if (answerSink) answerSink({ ok: false, error: String(e) });
+        return true;
+    }
     if (!started) {
         busy = false;
         // slot ocupado: quase sempre uma requisicao orfa (app fechado no

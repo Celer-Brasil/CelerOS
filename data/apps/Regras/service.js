@@ -11,10 +11,19 @@
  *       { "quando": "presenca",
  *         "guardar": { "chave": "visto", "valor": "sim" } }
  *   ] }
- * Acao desconhecida ou JSON quebrado: loga e ignora (servico nao morre). */
+ * Acao desconhecida: ignora; JSON quebrado na carga: propaga e PARA o
+ * servico (erro do dono visivel, sem mascara). Nas ACOES, um send/Storage
+ * que estoure e contido: uma regra ruim nao pode matar o servico. */
 var DATA = "/local/data/celeros.regras/rules.json";
 var regras = [];
 var servidas = 0;
+
+// System.print NAO existe na superficie do svchost (JsSvc.cpp): chama-lo
+// dentro de um catch trocava o RangeError contido por TypeError e o
+// callback que falhava PARAVA o servico. Log e melhor esforco.
+function log(msg) {
+    if (typeof System.print === "function") System.print(msg);
+}
 
 function carregar() {
     regras = [];
@@ -41,21 +50,25 @@ function executar(r, envelope) {
         try {
             Pack.send(alvo, r.enviar.msg !== undefined ? r.enviar.msg : { eco: r.quando });
         } catch (e) {
-            System.print("regras: enviar falhou (" + r.quando + "): " + e);
+            log("regras: enviar falhou (" + r.quando + "): " + e);
         }
     }
     if (r.guardar && r.guardar.chave) {
         try {
             Storage.set(r.guardar.chave, r.guardar.valor !== undefined ? String(r.guardar.valor) : String(envelope));
         } catch (e) {
-            System.print("regras: guardar falhou (" + r.guardar.chave + "): " + e);
+            log("regras: guardar falhou (" + r.guardar.chave + "): " + e);
         }
     }
 }
 
 function tick() {
-    var env;
-    while ((env = Pack.poll()) !== null) {
+    var env, n = 0;
+    // teto por giro: o svchost tem orcamento de 8 ms/tick e a fila do Pack
+    // (ringbuffer) pode vir cheia de uma rajada — drena 16 e o resto no
+    // proximo segundo, em vez de segurar o pump dos outros servicos
+    while (n < 16 && (env = Pack.poll()) !== null) {
+        n++;
         servidas++;
         // Pack.poll() entrega {from, fromName, data} — o dado e "data"
         var msg = env && env.data;

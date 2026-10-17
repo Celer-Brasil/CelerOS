@@ -1,7 +1,7 @@
 {
   "name": "Chat IA",
   "packageName": "celeros.chatai",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "CelerOS",
   "description": "Assistente com IA (DeepSeek) direto no aparelho",
   "type": "App",
@@ -9,5 +9,5 @@
   "api": 22,
   "permissions": ["net", "fs"],
   "topbar": true,
-  "changelog": "1.2.0 - conversa em baloes com rolagem por inercia que segue o fim (toolkit UI, API 22)\n1.1.0 - arrasto para rever, detalhe do erro da API, tokens da resposta, bip na chegada"
+  "changelog": "1.2.1 - AI.chat em try/catch (WiFi caiu entre o check e a chamada nao mata mais o app nem prende busy); retentativa silenciosa em 502/504/429 do gateway (2 s, uma vez); max_tokens 400 (resposta curta, menos latencia)\n1.2.0 - conversa em baloes com rolagem por inercia que segue o fim (toolkit UI, API 22)\n1.1.0 - arrasto para rever, detalhe do erro da API, tokens da resposta, bip na chegada"
 }

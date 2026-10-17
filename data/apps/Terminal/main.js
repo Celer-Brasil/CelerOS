@@ -396,7 +396,10 @@ function execute(line) {
     if (cmds[name]) {
         try { cmds[name](args); }
         catch (e) {
-            if (e === "OS_EXIT") throw e;  // exit/reboot: deixa o kernel sair
+            // exit: o firmware lanca um Error MARCADO (celerExit), nao a
+            // string "OS_EXIT" — sem relancar o objeto, o catch pintava
+            // "exit: erro: Error: app exit" antes da saida grudenta
+            if (e === "OS_EXIT" || (e && e.celerExit)) throw e;
             out(name + ": erro: " + e, T.err);
         }
     } else {

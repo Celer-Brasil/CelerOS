@@ -1,7 +1,7 @@
 {
   "name": "Matilha",
   "packageName": "celeros.matilha",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "CelerOS",
   "description": "Painel do bando de CelerOS: liga a malha, mostra os membros com o papel de cada um (som, mic, tela, patas, leds, rede), manda mensagens diretas ou para todos, passa a música em curso para o vizinho com alto-falante e entra na matilha privada: por nome e senha ou por convite pelo CelerLink (código de 6 dígitos).",
   "type": "App",
@@ -11,5 +11,5 @@
     "system"
   ],
   "topbar": false,
-  "changelog": "1.1.0 - tela Entrar (API 40): matilha por nome+senha (Pack.join), aguardar convite (mostra o código do CelerLink), convidar aparelho (scan, código, Pack.invite selado) e sair da matilha; pede a permissão system. 1.0.1 - guarda typeof Pack junto do CelerNet (firmware com malha e sem matilha nao quebra no poll). 1.0.0 - primeira versao: toggle da malha, membros com papel/RSSI/idade, mensagem direta (Pack.send) e para todos (CelerNet.broadcast), handoff de musica (Pack.handoffMusic) e log do que chega. Absorve o app CelerNet."
+  "changelog": "1.1.1 - telas Aguardar/Convidar nao repintam o quadro inteiro a 30 fps: UI.invalidate so quando o estado (codigo, pairing, inviteStatus) muda\n1.1.0 - tela Entrar (API 40): matilha por nome+senha (Pack.join), aguardar convite (mostra o código do CelerLink), convidar aparelho (scan, código, Pack.invite selado) e sair da matilha; pede a permissão system. 1.0.1 - guarda typeof Pack junto do CelerNet (firmware com malha e sem matilha nao quebra no poll). 1.0.0 - primeira versao: toggle da malha, membros com papel/RSSI/idade, mensagem direta (Pack.send) e para todos (CelerNet.broadcast), handoff de musica (Pack.handoffMusic) e log do que chega. Absorve o app CelerNet."
 }

@@ -81,6 +81,51 @@ function pushHint(s) { pushView("note", s, T.textDim); }
 function pushErr(s) { pushView("note", s, T.err); }
 
 // ------------------------------------------------------------------ envio --
+// Um pedido em voo. 502/504/429 do gateway sao transientes: uma retentativa
+// silenciosa (2 s) evita o erro na cara do dono, como no Qwen.
+function ask(payload, isRetry) {
+    if (busy) return false;   // retry atrasado nao atropela uma pergunta nova
+    busy = true;
+    var started = false;
+    // AI.chat LANCA quando o WiFi cai entre o check e a chamada (ou a chave
+    // sumiu): sem o catch, busy ficava preso e o app morria com erro
+    try {
+        started = AI.chat({ messages: payload, max_tokens: 400 }, function (r) {
+            busy = false;
+            if (!isRetry && r && !r.ok &&
+                (r.status === 502 || r.status === 504 || r.status === 429)) {
+                pushHint("repetindo...");
+                setTimeout(function () { ask(payload, true); }, 2000);
+                return;
+            }
+            try { if (typeof System.beep === "function") System.beep(1320, 60); } catch (e) {}
+            if (r && r.ok && r.content) {
+                pushMsg("assistant", fit(r.content));
+                if (r.usage && r.usage.total_tokens) {
+                    pushHint("(" + r.usage.total_tokens + " tokens)");
+                }
+            } else if (r && r.ok) {
+                pushErr("IA: resposta vazia");
+            } else {
+                pushErr("IA: erro " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)));
+                if (r && r.detail) pushHint("detalhe: " + fit(r.detail));
+            }
+            UI.invalidate();
+        });
+    } catch (e) {
+        busy = false;
+        pushErr("IA: " + (e && e.message ? e.message : e));
+        UI.invalidate();
+        return false;
+    }
+    if (!started) {
+        busy = false;
+        pushErr("IA: ocupado, tente de novo");
+    }
+    UI.invalidate();
+    return started;
+}
+
 function send(text) {
     if (busy) { pushHint("(a IA ainda está respondendo)"); return; }
     if (!hasAI) { pushErr("sem AI no firmware (requer API >= 18)"); return; }
@@ -93,28 +138,7 @@ function send(text) {
     for (var i = start; i < msgs.length; i++) {
         payload.push({ role: msgs[i].r, content: msgs[i].s });
     }
-    busy = true;
-    var started = AI.chat({ messages: payload }, function (r) {
-        busy = false;
-        try { if (typeof System.beep === "function") System.beep(1320, 60); } catch (e) {}
-        if (r && r.ok && r.content) {
-            pushMsg("assistant", fit(r.content));
-            if (r.usage && r.usage.total_tokens) {
-                pushHint("(" + r.usage.total_tokens + " tokens)");
-            }
-        } else if (r && r.ok) {
-            pushErr("IA: resposta vazia");
-        } else {
-            pushErr("IA: erro " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)));
-            if (r && r.detail) pushHint("detalhe: " + fit(r.detail));
-        }
-        UI.invalidate();
-    });
-    if (!started) {
-        busy = false;
-        pushErr("IA: ocupado, tente de novo");
-    }
-    UI.invalidate();
+    ask(payload, false);
 }
 
 // -------------------------------------------------------------- desenho ----

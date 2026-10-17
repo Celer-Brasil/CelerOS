@@ -166,7 +166,7 @@ declare const System: {
     getIPAddress(): any;
     /** devolve true se o ESP32 estiver conectado a uma rede WiFi. */
     isWiFiActive(): any;
-    prompt(promptMsg?: number, initialText?: number, options?: number): any;
+    prompt(promptMsg?: string, initialText?: number, options?: number): any;
     keypadOpen(options?: number): any;
     /** bombeia o toque para o teclado, redesenha as teclas quando necessário (feedback de pressionamento, páginas de layout, cursor piscando) */
     keypadPoll(): any;
@@ -185,7 +185,7 @@ declare const System: {
     setAutoBrightness(on?: boolean): any;
     getAutoBrightness(): any;
     exitApp(): void;
-    launchApp(packageName: number): void;
+    launchApp(packageName: string): void;
     present(): void;
     isBuffered(): any;
     wifiStatus(): any;
@@ -256,7 +256,7 @@ declare const System: {
     /** @permission "system" */
     otaStart(url: string, progressCallback?: number): any;
     /** @permission "system" */
-    installZip(zipPath: number, nome: string): any;
+    installZip(zipPath: string, nome: string): any;
     /** @permission "system" */
     appOpen(): any;
     /** @permission "system" */
@@ -557,7 +557,7 @@ interface CelerLinkApi {
     start(nome?: string, opcoes?: number): any;
     stop(): any;
     scan(timeoutMs?: number): any;
-    connect(idOuNome: number, timeoutMs?: number): any;
+    connect(idOuNome: string, timeoutMs?: number): any;
     disconnect(): any;
     send(mensagem?: number): any;
     poll(): any;
@@ -574,7 +574,7 @@ declare const CelerNet: {
     start(opcoes?: { name?: string; /** ignorado desde a API 37 */ net?: string; relay?: boolean }): boolean;
     stop(): boolean;
     broadcast(mensagem?: string | object, ttl?: number): boolean;
-    send(destino: number, mensagem?: number, opcoes?: number): any;
+    send(destino: string, mensagem?: number, opcoes?: number): any;
     poll(): MeshMessage | null;
     nodes(): MeshNode[];
     status(): MeshStatus;
@@ -583,9 +583,9 @@ declare const CelerNet: {
 declare const Pack: {
     me(): any;
     members(): any;
-    send(destino: number, mensagem?: number, opcoes?: number): any;
+    send(destino: string, mensagem?: number, opcoes?: number): any;
     poll(): any;
-    handoffMusic(destino?: number): any;
+    handoffMusic(destino?: string): any;
     join(nome: string, senha: string): any;
     leave(): any;
     acceptInvite(on?: boolean): any;

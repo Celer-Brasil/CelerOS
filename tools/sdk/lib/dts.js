@@ -105,9 +105,12 @@ const PARAM_TYPES = {
 };
 
 // Nomes de argumento que indicam string (o restante e number: a API e
-// majoritariamente numerica — coordenadas, cores, tamanhos, ids).
+// majoritariamente numerica — coordenadas, cores, tamanhos, ids). Compostos
+// camelCase contam pelo SUFIXO ("zipPath" e um path, "destinoN" nao).
 function argType(name) {
-    if (/^(s|str|txt|text|texto|name|nome|label|path|arq|arquivo|ssid|pass|senha|key|chave|url|host|body|json|msg|linha|code|cod|prompt|title|descricao|id)$/i.test(name)) return 'string';
+    if (/^(s|str|txt|text|texto|name|nome|label|path|arq|arquivo|ssid|pass|senha|key|chave|url|host|body|json|msg|linha|code|cod|prompt|title|descricao|id|destino|alvo)$/i.test(name)) return 'string';
+    if (/([Pp]ath|[Aa]rquivo|[Nn]ome|[Nn]ame|[Ss]enha|[Mm]sg|[Uu]rl|[Tt]itulo)$/.test(name) &&
+        /^[A-Za-z_$][\w$]*$/.test(name)) return 'string';
     if (/^(on|ok|down|touched|enabled)$/i.test(name)) return 'boolean';
     return 'number';
 }

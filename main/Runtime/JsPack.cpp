@@ -498,6 +498,8 @@ duk_ret_t JSBindings::js_packRecordStop(duk_context *ctx) {
     }
     size_t len = 0;
     uint32_t ms = 0;
+    present();  // gravacao de 320 KB + rename passa de 1 s: o tempo NATIVO
+                // conta na janela do exec-timeout (padrao do js_copyFile)
     char* p = Resources::recStop(h, !raw && path.empty(), &len, &ms);
     if (p == nullptr) {
         if (!path.empty()) duk_push_false(ctx);
@@ -516,6 +518,7 @@ duk_ret_t JSBindings::js_packRecordStop(duk_context *ctx) {
             ok = false;
         }
         free(p);
+        CelerKernel::noteAppYield();  // a janela renewida acima cobre a escrita
         duk_push_boolean(ctx, ok ? 1 : 0);
         return 1;
     }
@@ -539,7 +542,10 @@ duk_ret_t JSBindings::js_packSnap(duk_context *ctx) {
         if (duk_is_string(ctx, -1)) path = duk_get_string(ctx, -1);
         duk_pop(ctx);
     }
-    if (path.size() >= 64 || !perm(celer::PERM_FS) || !fsWriteAllowed(path.c_str())) {
+    if (path.size() >= 64) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Pack.snap: caminho longo demais (max 63)");
+    }
+    if (!perm(celer::PERM_FS) || !fsWriteAllowed(path.c_str())) {
         duk_error(ctx, DUK_ERR_ERROR, "Pack.snap: escrita negada nesse caminho (perm fs)");
     }
     const int q = optInt(ctx, 1, "quality", 12);

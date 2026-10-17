@@ -925,6 +925,76 @@ class TestMeshPeloCabo(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_wav_8bit_vira_pcm16k(self):
+        import wave
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            with wave.open(path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(1)
+                w.setframerate(8000)
+                w.writeframes(bytes([128, 255, 128, 0] * 20))
+            pcm = C.wav_to_pcm16k(path)
+            amostras = struct.unpack("<%dh" % (len(pcm) // 2), pcm)
+            self.assertEqual(len(amostras), 160)    # 8 kHz -> 16 kHz dobra
+            self.assertEqual(amostras[0], 0)        # 128 (silencio u8) -> 0
+            self.assertEqual(max(amostras), 32512)  # 255 -> 127 << 8
+            self.assertEqual(min(amostras), -32768)  # 0 -> -128 << 8
+        finally:
+            os.unlink(path)
+
+    def test_wav_nao_pcm_vira_erro_claro(self):
+        import wave
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            with wave.open(path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(struct.pack("<16h", *([100] * 16)))
+            with open(path, "r+b") as f:
+                f.seek(20)  # tag do formato no fmt canonico
+                f.write(b"\x03\x00")  # IEEE float: o wave do Python recusa
+            with self.assertRaises(C.CelerError) as cm:
+                C.wav_to_pcm16k(path)
+            self.assertIn("WAV invalido", str(cm.exception))
+        finally:
+            os.unlink(path)
+
+    def test_wav_acima_do_teto_recusa_sem_decodificar(self):
+        # header mentiroso: 40 s declarados e NENHUMA amostra no arquivo —
+        # a recusa tem que vir do cabecalho (antes do readframes)
+        rate, n = 16000, 16000 * 40
+        hdr = (b"RIFF" + struct.pack("<I", 36) + b"WAVEfmt " +
+               struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16) +
+               b"data" + struct.pack("<I", n * 2))
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        try:
+            with open(path, "wb") as f:
+                f.write(hdr)
+            with self.assertRaises(C.CelerError) as cm:
+                C.wav_to_pcm16k(path)
+            self.assertIn("40", str(cm.exception))
+        finally:
+            os.unlink(path)
+
+    def test_snap_q_e_rec_segundos_fora_do_teto(self):
+        link, dev = make_link()
+        link.hello()
+        fd, saida = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        try:
+            with self.assertRaises(C.CelerError):
+                self._run(link, ["res", "snap", "-n", "5C26", saida, "-q", "300"])
+            with self.assertRaises(C.CelerError):
+                self._run(link, ["res", "rec", "-n", "5C26", "300", saida])
+            self.assertFalse(hasattr(dev, "media"))  # nada saiu pelo fio
+        finally:
+            os.unlink(saida)
+
     def test_firmware_antigo_orienta_o_shell(self):
         link, dev = make_link()
         link.hello()

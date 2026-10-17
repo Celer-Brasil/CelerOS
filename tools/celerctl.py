@@ -1741,9 +1741,19 @@ def wav_to_pcm16k(path):
     parser so (o do PC)."""
     import wave
     import array
-    with wave.open(path, "rb") as w:
-        ch, sw, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
-        raw = w.readframes(n)
+    try:
+        with wave.open(path, "rb") as w:
+            ch, sw, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+            # teto ANTES de decodificar: um WAV de 10 min viraria GB de ints
+            # no PC so para o device recusar
+            if rate <= 0 or (n and n / rate > 30.5):
+                dur = (n / rate) if rate > 0 else 0
+                raise CelerError("audio com %.1f s: o teto do play e 30 s" % dur)
+            raw = w.readframes(n)
+    except CelerError:
+        raise
+    except (wave.Error, EOFError, ValueError) as e:
+        raise CelerError("WAV invalido ou nao-PCM (%s): use PCM 8/16 bits" % e)
     if sw == 2:
         a = array.array("h")
         a.frombytes(raw)
@@ -1882,10 +1892,14 @@ def cmd_res(args):
             link.keep_push = True
             node = _node_id(link, args.no)
             if sub == "snap":
+                if not 5 <= args.q <= 63:
+                    raise CelerError("q fora do teto do device (5..63): %d" % args.q)
                 print("foto de %s (q %d)..." % (args.no, args.q))
                 link.res_media(SUB["SNAP_AT"], node, args.q, timeout=40)
                 remoto, local = PC_PATHS["PC_SNAP_PATH"], args.saida
             elif sub == "rec":
+                if not 1 <= args.segundos <= 10:
+                    raise CelerError("segundos fora do teto do device (1..10): %d" % args.segundos)
                 print("gravando %d s do mic de %s..." % (args.segundos, args.no))
                 link.res_media(SUB["REC_AT"], node, args.segundos, timeout=args.segundos + 25)
                 remoto, local = PC_PATHS["PC_REC_PATH"], args.saida
@@ -1908,7 +1922,16 @@ def cmd_res(args):
                 print("tocou")
                 remoto = None
             if remoto:
-                link.read_file(remoto, local, progress=False)
+                try:
+                    link.read_file(remoto, local, progress=False)
+                except Exception:
+                    # pull caiu no meio: o arquivo do gateway morre tambem (o
+                    # padrao do play), senao 320 KB ficam no /local do no
+                    try:
+                        link.delete(remoto)
+                    except Exception:
+                        pass
+                    raise
                 link.delete(remoto)
                 print("salvo em %s (%d bytes)" % (local, os.path.getsize(local)))
         elif sub == "relay":
@@ -2013,8 +2036,12 @@ def cmd_mesh(args):
                 else:
                     codigo = args.codigo or (_codigo_do_novo(args) if args.de else
                                              input("codigo na tela do novo: ").strip())
+                    # die direto (SystemExit): erro de digitacao do codigo
+                    # nao pode virar a dica de "firmware anterior a API 40"
+                    if not re.fullmatch(r"\d{6}", str(codigo)):
+                        die("codigo do convite sao 6 digitos (veio %r)" % codigo)
                     print("enviando a chave (codigo %s)..." % codigo)
-                    link.res_ctl(SUB["INVITE_CODE"], codigo.encode()[:6], timeout=20)
+                    link.res_ctl(SUB["INVITE_CODE"], codigo.encode(), timeout=20)
                     print("convite aceito: %s entrou na matilha" % args.alvo)
             st = json.loads(link.res_ctl(SUB["NET"]).decode("utf-8", "replace"))
         except CelerError as e:

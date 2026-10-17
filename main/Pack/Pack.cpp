@@ -177,6 +177,13 @@ bool handleEnv(uint16_t from, const char* fromName, uint16_t dst, const uint8_t*
         customPush(from, fromName, data + ENV_HDR, len - ENV_HDR);
         return true;
     }
+    if (kind == KIND_RULE) {
+        // Reflexos da matilha (API 42): o canal reservado tem dono — o
+        // servico JS do app "Regras" drena pela MESMA fila do Pack.poll().
+        if (len == ENV_HDR) return true;
+        customPush(from, fromName, data + ENV_HDR, len - ENV_HDR);
+        return true;
+    }
     if (kind == KIND_RES) {
         Resources::onEnvelope(from, fromName, data + ENV_HDR, len - ENV_HDR);
         return true;

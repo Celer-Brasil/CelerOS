@@ -1,0 +1,13 @@
+{
+  "name": "Regras",
+  "packageName": "celeros.regras",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Reflexos da matilha: regras quando/entao sobre envelopes do Pack (API 42)",
+  "api": 42,
+  "system": true,
+  "order": 2,
+  "topbar": false,
+  "permissions": ["system", "fs"],
+  "service": "service.js"
+}

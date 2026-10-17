@@ -55,7 +55,9 @@ const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 const MAX_ASSET_FILE = _hubLimit('MAX_ASSET_FILE', 128 * 1024);
 const MAX_ASSETS_TOTAL = _hubLimit('MAX_ASSETS_TOTAL', 256 * 1024);
 const MAX_EXTRA_FILES = _hubLimit('MAX_EXTRA_FILES', 16);
-const ASSET_EXTS = ['.js', '.png', '.wav', '.qoa', '.json', '.bin'];
+// install.sh (API 42): script de instalacao — roda 1x por versao no sh
+// restrito do device (ver data/AGENTS.md); publica no pacote como asset.
+const ASSET_EXTS = ['.js', '.png', '.wav', '.qoa', '.json', '.bin', '.sh'];
 const FILE_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 // Objetos JS da API (raizes validas de cadeia de membro).

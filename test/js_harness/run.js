@@ -636,6 +636,12 @@ function makeEnv() {
     },
     otaStart: function() { return false; },
     installZip: function(zip, nome) { log.push('[installZip] ' + nome); return { ok: true, files: 0, bytes: 0 }; },
+    appOpen: function() { return false; },
+    updateBusy: function() { return false; },
+    shellActive: function() { return false; },
+    syncTime: function() { return false; },
+    timeValid: function() { return true; },
+    persistTime: function() { return true; },
     webActive: function() { return true; },
     webSetActive: function() {},
     webAuthInfo: function() { return { user: 'admin', pass: 'senha-web' }; },
@@ -4051,7 +4057,42 @@ function holdFrames(x, y, n) {
     check('dep nao declarada e sem arquivo local: erro claro', threwDep);
 })();
 
-// resumo
+// ============================================================
+// Nucleo: politica do servico do OS (API 42) — modulo puro
+// ============================================================
+(function () {
+    var env = makeEnv();
+    var pol = makeRequire('data/apps/Nucleo', env)('policy');
+
+    function mixin(st, over) {
+        var o = {};
+        for (var k in st) o[k] = st[k];
+        for (var k2 in over) o[k2] = over[k2];
+        return o;
+    }
+
+    // gates do check: so wifi+grace+intervalo
+    var base = { wifiConnected: true, appOpen: false, busy: false, shell: false,
+                 graceOk: true, intervalOk: true };
+    check('nucleo: devido com tudo ok', pol.shouldCheck(base) === true);
+    check('nucleo: sem wifi nao checa', pol.shouldCheck(mixin(base, { wifiConnected: false })) === false);
+    check('nucleo: app aberto nao checa (nunca disputa o vidro)', pol.shouldCheck(mixin(base, { appOpen: true })) === false);
+    check('nucleo: check em curso nao re-checa', pol.shouldCheck(mixin(base, { busy: true })) === false);
+    check('nucleo: sessao celerctl nao checa', pol.shouldCheck(mixin(base, { shell: true })) === false);
+    check('nucleo: dentro do grace de 60s nao checa', pol.shouldCheck(mixin(base, { graceOk: false })) === false);
+    check('nucleo: dentro das 24h nao re-checa', pol.shouldCheck(mixin(base, { intervalOk: false })) === false);
+
+    // dedup da notificacao: 1x por versao nova
+    check('nucleo: notifica versao nova', pol.shouldNotify('', '1.9.0') === true);
+    check('nucleo: notifica acima da notificada', pol.shouldNotify('1.8.2', '1.9.0') === true);
+    check('nucleo: mesma versao nao re-notifica', pol.shouldNotify('1.9.0', '1.9.0') === false);
+    check('nucleo: hub nao anda para tras', pol.shouldNotify('1.9.1', '1.9.0') === false);
+    check('nucleo: sem versao valida, sem nota', pol.shouldNotify('', '') === false);
+    check('nucleo: semver 2 partes', pol.semverGreater('1.10', '1.9') === true);
+    check('nucleo: prefixo v tolerado', pol.semverGreater('v2.0.0', '1.9.9') === true);
+})();
+
+// resume
 console.log('');
 if (failures) {
     console.log('FALHAS: ' + failures);

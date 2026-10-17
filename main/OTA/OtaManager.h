@@ -57,14 +57,6 @@ public:
     // e o app da vez e precisa vivo para desenhar o progresso.
     static void evictRunningApp();
 
-    // Verificacao automatica em background (UpdateCheck.h decide o quando):
-    // corpo do servico "updcheck", nunca bloqueia — quando devido, spawna a
-    // task curta "celerupd" que roda checkForUpdates() e notifica a versao
-    // nova pelo centro de notificacoes (1x por versao, dedup em
-    // CelerSettings "ota_noted_ver"). inApp = true pula: com app aberto o
-    // fetch disputaria RAM/rede com ele.
-    static void tickCheck(bool inApp);
-
     // Gate para a politica do servico JS (API 42): true com check manual ou
     // task do fetch em curso — o servico nao dispara check em cima de check.
     static bool checkBusy();

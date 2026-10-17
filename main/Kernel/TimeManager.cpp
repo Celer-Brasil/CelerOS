@@ -1,5 +1,6 @@
 #include "TimeManager.h"
 #include "Alarms.h"
+#include "AppServices.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
@@ -167,10 +168,15 @@ void TimeManager::tick(bool networkUp) {
     static std::atomic_bool s_ticking{false};
     if (s_ticking.exchange(true)) return;
 
-    // Rede no ar e hora ainda invalida: insiste a cada 30 s (pacote UDP
-    // perdido, DNS lento no boot...) — o intervalo normal do SNTP e 1 h.
+    // API 42: o RETRY de SNTP (30 s) e a persistencia (10 min) migraram
+    // para o servico JS do app Nucleo (data/apps/Nucleo/service.js). Aqui
+    // virou WATCHDOG: se o svchost nao gira ha 15 min (servico morto, svc
+    // parado a mao, build sem servicos) as cadencias voltam nativas — a
+    // hora do aparelho nunca fica orfa da politica JS.
     static uint32_t lastTryMs = 0;
-    if (ntpEnabled && networkUp && !isTimeValid()) {
+    static uint32_t lastSaveMs = 0;
+    const bool svcStale = AppServices::lastTickAgoMs() > 15u * 60u * 1000u;
+    if (svcStale && ntpEnabled && networkUp && !isTimeValid()) {
         uint32_t now = millis();
         if (lastTryMs == 0 || now - lastTryMs >= 30000) {
             lastTryMs = now;
@@ -179,8 +185,7 @@ void TimeManager::tick(bool networkUp) {
     }
 
     // Hora valida -> persiste (barato: 1 escrita NVS a cada 10 min)
-    static uint32_t lastSaveMs = 0;
-    if (isTimeValid()) {
+    if (svcStale && isTimeValid()) {
         uint32_t now2 = millis();
         if (lastSaveMs == 0 || now2 - lastSaveMs >= 600000UL) {
             lastSaveMs = now2;

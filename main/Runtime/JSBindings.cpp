@@ -1322,6 +1322,15 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"otaCheck", js_otaCheck, 0},
         {"otaStart", js_otaStart, 2},
         {"installZip", js_installZip, 2},
+        // Gates da politica dos servicos (API 42): getters burros que o
+        // svchost usa para decidir QUANDO agir; uteis tambem a apps de
+        // sistema (Ajustes mostra "checando...", evita check em cima).
+        {"appOpen", js_appOpen, 0},
+        {"updateBusy", js_updateBusy, 0},
+        {"shellActive", js_shellActive, 0},
+        {"syncTime", js_syncTime, 0},
+        {"timeValid", js_timeValid, 0},
+        {"persistTime", js_persistTime, 0},
         {"webActive", js_webActive, 0},
         {"webSetActive", js_webSetActive, 1},
         {"webAuthInfo", js_webAuthInfo, 0},

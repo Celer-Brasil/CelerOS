@@ -2837,3 +2837,45 @@ if (ok && FS.md5("/local/blob.zip") === it.zip.md5) {
     FS.remove("/local/blob.zip");
 }
 ```
+
+## 45. API Level 42 — Background services and policy gates
+
+An app can declare `"service": "service.js"` in its app.json: the JS
+runs OUTSIDE the foreground in an OS-owned heap (one thread per
+service, no UI), pumped by the services table with an 8 ms/tick budget.
+The surface available to a service: timers (`setTimeout`/`setInterval`),
+`require()` from the app folder, `Storage` (per-package NVS), `FS`
+(same jail), `CelerNet`/`Pack` (poll) and the lean `System` below +
+`Service`. Not available to a service: UI/touch, `Net.*` (use
+`System.otaCheck` instead), AI, mic, camera. A service inherits the
+app's consent (it can only do what the app may); a throwing callback
+STOPS that service (`system:true` apps get one restart after 60 s).
+Without PSRAM the service heap suspends while an app is in the
+foreground; with PSRAM it stays up. The service's companion: `install.sh`
+in the app folder runs once per version under the restricted `sh`
+(see `data/AGENTS.md`).
+
+#### `System.appOpen()` → bool (API 42)
+true while a JS app is in the foreground. Policy gate: the Nucleo
+update check never fires with an app open.
+
+#### `System.updateBusy()` → bool (API 42)
+true while a manual check or an OTA is running — never fire a check on
+top of a check.
+
+#### `System.shellActive()` → bool (API 42)
+true while a `celerctl` session is active (an in-flight debug/ota push
+must not be trampled).
+
+#### `System.syncTime()` → bool (API 42)
+Attempts SNTP now and returns whether time is ALREADY valid (SNTP
+settles asynchronously — repeat next tick while `System.timeValid()` is
+false).
+
+#### `System.timeValid()` → bool (API 42)
+Time is valid (SNTP/manual/phone since boot).
+
+#### `System.persistTime()` → bool (API 42)
+Persists the epoch to NVS (the TimeManager's 10-min saveEpoch became
+the Nucleo service's policy; the native side is now a watchdog and
+takes over if the service goes silent for 15 min).

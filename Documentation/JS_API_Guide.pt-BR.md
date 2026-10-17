@@ -3117,3 +3117,43 @@ if (ok && FS.md5("/local/blob.zip") === it.zip.md5) {
     FS.remove("/local/blob.zip");
 }
 ```
+
+## 45. Nível de API 42 — Serviços em segundo plano e gates de política
+
+Um app pode declarar `"service": "service.js"` no app.json: o JS roda
+FORA do foreground num heap próprio do OS (uma thread por serviço, sem
+UI), bombeado pela tabela de serviços com orçamento de 8 ms/giro. A
+superfície disponível ao serviço: timers (`setTimeout`/`setInterval`),
+`require()` da pasta do app, `Storage` (NVS do pacote), `FS` (com a
+jail), `CelerNet`/`Pack` (poll) e o `System` enxuto abaixo + `Service`.
+Fora do serviço: UI/touch, `Net.*` (o serviço usa `System.otaCheck`), IA,
+mic, câmera. O serviço herda o consentimento do app (só faz o que o app
+pode); erro em callback PARA o serviço (app `system:true` reinicia 1x
+após 60 s). Sem PSRAM, o heap do serviço suspende com app aberto; com
+PSRAM segue no ar. Companheiro do serviço: o `install.sh` na pasta do
+app roda 1x por versão no `sh` restrito (veja `data/AGENTS.md`).
+
+#### `System.appOpen()` → bool (API 42)
+true com um app JS em primeiro plano. Gate da política: o check de
+update do Nucleo nunca dispara com app aberto.
+
+#### `System.updateBusy()` → bool (API 42)
+true com check manual ou OTA em curso — não dispara check em cima de
+check.
+
+#### `System.shellActive()` → bool (API 42)
+true com sessão `celerctl` ativa (debug/ota push no meio não pode ser
+atropelado).
+
+#### `System.syncTime()` → bool (API 42)
+Tenta o SNTP agora e devolve se a hora JÁ é válida (o SNTP assenta
+assíncrono — repita no próximo giro enquanto `System.timeValid()` for
+false).
+
+#### `System.timeValid()` → bool (API 42)
+Hora válida (SNTP/manual/celular desde o boot).
+
+#### `System.persistTime()` → bool (API 42)
+Grava o epoch no NVS (o saveEpoch de 10 min do TimeManager virou
+política do serviço Nucleo; o nativo vira watchdog e retoma se o
+serviço ficar 15 min sem girar).

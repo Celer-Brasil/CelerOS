@@ -69,7 +69,7 @@ inline bool startService(const std::string&) { return false; }
 inline bool rerunSetup(const std::string&) { return false; }
 struct Info { int found = 0; int running = 0; bool heapAlive = false; bool suspended = false; };
 inline Info info() { return Info{}; }
-inline uint32_t lastTickAgoMs() { return 0; }
+inline uint32_t lastTickAgoMs() { return 0xFFFFFFFFu; }  // stale: watchdog nativo ativo
 }  // namespace AppServices
 
 #endif  // CONFIG_CELEROS_APP_SERVICES

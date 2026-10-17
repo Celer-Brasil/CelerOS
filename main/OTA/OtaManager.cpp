@@ -1,5 +1,4 @@
 #include "OtaManager.h"
-#include "UpdateCheck.h"
 #include <string>
 #include <cstdio>
 #include <atomic>
@@ -41,10 +40,6 @@ std::atomic<bool> s_busy{false};
 // transicao desconectado->conectado ancora o grace de 1 min e dispensa a
 // inscricao no onStateChanged (um handler a menos, zero problema de
 // ordenacao no boot).
-bool s_wasConnected = false;
-uint32_t s_connectedAtMs = 0;
-uint32_t s_lastCheckMs = 0;
-bool s_checkedThisSession = false;
 std::atomic<bool> s_taskRunning{false};
 
 // Id fixo da nota de update: o push com extId != 0 SUBSTITUI a nota anterior
@@ -423,76 +418,13 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
 }
 
 // ========================= Verificacao automatica ==========================
+// A POLITICA (quando checar, quando notificar) migraram para o servico JS
+// do app "Nucleo" (data/apps/Nucleo/service.js + policy.js, API 42): o
+// update.json vem pelo System.otaCheck (o fetch nativo de sempre, task de
+// 16 KB) e a notificacao 1x por versao e do proprio servico (Storage
+// "noted_ver"). Quem sobrou aqui e so o gate: checkBusy() para o servico
+// nao disparar check em cima do check manual/OTA em curso.
 
-namespace {
-
-// Notifica a versao nova no centro de notificacoes (1x por versao: o dedup
-// em "ota_noted_ver" sobrevive a reboot — o mesmo update pendente nao
-// volta a apitar no proximo boot). Push e thread-safe por construcao (mutex
-// interno + fila de toast/beep cross-task) e respeita o Nao Perturbe.
-void noteUpdate() {
-    const std::string noted = CelerSettings::get("ota_noted_ver");
-    if (!celer::updchk::shouldNotify(noted, OtaManager::info.version)) return;
-    std::string title = "CelerOS " + OtaManager::info.version + " disponível";
-    std::string msg = OtaManager::info.changelog;
-    size_t nl = msg.find('\n');
-    if (nl != std::string::npos) msg = msg.substr(0, nl);
-    msg = msg.empty() ? "Atualize em Ajustes > Atualização"
-                      : msg + " (Ajustes > Atualização)";
-    Notifications::push(title, msg, "ota", kOtaNoteId);
-    CelerSettings::set("ota_noted_ver", OtaManager::info.version.c_str());
-}
-
-void updchkTask(void*) {
-    OtaManager::checkForUpdates();
-    if (OtaManager::info.fetchFailed) {
-        ESP_LOGI("celer.ota", "check automatico: hub nao respondeu (silencioso)");
-    } else if (OtaManager::info.available) {
-        ESP_LOGI("celer.ota", "check automatico: %s disponivel",
-                 OtaManager::info.version.c_str());
-        noteUpdate();
-    } else {
-        ESP_LOGI("celer.ota", "check automatico: em dia (%s)", CELEROS_VERSION);
-    }
-    s_taskRunning = false;
-    vTaskDelete(nullptr);
-}
-
-}  // namespace
-
-// Gate para a politica do servico JS (API 42): check manual ou task do
-// fetch em curso — o servico "Atualizacoes" nao dispara check em cima.
 bool OtaManager::checkBusy() {
     return s_busy || s_taskRunning;
-}
-
-// Corpo do servico "updcheck" (ALWAYS: roda no celerLoop e no present() dos
-// apps). Nunca bloqueia: quando a politica de UpdateCheck.h diz "sim",
-// spawna a task curta acima — 16 KB de stack so enquanto o fetch vive
-// (~10 s; o mesmo TLS do check manual do Ajustes roda na task de 32 KB do
-// app), prio 1 igual ao loop: os bloqueios de socket devolvem a CPU.
-void OtaManager::tickCheck(bool inApp) {
-    const uint32_t now = millis();
-    const bool conn = NetworkManager::instance().isConnected();
-    if (conn && !s_wasConnected) s_connectedAtMs = now;  // (re)conexao ancora o grace
-    s_wasConnected = conn;
-
-    celer::updchk::State st;
-    st.wifiConnected = conn;
-    st.appOpen = inApp;
-    st.busy = s_busy || s_taskRunning;
-    st.shellSession = DebugBridge::sessionActive();
-    st.checkedThisSession = s_checkedThisSession;
-    st.sinceConnectMs = now - s_connectedAtMs;
-    st.sinceLastCheckMs = s_checkedThisSession ? now - s_lastCheckMs : 0;
-    if (!celer::updchk::due(st)) return;
-    s_taskRunning = true;
-    // Marca ANTES do fim da task: o tick seguinte (task ainda no fetch) nao
-    // re-spawna; falha de fetch tambem conta (nao martelar o hub caido)
-    s_checkedThisSession = true;
-    s_lastCheckMs = now;
-    if (xTaskCreate(updchkTask, "celerupd", 16384, nullptr, 1, nullptr) != pdPASS) {
-        s_taskRunning = false;
-        ESP_LOGW("celer.ota", "task do check automatico nao criou (heap?)");
-    }
 }

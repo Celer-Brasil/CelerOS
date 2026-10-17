@@ -1,0 +1,13 @@
+{
+  "name": "Nucleo",
+  "packageName": "celeros.nucleo",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Servicos do OS em segundo plano: check de atualizacao e relogio (API 42)",
+  "api": 42,
+  "system": true,
+  "order": 1,
+  "topbar": false,
+  "permissions": ["system"],
+  "service": "service.js"
+}

@@ -27,13 +27,16 @@ namespace {
 // (limite do NVS). Com o prefixo "celeros." sobravam 3 chars uteis e
 // pacotes como "celeros.notes"/"celeros.notepad" dividiam o mesmo Storage.
 std::string legacyNamespace(const std::string& pkg) {
+    // Sem packageName (script solto) = anonimo. O teste e o pkg VAZIO, nao o
+    // tamanho do namespace: um pacote de 1 char ("a" -> "app_a") caia no
+    // mesmo "app__anon" dos scripts avulsos e dividia o Storage com eles.
+    if (pkg.empty()) return "app__anon";
     std::string ns = "app_";
     for (size_t i = 0; i < pkg.size() && ns.size() < 15; i++) {
         char c = pkg[i];
         ns += (c == '.' || c == '-' || c == '_') ? '_' :
               ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) ? c : '_';
     }
-    if (ns.size() < 6) ns = "app__anon";  // sem packageName (script avulso)
     return ns;
 }
 
@@ -71,6 +74,10 @@ void markMigrated(const std::string& pkg) {
 // Uma vez por pacote: copia as chaves do namespace legado (truncado) para o
 // novo. O legado NAO e apagado — pode ser compartilhado com outro pacote
 // de mesmo prefixo, que migra a propria copia quando abrir.
+// O marcador so e gravado quando a copia terminou por INTEIRO: NVS cheia
+// (set_blob falho) ou malloc recusado deixavam chaves para tras e o
+// "ja migrado" impedia qualquer nova tentativa (dado antigo perdido para
+// sempre). Sem o marcador, a proxima abertura tenta de novo.
 void migrateLegacy(const std::string& pkg) {
     char key[12];
     snprintf(key, sizeof(key), "%08x", (unsigned)fnv1a(pkg));
@@ -84,19 +91,28 @@ void migrateLegacy(const std::string& pkg) {
     const std::string oldNs = legacyNamespace(pkg);
     const std::string newNs = pkgNamespace(pkg);
     nvs_handle_t src, dst;
+    bool ok = true;        // copia completa
+    bool haveSrc = false;  // namespace legado existe (tem o que copiar)
     if (nvs_open(oldNs.c_str(), NVS_READONLY, &src) == ESP_OK) {
+        haveSrc = true;
         if (nvs_open(newNs.c_str(), NVS_READWRITE, &dst) == ESP_OK) {
             nvs_iterator_t it = nullptr;
             esp_err_t e = nvs_entry_find("nvs", oldNs.c_str(), NVS_TYPE_BLOB, &it);
+            // NOT_FOUND = namespace sem entradas (nada a copiar); qualquer
+            // outro erro deixa a migracao incompleta (sem marcador)
+            if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) ok = false;
             while (e == ESP_OK && it != nullptr) {
                 nvs_entry_info_t info;
                 nvs_entry_info(it, &info);
                 size_t len = 0;
                 if (nvs_get_blob(src, info.key, nullptr, &len) == ESP_OK && len > 0) {
                     void* buf = malloc(len);
-                    if (buf != nullptr) {
-                        if (nvs_get_blob(src, info.key, buf, &len) == ESP_OK) {
-                            nvs_set_blob(dst, info.key, buf, len);
+                    if (buf == nullptr) {
+                        ok = false;  // sem RAM: tenta na proxima abertura
+                    } else {
+                        if (nvs_get_blob(src, info.key, buf, &len) != ESP_OK ||
+                            nvs_set_blob(dst, info.key, buf, len) != ESP_OK) {
+                            ok = false;
                         }
                         free(buf);
                     }
@@ -104,12 +120,16 @@ void migrateLegacy(const std::string& pkg) {
                 e = nvs_entry_next(&it);
             }
             if (it != nullptr) nvs_release_iterator(it);
-            nvs_commit(dst);
+            if (nvs_commit(dst) != ESP_OK) ok = false;
             nvs_close(dst);
+        } else {
+            ok = false;  // sem o destino nao ha migracao: tenta depois
         }
         nvs_close(src);
     }
-    markMigrated(pkg);
+    // Sem namespace legado (nada a migrar) ou copia inteira: marca. Falha
+    // parcial mantem o marcador fora para a proxima abertura tentar de novo.
+    if (!haveSrc || ok) markMigrated(pkg);
 }
 
 // Namespace do app corrente; migra na primeira chamada de cada app
@@ -205,8 +225,13 @@ duk_ret_t JSBindings::js_storageGet(duk_context *ctx) {
         pushDefault(ctx);
         return 1;
     }
-    nvs_get_blob(h, key, buf, &len);
+    esp_err_t got = nvs_get_blob(h, key, buf, &len);
     nvs_close(h);
+    if (got != ESP_OK) {  // corrida/valor mudou: nao devolve bytes velhos
+        free(buf);
+        pushDefault(ctx);
+        return 1;
+    }
     // valor pode conter NUL (binario ok)
     return jsPushOwnedString(ctx, buf, len);
 }

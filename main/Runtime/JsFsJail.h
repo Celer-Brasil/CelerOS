@@ -46,15 +46,33 @@ inline bool fsIsMountRoot(const char* path, const char* mount) {
     return strncmp(path, mount, n) == 0 && (path[n] == '\0' || (path[n] == '/' && path[n + 1] == '\0'));
 }
 
+// Teto de path vindo do JS. O VFS do IDF aceita ate ~255 (LittleFS limita o
+// componente a 64, o FAT a 255); acima disto so o app paga alocacao: os
+// nomes derivados ("<path>.tmp"/"<path>.part") viram std::string e o
+// crescimento sem excecoes ABORTA o aparelho. Quem monta nome derivado checa.
+constexpr size_t kJsPathMax = 192;
+
 // Pasta de apps instalados (/local/apps, /sd/apps e tudo abaixo): o codigo
 // de OUTROS apps. Escrever ali reescreveria o main.js de um app com mais
 // permissoes concedidas e herdaria a concessao (AppGrants) — so "system".
+// O FAT do /sd e CASE-INSENSITIVE: "/sd/Apps" e o MESMO diretorio de
+// "/sd/apps", entao a comparacao ali ignora caixa (o LittleFS do /local e
+// sensivel e segue exato — "/local/APPS" e outra pasta).
 inline bool fsUnderAppsDir(const char* path) {
-    auto under = [path](const char* dir) {
+    auto under = [](const char* p, const char* dir, bool foldCase) {
         size_t n = strlen(dir);
-        return strncmp(path, dir, n) == 0 && (path[n] == '\0' || path[n] == '/');
+        for (size_t i = 0; i < n; i++) {
+            char a = p[i], b = dir[i];
+            if (foldCase) {
+                if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+            }
+            if (a != b) return false;
+            if (a == '\0') return false;  // prefixo curto: nao e a pasta
+        }
+        return p[n] == '\0' || p[n] == '/';
     };
-    return under("/local/apps") || under("/sd/apps");
+    return under(path, "/local/apps", false) || under(path, "/sd/apps", true);
 }
 
 // Modulos compartilhados do hub (/local/modules/<nome>/<versao>/): codigo
@@ -77,6 +95,19 @@ inline bool fsOtherAppData(const char* path) {
     const char* end = strchr(seg, '/');
     size_t len = end ? (size_t)(end - seg) : strlen(seg);
     return s_appPkg.empty() || len != s_appPkg.size() || strncmp(seg, s_appPkg.c_str(), len) != 0;
+}
+
+// Arquivo protegido: caminho exato, o ".tmp" da escrita atomica ao lado e a
+// forma com UMA barra final. O LittleFS ignora a barra final ("/local/
+// wifi.txt/" resolve para o MESMO arquivo): a comparacao exata deixava o app
+// ler/gravar/apagar o wifi.txt com uma barra no fim.
+inline bool fsProtectedHit(const char* path, const char* prot) {
+    size_t n = strlen(prot);
+    if (strncmp(path, prot, n) != 0) return false;
+    const char* rest = path + n;
+    if (*rest == '\0') return true;
+    if (strcmp(rest, ".tmp") == 0 || strcmp(rest, ".tmp/") == 0) return true;
+    return rest[0] == '/' && rest[1] == '\0';
 }
 
 // Arquivos do SISTEMA sob /local (credenciais, PIN, boot, OTA) so sao
@@ -112,8 +143,7 @@ inline bool fsPathAllowed(const char* path) {
     for (const char* p : kProtected) {
         // tambem o ".tmp" da escrita atomica (writeTextFile escreve ao lado
         // e renomeia por cima: o app nao pode plantar o tmp)
-        size_t n = strlen(p);
-        if (strncmp(path, p, n) == 0 && (path[n] == '\0' || strcmp(path + n, ".tmp") == 0)) return false;
+        if (fsProtectedHit(path, p)) return false;
     }
     return true;
 }
@@ -123,6 +153,15 @@ inline bool fsPathAllowed(const char* path) {
 inline bool fsWriteAllowed(const char* path) {
     if (!fsPathAllowed(path)) return false;
     if (perm(celer::PERM_SYSTEM)) return true;
+    // Raiz de montagem e a raiz de /local/data nao sao alvo de escrita de
+    // app: o rename de DIRETORIO do LittleFS e permitido, entao um
+    // FS.renameFile("/local/data", ...) moveria a pasta privada de TODOS os
+    // apps (e "/local" e o proprio ponto de montagem). FS.appData() cria a
+    // pasta do app pelo lado C++, sem passar por aqui.
+    if (fsIsMountRoot(path, "/local") || fsIsMountRoot(path, "/sd") ||
+        fsIsMountRoot(path, "/local/data")) {
+        return false;
+    }
     return !fsUnderAppsDir(path) && !fsUnderSharedModules(path);
 }
 

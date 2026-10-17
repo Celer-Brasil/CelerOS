@@ -147,7 +147,8 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     // Cache no heap stash, chaveado pela PASTA + nome: no svchost o heap e
     // UNICO para todos os servicos — sem a pasta na chave, dois apps dando
     // require("utils") compartilhariam a instancia (e a pasta) do primeiro.
-    char cacheKey[112];
+    // 160 = pasta (no maximo /local/apps/<pkg de 64>) + "/" + nome (63) + NUL
+    char cacheKey[160];
     snprintf(cacheKey, sizeof(cacheKey), "%s/%s", s_appDir.c_str(), mod);
 
     // Cache no heap stash do app corrente: [.. name(0) stash(1) cache(2)]
@@ -228,6 +229,8 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     duk_int_t rc = duk_pcompile_lstring_filename(ctx, DUK_COMPILE_FUNCTION, src, srcLen);
     free(src);  // bytecode no heap: o fonte sai antes do eval
     if (rc != 0) {
+        // a entrada parcial foi gravada sob cacheKey (pasta + nome): apagar
+        // "mod" nao removia nada e o retry devolvia exports quebrado
         duk_del_prop_string(ctx, 2, cacheKey);  // falha nao memoiza
         return duk_throw(ctx);             // erro de sintaxe propagado ao app
     }
@@ -248,7 +251,10 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     rc = duk_pcall(ctx, 3);
     g_depth--;
     if (rc != 0) {
-        duk_del_prop_string(ctx, 2, mod);  // retry recarrega do disco
+        // memoizacao parcial vive sob cacheKey (pasta + nome), nao sob "mod":
+        // a chave errada deixava exports quebrado no cache e o retry
+        // devolvia o objeto pela metade em vez de reavaliar do disco
+        duk_del_prop_string(ctx, 2, cacheKey);  // retry recarrega do disco
         return duk_throw(ctx);             // erro do modulo propagado ao app
     }
     duk_pop(ctx);  // resultado do eval (undefined) nao interessa

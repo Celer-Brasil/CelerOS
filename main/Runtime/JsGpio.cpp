@@ -109,9 +109,13 @@ duk_ret_t JSBindings::js_pulseIn(duk_context *ctx) {
     // espera ocupada sem ceder: teto de 1 s (um timeout enorme prendia a CPU
     // ate o watchdog reiniciar o aparelho)
     if (timeout > 1000000UL) timeout = 1000000UL;
-    esp_task_wdt_reset();
-
-    unsigned long duration = pulseIn(pin, state, timeout);
+    // espera de ate 1 s e NATIVA: present antes (quadro do app) e
+    // noteAppYield no retorno — sem isso a janela do exec-timeout vencia e o
+    // RangeError matava o app logo depois de medir o pulso
+    unsigned long duration = jsBlocking([&] {
+        esp_task_wdt_reset();
+        return pulseIn(pin, state, timeout);
+    });
     duk_push_uint(ctx, duration);
     return 1;
 }

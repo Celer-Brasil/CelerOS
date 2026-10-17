@@ -496,6 +496,8 @@ bool providerStart(const LeaseTable<LEASES>::Lease& l, const uint8_t* params, si
         }
         case TYPE_MIC:
             if (AudioRes::sourceActive()) return true;  // a desta sessao (exclusivo)
+            // app gravando no mesmo I2S: recusa (o stream roubaria chunks)
+            if (BoardIO::micRecActive()) return false;
             return AudioRes::sourceStart(l.mac, l.sid, l.token);
         case TYPE_SPEAKER:
             if (AudioRes::playActive()) return true;

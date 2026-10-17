@@ -94,11 +94,12 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         {"otaCheck", JSBindings::js_otaCheck, 0},
         {"installZip", JSBindings::js_installZip, 2},
         {"notify", JSBindings::js_notify, 2},
+        {"print", JSBindings::js_print, 1},                // log do servico
         {"appOpen", JSBindings::js_appOpen, 0},            // API 42
         {"updateBusy", JSBindings::js_updateBusy, 0},      // API 42
         {"shellActive", JSBindings::js_shellActive, 0},    // API 42
     };
-    JSBindings::putFns(thr, kSvcSys, 26);
+    JSBindings::putFns(thr, kSvcSys, 27);
     duk_put_prop_string(thr, -2, "System");
 
     // ---- Service: controle do proprio servico ----

@@ -42,7 +42,10 @@ static void fsDeny(duk_context *ctx, const char* path) {
 duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     if (!fsPathAllowed(path)) fsDeny(ctx, path);
-    std::string content = FileSystem::readTextFile(path);
+    // leitura de arquivo grande (SD) passa de 1s: o tempo NATIVO conta na
+    // janela do exec-timeout (padrao do js_copyFile: present antes,
+    // noteAppYield depois)
+    std::string content = jsBlocking([&] { return FileSystem::readTextFile(path); });
     if (content.length() == 0 && !FileSystem::exists(path)) {
         duk_push_null(ctx);
     } else {
@@ -54,8 +57,13 @@ duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
 duk_ret_t JSBindings::js_writeTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     if (!fsWriteAllowed(path)) fsDeny(ctx, path);
+    // o writeTextFile monta "<path>.tmp" num std::string: path absurdo
+    // (app hostil) abortaria o aparelho no -fno-exceptions
+    if (strlen(path) > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "FS: caminho longo demais");
+    }
     const char *content = duk_require_string(ctx, 1);
-    bool success = FileSystem::writeTextFile(path, content);
+    bool success = jsBlocking([&] { return FileSystem::writeTextFile(path, content); });
     duk_push_boolean(ctx, success);
     return 1;
 }
@@ -105,6 +113,7 @@ static duk_ret_t listDirPush(duk_context *ctx, void *udata) {
 duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     // "/local/." etc. e pasta privada de outro app: lista vazia (como ausente)
+    present();  // chamada bloqueante (pasta grande no SD): quadro antes
     DIR* dir = fsPathAllowed(path) ? opendir(path) : nullptr;
     if (dir == nullptr) {
         duk_push_array(ctx);
@@ -113,6 +122,7 @@ duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     ListDirArgs args{dir, path};
     duk_int_t rc = duk_safe_call(ctx, listDirPush, &args, 0, 1);
     closedir(dir);
+    CelerKernel::noteAppYield();  // montar o array de milhares de entradas
     if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
     return 1;
 }
@@ -121,7 +131,8 @@ duk_ret_t JSBindings::js_appendTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     if (!fsWriteAllowed(path)) fsDeny(ctx, path);
     const char *content = duk_require_string(ctx, 1);
-    duk_push_boolean(ctx, FileSystem::appendTextFile(path, content));
+    bool ok = jsBlocking([&] { return FileSystem::appendTextFile(path, content); });
+    duk_push_boolean(ctx, ok);
     return 1;
 }
 
@@ -188,18 +199,24 @@ duk_ret_t JSBindings::js_getFileMD5(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char *path = duk_require_string(ctx, 0);
     if (!fsPathAllowed(path)) fsDeny(ctx, path);
-    duk_push_string(ctx, FileSystem::getFileMD5(path).c_str());
+    std::string hash = FileSystem::getFileMD5(path);
+    CelerKernel::noteAppYield();  // hash de arquivo grande (SD/firmware) > 1s
+    duk_push_string(ctx, hash.c_str());
     return 1;
 }
 
 duk_ret_t JSBindings::js_mountSD(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
-    duk_push_boolean(ctx, FileSystem::mountSD());
+    bool ok = FileSystem::mountSD();  // init do cartao pode levar segundos
+    CelerKernel::noteAppYield();
+    duk_push_boolean(ctx, ok);
     return 1;
 }
 
 duk_ret_t JSBindings::js_unmountSD(duk_context *ctx) {
+    present();  // flush/desligamento do cartao e bloqueante
     FileSystem::unmountSD();
+    CelerKernel::noteAppYield();
     return 0;
 }
 
@@ -217,6 +234,7 @@ duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
         if (maxLen > 64 * 1024) maxLen = 64 * 1024;
     }
 
+    present();  // leitura de ate 64KB no SD: quadro antes
     FILE* f = fopen(path, "rb");
     if (f == nullptr) { duk_push_null(ctx); return 1; }
     fseek(f, 0, SEEK_END);
@@ -229,6 +247,7 @@ duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
     if (buf == nullptr) { fclose(f); duk_push_null(ctx); return 1; }
     size_t got = fread(buf, 1, sz, f);
     fclose(f);
+    CelerKernel::noteAppYield();  // tempo NATIVO da leitura
     return jsPushOwnedString(ctx, buf, got);
 }
 
@@ -238,6 +257,12 @@ duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
 duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     if (!fsWriteAllowed(path)) fsDeny(ctx, path);
+    // o ".tmp" da escrita atomica era um std::string: path absurdo (app
+    // hostil) abortaria o aparelho no -fno-exceptions. Buffer de pilha
+    // dimensionado pelo teto (jail).
+    if (strlen(path) > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "FS.writeFile: caminho longo demais");
+    }
     size_t len = 0;
     const char* data = duk_require_lstring(ctx, 1, &len);
     if (len > 64 * 1024) {
@@ -247,15 +272,18 @@ duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
     // o writeTextFile) — queda de energia nao deixa o arquivo pela metade.
     // FAT do SD nao sobrescreve com rename: escrita direta.
     const bool atomic = strncmp(path, "/local/", 7) == 0;
-    std::string tmp = atomic ? std::string(path) + ".tmp" : std::string(path);
-    FILE* f = fopen(tmp.c_str(), "wb");
+    char tmp[kJsPathMax + 8];
+    snprintf(tmp, sizeof(tmp), "%s%s", path, atomic ? ".tmp" : "");
+    present();  // escrita de ate 64KB (LittleFS fragmentado): quadro antes
+    FILE* f = fopen(tmp, "wb");
     if (f == nullptr) { duk_push_boolean(ctx, 0); return 1; }
     bool ok = fwrite(data, 1, len, f) == len;
     ok = fclose(f) == 0 && ok;
-    if (atomic && (!ok || rename(tmp.c_str(), path) != 0)) {
-        unlink(tmp.c_str());
+    if (atomic && (!ok || rename(tmp, path) != 0)) {
+        unlink(tmp);
         ok = false;
     }
+    CelerKernel::noteAppYield();  // tempo NATIVO da escrita/rename
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }

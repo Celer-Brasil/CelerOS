@@ -55,6 +55,17 @@ float numOr(duk_context* ctx, int idx, float def) {
     return duk_is_number(ctx, idx) ? (float)duk_get_number(ctx, idx) : def;
 }
 
+// Teto de magnitude de um parametro do step: finito-porem-absurdo (1e29)
+// passa no vfin do motor, mas gx*dt2 / damp*velocidade estouram float para
+// infinito na primeira conta e o mundo inteiro vira NaN no passo seguinte.
+// A faixa (1e6) cobre qualquer jogo no espaco 240x320 com folga.
+float clampMag(float v, float lim, float bad) {
+    if (!celer::verlet::vfin(v)) return bad;
+    if (v > lim) return lim;
+    if (v < -lim) return -lim;
+    return v;
+}
+
 }  // namespace
 
 void jsPhysicsReset() {
@@ -197,6 +208,18 @@ duk_ret_t JSBindings::js_verletStep(duk_context* ctx) {
     float maxx = numOr(ctx, 7, 0);
     float maxy = numOr(ctx, 8, 0);
     float bounce = numOr(ctx, 9, 0.5f);
+    // dt absurdo (finito, mas 1e30) estoura dt2 no motor: passo de 1 s e o
+    // teto plausivel (o normal e 1/60). dt <= 0 e NaN seguem recusados pelo
+    // stepWorld (devolve false, mundo intocado).
+    if (celer::verlet::vfin(dt) && dt > 1.0f) dt = 1.0f;
+    gx = clampMag(gx, 1e6f, 0);
+    gy = clampMag(gy, 1e6f, 0);
+    // damp negativo e amplificacao por quadro (bomba de energia) e NaN vira
+    // o default do motor: nunca maior que 10x por passo
+    damp = clampMag(damp, 10.0f, 1.0f);
+    if (damp < 0.0f) damp = 1.0f;
+    bounce = clampMag(bounce, 10.0f, 0);
+    // bounds NaN/inf ja desligam a caixa sozinhos (comparacoes falsas)
     CelerKernel::noteAppYield();  // step pesado renova o exec-timeout (padrao 4b5b9ce)
     // devolve se o passo RODOU: dt NaN/infinito/<= 0 e' recusado dentro do
     // stepWorld (mundo intocado) em vez de envenenar posicoes

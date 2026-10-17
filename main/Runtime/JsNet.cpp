@@ -36,6 +36,20 @@
 // ~90KB do runtime JS. Limitar payloads a dezenas de KB.
 #define NET_MAX_BODY 32768
 
+// URL absurda (app hostil) vira std::string dentro do HttpClient (cada copia
+// cresce sem excecoes e ABORTA no heap apertado da CYD): teto com RangeError
+// pre-formatado. 2 KB cobre qualquer URL real com query longa.
+#define NET_MAX_URL 2048
+
+// O duk_require_string fica NO BINDING (o app_lint infere a aridade minima
+// dos corpos e um helper proprio esconderia o argumento obrigatorio).
+static const char* netCheckUrl(duk_context* ctx, const char* url) {
+    if (strlen(url) > NET_MAX_URL) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net: URL longa demais (max 2048)");
+    }
+    return url;
+}
+
 // Corpo no JsBodySink do JsInternal.h (teto NET_MAX_BODY aplicado no
 // stream, malloc/realloc — ver comentario do helper).
 
@@ -45,12 +59,19 @@
 static bool netFetch(duk_context *ctx, bool isPost) {
     JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
     jsRequireWifi(ctx, "Net");
-    const char *url = duk_require_string(ctx, 0);
+    const char *url = netCheckUrl(ctx, duk_require_string(ctx, 0));
 
     std::string body;
     std::string contentType = "text/plain";
     if (isPost) {
-        body = duk_require_string(ctx, 1);
+        size_t blen = 0;
+        const char* b = duk_require_lstring(ctx, 1, &blen);
+        // corpo do POST e copiado para std::string (HttpClient): teto evita
+        // que um app hostil derrube o aparelho no crescimento sem excecoes
+        if (blen > 64 * 1024) {
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.post: corpo acima de 64KB");
+        }
+        body.assign(b, blen);
         if (duk_is_string(ctx, 2)) contentType = duk_get_string(ctx, 2);
     }
 
@@ -109,7 +130,7 @@ duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
 duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
     jsRequireWifi(ctx, "Net");
-    const char *url = duk_require_string(ctx, 0);
+    const char *url = netCheckUrl(ctx, duk_require_string(ctx, 0));
     const char *path = duk_require_string(ctx, 1);
     // Grava no FS: mesma capability e mesmo jail do FS.writeFile. Antes so
     // "net" bastava e o destino era livre (ota_url.txt, main.js de app de
@@ -122,11 +143,17 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
         snprintf(msg, sizeof(msg), "Net.download: destino %s nao permitido", path);
         duk_error(ctx, DUK_ERR_ERROR, msg);
     }
+    // "<path>.part" em buffer de pilha: path absurdo (app hostil) virava
+    // std::string que aborta o aparelho no -fno-exceptions
+    if (strlen(path) > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.download: caminho longo demais");
+    }
     const bool hasProgress = duk_is_function(ctx, 2);
 
     // Baixa ao lado e so troca no sucesso: o "wb" do downloadToFile zerava
     // o arquivo existente ANTES da requisicao (404/sem rede = arquivo perdido)
-    std::string part = std::string(path) + ".part";
+    char part[kJsPathMax + 8];
+    snprintf(part, sizeof(part), "%s.part", path);
     bool exitReq = false;  // X/exit pedido de dentro do callback
 
     HttpClient http;
@@ -159,8 +186,12 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
         duk_pop(ctx);  // resultado ou erro
     });
     HttpResponse resp = http.downloadToFile(url, part);
-    bool ok = resp.isOk() && FileSystem::renameFile(part.c_str(), path);
-    if (!ok) FileSystem::deleteFile(part.c_str());
+    // Sem progresso (DNS/TLS/handshake parado ate o timeout de 15s) nenhum
+    // chunk renovou a janela: o retorno cairia no RangeError do executor
+    // mesmo com o arquivo baixado. Renova AQUI, antes do rename/retorno.
+    CelerKernel::noteAppYield();
+    bool ok = resp.isOk() && FileSystem::renameFile(part, path);
+    if (!ok) FileSystem::deleteFile(part);
     if (exitReq) throwAppExit(ctx);
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
@@ -240,7 +271,7 @@ static void netAsyncTask(void* raw) {
 }
 
 duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
-    const char* url = duk_require_string(ctx, 0);
+    const char* url = netCheckUrl(ctx, duk_require_string(ctx, 0));
     if (!WebManager::isWifiConnected()) {
         celer_log_println("[net] beginGet -1: wifi fora (state)");
         duk_push_int(ctx, -1);

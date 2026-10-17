@@ -52,6 +52,10 @@ duk_ret_t JSBindings::js_sensorsStepHistory(duk_context* ctx) {
     int32_t days[7];
     int32_t counts[7];
     int n = bp.imuStepHistory ? bp.imuStepHistory(days, counts, 7) : 0;
+    // contrato do hook e <= 7; um perfil defeituoso nao pode estourar as
+    // pilhas acima na leitura
+    if (n < 0) n = 0;
+    if (n > 7) n = 7;
     duk_idx_t arr = duk_push_array(ctx);
     for (int i = 0; i < n; i++) {
         duk_push_object(ctx);

@@ -151,7 +151,9 @@ bool sourceStartBuffer(const uint8_t mac[6], uint16_t sid, uint32_t token, const
 }
 
 bool sourceStart(const uint8_t mac[6], uint16_t sid, uint32_t token) {
-    if (!micAvailable() || s_src.alive) return false;
+    // o app pode estar GRAVANDO no mesmo I2S (micRecActive): um stream remoto
+    // aberto agora roubaria chunks da gravacao local (e vice-versa)
+    if (!micAvailable() || s_src.alive || BoardIO::micRecActive()) return false;
     s_src.buf = nullptr;
     s_src.bufN = 0;
     if (s_src.task != nullptr) {  // task da sessao anterior estacionada

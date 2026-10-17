@@ -54,6 +54,13 @@ struct TimerHost {
 TimerHost s_appHost;   // o app em foreground (present())
 TimerHost s_svcHost;   // servicos em segundo plano (AppServices::tick)
 TimerHost* s_cur = &s_appHost;  // host que os bindings js_setTimeout... enxergam
+// Profundidade do host de servicos: o dispatch roda DENTRO do present (o
+// appsvc e ALWAYS), e um binding de servico que chama present de novo (FS
+// copyFile/listDir...) dispara outro drainTimers aninhado. Sem a pilha, o
+// "false" do drain INTERNO devolvia s_cur ao host do APP e um setTimeout
+// depois do present caia na fileira errada (stash do servico, slot do app —
+// o timer virava do app e a referencia ficava presa no heap do svchost).
+int s_svcDepth = 0;
 
 void timerHostReset(TimerHost& h) {
     for (auto& t : h.slots) t = TimerSlot{};
@@ -159,7 +166,12 @@ static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
     t.ctx = ctx;
     t.used = true;
     t.repeat = repeat;
-    t.period = ms < 10 ? 10 : ms;  // piso de 10ms: dispara no proximo present()
+    // piso de 10ms (dispara no proximo present()); teto de 2^31-1 ms: acima
+    // disso millis()+period dava a volta e o timeout de "49 dias" disparava
+    // na hora (a comparacao e por diferenca assinada)
+    if (ms < 10) ms = 10;
+    if (ms > 0x7FFFFFFFu) ms = 0x7FFFFFFFu;
+    t.period = ms;
     t.nextFire = millis() + t.period;
     // id monotonico por app (nunca o slot): o id de um timeout que ja
     // disparou nao pode cancelar o timer novo que reusou o mesmo slot
@@ -203,13 +215,22 @@ duk_ret_t JSBindings::js_clearInterval(duk_context *ctx) { return timerClear(ctx
 // Reset por app (chamado no init da fachada)
 void JSBindings::timersResetAll() {
     timerHostReset(s_appHost);
+    s_svcDepth = 0;  // nenhum dispatch de servico atravessa o init
     JSBindingsTimers::setHost(&s_appHost);
 }
 
 // Host do svchost (API 42): zera slots e troca o corrente durante o dispatch
 void JSBindings::timersResetSvc() { timerHostReset(s_svcHost); }
 void JSBindings::timersUseSvcHost(bool svc) {
-    JSBindingsTimers::setHost(svc ? &s_svcHost : &s_appHost);
+    // Profundidade: o dispatch de servico pode aninhar (binding de servico
+    // chama present -> outro drainTimers). So o "false" do nivel 0 devolve o
+    // host do app; o interno preserva o host de servicos para os bindings
+    // que rodarem depois do present aninhado.
+    if (svc) {
+        if (s_svcDepth++ == 0) JSBindingsTimers::setHost(&s_svcHost);
+    } else if (s_svcDepth > 0) {
+        if (--s_svcDepth == 0) JSBindingsTimers::setHost(&s_appHost);
+    }
 }
 
 // Hooks do dispatch do svchost: identidade do dono do slot (svcIdentity/

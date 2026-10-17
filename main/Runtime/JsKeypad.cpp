@@ -20,6 +20,7 @@
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include <cstring>
+#include <new>  // std::nothrow (KeyboardScreen sem abortar no heap cheio)
 #include "JsInternal.h"
 #include "../Hardware/Buttons.h"
 #include "../Display/ScreenPower.h"
@@ -163,7 +164,17 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     if (maxLen < 1) maxLen = 1;
 
     present();
-    s_kb = new kui::KeyboardScreen(title, initial, maxLen);
+    // Textos do app hostil: o titulo so cabe numa linha e o inicial tem o
+    // teto do proprio campo (o KeyboardScreen clampa o maxLen em 256 mas
+    // NAO corta o initial recebido). Sem os cortes, um app derrubava o
+    // aparelho nas copias para std::string (sem excecoes) com o heap cheio.
+    if (title.size() > 64) title.resize(64);
+    if (initial.size() > 256) initial.resize(256);
+    s_kb = new (std::nothrow) kui::KeyboardScreen(title, initial, maxLen);
+    if (s_kb == nullptr) {  // sem RAM: false (o app segue sem teclado)
+        duk_push_false(ctx);
+        return 1;
+    }
     s_kb->setPersistent(true);
     s_kb->setShowField(field);
     s_kb->setMask(mask);

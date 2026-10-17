@@ -81,6 +81,9 @@ bool s_hwTouched = false;  // JsSystemApps marca ao aplicar sem persistir
 void JSBindings::appExitCleanup() {
     ScreenPower::keepAwake(false);   // latched (keepAwake(true)) de um app
     ScreenPower::keepAwakeFor(0);    // e o prazo (Clock: 30 min depois de sair)
+    // app saiu no meio de uma gravacao: o mic seguia ate o ms (10 s) e o
+    // buffer ficava alocado ate o init do proximo app — devolve AGORA
+    BoardIO::micRecCancel();
     // Estado nativo do app volta ao heap na SAIDA (antes so no init do
     // proximo app): mundos verlet/rigidos, sprites e corpos pendentes de
     // net/AI seguravam dezenas de KB durante o intervalo no launcher — e

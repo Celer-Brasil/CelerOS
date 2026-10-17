@@ -230,11 +230,20 @@ void JSBindings::aiReset() {
     // estar no meio do playback, que ignora o discard sozinho)
     if (s.speak && s.state == 1) AudioPlayer::requestStop();
     s.discard = true;
-    if (s.state == 2) {
+    // state 1 = worker VIVA: payload/key/path sao dela (ela libera ao
+    // consumir; liberar aqui seria double free/UAF). state 0/2 = ninguem
+    // mais toca: devolve TUDO — o caminho "worker nao nasceu" deixava o
+    // payload (centenas de KB no audio do Qwen) preso ate o proximo AI.*.
+    if (s.state != 1) {
         s.state = 0;
         jsSlotFreeBody(s);
         free(s.path);
         s.path = nullptr;
+        free(s.payload);
+        s.payload = nullptr;
+        s.payloadLen = 0;
+        free(s.key);
+        s.key = nullptr;
     }
     xSemaphoreGive(s.mux);
 }
@@ -712,15 +721,44 @@ static void aiStashCallback(duk_context* ctx) {
     s_aiPending = true;
 }
 
+// Pre-cria o array "_ai" do stash do app (slot 0 ja alocado) ANTES do
+// encode grande: com o heap apertado (payload de audio de centenas de KB) o
+// push_array podia lancar DEPOIS do slot em state=1 e da worker acordada —
+// o slot ficava "ocupado" para sempre (AI.chat devolvia false ate reiniciar).
+// Depois disto, aiStashCallback so escreve num indice existente (sem alloc).
+static void aiEnsureCallbackArray(duk_context* ctx) {
+    duk_push_heap_stash(ctx);
+    duk_get_prop_string(ctx, -1, "_ai");
+    if (!duk_is_array(ctx, -1)) {
+        duk_pop(ctx);                 // valor antigo (ou undefined)
+        duk_push_array(ctx);          // [stash, arr]
+        duk_push_undefined(ctx);      // [stash, arr, undef]
+        duk_put_prop_index(ctx, -2, 0);
+        duk_put_prop_string(ctx, -2, "_ai");
+    } else {
+        duk_pop(ctx);                 // [stash]
+    }
+    duk_pop(ctx);                     // []
+}
+
 // Acorda (ou cria) a worker. false = worker nao nasceu (RAM p/ stack): o
 // slot e devolvido e o callback do stash esquecido — o app ve false.
 static bool aiWakeWorker(duk_context* ctx) {
     aiEnsureWorker();
     if (s_aiWorker == nullptr || s_aiWork == nullptr) {
-        // worker nao nasceu: devolve o slot e esquece o callback
+        // worker nao nasceu: devolve o slot, esquece o callback e libera o
+        // pedido (ninguem vai consumir payload/key/path; antes ficavam
+        // presos ate o proximo AI.* — ate o audio base64 do Qwen)
         AiSlot& s = s_aiSlot;
         jsSlotMuxTake(s);
         if (s.state == 1) s.state = 0;
+        free(s.payload);
+        s.payload = nullptr;
+        s.payloadLen = 0;
+        free(s.key);
+        s.key = nullptr;
+        free(s.path);
+        s.path = nullptr;
         xSemaphoreGive(s.mux);
         s_aiPending = false;
         duk_push_heap_stash(ctx);
@@ -772,6 +810,8 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "AI: opts.messages deve ser um array");
     }
     duk_pop(ctx);
+    // callback a prova de OOM antes do encode grande (ver aiEnsureCallbackArray)
+    aiEnsureCallbackArray(ctx);
     // JSON codificado fica na pilha ate o malloc do slot: sem std::string
     // intermediaria (o audio base64 do Qwen chega a centenas de KB — eram
     // tres copias vivas no pico: string do duk, std::string e o malloc)
@@ -813,6 +853,9 @@ duk_ret_t JSBindings::js_aiChat(duk_context *ctx) {
     xSemaphoreGive(s.mux);
 
     aiStashCallback(ctx);
+    // encode + copia do pedido sao NATIVOS (audio base64 do Qwen chega a
+    // centenas de KB): renova a janela antes de voltar ao bytecode
+    CelerKernel::noteAppYield();
     duk_push_boolean(ctx, aiWakeWorker(ctx) ? 1 : 0);
     return 1;
 }
@@ -857,6 +900,8 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
         celer_log_printf("%s\n", msg);
         textLen = AI_TTS_MAX_TEXT;
     }
+    // callback a prova de OOM antes do encode/copia do pedido
+    aiEnsureCallbackArray(ctx);
 
     // Destino: appData do app corrente por default (mesma casa do
     // FS.appData); um path explicito segue as regras do jail de escrita.
@@ -948,6 +993,7 @@ duk_ret_t JSBindings::js_aiSpeak(duk_context *ctx) {
     xSemaphoreGive(s.mux);
 
     aiStashCallback(ctx);
+    CelerKernel::noteAppYield();  // encode/copia do pedido (tempo NATIVO)
     duk_push_boolean(ctx, aiWakeWorker(ctx) ? 1 : 0);
     return 1;
 }
@@ -1190,6 +1236,17 @@ static duk_ret_t aiPushResult(duk_context* ctx, void* udata) {
 // chamadores, o longjmp nao atravessa recurso C aberto).
 void JSBindings::aiTick(duk_context* ctx) {
     if (ctx == nullptr || !s_aiPending) return;
+    // O ctx do present pode ser o heap do SVCHOST: um servico que chama um
+    // binding bloqueante (FS.copyFile/listDir...) dispara present() com a
+    // identidade do servico. O resultado da IA do APP era entao consumido e
+    // DESCARTADO (o stash "_ai" nao existe naquele heap) e o app nunca
+    // recebia o callback. Sem o array neste ctx nao ha o que entregar:
+    // preserva slot/pending para o proximo present do app.
+    duk_push_heap_stash(ctx);
+    duk_get_prop_string(ctx, -1, "_ai");
+    const bool hasCallback = duk_is_array(ctx, -1);
+    duk_pop_2(ctx);
+    if (!hasCallback) return;
     AiSlot& s = s_aiSlot;
     if (!jsSlotMuxTake(s)) return;
     if (s.state != 2) {

@@ -3,6 +3,7 @@
 #include "../Hardware/BoardIO.h"
 #if CONFIG_CELEROS_BLUETOOTH
 #include "../Pack/Resources.h"
+#include "../Pack/AudioRes.h"
 #endif
 
 // =====================================================
@@ -29,12 +30,32 @@ duk_ret_t JSBindings::js_micRecStart(duk_context *ctx) {
         if (duk_is_number(ctx, -1)) ms = duk_get_int(ctx, -1);
         duk_pop(ctx);
     }
+    // Init do canal I2S/codec pode esperar o lock (500 ms) e o codec do
+    // watch acorda: o tempo NATIVO conta na janela do exec-timeout.
+    present();
 #if CONFIG_CELEROS_BLUETOOTH
     // o dono vem primeiro: sessao remota no nosso mic (Pack.listen/record de
     // outro no) e revogada — dois leitores no canal roubariam chunks
     Resources::localClaim(resproto::TYPE_MIC);
+    // Revoke com task presa no i2s_read (ate 400 ms de espera do sourceStop):
+    // entrar na gravacao agora seria contencao de dois leitores no MESMO
+    // canal. O app ve false e tenta de novo no proximo toque.
+    if (AudioRes::sourceActive()) {
+        CelerKernel::noteAppYield();
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
 #endif
-    duk_push_boolean(ctx, BoardIO::micRecStart(ms) ? 1 : 0);
+    const bool ok = BoardIO::micRecStart(ms);
+#if CONFIG_CELEROS_BLUETOOTH
+    if (ok) {
+        // janela entre o claim e o start: uma sessao remota aberta nesse
+        // intervalo tambem e revogada (o app e o dono do mic enquanto grava)
+        Resources::localClaim(resproto::TYPE_MIC);
+    }
+#endif
+    CelerKernel::noteAppYield();
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -48,9 +69,14 @@ duk_ret_t JSBindings::js_micRecStop(duk_context *ctx) {
         raw = duk_get_boolean(ctx, -1) != 0;
         duk_pop(ctx);
     }
+    // join da task (ate ~150 ms no i2s_read) + WAV/base64 de ate ~430 KB: o
+    // tempo NATIVO passa da janela do exec-timeout (mesmo caso do
+    // Pack.recordStop)
+    present();
     size_t len = 0;
     uint32_t ms = 0;
     char* p = BoardIO::micRecStop(!raw, &len, &ms);
+    CelerKernel::noteAppYield();  // janela renovada antes de voltar ao bytecode
     if (p == nullptr) {
         duk_push_null(ctx);
         return 1;

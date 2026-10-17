@@ -44,9 +44,10 @@ void tick(bool inApp);
 void suspendForApp();
 void resumeAfterApp();
 
-// shell svc <list|stop|start> [pkg]
+// shell svc <list|stop|start|setup> [pkg]
 bool stopService(const std::string& pkg);   // para ate o proximo boot/start
 bool startService(const std::string& pkg);  // (re)carrega agora
+bool rerunSetup(const std::string& pkg);    // esquece o marcador do install.sh
 Info info();
 
 // Watchdog do TimeManager: ms desde o ultimo giro do svchost (o fallback
@@ -65,6 +66,7 @@ inline void suspendForApp() {}
 inline void resumeAfterApp() {}
 inline bool stopService(const std::string&) { return false; }
 inline bool startService(const std::string&) { return false; }
+inline bool rerunSetup(const std::string&) { return false; }
 struct Info { int found = 0; int running = 0; bool heapAlive = false; bool suspended = false; };
 inline Info info() { return Info{}; }
 inline uint32_t lastTickAgoMs() { return 0; }

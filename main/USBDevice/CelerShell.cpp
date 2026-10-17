@@ -800,7 +800,12 @@ int cmdSvc(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "%s: %s\r\n", argv[1], ok ? "ok" : "servico nao encontrado");
         return ok ? 0 : 1;
     }
-    print(ctx, "uso: svc list | svc stop <pkg> | svc start <pkg>\r\n");
+    if (argc >= 3 && strcmp(argv[1], "setup") == 0) {
+        bool ok = AppServices::rerunSetup(argv[2]);
+        print(ctx, "setup: %s (roda no proximo giro)\r\n", ok ? "reagendado" : "svc ausente");
+        return ok ? 0 : 1;
+    }
+    print(ctx, "uso: svc list | svc stop|start|setup <pkg>\r\n");
     return 1;
 }
 
@@ -2158,7 +2163,35 @@ const ShellCmd kCommands[] = {
 
 }  // namespace
 
+// Raizes do modo restrito (install.sh): nullptr = livre
+static char s_rRootA[96] = {0};
+static char s_rRootB[96] = {0};
+
+void CelerShell::setRestrictedRoots(const char* a, const char* b) {
+    if (a != nullptr) {
+        strncpy(s_rRootA, a, sizeof(s_rRootA) - 1);
+        s_rRootA[sizeof(s_rRootA) - 1] = 0;
+    } else {
+        s_rRootA[0] = 0;
+    }
+    if (b != nullptr) {
+        strncpy(s_rRootB, b, sizeof(s_rRootB) - 1);
+        s_rRootB[sizeof(s_rRootB) - 1] = 0;
+    } else {
+        s_rRootB[0] = 0;
+    }
+}
+
 bool CelerShell::pathAllowed(const std::string& path) {
+    // Modo restrito: o script de instalacao so toca a PROPRIA pasta (le o
+    // pacote) e o proprio /local/data/<pkg> (dados do app)
+    if (s_rRootA[0] != 0) {
+        auto under = [&path](const char* root) {
+            size_t n = strlen(root);
+            return path.compare(0, n, root) == 0 && (path.size() == n || path[n] == '/');
+        };
+        return under(s_rRootA) || (s_rRootB[0] != 0 && under(s_rRootB));
+    }
     // Segmento inteiro (mesma correcao do WebManager::pathAllowed): o
     // prefixo cru aceitava "/localfoo"/"/sdcard" e o caminho ia direto
     // ao fopen/stat/remove dos comandos
@@ -2227,6 +2260,26 @@ static int runSegment(char* seg, CelerShell::PrintFn print, void* ctx) {
     for (const char* w : kBlockWords) {
         if (strcmp(argv[0], w) == 0) {
             print(ctx, "%s: palavra de bloco — so dentro de script (sh <arquivo>)\r\n", w);
+            return 1;
+        }
+    }
+
+    // Modo restrito (install.sh de app, API 42): o script roda com os
+    // poderes do shell (root de FS) — a allowlist impede reboot/wifi/
+    // grant/mesh/ota de um pacote publicado por terceiro.
+    if (s_rRootA[0] != 0) {
+        static const char* const kAllowed[] = {
+            "ls", "cat", "rm", "rmdir", "mkdir", "mv", "cp", "echo", "set",
+            "test", "sh", "head", "tail", "grep", "find", "stat", "df",
+            "true", "false", "cd", "pwd", "date", "rescan",
+        };
+        bool okCmd = false;
+        for (const char* w : kAllowed) {
+            if (strcmp(argv[0], w) == 0) { okCmd = true; break; }
+        }
+        if (!okCmd) {
+            print(ctx, "%s: comando indisponivel no install.sh (restrito)\r\n", argv[0]);
+            s_lastRc = 126;
             return 1;
         }
     }

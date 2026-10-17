@@ -9,6 +9,9 @@
 #include "../Utils/AppGrants.h"
 #include "../Utils/AppPerms.h"
 #include "../USBDevice/LogSink.h"
+#include "../USBDevice/CelerShell.h"
+#include "../Utils/InstallMarker.h"
+#include "../Utils/CelerSettings.h"
 #include "../Boards/Board.h"
 #include <duktape.h>
 #include <esp_heap_caps.h>
@@ -66,16 +69,64 @@ duk_context* s_heap = nullptr;
 bool s_suspended = false;
 uint32_t s_lastTickMs = 0;
 
+// install.sh pendente (UMA versao, um script por giro do pump)
+struct InstallJob {
+    std::string dir;
+    std::string pkg;
+    std::string name;
+    std::string version;
+};
+std::vector<InstallJob> s_installs;
+
+// chave NVS curta (teto de 15 chars do namespace): "su_" + FNV1a do pkg
+std::string setupKey(const std::string& pkg) {
+    uint32_t h = 2166136261u;
+    for (char c : pkg) {
+        h ^= (uint8_t)c;
+        h *= 16777619u;
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), "su_%08lx", (unsigned long)h);
+    return buf;
+}
+
+void logPrint(void*, const char* fmt, ...) {
+    char buf[192];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    celer_log_println(buf);
+}
+
 // ---------------- descoberta (boot e rescan) ----------------
 
 void discover() {
     s_apps.clear();
+    s_installs.clear();
     const int n = LauncherUI::appEntryCount();
-    for (int i = 0; i < n && (int)s_apps.size() < kMaxServices; i++) {
+    for (int i = 0; i < n; i++) {
         if (!LauncherUI::appEntryIsFolder(i)) continue;  // .js avulso nao tem servico
         const std::string& path = LauncherUI::appEntryPath(i);
         std::string json = FileSystem::readTextFile((path + "/app.json").c_str());
         if (json.empty()) continue;
+        // install.sh (API 42): roda 1x por versao, restrito a propria pasta
+        // e ao proprio /local/data/<pkg> (o shell ja tem if/while/vars,
+        // redirecao ">" e comandos de arquivo — nada de JS para isto)
+        if (FileSystem::exists((path + "/install.sh").c_str()) &&
+            FileSystem::getFileSize((path + "/install.sh").c_str()) <= 16 * 1024) {
+            std::string ver = FileSystem::parseJsonValue(json, "version");
+            std::string pkg = LauncherUI::appEntryPkg(i);
+            if (celer::setup::due(ver, CelerSettings::get(setupKey(pkg).c_str(), ""))) {
+                InstallJob j;
+                j.dir = path;
+                j.pkg = pkg;
+                j.name = LauncherUI::appEntryName(i);
+                j.version = ver;
+                s_installs.push_back(j);
+            }
+        }
+        if ((int)s_apps.size() >= kMaxServices) continue;
         std::string svcFile = FileSystem::parseJsonValue(json, "service");
         if (svcFile.empty() || svcFile == "true") continue;
         // nome simples e seguro (mesma regra do "main": sem barra/..)
@@ -262,6 +313,31 @@ void tick(bool inApp) {
         discover();
     }
 
+    // install.sh pendente: UM por giro (script roda restrito, fora do heap
+    // Duktape — o shell de arquivo basta). Falha nao grava o marcador: o
+    // proximo boot tenta de novo.
+    if (!s_installs.empty()) {
+        InstallJob j = s_installs.front();
+        s_installs.erase(s_installs.begin());
+        celer_log_printf("[setup] %s: install.sh v%s\n", j.name.c_str(), j.version.c_str());
+        const std::string dataDir = "/local/data/" + j.pkg;
+        FileSystem::mkdir(dataDir.c_str());
+        CelerShell::setRestrictedRoots(j.dir.c_str(), dataDir.c_str());
+        CelerShell::execute(("cd " + j.dir).c_str(), logPrint, nullptr);
+        int rc = CelerShell::execute("sh -e install.sh", logPrint, nullptr);
+        CelerShell::execute("cd /", logPrint, nullptr);
+        CelerShell::setRestrictedRoots(nullptr, nullptr);
+        if (rc == 0) {
+            CelerSettings::set(setupKey(j.pkg).c_str(), j.version.c_str());
+            celer_log_printf("[setup] %s: ok\n", j.name.c_str());
+        } else {
+            celer_log_printf("[setup] %s: FALHOU (rc=%d); tenta no proximo boot\n",
+                             j.name.c_str(), rc);
+            Notifications::push("install.sh falhou", (j.name + " (rc=" + std::to_string(rc) + ")").c_str(), "setup");
+        }
+        return;  // um por giro: script pode ser pesado (rm/arquivo)
+    }
+
     if (!ensureHeap()) return;
 
     uint32_t t0 = millis();
@@ -304,6 +380,14 @@ bool stopService(const std::string& pkg) {
         return true;
     }
     return false;
+}
+
+// svc setup <pkg>: esquece o marcador e roda o install.sh de novo no
+// proximo giro (bench: mudou o script, testa sem reinstalar)
+bool rerunSetup(const std::string& pkg) {
+    CelerSettings::set(setupKey(pkg).c_str(), "");
+    LauncherUI::svcDirty = true;
+    return true;
 }
 
 bool startService(const std::string& pkg) {

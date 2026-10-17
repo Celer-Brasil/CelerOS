@@ -2361,6 +2361,7 @@ static void testAppZip() {
 // Instalacao do pacote .zip (Utils/AppPackage.cpp): validacao, staging e
 // troca com rollback.
 #include "../../main/Utils/AppPackage.h"
+#include "../../main/Utils/InstallMarker.h"
 
 static bool existsPathSt(const char* p) {
     struct stat st;
@@ -2449,6 +2450,16 @@ static void testAppPackage() {
     CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
 }
 
+static void testInstallMarker() {
+    using namespace celer::setup;
+    CHECK(due("1.0.0", ""));        // nunca rodou
+    CHECK(due("1.1.0", "1.0.0"));   // versao nova
+    CHECK(!due("1.0.0", "1.0.0"));  // mesma versao
+    CHECK(!due("1.0.0", "2.0.0"));  // downgrade nao re-roda
+    CHECK(!due("", "1.0.0"));       // sem versao no app.json: nunca roda
+    CHECK(!due("", ""));
+}
+
 int main() {
     testSemVer();
     testUpdateCheck();
@@ -2485,6 +2496,7 @@ int main() {
     testShScript();
     testAppZip();
     testAppPackage();
+    testInstallMarker();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

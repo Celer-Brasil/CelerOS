@@ -19,6 +19,10 @@ public:
 
     // Mesma politica de caminhos do WebManager: so /local e /sd.
     static bool pathAllowed(const std::string& path);
+    // Modo restrito (install.sh de app, API 42): enquanto ativo, pathAllowed
+    // so aceita os dois predicados e runSegment recusa comandos fora da
+    // allowlist. nullptr/no-arg = modo livre (console da bancada).
+    static void setRestrictedRoots(const char* a, const char* b);
 
     static constexpr int MAX_LINE = 256;
 };

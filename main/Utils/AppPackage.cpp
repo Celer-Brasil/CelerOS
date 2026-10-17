@@ -130,11 +130,15 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
     const std::string newDir = dest + ".new";
     const std::string oldDir = dest + ".old";
 
-    // 1. Validacao INTEIRA antes de tocar o disco de destino
-    appzip::Reader z;
-    if (!z.open(zipPath)) return false;
+    // 1. Validacao INTEIRA antes de tocar o disco de destino. O Reader vai
+    //    pro heap (~8,4 KB de central directory): na stack nao cabe nem na
+    //    task do canal (8 KB) nem na do shell (6 KB).
+    appzip::Reader* zp = appzip::newReader();
+    if (zp == nullptr) return false;
+    appzip::Reader& z = *zp;
+    bool ok = z.open(zipPath);
     int n = z.count();
-    bool ok = n > 0;  // zip vazio nao e pacote
+    ok = ok && n > 0;  // zip vazio nao e pacote
     bool hasAppJson = false;
     uint64_t total = 0;
     for (int i = 0; ok && i < n; i++) {
@@ -203,6 +207,7 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
 
     if (!ok) rmRf(newDir);  // dest/.old ficam intactos
     z.close();
+    appzip::freeReader(zp);
     r.ok = ok;
     if (out) *out = r;
     return ok;

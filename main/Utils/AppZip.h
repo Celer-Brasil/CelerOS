@@ -79,6 +79,13 @@ private:
     int m_fd = -1;
 };
 
+/** Reader no alocador corrente: a classe carrega o central directory
+ *  (~8,4 KB) e NAO cabe na stack das tasks do shell/canal (6-8 KB — o
+ *  `installzip` por elas estourava). freeReader() sempre depois, mesmo
+ *  quando open() falha (null se sem memoria). */
+Reader* newReader();
+void freeReader(Reader* r);
+
 }  // namespace celer::appzip
 
 #endif  // APP_ZIP_H

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cstdlib>
+#include <new>
 
 // tinfl do miniz vendored (LovyanGFX). No device os prototipos bastam: o
 // componente LovyanGFX compila lgfx_miniz.c (gcc, ligacao C) em todas as
@@ -81,6 +82,18 @@ bool writeAll(int fd, const uint8_t* src, uint32_t len) {
 void setAllocator(void* (*alloc)(size_t), void (*freeFn)(void* p)) {
     s_alloc = alloc;
     s_free = freeFn;
+}
+
+Reader* newReader() {
+    void* m = s_alloc(sizeof(Reader));
+    if (m == nullptr) return nullptr;
+    return new (m) Reader();
+}
+
+void freeReader(Reader* r) {
+    if (r == nullptr) return;
+    r->~Reader();
+    s_free(r);
 }
 
 bool nameSafe(const char* name, bool* isDirOut) {

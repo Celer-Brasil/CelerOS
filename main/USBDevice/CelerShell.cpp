@@ -22,6 +22,7 @@
 #include "Utils/AppGrants.h"
 #include "Utils/AppPerms.h"
 #include "Utils/AppPackage.h"
+#include "Kernel/AppServices.h"
 #include "Utils/ShellLogic.h"
 #include "../Utils/CelerSettings.h"
 
@@ -768,7 +769,7 @@ int cmdInstallZip(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     nome = nomeJoin.c_str();
     size_t len = strlen(nome);
     if (len == 0 || len > 40 || strchr(nome, '/') != nullptr ||
-        strstr(nome, "..") != nullptr) {
+        strchr(nome, '\\') != nullptr || strstr(nome, "..") != nullptr) {
         print(ctx, "installzip: nome de pasta invalido\r\n");
         return 1;
     }
@@ -781,6 +782,26 @@ int cmdInstallZip(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     LauncherUI::requestRescan();
     print(ctx, "ok: %d arquivos, %u bytes em %s\r\n", r.files, (unsigned)r.bytes, dest.c_str());
     return 0;
+}
+
+// svc [list|stop|start] [pkg]: servicos em segundo plano de apps (API 42).
+// stop mata os timers do servico e o deixa parado ate `svc start` ou reboot.
+int cmdSvc(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc >= 2 && strcmp(argv[1], "list") == 0) {
+        AppServices::Info in = AppServices::info();
+        print(ctx, "svchost: heap %s, %d servico(s), %d no ar%s\r\n",
+              in.heapAlive ? "vivo" : "fora", in.found, in.running,
+              in.suspended ? " [suspenso: app em foreground]" : "");
+        return 0;
+    }
+    if (argc >= 3 && (strcmp(argv[1], "stop") == 0 || strcmp(argv[1], "start") == 0)) {
+        bool ok = strcmp(argv[1], "stop") == 0 ? AppServices::stopService(argv[2])
+                                               : AppServices::startService(argv[2]);
+        print(ctx, "%s: %s\r\n", argv[1], ok ? "ok" : "servico nao encontrado");
+        return ok ? 0 : 1;
+    }
+    print(ctx, "uso: svc list | svc stop <pkg> | svc start <pkg>\r\n");
+    return 1;
 }
 
 // Lista os apps que o launcher enxerga, COM a origem: /local e /sd
@@ -2106,7 +2127,7 @@ const ShellCmd kCommands[] = {
     {"lcddma", cmdLcdDma},
 #endif
     {"rescan", cmdRescan}, {"apps", cmdApps}, {"stat", cmdStat},
-    {"installzip", cmdInstallZip},
+    {"installzip", cmdInstallZip}, {"svc", cmdSvc},
     {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
     {"lasterror", cmdLastError},

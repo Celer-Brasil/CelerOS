@@ -69,7 +69,8 @@ VALID_REQUIRES = ("psram",)
 # regras do servidor (CelerOS-Server app.py). O hub computa o campo gerenciado
 # "files" {nome: {size, md5}} no publish — nunca setar a mao. Modulos contam
 # na SOMA do teto de compile; assets (nao-.js) tem tetos proprios.
-ASSET_EXTS = (".js", ".png", ".wav", ".qoa", ".json", ".bin")
+# .sh = install.sh do Installer (API 42): roda 1x por versao no sh restrito.
+ASSET_EXTS = (".js", ".png", ".wav", ".qoa", ".json", ".bin", ".sh")
 FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 MAX_ASSET_FILE = 128 * 1024
 MAX_ASSETS_TOTAL = 256 * 1024
@@ -643,7 +644,8 @@ def cmd_publish(args):
             f"{'1' if args.force else '0'}\r\n"
         ).encode()
         _, out = http("POST", f"{hub_url(args)}/admin/apps", token=tok,
-                      data=part + blob + force_part + f"--{boundary}--\r\n".encode(),
+                      data=part + blob + b"\r\n" + force_part +
+                      f"--{boundary}--\r\n".encode(),
                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         print(f"ok: {out.get('package')} v{out.get('version')} publicado "
               f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}..., "

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -88,7 +89,15 @@ struct NodeEntry {
     int8_t rssi;
     uint8_t hops;
     uint32_t lastMs;
+    uint32_t linkMs;    // ultimo HELLO autentico pelo ESP-NOW (touchAlive); 0 = nunca
 };
+
+// Vivo por QUALQUER transporte: o BEAT (BLE) ou o HELLO do ESP-NOW. Com o
+// WiFi no ar o coex entrega ~metade dos BEATs e 5 perdidos seguidos (15 s)
+// faziam o vizinho sair e voltar a cada 1-2 min (bancada 2026-10-17).
+uint32_t aliveMs(const NodeEntry& e) {
+    return e.linkMs != 0 && (int32_t)(e.linkMs - e.lastMs) > 0 ? e.linkMs : e.lastMs;
+}
 
 // TUDO que e grande vive na PSRAM (fila RX, remontador, fila de TX/relay,
 // presenca e dedup): o .bss da malha e ~0 e o boot das placas apertadas
@@ -1114,6 +1123,20 @@ bool CelerNet::nameOf(uint16_t id, char* out, size_t cap) {
     return out[0] != '\0';
 }
 
+void CelerNet::touchAlive(uint16_t id) {
+    if (s_heap == nullptr || id == 0 || id == s_node) return;
+    // da res_rx: um toque perdido nao custa nada — nao espera o tick da malha
+    if (xSemaphoreTakeRecursive(lock(), pdMS_TO_TICKS(20)) != pdTRUE) return;
+    const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+    for (int i = 0; i < NODES_MAX; i++) {
+        if (s_heap->nodes[i].used && s_heap->nodes[i].id == id) {
+            s_heap->nodes[i].linkMs = nowMs != 0 ? nowMs : 1;
+            break;
+        }
+    }
+    xSemaphoreGiveRecursive(lock());
+}
+
 uint16_t CelerNet::proxyNode() {
     return s_proxyNode;
 }
@@ -1184,14 +1207,14 @@ int CelerNet::nodes(Node* out, int max) {
         // o evento de saida) — liberar aqui engolia o "saiu" do Pack e a volta
         // do no virava um segundo "entrou". Mesmo criterio do sweep
         // (nodeExpired): a lista nao esconde um no que o sweep ainda mantem
-        if (nodeExpired(s_heap->nodes[i].lastMs, nowMs)) continue;
+        if (nodeExpired(aliveMs(s_heap->nodes[i]), nowMs)) continue;
         out[n].id = s_heap->nodes[i].id;
         snprintf(out[n].name, sizeof(out[n].name), "%s", s_heap->nodes[i].name);
         out[n].caps = s_heap->nodes[i].caps;
         out[n].flags = s_heap->nodes[i].flags;
         out[n].rssi = s_heap->nodes[i].rssi;
         out[n].hops = s_heap->nodes[i].hops;
-        out[n].lastSeenMs = nowMs - s_heap->nodes[i].lastMs;
+        out[n].lastSeenMs = nowMs - aliveMs(s_heap->nodes[i]);
         n++;
     }
     xSemaphoreGiveRecursive(lock());
@@ -1240,12 +1263,25 @@ void CelerNet::info(Info* out) {
     xSemaphoreGiveRecursive(lock());
 }
 
+// Protecao de ciclo contada em boots (RAM RTC: sobrevive ao reset, nao ao
+// power-on). Um reset de watchdog isolado — o esp_restart do OTA que
+// trava no desligamento vira ESP_RST_WDT (4848, bancada 2026-10-17) —
+// deixava a malha desligada ate o proximo boot limpo: o no "saia" da
+// matilha por horas. Agora so o 2o crash seguido (sem a malha ter ficado
+// de pe por K_STABLE_MS no meio) segura o auto-start.
+RTC_NOINIT_ATTR static uint32_t s_crashMagic;
+RTC_NOINIT_ATTR static uint32_t s_crashStreak;
+static constexpr uint32_t K_CRASH_MAGIC = 0xCE1E7A11u;
+static constexpr uint32_t K_STABLE_MS = 120000;
+static uint32_t s_meshUpMs = 0;  // desde quando a malha esta no ar (0 = fora)
+
 bool CelerNet::enabledSetting() {
     return CelerSettings::get("celernet", "0") == "1";
 }
 
 void CelerNet::tick() {
     if (!s_active) {
+        s_meshUpMs = 0;
         // Protecao de ciclo: boot apos crash/watchdog NAO auto-inicia a
         // malha (o usuario liga pelo app quando quiser). Sem isso um no
         // instavel derruba o device a cada boot+10 s (4848, bancada
@@ -1255,10 +1291,21 @@ void CelerNet::tick() {
         if (!s_bootChecked) {
             s_bootChecked = true;
             const esp_reset_reason_t r = esp_reset_reason();
-            s_skipAuto = r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT ||
-                         r == ESP_RST_WDT;
-            if (s_skipAuto && enabledSetting()) {
-                ESP_LOGW(TAG, "malha NAO auto-inicia: boot apos crash (protecao de ciclo)");
+            const bool crash = r == ESP_RST_PANIC || r == ESP_RST_INT_WDT ||
+                               r == ESP_RST_TASK_WDT || r == ESP_RST_WDT;
+            if (s_crashMagic != K_CRASH_MAGIC || r == ESP_RST_POWERON) {
+                s_crashMagic = K_CRASH_MAGIC;
+                s_crashStreak = 0;
+            }
+            s_crashStreak = crash ? (s_crashStreak < 255 ? s_crashStreak + 1 : 255) : 0;
+            s_skipAuto = s_crashStreak >= 2;
+            if (crash && enabledSetting()) {
+                if (s_skipAuto) {
+                    ESP_LOGW(TAG, "malha NAO auto-inicia: %u boots seguidos apos crash (protecao de ciclo)",
+                             (unsigned)s_crashStreak);
+                } else {
+                    ESP_LOGW(TAG, "boot apos crash (motivo %d): a malha tenta de novo", (int)r);
+                }
             }
         }
         if (s_skipAuto) return;
@@ -1281,6 +1328,16 @@ void CelerNet::tick() {
             tryStart(nullptr, nullptr, true, false);  // nao regrava o setting
         }
         return;
+    }
+
+    if (s_crashStreak != 0) {
+        // de pe por K_STABLE_MS: o crash anterior nao era da malha
+        const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+        if (s_meshUpMs == 0) {
+            s_meshUpMs = nowMs != 0 ? nowMs : 1;
+        } else if (nowMs - s_meshUpMs > K_STABLE_MS) {
+            s_crashStreak = 0;
+        }
     }
 
     const int64_t t0 = esp_timer_get_time();
@@ -1383,7 +1440,7 @@ void CelerNet::tickBody() {
     if (nowMs - s_lastSweepMs >= 1000) {
         s_lastSweepMs = nowMs;
         for (int i = 0; i < CelerNet::NODES_MAX; i++) {
-            if (s_heap->nodes[i].used && nodeExpired(s_heap->nodes[i].lastMs, nowMs)) {
+            if (s_heap->nodes[i].used && nodeExpired(aliveMs(s_heap->nodes[i]), nowMs)) {
                 s_heap->nodes[i].used = false;
                 if (s_memberCb != nullptr) {
                     s_memberCb(s_heap->nodes[i].id, s_heap->nodes[i].name,

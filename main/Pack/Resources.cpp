@@ -1243,7 +1243,12 @@ void rxTask(void*) {
                 if (!forUs) s_ctrlNotUs++;
                 if (from == 0) s_ctrlFrom0++;
                 if (forUs && from != 0 && from != ourNode() && rx->len > 0) {
-                    if (rx->net == 0) s_lastPackMs = nowMs();  // a matilha esta neste canal
+                    if (rx->net == 0) {
+                        s_lastPackMs = nowMs();  // a matilha esta neste canal
+                        // HELLO autentico da matilha: o no esta vivo, mesmo com
+                        // os BEATs do BLE perdidos no coex com o WiFi
+                        if (rx->data[0] == OP_HELLO) CelerNet::touchAlive(from);
+                    }
                     {
                         Guard g;
                         learnPeer(from, rx->mac);

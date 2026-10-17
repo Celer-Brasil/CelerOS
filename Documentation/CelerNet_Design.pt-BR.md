@@ -232,8 +232,12 @@ salt do HKDF: "celernet-v3"
 
 - **BEAT a cada 3 s** (`K_BEAT_MS`) carrega `[caps][flags][nome]`. Nó id =
   2 últimos bytes da MAC BT; nome default `Celer-XXXX`.
-- Tabela de **16 nós**, expiração 15 s sem BEAT (teto 4×TTL enquanto o
-  próprio TX está pendente). Discovery é **passivo**: aparece quem você
+- Tabela de **16 nós**, expiração 15 s sem prova de vida (teto 4×TTL
+  enquanto o próprio TX está pendente). Prova de vida = BEAT **ou** o HELLO
+  autenticado do ESP-NOW (5 s, `CelerNet::touchAlive`): com o WiFi no ar o
+  coex entrega ~metade dos BEATs e o vizinho saía e voltava a cada 1–2 min
+  (bancada 2026-10-17). O HELLO só renova um nó já ouvido — nome, caps,
+  saltos e RSSI seguem vindo do BEAT. Discovery é **passivo**: aparece quem você
   ouve; caminho mais curto fresco vence (hops/RSSI).
 - Endereçamento aceita id `A1B2` (4 hex) ou **nome** case-insensitive
   (`CelerNet.cpp:1017`).
@@ -271,7 +275,7 @@ salt do HKDF: "celernet-v3"
 | Lease de recurso | 20 s, KEEP urgente a cada 5 s |
 | Retry de OPEN | 2500 ms × 5 tentativas |
 | Nós / recursos por nó / leases por nó | 16 / 12 / 8 |
-| Auto-start da malha | após 45 s de boot (com Phone Link; 10 s sem), **nunca** após crash/WDT |
+| Auto-start da malha | após 45 s de boot (com Phone Link; 10 s sem); **não** no 2º boot seguido após crash/WDT (contador na RAM RTC, zera com 120 s de malha no ar) — um WDT isolado (o `esp_restart` do OTA às vezes sai assim) não derruba mais a malha até o próximo boot limpo |
 | Tuning de bancada | `/local/celernet_tune.txt`: `adv= defer= suppress= coex=` |
 
 ### 5.6 Entrada no produto

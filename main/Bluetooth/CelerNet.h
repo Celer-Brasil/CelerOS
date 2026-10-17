@@ -157,6 +157,11 @@ public:
     // Nome do no pelo id (presenca da malha); "" e false se nao ouvido.
     static bool nameOf(uint16_t id, char* out, size_t cap);
 
+    // Prova de vida de um no JA ouvido vinda de outro transporte (o HELLO
+    // autenticado pela matilha no ESP-NOW): adia a expiracao sem mexer em
+    // rssi/saltos. Nunca cria no (nome/caps so do BEAT).
+    static void touchAlive(uint16_t id);
+
     // Mensagem recebida (fila RX_DEPTH, cheia descarta a mais antiga).
     static bool poll(Msg* out);
 

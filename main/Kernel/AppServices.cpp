@@ -16,6 +16,8 @@
 #include "DeviceStats.h"
 #include <duktape.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <vector>
 #include <string>
 
@@ -70,6 +72,14 @@ std::vector<SvcApp> s_apps;
 duk_context* s_heap = nullptr;
 bool s_suspended = false;
 uint32_t s_lastTickMs = 0;
+SemaphoreHandle_t s_mux = nullptr;  // s_apps: pump (principal) x shell (canal)
+std::string s_stopReq;  // svc stop do shell: consumido no giro do pump
+
+// Guard do estado dos servicos (recursivo: o tick chama discover)
+struct SvcGuard {
+    SvcGuard() { xSemaphoreTakeRecursive(s_mux, portMAX_DELAY); }
+    ~SvcGuard() { xSemaphoreGiveRecursive(s_mux); }
+};
 
 // install.sh pendente (UMA versao, um script por giro do pump)
 struct InstallJob {
@@ -104,6 +114,7 @@ void logPrint(void*, const char* fmt, ...) {
 // ---------------- descoberta (boot e rescan) ----------------
 
 void discover() {
+    SvcGuard g;  // o rescan RECONSTRói s_apps: leitores (info/stop) fora
     s_apps.clear();
     s_installs.clear();
     const int n = LauncherUI::appEntryCount();
@@ -182,6 +193,10 @@ void noteCrash(SvcApp& a, const char* err) {
 void svcFatal(void* udata, const char* msg) {
     (void)udata;
     celer_log_printf("[svc] fatal do heap: %s\n", msg ? msg : "sem mensagem");
+    // o celer_log so vive no ring em RAM: sem a linha no LOG PERSISTIDO o
+    // motivo do fatal morria no restart (bancada 2026-10-17 — o fatal do
+    // svchost era invisivel no pos-mortem)
+    ESP_LOGE("celer.svc", "fatal do heap do svchost: %s", msg ? msg : "sem mensagem");
     CelerKernel::recordCrash("Fatal do svchost", msg ? msg : "sem mensagem");
     delay(1500);
     ESP.restart();
@@ -211,6 +226,7 @@ bool ensureHeap() {
 }
 
 void destroyHeap() {
+    SvcGuard g;  // zera as threads: info() do shell nao ve estado pela metade
     if (s_heap != nullptr) {
         duk_destroy_heap(s_heap);
         s_heap = nullptr;
@@ -249,6 +265,11 @@ void svcSlotBegin(duk_context* tctx) {
     for (auto& a : s_apps) {
         if (a.thr != tctx || !a.running) continue;
         JSBindings::svcIdentity(tctx, a.pkg.c_str(), a.perms, a.dir.c_str());
+        // janela FRESCA por callback: o setInterval de 1 s chega com o
+        // s_jsSliceStart do giro anterior — sem isto o primeiro interrupt
+        // via 1000 ms > 250 ms e o callback morria de "execution timeout"
+        // (bancada 2026-10-17: Regras entrava "no ar" e caia no 1o tick)
+        CelerKernel::noteAppYield();
         return;
     }
 }
@@ -308,6 +329,17 @@ void loadService(SvcApp& a) {
     a.thr = duk_require_context(s_heap, -1);
     duk_put_prop_index(s_heap, -2, idx);         // [stash, arr] (stash e o dono)
     duk_pop_2(s_heap);                           // []
+    // Pilha de valores PRE-CRESCIDA (512 entradas): o crescimento on-demand
+    // dentro do callback roda com o aparelho ja carregado — o my_alloc recusa
+    // para proteger o piso de RAM interna e o duk fatal derruba o heap
+    // INTEIRO ("cannot push beyond allocated stack", bancada 2026-10-17:
+    // Regras + Detona morria a ~100 s de boot). Na carga a RAM esta saudavel.
+    if (!duk_check_stack(a.thr, 512)) {
+        noteCrash(a, "sem pilha de valores na carga");
+        JSBindings::timersClearCtx(a.thr);
+        releaseThread(a);
+        return;
+    }
 
     // Superficie + IDENTIDADE do servico durante o compile E o top-level:
     // o setInterval do top-level tem que registrar no host DE SERVICOS (no
@@ -370,7 +402,13 @@ void drainTimers() {
 namespace AppServices {
 
 void init() {
+    // info()/stop/start vem da task do canal (shell); o pump roda na
+    // principal — o estado dos servicos (s_apps) e seccao critica dos dois
+    // lados (o fatal do svchost de 2026-10-17 veio do stop duk-andando fora
+    // da task do pump)
+    s_mux = xSemaphoreCreateRecursiveMutex();
     JSBindings::timersSvcHooks(svcSlotBegin, svcSlotEnd, svcSlotCrash);
+    SvcGuard g;
     discover();
     // o heap nasce LAZY no primeiro tick — o boot critico nao paga por ele
     celer_log_printf("[svc] %u servico(s) declarado(s)\n", (unsigned)s_apps.size());
@@ -380,6 +418,7 @@ void tick(bool inApp) {
     (void)inApp;
     if (s_suspended) return;  // resumeAfterApp reativa; o watchdog do
     // TimeManager assume (s_lastTickMs velho = servico "sem girar")
+    SvcGuard g;  // estado dos servicos exclusivo do pump enquanto gira
     s_lastTickMs = millis();
     if (LauncherUI::svcDirty) {
         LauncherUI::svcDirty = false;  // apps mudaram: redescobre (install/remocao)
@@ -413,6 +452,16 @@ void tick(bool inApp) {
         return;  // um por giro: script pode ser pesado (rm/arquivo)
     }
 
+    if (!s_stopReq.empty()) {  // svc stop do shell: duk work so na task do pump
+        for (auto& a : s_apps) {
+            if (a.pkg != s_stopReq) continue;
+            releaseThread(a);
+            a.stopped = true;
+            celer_log_printf("[svc] %s: parado (svc stop)\n", a.name.c_str());
+            break;
+        }
+        s_stopReq.clear();
+    }
     if (!ensureHeap()) return;
 
     uint32_t t0 = millis();
@@ -447,11 +496,14 @@ void resumeAfterApp() {
     celer_log_println("[svc] volta do suspension");
 }
 
+// svc stop do shell: o duk work (releaseThread toca o heap do svchost) NAO
+// pode rodar na task do canal — o tick consome no giro seguinte (task do
+// pump, a unica que toca o heap fora dos hooks).
 bool stopService(const std::string& pkg) {
+    SvcGuard g;
     for (auto& a : s_apps) {
         if (a.pkg != pkg) continue;
-        releaseThread(a);  // timers + referencia do stash (nao so o ponteiro)
-        a.stopped = true;
+        s_stopReq = pkg;
         return true;
     }
     return false;
@@ -466,6 +518,7 @@ bool rerunSetup(const std::string& pkg) {
 }
 
 bool startService(const std::string& pkg) {
+    SvcGuard g;
     for (auto& a : s_apps) {
         if (a.pkg != pkg) continue;
         a.stopped = false;
@@ -478,6 +531,7 @@ bool startService(const std::string& pkg) {
 }
 
 Info info() {
+    SvcGuard g;  // copia o estado sob o lock (o pump reconstrói a lista)
     Info in;
     in.found = (int)s_apps.size();
     for (auto& a : s_apps) {

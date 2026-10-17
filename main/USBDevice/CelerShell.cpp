@@ -274,6 +274,10 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  wifi <ssid> <senha>     salva a rede no NVS e conecta (ssid sem espacos)\r\n"
         "  wifi off|on             desliga (persistente) / religa o WiFi\r\n"
         "  lasterror               ultimo erro de app gravado (/local/lastcrash.txt)\r\n"
+        "  crash [n]               resumo do ultimo crash + ultimas n linhas do apps.log\r\n"
+        "  svc list                servicos de app em 2o plano: estado por servico\r\n"
+        "  svc info <pkg>          detalhe do servico (estado, reinicios, pump)\r\n"
+        "  svc stop|start|setup <pkg>  para / religa / roda o install.sh de novo\r\n"
         "  debug on|off            arma o debugger Duktape (a sessao e do celerctl debug)\r\n"
 #if CONFIG_CELEROS_DEBUG_BRIDGE
         "  bridge                  estado/token do Celer Debug Bridge (WiFi)\r\n"
@@ -475,12 +479,14 @@ int cmdFree(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "heap livre     : %s\r\n"
         "heap minimo    : %s\r\n"
         "maior bloco 8b : %s\r\n"
-        "PSRAM livre    : %s\r\n"
+        "PSRAM livre    : %s (min %s, maior bloco %s)\r\n"
         "interna livre  : %s (min %s, maior bloco %s)\r\n",
         humanSize(esp_get_free_heap_size()).c_str(),
         humanSize(esp_get_minimum_free_heap_size()).c_str(),
         humanSize(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)).c_str(),
         humanSize(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)).c_str(),
+        humanSize(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM)).c_str(),
+        humanSize(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)).c_str(),
         humanSize(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)).c_str(),
         humanSize(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)).c_str(),
         humanSize(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)).c_str());
@@ -613,6 +619,32 @@ int cmdTop(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
               (unsigned)(dFrames * 1000ULL / windowMs),
               (unsigned)((b->uiFrameUs - a->uiFrameUs) / dPresents),
               (unsigned)b->uiFrameUsMax);
+    }
+
+    // svchost de servicos (API 42): foto do AppServices + delta dos contadores
+    // do pump (DeviceStats, incrementados pelo AppServices::tick) na janela.
+    // Contadores sao cumulativos desde o boot: "pior" e o maximo historico.
+    {
+        AppServices::Info svc = AppServices::info();
+        if (svc.found == 0) {
+            print(ctx, "svchost: sem servicos declarados\r\n");
+        } else {
+            const uint32_t dSvcTicks = b->svcTicks - a->svcTicks;
+            const uint32_t dSvcOvr = b->svcOverruns - a->svcOverruns;
+            const uint32_t dSvcSum = b->svcBusyMsSum - a->svcBusyMsSum;
+            print(ctx, "svchost: %d/%d no ar, heap %s%s, pump ha %ums",
+                  svc.running, svc.found,
+                  svc.heapAlive ? "vivo" : "fora",
+                  svc.suspended ? " (suspenso)" : "",
+                  (unsigned)AppServices::lastTickAgoMs());
+            if (dSvcTicks > 0) {
+                const unsigned avgTenth = (unsigned)(dSvcSum * 10 / dSvcTicks);
+                print(ctx, ", %u giro(s) na janela (media %u.%ums, %u overrun, pior do boot %ums)",
+                      (unsigned)dSvcTicks, avgTenth / 10, avgTenth % 10,
+                      (unsigned)dSvcOvr, (unsigned)b->svcBusyMsMax);
+            }
+            print(ctx, "\r\n");
+        }
     }
 
     // delta de runtime por task (pareada pelo nome) + ordenacao por CPU desc
@@ -784,15 +816,65 @@ int cmdInstallZip(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-// svc [list|stop|start] [pkg]: servicos em segundo plano de apps (API 42).
-// stop mata os timers do servico e o deixa parado ate `svc start` ou reboot.
+#if CONFIG_CELEROS_APP_SERVICES
+// Estado legivel de um servico (svc list/info). A ordem importa: parado e
+// backoff vencem os outros (um giro com crash deixa running=false e o
+// dispatch reabre; suspenso so existe sem PSRAM com app em foreground).
+static const char* svcEstado(const AppServices::SvcState& s) {
+    if (s.stopped) return "parado";
+    if (s.backingOff) return "backoff";
+    if (s.suspended) return "suspenso";
+    if (s.running) return "no ar";
+    return "aguardando";
+}
+#endif
+
+// svc <list|info|stop|start|setup> [pkg]: servicos em segundo plano de apps
+// (API 42). stop mata os timers do servico e o deixa parado ate `svc start`
+// ou reboot; list/info sao a janela de debugging do svchost.
 int cmdSvc(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc >= 2 && strcmp(argv[1], "list") == 0) {
         AppServices::Info in = AppServices::info();
-        print(ctx, "svchost: heap %s, %d servico(s), %d no ar%s\r\n",
+        const uint32_t ago = AppServices::lastTickAgoMs();
+        print(ctx, "svchost: heap %s, %d servico(s), %d no ar%s, pump ha %ums\r\n",
               in.heapAlive ? "vivo" : "fora", in.found, in.running,
-              in.suspended ? " [suspenso: app em foreground]" : "");
+              in.suspended ? " [suspenso: app em foreground]" : "",
+              (unsigned)ago);
+#if CONFIG_CELEROS_APP_SERVICES
+        for (const AppServices::SvcState& s : in.apps) {
+            print(ctx, "  %-18s %-10s %d reinicio(s)%s%s\r\n",
+                  s.name.c_str(), svcEstado(s), s.restarts,
+                  s.lastErr[0] != '\0' ? " | " : "",
+                  s.lastErr[0] != '\0' ? s.lastErr : "");
+        }
+#endif
         return 0;
+    }
+    if (argc >= 3 && strcmp(argv[1], "info") == 0) {
+        const std::string pkg = argv[2];
+#if CONFIG_CELEROS_APP_SERVICES
+        AppServices::Info in = AppServices::info();
+        for (const AppServices::SvcState& s : in.apps) {
+            if (s.pkg != pkg) continue;
+            print(ctx, "servico %s (%s)\r\n", s.name.c_str(), s.pkg.c_str());
+            print(ctx, "  estado    : %s\r\n", svcEstado(s));
+            if (s.backoffRemainMs > 0) {
+                print(ctx, "  backoff   : %ums restantes\r\n", (unsigned)s.backoffRemainMs);
+            }
+            print(ctx, "  reinicios : %d\r\n", s.restarts);
+            if (s.lastErr[0] != '\0') {
+                print(ctx, "  ult. erro : %s\r\n", s.lastErr);
+            }
+            print(ctx, "  svchost   : heap %s%s\r\n",
+                  in.heapAlive ? "vivo" : "fora",
+                  in.suspended ? " (suspenso: app em foreground)" : "");
+            print(ctx, "  pump      : ultimo giro ha %ums\r\n",
+                  (unsigned)AppServices::lastTickAgoMs());
+            return 0;
+        }
+#endif
+        print(ctx, "info: servico %s nao encontrado\r\n", pkg.c_str());
+        return 1;
     }
     if (argc >= 3 && (strcmp(argv[1], "stop") == 0 || strcmp(argv[1], "start") == 0)) {
         bool ok = strcmp(argv[1], "stop") == 0 ? AppServices::stopService(argv[2])
@@ -805,7 +887,7 @@ int cmdSvc(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "setup: %s (roda no proximo giro)\r\n", ok ? "reagendado" : "svc ausente");
         return ok ? 0 : 1;
     }
-    print(ctx, "uso: svc list | svc stop|start|setup <pkg>\r\n");
+    print(ctx, "uso: svc list | svc info <pkg> | svc stop|start|setup <pkg>\r\n");
     return 1;
 }
 
@@ -914,6 +996,61 @@ int cmdLastError(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     }
     fclose(f);
     print(ctx, "\r\n");
+    return 0;
+}
+
+// crash [n]: triagem rapida do ultimo erro de app — o header do
+// /local/lastcrash.txt (versao, hora, app/pacote e o tipo do erro, gravado
+// pelo CelerKernel::recordCrash) + as ultimas n linhas do apps.log (prints
+// dos apps, com o pacote na frente). O `lasterror` segue com a stack inteira;
+// este aqui responde "quem crashou e o que ele disse antes" numa vez so.
+static int printTail(const std::string& path, long n, CelerShell::PrintFn print, void* ctx);
+int cmdCrash(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    long n = (argc > 1) ? atol(argv[1]) : 20;
+    if (n < 1) n = 1;
+    if (n > 200) n = 200;
+    const char* path = "/local/lastcrash.txt";
+    struct stat st;
+    if (stat(path, &st) != 0 || st.st_size == 0) {
+        print(ctx, "nenhum crash registrado (%s ausente)\r\n", path);
+        return 0;
+    }
+    char when[24] = "--------------------";
+    struct tm tmv;
+    if (st.st_mtime > 0 && localtime_r(&st.st_mtime, &tmv) != nullptr) {
+        strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tmv);
+    }
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) {
+        print(ctx, "crash: nao consegui abrir %s\r\n", path);
+        return 1;
+    }
+    // as 2 primeiras linhas carregam o contexto: "CelerOS x | hora | uptime |
+    // app: Titulo (pkg)" e o tipo do erro; a stack fica para o lasterror
+    char line[256];
+    print(ctx, "ultimo crash (arquivo de %s):\r\n", when);
+    for (int i = 0; i < 2 && fgets(line, sizeof(line), f) != nullptr; i++) {
+        print(ctx, "  %s", line);  // fgets preserva o \n
+    }
+    fclose(f);
+    // tail do apps.log na mesma casa do LogPersist (SD quando montado; sem
+    // log la — cartao tirado/trocado — cai para a littlefs)
+    std::string applog = FileSystem::sdMounted() ? std::string("/sd/log/apps.log")
+                                                 : std::string("/local/log/apps.log");
+    if (stat(applog.c_str(), &st) != 0 && FileSystem::sdMounted()) {
+        applog = "/local/log/apps.log";
+    }
+    if (stat(applog.c_str(), &st) == 0 && st.st_size > 0) {
+        print(ctx, "ultimas %ld linhas de %s:\r\n", n, applog.c_str());
+        if (printTail(applog, n, print, ctx) != 0) {
+            print(ctx, "crash: nao consegui abrir %s\r\n", applog.c_str());
+            return 1;
+        }
+        print(ctx, "\r\n");
+    } else {
+        print(ctx, "sem %s (logs de app persistentes ausentes neste build/boot)\r\n",
+              applog.c_str());
+    }
     return 0;
 }
 
@@ -1879,20 +2016,28 @@ int cmdMd5Sum(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return rc;
 }
 
-// Espelho do dmesg do app Terminal: tail do log persistente do kernel
-// (LogPersist grava /local/log/kern.log nos builds com logs persistentes).
+// Espelho do dmesg do app Terminal: tail do log persistente do kernel.
+// LogPersist grava na casa do SD quando montado (/sd/log/kern.log) e cai
+// para /local/log/kern.log na littlefs — o mesmo recorte que o `crash` usa
+// para o apps.log.
 int cmdDmesg(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     long n = (argc > 1) ? atol(argv[1]) : 30;
     if (n < 1) n = 1;
     if (n > 200) n = 200;
-    const char* path = "/local/log/kern.log";
+    // casa do SD primeiro (LogPersist); sem log la, tenta a littlefs —
+    // kern.log de boot anterior sem cartao continua legivel
+    std::string path = FileSystem::sdMounted() ? std::string("/sd/log/kern.log")
+                                               : std::string("/local/log/kern.log");
     struct stat st;
-    if (stat(path, &st) != 0 || st.st_size == 0) {
-        print(ctx, "sem %s neste build/firmware\r\n", path);
+    if ((stat(path.c_str(), &st) != 0 || st.st_size == 0) && FileSystem::sdMounted()) {
+        path = "/local/log/kern.log";
+    }
+    if (stat(path.c_str(), &st) != 0 || st.st_size == 0) {
+        print(ctx, "sem %s neste build/firmware\r\n", path.c_str());
         return 1;
     }
     if (printTail(path, n, print, ctx) != 0) {
-        print(ctx, "dmesg: nao consegui abrir %s\r\n", path);
+        print(ctx, "dmesg: nao consegui abrir %s\r\n", path.c_str());
         return 1;
     }
     print(ctx, "\r\n");
@@ -2136,6 +2281,7 @@ const ShellCmd kCommands[] = {
     {"run", cmdRun}, {"exit", cmdExit},
     {"grant", cmdGrant},
     {"lasterror", cmdLastError},
+    {"crash", cmdCrash},
     {"debug", cmdDebug},
     {"wifi", cmdWifi},
 #if CONFIG_CELEROS_DEBUG_BRIDGE

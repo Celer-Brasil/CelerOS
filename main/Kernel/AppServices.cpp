@@ -13,6 +13,7 @@
 #include "../Utils/InstallMarker.h"
 #include "../Utils/CelerSettings.h"
 #include "../Boards/Board.h"
+#include "DeviceStats.h"
 #include <duktape.h>
 #include <esp_heap_caps.h>
 #include <vector>
@@ -59,6 +60,7 @@ struct SvcApp {
     bool needsLoad = true;     // a carregar no proximo giro com orcamento
     bool stopped = false;      // shell svc stop / erro (ate start/boot)
     uint32_t backoffAt = 0;    // reinicio automatico adiado (system)
+    char lastErr[80] = {0};    // motivo da ultima falha (svc list/info)
     int restarts = 0;
     duk_context* thr = nullptr;
     duk_size_t stashIdx = 0;   // posicao da thread no stash "svcs" (para soltar)
@@ -156,6 +158,7 @@ void discover() {
 
 void noteCrash(SvcApp& a, const char* err) {
     celer_log_printf("[svc] %s: erro: %s\n", a.name.c_str(), err ? err : "?");
+    snprintf(a.lastErr, sizeof(a.lastErr), "%s", err ? err : "");
     if (a.isSystem && a.restarts == 0) {
         // servico de app system: 1 reinicio com backoff (as cadencias
         // migradas do firmware moram aqui)
@@ -426,6 +429,8 @@ void tick(bool inApp) {
         }
     }
     drainTimers();
+    // telemetria do pump (top/svc): media e overrun do orcamento por giro
+    DeviceStats::noteSvcTick(millis() - t0, kTickBudgetMs);
 }
 
 void suspendForApp() {
@@ -477,6 +482,18 @@ Info info() {
     in.found = (int)s_apps.size();
     for (auto& a : s_apps) {
         if (a.running && !a.stopped) in.running++;
+        SvcState st;
+        st.pkg = a.pkg;
+        st.name = a.name;
+        st.running = a.running;
+        st.stopped = a.stopped;
+        st.suspended = s_suspended && !a.stopped;
+        st.restarts = a.restarts;
+        st.backingOff = a.backoffAt != 0;
+        st.backoffRemainMs =
+            a.backoffAt != 0 && (int32_t)(a.backoffAt - millis()) > 0 ? a.backoffAt - millis() : 0;
+        snprintf(st.lastErr, sizeof(st.lastErr), "%s", a.lastErr);
+        in.apps.push_back(st);
     }
     in.heapAlive = s_heap != nullptr;
     in.suspended = s_suspended;

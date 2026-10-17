@@ -48,6 +48,15 @@ struct Snapshot {
     uint32_t taskCount;
     uint64_t totalRunTimeUs;
     bool truncated;  // lista de tasks cortada no kMaxTasks
+    // svchost de servicos (API 42): contadores CUMULATIVOS do pump, medios
+    // via noteSvcTick() — o INCREMENTO vive no AppServices::tick (fim do
+    // giro: busy = millis() - t0, orcamento = kTickBudgetMs). O estado do
+    // heap e a contagem de servicos NAO vao aqui: a foto fresca e do
+    // AppServices::info(), e o shell/celerctl combina os dois.
+    uint32_t svcTicks;      // giros do pump do svchost
+    uint32_t svcOverruns;   // giros que estouraram o orcamento de ms
+    uint32_t svcBusyMsMax;  // pior giro ja visto (ms)
+    uint32_t svcBusyMsSum;  // ms somados (media = sum/ticks no consumidor)
     TaskInfo tasks[kMaxTasks];
 };
 
@@ -68,6 +77,9 @@ void noteJsAlloc();
 void noteJsFree();
 void noteLoopIter(uint32_t busyUs, uint32_t totalUs);
 void notePresent(uint32_t us, bool pushedFrame);
+// Um giro do pump do svchost (AppServices::tick): busyMs = ms do giro,
+// budgetMs = orcamento (kTickBudgetMs) — acima dele conta overrun.
+void noteSvcTick(uint32_t busyMs, uint32_t budgetMs);
 
 }  // namespace DeviceStats
 
@@ -143,8 +155,23 @@ inline size_t toJson(const Snapshot& s, char* buf, size_t cap) {
             }
         }
         if (!j.ovf) {
-            j.add("],\"trunc\":%d}", truncated ? 1 : 0);
-            if (!j.ovf) return (size_t)(j.p - buf);
+            j.add("],\"trunc\":%d", truncated ? 1 : 0);
+            if (!j.ovf) {
+                // svchost (API 42): bloco final OPCIONAL antes da chave que
+                // fecha — se nao couber, rollback (mesmo padrao das tasks) e
+                // o JSON fecha sem ele (celerctl antigo segue parseando)
+                char* mark = j.p;
+                size_t markLeft = j.left;
+                j.add(",\"svc\":{\"ticks\":%u,\"overruns\":%u,\"max_ms\":%u,\"sum_ms\":%u}",
+                      s.svcTicks, s.svcOverruns, s.svcBusyMsMax, s.svcBusyMsSum);
+                if (j.ovf) {
+                    j.p = mark;
+                    j.left = markLeft;
+                    j.ovf = false;
+                }
+                j.add("}");
+                if (!j.ovf) return (size_t)(j.p - buf);
+            }
         }
     }
     // header inteiro ou fechamento nao couberam: esqueleto minimo valido

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <string>
+#include <vector>
 
 /**
  * @file AppServices.h
@@ -24,11 +25,24 @@
 
 namespace AppServices {
 
+struct SvcState {
+    std::string pkg;
+    std::string name;
+    bool running = false;
+    bool stopped = false;   // svc stop / erro (nao recarrega)
+    bool suspended = false; // heap suspenso (sem PSRAM, app aberto)
+    int restarts = 0;       // reinicios usados (system ganha 1)
+    bool backingOff = false;
+    uint32_t backoffRemainMs = 0; // quanto falta do backoff (0 = nao esta)
+    char lastErr[80] = {0};       // motivo da ultima falha ("" = nenhuma)
+};
+
 struct Info {
     int found = 0;      // servicos declarados nos apps instalados
     int running = 0;    // threads vivas no svchost
     bool heapAlive = false;
     bool suspended = false;
+    std::vector<SvcState> apps;  // detalhe por servico (svc list/info)
 };
 
 // Boot (celerSetup, depois do scan do launcher): descobre quem declara
@@ -53,9 +67,7 @@ Info info();
 // Watchdog do TimeManager: ms desde o ultimo giro do svchost (o fallback
 // nativo das cadencias do tempo volta quando o servico morre e ninguem
 // ticka ha tempo demais)
-uint32_t lastTickAgoMs();
-
-}  // namespace AppServices
+uint32_t lastTickAgoMs();}  // namespace AppServices
 
 #else  // !CONFIG_CELEROS_APP_SERVICES
 

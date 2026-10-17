@@ -36,6 +36,10 @@ static std::atomic<uint64_t> s_uiFrames{0};
 static std::atomic<uint64_t> s_uiPresents{0};
 static std::atomic<uint64_t> s_uiFrameUs{0};
 static std::atomic<uint64_t> s_uiFrameUsMax{0};
+static std::atomic<uint32_t> s_svcTicks{0};
+static std::atomic<uint32_t> s_svcOverruns{0};
+static std::atomic<uint32_t> s_svcBusyMsMax{0};
+static std::atomic<uint64_t> s_svcBusyMsSum{0};
 
 void noteJsAlloc() {
     uint32_t n = s_jsAlive.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -60,6 +64,15 @@ void notePresent(uint32_t us, bool pushedFrame) {
     while (us > m && !s_uiFrameUsMax.compare_exchange_weak(m, us, std::memory_order_relaxed)) {
     }
     if (pushedFrame) s_uiFrames.fetch_add(1, std::memory_order_relaxed);
+}
+
+void noteSvcTick(uint32_t busyMs, uint32_t budgetMs) {
+    s_svcTicks.fetch_add(1, std::memory_order_relaxed);
+    s_svcBusyMsSum.fetch_add(busyMs, std::memory_order_relaxed);
+    uint32_t m = s_svcBusyMsMax.load(std::memory_order_relaxed);
+    while (busyMs > m && !s_svcBusyMsMax.compare_exchange_weak(m, busyMs, std::memory_order_relaxed)) {
+    }
+    if (budgetMs > 0 && busyMs > budgetMs) s_svcOverruns.fetch_add(1, std::memory_order_relaxed);
 }
 
 // ---- coleta (consumidores: handleStats do HostLink, top do shell) ----
@@ -112,6 +125,11 @@ bool take(Snapshot& out) {
     out.uiPresents = s_uiPresents.load(std::memory_order_relaxed);
     out.uiFrameUs = s_uiFrameUs.load(std::memory_order_relaxed);
     out.uiFrameUsMax = s_uiFrameUsMax.load(std::memory_order_relaxed);
+
+    out.svcTicks = s_svcTicks.load(std::memory_order_relaxed);
+    out.svcOverruns = s_svcOverruns.load(std::memory_order_relaxed);
+    out.svcBusyMsMax = s_svcBusyMsMax.load(std::memory_order_relaxed);
+    out.svcBusyMsSum = (uint32_t)s_svcBusyMsSum.load(std::memory_order_relaxed);
 
     // tasks: tabela so durante a coleta (mesma economia de RAM do ps do shell)
     UBaseType_t want = uxTaskGetNumberOfTasks();

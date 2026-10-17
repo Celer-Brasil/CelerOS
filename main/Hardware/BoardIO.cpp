@@ -1,5 +1,6 @@
 #include "BoardIO.h"
 #include "AudioPlayer.h"
+#include "PowerPolicy.h"  // gravacao de mic segura o light sleep
 
 #include <Arduino.h>
 #include <math.h>
@@ -18,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps/vTaskDeleteWithCaps
 #include "mbedtls/base64.h"
 #include "../USBDevice/LogSink.h"
 #include "esp_heap_caps.h"
@@ -115,6 +117,28 @@ namespace {
 constexpr int kSineLen = 256;
 constexpr uint32_t kToneBlock = 512;
 
+// Bloco com teto de tempo. O tom usava portMAX_DELAY: se o DMA parasse, a
+// task do beep ficava presa SEGURANDO a guarda do I2S (acquireOutput) e
+// nenhum outro som do aparelho voltava ate rebootar. 5 estouros seguidos
+// (~0,5 s sem progresso) abortam o tom.
+static bool toneWriteAll(i2s_chan_handle_t tx, const void* data, size_t bytes) {
+    const uint8_t* p = (const uint8_t*)data;
+    size_t left = bytes;
+    int stalls = 0;
+    while (left > 0) {
+        size_t w = 0;
+        const esp_err_t e = i2s_channel_write(tx, p, left, &w, pdMS_TO_TICKS(100));
+        if (w > 0) {
+            p += w;
+            left -= w;
+            stalls = 0;
+        }
+        if (e != ESP_OK && e != ESP_ERR_TIMEOUT) return false;
+        if (w == 0 && ++stalls >= 5) return false;  // canal morto/desabilitado
+    }
+    return true;
+}
+
 // Tom via amplificador digital I2S (NS4168 na SmartDisplay: 44,1 kHz sem
 // MCLK; ES8311 do watch: 16 kHz com MCLK 256x e codec no I2C — wake/sleep
 // em volta do tom, PA so durante a transmissao). Aloca o canal, transmite
@@ -190,6 +214,7 @@ static bool toneI2sOut(int freqHz, int ms) {
     }
 
     // estereo L/R duplicado (amp mono) + tabela, num bloco so
+    bool ok = true;
     int16_t* frames = (int16_t*)malloc(kToneBlock * 2 * sizeof(int16_t) + kSineLen * sizeof(int16_t));
     if (frames != nullptr) {
         // tabela ja com o volume aplicado (escala digital; o codec tambem
@@ -213,21 +238,25 @@ static bool toneI2sOut(int freqHz, int ms) {
                 frames[i * 2] = s;
                 frames[i * 2 + 1] = s;
             }
-            size_t written = 0;
-            i2s_channel_write(tx, frames, n * 2 * sizeof(int16_t), &written, portMAX_DELAY);
+            if (!toneWriteAll(tx, frames, n * 2 * sizeof(int16_t))) {
+                ok = false;  // canal parado: nao segura o beep pelo tempo todo
+                break;
+            }
             AudioPlayer::feedWatchdog();  // celerbeep nao e inscrita
             sent += n;
         }
         free(frames);
+    } else {
+        ok = false;  // OOM: antes devolvia true e o beep "tocava" mudo
     }
     if (bp.audioPaPin >= 0) digitalWrite(bp.audioPaPin, LOW);
     if (hasCodec) bp.audioCodecSleep();
-    if (txKeep) return true;  // persistente: auto_clear segue mandando silencio
+    if (txKeep) return ok;  // persistente: auto_clear segue mandando silencio
     i2s_channel_disable(tx);
     i2s_del_channel(tx);
     speakerPinsPark();
     if (hasCodec) micPinsDirty();  // pins do I2S1 voltam mortos
-    return true;
+    return ok;
 }
 }  // namespace
 
@@ -319,7 +348,14 @@ void toneAsync(int freqHz, int ms, int gapMs) {
     if (freqHz < 20 || freqHz > 20000 || ms <= 0 || ms > 5000) return;
     xSemaphoreTake(beepMu(), portMAX_DELAY);
     if (s_beepTask == nullptr) {  // criacao sob o lock: sem janela de task dupla
-        if (xTaskCreate(beepTaskFunc, "celerbeep", 4096, nullptr, 2, &s_beepTask) != pdPASS) {
+        // Pilha na PSRAM quando existe (a interna e o recurso escasso do
+        // cao com NimBLE/TLS): a task so bloqueia em notification e chama o
+        // tone, nada de flash. Fallback para a interna nas placas sem PSRAM.
+        BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(beepTaskFunc, "celerbeep", 4096, nullptr, 2,
+                                                        &s_beepTask, tskNO_AFFINITY,
+                                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (ok != pdPASS) ok = xTaskCreate(beepTaskFunc, "celerbeep", 4096, nullptr, 2, &s_beepTask);
+        if (ok != pdPASS) {
             s_beepTask = nullptr;
             xSemaphoreGive(beepMu());
             return;
@@ -815,6 +851,32 @@ bool micInit() {
     return ok;
 }
 
+// Codec de CAPTURA (ES7210 do watch): o init e CARO (reset + ~30 escritas
+// I2C + 50 ms de hold para a maquina de estados destravar). O BoardIO chamava
+// o wake a cada micLevel; com um medidor de nivel de 32 ms isso virava >50 ms
+// de bloqueio POR LEITURA (o app de nivel engasgava). Guardamos o estado e
+// invalidamos em todo sleep/roubo de pino que NOS fazemos (micCodecDown e
+// micPinsDirty); se outro dono (AudioRes) dormir o codec por fora, a leitura
+// toda-zeros do micLevel religa uma vez.
+namespace {
+bool s_micCodecOn = false;
+
+bool micCodecUp() {
+    const BoardProfile& bp = Board::profile();
+    if (bp.micCodecWake == nullptr) return true;  // sem codec: sempre ligado
+    if (s_micCodecOn) return true;
+    if (!bp.micCodecWake()) return false;
+    s_micCodecOn = true;
+    return true;
+}
+
+void micCodecDown() {
+    const BoardProfile& bp = Board::profile();
+    if (bp.micCodecSleep != nullptr) bp.micCodecSleep();
+    s_micCodecOn = false;
+}
+}  // namespace
+
 // ---- gravacao (Mic.* do runtime, API 19): estado + task de captura ----
 //
 // Mesmo canal I2S1 do micLevel: enquanto a task vive ela e a unica leitora.
@@ -833,6 +895,8 @@ struct MicRecState {
     volatile bool done = false;  // task terminou; buffer aguardando leitura
     volatile int level = 0;      // RMS 0..100 do ultimo chunk (mesma escala do micLevel)
     bool overflow = false;       // amostra descartada (teto/lock lento)
+    bool pmHeld = false;         // segura o light sleep enquanto grava
+    bool caps = false;           // task com pilha na PSRAM (vTaskDeleteWithCaps)
     int state = 0;               // 0 livre, 1 gravando (done=true = teto alcancado)
 };
 MicRecState s_rec;
@@ -842,10 +906,18 @@ void micRecTask(void*) {
     int tele = 0;      // telemetria ~1x/s: RMS dos dois slots (logcat)
     while (!s_rec.stopReq) {
         size_t r = 0;
+        // Outro dono (AudioRes) pode ter dormido o ES7210 entre duas
+        // gravacoes: religa FORA do mutex do canal (o init leva ~50 ms).
+        if (!micCodecUp()) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
         // so devolve o mutex que pegou: soltar sem ter (lock falhou) corrompe
         // o dono do mutex no FreeRTOS
         if (!BoardIO::micChanLock(250)) continue;
-        const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
+        const esp_err_t rr = s_mic != nullptr
+                                 ? i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150))
+                                 : ESP_ERR_INVALID_STATE;
         BoardIO::micChanUnlock();
         if (rr != ESP_OK || r < 4) continue;
         const int frames = (int)(r / 4);
@@ -868,8 +940,10 @@ void micRecTask(void*) {
     }
     s_rec.level = 0;
     s_rec.done = true;
-    s_rec.task = nullptr;
-    vTaskDelete(nullptr);
+    // NAO se autodeleta: a pilha pode estar na PSRAM e o vTaskDelete comum
+    // nao a devolve (xTaskCreate*WithCaps exige vTaskDeleteWithCaps). O
+    // handle fica valido para o micRecJoin apagar.
+    vTaskSuspend(nullptr);
 }
 }  // namespace
 
@@ -891,7 +965,14 @@ int rmsLevel100(const int16_t* samples, int n, int stride, int slot) {
     return lvl > 100 ? 100 : lvl;
 }
 
-void micPinsDirty() { s_micPinsDirty = true; }
+void micPinsDirty() {
+    s_micPinsDirty = true;
+    // O som (tom/playWav/musica) passou pelos pinos do I2S1 e, no watch,
+    // pode ter rodado o MCLK em OUTRA taxa ate o teardown: o ES7210 precisa
+    // de um init novo na proxima captura (era o que o wake-por-leitura
+    // garantia). So a primeira leitura seguinte paga os ~50 ms.
+    s_micCodecOn = false;
+}
 
 // ---- alto-falante: canal TX persistente das placas sem codec ---------------
 //
@@ -931,6 +1012,10 @@ i2s_chan_handle_t speakerChannel(int sampleRateHz) {
             i2s_del_channel(s_spk);
             s_spk = nullptr;
             s_spkRate = 0;
+            // o canal antigo foi apagado: sem zerar a flag o canal NOVO
+            // nascia sem i2s_channel_enable e speakerChannel devolvia um
+            // handle parado (todo som seguinte morria em silencio)
+            s_spkOn = false;
         }
     }
     if (s_spk == nullptr) {
@@ -1010,7 +1095,11 @@ int micReadMonoLocked(int16_t* out, int maxSamples) {
     }
     const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
     micChanUnlock();
-    if (rr != ESP_OK || r < 4) return rr == ESP_ERR_TIMEOUT ? -4 : -1;  // -4: sem clock/dados
+    // -4 = sem clock/sem dados: timeout OU canal parado devolvendo 0 bytes
+    // (ESP_OK sem progresso). -1 fica para erro real do driver.
+    if (rr != ESP_OK || r < 4) {
+        return (rr == ESP_ERR_TIMEOUT || rr == ESP_OK) ? -4 : -1;
+    }
     const int frames = (int)(r / 4);
     const int n = frames < maxSamples ? frames : maxSamples;
     for (int i = 0; i < n; i++) out[i] = buf[2 * i];  // slot L
@@ -1021,15 +1110,29 @@ int micLevel() {
     // Gravacao em curso: a task do gravador e a unica leitora do canal —
     // o nivel ao vivo sai dela (ler aqui roubaria chunks do audio)
     if (s_rec.state != 0) return s_rec.done ? -1 : s_rec.level;
-    // Placa com codec de captura (watch): o ES7210 dorme entre usos —
-    // religa a cada leitura (~1 ms de I2C; os clocks ja correm pelo canal).
     const BoardProfile& bp = Board::profile();
-    if (bp.micCodecWake != nullptr && !bp.micCodecWake()) return -1;
-
     int16_t mono[256];  // 32 ms de audio (um chunk do canal)
-    const int n = micReadMonoLocked(mono, 256);
-    if (n < 16) return -1;  // janela curta demais (antes: r < 64 bytes)
-    return rmsLevel100(mono, n, 1, 0);
+    for (int tentativa = 0; tentativa < 2; tentativa++) {
+        if (!micCodecUp()) return -1;  // ES7210 nao subiu
+        const int n = micReadMonoLocked(mono, 256);
+        if (n < 16) return -1;  // janela curta demais / lock / sem clock
+        bool zeros = true;
+        for (int i = 0; i < n; i++) {
+            if (mono[i] != 0) {
+                zeros = false;
+                break;
+            }
+        }
+        // Zeros DIGITAIS num mic analogico (o piso de ruido nunca e zero
+        // exato) = codec desligado por outro dono. Religar uma vez e reler;
+        // nao reportar "silencio" com o ADC dormindo.
+        if (zeros && bp.micCodecWake != nullptr && tentativa == 0) {
+            s_micCodecOn = false;
+            continue;
+        }
+        return rmsLevel100(mono, n, 1, 0);
+    }
+    return 0;
 }
 
 // ---- gravacao de microfone: API do runtime (Mic.*) ---------------------------
@@ -1051,10 +1154,9 @@ void wavHeader(uint8_t* h, uint32_t dataLen) {
 }
 
 // Depois da gravacao o codec de captura do watch volta a dormir (o
-// micLevel religa na proxima leitura)
-void micRecCodecDown() {
-    if (Board::profile().micCodecSleep != nullptr) Board::profile().micCodecSleep();
-}
+// micLevel religa na proxima leitura). Passa pelo helper para manter o
+// cache de estado do BoardIO coerente (s_micCodecOn).
+void micRecCodecDown() { micCodecDown(); }
 
 void micRecFree() {
     free(s_rec.pcm);
@@ -1062,6 +1164,10 @@ void micRecFree() {
     s_rec.cap = 0;
     s_rec.n = 0;
     s_rec.state = 0;
+    if (s_rec.pmHeld) {  // solta o NO_LIGHT_SLEEP do Mic.start
+        PowerPolicy::audioBusy(false);
+        s_rec.pmHeld = false;
+    }
 }
 
 // Monta WAV (ou base64 dele) do buffer gravado. Chamado SO com done=true
@@ -1123,23 +1229,37 @@ char* micRecBuildOut(bool base64, size_t* lenOut, uint32_t* msOut) {
     return b64;
 }
 
-// Espera a task morrer (ela pode estar ate 150 ms dentro do i2s_read)
+// Espera a task morrer (ela pode estar ate 150 ms dentro do i2s_read) e
+// apaga o handle. A task NAO se autodeleta: se a pilha veio de caps (PSRAM),
+// o vTaskDelete comum nao devolveria a memoria.
 void micRecJoin() {
     s_rec.stopReq = true;
     while (!s_rec.done) vTaskDelay(pdMS_TO_TICKS(2));
+    if (s_rec.task != nullptr) {
+        if (s_rec.caps) {
+            vTaskDeleteWithCaps(s_rec.task);
+        } else {
+            vTaskDelete(s_rec.task);
+        }
+        s_rec.task = nullptr;
+    }
 }
 }  // namespace
 
 bool micRecStart(int maxMs) {
     if (!micInit()) return false;
     if (s_rec.state != 0) return false;  // ja gravando (ou buffer nao lido)
-    const BoardProfile& bp = Board::profile();
-    if (bp.micCodecWake != nullptr && !bp.micCodecWake()) return false;  // ES7210: ADC ligado
+    if (!micCodecUp()) return false;     // ES7210: ADC ligado (init cacheado)
     if (maxMs < 200) maxMs = 200;
     if (maxMs > 10000) maxMs = 10000;  // 10 s = 320 KB de PCM (PSRAM)
     if (s_rec.mux == nullptr) s_rec.mux = xSemaphoreCreateMutex();
     if (s_rec.mux == nullptr) return false;
-    s_rec.pcm = (int16_t*)malloc((size_t)maxMs * 16 * sizeof(int16_t));
+    // 320 KB no pior caso: PSRAM primeiro (a interna e o bem escasso do cao
+    // com NimBLE/TLS). A fonte do DMA e o buffer interno do driver; este e
+    // so o acumulador do WAV.
+    const size_t bytes = (size_t)maxMs * 16 * sizeof(int16_t);
+    s_rec.pcm = (int16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_rec.pcm == nullptr) s_rec.pcm = (int16_t*)malloc(bytes);
     if (s_rec.pcm == nullptr) return false;
     s_rec.cap = (size_t)maxMs * 16;
     s_rec.n = 0;
@@ -1148,12 +1268,24 @@ bool micRecStart(int maxMs) {
     s_rec.overflow = false;
     s_rec.level = 0;
     s_rec.state = 1;
-    if (xTaskCreate(micRecTask, "micrec", 3072, nullptr, 3, &s_rec.task) != pdPASS) {
+    // Pilha na PSRAM quando existe (idem beep/player): a task so le o I2S e
+    // copia para o buffer — nada de flash. Fallback interno nas placas sem
+    // PSRAM (o delete do join acompanha o tipo de alocacao).
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(micRecTask, "micrec", 3072, nullptr, 3,
+                                                    &s_rec.task, tskNO_AFFINITY,
+                                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_rec.caps = (ok == pdPASS);
+    if (ok != pdPASS) ok = xTaskCreate(micRecTask, "micrec", 3072, nullptr, 3, &s_rec.task);
+    if (ok != pdPASS) {
         s_rec.task = nullptr;
         micRecFree();
-        micRecCodecDown();
+        micRecCodecDown();  // solta o codec que o start ligou
         return false;
     }
+    // Gravacao com a tela apagada: o tickless sleep pararia o clock do I2S1
+    // e o gravador leria zeros/estouraria o timeout ate o fim do buffer.
+    PowerPolicy::audioBusy(true);
+    s_rec.pmHeld = true;
     return true;
 }
 

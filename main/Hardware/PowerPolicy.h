@@ -31,6 +31,15 @@ void reloadSettings();  // rele wifi_sleep_min (System.setting)
 // (deixa o tickless idle dormir de verdade).
 int loopDelayMs();
 
+// Audio em curso (playWav, PcmFeed, tom, musica, gravacao) segura o
+// NO_LIGHT_SLEEP: o driver do I2S so pede ESP_PM_APB_FREQ_MAX, que NAO
+// barra light sleep — no watch com a tela apagada o clock do canal para
+// entre descritores e o som engasga/picota. Chamadas PARELADAS
+// (true = entra, false = sai), de qualquer task. No-op sem CONFIG_PM_ENABLE.
+// Nao usar para leituras curtas de micLevel (32 ms): o custo e o mesmo da
+// reproducao e a leitura tem timeout proprio.
+void audioBusy(bool on);
+
 }  // namespace PowerPolicy
 
 #endif  // CELER_HARDWARE_POWERPOLICY_H

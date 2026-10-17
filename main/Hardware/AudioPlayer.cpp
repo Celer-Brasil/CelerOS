@@ -1,6 +1,7 @@
 #include "AudioPlayer.h"
 #include "../Boards/Board.h"
 #include "BoardIO.h"
+#include "PowerPolicy.h"  // audio segura o light sleep (watch com a tela apagada)
 #include <Arduino.h>
 #include <atomic>
 #include <cstdio>
@@ -34,9 +35,19 @@ void requestStop() { s_stopReq = true; }
 
 bool acquireOutput() {
     bool livre = false;
-    return s_playing.compare_exchange_strong(livre, true);
+    if (!s_playing.compare_exchange_strong(livre, true)) return false;
+    // O driver do I2S so pega ESP_PM_APB_FREQ_MAX (nao barra light sleep):
+    // no watch, com a tela apagada, o sleep entre descritores para o clock
+    // e o stream engasga. Tom e musica usam esta guarda; o playWav toma a
+    // mesma s_playing por conta propria e segura o PM la tambem (o PcmFeed
+    // idem, no begin/end). No-op nas placas sem CONFIG_PM_ENABLE.
+    PowerPolicy::audioBusy(true);
+    return true;
 }
-void releaseOutput() { s_playing = false; }
+void releaseOutput() {
+    s_playing = false;
+    PowerPolicy::audioBusy(false);
+}
 
 bool active() { return s_playing; }  // detector de wake dorme enquanto toca
 
@@ -50,6 +61,49 @@ namespace {
 uint32_t rdU32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 uint16_t rdU16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
+// Teto de cada i2s_channel_write e estouros seguidos antes de desistir.
+// portMAX_DELAY prendia a task (e a guarda do I2S) para SEMPRE se o DMA
+// parasse: o vigia de 500 ms do end() desistia, recursos e s_playing
+// vazavam e o audio do aparelho ficava morto ate rebootar. Com teto, o
+// player volta ao laco, ve _quit/s_stopReq e sai limpo.
+constexpr uint32_t kWriteMs = 100;    // ~3 blocos de DMA a 16 kHz
+constexpr int kWriteStalls = 5;       // 5 estouros seguidos (~0,5 s) = canal morto
+
+// Escreve o bloco INTEIRO. false = corte pedido, canal morto ou erro.
+// `quit` permite ao PcmFeed abortar no meio do bloco quando o end() pede.
+bool writeAll(i2s_chan_handle_t tx, const void* data, size_t bytes,
+              const volatile bool* quit = nullptr) {
+    const uint8_t* p = (const uint8_t*)data;
+    size_t left = bytes;
+    int stalls = 0;
+    while (left > 0) {
+        if (s_stopReq || (quit != nullptr && *quit)) return false;
+        size_t w = 0;
+        const esp_err_t e = i2s_channel_write(tx, p, left, &w, pdMS_TO_TICKS(kWriteMs));
+        if (w > 0) {
+            p += w;
+            left -= w;
+            stalls = 0;
+        }
+        if (e != ESP_OK && e != ESP_ERR_TIMEOUT) return false;  // driver invalido
+        // i2s_channel_write tambem devolve ESP_OK sem escrever quando o canal
+        // foi desabilitado por baixo (o laco do driver so termina no estado
+        // != RUNNING): sem progresso e sem erro, o teto vale igual.
+        if (w == 0 && ++stalls >= kWriteStalls) return false;
+    }
+    return true;
+}
+
+// Buffers de trabalho grandes (decode QOA) vao para a PSRAM e so caem na
+// interna se ela nao existir. O DMA do I2S exige RAM interna apenas para os
+// descritores do driver: o i2s_channel_write COPIA o bloco do chamador para
+// o DMA, entao a fonte pode morar na PSRAM sem risco de corrupcao.
+void* mallocAudio(size_t bytes) {
+    void* p = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (p == nullptr) p = malloc(bytes);
+    return p;
+}
+
 struct WavInfo {
     uint32_t sampleRate = 0;
     uint16_t channels = 0;     // 1 ou 2
@@ -57,15 +111,42 @@ struct WavInfo {
     uint32_t dataBytes = 0;
 };
 
+// ID3v2 na frente do arquivo (o ffmpeg as vezes prefixa a tag): devolve o
+// offset do conteudo real. Sem isto as magias 'qoaf'/'RIFF' nao apareciam no
+// sniff e um QOA valido virava BadHeader — o app caia no fallback de melodia
+// (2 bipes) mesmo com o audio certo no FS.
+long skipId3(FILE* f) {
+    if (fseek(f, 0, SEEK_END) != 0) return 0;
+    const long size = ftell(f);
+    if (size < 10 || fseek(f, 0, SEEK_SET) != 0) return 0;
+    uint8_t h[10];
+    if (fread(h, 1, 10, f) != 10) return 0;
+    if (memcmp(h, "ID3", 3) != 0 || h[3] < 2 || h[3] > 4) return 0;
+    uint32_t tag;
+    if (h[3] == 2) {  // ID3v2.2: tamanho de 3 bytes (nao synchsafe de 4)
+        tag = ((uint32_t)h[6] << 16) | ((uint32_t)h[7] << 8) | h[8];
+    } else {
+        if (((h[6] | h[7] | h[8] | h[9]) & 0x80) != 0) return 0;  // synchsafe invalido
+        tag = ((uint32_t)(h[6] & 0x7f) << 21) | ((uint32_t)(h[7] & 0x7f) << 14) |
+              ((uint32_t)(h[8] & 0x7f) << 7) | (h[9] & 0x7f);
+    }
+    // rodape opcional do ID3v2.4 (flag 0x10): mais 10 bytes apos a tag
+    const bool footer = (h[3] == 4 && (h[5] & 0x10) != 0);
+    const long long off = 10 + (long long)tag + (footer ? 10 : 0);
+    if (off <= 10 || off >= size) return 0;  // tag corrompida/colada no fim
+    return (long)off;
+}
+
 // Percorre os chunks RIFF ate achar fmt (obrigatorio) e data. Sem parser de
 // JSON/strings gigante: cabecalho WAV sao blocos de 8 bytes (id + tamanho).
 // Arquivo nao confiavel: todo salto e para FRENTE e dentro do arquivo. Antes
 // um tamanho >= 2^31 virava long negativo no fseek, o parser voltava ao
 // mesmo cabecalho e o loop nunca terminava (watchdog reiniciava o aparelho).
-bool parseHeader(FILE* f, WavInfo& out) {
+// `start` e o offset do 'RIFF' (0, ou depois de uma tag ID3).
+bool parseHeader(FILE* f, WavInfo& out, long start) {
     if (fseek(f, 0, SEEK_END) != 0) return false;
     const long fileSize = ftell(f);
-    if (fileSize < 12 || fseek(f, 0, SEEK_SET) != 0) return false;
+    if (start < 0 || fileSize - start < 12 || fseek(f, start, SEEK_SET) != 0) return false;
 
     uint8_t h[12];
     if (fread(h, 1, 12, f) != 12) return false;
@@ -75,7 +156,7 @@ bool parseHeader(FILE* f, WavInfo& out) {
     uint8_t ch[8];
     for (;;) {
         const long pos = ftell(f);
-        if (pos < 0 || fileSize - pos < 8 || fread(ch, 1, 8, f) != 8) break;
+        if (pos < start || fileSize - pos < 8 || fread(ch, 1, 8, f) != 8) break;
         const uint64_t sz = rdU32(ch + 4);
         const long body = pos + 8;                       // inicio do conteudo
         const uint64_t avail = (uint64_t)(fileSize - body);
@@ -183,16 +264,14 @@ WavError playQoaStream(FILE* f) {
         fclose(f);
         return WavError::BadHeader;
     }
-    // big endian (QOA e BE por especificacao)
+    // big endian (QOA e BE por especificacao). total = 0 e o modo
+    // "streaming" da especificacao (numero de amostras desconhecido): toca
+    // frame a frame ate o EOF em vez de recusar o arquivo.
     const uint32_t total = ((uint32_t)fh[4] << 24) | ((uint32_t)fh[5] << 16) | (fh[6] << 8) | fh[7];
-    if (total == 0) {
-        fclose(f);
-        return WavError::BadHeader;
-    }
 
     const uint32_t kFrameMax = 8 + 16 * 2 + 8 * 256 * 2;             // frame max stereo
-    uint8_t* fbuf = (uint8_t*)malloc(kFrameMax);
-    int16_t* pcm = (int16_t*)malloc(QOA_FRAME_LEN * 2 * sizeof(int16_t));   // 20 KB -> PSRAM
+    uint8_t* fbuf = (uint8_t*)mallocAudio(kFrameMax);                // 4 KB
+    int16_t* pcm = (int16_t*)mallocAudio(QOA_FRAME_LEN * 2 * sizeof(int16_t));  // 20 KB -> PSRAM
     int16_t (*frames)[2] = (int16_t(*)[2])malloc(256 * 2 * sizeof(int16_t));
     if (fbuf == nullptr || pcm == nullptr || frames == nullptr) {
         free(fbuf); free(pcm); free(frames);
@@ -203,7 +282,11 @@ WavError playQoaStream(FILE* f) {
     TxSink sink;
     const int vol = BoardIO::volumePct();
     uint32_t played = 0;
-    while (played < total) {
+    bool anyFrame = false;   // pelo menos um frame valido decodificado
+    bool ioOk = true;        // canal de saida aceitou tudo (false = morreu)
+    bool sinkFail = false;   // openTxSink recusou (sem canal/sem RAM)
+    const bool streaming = (total == 0);
+    while (streaming || played < total) {
         if (s_stopReq) break;  // corte pedido por fora (fala do TTS)
         // header do frame (8 B, BE): canais, taxa, amostras, tamanho
         uint8_t h[8];
@@ -221,10 +304,14 @@ WavError playQoaStream(FILE* f) {
             q.channels = channels;
             q.samplerate = rate;
             ESP_LOGI("celer.audio", "qoa: %u Hz ch=%u (%u amostras)", rate, channels, total);
-            if (!openTxSink(rate, sink)) break;
+            if (!openTxSink(rate, sink)) {
+                sinkFail = true;
+                break;
+            }
         }
         unsigned frameLen = 0;
         if (qoa_decode_frame(fbuf, frameSize, &q, pcm, &frameLen) == 0 || frameLen == 0) break;
+        anyFrame = true;
 
         for (uint32_t b = 0; b < frameLen; b += 256) {
             const uint32_t m = (frameLen - b < 256) ? frameLen - b : 256;
@@ -234,16 +321,22 @@ WavError playQoaStream(FILE* f) {
                 frames[i][0] = (int16_t)((l * vol) / 100);
                 frames[i][1] = (int16_t)((r * vol) / 100);
             }
-            size_t written = 0;
-            i2s_channel_write(sink.tx, frames, m * sizeof(frames[0]), &written, portMAX_DELAY);
+            if (!writeAll(sink.tx, frames, m * sizeof(frames[0]))) {
+                ioOk = false;  // corte (s_stopReq) ou canal morto
+                break;
+            }
             feedWatchdog();
         }
+        if (!ioOk) break;
         played += frameLen;
     }
 
     if (sink.tx != nullptr) closeTxSink(sink);
     free(fbuf); free(pcm); free(frames);
     fclose(f);
+    if (sinkFail) return WavError::NoAudio;
+    if (!ioOk && !s_stopReq) return WavError::NoAudio;  // canal morreu no meio
+    if (!anyFrame && !s_stopReq) return WavError::BadHeader;
     return WavError::None;
 }
 
@@ -257,9 +350,14 @@ WavError playWav(const char* path) {
 
     bool livre = false;
     if (!s_playing.compare_exchange_strong(livre, true)) return WavError::Busy;
+    // playWav nao passa por acquireOutput (a guarda e tomada aqui): segura o
+    // light sleep pelo mesmo motivo (ver acquireOutput) — TTS/alarme com a
+    // tela apagada no watch engasgava com o clock do I2S dormindo.
+    PowerPolicy::audioBusy(true);
     s_stopReq = false;
     const WavError e = playWavLocked(path);
     s_playing = false;
+    PowerPolicy::audioBusy(false);
     return e;
 }
 
@@ -279,18 +377,24 @@ static WavError playWavLocked(const char* path) {
         return WavError::NoAudio;
     }
 
-    // Fareio o formato: RIFF..WAVE = WAV PCM; magica "qoaf" = QOA
+    // Fareio o formato DEPOIS de pular uma eventual tag ID3v2 (ffmpeg):
+    // RIFF..WAVE = WAV PCM; magica "qoaf" = QOA (big endian).
+    const long start = skipId3(f);
     {
         uint8_t m[4];
+        if (fseek(f, start, SEEK_SET) != 0) {
+            fclose(f);
+            return WavError::BadHeader;
+        }
         const size_t rn = fread(m, 1, 4, f);
-        fseek(f, 0, SEEK_SET);
+        fseek(f, start, SEEK_SET);
         if (rn == 4 && m[0] == 'q' && m[1] == 'o' && m[2] == 'a' && m[3] == 'f') {
             return playQoaStream(f);
         }
     }
 
     WavInfo wi;
-    if (!parseHeader(f, wi) ||
+    if (!parseHeader(f, wi, start) ||
         (wi.channels != 1 && wi.channels != 2) ||
         wi.sampleRate < 8000 || wi.sampleRate > 48000 || wi.dataBytes < 4) {
         fclose(f);
@@ -315,6 +419,7 @@ static WavError playWavLocked(const char* path) {
     // fallback do AI.speak jurava played:true sem ter tocado nada. Mesmo
     // WavError::NoAudio do OOM do playQoaStream.
     const bool oom = src == nullptr || frames == nullptr;
+    bool ioOk = true;
     if (!oom) {
         uint32_t remaining = wi.dataBytes / (2u * wi.channels);  // em frames
         while (remaining > 0) {
@@ -328,8 +433,10 @@ static WavError playWavLocked(const char* path) {
                 frames[i][0] = (int16_t)((l * vol) / 100);
                 frames[i][1] = (int16_t)((r * vol) / 100);
             }
-            size_t written = 0;
-            i2s_channel_write(sink.tx, frames, got * sizeof(frames[0]), &written, portMAX_DELAY);
+            if (!writeAll(sink.tx, frames, got * sizeof(frames[0]))) {
+                ioOk = false;  // corte (s_stopReq) ou canal morreu
+                break;
+            }
             feedWatchdog();
             remaining -= got;
         }
@@ -339,7 +446,10 @@ static WavError playWavLocked(const char* path) {
 
     closeTxSink(sink);
     fclose(f);
-    return oom ? WavError::NoAudio : WavError::None;
+    if (oom) return WavError::NoAudio;
+    // canal morreu sem pedido de corte: nao mentir "tocou" para o chamador
+    if (!ioOk && !s_stopReq) return WavError::NoAudio;
+    return WavError::None;
 }
 
 // ---- PcmFeed: streaming ao vivo do TTS (AI.speak) --------------------------
@@ -352,6 +462,10 @@ static WavError playWavLocked(const char* path) {
 // juntar isso de novo (ou o download acabar) — uma pausa limpa em vez de
 // uma rajada de cliques de 10 ms.
 static constexpr uint32_t kResumeMs = 200;
+
+// Teto do dreno de rabo no end() sem finish() (AudioRes::playStop): a fila
+// daquele caminho cabe em ~1 s (playFeed so enfileira ate 900 ms a frente).
+static constexpr uint32_t kEndDrainMaxMs = 1200;
 
 void PcmFeed::playerTask(void* arg) {
     PcmFeed* f = (PcmFeed*)arg;
@@ -391,8 +505,16 @@ void PcmFeed::playerTask(void* arg) {
         }
         __sync_synchronize();
         f->_r = r + m;  // espaco devolvido ao produtor
-        size_t written = 0;
-        i2s_channel_write(f->_tx, frames, m * sizeof(frames[0]), &written, portMAX_DELAY);
+        // Bloco com teto (writeAll): se o DMA parar, o laco volta e ve
+        // _quit/s_stopReq. Com portMAX_DELAY a task ficava presa para sempre
+        // e o end() desistia — vazava task, fila, canal e a guarda do I2S.
+        if (!writeAll(f->_tx, frames, m * sizeof(frames[0]), &f->_quit)) {
+            // _r ja avancou: sem a flag, o finish() veria a fila vazia e
+            // reportaria "tocou tudo" com o canal morto no meio do bloco.
+            if (!s_stopReq && !f->_quit) f->_err = true;
+            break;
+        }
+        feedWatchdog();
     }
     f->_done = true;
     vTaskSuspend(nullptr);  // stack na PSRAM: quem libera e o end()
@@ -405,6 +527,9 @@ bool PcmFeed::begin(uint32_t sampleRate, size_t capBytes) {
     bool livre = false;
     if (!s_playing.compare_exchange_strong(livre, true)) return false;  // playWav em curso
     _held = true;  // deste ponto em diante o end() e obrigatorio
+    // O player drena o I2S por conta propria: sem o lock de PM o tickless
+    // sleep para o clock do canal no meio da fala (tela apagada no watch).
+    PowerPolicy::audioBusy(true);
     // corte VELHO (cancel de uma fala que ja tinha acabado): sem limpar, todo
     // feed seguinte nascia morto ate algum playWav zerar a flag
     s_stopReq = false;
@@ -416,6 +541,7 @@ bool PcmFeed::begin(uint32_t sampleRate, size_t capBytes) {
     _eof = false;
     _quit = false;
     _done = false;
+    _err = false;
     _starves = 0;
     _starveMs = 0;
     _cap = capBytes / 2;
@@ -498,7 +624,10 @@ bool PcmFeed::finish() {
         vTaskDelay(pdMS_TO_TICKS(20));
         feedWatchdog();
     }
-    const bool inteiro = _done && !s_stopReq && _w == _r;
+    // _err: o player saiu por falha de I2S (nao por corte/fim). Sem isso o
+    // _r avancado antes do write fazia a fila parecer vazia e o AI.speak
+    // reportava "tocou tudo" com a voz cortada no meio.
+    const bool inteiro = _done && !s_stopReq && !_err && _w == _r;
     // ultimo bloco ainda no DMA (~40 ms): sem isto o canal com codec
     // fechava cortando a ultima silaba
     if (inteiro) vTaskDelay(pdMS_TO_TICKS(60));
@@ -506,20 +635,53 @@ bool PcmFeed::finish() {
 }
 
 void PcmFeed::end() {
+    if (_stuck) {
+        // Player preso numa chamada ANTERIOR do end(): se ele finalmente
+        // saiu, conclui a limpeza; senao nao toca em _ring/_tx (a task ainda
+        // usa) nem solta a guarda. Antes o primeiro end() zerava _task
+        // mesmo sem seguro e o SEGUNDO end() (destrutor do PcmFeed, que o
+        // AudioRes chama depois do delete) liberava canal/fila sob a task
+        // presa — use-after-free. Com o writeAll o caso virou quase
+        // impossivel, mas o backstop nao pode piorar a situacao.
+        if (_task == nullptr || !_done) return;
+        _stuck = false;
+    }
     bool seguro = true;  // nada mais toca no canal/fila
     if (_task != nullptr) {
+        // Rabo: end() sem cancelamento e sem finish() (AudioRes::playStop)
+        // drena o que ja esta na fila antes de matar o player — o corte
+        // seco comia ate ~1 s de PCM recebido. finish() deixou a fila vazia
+        // (sai na hora) e cancelamento (s_stopReq) corta na hora tambem.
+        // Trade-off: esta espera pode somar ate kEndDrainMaxMs.
+        if (!s_stopReq && _go && !_eof && !_done && _w != _r) {
+            const uint32_t ms = bufferedMs();
+            const uint32_t cap = ms < kEndDrainMaxMs ? ms : kEndDrainMaxMs;
+            const int64_t lim = esp_timer_get_time() + (int64_t)(cap + 250) * 1000;
+            while (_w != _r && !s_stopReq && esp_timer_get_time() < lim) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                feedWatchdog();
+            }
+            // ultimo bloco ainda no DMA (~40 ms): idem finish()
+            if (_w == _r && !s_stopReq) vTaskDelay(pdMS_TO_TICKS(60));
+        }
         _quit = true;
         xTaskNotifyGive((TaskHandle_t)_task);
-        for (int i = 0; i < 100 && !_done; i++) vTaskDelay(pdMS_TO_TICKS(5));
+        // 1 s: o pior caso do player com writeAll e ~600 ms (write de 100 ms
+        // + 5 estouros de 100 ms). Esperar MENOS que isso deixava a task
+        // sair logo depois do end() desistir — e o PcmFeed do AudioRes e
+        // apagado em seguida (escrita em objeto liberado).
+        for (int i = 0; i < 200 && !_done; i++) vTaskDelay(pdMS_TO_TICKS(5));
         if (_done) {
             vTaskDeleteWithCaps((TaskHandle_t)_task);
+            _task = nullptr;
         } else {
-            // player preso no I2S (nao deve acontecer: o DMA sempre drena):
-            // vaza task, fila, canal e guarda em vez de solta-los sob ele
+            // player preso no I2S (writeAll torna o caso quase impossivel):
+            // retem task, fila, canal e guarda em vez de solta-los sob ele.
+            // _task fica para a proxima chamada poder concluir a limpeza.
+            _stuck = true;
             seguro = false;
             ESP_LOGE("celer.audio", "pcmfeed: player nao saiu; recursos retidos");
         }
-        _task = nullptr;
     }
     if (!seguro) return;
     if (_tx != nullptr) {
@@ -531,7 +693,7 @@ void PcmFeed::end() {
     _ring = nullptr;
     _cap = 0;
     if (_held) {  // so solta a guarda que o begin pegou (nunca a de um playWav)
-        s_playing = false;
+        releaseOutput();  // solta s_playing E o lock de PM do begin()
         _held = false;
     }
 }

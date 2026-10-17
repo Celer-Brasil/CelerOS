@@ -71,6 +71,9 @@ public:
     // fim (false = corte). Chama start() se ninguem chamou.
     bool finish();
     // Para o player, fecha o canal e solta a guarda (idempotente).
+    // Sem finish() previo (AudioRes::playStop), DRENA a fila antes de parar
+    // (ate ~1,2 s): o corte seco comia o PCM ja recebido. Cancelamento
+    // (requestStop) e o fim normal (finish) saem na hora.
     void end();
     // Audio enfileirado ainda nao tocado (ms) e telemetria de engasgo.
     uint32_t bufferedMs() const;
@@ -91,6 +94,9 @@ private:
     volatile size_t _w = 0;   // contadores monotonicos (produtor/consumidor)
     volatile size_t _r = 0;
     volatile bool _go = false, _eof = false, _quit = false, _done = false;
+    volatile bool _err = false;  // player saiu por falha do I2S (finish honesto)
+    bool _stuck = false;      // end() anterior nao conseguiu parar o player:
+                              // nada e liberado sob ele (nem na 2a chamada)
     void* _task = nullptr;    // TaskHandle_t do player
     volatile uint32_t _starves = 0, _starveMs = 0;
 };

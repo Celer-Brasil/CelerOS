@@ -1172,11 +1172,12 @@ E.run({
             if (this.first) {
                 this.first = false;
                 System.fillScreen(C.preto);
+                // A arte de titulo (480x480, ~105 KB) travava o decode nativo
+                // por dezenas de segundos no 4848: o HostLink parava de
+                // responder e o aparelho parecia morto. O titulo tipografico
+                // entra no lugar; a arte fica no repo para uma versao com
+                // imagem menor. (Os sprites pequenos seguem em PNG.)
                 tituloArte = false;
-                if (E.caps.png && W >= 480) {
-                    try { tituloArte = !!System.drawPNG(E.spr.bases[0] + "titulo.png", Math.round((W - 480) / 2), 0); }
-                    catch (e) { tituloArte = false; }
-                }
                 // nome na placa preta da arte (y 172..225) ou centrado sem arte
                 var ty = tituloArte ? 199 : Math.round(H * 0.3);
                 E.gfx.text("DETONA!", W / 2, ty, { color: C.ouro, px: u(21), align: "center",

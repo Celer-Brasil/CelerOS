@@ -290,7 +290,10 @@ bool clientChunk(int slot, const uint8_t* p, size_t len) {
     const uint8_t xfer = p[0];
     const uint32_t total = get32(p + 1), off = get32(p + 5);
     const size_t n = len - BULK_HDR;
-    if (total == 0 || total > MAX_IMAGE || off % CHUNK != 0 || off + n > total) return false;
+    // sem soma que envolva: off vem do fio e off+n em 32 bits dava a volta
+    // (off ~4 G + n) e o teste passava com indice e memcpy fora do buffer
+    if (total == 0 || total > MAX_IMAGE || off % CHUNK != 0 || off > total || n > total - off)
+        return false;
     if (a.active && xfer == a.xfer && a.complete) {
         a.ackNow = true;  // reenvio de uma imagem que ja temos: o ACK se perdeu
         return false;

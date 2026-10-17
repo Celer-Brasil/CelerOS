@@ -472,7 +472,13 @@ int paramInt(const uint8_t* params, size_t plen, const char* key, int def) {
     snprintf(k, sizeof(k), "\"%s\":", key);
     const size_t kl = strlen(k);
     for (size_t i = 0; i + kl < plen; i++) {
-        if (memcmp(params + i, k, kl) == 0) return atoi((const char*)params + i + kl);
+        if (memcmp(params + i, k, kl) != 0) continue;
+        // params nao e NUL-terminado: o atoi poderia varrer alem do fim
+        char v[16];
+        const size_t left = plen - (i + kl);
+        snprintf(v, sizeof(v), "%.*s", (int)(left < sizeof(v) - 1 ? left : sizeof(v) - 1),
+                 (const char*)params + i + kl);
+        return atoi(v);
     }
     return def;
 }
@@ -1210,7 +1216,15 @@ void rxTask(void*) {
                                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     uint32_t lastTimers = 0;
     for (;;) {
-        if (rx != nullptr && DataLink::pollWait(rx, 50)) {
+        if (rx == nullptr) {
+            // sem RAM para o Rx agora: espera e tenta de novo (spin aqui em
+            // prio 6 matava tudo abaixo)
+            vTaskDelay(pdMS_TO_TICKS(250));
+            rx = (DataLink::Rx*)heap_caps_malloc(sizeof(DataLink::Rx),
+                                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            continue;
+        }
+        if (DataLink::pollWait(rx, 50)) {
             if (rx->kind == DataLink::KIND_ENV) {
                 // envelope do Pack em banda (API 41): token = destino
                 const uint16_t from = rx->sid;

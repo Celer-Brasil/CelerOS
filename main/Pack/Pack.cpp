@@ -131,6 +131,11 @@ void memberCb(uint16_t id, const char* name, uint8_t caps, bool joined) {
 }
 
 void customPush(uint16_t from, const char* fromName, const uint8_t* d, size_t len) {
+    // teto ANTES do memcpy: pela banda ESP-NOW (API 41) o envelope chega com
+    // ate 1449 B e o data da CustomMsg tem MAX_PAYLOAD — a malha disfarca
+    // (434), o ESP-NOW nao. Acima do teto nao e mensagem de app (o
+    // Pack.send ja limita a 430): descarta.
+    if (len > MAX_PAYLOAD) return;
     if (s_customCount >= CUSTOM_DEPTH) {
         s_customHead = (uint8_t)((s_customHead + 1) % CUSTOM_DEPTH);
         s_customCount--;

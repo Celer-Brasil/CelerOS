@@ -28,7 +28,13 @@ int paramInt(const uint8_t* params, size_t plen, const char* key, int def) {
     snprintf(k, sizeof(k), "\"%s\":", key);
     const size_t kl = strlen(k);
     for (size_t i = 0; i + kl < plen; i++) {
-        if (memcmp(params + i, k, kl) == 0) return atoi((const char*)params + i + kl);
+        if (memcmp(params + i, k, kl) != 0) continue;
+        // params nao e NUL-terminado: o atoi poderia varrer alem do fim
+        char v[16];
+        const size_t left = plen - (i + kl);
+        snprintf(v, sizeof(v), "%.*s", (int)(left < sizeof(v) - 1 ? left : sizeof(v) - 1),
+                 (const char*)params + i + kl);
+        return atoi(v);
     }
     return def;
 }

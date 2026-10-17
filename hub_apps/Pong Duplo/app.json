@@ -8,7 +8,10 @@
   "category": "Arcade",
   "api": 30,
   "permissions": [],
-  "changelog": "2.0.0 - portado para a familia CelerGame (core 1.0.2 + fx 1.0.2 + ui 1.0.1): cenas menu/host/scan/partida/fim com transicoes fade/wipe, menu com titulo e dialogo \"Como jogar\", pausa (Continuar/Recomecar/Sair) e fim com placar e Revanche; juice novo (burst no rebote da raquete e das paredes, ring/flash no ponto, popText no placar), sons de tabela (hit/score/win) e piloto automatico salvo no NVS via E.save; protocolo do Celer Link preservado ({t:b}, {t:p}, {t:s}), pareamento por codigo de 6 digitos, 5 pontos vencem; o piloto automatico virou o chip AUTO: ON/OFF ao lado da dica (antes o AUTO colidia com o Como jogar)\n1.0.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.0.0 - primeira versao: anfitriao com pareamento por codigo, busca e entrada com ate 3 tentativas, bola espelhada entre as telas ({t:b}), ponto ({t:p}), saque de quem perdeu, piloto automatico",
+  "requires": [
+    "psram"
+  ],
+  "changelog": "2.0.0 - portado para a familia CelerGame (core 1.0.2 + fx 1.0.2 + ui 1.0.1): cenas menu/host/scan/partida/fim com transicoes fade/wipe, menu com titulo e dialogo \"Como jogar\", pausa (Continuar/Recomecar/Sair) e fim com placar e Revanche; juice novo (burst no rebote da raquete e das paredes, ring/flash no ponto, popText no placar), sons de tabela (hit/score/win) e piloto automatico salvo no NVS via E.save; protocolo do Celer Link preservado ({t:b}, {t:p}, {t:s}), pareamento por codigo de 6 digitos, 5 pontos vencem; o piloto automatico virou o chip AUTO: ON/OFF ao lado da dica (antes o AUTO colidia com o Como jogar); pede psram (pacote + dep ui passa do teto de 48 KB da CYD)\n1.0.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.0.0 - primeira versao: anfitriao com pareamento por codigo, busca e entrada com ate 3 tentativas, bola espelhada entre as telas ({t:b}), ponto ({t:p}), saque de quem perdeu, piloto automatico",
   "deps": {
     "celeros.game": "^1.0.0",
     "celeros.game.fx": "^1.0.0",

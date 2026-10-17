@@ -1,5 +1,7 @@
 #include "LogPersist.h"
 
+#include "../Display/Backlight.h"
+#include "../Display/ScreenPower.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Hardware/AudioPlayer.h"
 #include "esp_heap_caps.h"
@@ -16,7 +18,8 @@
 // kern.log recebe o firmware (ESP_LOG pelo hook do SerialLink + celer_log_*);
 // apps.log recebe os System.print dos apps com o pacote na frente. O staging
 // e RAM estatica (sem malloc: alocacao falhando aborta o aparelho) e o flush
-// roda no servico "logpersist" do CelerServices (~3 s ou buffer quase cheio).
+// roda no servico "logpersist" do CelerServices (~3 s ou buffer quase cheio),
+// com o vidro apagado — ver tick().
 //
 // O flush copia o staging para um buffer de saida sob o mutex e escreve
 // DEPOIS de soltar: o fwrite do LittleFS pode logar erro pelo ESP_LOG, e
@@ -210,6 +213,20 @@ void tick() {
     // com FSInfo invalido, ~1 min): cada fopen/stat esperaria ate 10 s pelo
     // lock aqui na task main — o staging segura ate ela terminar.
     if (FileSystem::sdScanBusy()) return;
+    // Vidro aceso: escrever na flash suspende o cache e estaciona o outro
+    // nucleo por dezenas de ms — o DMA do painel RGB varre o framebuffer em
+    // PSRAM dentro da janela e a imagem embaralha no meio do quadro (bancada
+    // 2026-10-16: rajada de rm+touch no sh embaralhou os 2 4848 na hora; a
+    // ISR do VSYNC em IRAM do 345b034 pontualiza o reinicio mas nao protege
+    // a janela). O flush espera o vidro apagar (backlight off; no watch,
+    // SLPIN — AOD ainda mostra e espera junto) e so flusha aceso no estagio
+    // quase cheio: perder log e pior que um embaralhado raro. Sem backlight
+    // (headless) flusha sempre, como antes. Debug ao vivo nao muda: o
+    // logcat --dump le o ring em RAM.
+    if (!quase && Backlight::isSupported() && !Backlight::isOff() &&
+        ScreenPower::state() > 0) {
+        return;
+    }
     s_last = now;
     flushStage(*s_kern, "kern");
     flushStage(*s_apps, "apps");

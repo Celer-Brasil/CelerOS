@@ -20,6 +20,7 @@
 // 1.4.0: presets de aventura — corte (faisca do golpe de espada), poof
 // (monstro que some), brilho (item/coracao), pedrinha (pedra que quebra);
 // play(..., {dir: rad}) aponta a receita (o corte sai para onde o golpe foi).
+// 1.4.1: particula fora do vidro nao desenha nem registra caixa suja.
 
 var E = require('celeros.game');
 var S = System;
@@ -33,7 +34,7 @@ var _bmO = { w: 1 };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.4.0',
+    version: '1.4.1',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
@@ -444,6 +445,7 @@ E.fx = {
         var ps = this._parts, D = E.dirty, mix = E.caps.wide;
         // camera do quadro (E.cam.wx/wy inline: 2 chamadas a menos por particula)
         var cox = E.cam.ox - E.cam.x, coy = E.cam.oy - E.cam.y;
+        var W8 = E.W + 8, H8 = E.H + 8;
         for (var i = 0, n = this._live > 0 ? ps.length : 0; i < n; i++) {
             var p = ps[i];
             if (p.dead) continue;
@@ -451,6 +453,9 @@ E.fx = {
             var col = p.color;
             if (k < 0.5 && mix) col = S.mixColor(p.color, 0x0000, Math.round(100 - k * 200));
             var x = Math.round(p.x + cox), y = Math.round(p.y + coy);
+            // fora do vidro (camera andou, faisca voou): nem desenha nem
+            // registra caixa — o anel ainda pode cruzar a tela crescendo
+            if (p.shape !== 'ring' && (x < -8 || y < -8 || x > W8 || y > H8)) continue;
             if (p.shape === 'spark') {
                 var x2 = Math.round(x - p.vx * 0.05), y2 = Math.round(y - p.vy * 0.05);
                 S.drawLine(x, y, x2, y2, col);

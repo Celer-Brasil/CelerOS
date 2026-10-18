@@ -56,6 +56,67 @@ module.exports = function (check) {
     var zerados = dts.filter(function (d) { return d[1] === 0; }).length;
     check('core: E.freeze(ms) zera o dt por ~ms e volta sozinho',
           zerados >= 2 && dts[dts.length - 1][1] > 0 && !c.E.frozen(), JSON.stringify(dts.slice(0, 8)));
+    // tap com quadro LENTO no meio: press amostrado em t0, dedo ainda no
+    // vidro 10 ms depois, e o quadro seguinte (que le a soltura) so chega
+    // 600 ms mais tarde — o toque foi curto, e tap (antes sumia)
+    (function () {
+        var ct = fresh([]);
+        var seq = [[{ id: 1, x: 50, y: 60 }], [{ id: 1, x: 50, y: 60 }], []], q = 0;
+        ct.S.getTouches = function () { return seq[q++] || []; };
+        ct.E.caps.multi = true;
+        ct.E._pollInput(1000);
+        ct.E._pollInput(1010);
+        ct.E._pollInput(1610);
+        check('core 1.4.2: tap curto sobrevive a um quadro lento antes da soltura',
+              !!ct.E.input.tap && ct.E.input.tap.x === 50, JSON.stringify(ct.E.input.tap));
+        // segurar de verdade (dedo no vidro 600 ms) continua NAO sendo tap
+        seq = [[{ id: 2, x: 5, y: 6 }], [{ id: 2, x: 5, y: 6 }], []]; q = 0;
+        ct.E._pollInput(3000);
+        ct.E._pollInput(3600);
+        ct.E._pollInput(3610);
+        check('core 1.4.2: dedo parado 600 ms nao vira tap', !ct.E.input.tap);
+    })();
+
+    // path.flow: o BFS do custo uniforme e o heap do custo variado dao a
+    // MESMA distancia que um Dijkstra de referencia (O(n^2), sem heap)
+    (function () {
+        var cp = fresh(['path']);
+        function refDist(cols, rows, c1, r1, cost) {
+            var n = cols * rows, d = [], done = [], i;
+            for (i = 0; i < n; i++) { d.push(-1); done.push(false); }
+            d[r1 * cols + c1] = 0;
+            for (;;) {
+                var k = -1;
+                for (i = 0; i < n; i++) if (!done[i] && d[i] >= 0 && (k < 0 || d[i] < d[k])) k = i;
+                if (k < 0) break;
+                done[k] = true;
+                var c = k % cols, r = (k - c) / cols, wk = cost(c, r);
+                if (!(wk >= 0)) wk = 1;
+                var nb = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+                for (var q = 0; q < 4; q++) {
+                    var nc = c + nb[q][0], nr = r + nb[q][1];
+                    if (nc < 0 || nr < 0 || nc >= cols || nr >= rows || !(cost(nc, nr) >= 0)) continue;
+                    var nk = nr * cols + nc, nv = d[k] + wk;
+                    if (d[nk] < 0 || nv < d[nk]) d[nk] = nv;
+                }
+            }
+            return d;
+        }
+        var R = cp.E.rng(7), ruins = 0;
+        for (var t = 0; t < 12; t++) {
+            var cols = 15, rows = 13, grid = [];
+            for (var i = 0; i < cols * rows; i++) grid.push(R() < 0.3 ? -1 : (t % 2 ? 1 + R.int(0, 3) : 1));
+            var cost = function (c, r) { return grid[r * cols + c]; };
+            var c1 = R.int(0, cols - 1), r1 = R.int(0, rows - 1);
+            var f = cp.E.path.flow(cols, rows, c1, r1, cost), ref = refDist(cols, rows, c1, r1, cost);
+            for (var k = 0; k < cols * rows; k++) {
+                if (Math.abs(f.dist(k % cols, (k - k % cols) / cols) - ref[k]) > 1e-9) { ruins++; break; }
+            }
+        }
+        check('path.flow: BFS (custo uniforme) e heap (custo variado) = Dijkstra de referencia', ruins === 0,
+              ruins + ' grades divergiram');
+    })();
+
     // audio: firmware aceita o playMusic mas o canal I2S nao abre (RAM
     // interna sem DMA) — o restart nao pode virar um playMusic por quadro
     var pedidos = 0;

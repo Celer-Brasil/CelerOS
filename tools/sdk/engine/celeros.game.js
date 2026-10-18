@@ -75,8 +75,17 @@
 // primario segue alimentando x/y/tap/swipe como sempre; quando ele levanta
 // com outro dedo na tela, o primario vira soltura + toque novo (sem pulo
 // de posicao que viraria swipe falso).
+// 1.4.1: restart da trilha com backoff quando o canal I2S nao abre.
+// 1.4.2: gfx.hearts pinta o coracao cheio 1x (eram 6 primitivas); camera
+// com lerp corrigido pelo dt (a 20 fps seguia 1/3 mais devagar); save.set/
+// setObj devolvem false e avisam no log (E._warn) quando a NVS recusa chave
+// > 15 chars ou valor > 4 KB — antes o save sumia calado; texto com o par
+// cru font/size usa estilo memoizado (cache de largura, sem objeto novo);
+// o tap mede o toque ate o ULTIMO quadro com o dedo (um quadro pesado entre
+// o press e a leitura da soltura nao engole mais o toque) e o duplo-toque
+// conta do fim do 1o ao inicio do 2o.
 
-var E = { version: '1.4.1' };
+var E = { version: '1.4.2' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -91,6 +100,13 @@ E._modTicks = [];
 // cena, ainda dentro da camada suja — fica por cima e apaga sozinho
 E._modDraws = [];
 E._mods = [];       // nomes carregados (["fx", "spr", ...]) — diagnostico
+// aviso de diagnostico no log do aparelho (logcat), 1x por mensagem
+var _warned = {};
+E._warn = function (msg) {
+    if (_warned[msg]) return;
+    _warned[msg] = true;
+    try { S.print('[celergame] ' + msg); } catch (e) {}
+};
 E._inited = false;  // modulo carregado DEPOIS do init se auto-inicializa
 
 // ------------------------------------------------------- caps / init ------
@@ -458,7 +474,7 @@ E.input = {
         for (var k = 0; k < L.length; k++) if (L[k].id === id) return L[k];
         return null;
     },
-    _raw: { down: false, sx: 0, sy: 0, t0: 0, moved: false, longDone: false,
+    _raw: { down: false, sx: 0, sy: 0, t0: 0, t1: 0, moved: false, longDone: false,
             lastTapT: -1e9, lastTapX: 0, lastTapY: 0, pid: -1, swap: false }
 };
 
@@ -548,6 +564,7 @@ E._pollInput = function (now) {
         i.x = t.x;
         i.y = t.y;
         i.down = true;
+        r.t1 = now;          // ultimo quadro com o dedo no vidro
         i.heldMs = now - r.t0;
         i.holdDx = t.x - r.sx;
         i.holdDy = t.y - r.sy;
@@ -563,17 +580,21 @@ E._pollInput = function (now) {
         i.down = false;
         i.heldMs = 0;
         i.justUp = true;
-        if (!r.moved && now - r.t0 < i.tapMs) {
+        // duracao do toque = press ate o ULTIMO quadro com o dedo no vidro
+        // (r.t1), nao ate o quadro que leu a soltura: um quadro pesado no
+        // meio (o press redesenha a tela, decodifica PNG) empurrava o
+        // release para depois da janela e o tap sumia — o botao so piscava
+        if (!r.moved && r.t1 - r.t0 < i.tapMs) {
             i.tap = { x: r.sx, y: r.sy };
             // duplo: 2o tap seco a < dblMs e < 2x o limiar do 1o (o 3o tap
             // recomeca a contagem — triplo nao vira dois duplos)
-            if (now - r.lastTapT < i.dblMs &&
+            if (r.t0 - r.lastTapT < i.dblMs &&
                 Math.abs(r.sx - r.lastTapX) <= i.dragThresh * 2 &&
                 Math.abs(r.sy - r.lastTapY) <= i.dragThresh * 2) {
                 i.doubleTap = i.tap;
                 r.lastTapT = -1e9;
             } else {
-                r.lastTapT = now;
+                r.lastTapT = r.t1;
                 r.lastTapX = r.sx;
                 r.lastTapY = r.sy;
             }
@@ -1557,7 +1578,11 @@ E.cam = {
     },
     _tick: function (dt) {
         if (this._target) {
+            // lerp calibrado a 30 quadros/s e corrigido pelo dt: a 20 fps (4848
+            // com jogo pesado) a camera seguia o alvo 1/3 mais devagar
             var k = E.m.clamp(this._lerp, 0, 1);
+            if (k < 1 && dt > 0) k = 1 - Math.pow(1 - k, dt * 30);
+            else if (k < 1) k = 0;
             var tx = this._target.x - E.W / 2, ty = this._target.y - E.H / 2;
             if (this.offset) { tx += this.offset.x || 0; ty += this.offset.y || 0; }
             var dz = this._dz;
@@ -1618,8 +1643,15 @@ E.gfx = (function () {
         var want = o.px !== undefined ? o.px :
                    (o.ts !== undefined ? (E.ts[o.ts] || 13) * E.U : -1);
         if (want > 0) return E.font(want);
-        return { font: o.font || 2, size: o.size || 1, h: 0 };
+        // par cru font/size: estilo memoizado por par (antes um objeto novo
+        // por chamada, sem cache de largura — com a camada suja cada texto
+        // pagava um textWidth nativo por quadro)
+        var f = o.font || 2, z = o.size || 1, kk = f * 16 + z;
+        var rs = _raw[kk];
+        if (!rs) rs = _raw[kk] = { font: f, size: z, h: 0, _w: Object.create(null), _wn: 0 };
+        return rs;
     }
+    var _raw = {};
     // firmware ate a API 31 devolvia o textWidth no espaco virtual 240 mesmo
     // no canvas nativo (metade no 480): corrige pela escala do vidro
     var api = 0;
@@ -1915,9 +1947,11 @@ E.gfx = (function () {
             for (var i = 0; i < max; i++) {
                 var hx = x + i * (sz + gap);
                 var v = hp - i;   // >= 1 cheio, 0.5 metade, <= 0 vazio
+                // cheio pinta so a cor cheia (antes o vazio ia por baixo:
+                // 6 primitivas por coracao em vez de 3)
+                if (v >= 1) { heart(hx, y, sz, r, full, o.screen); continue; }
                 heart(hx, y, sz, r, vazio, o.screen);
-                if (v >= 1) heart(hx, y, sz, r, full, o.screen);
-                else if (v >= 0.5) halfHeart(hx, y, sz, r, full, o.screen);
+                if (v >= 0.5) halfHeart(hx, y, sz, r, full, o.screen);
             }
             return max > 0 ? max * sz + (max - 1) * gap : 0;
         }
@@ -2086,8 +2120,16 @@ E.save = {
             return v;
         } catch (e) { return def; }
     },
+    // true se gravou. A NVS recusa chave > 15 chars (prefixo + slot +
+    // nome) e valor > 4 KB: antes o erro sumia e o save "salvava" calado
     set: function (key, val) {
-        try { Storage.set(E.save.prefix + key, String(val)); } catch (e) {}
+        try {
+            Storage.set(E.save.prefix + key, String(val));
+            return true;
+        } catch (e) {
+            E._warn('save.set(' + E.save.prefix + key + '): ' + (e && e.message ? e.message : e));
+            return false;
+        }
     },
     num: function (key, def) {
         var v = parseFloat(E.save.get(key, def));
@@ -2101,7 +2143,9 @@ E.save = {
         try { return JSON.parse(v); } catch (e) { return def; }
     },
     setObj: function (key, val) {
-        try { E.save.set(key, JSON.stringify(val)); } catch (e) {}
+        var txt;
+        try { txt = JSON.stringify(val); } catch (e) { return false; }
+        return E.save.set(key, txt);
     },
     // contador persistente (mortes, partidas, moedas totais): devolve o novo
     inc: function (key, n) {

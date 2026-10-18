@@ -29,6 +29,8 @@
 // toque unico (CYD) o comportamento e o de sempre.
 // 1.2.1: com a camada suja, cada controle so redesenha quando muda ou
 // quando algo apaga a area dele (parado nao custa nada por quadro).
+// 1.2.2: button.tap mede ate o ultimo quadro apertado (um quadro lento entre
+// o aperto e a soltura nao engole o toque).
 
 var E = require('celeros.game');
 var EMPTY = {};
@@ -75,7 +77,7 @@ var _knob = { screen: true, smooth: true };
 var _lbl = { align: 'center', valign: 'middle', screen: true, color: 0, px: 12 };
 
 E.pad = {
-    version: '1.2.1',
+    version: '1.2.2',
 
     // stick analogico. o = {zone {x,y,w,h} (onde o dedo PRESSIONA para
     // pegar o stick; default metade esquerda), r (raio em px, default
@@ -114,7 +116,7 @@ E.pad = {
     button: function (o) {
         var b = { x: o.x, y: o.y, r: o.r, w: o.w, h: o.h, label: o.label || '',
                   color: o.color, down: false, pressed: false, released: false,
-                  heldMs: 0, tap: false, _t0: 0, finger: null,
+                  heldMs: 0, tap: false, _t0: 0, _t1: 0, finger: null,
                   gen: genOf(o),
                   visible: o.visible !== false };
         _buttons.push(b);
@@ -169,8 +171,11 @@ E.pad = {
             var on = !!f && E.pad._in(bt, f.x, f.y, 1.3);
             bt.pressed = on && !bt.down;
             bt.released = !on && bt.down;
-            bt.tap = bt.released && t - bt._t0 < 250;
             if (bt.pressed) bt._t0 = t;
+            if (on) bt._t1 = t;
+            // ate o ULTIMO quadro apertado (quadro lento depois da soltura
+            // nao engole o toque — mesmo criterio do tap do core 1.4.2)
+            bt.tap = bt.released && bt._t1 - bt._t0 < 250;
             bt.heldMs = on ? t - bt._t0 : 0;
             bt.down = on;
         }

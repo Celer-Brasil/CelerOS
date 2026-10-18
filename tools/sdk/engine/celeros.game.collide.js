@@ -24,6 +24,8 @@
 // as celulas quando passam de 4096. Novos: C.ray (raio contra o tilemap,
 // DDA — tiro instantaneo, laser, visao em pixels) e C.sweep (AABB em
 // movimento: fracao do 1o contato).
+// 1.2.0: hash em baldes numericos fixos (sem chave string nem array por
+// caixa) e pairs sem closure por corpo — mesma API e mesmo resultado.
 
 var E = require('celeros.game');
 
@@ -31,7 +33,7 @@ var _res = { hitX: false, hitY: false, ground: false, ceil: false, dx: 0, dy: 0 
 var _ray = { hit: false, x: 0, y: 0, c: 0, r: 0, dist: 0 };
 
 E.collide = {
-    version: '1.1.0',
+    version: '1.2.0',
     normal: { x: 0, y: 0 },   // normal do ultimo sweep com contato
 
     // retangulo x retangulo (bordas encostando NAO contam)
@@ -155,42 +157,52 @@ E.collide = {
     // (test) — fn devolvendo true para a busca
     hash: function (cell) {
         cell = cell || 32;
-        var cells = {}, used = [], mark = 0;
+        // 1.2.0: baldes NUMERICOS fixos (hash da celula -> 0..NB-1) no lugar
+        // do dicionario por chave "c,r": sem string por celula nem array por
+        // caixa (no 4848 o hash de 4 corpos custava ~9 ms/quadro). Celulas
+        // diferentes podem cair no mesmo balde — o test() e o carimbo _hm
+        // filtram, e o resultado e o mesmo
+        var NB = 512, MASK = NB - 1;
+        var buckets = [], used = [], mark = 0;
+        for (var bi = 0; bi < NB; bi++) buckets.push(null);
         var h = { count: 0 };
-        function box(o) {
-            if (o.r !== undefined) return [o.x - o.r, o.y - o.r, o.r * 2, o.r * 2];
-            return [o.x, o.y, o.w || 0, o.h || 0];
+        function bk(c, r) { return ((c * 73856093) ^ (r * 19349663)) & MASK; }
+        // caixa do corpo em celulas: _b0.._b3 = c0, r0, c1, r1
+        var _c0 = 0, _r0 = 0, _c1 = 0, _r1 = 0;
+        function span(o) {
+            var x, y, w, hh;
+            if (o.r !== undefined) { x = o.x - o.r; y = o.y - o.r; w = hh = o.r * 2; }
+            else { x = o.x; y = o.y; w = o.w || 0; hh = o.h || 0; }
+            _c0 = Math.floor(x / cell); _c1 = Math.floor((x + w) / cell);
+            _r0 = Math.floor(y / cell); _r1 = Math.floor((y + hh) / cell);
         }
         h.add = function (o) {
-            var b = box(o);
-            var c0 = Math.floor(b[0] / cell), c1 = Math.floor((b[0] + b[2]) / cell);
-            var r0 = Math.floor(b[1] / cell), r1 = Math.floor((b[1] + b[3]) / cell);
-            for (var r = r0; r <= r1; r++) {
-                for (var c = c0; c <= c1; c++) {
-                    var k = c + ',' + r;
-                    var L = cells[k];
-                    if (!L) { L = cells[k] = []; used.push(k); }
-                    L.push(o);
+            span(o);
+            for (var r = _r0; r <= _r1; r++) {
+                for (var c = _c0; c <= _c1; c++) {
+                    var k = bk(c, r);
+                    var L = buckets[k];
+                    if (!L) L = buckets[k] = [];
+                    if (!L.length) used.push(k);
+                    // corpo grande que cobre 2 celulas do mesmo balde entra 1x
+                    if (L[L.length - 1] !== o) L.push(o);
                 }
             }
             h.count++;
         };
         h.clear = function () {
-            // mundo que rola visita celulas novas sem parar: passou do teto,
-            // recomeca o dicionario (senao a memoria so cresce)
-            if (used.length > 4096) { cells = {}; used = []; }
-            else for (var i = 0; i < used.length; i++) cells[used[i]].length = 0;
+            for (var i = 0; i < used.length; i++) buckets[used[i]].length = 0;
+            used.length = 0;
             h.count = 0;
         };
         h.query = function (q, fn) {
-            var b = box(q);
+            span(q);
             mark++;
-            var c0 = Math.floor(b[0] / cell), c1 = Math.floor((b[0] + b[2]) / cell);
-            var r0 = Math.floor(b[1] / cell), r1 = Math.floor((b[1] + b[3]) / cell);
+            var c0 = _c0, c1 = _c1, r0 = _r0, r1 = _r1;
             var n = 0;
             for (var r = r0; r <= r1; r++) {
                 for (var c = c0; c <= c1; c++) {
-                    var L = cells[c + ',' + r];
+                    var L = buckets[bk(c, r)];
                     if (!L) continue;
                     for (var i = 0; i < L.length; i++) {
                         var o = L[i];
@@ -205,17 +217,16 @@ E.collide = {
             return n;
         };
         // cada par que colide uma vez so: fn(a, b)
+        var _pa = null, _pf = null;
+        function _par(b) { if (b._hi !== undefined && b._hi > _pa._hi) _pf(_pa, b); }
         h.pairs = function (list, fn) {
-            for (var i = 0; i < list.length; i++) {
-                var a = list[i];
-                a._hi = i;
-            }
+            for (var i = 0; i < list.length; i++) list[i]._hi = i;
+            _pf = fn;
             for (var j = 0; j < list.length; j++) {
-                var aa = list[j];
-                h.query(aa, function (b) {
-                    if (b._hi !== undefined && b._hi > aa._hi) fn(aa, b);
-                });
+                _pa = list[j];
+                h.query(_pa, _par);
             }
+            _pa = _pf = null;
             // indice da lista nao vaza para a proxima chamada
             for (var k = 0; k < list.length; k++) list[k]._hi = undefined;
         };

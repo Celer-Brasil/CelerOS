@@ -23,6 +23,8 @@
 // inimigo atravessava o canto — agora usa a linha de visao estrita. Novos:
 // E.path.flow (mapa de distancias com custo: N inimigos, 1 busca) e o
 // seguidor com {loop} / {pingpong} (patrulha).
+// 1.1.1: flow le o custo de cada celula uma vez (antes ate 3x por vizinho)
+// e, com custo uniforme sem diagonal, roda BFS em vez do Dijkstra com heap.
 
 var E = require('celeros.game');
 
@@ -30,6 +32,8 @@ var E = require('celeros.game');
 // novo em vez de zerar tudo)
 var _g = [], _from = [], _seen = [], _closed = [], _stamp = 0;
 var _heap = [], _hf = [];
+var _cs = [];          // custos do flow (reaproveitado)
+var _q = [];           // fila do BFS do flow uniforme
 
 function heapPush(k, f) {
     var i = _heap.length;
@@ -68,7 +72,7 @@ var DX8 = [1, -1, 0, 0, 1, 1, -1, -1], DY8 = [0, 0, 1, -1, 1, -1, 1, -1];
 var SQ2 = Math.SQRT2;
 
 E.path = {
-    version: '1.1.0',
+    version: '1.1.1',
     // nos expandidos na ultima busca (diagnostico/orcamento)
     expanded: 0,
 
@@ -195,24 +199,53 @@ E.path = {
         }
         _heap.length = 0;
         _hf.length = 0;
+        // custo de cada celula UMA vez (1.1.1): antes o laco chamava
+        // cost() ate 3x por vizinho de cada no — milhares de chamadas JS
+        // por busca numa sala 15x13 com diagonal. -1 = parede
+        var cs = _cs, um = true;
+        cs.length = n;
+        for (i = 0; i < n; i++) {
+            var cv = cost(i % cols, (i - i % cols) / cols);
+            cs[i] = cv >= 0 ? cv : -1;
+            if (cv >= 0 && cv !== 1) um = false;
+        }
         var g0 = r1 * cols + c1;
         dist[g0] = 0;
-        heapPush(g0, 0);
+        if (um && !diag) {
+            // custo uniforme (1 ou parede — o caso de quase todo labirinto):
+            // BFS com fila plana da a MESMA distancia que o Dijkstra sem o
+            // heap (no 4848 o flow de 15x13 custava ~32 ms; o Detona faz 2
+            // a cada 0,5 s e soluçava 100 ms quando caiam no mesmo quadro)
+            var Q = _q, qh = 0;
+            Q.length = 0;
+            Q.push(g0);
+            while (qh < Q.length) {
+                var kq = Q[qh++], qc = kq % cols, qr = (kq - qc) / cols, dq = dist[kq] + 1;
+                for (var dd = 0; dd < 4; dd++) {
+                    var xc = qc + dxs[dd], xr = qr + dys[dd];
+                    if (xc < 0 || xr < 0 || xc >= cols || xr >= rows) continue;
+                    var xk = xr * cols + xc;
+                    if (cs[xk] < 0 || dist[xk] >= 0) continue;
+                    dist[xk] = dq;
+                    Q.push(xk);
+                }
+            }
+        } else heapPush(g0, 0);
         while (_heap.length) {
             var f = _hf[0], k = heapPop();
             if (f > dist[k]) continue;          // entrada velha do heap
             var cc = k % cols, cr = (k - cc) / cols;
             // custo de ENTRAR em k vindo do vizinho = cost(k): a celula do
             // alvo e a origem; anda-se "ao contrario" pagando o destino
-            var wk = cost(cc, cr);
-            if (!(wk >= 0)) wk = 1;
+            var wk = cs[k];
+            if (wk < 0) wk = 1;
             for (var d = 0; d < nd; d++) {
                 var nc = cc + dxs[d], nr = cr + dys[d];
                 if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
-                if (!(cost(nc, nr) >= 0)) continue;
+                if (cs[nr * cols + nc] < 0) continue;
                 var w = wk;
                 if (d >= 4) {
-                    if (!(cost(nc, cr) >= 0) || !(cost(cc, nr) >= 0)) continue;
+                    if (cs[cr * cols + nc] < 0 || cs[nr * cols + cc] < 0) continue;
                     w *= SQ2;
                 }
                 var nk = nr * cols + nc, nv = dist[k] + w;

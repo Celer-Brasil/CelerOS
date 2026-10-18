@@ -813,6 +813,56 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 - O `E.audio.sfx` não bloqueia na API 32 (`System.sfx`); em firmware anterior é **bloqueante** (`playTone`): mantenha as melodias abaixo de ~300 ms.
 - Rajada de JS puro acima de ~1 s esbarra no exec-timeout do firmware — o loop do `E.run` cede todo frame, então fique dentro dele.
 
+## 18c. Rodada de performance (core 1.4.2, spr 1.5, ui 1.2.1, collide 1.2, path 1.1.1, pad 1.2.2)
+
+Medido no SmartDisplay 4848 sem teto de fps. O Detona foi de 17,8 para 25 fps, a Lenda segura
+33 fps com diálogo aberto (eram 18) e o Supernova foi de 4 para 7 fps só pelo lado do jogo. As
+regras abaixo foram o que fez a diferença.
+
+- **Nunca desenhe sprite com escala por quadro.** `E.spr.stamp(nome, x, y, {scale})` com escala
+  diferente de 1 vai pelo `drawSprite` afim, ~1,25 ms por chamada. Grave os quadros uma vez com
+  `E.spr.prescale([[nome, escala, novoNome], ...], {key})`. Todos vão para UM slot, e os nomes
+  novos desenham em escala 1 pelo `pushSprite`. Sem slot livre, `drawSprite` ou `setClip`, os
+  nomes novos viram apelidos do original naquela escala, então o jogo mantém um caminho só.
+- **Grave o fundo estático.** Fundo estampado todo quadro, ou célula de 64 px por célula no
+  painter da camada suja, deve ser gravado uma vez num sprite do tamanho da tela. O painter vira
+  um único `System.blitSprite(id, x, y, w, h)` por caixa suja (API 34; detecte com `typeof`).
+- **Menu é `static`.** Título ou fim de jogo sem `static` repinta a tela inteira todo quadro. A
+  cena static só redesenha no `E.redraw()` ou quando o dedo entra ou sai de um `E.gfx.button`. Se
+  um toque fora dos botões precisa agir, chame `E.redraw()` no `update` quando houver
+  `E.input.tap`.
+- **Pausa desenha o véu uma vez.** Empilhe uma cena de pausa static (`E.push('pausa')`). Não
+  desenhe `E.ui.pause` todo quadro sobre a camada suja viva: isso repinta o campo inteiro por
+  baixo do véu.
+- **Campo de IA sob demanda.** O `E.path.flow` com custo uniforme (1 ou parede, sem diagonal)
+  agora roda como BFS. Calcular campo de fluxo 2x a cada 0,5 s para bicho que nem segue custava
+  ~32 ms por campo no Detona. Use como chave a célula do jogador mais uma versão da grade.
+- **Poucos pixels espalhados.** O firmware guarda até 32 caixas sujas (eram 8). Centenas de
+  desenhos de 1 px espalhados (estrelas, poeira) ainda viram uniões grandes, e o present copia
+  essas uniões para o painel.
+- Correções da engine que vêm de graça:
+  - O tap dura até o ÚLTIMO quadro com o dedo no vidro. Um quadro lento entre o aperto e a
+    soltura não engole mais o toque; os botões do `pad` seguem a mesma regra.
+  - O `ui.dialog` com camada suja só redesenha quando o texto revelado muda.
+  - O `gfx.hearts` pinta cada coração cheio uma vez.
+  - O lerp da câmera é corrigido pelo dt (calibrado em 30 fps).
+  - Partícula fora da tela não é desenhada.
+  - `E.save.set` e `setObj` devolvem `false` e avisam no log o erro da NVS (chave acima de 15
+    chars, valor acima de 4 KB) em vez de falhar calados.
+  - Estilos de texto com `font`/`size` crus são memoizados.
+  - O `collide.hash` usa baldes numéricos (sem chave string por célula).
+- Firmware (mesma API):
+  - O GC completo periódico roda a cada 10 s nas placas com PSRAM (era a cada 1 s: ~40 ms, um
+    quadro perdido por segundo em jogo grande).
+  - O toque GT911 é lido por uma task de fundo. Abaixo de ~8 fps, todo `getTouch` travava ~30 ms
+    esperando uma amostra nova.
+  - O caminho rápido do `drawPixel` respeita o `setClip` do app no quadro.
+- Como medir: injete cronômetros de `System.millis()` em volta de `update`/`draw` das cenas do
+  `E.run`, do `E.dirty._begin`, do `E._pollInput` e do `System.delay`. Imprima a cada 2 s com
+  `System.print` e leia as linhas com `celerctl logcat --dump`. No harness, conte as chamadas
+  nativas por quadro embrulhando o `System.*` num arquivo de `--events`. A área em pixels por
+  quadro é o custo que importa no painel RGB.
+
 ## 18b. CelerGame 1.1 (core 1.1.0, fx/spr/tilemap/ui/sfx 1.1.0)
 
 Versão aditiva: toda chamada da 1.0 continua valendo. Declare `^1.1.0` no
@@ -950,6 +1000,7 @@ no JS quando os mundos nativos acabam).
 | `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | módulos para jogos complexos (§14c) |
 | `E.script`, `E.inv`, `E.steer`, `E.gen`, `E.stats`, `E.waves` | cutscene, inventário, steering, fase procedural, atributos de combate, diretor de ondas (§14d) |
 | `E.combat`, `E.world`, `E.freeze`, `E.save.slot`, `E.spr.stamp`, `E.anim.dir` | ação e aventura: hitbox/knockback/hitstop, salas do tamanho da tela com slide, arquivos de jogo, sala gravada, animação em 4 direções (§14e) |
+| `E.spr.prescale(lista, {key})` | grava quadros na escala da tela num slot só: desenho em escala 1 no lugar do `drawSprite` afim por quadro (§18c) |
 | `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | parâmetro de cena, recarga na tela, passeio de câmera, corações de vida (core 1.3) |
 | `P.verletFast`, `P.rigid`, `P.hit` | a escada de física: verlet nativo, corpo rígido nativo, sobreposição estática (módulo opcional — §15) |
 

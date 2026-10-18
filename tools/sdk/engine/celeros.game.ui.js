@@ -14,6 +14,9 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme).
 //
+// 1.2.1: \n no texto do dialog/confirm quebra o paragrafo; com a camada
+// suja o dialogo so redesenha quando o texto revelado muda ou algo apaga a
+// caixa (desenho mudo; a caixa volta ao fundo ao fechar).
 // 1.2.0: dialog com paginas (texto = array), d.next() (avanca pelo botao
 // do pad, sem tocar a caixa), {realtime} (anda com o jogo pausado) e
 // {tap: false}.
@@ -58,26 +61,51 @@ function ctext(str, y, ts, color) {
 }
 
 // quebra de linha por palavras dentro de maxW (px) — devolve as linhas
+// (\n quebra o paragrafo: a fala com linha em branco saia emendada)
 function wrap(str, maxW, st) {
-    var out = [], word, line = '';
-    var words = String(str).split(' ');
+    var out = [], word, line;
+    var paras = String(str).split('\n');
     _wM.font = st.font; _wM.size = st.size;
-    for (var i = 0; i < words.length; i++) {
-        word = words[i];
-        var probe = line ? line + ' ' + word : word;
-        if (line && E.gfx.measure(probe, _wM) > maxW) {
-            out.push(line);
-            line = word;
-        } else {
-            line = probe;
+    for (var p = 0; p < paras.length; p++) {
+        var words = paras[p].split(' ');
+        line = '';
+        for (var i = 0; i < words.length; i++) {
+            word = words[i];
+            var probe = line ? line + ' ' + word : word;
+            if (line && E.gfx.measure(probe, _wM) > maxW) {
+                out.push(line);
+                line = word;
+            } else {
+                line = probe;
+            }
         }
+        if (line || p < paras.length - 1) out.push(line);
     }
-    if (line) out.push(line);
     return out;
 }
 
+// toque/tempo do dialogo (corre mesmo quando o desenho mudo foi pulado)
+function dialogInput(d, o, x, y, w, h) {
+    var tap = o.tap === false ? null : E.input.tap;
+    if (tap && tap.x >= x && tap.x <= x + w && tap.y >= y && tap.y <= y + h) d.next();
+    if (o.realtime) {
+        var agora = S.millis();
+        d.t += d._rt ? (agora - d._rt) / 1000 : 0;
+        d._rt = agora;
+    } else d.t += E.dt;
+    if (d.closed) apagaDialogo(d);
+    return !d.closed;
+}
+// a caixa desenhada fora da camada (muda) e apagada quando o dialogo fecha
+function apagaDialogo(d) {
+    var bb = d._bb;
+    if (!bb || !E.dirty.on) return;
+    E.dirty.erase(bb[0], bb[1], bb[2], bb[3]);
+    d._bb = null;
+}
+
 E.ui = {
-    version: '1.2.0',
+    version: '1.2.1',
 
     // menu vertical immediate-mode: items = ["Jogar", ...] ou
     // [{label, value, danger, disabled}]. Devolve o value (ou label) do
@@ -220,6 +248,7 @@ E.ui = {
                 return true;
             }
             d.closed = true;
+            apagaDialogo(d);
             return false;
         };
         d.draw = function (x, y, w) {
@@ -233,16 +262,36 @@ E.ui = {
             var ty0 = y + (o.name ? Math.round(20 * E.U) : Math.round(8 * E.U));
             var h = ty0 - y + d._lines.length * Math.round(st.h + 2) +
                     Math.round(10 * E.U);
-            E.gfx.panel(x, y, w, h, _scr);
-            if (o.name) {
-                _dName.color = T.accent;
-                E.gfx.text(o.name, x + Math.round(10 * E.U), y + Math.round(4 * E.U), _dName);
-            }
             // revela `speed` chars por segundo pelas linhas ja quebradas
             // (avanca no draw: cena comum, nao static)
             var n = Math.floor(d.t * d.speed);
             var completo = n >= d.text.length;
             if (completo) d.done = true;
+            // camada suja: so redesenha quando o texto revelado muda ou algo
+            // apagou a caixa (1.2.1). Desenho MUDO (fica no quadro): o painel
+            // parado custava a borracha (repintar o fundo da caixa inteira)
+            // + o redesenho a cada quadro — 18 fps na Lenda com a fala aberta
+            var D = E.dirty, mudo = false;
+            if (D.on) {
+                var key = d.page + '|' + (completo ? -1 : n) + '|' + x + '|' + y + '|' + w;
+                var bb = d._bb;
+                if (key === d._k && bb && !D.touches(bb[0], bb[1], bb[2], bb[3])) {
+                    return dialogInput(d, o, x, y, w, h);
+                }
+                if (bb && (bb[0] !== x || bb[1] !== y || bb[2] !== w || bb[3] !== h)) {
+                    D.erase(bb[0], bb[1], bb[2], bb[3]);
+                }
+                if (!bb) bb = d._bb = [0, 0, 0, 0];
+                bb[0] = x; bb[1] = y; bb[2] = w; bb[3] = h;
+                d._k = key;
+                D._mute++;
+                mudo = true;
+            }
+            E.gfx.panel(x, y, w, h, _scr);
+            if (o.name) {
+                _dName.color = T.accent;
+                E.gfx.text(o.name, x + Math.round(10 * E.U), y + Math.round(4 * E.U), _dName);
+            }
             for (var li = 0; li < d._lines.length && n > 0; li++) {
                 var ln = d._lines[li];
                 var corte = ln.length <= n ? ln : ln.substring(0, n);
@@ -256,17 +305,12 @@ E.ui = {
                 E.gfx.text('>', x + w - Math.round(14 * E.U), y + h - Math.round(12 * E.U),
                            _arrow);
             }
-            var tap = o.tap === false ? null : E.input.tap;
-            if (tap && tap.x >= x && tap.x <= x + w && tap.y >= y && tap.y <= y + h) d.next();
-            if (o.realtime) {
-                var agora = S.millis();
-                d.t += d._rt ? (agora - d._rt) / 1000 : 0;
-                d._rt = agora;
-            } else d.t += E.dt;
-            return !d.closed;
+            if (mudo) D._mute--;
+            return dialogInput(d, o, x, y, w, h);
         };
+
         d.skip = function () { d.t = d.text.length / d.speed + 1; };
-        d.close = function () { d.closed = true; };
+        d.close = function () { d.closed = true; apagaDialogo(d); };
         return d;
     },
 

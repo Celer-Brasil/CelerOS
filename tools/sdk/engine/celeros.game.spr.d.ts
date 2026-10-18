@@ -46,6 +46,13 @@ declare namespace E {
         stamp(name: string, x: number, y: number,
               o?: { scale?: number; key?: number | null; cx?: boolean; cy?: boolean;
                     ax?: number; ay?: number }): boolean;
+        /** 1.5: grava quadros ja carregados numa escala nova, todos num slot so.
+         *  Os novos nomes desenham em escala 1 (pushSprite no quadro); sem slot,
+         *  drawSprite ou setClip viram apelidos do original na escala pedida.
+         *  true = gravou. Item: [nome, escala, novoNome?] ou {name, scale, as?}
+         *  (novoNome default nome + '@' + escala*100) */
+        prescale(list: Array<[string, number, string?] | { name: string; scale: number; as?: string }>,
+                 o?: { key?: number; maxW?: number; name?: string }): boolean;
         /** {w, h} do sprite/regiao, ou null */
         size(name: string): { w: number; h: number } | null;
         free(name: string): void;

@@ -445,12 +445,14 @@ declare namespace E {
     const save: {
         prefix: string;
         get(key: string, def?: string): string;
-        set(key: string, val: any): void;
+        /** true se gravou; false (e aviso no log) quando a NVS recusa:
+         *  chave (prefixo + slot + nome) > 15 chars ou valor > 4 KB */
+        set(key: string, val: any): boolean;
         num(key: string, def?: number): number;
         best(key: string, score: number): boolean;
         /** objeto/array guardado em JSON (JSON podre ou ausente = def) */
         obj<T = any>(key: string, def?: T): T;
-        setObj(key: string, val: any): void;
+        setObj(key: string, val: any): boolean;
         del(key: string): void;
         /** contador persistente; devolve o novo valor */
         inc(key: string, n?: number): number;

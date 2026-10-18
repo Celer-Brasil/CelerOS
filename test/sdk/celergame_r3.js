@@ -288,8 +288,8 @@ module.exports = function (check) {
     var fc0 = c.S.fillCircle;
     c.S.fillCircle = function () { circ++; return fc0 && fc0.apply(null, arguments); };
     var hw = c.E.gfx.hearts(2.5, 3, 0, 0, { size: 12, gap: 4 });
-    check('melhoria gfx: hearts desenha cheio/meio/vazio e devolve a largura',
-          hw === 3 * 12 + 2 * 4 && circ === 6 + 4 + 1, 'w=' + hw + ' circ=' + circ);
+    check('melhoria gfx: hearts desenha cheio/meio/vazio e devolve a largura (cheio pinta 1x)',
+          hw === 3 * 12 + 2 * 4 && circ === 2 * 2 + 2 + 1, 'w=' + hw + ' circ=' + circ);
 
     // save.bool/toggle
     c = fresh([], { save: 'r3.' });

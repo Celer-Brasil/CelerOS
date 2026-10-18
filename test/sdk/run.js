@@ -1558,7 +1558,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.4.1' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.4.2' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1582,7 +1582,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.4.1',
+          out.fx[2] === '1.4.2',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro

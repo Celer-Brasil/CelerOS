@@ -31,16 +31,32 @@
 // 1.4.1: stamp em escala 1 no QUADRO vai pelo pushSprite recortado (o
 // drawSprite afim custava ~4x por entidade: o 4848 caia a ~14 fps com 3
 // monstros); E.spr.alvo marca quando o desenho vai para dentro de um sprite.
+// 1.5.0: E.spr.prescale(lista) grava quadros numa escala nova UMA vez (todos
+// num slot so) — arte de 64 px do atlas IA desenhada por quadro em celula de
+// 30 ia pelo drawSprite afim a cada chamada (~1,25 ms no 4848; o Detona
+// fazia 20 por quadro); o nome novo cai no pushSprite. Sem slot/drawSprite
+// o nome novo vira apelido do original em escala (mesmo desenho, so mais lento).
 
 var E = require('celeros.game');
 var S = System;
 var EMPTY = {};
 var _stO = { key: 0 };
+var _alO = { scale: 1, key: 0, ax: 0, ay: 0 };   // stamp/blit de apelido
+var _psO = { scale: 1, key: null };              // gravacao do prescale
+
+// repassa ancora/cor-chave para o desenho do original de um apelido
+function alias(s, x, y, o, k) {
+    _alO.scale = k * s._k;
+    _alO.key = o && o.key !== undefined ? o.key : 0x0000;
+    _alO.ax = o ? (o.ax !== undefined ? o.ax : (o.cx ? 0.5 : 0)) : 0;
+    _alO.ay = o ? (o.ay !== undefined ? o.ay : (o.cy ? 0.5 : 0)) : 0;
+    return E.spr.stamp(s.alias, x, y, _alO);
+}
 
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.4.1',
+    version: '1.5.0',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
@@ -195,6 +211,7 @@ E.spr = {
     blit: function (name, x, y, opts) {
         var s = E.spr._slots[name];
         if (!s) return;
+        if (s.alias) { alias(s, x, y, opts, 1); return; }
         // sem slot E sem painter nada pode ser desenhado (PNG falhou no
         // load/sheet e a def nao trouxe paint): no-op SECO — antes registrava
         // a caixa na camada suja mesmo assim e o "apagar" do quadro seguinte
@@ -245,6 +262,7 @@ E.spr = {
         if (!s) return false;
         o = o || EMPTY;
         var k = o.scale || 1;
+        if (s.alias) return alias(s, x, y, o, k);
         var w = s.w * k, h = s.h * k;
         var ax = o.ax !== undefined ? o.ax : (o.cx ? 0.5 : 0);
         var ay = o.ay !== undefined ? o.ay : (o.cy ? 0.5 : 0);
@@ -295,6 +313,72 @@ E.spr = {
             return true;
         }
         return false;
+    },
+
+    // grava quadros JA carregados numa escala nova, todos num slot so
+    // (prateleiras de ate o.maxW px). list = [[nome, escala, novoNome], ...]
+    // ou [{name, scale, as}] — novoNome default nome + '@' + escala*100.
+    // Os novos sao regioes de 1a classe: stamp/blit em escala 1 vao pelo
+    // pushSprite (quadro), anim/size/backed funcionam. Sem slot livre,
+    // drawSprite (API 33) ou setClip o novo nome e um APELIDO do original
+    // na escala pedida. Devolve true se gravou (false = apelidos).
+    // o = {key: cor do fundo vazio (default preto = a cor-chave do blit),
+    // maxW (default 512), name (nome do sheet p/ freeSheet)}
+    prescale: function (list, o) {
+        o = o || EMPTY;
+        var items = [], i, it, src;
+        for (i = 0; i < list.length; i++) {
+            it = list[i];
+            var nm = it.name !== undefined ? it.name : it[0];
+            var k = it.scale !== undefined ? it.scale : it[1];
+            var as = it.as !== undefined ? it.as : (it[2] !== undefined ? it[2] : nm + '@' + Math.round(k * 100));
+            src = E.spr._slots[nm];
+            if (!src || !(k > 0)) continue;
+            items.push({ nm: nm, k: k, as: as, w: Math.max(1, Math.round(src.w * k)),
+                         h: Math.max(1, Math.round(src.h * k)), x: 0, y: 0 });
+        }
+        var maxW = o.maxW || 512, cx = 0, cy = 0, rowH = 0, totW = 0;
+        for (i = 0; i < items.length; i++) {
+            it = items[i];
+            if (cx > 0 && cx + it.w > maxW) { cy += rowH; cx = 0; rowH = 0; }
+            it.x = cx; it.y = cy;
+            cx += it.w;
+            if (cx > totW) totW = cx;
+            if (it.h > rowH) rowH = it.h;
+        }
+        var totH = cy + rowH, id = 0;
+        var pode = items.length && E.caps.sprites && E.caps.clip &&
+                   typeof S.drawSprite === 'function' && E.spr._used < E.caps.slots;
+        if (pode) id = S.createSprite(totW, totH);
+        if (!id) {
+            for (i = 0; i < items.length; i++) {
+                it = items[i];
+                E.spr._slots[it.as] = { id: 0, w: it.w, h: it.h, alias: it.nm, _k: it.k, paint: null };
+            }
+            return false;
+        }
+        S.useSprite(id);
+        S.fillScreen(o.key === undefined ? 0x0000 : o.key);
+        var alvo0 = E.spr.alvo;
+        E.spr.alvo = id;
+        for (i = 0; i < items.length; i++) {
+            it = items[i];
+            _psO.scale = it.k;
+            E.spr.stamp(it.nm, it.x, it.y, _psO);
+        }
+        E.spr.alvo = alvo0;
+        S.useSprite(0);
+        E.spr._used++;
+        var shn = o.name || ('@ps' + id);
+        if (E.spr._sheets[shn]) E.spr.freeSheet(shn);
+        var sh = { id: id, w: totW, h: totH, name: shn, regs: [] };
+        for (i = 0; i < items.length; i++) {
+            it = items[i];
+            E.spr._slots[it.as] = { id: id, w: it.w, h: it.h, sheet: sh, rx: it.x, ry: it.y, paint: null };
+            sh.regs.push(it.as);
+        }
+        E.spr._sheets[shn] = sh;
+        return true;
     },
 
     free: function (name) {

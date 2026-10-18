@@ -816,6 +816,54 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 - `E.audio.sfx` is non-blocking on API 32 (`System.sfx`); on older firmware it is **blocking** (`playTone`): keep melodies under ~300 ms.
 - Pure-JS bursts longer than ~1 s trip the firmware exec-timeout — the `E.run` loop yields every frame, so stay inside it.
 
+## 18c. Performance round (core 1.4.2, spr 1.5, ui 1.2.1, collide 1.2, path 1.1.1, pad 1.2.2)
+
+Measured on the SmartDisplay 4848 with uncapped fps. Detona went from 17.8 to 25 fps, Lenda keeps
+33 fps with a dialog open (it was 18), and Supernova went from 4 to 7 fps on the game side alone.
+The rules below are what made the difference.
+
+- **Never draw a scaled sprite per frame.** `E.spr.stamp(name, x, y, {scale})` with a scale other
+  than 1 goes through the affine `drawSprite`, about 1.25 ms per call. Bake the frames once with
+  `E.spr.prescale([[name, scale, newName], ...], {key})`. All of them go into ONE slot, and the new
+  names draw at scale 1 through `pushSprite`. Without a free slot, `drawSprite` or `setClip`, the new
+  names become aliases of the original at that scale, so the game keeps a single code path.
+- **Bake static backgrounds.** A background stamped every frame, or one 64 px cell at a time in the
+  dirty-layer painter, should be baked once into a screen-sized sprite. The painter then becomes a
+  single `System.blitSprite(id, x, y, w, h)` per dirty box (API 34; feature-detect it).
+- **Menus are `static`.** A title or game-over scene that is not static repaints the whole screen
+  every frame. A static scene only redraws on `E.redraw()` or when a finger enters or leaves an
+  `E.gfx.button`. If a tap outside the buttons must act, call `E.redraw()` in `update` when
+  `E.input.tap` is set.
+- **Pauses draw the veil once.** Push a static pause scene (`E.push('pausa')`). Do not draw
+  `E.ui.pause` every frame over a live dirty layer: that repaints the whole field under the veil.
+- **Compute AI fields on demand.** `E.path.flow` with uniform cost (1 or wall, no diagonal) now runs
+  as a BFS. Computing a flow field 2× per 0.5 s for monsters that never follow it cost Detona
+  ~32 ms per field. Key it by the player cell plus a grid version.
+- **Few scattered pixels.** The firmware keeps up to 32 dirty boxes (it was 8). Hundreds of
+  scattered 1 px draws (stars, dust) still turn into large unions, and the present copies them to
+  the panel.
+- Engine fixes that come for free:
+  - The tap lasts until the LAST frame with the finger down. A slow frame between press and release
+    no longer eats the tap; `pad` buttons follow the same rule.
+  - `ui.dialog` with a dirty layer redraws only when the revealed text changes.
+  - `gfx.hearts` paints each full heart once.
+  - The camera lerp is dt-corrected (calibrated to 30 fps).
+  - Particles outside the screen are not drawn.
+  - `E.save.set` and `setObj` return `false` and log the NVS error (key over 15 chars, value over
+    4 KB) instead of failing silently.
+  - Raw `font`/`size` text styles are memoized.
+  - `collide.hash` uses numeric buckets (no string key per cell).
+- Firmware (same API):
+  - The periodic full GC runs every 10 s on PSRAM boards (it was every 1 s: ~40 ms, one lost frame
+    per second in big games).
+  - The GT911 touch is read by a background task. Below ~8 fps every `getTouch` used to stall
+    ~30 ms waiting for a fresh sample.
+  - The `drawPixel` fast path respects the app's `setClip` on the frame.
+- How to measure: inject `System.millis()` timers around `E.run`'s scene `update`/`draw`,
+  `E.dirty._begin`, `E._pollInput` and `System.delay`. Print every 2 s with `System.print` and read
+  the lines with `celerctl logcat --dump`. In the harness, count native calls per frame by wrapping
+  `System.*` in an `--events` file. Pixel area per frame is the cost that matters on the RGB panel.
+
 ## 18b. CelerGame 1.1 (core 1.1.0, fx/spr/tilemap/ui/sfx 1.1.0)
 
 Additive release: every 1.0 call keeps working. Declare `^1.1.0` in `app.json`
@@ -953,6 +1001,7 @@ run out).
 | `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | modules for complex games (§14c) |
 | `E.script`, `E.inv`, `E.steer`, `E.gen`, `E.stats`, `E.waves` | cutscenes, inventory, steering, procedural levels, combat stats, wave director (§14d) |
 | `E.combat`, `E.world`, `E.freeze`, `E.save.slot`, `E.spr.stamp`, `E.anim.dir` | action-adventure: hitboxes/knockback/hitstop, screen-sized rooms with slide, game files, baked rooms, 4-way animation (§14e) |
+| `E.spr.prescale(list, {key})` | bake frames at the screen scale into one slot: scale-1 draws instead of the affine `drawSprite` per frame (§18c) |
 | `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | scene parameters, cooldown display, camera pans, hp hearts (core 1.3) |
 | `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 

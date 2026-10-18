@@ -3807,14 +3807,44 @@ def _local_sdk_deps():
     return out
 
 
+def _push_dep_module(link, name, ver, meta):
+    """Baixa (ou tira do SDK local, meta["_local"]) o modulo <name> <ver> e
+    poe no cache /local/modules com escrita verificada por releitura (crc32):
+    /local/modules e o caminho mais historico de push fantasma (cache
+    compartilhado entre apps — um modulo servindo lixo quebra todo mundo que
+    o require)."""
+    import celerhub
+    if meta.get("_local"):
+        # enxuto como o publish-dep sobe (jsstrip): o aparelho recebe
+        # o mesmo arquivo que viria do hub
+        print(f"dep {name} {ver}: do SDK local (tools/sdk/engine)")
+        blob = celerhub.strip_js(Path(meta["_local"]))
+    else:
+        print(f"dep {name} {ver}: baixando do hub...")
+        req = _urlreq.Request(meta["url"],
+                              headers={"User-Agent": "celerosctl/1.0"})
+        with _urlreq.urlopen(req, timeout=30) as resp:
+            blob = resp.read()
+        if meta.get("md5") and hashlib.md5(blob).hexdigest() != meta["md5"]:
+            die(f"dep {name} {ver}: md5 divergente do indice do hub")
+    mod_dir = f"/local/modules/{name}/{ver}"
+    for d in (f"/local/modules", f"/local/modules/{name}", mod_dir):
+        try:
+            link.simple("MKDIR", d.encode() + b"\0")
+        except CelerError:
+            pass  # ja existe
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td) / f"{name}.js"
+        tmp.write_bytes(blob)
+        link.write_file(str(tmp), f"{mod_dir}/{name}.js")
+        link.verify_file(str(tmp), f"{mod_dir}/{name}.js")
+    print(f"dep {name} {ver}: no cache do device ({len(blob)} B, verificada)")
+
+
 def _install_shared_deps(link, deps, hub, local=False):
     """Deps compartilhadas (API 30): resolve os ranges contra o indice do
     hub (mesma semantica do celerhub.py), baixa cada modulo no PC e empurra
     para /local/modules/<nome>/<versao>/ — o cache publico do require.
-    Pulamos o stat de existencia por dep (nao paga o tempo que economiza),
-    mas a ESCRITA e verificada por releitura (crc32): /local/modules e o
-    caminho mais historico de push fantasma (cache compartilhado entre
-    apps — um modulo servindo lixo quebra todo mundo que o require).
     Devolve {nome: versao} resolvido (o chamador grava o deps.json na
     pasta do app)."""
     import celerhub  # mesma pasta tools/; so funcoes, main() e guardado
@@ -3838,32 +3868,7 @@ def _install_shared_deps(link, deps, hub, local=False):
         die(f"deps: indice do hub indisponivel ({hub}/store/deps.json)")
     resolved = celerhub.resolve_dep_ranges(deps, index)
     for name, ver in resolved.items():
-        dmeta = index[name][ver]
-        if dmeta.get("_local"):
-            # enxuto como o publish-dep sobe (jsstrip): o aparelho recebe
-            # o mesmo arquivo que viria do hub
-            print(f"dep {name} {ver}: do SDK local (tools/sdk/engine)")
-            blob = celerhub.strip_js(Path(dmeta["_local"]))
-        else:
-            print(f"dep {name} {ver}: baixando do hub...")
-            req = _urlreq.Request(dmeta["url"],
-                                  headers={"User-Agent": "celerosctl/1.0"})
-            with _urlreq.urlopen(req, timeout=30) as resp:
-                blob = resp.read()
-            if dmeta.get("md5") and hashlib.md5(blob).hexdigest() != dmeta["md5"]:
-                die(f"dep {name} {ver}: md5 divergente do indice do hub")
-        mod_dir = f"/local/modules/{name}/{ver}"
-        for d in (f"/local/modules", f"/local/modules/{name}", mod_dir):
-            try:
-                link.simple("MKDIR", d.encode() + b"\0")
-            except CelerError:
-                pass  # ja existe
-        with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td) / f"{name}.js"
-            tmp.write_bytes(blob)
-            link.write_file(str(tmp), f"{mod_dir}/{name}.js")
-            link.verify_file(str(tmp), f"{mod_dir}/{name}.js")
-        print(f"dep {name} {ver}: no cache do device ({len(blob)} B, verificada)")
+        _push_dep_module(link, name, ver, index[name][ver])
     return resolved
 
 
@@ -3901,14 +3906,20 @@ def _gc_plan(modules, refs):
     return orfas, ausentes, sorted(installed - set(orfas))
 
 
-def _read_remote_json(link, path):
-    """Le um JSON pequeno no device (deps.json ~dezenas de B); None se
-    ausente/invalido."""
+def _read_remote_json(link, path, teto=16384):
+    """Le um JSON pequeno no device (deps.json: fecho de ate 32 deps, 1-2 KB;
+    app.json com changelog fica perto de 16 KB); None se ausente/invalido.
+    Acima do teto NAO le, mas AVISA: em silencio o chamador tratava o app
+    como sem refs e o GC via celerctl marcava orfas falsas no cache todo."""
     try:
         st = link.stat(path)
     except CelerError:
         return None
-    if st is None or st["dir"] or st["size"] > 4096:
+    if st is None or st["dir"]:
+        return None
+    if st["size"] > teto:
+        print(f"! {path}: {st['size']} B acima do teto de leitura ({teto} B) "
+              f"— arquivo ignorado")
         return None
     raw = b""
     while len(raw) < st["size"]:
@@ -4180,6 +4191,75 @@ def _apps_deps(link, args):
         print(f"({len(orfas)} orfa(s); limpe com: apps deps --gc --yes)")
 
 
+def _apps_deps_upgrade(link, args):
+    """apps deps --upgrade: re-resolve as deps de CADA app instalado contra
+    o indice ATUAL do hub (maior satisfazendo; o caret nunca pula major),
+    poe os modulos novos no cache e regrava o deps.json de cada app. E o
+    `pub upgrade` do device: sem isso as versoes congeladas no install so
+    saiam da estiva abrindo a Loja (fluxo 'Atualizar engine'). Nao destrói
+    nada — versao velha fica no cache ate o GC recolher."""
+    import celerhub
+    hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
+    try:
+        status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
+    except Exception as e:  # noqa: BLE001
+        die(f"deps: indice do hub indisponivel ({e})")
+    index = (idx or {}).get("deps", {})
+    if not index:
+        die(f"deps: indice vazio ({hub}/store/deps.json)")
+    mods = _modules_tree(link)
+    planos = []    # (app, base, lock_atual, novo)
+    pendentes = {}  # (nome, versao) -> meta (baixa 1x mesmo com N apps)
+    for base in ("/local/apps", "/sd/apps"):
+        try:
+            apps = link.ls(base)
+        except CelerError:
+            continue  # /sd sem cartao
+        for a in apps:
+            if not a["dir"]:
+                continue
+            meta = _read_remote_json(link, f"{base}/{a['name']}/app.json")
+            if not isinstance(meta, dict) or not meta.get("deps"):
+                continue
+            try:
+                novo = celerhub.resolve_dep_ranges(meta["deps"], index)
+            except SystemExit as e:
+                # resolve_dep_ranges die() com o motivo; o app fica de fora
+                # da rodada (lock atual continua valendo) sem abortar os outros
+                print(f"! {a['name']}: {e}")
+                continue
+            atual = _read_remote_json(link, f"{base}/{a['name']}/deps.json")
+            atual = {str(k): str(v) for k, v in atual.items()} \
+                if isinstance(atual, dict) else {}
+            planos.append((a["name"], base, atual, novo))
+            for n, v in novo.items():
+                if mods.get(n, {}).get(v) is None:
+                    if n not in index or v not in index[n]:
+                        die(f"dep {n} {v}: indice do hub sem o arquivo")
+                    pendentes[(n, v)] = index[n][v]
+    if not planos:
+        print("nenhum app com deps instalado")
+        return
+    for (n, v), meta in sorted(pendentes.items()):
+        _push_dep_module(link, n, v, meta)
+    alterados = 0
+    for app, base, atual, novo in planos:
+        if atual == novo:
+            print(f"{app}: em dia ({len(novo)} dep(s))")
+            continue
+        diffs = [f"{n} {atual.get(n, '-')}>{v}"
+                 for n, v in sorted(novo.items()) if atual.get(n) != v]
+        with tempfile.TemporaryDirectory() as td:
+            dj = Path(td) / "deps.json"
+            dj.write_text(json.dumps(novo), encoding="utf-8")
+            link.write_file(str(dj), f"{base}/{app}/deps.json")
+            link.verify_file(str(dj), f"{base}/{app}/deps.json")
+        print(f"{app}: {'; '.join(diffs)}")
+        alterados += 1
+    if not pendentes and not alterados:
+        print("todos os apps em dia com o hub")
+
+
 def _apps_run(link, args):
     """apps run: abre um app instalado pelo nome da pasta (exit + run; o
     nome vai re-juntado no device, espaco nao precisa de aspas)."""
@@ -4296,7 +4376,10 @@ def cmd_apps(args):
         elif args.action == "installzip":
             _apps_installzip(link, args)
         elif args.action == "deps":
-            _apps_deps(link, args)
+            if args.upgrade:
+                _apps_deps_upgrade(link, args)
+            else:
+                _apps_deps(link, args)
         elif args.action == "push-dep":
             _apps_push_dep(link, args)
         elif args.action == "deps-status":
@@ -4654,6 +4737,9 @@ def build_parser():
     a = apps_sub.add_parser("deps", help="deps compartilhadas em /local/modules: uso e orfas")
     a.add_argument("--gc", action="store_true",
                    help="remove as versoes orfas (exige --yes)")
+    a.add_argument("--upgrade", action="store_true",
+                   help="re-resolve as deps de cada app instalado contra o hub "
+                        "(maior satisfazendo, nunca pula major) e regrava os deps.json")
     a.add_argument("--yes", action="store_true", help="confirma o --gc")
     a = apps_sub.add_parser("push-dep", help="deploy de uma dep do repo "
                          "(tools/sdk/engine) no cache do device — relance o app depois")

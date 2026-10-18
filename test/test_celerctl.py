@@ -2239,5 +2239,96 @@ class TestTokenVelho(unittest.TestCase):
         self.assertIn("AUTH velho", br.auth_fails)
 
 
+class TestDepsCompartilhadas(unittest.TestCase):
+    """Sync de dependencias (API 30) contra o FakeDevice: o caminho unico
+    _sync_app_deps (install/dev/push de app) e o apps deps --upgrade."""
+
+    HUB_IDX = {"deps": {"celeros.game": {
+        "1.0.0": {"url": "https://hub/1.0.0.js", "md5": "", "size": 3},
+        "1.3.0": {"url": "https://hub/1.3.0.js", "md5": "", "size": 3},
+    }}}
+
+    def setUp(self):
+        import celerhub
+        self._orig_http = celerhub.http
+        self._orig_push = C._push_dep_module
+        celerhub.http = lambda *a, **k: (200, self.HUB_IDX)
+
+    def tearDown(self):
+        import celerhub
+        celerhub.http = self._orig_http
+        C._push_dep_module = self._orig_push
+
+    def test_sync_grava_deps_json_no_destino(self):
+        link, dev = make_link()
+        link.hello()  # negocia proto (WRITE_BEGIN nao tem retry)
+        src = Path(tempfile.mkdtemp()) / "Meu App"
+        src.mkdir()
+        (src / "app.json").write_text(json.dumps(
+            {"name": "Meu App", "deps": {"celeros.game": "^1.0.0"}}), encoding="utf-8")
+        enviados = []
+        C._push_dep_module = lambda lk, n, v, meta: enviados.append((n, v))
+        args = C.build_parser().parse_args(["apps", "install", str(src)])
+        out = C._sync_app_deps(link, src, "/local/apps/Meu App", args)
+        self.assertEqual(out, {"celeros.game": "1.3.0"})  # maior satisfazendo
+        self.assertEqual(enviados, [("celeros.game", "1.3.0")])
+        lock = json.loads(dev.files["/local/apps/Meu App/deps.json"].decode())
+        self.assertEqual(lock, {"celeros.game": "1.3.0"})
+
+    def test_sync_sem_deps_nao_escreve_nada(self):
+        link, dev = make_link()
+        src = Path(tempfile.mkdtemp()) / "Simples"
+        src.mkdir()
+        (src / "app.json").write_text(json.dumps({"name": "Simples"}), encoding="utf-8")
+        args = C.build_parser().parse_args(["apps", "install", str(src)])
+        self.assertIsNone(C._sync_app_deps(link, src, "/local/apps/Simples", args))
+        self.assertNotIn("/local/apps/Simples/deps.json", dev.files)
+
+    def test_upgrade_regrava_lock_e_baixa_so_o_que_falta(self):
+        link, dev = make_link()
+        dev.dirs["/local/apps"] = ["Jogo", "Simples"]
+        dev.files["/local/apps/Jogo/app.json"] = json.dumps(
+            {"name": "Jogo", "deps": {"celeros.game": "^1.0.0"}}).encode()
+        dev.files["/local/apps/Jogo/deps.json"] = json.dumps(
+            {"celeros.game": "1.0.0"}).encode()
+        dev.files["/local/apps/Simples/app.json"] = json.dumps(
+            {"name": "Simples"}).encode()
+        dev.dirs["/local/modules"] = ["celeros.game"]
+        dev.dirs["/local/modules/celeros.game"] = ["1.0.0"]
+        baixados = []
+        C._push_dep_module = lambda lk, n, v, meta: baixados.append((n, v))
+        out, err, code = run_cli(["apps", "deps", "--upgrade"], link)
+        self.assertEqual(code, 0)
+        self.assertEqual(baixados, [("celeros.game", "1.3.0")])  # 1.0.0 ja no cache
+        lock = json.loads(dev.files["/local/apps/Jogo/deps.json"].decode())
+        self.assertEqual(lock, {"celeros.game": "1.3.0"})
+        self.assertIn("Jogo: celeros.game 1.0.0>1.3.0", out)
+        self.assertNotIn("Simples", out)  # sem deps: nem entra no plano
+
+    def test_upgrade_app_sem_resolucao_nao_aborta_os_outros(self):
+        link, dev = make_link()
+        dev.dirs["/local/apps"] = ["Quebrado", "Bom"]
+        dev.files["/local/apps/Quebrado/app.json"] = json.dumps(
+            {"name": "Quebrado", "deps": {"celeros.game": "^9.0.0"}}).encode()
+        dev.files["/local/apps/Bom/app.json"] = json.dumps(
+            {"name": "Bom", "deps": {"celeros.game": "^1.0.0"}}).encode()
+        dev.dirs["/local/modules"] = []
+        C._push_dep_module = lambda lk, n, v, meta: None
+        out, err, code = run_cli(["apps", "deps", "--upgrade"], link)
+        self.assertEqual(code, 0)
+        self.assertIn("! Quebrado", out)
+        lock = json.loads(dev.files["/local/apps/Bom/deps.json"].decode())
+        self.assertEqual(lock, {"celeros.game": "1.3.0"})
+
+    def test_leitor_remoto_acima_do_teto_avisa_e_devolve_none(self):
+        link, dev = make_link()
+        dev.files["/local/apps/X/deps.json"] = b"{" + b" " * 20000
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out):
+            r = C._read_remote_json(link, "/local/apps/X/deps.json")
+        self.assertIsNone(r)
+        self.assertIn("acima do teto", out.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

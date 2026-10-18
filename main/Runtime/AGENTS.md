@@ -31,6 +31,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 | Add a binding | define `JSBindings::js_x` in the module file, declare it in `JSBindings.h`, add `{"name", js_x, nargs}` to the right `kFnsN[]` table in `init()` |
 | Per-app reset of all binding state | `JSBindings::init(ctx, tft, appTitle, topbarFixed)`, called by CelerKernel on each app launch |
 | API level reported to apps | `System.getAPILevel()` pushes `CELEROS_API_LEVEL` (defined in `main/CMakeLists.txt`, currently 44) |
+| Watch edge gestures inside apps / topbar reveal | `JSBindings.cpp` `pollWatchEdges` (runs BEFORE the retractable-topbar block of `pollAppChrome`) — twin of the native hook `Launcher/WatchPanels.cpp` `edgeGestureHook`; keep the map in sync |
 | Streaming download | `Net.download` in `JsNet.cpp` (API 6; older firmware truncated bodies at 32KB) |
 | Public docs of every call | `Documentation/JS_API_Guide.md` (EN) / `.pt-BR.md` |
 
@@ -48,6 +49,7 @@ The C++ side of the JS API: exposes the firmware to apps as the `System`, `Net` 
 - Bindings are lightfuncs with fixed `nargs`: the value stack ALWAYS has `nargs` entries, so `duk_get_top()` cannot detect an omitted argument. Test `duk_is_undefined`/`duk_is_null_or_undefined` instead.
 - Native code that calls back into JS from inside a C loop (OTA progress, download progress) must wrap the call in `duk_pcall`/`duk_safe_call`: `present()` runs timers and their errors longjmp. App exit is a marked error (`throwAppExit`, sticky via `s_appExitPending`); never `duk_error(..., "OS_EXIT")`.
 - System code drawing on the app's target (topbar, docked keypad) wraps itself in `GfxStateGuard` (JsInternal.h) so text color/datum/size and clip don't leak either way.
+- Watch edge gestures (`BoardProfile::watchGestures`) share the top edge with the retractable topbar: the left third pull-down requests quick settings and the center third the notification center (both exit the app through the clean X path; `WatchPanels::service()` stacks the panel on the UI loop), while the right third NEVER opens a panel — it is the reveal gesture, consumed until release (the app never sees its press/release, even after the strip is shown). Bottom edge up = notification center, left edge right-swipe = plain exit. The same map lives in the native hook (`Launcher/WatchPanels.cpp` `edgeGestureHook`, where the right third is a no-op) — change both together.
 - The PSRAM frame `s_frame` is a `FrameSprite` (`main/Display/FrameSprite.h`): every draw on it accumulates into up to 8 dirty boxes (`main/Display/DirtyRects.h`: touching boxes merge; when they cover most of their union it pushes the union) and `present()` pushes only those boxes to the glass. Drawing on the frame needs nothing extra. Code that draws straight on the glass while an app runs (blocking prompt keyboard, AOD) must set `s_frameDirty = true`, which asks for a full push. Leaving AOD/off already does this. Never recreate the frame buffer after `createFrame()`.
 - Adding or changing a JS call means you must:
   1. Bump `CELEROS_API_LEVEL` if apps can feature-detect it.

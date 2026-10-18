@@ -464,7 +464,7 @@ fora da legenda lança com linha e coluna. `lv.data` vai direto no
 
 ## 14d. Mais módulos: roteiro, inventário, steering, geração, atributos, ondas
 
-Mais seis deps sobre o mesmo `E` (testadas em `test/sdk/celergame_r3.js`):
+Mais sete deps sobre o mesmo `E` (testadas em `test/sdk/celergame_r3.js`):
 
 | Dep | Dá | Uso típico |
 |---|---|---|
@@ -473,6 +473,7 @@ Mais seis deps sobre o mesmo `E` (testadas em `test/sdk/celergame_r3.js`):
 | `celeros.game.steer` | `E.steer.agent(obj, {speed, force})` | morcego, peixe, nave, bando em espaço aberto |
 | `celeros.game.gen` | `E.gen.rooms/cave/maze/scatter/lines` | masmorra de roguelike, caverna, labirinto por semente |
 | `celeros.game.stats` | `E.stats(base, {iframes, xp})` | vida com invencibilidade, buffs, recargas, XP/nível |
+| `celeros.game.rpg` | `E.rpg` — stats + inv + script num bundle só | cérebro de personagem dentro do teto de 8 deps (o kit usa) |
 | `celeros.game.waves` | `E.waves(lista, {spawn, alive})` | diretor de ondas de shooter / tower defense / arena |
 
 **Script.** Lista de passos rodados em ordem no tick da engine (tempo de jogo:

@@ -26,18 +26,16 @@
   "celeros.game.waves": { "deps": { "celeros.game": "^1.2.0" } },
   "celeros.game.combat": { "deps": { "celeros.game": "^1.4.0", "celeros.game.collide": "^1.1.0" } },
   "celeros.game.world": { "deps": { "celeros.game": "^1.2.0", "celeros.game.level": "^1.1.0" } },
+  "celeros.game.rpg": { "deps": { "celeros.game": "^1.1.0", "celeros.game.stats": "^1.1.0", "celeros.game.inv": "^1.0.0", "celeros.game.script": "^1.0.0" } },
   "celeros.game.kit": {
     "deps": {
-      "celeros.game": "^1.4.0",
-      "celeros.game.collide": "^1.1.0",
-      "celeros.game.level": "^1.1.0",
+      "celeros.game.world": "^1.0.0",
+      "celeros.game.combat": "^1.0.0",
+      "celeros.game.rpg": "^1.0.0",
       "celeros.game.fsm": "^1.1.0",
       "celeros.game.events": "^1.1.0",
       "celeros.game.path": "^1.1.0",
       "celeros.game.steer": "^1.0.0",
-      "celeros.game.stats": "^1.1.0",
-      "celeros.game.inv": "^1.0.0",
-      "celeros.game.script": "^1.0.0",
       "celeros.sfx": "^1.4.0"
     }
   }

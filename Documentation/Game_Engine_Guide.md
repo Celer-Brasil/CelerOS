@@ -463,7 +463,7 @@ unlocks (`next()`), and best-only stars per level.
 
 ## 14d. More modules: scripts, inventory, steering, generation, stats, waves
 
-Six more deps on the same `E` (tested in `test/sdk/celergame_r3.js`):
+Seven more deps on the same `E` (tested in `test/sdk/celergame_r3.js`):
 
 | Dep | Gives | Typical use |
 |---|---|---|
@@ -472,6 +472,7 @@ Six more deps on the same `E` (tested in `test/sdk/celergame_r3.js`):
 | `celeros.game.steer` | `E.steer.agent(obj, {speed, force})` | bats, fish, ships, flocks in open space |
 | `celeros.game.gen` | `E.gen.rooms/cave/maze/scatter/lines` | roguelike dungeons, caves, mazes from a seed |
 | `celeros.game.stats` | `E.stats(base, {iframes, xp})` | hp with invulnerability, buffs, cooldowns, XP/levels |
+| `celeros.game.rpg` | `E.rpg` — stats + inv + script in ONE bundle | character brain under the 8-deps ceiling (the kit uses it) |
 | `celeros.game.waves` | `E.waves(list, {spawn, alive})` | shooter / tower-defense / arena wave director |
 
 **Script.** A list of steps run in order on the engine tick (game time:

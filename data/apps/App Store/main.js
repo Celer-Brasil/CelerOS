@@ -209,6 +209,16 @@ var wasUpdate = false, selfUpdated = false;
 var batchOk = 0, batchFails = [];
 var depIndex = null;   // indice /store/deps.json do load (deteccao de engine)
 var depUpd = {};       // pkg -> {names, resolved, have}: deps do hub mais novas
+var catWarn = "";      // catalogo parcial: categoria(s) que nao carregaram no load
+var lowSpace = false;  // /local apertado durante o load (muda a dica do erro)
+
+// livre em /local abaixo do piso? firmware sem FS.getFreeSpace (ou SD) segue
+// o comportamento de sempre (false) — o cheque e otimizacao, nao dependencia
+function freeSpaceLow(min) {
+    var f = 0;
+    try { f = FS.getFreeSpace("/local"); } catch (e) { return false; }
+    return f > 0 && f < min;
+}
 
 // Versao dos dados que alimentam as listas (apps/localMap/cats): sobe a cada
 // refresh(). curList()/curRows() cacheiam por essa chave — a lista e lida a
@@ -461,6 +471,8 @@ function loadCatalog() {
     curCat = "Todos";
     selIt = null;
     retryMode = "load";
+    catWarn = "";
+    lowSpace = false;
 
     drawLoading("Baixando catálogo...", "");
     System.delay(30);
@@ -482,6 +494,16 @@ function loadCatalog() {
     var catsIdx = idx.categories;
     var gotAll = false;
     if (catsIdx["Todos"] && HAS_PSRAM) {
+        // 2.9.1: o caminho do all.json custa ~2x o catalogo de /local (o
+        // download e o cache reescrito no fim). /local apertado (a bancada
+        // vive com <200 KB) derruba a escrita no meio, o load murcha para as
+        // categorias sem dizer por que e o arcade (>32 KB) some da lista: o
+        // cache velho (~1x catalogo) sai na frente — ele e reescrito no fim.
+        lowSpace = freeSpaceLow(200 * 1024);
+        if (lowSpace) {
+            try { FS.deleteFile(CACHE); } catch (eS0) {}
+            lowSpace = freeSpaceLow(128 * 1024);   // ainda apertado sem o cache
+        }
         drawLoading("Baixando catálogo...", "todos os apps");
         System.delay(30);
         var allPath = "/local/appstore_all.json";
@@ -511,14 +533,14 @@ function loadCatalog() {
         all = null;
     }
     if (!gotAll) {
-        var catTotal = 0, catOk = 0;
+        var catTotal = 0, catOk = 0, catFail = [];
         for (var cname in catsIdx) {
             if (!catsIdx.hasOwnProperty(cname) || cname === "Todos") continue;
             catTotal++;
             drawLoading("Categoria: " + cname, "");
             System.delay(30);
             var cat = fetchJSON(catsIdx[cname]);
-            if (!cat || !cat.apps) continue;
+            if (!cat || !cat.apps) { catFail.push(cname); continue; }
             catOk++;
             for (var id in cat.apps) {
                 if (!cat.apps.hasOwnProperty(id)) continue;
@@ -529,8 +551,17 @@ function loadCatalog() {
         }
         if (entries.length === 0 && catTotal > 0 && catOk === 0) {
             errMsg = "Falha ao baixar o catálogo";
-            errHint = "Verifique a internet.";
+            errHint = lowSpace
+                ? "Pouco espaço livre em /local (desinstale apps) ou sem internet."
+                : "Verifique a internet.";
             return "err";
+        }
+        if (catFail.length > 0) {
+            // Net.get/getJSON truncam em 32 KB (NET_MAX_BODY): categoria que
+            // cresceu demais (arcade ja passou) volta quebrada e sumiria da
+            // lista sem erro nenhum. Aviso na lista > app desaparecido.
+            catWarn = "Catálogo incompleto, não carregou: " + catFail.join(", ") +
+                      (lowSpace ? " (espaço em /local baixo)" : "") + ".";
         }
     }
 
@@ -556,7 +587,15 @@ function loadCatalog() {
     refresh();
     if (apps.length > 0) {
         System.delay(1);   // stringify do catalogo inteiro pro cache
-        FS.writeTextFile(CACHE, JSON.stringify(apps));
+        // 2.9.1: o writeTextFile atomico so falha sem espaco (o cache velho
+        // fica), mas o .tmp abortado comeria o poco que resta — so escreve
+        // com folga conhecida; sem o cheque do firmware, escreve como sempre
+        var blob = JSON.stringify(apps);
+        var fCache = 0;
+        try { fCache = FS.getFreeSpace("/local"); } catch (eS1) { fCache = 0; }
+        if (fCache <= 0 || fCache > blob.length + 16384) {
+            FS.writeTextFile(CACHE, blob);
+        }
     }
     return "list";
 }
@@ -703,6 +742,11 @@ function screenList() {
             if (UI.button(curCat, LX + 108, BODY_Y, LW - 108, 30, { style: "ghost" })) return "cats";
             listY = BODY_Y + 38;
             listH = 190;
+            if (catWarn) {
+                UI.text(catWarn, 120, BODY_Y + 40, { role: "caption", align: "center", color: T.warn });
+                listY = BODY_Y + 62;
+                listH = 166;
+            }
         } else {
             UI.text(countLine(), 120, BODY_Y + 2, { role: "caption", align: "center",
                     color: (curTab === 1 && updCount) ? T.warn : T.textDim });

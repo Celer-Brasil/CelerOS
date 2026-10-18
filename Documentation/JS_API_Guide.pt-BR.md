@@ -629,13 +629,18 @@ que 32 KB são truncadas.
 - **Retorna:** String (corpo da resposta) ou `null` em falha (DNS, timeout,
   status HTTP fora de 2xx).
 - **Descrição:** executa um HTTP GET. Segue redirects. Lança erro se o WiFi
-  não estiver conectado.
+  não estiver conectado. O corpo tem **teto de 32 KB** (`NET_MAX_BODY`):
+  resposta maior é truncada em silêncio para o teto, sem erro nenhum. Para
+  arquivos grandes use `Net.download`, que vai a disco sem teto.
 
 #### `Net.getJSON(url)`
 - **Parâmetros:** `url` (String)
 - **Retorna:** objeto/array JS parseado, ou `null` em falha da requisição.
-- **Descrição:** como `Net.get()`, mas parseia o corpo como JSON. Um corpo
-  JSON malformado lança um erro visível no script.
+- **Descrição:** como `Net.get()`, mas parseia o corpo como JSON. Mesmo
+  **teto de 32 KB** do `Net.get()`: um JSON maior que o teto chega truncado e
+  o parse lança erro — mantenha os arquivos que você busca assim abaixo de
+  32 KB (é exatamente por isso que toda categoria do catálogo da App Store
+  cabe no teto). Um corpo JSON malformado lança um erro visível no script.
 
 #### `Net.post(url, body, contentType)`
 - **Parâmetros:**

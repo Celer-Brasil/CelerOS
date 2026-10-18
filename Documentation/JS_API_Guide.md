@@ -471,12 +471,12 @@ than 32 KB are truncated.
 #### `Net.get(url)`
 - **Parameters:** `url` (String, `http://` or `https://`)
 - **Returns:** String (response body) or `null` on failure (DNS, timeout, HTTP status outside 2xx).
-- **Description:** Performs an HTTP GET. Follows redirects. Throws an error if WiFi is not connected.
+- **Description:** Performs an HTTP GET. Follows redirects. Throws an error if WiFi is not connected. The body is **capped at 32 KB** (`NET_MAX_BODY`): a larger response is silently truncated to the cap — no error is raised. For big files use `Net.download`, which streams to disk with no cap.
 
 #### `Net.getJSON(url)`
 - **Parameters:** `url` (String)
 - **Returns:** Parsed JS object/array, or `null` on request failure.
-- **Description:** Like `Net.get()`, but parses the body as JSON. A malformed JSON body throws a visible script error.
+- **Description:** Like `Net.get()`, but parses the body as JSON. Same **32 KB body cap** as `Net.get()`: a JSON bigger than the cap arrives truncated and the parse throws — keep server files you fetch with it under 32 KB (the App Store keeps every catalog file under the cap for exactly this reason). A malformed JSON body throws a visible script error.
 
 #### `Net.post(url, body, contentType)`
 - **Parameters:**

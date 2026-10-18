@@ -72,12 +72,16 @@ void endSession() {
 bool openSessionLocked() {
     if (s_task == nullptr) {  // criacao sob o lock: sem janela de task dupla
         // Stack na PSRAM quando existe (a interna e o bem escasso do cao
-        // com NimBLE + TLS ativos), com fallback comum
-        BaseType_t okc = xTaskCreateWithCaps(taskFunc, "celermusic", 4096, nullptr,
-                                             4, &s_task,
-                                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        // com NimBLE + TLS ativos), com fallback comum. Nucleo 0 fixo: o
+        // compile da trilha e o canal I2S fazem malloc/free (secoes
+        // criticas do heap mascaram ate o nivel 3) e no nucleo 1 isso
+        // atrasava a ISR do VSYNC do 4848 — imagem deslocando (1 us = ~12
+        // px, ver boards/AGENTS.md). O nucleo 0 existe em toda placa
+        BaseType_t okc = xTaskCreatePinnedToCoreWithCaps(taskFunc, "celermusic", 4096, nullptr,
+                                                         4, &s_task, 0,
+                                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (okc != pdPASS)
-            okc = xTaskCreate(taskFunc, "celermusic", 3072, nullptr, 4, &s_task);
+            okc = xTaskCreatePinnedToCore(taskFunc, "celermusic", 3072, nullptr, 4, &s_task, 0);
         if (okc != pdPASS) {
             s_task = nullptr;
             return false;

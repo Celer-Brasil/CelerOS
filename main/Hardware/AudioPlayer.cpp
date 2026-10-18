@@ -564,8 +564,9 @@ bool PcmFeed::begin(uint32_t sampleRate, size_t capBytes) {
     // durante escrita de flash ninguem roda mesmo — o LogPersist segura o
     // flush enquanto toca).
     TaskHandle_t h = nullptr;
+    // nucleo 0: idem celermusic (fora do nucleo da ISR do VSYNC do 4848)
     if (xTaskCreatePinnedToCoreWithCaps(playerTask, "pcmfeed", 4096, this, 6, &h,
-                                        tskNO_AFFINITY,
+                                        0,
                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
         end();
         return false;

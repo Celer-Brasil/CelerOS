@@ -141,6 +141,11 @@ void micPinsDirty();
 // devolve nullptr: la os clocks sao emprestados do I2S1 do mic e o som
 // continua criando/destruindo o canal por uso.
 i2s_chan_handle_t speakerChannel(int sampleRateHz);
+// Abre o canal persistente JA no boot (placas com PSRAM, sem codec): os
+// descritores DMA (~3,8 KB internos) ficam reservados antes que app, SD
+// (FATFS/SPI) e WiFi esgotem a RAM interna — nascendo no primeiro som, um
+// app pesado aberto do SD achava a interna sem bloco e ficava mudo.
+void speakerWarmup();
 // Desfaz o canal persistente (ritual do deep sleep): estaciona os pinos em
 // nivel baixo e devolve a RAM dos descritores DMA. Em placa sem I2S ou com
 // codec e um no-op.

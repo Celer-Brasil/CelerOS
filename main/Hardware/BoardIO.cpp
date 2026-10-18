@@ -351,10 +351,12 @@ void toneAsync(int freqHz, int ms, int gapMs) {
         // Pilha na PSRAM quando existe (a interna e o recurso escasso do
         // cao com NimBLE/TLS): a task so bloqueia em notification e chama o
         // tone, nada de flash. Fallback para a interna nas placas sem PSRAM.
+        // Nucleo 0: idem celermusic (malloc do tom fora do nucleo da ISR do
+        // VSYNC do painel RGB)
         BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(beepTaskFunc, "celerbeep", 4096, nullptr, 2,
-                                                        &s_beepTask, tskNO_AFFINITY,
+                                                        &s_beepTask, 0,
                                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (ok != pdPASS) ok = xTaskCreate(beepTaskFunc, "celerbeep", 4096, nullptr, 2, &s_beepTask);
+        if (ok != pdPASS) ok = xTaskCreatePinnedToCore(beepTaskFunc, "celerbeep", 4096, nullptr, 2, &s_beepTask, 0);
         if (ok != pdPASS) {
             s_beepTask = nullptr;
             xSemaphoreGive(beepMu());
@@ -1035,6 +1037,15 @@ namespace {
 i2s_chan_handle_t s_spk = nullptr;  // canal TX persistente (sem codec)
 int s_spkRate = 0;                  // taxa atual do canal (0 = ainda nao usado)
 bool s_spkOn = false;               // canal habilitado (reconfig exige desabilitar)
+// Falha ao criar o canal (sem RAM interna DMA para os descritores): nao
+// tenta de novo por kSpkRetryMs. Sem o freio cada som e cada bloco de
+// musica recriavam e apagavam canal I2S + GDMA + interrupcao dezenas de
+// vezes por segundo — no 4848 com o app no SD (FATFS/SPI comem a interna)
+// a rajada de "allocate DMA buffer failed" vinha junto da imagem
+// embaralhando (bancada 2026-10-18)
+constexpr uint32_t kSpkRetryMs = 3000;
+uint32_t s_spkFailAt = 0;
+bool s_spkFailed = false;
 }  // namespace
 
 i2s_chan_handle_t speakerChannel(int sampleRateHz) {
@@ -1059,6 +1070,7 @@ i2s_chan_handle_t speakerChannel(int sampleRateHz) {
             s_spkOn = false;
         }
     }
+    if (s_spk == nullptr && s_spkFailed && millis() - s_spkFailAt < kSpkRetryMs) return nullptr;
     if (s_spk == nullptr) {
         i2s_chan_config_t chanCfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
         // I2S_NUM_0 fixo: o I2S1 fica reservado ao microfone (mesma regra do
@@ -1070,6 +1082,8 @@ i2s_chan_handle_t speakerChannel(int sampleRateHz) {
         chanCfg.dma_desc_num = 4;
         if (i2s_new_channel(&chanCfg, &s_spk, nullptr) != ESP_OK) {
             s_spk = nullptr;
+            s_spkFailed = true;
+            s_spkFailAt = millis();
             return nullptr;
         }
         i2s_std_config_t stdCfg = {};
@@ -1083,12 +1097,22 @@ i2s_chan_handle_t speakerChannel(int sampleRateHz) {
         if (i2s_channel_init_std_mode(s_spk, &stdCfg) != ESP_OK) {
             i2s_del_channel(s_spk);
             s_spk = nullptr;
+            s_spkFailed = true;
+            s_spkFailAt = millis();
             return nullptr;
         }
         s_spkRate = sampleRateHz;
+        s_spkFailed = false;
     }
     if (!s_spkOn && i2s_channel_enable(s_spk) == ESP_OK) s_spkOn = true;
     return s_spkOn ? s_spk : nullptr;
+}
+
+void speakerWarmup() {
+    // So placas com PSRAM: no boot a RAM interna ainda sobra. No cao (sem
+    // PSRAM, boot apertado) o canal segue nascendo no primeiro som
+    if (!Board::profile().hasPsram || !hasSpeaker()) return;
+    speakerChannel(44100);  // a taxa do tom e da musica sem codec
 }
 
 void speakerChannelDown() {

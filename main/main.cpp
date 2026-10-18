@@ -19,6 +19,7 @@
 #endif
 #include "Display/ScreenPower.h"
 #include "Hardware/Buttons.h"
+#include "Hardware/BoardIO.h"
 #include "FileSystem/FileSystem.h"
 #include "Launcher/LauncherUI.h"
 #if CONFIG_CELEROS_UI
@@ -161,6 +162,8 @@ static void celerSetup() {
 
     // Botoes fisicos do perfil (no-op sem pins; watch: BOOT/PWR)
     Buttons::init();
+    // Canal do alto-falante reservado com a RAM interna ainda folgada
+    BoardIO::speakerWarmup();
 
     // Estados de tela do watch (dim/AOD/off; no-op sem hooks no perfil)
     ScreenPower::init();

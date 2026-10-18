@@ -56,13 +56,15 @@ família da placa do cachorro).
   estilos — digital, analógico, mínimo — trocados com toque longo, e mostra
   bateria em %, passos x meta, próximo alarme, timer rodando, não lidas e o
   clima do celular.
-* **Gestos de borda** (`BoardProfile::watchGestures`): da borda de cima,
-  puxe para baixo os **ajustes rápidos** (brilho, volume, WiFi, Não
-  perturbe, levantar o pulso, sempre ligada, lanterna, ajustes, celular,
-  achar celular); da borda de baixo, puxe para cima a **central de
-  notificações** (toque expande, deslize de lado apaga, limpar tudo); da
-  borda esquerda, deslize para a direita para sair do app. Painel aberto a
-  partir do mostrador volta para ele.
+* **Gestos de borda** (`BoardProfile::watchGestures`): a borda de cima é
+  dividida em terços — esquerda, puxe para baixo os **ajustes rápidos**
+  (brilho, volume, WiFi, Não perturbe, levantar o pulso, sempre ligada,
+  lanterna, ajustes, celular, achar celular); centro, a **central de
+  notificações**; o terço direito revela a topbar retrátil do app (jogos).
+  Da borda de baixo, puxe para cima também abre a **central de notificações**
+  (toque expande, deslize de lado apaga, limpar tudo); da borda esquerda,
+  deslize para a direita para sair do app. Painel aberto a partir do
+  mostrador volta para ele.
 * **Launcher** em lista vertical (`launcherList`), com bateria em % e
   carregando na barra de status.
 * **Escada de tela** (ScreenPower): pleno → **dim** em 8 s → **AOD** em

@@ -56,12 +56,14 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   three styles — digital, analog, minimal — switched with a long press, and
   shows battery %, steps against the goal, the next alarm, a running timer,
   unread notifications and the phone's weather.
-* **Edge gestures** (`BoardProfile::watchGestures`): from the top edge pull
-  down for **quick settings** (brightness, volume, WiFi, Do Not Disturb,
-  raise-to-wake, always-on, flashlight, settings, phone link, find phone);
-  from the bottom edge pull up for the **notification center** (tap to
-  expand, swipe sideways to dismiss, clear all); from the left edge swipe
-  right to leave an app. Opening a panel from the watch face returns to it.
+* **Edge gestures** (`BoardProfile::watchGestures`): the top edge is split in
+  thirds — left pull down for **quick settings** (brightness, volume, WiFi, Do
+  Not Disturb, raise-to-wake, always-on, flashlight, settings, phone link,
+  find phone), center for the **notification center**; the right third
+  reveals the retractable app topbar (games). Bottom edge pull up also opens
+  the **notification center** (tap to expand, swipe sideways to dismiss,
+  clear all); from the left edge swipe right to leave an app. Opening a panel
+  from the watch face returns to it.
 * **Launcher** is a vertical list (`launcherList`) with the battery % and
   charging state in the status bar.
 * **Screen power ladder** (ScreenPower): full → **dim** after 8 s →

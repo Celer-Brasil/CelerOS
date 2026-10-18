@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 42
+### API Level: 43
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -96,6 +96,16 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
   - `touched` is `true` if a finger/stylus is pressing the screen.
   - `x` and `y` represent pixel coordinates. If `touched` is `false`, `x` and `y` default to 0.
 - **Hidden Exit Trigger:** If a user touches `x >= 200` and `y <= 40` (Top-Right corner), the C++ Kernel will instantly abort the JS Engine and force-close the app to prevent users from getting permanently locked out of the OS.
+
+#### `System.getTouches()` (API 43)
+- **Returns:** `Array` -> `[{ id: Integer, x: Integer, y: Integer, size: Integer }, ...]`
+- **Description:** Polls ALL fingers on the touch controller (multitouch). Same frame yield as `System.getTouch()` — call ONE of the two per loop, not both.
+  - Ordered oldest finger first: index `0` is the primary finger (the one the system UI/chrome tracks).
+  - `id` is the controller track id — stable while the finger stays down; use it to tell fingers apart across frames.
+  - `size` is the contact area (0 when the controller does not report it).
+  - Empty array `[]` when nothing is touching.
+  - Glass without multitouch returns at most one point (resistive CYD: 1; the SmartDisplay 4848 and the watch: up to 5).
+  - The system chrome (top bar, hidden exit corner, watch edge gestures) consumes the primary finger only — secondary fingers always reach your app untouched.
 
 #### `System.getInfo()`
 - **Returns:** `Object` -> `{ totalRAM: Integer, freeRAM: Integer, minFreeRAM: Integer, maxAllocRAM: Integer, cpuFreqMHz: Integer, chipModel: String, chipCores: Integer, chipRevision: Integer, flashSize: Integer, uptimeMs: Integer, appRAM: Integer }`
@@ -734,14 +744,19 @@ package, not from code:
   menus/lists/forms — Settings, App Store, Terminal.
 - **Retractable (default)** — no `topbar` field: the app runs **full screen**
   (the canvas maps 1:1 over the whole panel, exactly like pre-topbar apps).
-  Swiping down from the very top edge reveals the strip for **3 seconds**; the
-  whole reveal gesture is consumed by the system — the app never sees its
-  press/release. Ideal for games (Snake, 2048, Breakout).
+  Swiping down from the **right third** of the top edge reveals the strip for
+  **3 seconds**; the whole reveal gesture is consumed by the system — the app
+  never sees its press/release. Ideal for games (Snake, 2048, Breakout).
 
 Notes:
 
 - In fixed mode touches in the strip never reach the app; in retractable mode
   only while the strip is visible (X included — it fires on release, debounced).
+- With watch gestures enabled (touch boards) the top edge is split in thirds:
+  left pull-down opens **quick settings** and center opens the **notification
+  center** (both leave the app by the clean X path); the right third belongs
+  to the retractable reveal. Games must not rely on downward swipes that start
+  in the left/center thirds of the top strip.
 - On PSRAM boards the strip is composed into the frame (no flicker, and hiding
   it restores the area atomically). On the CYD (direct drawing) the strip is
   drawn only when it changes, and the display is clipped below it so the app

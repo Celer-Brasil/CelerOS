@@ -416,8 +416,10 @@ bool edgeGestureHook(const kui::TouchEvent& ev) {
     if (top == &s_quick || top == &s_notif || top == &s_flash) return false;
     const int edge = WatchPanels::edgeAt(ev.startX, ev.startY);
     if (edge == 1 && sw == kui::TouchEvent::SwipeDown) {
+        const int third = WatchPanels::topThirdAt(ev.startX);
+        if (third == 2) return false;  // terco direito: so o app (topbar retratil)
         s_returnHome = false;
-        kui::Navigator::push(&s_quick);
+        kui::Navigator::push(third == 0 ? (kui::Screen*)&s_quick : (kui::Screen*)&s_notif);
         return true;
     }
     if (edge == 2 && sw == kui::TouchEvent::SwipeUp) {
@@ -444,6 +446,11 @@ int edgeAt(int x, int y) {
     if (y >= UI::H - edgeTop()) return 2;
     if (x < edgeLeft()) return 3;
     return 0;
+}
+
+int topThirdAt(int x) {
+    if (x < UI::sx(80)) return 0;
+    return x < UI::sx(160) ? 1 : 2;
 }
 
 void request(Panel p, bool returnHome) {

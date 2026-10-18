@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 42
+### Nível de API: 43
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -135,6 +135,22 @@ para o SO do ESP32.
 - **Gatilho oculto de saída:** se o usuário tocar em `x >= 200` e `y <= 40`
   (canto superior direito), o kernel C++ aborta instantaneamente o motor JS
   e força o fechamento do app para impedir que o usuário fique preso no SO.
+
+#### `System.getTouches()` (API 43)
+- **Retorna:** `Array` -> `[{ id: Integer, x: Integer, y: Integer, size: Integer }, ...]`
+- **Descrição:** consulta TODOS os dedos no controlador de toque (multitoque).
+  Mesma cedida de quadro do `System.getTouch()` — chame UM dos dois por loop,
+  não os dois.
+  - Ordenado do dedo mais antigo para o mais novo: índice `0` é o dedo
+    primário (o que a UI/chrome do sistema acompanha).
+  - `id` é o track id do controlador — estável enquanto o dedo está na tela;
+    use para distinguir dedos entre quadros.
+  - `size` é a área de contato (0 quando o controlador não informa).
+  - Sem dedo, devolve `[]`.
+  - Vidro sem multitoque devolve no máximo 1 ponto (CYD resistiva: 1;
+    SmartDisplay 4848 e watch: até 5).
+  - O chrome do sistema (topbar, canto de saída, gestos de borda do watch)
+    consome só o dedo primário — os secundários chegam limpos ao app.
 
 #### `System.getInfo()`
 - **Retorna:** `Object` -> `{ totalRAM, freeRAM, minFreeRAM, maxAllocRAM, cpuFreqMHz, chipModel, chipCores, chipRevision, flashSize, uptimeMs, appRAM }` (Integers, exceto chipModel: String)
@@ -998,14 +1014,19 @@ não do código:
   menus/listas/formulários — Settings, App Store, Terminal.
 - **Retrátil (padrão)** — sem o campo `topbar`: o app roda em **tela cheia**
   (canvas 1:1 sobre o painel inteiro, como os apps pré-topbar). Deslizar o
-  dedo de cima para baixo na borda superior revela a faixa por **3 segundos**;
-  todo o gesto de revelar é consumido pelo sistema — o app nunca vê o
-  press/release dele. Ideal para jogos (Snake, 2048, Breakout).
+  dedo de cima para baixo no **terço direito** da borda superior revela a
+  faixa por **3 segundos**; todo o gesto de revelar é consumido pelo sistema —
+  o app nunca vê o press/release dele. Ideal para jogos (Snake, 2048, Breakout).
 
 Notas:
 
 - No modo fixa, toques na faixa nunca chegam ao app; no retrátil, apenas
   enquanto ela está visível (X incluído — dispara no release, com debounce).
+- Com gestos de relógio ativos (placas com touch), a borda de cima é dividida
+  em terços: a esquerda abre os **ajustes rápidos** e o centro a **central de
+  notificações** (ambos saem do app pelo caminho limpo do X); o terço direito
+  é da revelação retrátil. Jogos não devem depender de arrastos para baixo
+  que começam nos terços esquerdo/central da faixa do topo.
 - Em placas com PSRAM a faixa é composta dentro do quadro (sem flicker; ao
   esconder, a área volta atomically no próximo push). Na CYD (desenho direto) a faixa só é
   desenhada quando muda, e o display fica recortado abaixo dela — o app não

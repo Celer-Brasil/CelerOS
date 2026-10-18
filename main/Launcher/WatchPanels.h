@@ -3,9 +3,13 @@
 
 // Paineis de sistema (API 15), ativos com BoardProfile::watchGestures
 // (watch + placas com touch: smartdisplay, cyd):
-//   - borda de cima, arrastar para baixo  -> Ajustes rapidos (brilho, volume,
-//     WiFi, Nao perturbe, levantar p/ acordar*, AOD*, lanterna, Ajustes)
-//     [* so no watch, com a maquina de estados de tela];
+//   - borda de cima, arrastar para baixo, em tercos horizontais:
+//       1/3 esquerdo -> Ajustes rapidos (brilho, volume, WiFi, Nao perturbe,
+//          levantar p/ acordar*, AOD*, lanterna, Ajustes)
+//          [* so no watch, com a maquina de estados de tela];
+//       1/3 central  -> Central de notificacoes;
+//       1/3 direito  -> fica com o app: e o gesto que revela a topbar
+//          retratil (jogos); tela nativa nao abre painel nele;
 //   - borda de baixo, arrastar para cima  -> Central de notificacoes;
 //   - borda esquerda, arrastar p/ direita -> sai do app JS (telas nativas ja
 //     tinham o voltar).
@@ -32,6 +36,10 @@ void service();  // loop da UI
 
 // Borda tocada (coordenadas fisicas): 1 cima, 2 baixo, 3 esquerda, 0 nada.
 int edgeAt(int x, int y);
+
+// Terco horizontal da borda de cima (coordenadas fisicas): 0 esquerda,
+// 1 centro, 2 direita.
+int topThirdAt(int x);
 
 }  // namespace WatchPanels
 

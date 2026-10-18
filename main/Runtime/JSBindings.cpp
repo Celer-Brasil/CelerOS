@@ -123,9 +123,10 @@ void JSBindings::appExitCleanup() {
 //
 // Dois modos (app.json "topbar"):
 //   fixo    — faixa sempre visivel; o canvas do app e a area abaixo dela;
-//   retratil — app em tela cheia; swipe de cima para baixo na borda revela a
-//              faixa por alguns segundos (RETRACT_MS). Todo o gesto de revelar
-//              e consumido: o app nunca ve press/release dele.
+//   retratil — app em tela cheia; swipe de cima para baixo no terco direito
+//              da borda revela a faixa por alguns segundos (RETRACT_MS). Todo
+//              o gesto de revelar e consumido: o app nunca ve press/release
+//              dele (os tercos esquerdo/central sao os paineis de borda).
 static bool s_exitArmed = false;
 static bool s_barOnGlass = false;
 static bool s_barHotOnGlass = false;
@@ -306,7 +307,9 @@ static int tbButtonAt(int jx) {
 // seguem o mesmo contrato e viram fila em System.topbarPop().
 // Gestos de borda do relogio (API 15, BoardProfile::watchGestures): o dedo
 // que nasce numa borda e cruza o limiar encerra o app pelo caminho do X —
-// cima pede os Ajustes rapidos, baixo a central de notificacoes, esquerda so
+// borda de cima em tercos: esquerda pede os Ajustes rapidos, centro a central
+// de notificacoes, direito NAO abre painel (e o gesto que revela a topbar
+// retratil, tratado no bloco retratil abaixo), baixo a central, esquerda so
 // sai. Nao consome o toque (o X/topbar e os apps seguem vendo a borda); o
 // app so perde o gesto que virou sistema.
 static bool pollWatchEdges(bool touched, uint16_t x, uint16_t y) {
@@ -328,7 +331,15 @@ static bool pollWatchEdges(bool touched, uint16_t x, uint16_t y) {
     const int dx = (int)x - s_x0, dy = (int)y - s_y0;
     WatchPanels::Panel p = WatchPanels::Panel::None;
     if (s_edge == 1 && dy >= UI::sy(60)) {
-        p = WatchPanels::Panel::Quick;
+        const int third = WatchPanels::topThirdAt(s_x0);
+        if (third == 0) {
+            p = WatchPanels::Panel::Quick;
+        } else if (third == 1) {
+            p = WatchPanels::Panel::Notifications;
+        } else {
+            s_edge = 0;  // terco direito: fica com o app (revelar a topbar)
+            return false;
+        }
     } else if (s_edge == 2 && dy <= -UI::sy(60)) {
         p = WatchPanels::Panel::Notifications;
     } else if (!(s_edge == 3 && dx >= UI::sx(70) && abs(dy) < UI::sy(50))) {
@@ -353,11 +364,10 @@ bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
     if (!s_topbarFixed) {
         // ---- modo retratil: gesto de revelar + faixa transitoria ----
         retractTick();
-        if (s_tbSwipe) {  // dedo ainda descendo a partir da borda
+        if (s_tbSwipe) {  // dedo ainda no gesto de revelar (ate o release)
             if (!touched) {
-                s_tbSwipe = false;             // soltou sem arrastar o bastante
-            } else if ((int)y - s_tbSwipeY0 >= UI::sy(12)) {
-                s_tbSwipe = false;
+                s_tbSwipe = false;             // soltou: gesto acabou
+            } else if (!s_barShown && (int)y - s_tbSwipeY0 >= UI::sy(12)) {
                 s_barShown = true;             // revela por RETRACT_MS
                 s_barShownAt = millis();
                 celer_log_println("[TB] show");
@@ -365,7 +375,9 @@ bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
             touched = false;                   // gesto inteiro e chrome
             return false;
         }
-        if (touched && !s_barShown && UI::inTopbar(x, y)) {
+        // revelar so pelo terco direito: esquerda/centro sao os paineis de
+        // borda (pollWatchEdges) e nao podem piscar a faixa no caminho
+        if (touched && !s_barShown && UI::inTopbar(x, y) && WatchPanels::topThirdAt(x) == 2) {
             s_tbSwipe = true;                  // pode virar o gesto de revelar
             s_tbSwipeY0 = y;
             touched = false;

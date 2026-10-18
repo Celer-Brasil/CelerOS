@@ -1,0 +1,22 @@
+# CYD (ESP32, 4 MB): a particao littlefs tem 768 KB e a fabrica inteira
+# nao cabe mais desde a migracao ao CelerKit (as copias de data/modules
+# somaram ~200 KB na imagem). Saem da fabrica os apps sem uso nesta placa
+# (sem Bluetooth: malha; sem mic: IA) e os que a Loja instala do catalogo;
+# ficam o nucleo do sistema (Store, Watchface, Settings, Nucleo,
+# Installer, Terminal, Touch Test, Barebone) com os modulos e icones de
+# que eles precisam.
+apps/Chat IA
+apps/Help
+apps/HTTP Demo
+apps/Matilha
+apps/Qwen
+apps/Regras
+apps/Snake
+apps/Web Server
+icons/httpdemo.png
+icons/qwen.png
+icons/snake.png
+modules/celeros.app.ai
+modules/celeros.app.chat
+modules/celeros.app.mesh
+modules/celeros.app.net

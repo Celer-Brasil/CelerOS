@@ -79,6 +79,26 @@ def build_data_image(board: str, out: Path) -> None:
         if overlay.is_dir():
             shutil.copytree(overlay, stage, dirs_exist_ok=True)
             print(f"  overlay: boards/{board}/data somado")
+        # Exclusao da placa: boards/<board>/data-exclude.txt, mesma receita do
+        # flash_data.sh (um caminho relativo a data/ por linha, # comenta).
+        # A fabrica inteira nao cabe na littlefs de 768 KB da CYD desde que
+        # data/modules passou a viajar na imagem.
+        excl = ROOT / "boards" / board / "data-exclude.txt"
+        if excl.is_file():
+            for linha in excl.read_text(encoding="utf-8").splitlines():
+                rel = linha.strip()
+                if not rel or rel.startswith("#"):
+                    continue
+                if ".." in rel or rel.startswith("/"):
+                    die(f"data-exclude: caminho invalido: {rel}")
+                alvo = stage / rel
+                if not alvo.exists():
+                    die(f"data-exclude: nao existe: {rel}")
+                if alvo.is_dir():
+                    shutil.rmtree(alvo)
+                else:
+                    alvo.unlink()
+                print(f"  excluido: {rel}")
         mklfs = ROOT / "tools" / "bin" / "mklittlefs.bin"
         if not mklfs.is_file():
             die(f"mklittlefs nao encontrado: {mklfs}")

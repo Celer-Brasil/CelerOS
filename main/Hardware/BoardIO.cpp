@@ -755,6 +755,12 @@ namespace {
 i2s_chan_handle_t s_mic = nullptr;
 bool s_micFail = false;       // ultima tentativa falhou (ve o prazo abaixo)
 int64_t s_micFailAtUs = 0;    // quando falhou
+// MEMS direto no I2S (sem codec/MCLK, INMP441 do cao): os dados sao 24 bits
+// LEFT-JUSTIFIED em slot de 32. Com slot de 16 o frame tem 32 BCLK e o mic
+// nunca ve um frame valido — o DMA entregava lixo em full-scale e TODO
+// nivel saia 100/100 ("microfone nao funciona", bancada 2026-10-17). O
+// codec (watch ES7210) continua 16-bit.
+bool s_mic32 = false;
 
 // Falha de init NAO e mais permanente: no boot do cao o heap interno encosta
 // em ~3 KB (Dog Face + BLE + servos subindo juntos) e os descritores DMA do
@@ -815,7 +821,9 @@ bool micInitUnlocked() {
     }
     i2s_std_config_t cfg = {};
     cfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000);
-    cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    s_mic32 = Board::profile().i2s.mclk < 0;  // sem MCLK = MEMS direto (32-bit)
+    cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
+        s_mic32 ? I2S_DATA_BIT_WIDTH_32BIT : I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     cfg.gpio_cfg.mclk = Board::profile().i2s.mclk >= 0
                             ? (gpio_num_t)Board::profile().i2s.mclk
                             : I2S_GPIO_UNUSED;  // codec (ES8311): MCLK do I2S1
@@ -902,7 +910,11 @@ struct MicRecState {
 MicRecState s_rec;
 
 void micRecTask(void*) {
-    int16_t buf[512];  // 256 frames stereo = 32 ms
+    int16_t buf[512];           // 256 frames stereo = 32 ms (codec 16-bit)
+    static int32_t buf32[512];  // idem em 32-bit (MEMS sem codec; sob o mux)
+    int16_t mono[256];          // slot L ja convertido (usado fora do lock)
+    int16_t monoR[256];         // slot R (so telemetria)
+    bool firstLog = true;
     int tele = 0;      // telemetria ~1x/s: RMS dos dois slots (logcat)
     while (!s_rec.stopReq) {
         size_t r = 0;
@@ -914,17 +926,37 @@ void micRecTask(void*) {
         }
         // so devolve o mutex que pegou: soltar sem ter (lock falhou) corrompe
         // o dono do mutex no FreeRTOS
-        if (!BoardIO::micChanLock(250)) continue;
-        const esp_err_t rr = s_mic != nullptr
-                                 ? i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150))
-                                 : ESP_ERR_INVALID_STATE;
+        if (!BoardIO::micChanLock(250)) {
+            if (firstLog) {
+                firstLog = false;
+                celer_log_printf("[micrec] sem o mux do canal (wakeword segurando?)\n");
+            }
+            continue;
+        }
+        const esp_err_t rr =
+            s_mic == nullptr ? ESP_ERR_INVALID_STATE
+                             : (s_mic32 ? i2s_channel_read(s_mic, buf32, sizeof(buf32), &r,
+                                                           pdMS_TO_TICKS(150))
+                                        : i2s_channel_read(s_mic, buf, sizeof(buf), &r,
+                                                           pdMS_TO_TICKS(150)));
+        int frames = (rr == ESP_OK) ? (int)(r / (s_mic32 ? 8 : 4)) : 0;
+        if (firstLog) {
+            firstLog = false;
+            celer_log_printf("[micrec] 1o read: rr=%s r=%u frames=%d mic32=%d\n",
+                             esp_err_to_name(rr), (unsigned)r, frames, s_mic32 ? 1 : 0);
+        }
+        if (frames > 256) frames = 256;
+        // converte sob o lock (buf32 e estatico; o mux garante um leitor)
+        for (int i = 0; i < frames; i++) {
+            mono[i] = s_mic32 ? (int16_t)(buf32[2 * i] >> 16) : buf[2 * i];  // slot L
+            if (s_mic32) monoR[i] = (int16_t)(buf32[2 * i + 1] >> 16);      // slot R (telemetria)
+        }
         BoardIO::micChanUnlock();
-        if (rr != ESP_OK || r < 4) continue;
-        const int frames = (int)(r / 4);
+        if (frames <= 0) continue;
         bool dropped = false;
         if (xSemaphoreTake(s_rec.mux, pdMS_TO_TICKS(50)) == pdTRUE) {
             for (int i = 0; i < frames; i++) {
-                if (s_rec.n < s_rec.cap) s_rec.pcm[s_rec.n++] = buf[2 * i];  // slot L (mono capturado)
+                if (s_rec.n < s_rec.cap) s_rec.pcm[s_rec.n++] = mono[i];  // slot L (mono capturado)
                 else dropped = true;
             }
             if (dropped) s_rec.overflow = true;
@@ -932,8 +964,10 @@ void micRecTask(void*) {
         } else {
             s_rec.overflow = true;
         }
-        s_rec.level = rmsLevel100(buf, frames, 2, 0);
-        s_rec.levelR = rmsLevel100(buf, frames, 2, 1);  // telemetria de slot
+        // nivel do audio CAPTURADO (mono ja convertido do slot L) e
+        // telemetria do slot R (diagnostico; convertido sob o lock acima)
+        s_rec.level = rmsLevel100(mono, frames, 1, 0);
+        s_rec.levelR = s_mic32 ? rmsLevel100(monoR, frames, 1, 0) : rmsLevel100(buf, frames, 2, 1);
         if (++tele % 31 == 0)  // ~1 s de chunks de 32 ms
             celer_log_printf("[micrec] slotL=%d slotR=%d\n", s_rec.level, s_rec.levelR);
         if (s_rec.n >= s_rec.cap) break;  // teto: encerra sozinho
@@ -1084,7 +1118,9 @@ void micChanUnlock() {
 }
 
 int micReadMonoLocked(int16_t* out, int maxSamples) {
-    int16_t buf[512];  // 256 frames stereo = 32 ms
+    int16_t buf[512];           // 256 frames stereo = 32 ms (codec 16-bit)
+    static int32_t buf32[512];  // idem em 32-bit (MEMS sem codec) — estatico:
+                                // o mux do canal garante um leitor por vez
     size_t r = 0;
     if (!micChanLock(200)) return -2;  // outro leitor segurando o canal
     // beep/playWav desviou os pinos (ou o canal caiu): o leitor de fundo
@@ -1093,16 +1129,25 @@ int micReadMonoLocked(int16_t* out, int maxSamples) {
         micChanUnlock();
         return -3;  // canal nao subiu
     }
-    const esp_err_t rr = i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
-    micChanUnlock();
+    const esp_err_t rr =
+        s_mic32 ? i2s_channel_read(s_mic, buf32, sizeof(buf32), &r, pdMS_TO_TICKS(150))
+                : i2s_channel_read(s_mic, buf, sizeof(buf), &r, pdMS_TO_TICKS(150));
     // -4 = sem clock/sem dados: timeout OU canal parado devolvendo 0 bytes
     // (ESP_OK sem progresso). -1 fica para erro real do driver.
-    if (rr != ESP_OK || r < 4) {
+    if (rr != ESP_OK || r < (s_mic32 ? 8u : 4u)) {
+        micChanUnlock();
         return (rr == ESP_ERR_TIMEOUT || rr == ESP_OK) ? -4 : -1;
     }
-    const int frames = (int)(r / 4);
+    const int frames = (int)(r / (s_mic32 ? 8 : 4));
     const int n = frames < maxSamples ? frames : maxSamples;
-    for (int i = 0; i < n; i++) out[i] = buf[2 * i];  // slot L
+    // conversao AINDA no lock: buf32 e estatico; o slot L dos 24 bits
+    // left-justified vira 16-bit com >>16 (full-scale continua 32767)
+    if (s_mic32) {
+        for (int i = 0; i < n; i++) out[i] = (int16_t)(buf32[2 * i] >> 16);
+    } else {
+        for (int i = 0; i < n; i++) out[i] = buf[2 * i];  // slot L
+    }
+    micChanUnlock();
     return n;
 }
 

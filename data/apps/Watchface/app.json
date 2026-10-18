@@ -1,16 +1,21 @@
 {
   "name": "Watchface",
   "packageName": "celeros.watchface",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "author": "CelerOS",
   "description": "Relógio de pulso e de mesa: hora grande em pílulas glass, dia da semana, passos do dia, bateria e trilha de segundos. Com /sd/wallpaper.png vira papel de parede (gerado por tools/make_wallpapers.py); swipe para cima abre o launcher; toque longo troca o estilo (digital, analógico, mínimo). Aceita plugins de outros apps (watchface.js).",
   "type": "Utility",
   "category": "System",
-  "api": 16,
+  "api": 30,
   "permissions": ["fs"],
   "system": true,
   "topbar": false,
   "order": -10,
   "icon": "time",
-  "changelog": "4.1.0 - plugins de watchface (API 16): apps instalam um watchface.js (na pasta do app ou no appData deles) e o relogio mostra ate 2 linhas de widget nos estilos digital e analogico; toque na linha abre o app do plugin (System.launchApp); plugin com erro e dispensado, sem derrubar o relogio; clima do celular sai do rodape quando ha plugin. Trilha de segundos vira pilula com o numero do segundo; rodape alterna timer, musica tocando (Phone.musicInfo), clima com temperatura em graus e aviso de celular desconectado (Phone.status); analogico ganha arcos de bateria e de passos e contador de nao lidas; minimo mostra quantas notificacoes nao lidas. 4.0.0 - tres estilos (digital, analogico, minimo; toque longo troca), bateria em %, meta de passos do Settings, proximo alarme, timer, nao lidas e clima do celular. 3.0.0 - wallpaper: desenha /sd/wallpaper.png uma vez e os elementos redesenham em pills glass opacas (app promovido de board para data/apps: relógio de mesa na SmartDisplay também). 2.0.0 - dia da semana (getWeekday) e card de passos com barra até a meta (Sensors.steps). 1.0.0 - relógio digital em tela cheia com data e trilha de segundos."
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.fmt": "^1.0.0",
+    "celeros.app.data": "^1.0.0"
+  },
+  "changelog": "4.2.0 - migrado para o CelerKit (deps celeros.app/fmt/data; api 16 -> 30): laco, frame e toque no A.run do kit (toque via UI.touch, que le o consumo do UI.begin do kit) e estilo persistido via celeros.app.data (valores antigos no Storage continuam validos). Bug: o vidro pedindo frame total (notificacao, retorno de outro app) apagava o papel de parede e o fundo ficava morto ate reiniciar o relogio - agora o frame total redesenha a parede (c.full). O desenho do mostrador segue intacto e fps-sensivel: assinatura de estado decide o redesenho, pills por cima do wallpaper, ritmo de ~7 fps como o delay(150) de antes. 4.1.0 - plugins de watchface (API 16): apps instalam um watchface.js (na pasta do app ou no appData deles) e o relogio mostra ate 2 linhas de widget nos estilos digital e analogico; toque na linha abre o app do plugin (System.launchApp); plugin com erro e dispensado, sem derrubar o relogio; clima do celular sai do rodape quando ha plugin. Trilha de segundos vira pilula com o numero do segundo; rodape alterna timer, musica tocando (Phone.musicInfo), clima com temperatura em graus e aviso de celular desconectado (Phone.status); analogico ganha arcos de bateria e de passos e contador de nao lidas; minimo mostra quantas notificacoes nao lidas. 4.0.0 - tres estilos (digital, analogico, minimo; toque longo troca), bateria em %, meta de passos do Settings, proximo alarme, timer, nao lidas e clima do celular. 3.0.0 - wallpaper: desenha /sd/wallpaper.png uma vez e os elementos redesenham em pills glass opacas (app promovido de board para data/apps: relógio de mesa na SmartDisplay também). 2.0.0 - dia da semana (getWeekday) e card de passos com barra até a meta (Sensors.steps). 1.0.0 - relógio digital em tela cheia com data e trilha de segundos."
 }

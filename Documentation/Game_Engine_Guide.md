@@ -47,6 +47,14 @@ python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.game.js --min-api
 python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.game.fx.js --min-api 30 --dep celeros.game=^1.0.0
 python3 tools/celerhub.py publish-dep tools/sdk/engine/celeros.physics.js --min-api 31
 
+# after changing ANY module under tools/sdk/engine: bump the version: 'x.y.z'
+# declared inside it, publish-dep it, and keep `deps-status` green BEFORE the
+# push (it is a gate) — a fix that is committed but not published reaches no
+# device. `celer.js deps <Pasta> --verify` fails when an app.json range has
+# no satisfying version on the hub:
+python3 tools/celerhub.py deps-status
+node tools/sdk/celer.js deps MyGame --verify
+
 # iterate (lint runs on save; emulator renders a PNG; device does live
 # reload — on the PC require resolves deps from the tools/sdk/engine tree):
 node tools/sdk/celer.js lint MyGame

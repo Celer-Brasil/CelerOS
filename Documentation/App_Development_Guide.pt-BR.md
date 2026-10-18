@@ -104,6 +104,24 @@ segurança.
   local na pasta do app ainda vence sobre o cache (vendorizar segue
   funcionando). As deps contam no teto de compilação de 48/128 KB. Ordem de
   resolução e detalhes: [Guia da API JS, seção 35](JS_API_Guide.pt-BR.md).
+
+**Como os ranges se comportam** (o modelo do `pub` do Dart): `^1.1.0` roda
+em qualquer 1.x ≥ 1.1.0 — a resolução sempre escolhe a maior versão que
+satisfaz, então minor/patch da dependência chegam ao app sem tocá-lo. A
+**major é a linha do breaking**: `^1.x` nunca pula para 2.0, e majors
+diferentes coexistem no aparelho (`/local/modules/<nome>/1.9.0/` e
+`/2.0.0/` lado a lado; o `deps.json` de cada app pinna a sua). Se o app
+precisa mesmo da major nova, suba o range no `app.json` e publique. O
+`deps.json` é o lock por app: congela o que foi resolvido para o app abrir
+reproduzível; atualize com `celerctl apps deps --upgrade` (ou o "Atualizar
+engine" da loja). **Todo caminho de instalação sincroniza as deps** —
+`celerctl apps install`, a loja, `celerctl dev` (na abertura e a cada
+mudança de `app.json`, com `--deps-local` para testar versões do repo
+antes do publish) e `celerctl push PASTA /local/apps` resolvem contra o
+hub, enchem o `/local/modules` e gravam o `deps.json` antes de o app
+rodar. `node tools/sdk/celer.js deps <Pasta> --verify` falha quando um
+range não tem versão que satisfaça no hub (o gate do `celer.js check`
+cobra isso dos `hub_apps`).
 - **`requires`** (opcional): requisitos de hardware — `"psram"` é o único
   valor hoje. Sobe o teto do hub para o `main.js` de 48 KB para 128 KB
   (placas com PSRAM compilam sem limite runtime); a loja marca o app como

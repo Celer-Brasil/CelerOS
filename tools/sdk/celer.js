@@ -28,7 +28,7 @@ const { encodeGif } = require('./lib/gif.js');
 const ROOT = path.resolve(__dirname, '../..');
 const TYPES_OUT = path.join(__dirname, 'types', 'celer.d.ts');
 const ENGINE_DIR = path.join(__dirname, 'engine');
-const HUB_URL = process.env.CELER_HUB_URL || 'https://os.celer.tec.br';
+const HUB_URL = process.env.CELER_HUB_URL || process.env.CELER_HUB || 'https://os.celer.tec.br';
 
 function die(msg, code = 1) {
     console.error('erro: ' + msg);
@@ -40,7 +40,7 @@ function usage() {
     console.log('');
     console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
     console.log('                                               (--game: jogo c/ deps celeros.game)');
-    console.log('  deps [PASTA]                                 deps do app.json + versoes no hub/local');
+    console.log('  deps [PASTA] [--verify]                      deps do app.json + resolucao no hub (--verify: exit 1 se nao resolve)');
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
     console.log('  types [--out ARQ]                            (re)gera celer.d.ts do manifest');
@@ -227,9 +227,70 @@ function fetchHubDeps(cb) {
     req.setTimeout(5000, () => { req.destroy(); cb(null); });
 }
 
+// Resolve os deps de TODOS os app.json do repo (data/apps, hub_apps,
+// boards/*/data/apps) contra o indice do hub — pela implementacao CANONICA
+// (celerhub.py, a mesma do celerctl/servidor): copiar o resolvedor para ca
+// seria a 5a copia, o caminho do bug 2.7.2. cb recebe
+// { ok, hubErro, stderr, resultados: [{path, resolvido}|{path, erro}] }.
+function resolveRepoDeps(cb) {
+    const targets = [];
+    const boardRoots = fs.existsSync(path.join(ROOT, 'boards'))
+        ? fs.readdirSync(path.join(ROOT, 'boards')).map((b) => 'boards/' + b + '/data/apps')
+        : [];
+    for (const root of ['data/apps', 'hub_apps'].concat(boardRoots)) {
+        const abs = path.join(ROOT, root);
+        if (!fs.existsSync(abs)) continue;
+        for (const d of fs.readdirSync(abs).sort()) {
+            const p = path.join(abs, d, 'app.json');
+            if (!fs.existsSync(p)) continue;
+            try {
+                const meta = JSON.parse(fs.readFileSync(p, 'utf8'));
+                if (meta.deps && Object.keys(meta.deps).length) {
+                    targets.push({ path: root + '/' + d, deps: meta.deps });
+                }
+            } catch (e) {
+                targets.push({ path: root + '/' + d, erro: 'app.json invalido: ' + e.message });
+            }
+        }
+    }
+    if (!targets.length) return cb({ ok: true, hubErro: null, stderr: '', resultados: [] });
+    const script = [
+        "import sys, json",
+        "sys.path.insert(0, 'tools')",
+        "import celerhub",
+        "req = json.load(sys.stdin)",
+        "try:",
+        "    _, idx = celerhub.http('GET', req['hub'].rstrip('/') + '/store/deps.json')",
+        "    index = (idx or {}).get('deps', {})",
+        "except Exception as e:",
+        "    print(json.dumps({'hubErro': str(e), 'stderr': '', 'resultados': []}))",
+        "    sys.exit(0)",
+        "res = []",
+        "for app in req['apps']:",
+        "    if app.get('erro'):",
+        "        res.append({'path': app['path'], 'erro': app['erro']}); continue",
+        "    try:",
+        "        res.append({'path': app['path'], 'resolvido': celerhub.resolve_dep_ranges(app['deps'], index)})",
+        "    except SystemExit:",
+        "        res.append({'path': app['path'], 'erro': 'range sem versao que satisfaca no hub'})",
+        "print(json.dumps({'hubErro': None, 'stderr': '', 'resultados': res}, sort_keys=True))",
+    ].join('\n');
+    const r = spawnSync('python3', ['-c', script],
+                        { cwd: ROOT, input: JSON.stringify({ hub: HUB_URL, apps: targets }),
+                          encoding: 'utf8', timeout: 60000, maxBuffer: 8 * 1024 * 1024 });
+    if (r.error) return cb({ ok: false, hubErro: String(r.error), stderr: '', resultados: [] });
+    let out;
+    try { out = JSON.parse(r.stdout); } catch (e) {
+        return cb({ ok: false, hubErro: 'saida invalida do resolvedor', stderr: r.stderr, resultados: [] });
+    }
+    out.stderr = r.stderr || '';
+    cb(out);
+}
+
 // deps do app.json + o que existe no hub e na arvore local (tools/sdk/engine)
 function cmdDeps(args) {
     if (args[0] === 'set') return cmdDepsSet(args.slice(1));
+    const verify = args.includes('--verify');
     const folder = args.find((a) => !a.startsWith('--')) || '.';
     const dir = path.resolve(folder);
     const appJsonPath = path.join(dir, 'app.json');
@@ -258,7 +319,30 @@ function cmdDeps(args) {
             if (local[n]) console.log('    local (tools/sdk/engine): ' + local[n]);
         }
         if (!hub) console.log('(hub ' + HUB_URL + ' inalcancavel — mostrando so o local)');
+        if (!names.length) return;
+        // resolucao de verdade (fixpoint da familia): o que o install
+        // resolveria AGORA para este app; --verify vira gate (exit 1)
+        resolveRepoDeps((r) => {
+            const meu = (r.resultados || []).find((x) => x.path === relRepo(dir));
+            if (!meu) return;  // fora do repo (app do autor): nada a acrescentar
+            if (meu.erro) {
+                console.log('  RESOLVE: FALHA — ' + meu.erro);
+                if (verify) process.exit(1);
+                return;
+            }
+            console.log('  resolve (maior satisfazendo): ' + JSON.stringify(meu.resolvido));
+            if (verify && r.hubErro) {
+                console.log('erro: hub inalcancavel (' + r.hubErro + ') — --verify precisa do hub');
+                process.exit(1);
+            }
+        });
     });
+}
+
+// caminho do app relativo ao repo (data/apps/X, hub_apps/Y, ...) — o
+// resolvedor reporta por esse caminho
+function relRepo(dir) {
+    return path.relative(ROOT, dir).split(path.sep).join('/');
 }
 
 // deps set NOME RANGE [PASTA]: grava/remove a dep no app.json ('-' remove)
@@ -589,8 +673,8 @@ function cmdCheck() {
         console.log('aviso: ' + n + ' nao renderiza no emulador (wire do renderer sem a primitiva)');
     }
 
-    // 4) drift das deps compartilhadas repo x hub (aviso — nao trava o
-    // gate; `celerhub.py deps-status` sai 1 quando quiser travar)
+    // 4) drift das deps compartilhadas repo x hub (aviso — o gate DURO de
+    // publicacao e o `celerhub.py deps-status`, que sai 1; aqui so avisamos)
     const dep = spawnSync('python3', [path.join(ROOT, 'tools', 'celerhub.py'), 'deps-status'],
                           { encoding: 'utf8', timeout: 90000 });
     if (dep.status === 1) {
@@ -603,7 +687,36 @@ function cmdCheck() {
         console.log('deps: tools/sdk/engine em paridade com o hub');
     }
 
-    process.exit(errors ? 1 : 0);
+    // 5) os ranges de TODOS os app.json do repo tem que resolver no hub
+    // AGORA — app apontando versao nunca publicada e o desencontro classico
+    // (instala no PC e quebra no device). DURO para hub_apps/boards (o hub
+    // e o unico caminho de install); data/apps (fabrica) e AVISO: o app de
+    // fabrica viaja com o proprio data/modules, e o publish dele no hub
+    // falharia de qualquer forma enquanto a dep nao existir (o publish
+    // resolve os ranges antes de subir).
+    resolveRepoDeps((r) => {
+        if (r.hubErro) {
+            console.log('aviso: deps dos apps nao conferidas (hub inalcancavel: ' + r.hubErro + ')');
+        } else {
+            for (const res of r.resultados) {
+                if (!res.erro) continue;
+                const fabrica = res.path.startsWith('data/apps/');
+                if (fabrica) {
+                    console.log('aviso deps: ' + res.path + ' — ' + res.erro +
+                                ' (fabrica: instala do data/modules; o publish no hub exige a dep publicada)');
+                } else {
+                    errors++;
+                    console.log('ERRO deps: ' + res.path + ' — ' + res.erro);
+                    console.log('      publique a dep que falta (celerhub.py publish-dep) ou ajuste o range no app.json');
+                }
+            }
+            if (!r.resultados.some((x) => x.erro)) {
+                console.log('deps: todos os app.json do repo resolvem no hub');
+            }
+        }
+        process.exit(errors ? 1 : 0);
+    });
+    return;  // o exit acontece no callback do resolvedor
 }
 
 // ---------------------------------------------------------------- externos

@@ -2554,7 +2554,12 @@ uma única cópia por versão no dispositivo, compartilhada pelos apps. O
   resolução acontece **no install**: a loja escolhe a maior versão do índice
   do hub (`/store/deps.json`) que satisfaz o range e grava a escolha em
   `<pasta do app>/deps.json` (a fonte do `require` em runtime). Um update do
-  app re-resolve os ranges.
+  app re-resolve os ranges. A gramática é o modelo do `pub` do Dart: a
+  **major é a linha do breaking** — `^1.1.0` roda em qualquer 1.x ≥ 1.1.0
+  (minor/patch chegam no próximo install ou no `celerctl apps deps
+  --upgrade`) e nunca pula para 2.0; **majors coexistem** no cache, cada app
+  pinado pelo próprio `deps.json` (o lock por app; o GC do launcher preserva
+  toda versão que algum app pinna).
 - O `deps.json` guarda o **fecho transitivo** (as deps das deps vêm
   junto). O runtime lê até **32** módulos por app a partir da API 44; até a
   API 43 lia só 8 e o resto do fecho falhava no `require`. App cujo fecho
@@ -2562,6 +2567,12 @@ uma única cópia por versão no dispositivo, compartilhada pelos apps. O
 - O hub valida no publish: as deps existem no repositório, a soma dos `.js`
   do pacote **+ deps resolvidas** conta no teto de 48/128 KB (a dep segue
   compilando no heap de cada app) e `api` do app ≥ `minApi` da dep.
+- **O provisionamento é automático em todo caminho**: `celerctl apps
+  install`/`apps store`, a loja, `celerctl dev` (abertura + mudança de
+  `app.json`) e `celerctl push PASTA /local/apps` resolvem contra o hub,
+  baixam os módulos para `/local/modules` e gravam o `deps.json` antes de o
+  app rodar. `celerctl apps deps --upgrade` refresca os pinos de todos os
+  apps instalados (a maior satisfazendo — nunca cruza major).
 
 #### Resolução do `require` (precedência)
 

@@ -2268,7 +2268,12 @@ resolves the fallback.
   Resolution happens **at install time**: the store picks the highest
   version from the hub index (`/store/deps.json`) that satisfies the range
   and writes the choice to `<app folder>/deps.json` (the runtime source for
-  `require`). Updating the app re-resolves the ranges.
+  `require`). Updating the app re-resolves the ranges. The grammar is the
+  Dart `pub` model: the **major is the breaking line** — `^1.1.0` runs on
+  any 1.x ≥ 1.1.0 (minor/patch reach the app on the next install or
+  `celerctl apps deps --upgrade`) and never jumps to 2.0; **majors
+  coexist** in the cache, each app pinned by its own `deps.json` (the
+  per-app lockfile; the launcher GC keeps every version some app pins).
 - `deps.json` holds the **transitive closure** (a dep's own deps come
   along). The runtime reads up to **32** modules per app from API 44; up to
   API 43 it read only 8 and the rest of the closure failed to `require`.
@@ -2277,6 +2282,12 @@ resolves the fallback.
   `.js` sum **+ resolved deps** counts toward the 48/128 KB ceiling (the dep
   still compiles inside each app's heap) and the app's `api` ≥ the dep's
   `minApi`.
+- **Provisioning is automatic on every path**: `celerctl apps install`/
+  `apps store`, the store, `celerctl dev` (start + `app.json` changes) and
+  `celerctl push PASTA /local/apps` resolve against the hub, download the
+  modules to `/local/modules` and write `deps.json` before the app runs.
+  `celerctl apps deps --upgrade` refreshes the pins of every installed app
+  (highest satisfying — never crosses a major).
 
 #### `require` resolution (precedence)
 

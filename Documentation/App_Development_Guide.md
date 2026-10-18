@@ -105,6 +105,7 @@ Because CelerOS handles the underlying C++ translation, you can write simple, hi
 
 * **ES5 only**: no arrow functions, `let`/`const`, `class` or template literals — the engine is Duktape. Use `var` + `function`.
 * Your app is a **blocking `while` loop** paced by `UI.end()` (or `System.delay()`) — there are no events or callbacks. Everything is polling: `System.getTouch()`, `System.keypadPoll()`, `CelerLink.poll()`.
+* **Multitouch** (API 43): `System.getTouches()` returns ALL fingers as `[{id, x, y, size}]` (primary/oldest first, `[]` when idle). It shares the frame yield with `System.getTouch()` — call **one of the two per loop**, never both. Glass without multitouch (resistive CYD) returns at most one point; the SmartDisplay 4848 and the watch return up to 5. The system chrome (exit corner, top bar, watch edges) consumes the primary finger only.
 * All coordinates live in the **virtual 240x320 canvas** (`System.screenWidth()` is 240 everywhere); the OS scales to the physical glass. Pick colors from `System.theme()` instead of hardcoding.
 * Exit with `System.exitApp()`. State you want to keep goes in `FS.appData()` (a private folder per app).
 

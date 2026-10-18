@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-07
-**Commit:** v1.8.0
+**Updated:** 2026-10-18
+**Commit:** main @ API 44 (multitouch = API 43)
 **Branch:** main
 
 ## OVERVIEW
@@ -29,6 +29,7 @@ CelerOS/
 | Task | Location | Notes |
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
+| Multitouch (fingers, injector, `System.getTouches`, `celerctl mtap`) | `main/AGENTS.md` "TOUCH PIPELINE" | primary = oldest finger; system chrome consumes ONLY the primary; call ONE of `getTouch`/`getTouches` per loop |
 | Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 44) |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
@@ -55,6 +56,7 @@ CelerOS/
 | `WatchPanels`, `AlarmScreen` | classes | `main/Launcher/` | edge-gesture panels (quick settings, notification center); full-screen alarm ring |
 | `JSBindings::init` | fn | `main/Runtime/JSBindings.cpp` | registers the JS API from `kFnsN[]` tables |
 | `Kui` | class | `main/UI/` | immediate-mode UI: Canvas/Screen/Widget/TouchPump/Navigator |
+| `kui::readTouches` | fn | `main/UI/Kui.cpp` | multi-touch read (API 43): up to `kTouchMax`=5 points, index 0 = PRIMARY (oldest finger, ordered by GT911/FT3168 track id); `readTouch(x,y)` is the primary wrapper — TouchPump/chrome/keyboard/launcher only ever see that one |
 | `NetworkManager::instance()` | singleton | `components/Network` | sole WiFi radio owner |
 | `SystemInfo::instance()` | singleton | `components/System` | device info |
 | `Event<Args...>` | template | `components/Utility` | type-erased core; single static mutex; handlers only set flags |

@@ -178,6 +178,13 @@ componentes de UI.
 * O app é um **loop `while` bloqueante** ritmado por `UI.end()` (ou `System.delay()`) — não existem
   eventos nem callbacks. Tudo é polling: `System.getTouch()`,
   `System.keypadPoll()`, `CelerLink.poll()`.
+* **Multitoque** (API 43): `System.getTouches()` devolve TODOS os dedos como
+  `[{id, x, y, size}]` (primário/mais antigo primeiro, `[]` sem dedo). Ela
+  compartilha a cedida de quadro com `System.getTouch()` — chame **uma das
+  duas por loop**, nunca as duas. Vidro sem multitoque (CYD resistiva)
+  devolve no máximo 1 ponto; o SmartDisplay 4848 e o watch devolvem até 5.
+  O chrome do sistema (canto de saída, topbar, bordas do watch) consome só
+  o dedo primário.
 * Todas as coordenadas vivem no **canvas virtual 240x320**
   (`System.screenWidth()` é 240 em qualquer placa); o OS escala para o vidro
   físico. Pegue cores no `System.theme()` em vez de fixar valores.

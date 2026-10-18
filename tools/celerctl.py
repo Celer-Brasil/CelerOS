@@ -2311,7 +2311,27 @@ def cmd_cat(args):
 
 
 def cmd_push(args):
-    if not os.path.isfile(args.local):
+    local = Path(args.local)
+    # Pasta de app p/ raiz de apps e um install: deps do hub, deps.json,
+    # poda e rescan — push cru de app deixava o require quebrado no
+    # primeiro run ("dependencia ausente"). --raw devolve o transporte
+    # puro (arquivo a arquivo, sem tratar nada).
+    if (not args.raw and local.is_dir() and (local / "app.json").is_file()
+            and args.remote.rstrip("/").endswith("/apps")):
+        raiz = args.remote.rstrip("/")
+        print(f"push: pasta de app ({local.name}) -> caminho de apps install "
+              f"(deps inclusas); --raw empurra cru")
+        args.sd = raiz.endswith("/sd/apps")
+        args.pula_lint = False
+        args.pula_verify = args.no_verify
+        args.run = False
+        link = open_link(args)
+        try:
+            _install_app_folder(link, local, args)
+        finally:
+            link.close()
+        return
+    if not local.is_file():
         die(f"{args.local} nao existe")
     link = open_link(args)
     try:
@@ -3158,6 +3178,35 @@ def cmd_mtap(args):
 
 # ------------------------------------------------------------------- apps ---
 
+def _sync_app_deps(link, src, dest, args):
+    """Deps compartilhadas do app.json da pasta: resolve contra o indice do
+    hub (ou tools/sdk/engine com --deps-local), poe os modulos em
+    /local/modules e grava <dest>/deps.json no device. Caminho unico de
+    `apps install`, `dev` e do push de pasta de app — nenhum caminho que
+    instala app pode deixar o require sem o cache (o classico
+    "dependencia ausente" so aparece depois, no primeiro run). Nao faz nada
+    sem `deps` no app.json. Devolve {nome: versao} resolvido ou None."""
+    try:
+        meta = json.loads((Path(src) / "app.json").read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not meta.get("deps"):
+        return None
+    hub = (getattr(args, "hub", None) or
+           os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
+    resolved = _install_shared_deps(link, meta["deps"], hub,
+                                    local=getattr(args, "deps_local", False))
+    with tempfile.TemporaryDirectory() as td:
+        dj = Path(td) / "deps.json"
+        dj.write_text(json.dumps(resolved), encoding="utf-8")
+        link.write_file(str(dj), f"{dest}/deps.json")
+        if not getattr(args, "pula_verify", False):
+            # deps.json aponta o require para o cache: se o FS servir lixo
+            # aqui, o app nem acha a dep em runtime
+            link.verify_file(str(dj), f"{dest}/deps.json")
+    return resolved
+
+
 def _install_app_folder(link, src, args):
     """Instala a PASTA local no device: lint, push com verificacao, poda de
     obseletos, deps do hub (args.hub vence; default CELER_HUB/producao) e
@@ -3222,23 +3271,7 @@ def _install_app_folder(link, src, args):
     # deps compartilhadas (API 30) DEPOIS da poda: deps.json e do
     # installer (versao resolvida), nao do pacote — a poda nao o ve
     # e o require do device le ele p/ cair em /local/modules
-    try:
-        meta = json.loads((src / "app.json").read_text(encoding="utf-8"))
-    except ValueError:
-        meta = {}
-    if meta.get("deps"):
-        hub = (getattr(args, "hub", None) or
-               os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
-        resolved = _install_shared_deps(link, meta["deps"], hub,
-                                        local=getattr(args, "deps_local", False))
-        with tempfile.TemporaryDirectory() as td:
-            dj = Path(td) / "deps.json"
-            dj.write_text(json.dumps(resolved), encoding="utf-8")
-            link.write_file(str(dj), f"{dest}/deps.json")
-            if not args.pula_verify:
-                # deps.json aponta o require para o cache: se o FS
-                # servir lixo aqui, o app nem acha a dep em runtime
-                link.verify_file(str(dj), f"{dest}/deps.json")
+    _sync_app_deps(link, src, dest, args)
     link.exec("rescan")
     nota_v = f", {verificados} verificados" if verificados else ""
     print(f"instalado: {dest} ({len(files)} arquivos{nota_v})")
@@ -3626,6 +3659,7 @@ def cmd_dev(args):
         first = True
         while True:
             snap = _snapshot(src)
+            primeira = first
             if first:
                 first = False
                 changed = sorted(snap)  # primeira passada: instala tudo
@@ -3645,6 +3679,10 @@ def cmd_dev(args):
                     for rp, sig in snap.items():
                         if rp in sent:
                             state[rp] = sig
+                    if primeira or "app.json" in changed:
+                        # deps antes do relaunch: o require le deps.json no
+                        # load do app e nao ha segunda chance
+                        _sync_app_deps(link, src, dest, args)
                     if any(rp == "app.json" or rp.endswith(".bin") or rp.endswith(".png")
                            for rp in changed):
                         link.exec("rescan")
@@ -4057,6 +4095,19 @@ def _apps_installzip(link, args):
     print(out.rstrip())
     if rc != 0:
         die(f"installzip falhou no device (rc={rc})")
+    # O installzip nativo e dep-cego (AppPackage nao toca em /local/modules
+    # nem grava deps.json): resolve no PC e grava o lock no destino — sem
+    # ele o require do app nao acha o cache no primeiro run.
+    if meta.get("deps"):
+        hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
+        dest = f"/local/apps/{nome}"
+        resolved = _install_shared_deps(link, meta["deps"], hub, local=False)
+        with tempfile.TemporaryDirectory() as td:
+            dj = Path(td) / "deps.json"
+            dj.write_text(json.dumps(resolved), encoding="utf-8")
+            link.write_file(str(dj), f"{dest}/deps.json")
+            link.verify_file(str(dj), f"{dest}/deps.json")
+        print(f"deps: {len(resolved)} modulo(s) no cache + {dest}/deps.json")
     print(f"instalado: /local/apps/{nome} (rescan pedido)")
     # a pasta e o que `apps run` acha — o packageName pode ter sufixo
     # diferente do nome de exibicao (celeros.webpass -> "WebPass" no zip)
@@ -4423,9 +4474,12 @@ def build_parser():
     p.add_argument("path")
     p.set_defaults(func=cmd_cat)
 
-    p = sub.add_parser("push", help="envia arquivo ao dispositivo")
+    p = sub.add_parser("push", help="envia arquivo ao dispositivo (pasta de "
+                                     "app com app.json p/ raiz de apps = install)")
     p.add_argument("local")
     p.add_argument("remote")
+    p.add_argument("--raw", action="store_true",
+                   help="pula o modo app: empurra cru mesmo sendo pasta de app")
     p.add_argument("--no-verify", action="store_true",
                    help="pula a releitura de verificacao (crc32) apos a escrita")
     p.set_defaults(func=cmd_push)
@@ -4553,8 +4607,10 @@ def build_parser():
     p.add_argument("--shots", action="store_true",
                    help="salva screenshot apos cada reload em PASTA/.dev/last.png")
     p.add_argument("--no-lint", action="store_true", help="pula o lint a cada reload")
+    p.add_argument("--deps-local", action="store_true",
+                   help="deps tambem do tools/sdk/engine (vence a do hub quando mais nova)")
     p.add_argument("--pula-verify", action="store_true",
-                   help="pula a releitura de verificacao (crc32) a cada push")
+                   help="pula a releitura de verificacao (crc32) de cada arquivo")
     p.set_defaults(func=cmd_dev)
 
     p = sub.add_parser("apps", help="gerencia apps instalados no dispositivo")

@@ -1,7 +1,7 @@
 {
   "name": "Installer",
   "packageName": "celeros.installer",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "author": "CelerOS",
   "description": "Instala apps a partir do cartao SD na flash (ou no propio SD) e gerencia o destino de instalacao.",
   "type": "System",
@@ -12,5 +12,5 @@
   "order": 20,
   "icon": "installer",
   "topbar": true,
-  "changelog": "1.4.1 - atualizacao nao perde mais o app instalado com o disco cheio: o espaco (pacote inteiro, nao so main/app.json/icon) e checado antes da copia e o fallback que apagava a versao antiga para copiar de novo saiu; se o rename final falhar, a copia nova e preservada em vez de descartada; o staging saiu de apps/ para /local (ou /sd) raiz, entao copia interrompida por queda de energia nao vira app duplicado na lista\n1.4.0 - visual novo com o toolkit UI (API 22): lista rolavel, toggle de destino, dialogos nativos\n1.3.0 - detalhe mostra tamanho do pacote e espaco livre no destino; som de sucesso (API 12+)\n1.2.0 - instalacao transacional e verificacao de autor"
+  "changelog": "1.4.2 - app com dependencias (deps) sem deps.json resolvido no cartao e barrado com aviso claro (o Installer nao tem rede); pacote que traz o proprio deps.json confere o cache /local/modules e avisa o que falta\n1.4.1 - atualizacao nao perde mais o app instalado com o disco cheio: o espaco (pacote inteiro, nao so main/app.json/icon) e checado antes da copia e o fallback que apagava a versao antiga para copiar de novo saiu; se o rename final falhar, a copia nova e preservada em vez de descartada; o staging saiu de apps/ para /local (ou /sd) raiz, entao copia interrompida por queda de energia nao vira app duplicado na lista\n1.4.0 - visual novo com o toolkit UI (API 22): lista rolavel, toggle de destino, dialogos nativos\n1.3.0 - detalhe mostra tamanho do pacote e espaco livre no destino; som de sucesso (API 12+)\n1.2.0 - instalacao transacional e verificacao de autor"
 }

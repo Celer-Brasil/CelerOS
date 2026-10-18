@@ -110,6 +110,12 @@ function scanApps() {
             api: (typeof m.api === "number") ? m.api : (parseInt(m.api, 10) || 0),
             desc: (typeof m.description === "string") ? m.description : "",
             author: (typeof m.author === "string") ? m.author : "",
+            // deps compartilhadas (API 30): o Installer nao tem rede — so
+            // instala app com deps se o pacote trouxer o deps.json ja
+            // resolvido (o celerctl gera) E o cache /local/modules tiver
+            // as versoes; sem isso o require quebra no primeiro run
+            deps: !!(m.deps && typeof m.deps === "object"),
+            lockDeps: FS.exists(dir + "/deps.json"),
             inst: false,
             instVer: ""
         };
@@ -241,10 +247,32 @@ function openApp(i) {
         showAlert("Conflito", ["Autor diferente do instalado (" + String(inst.author) + " / " + app.author + ")."], true);
         return;
     }
+    if (app.deps && !app.lockDeps) {
+        showAlert("Tem dependências", ["Este app usa dependências compartilhadas que só a rede baixa. " +
+                  "Instale pela App Store ou com celerctl apps install."], true);
+        return;
+    }
     detail = app;
     detailNeed = pkgBytes(app.folder);  // 1x por abertura: nao relê o SD por frame
     state = "detail";
     UI.invalidate();
+}
+// deps.json resolvido embarcado no pacote: confere se o cache /local/modules
+// tem cada <nome>/<versao> (onde o require cai). Devolve a lista de faltantes
+// (vazia = ok) ou null se o deps.json nao puder ser lido.
+function modulosFaltando(destPkg) {
+    var txt = null;
+    try { txt = FS.readTextFile(destPkg + "/deps.json"); } catch (e) { txt = null; }
+    if (txt === null || txt.length === 0) return null;
+    var lock = null;
+    try { lock = JSON.parse(txt); } catch (e2) { return null; }
+    var falta = [];
+    for (var nm in lock) if (lock.hasOwnProperty(nm)) {
+        if (!FS.exists("/local/modules/" + nm + "/" + lock[nm] + "/" + nm + ".js")) {
+            falta[falta.length] = nm + " " + lock[nm];
+        }
+    }
+    return falta;
 }
 function tryInstall(app) {
     if (!validPkg(app.pkg)) {
@@ -291,6 +319,12 @@ function tryInstall(app) {
         System.rescanApps();
         if (typeof System.playTone === "function") {
             try { System.playTone([[784, 80], [1047, 110]]); } catch (e1) {}
+        }
+        var falta = app.deps ? modulosFaltando(dest) : null;
+        if (falta !== null && falta.length > 0) {
+            showAlert("Instalado sem módulos", ["Faltam no cache: " + falta.join(", ") +
+                      ". Abra pela App Store para baixar as dependências."], true);
+            return;
         }
         showAlert("Instalado!", [app.name + " v" + app.version + " em " + dest + "."], false);
     } else {

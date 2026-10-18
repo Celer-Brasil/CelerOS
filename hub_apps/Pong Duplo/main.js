@@ -31,6 +31,7 @@ E.init({ dir: "Pong Duplo", fps: 60, save: "pong.",
          bases: ["/local/apps/Pong Duplo/", "/sd/apps/Pong Duplo/"] });
 
 var T = E.theme, W = E.W, H = E.H, U = E.U;
+var S = System;   // blitSprite (API 34) so com typeof: firmware velho fica no fundo liso
 var hasLink = typeof CelerLink !== "undefined";
 var SMOOTH = E.caps.smooth;   // anti-alias de circulo quando o firmware tem
 
@@ -274,8 +275,54 @@ E.on("ponto", function (o) {
 
 // ------------------------------------------------------------ desenho -----
 
+// fundo da quadra GRAVADO uma vez num sprite do tamanho da tela (arte IA +
+// linha tracejada do meio): o painter da camada suja copia so a caixa
+// pedida (blitSprite, API 34). Antes o stamp em escala 240/256 desenhava a
+// arte INTEIRA duas vezes por quadro (drawSprite afim) e registrava a tela
+// toda na camada suja — 60 fps de repaint integral
+var BG = 0;
+function dashes(y0, y1) {
+    var dash = E.u(8), gap = E.u(16), dh = Math.max(1, E.u(2));
+    if (TOP + dh <= y0 || TOP >= y1) return;
+    for (var x = E.u(4); x < W; x += gap) System.fillRect(x, TOP, Math.min(dash, W - x), dh, T.stroke);
+}
+function bakeCourt() {
+    if (BG || !aiBg || typeof S.blitSprite !== "function") return;
+    var id = System.createSprite(W, H);
+    if (!id) return;
+    System.useSprite(id);
+    System.fillScreen(T.bg);
+    E.spr.alvo = id;
+    E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null });
+    E.spr.stamp("bg", 0, E.W, { scale: E.W / 256, key: null });
+    E.spr.alvo = 0;
+    dashes(0, H);
+    System.useSprite(0);
+    BG = id;
+}
+function paintCourt(x, y, w, h) {
+    if (BG) { S.blitSprite(BG, x, y, w, h); return; }
+    System.fillRect(x, y, w, h, T.bg);
+    dashes(y, y + h);
+}
+
+// placar memoizado: so repinta quando muda ou quando a camada suja toca a
+// faixa dele (fogos do ponto, fim do veu). Desenhado MUDO (fora da camada:
+// a borracha nao o apaga no quadro seguinte)
+var hudKey = "";
+var _hudO = { screen: true };
+var _hT = { ts: "big", align: "center", color: 0, screen: true };
 function drawMatchHud(m) {
-    E.gfx.rect(0, 0, W, TOP, T.card, { screen: true });
+    var r = m.data.btnPause;
+    var k = mine + "|" + theirs + "|" + (r && E.press(r) ? 1 : 0);
+    if (k === hudKey && !E.dirty.touches(0, 0, W, TOP)) return;
+    hudKey = k;
+    E.dirty._mute++;
+    drawHudNow(m);
+    E.dirty._mute--;
+}
+function drawHudNow(m) {
+    E.gfx.rect(0, 0, W, TOP, T.card, _hudO);
     E.gfx.text(String(mine), W / 2 - E.u(34), E.u(5),
                { ts: "big", align: "center", color: T.accent, screen: true });
     E.gfx.text("×", W / 2, E.u(9),
@@ -290,27 +337,17 @@ function drawMatchHud(m) {
                                    { primary: false, screen: true });
 }
 
-function drawCourtBg() {
-    if (!aiBg) return;   // sem slot: fica o fundo liso da camada suja
-    E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null });
-    E.spr.stamp("bg", 0, E.W, { scale: E.W / 256, key: null });
-}
-
+var _padO = { r: Math.max(2, Math.round(PAD_H / 2)) };
+var _ballO = { smooth: SMOOTH };
+var _waitO = { ts: "small", align: "center", color: T.textDim };
 function drawField() {
-    drawCourtBg();
-    var dash = E.u(8), gap = E.u(16), dh = Math.max(1, E.u(2));
-    for (var x = E.u(4); x < W; x += gap) {
-        E.gfx.rect(x, TOP, Math.min(dash, W - x), dh, T.stroke);
-    }
-    E.gfx.rect(padX - PAD_W / 2, PAD_Y, PAD_W, PAD_H, T.accent,
-               { r: Math.max(2, Math.round(PAD_H / 2)) });
+    E.gfx.rect(padX - PAD_W / 2, PAD_Y, PAD_W, PAD_H, T.accent, _padO);
     if (ball) {
-        E.gfx.circle(ball.x, ball.y, R, T.text, { smooth: SMOOTH });
+        E.gfx.circle(ball.x, ball.y, R, T.text, _ballO);
         E.gfx.circle(ball.x - R * 0.3, ball.y - R * 0.3,
                      Math.max(1, R * 0.35), T.accent);
     } else if (waitT > 0.7) {
-        E.gfx.text("aguardando a bola...", W / 2, H / 2,
-                   { ts: "small", align: "center", color: T.textDim });
+        E.gfx.text("aguardando a bola...", W / 2, H / 2, _waitO);
     }
 }
 
@@ -331,6 +368,15 @@ function drawScan() {
                              E.u(100), E.u(36), { primary: false });
     backBtn = E.gfx.button("Voltar", W - E.u(112), H - E.u(50),
                            E.u(100), E.u(36), { primary: false });
+}
+
+// cenas static (menu/fim): o botao do pad que afunda ou solta pede o
+// redesenho (o feedback de press nao depende de draw por quadro)
+var _padK = "";
+function padRedraw() {
+    var k = "";
+    for (var n in F) if (F[n]) k += F[n].down ? "1" : "0";
+    if (k !== _padK) { _padK = k; E.redraw(); }
 }
 
 // tap do pad OU o toque seco no mesmo rect (fallback de firmware/tela
@@ -434,7 +480,8 @@ var states = {
             help = null;
         },
         update: function () {
-            if (help) return;   // o dialogo trata os proprios toques no draw
+            padRedraw();
+            if (help) { E.redraw(); return; }   // o dialogo datilografa e trata os toques no draw
             if (padHit(F.host, R_HOST)) { startHost(); return; }
             if (padHit(F.join, R_JOIN)) { startScan(); return; }
             if (padHit(F.quit, R_QUIT)) { System.exitApp(); return; }
@@ -589,7 +636,9 @@ var states = {
 
     play: {
         enter: function (m) {
-            E.dirty.enable(T.bg);
+            bakeCourt();
+            E.dirty.enable(paintCourt);
+            hudKey = "";
             m.data.btnPause = null;
             paused = false;
             waitT = 0;
@@ -608,6 +657,7 @@ var states = {
         },
         resume: function () {
             // volta da pausa: o estado (bola, placar, timers) continua igual
+            hudKey = "";
         },
         update: function (m, dt) {
             if (hasLink) {
@@ -654,17 +704,27 @@ var states = {
         exit: function () {
             E.pause(false);
             paused = false;
-            E.dirty.full();
+            // o veu desligou a camada: volta com a quadra inteira repintada
+            E.dirty.enable(paintCourt);
+            hudKey = "";
             E.redraw();
         },
         draw: function (m) {
-            // o play continua congelado embaixo (fx e timers parados)
-            drawField();
-            drawMatchHud(m);
-            E.fx.draw();
-            E.pad.draw();
-
+            // o play continua congelado embaixo (fx e timers parados): o
+            // quadro dele ja esta no vidro — o veu desenha 1x e repinta so
+            // quando um botao do menu muda de estado (dedo entra/sai)
+            if (m.data.btns) {
+                // o loop zera a lista de botoes antes de cada draw: devolve a
+                // do veu ja desenhado (o _btnUnder do quadro seguinte a usa)
+                for (var q = 0; q < m.data.btns.length; q++) E._btns.push(m.data.btns[q]);
+                var on = E._btnUnder();
+                if (on === m.data.on && !E.input.tap) return;
+                E._btns.length = 0;
+            }
+            m.data.on = E._btnUnder();
+            E.dirty.off();
             var act = E.ui.pause({ labels: ["Continuar", "Recomecar", "Sair"] });
+            m.data.btns = E._btns.slice();
             if (act === "resume") {
                 flow.pop();
             } else if (act === "restart") {
@@ -717,6 +777,7 @@ var states = {
                     return;
                 }
             }
+            padRedraw();
             if (padHit(F.again, R_AGAIN)) {
                 resetMatch();
                 E.audio.sfx("ok");
@@ -756,11 +817,13 @@ function makeScene(name, isStatic) {
 }
 
 var scenes = {
-    menu: makeScene("menu", false),
+    // menu e fim static: parados nao repintam nada por quadro (antes o menu
+    // redesenhava titulo, botoes e textos a 60 fps)
+    menu: makeScene("menu", true),
     host: makeScene("host", true),
     scan: makeScene("scan", false),
     play: makeScene("play", false),
-    end: makeScene("end", false)
+    end: makeScene("end", true)
 };
 
 // stick global: a zona cobre a quadra e cada dedo que desce nela vira dono

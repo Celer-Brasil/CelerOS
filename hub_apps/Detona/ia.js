@@ -101,15 +101,35 @@ function colocar(kind, c, r) {
     return e;
 }
 
+// campos de fluxo SOB DEMANDA: so quem persegue paga (fase so de baloes
+// nao calcula nada) e so quando o jogador troca de celula ou a grade muda
+// (bomba, bloco quebrado). Antes eram 2 flows a cada 0,5 s sempre — ~32 ms
+// cada no 4848, e um soluco de ~100 ms quando caiam no mesmo quadro
+var flowKey = "", ghostKey = "";
 function recompute(forca) {
     var st = arena.state();
     var agora = S.millis();
     if (!forca && agora < flowAte) return;
     flowAte = agora + 500;
+    var precisa = false, precisaGhost = false;
+    for (var i = 0; i < st.enemies.length; i++) {
+        var k = st.enemies[i];
+        if (k.morto) continue;
+        if (k.kind === 'fantasma') precisaGhost = true;
+        else if (k.kind === 'cacador' || k.kind === 'blindado' || k.kind === 'mini' ||
+                 k.kind === 'ladrao') precisa = true;
+    }
     var cel = arena.celulaPlayer();
-    flow = E.path.flow(NV.COLS, NV.ROWS, cel.c, cel.r, custo);
+    var key = cel.c + ',' + cel.r + '|' + arena.versao();
+    if (precisa && (forca || key !== flowKey || !flow)) {
+        flowKey = key;
+        flow = E.path.flow(NV.COLS, NV.ROWS, cel.c, cel.r, custo);
+    } else if (!precisa) { flow = null; flowKey = ""; }
     // o fantasma ignora macio e bomba: so o duro bloqueia
-    flowGhost = E.path.flow(NV.COLS, NV.ROWS, cel.c, cel.r, custoFantasma);
+    if (precisaGhost && (forca || key !== ghostKey || !flowGhost)) {
+        ghostKey = key;
+        flowGhost = E.path.flow(NV.COLS, NV.ROWS, cel.c, cel.r, custoFantasma);
+    } else if (!precisaGhost) { flowGhost = null; ghostKey = ""; }
 }
 
 function perigo() {

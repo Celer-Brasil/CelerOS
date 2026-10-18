@@ -38,6 +38,34 @@ var bg = E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256,
 var bgOn = !!(bg && bg.bg) && E.spr.backed("bg");
 var T = E.theme, SW = E.W, SH = E.H;
 var BAR_Y = 236;                      // topo da barra de ferramentas
+var barSuja = false;                  // fx passou pela barra no quadro anterior
+var pauseDrawn = false, pauseOn = -1, pauseBtns = [];
+
+// veu de pausa (1x por mudanca: o draw da cena chama so quando precisa)
+function drawPausa() {
+    pauseOn = E._btnUnder();
+    var pact = E.ui.pause({ labels: PAUSE_LB });
+    pauseBtns = E._btns.slice();
+    pauseOn = E._btnUnder();
+    pauseDrawn = true;
+    if (pact === "resume") {
+        sairPausa();
+        E.audio.sfx("ui");
+    } else if (pact === "restart") {
+        novoMundo();
+        sairPausa();
+        E.audio.sfx("back");
+    } else if (pact === "quit") {
+        sairPausa();
+        E.audio.sfx("back");
+        E.goto("titulo", { transition: "fade", ms: 300 });
+    }
+}
+function sairPausa() {
+    paused = false;
+    pauseDrawn = false;
+    barKey = "";        // a barra volta inteira (o veu passou por cima)
+}
 
 // sons proprios da cena (a tabela do core ganha as entradas do sandbox)
 E.audio.sfxTable.cut = [[1600, 18], [900, 30]];
@@ -123,6 +151,50 @@ for (var bi = 0, bx = 10; bi < TOOLS.length; bi++) {
 var BTN_CORDA = { x: 10, y: BAR_Y + 56, w: 70, h: 28 };
 var BTN_PANO = { x: 84, y: BAR_Y + 56, w: 70, h: 28 };
 var BTN_LIMPAR = { x: 158, y: BAR_Y + 56, w: 72, h: 28 };
+
+// fundo do mundo JA na escala da tela (1 sprite 240 x BAR_Y, gravado 1x):
+// o stamp em escala 240/256 por quadro era drawSprite afim do mundo inteiro
+// a 50 fps; o pushSprite 1:1 e uma copia de linhas. Sem slot fica o stamp
+var BGW = 0;
+(function () {
+    if (!bgOn || typeof System.createSprite !== "function") return;
+    var id = System.createSprite(SW, BAR_Y);
+    if (!id) return;
+    System.useSprite(id);
+    System.fillScreen(T.bg);
+    E.spr.alvo = id;
+    var ok = E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null });
+    E.spr.alvo = 0;
+    System.useSprite(0);
+    if (ok) BGW = id; else System.deleteSprite(id);
+})();
+
+// opts por quadro em scratch (um literal por bastao/no eram ~150 objetos
+// por quadro com o pano solto: GC constante no Duktape)
+var _lnO = { w: 2 };
+var _ndO = { smooth: true };
+var _cutO = { w: 2 };
+var _sO = { primary: false, px: 11 };
+var _tO = { primary: false, px: 12 };
+var _lO = { primary: false, stroke: 0 };
+var _hintBig = { ts: "big", align: "center", color: 0 };
+var _hintSm = { ts: "small", align: "center", color: 0 };
+
+// barra de ferramentas: so redesenha quando o estado dela muda (gravidade,
+// contagem, ferramenta, dedo sobre um botao) ou quando particulas/flash
+// podem ter passado por cima — o mundo limpa so ate BAR_Y
+var barKey = "";
+var BAR_BTNS = null;
+function barKeyNow() {
+    var i = E.input, on = -1;
+    if (i.down) {
+        for (var k = 0; k < BAR_BTNS.length; k++) {
+            var b = BAR_BTNS[k];
+            if (i.x >= b.x && i.x <= b.x + b.w && i.y >= b.y && i.y <= b.y + b.h) { on = k; break; }
+        }
+    }
+    return gravIdx + "|" + world.count() + "|" + tool + "|" + on;
+}
 
 function pararRastro() {
     if (trailEm) trailEm.stop();
@@ -565,7 +637,7 @@ E.run({
 
     jogo: {
         enter: function () {
-            paused = false;
+            sairPausa();          // barra e pausa recomecam do zero
             touchDown = false;
             resetTransientes();
         },
@@ -575,6 +647,7 @@ E.run({
             // pausa: botao proprio na barra; o overlay vive no draw
             if (!paused && E.hit(BTN_PAUSE)) {
                 paused = true;
+                pauseDrawn = false;
                 touchDown = false;
                 resetTransientes();
                 E.audio.sfx("ui");
@@ -623,22 +696,36 @@ E.run({
         draw: function () {
             // mundo (fundo da arte ai_bg quando o slot carregou; sem slot
             // fica o preto do tema — stamp devolve false e nada e desenhado)
-            E.gfx.rect(0, 0, SW, BAR_Y, T.bg, { screen: true });
-            if (bgOn) {
-                if (!E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null })) {
-                    E.spr.blit("bg", 0, 0);   // firmware sem drawSprite: 1:1
+            // pausa: o mundo congelado ja esta no vidro — o veu desenha 1x
+            // e repinta so quando o dedo entra/sai de uma opcao (ou tap)
+            if (paused && pauseDrawn) {
+                for (var pq = 0; pq < pauseBtns.length; pq++) E._btns.push(pauseBtns[pq]);
+                var pon = E._btnUnder();
+                if (pon === pauseOn && !E.input.tap) return;
+                E._btns.length = 0;
+                drawPausa();
+                return;
+            }
+            if (BGW) {
+                System.useSprite(BGW);
+                System.pushSprite(0, 0);
+                System.useSprite(0);
+            } else {
+                E.gfx.rect(0, 0, SW, BAR_Y, T.bg, { screen: true });
+                if (bgOn) {
+                    if (!E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null })) {
+                        E.spr.blit("bg", 0, 0);   // firmware sem drawSprite: 1:1
+                    }
                 }
             }
             System.drawFastHLine(0, BAR_Y - 1, SW, T.stroke);
 
             var xy = world.xy();
             if (!xy.length) {
-                E.gfx.text("Pinte, ou solte Corda/Pano", SW / 2, 108,
-                           { ts: "big", align: "center", color: T.textDim });
-                E.gfx.text("Pegar arrasta e arremessa;", SW / 2, 132,
-                           { ts: "small", align: "center", color: T.textDim });
-                E.gfx.text("Cortar fatia; Pino fixa no ar", SW / 2, 146,
-                           { ts: "small", align: "center", color: T.textDim });
+                _hintBig.color = _hintSm.color = T.textDim;
+                E.gfx.text("Pinte, ou solte Corda/Pano", SW / 2, 108, _hintBig);
+                E.gfx.text("Pegar arrasta e arremessa;", SW / 2, 132, _hintSm);
+                E.gfx.text("Cortar fatia; Pino fixa no ar", SW / 2, 146, _hintSm);
             }
 
             var pins = world.pins();
@@ -647,56 +734,52 @@ E.run({
                 var ia = st[i] * 2, ib = st[i + 1] * 2;
                 E.gfx.line(Math.floor(xy[ia]), Math.floor(xy[ia + 1]),
                            Math.floor(xy[ib]), Math.floor(xy[ib + 1]),
-                           T.text, { w: 2 });
+                           T.text, _lnO);
             }
             for (var j = 0; j < xy.length; j += 2) {
                 var idx = j / 2;
                 var col = pins[idx] ? T.warn : T.accent;
                 var r = (toolFsm.is("pegar") && idx === grabbed) ? 4 : 2;
-                E.gfx.circle(Math.floor(xy[j]), Math.floor(xy[j + 1]), r, col,
-                             { smooth: true });
+                // AA so no no agarrado (r 4): no de 2 px o suavizado nao
+                // aparece e custava varias vezes o circulo cheio (~60/quadro)
+                _ndO.smooth = r > 2;
+                E.gfx.circle(Math.floor(xy[j]), Math.floor(xy[j + 1]), r, col, _ndO);
             }
             // traco da tesoura em vermelho enquanto corta
             if (toolFsm.is("cortar") && cutPrev && E.input.down) {
                 E.gfx.line(Math.floor(cutPrev.x), Math.floor(cutPrev.y),
-                           Math.floor(E.input.x), Math.floor(E.input.y), T.err, { w: 2 });
+                           Math.floor(E.input.x), Math.floor(E.input.y), T.err, _cutO);
             }
 
-            // barra: status / ferramentas / acoes
-            E.gfx.button("g: " + GRAVS[gravIdx][1] + "  ·  " + world.count() + "/" +
-                         MAX_POINTS + " nós", BTN_STAT.x, BTN_STAT.y, BTN_STAT.w,
-                         BTN_STAT.h, { primary: false, px: 11 });
-            E.gfx.button("Pausa", BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w, BTN_PAUSE.h,
-                         { primary: false, px: 11 });
-            for (var ti = 0; ti < TOOLS.length; ti++) {
-                E.gfx.button(TOOLS[ti].label, BTN_TOOL[ti].x, BTN_TOOL[ti].y,
-                             BTN_TOOL[ti].w, BTN_TOOL[ti].h,
-                             { primary: ti === tool, px: 12 });
+            // barra: status / ferramentas / acoes (memoizada — ver barKeyNow)
+            if (!BAR_BTNS) BAR_BTNS = [BTN_STAT, BTN_PAUSE].concat(BTN_TOOL, [BTN_CORDA, BTN_PANO, BTN_LIMPAR]);
+            var bk = barKeyNow();
+            var sujo = E.fx.count() > 0 || E.fx._flashT > 0 || barSuja;
+            barSuja = E.fx.count() > 0 || E.fx._flashT > 0;   // o quadro seguinte limpa o resto
+            if (bk !== barKey || sujo) {
+                barKey = bk;
+                System.fillRect(0, BAR_Y, SW, SH - BAR_Y, T.bg);
+                E.gfx.button("g: " + GRAVS[gravIdx][1] + "  ·  " + world.count() + "/" +
+                             MAX_POINTS + " nós", BTN_STAT.x, BTN_STAT.y, BTN_STAT.w,
+                             BTN_STAT.h, _sO);
+                E.gfx.button("Pausa", BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w, BTN_PAUSE.h, _sO);
+                for (var ti = 0; ti < TOOLS.length; ti++) {
+                    _tO.primary = ti === tool;
+                    E.gfx.button(TOOLS[ti].label, BTN_TOOL[ti].x, BTN_TOOL[ti].y,
+                                 BTN_TOOL[ti].w, BTN_TOOL[ti].h, _tO);
+                }
+                E.gfx.button("Corda", BTN_CORDA.x, BTN_CORDA.y, BTN_CORDA.w, BTN_CORDA.h);
+                E.gfx.button("Pano", BTN_PANO.x, BTN_PANO.y, BTN_PANO.w, BTN_PANO.h);
+                _lO.stroke = T.err;
+                E.gfx.button("Limpar", BTN_LIMPAR.x, BTN_LIMPAR.y, BTN_LIMPAR.w, BTN_LIMPAR.h, _lO);
             }
-            E.gfx.button("Corda", BTN_CORDA.x, BTN_CORDA.y, BTN_CORDA.w, BTN_CORDA.h);
-            E.gfx.button("Pano", BTN_PANO.x, BTN_PANO.y, BTN_PANO.w, BTN_PANO.h);
-            E.gfx.button("Limpar", BTN_LIMPAR.x, BTN_LIMPAR.y, BTN_LIMPAR.w, BTN_LIMPAR.h,
-                         { primary: false, stroke: T.err });
+            System.drawFastHLine(0, BAR_Y - 1, SW, T.stroke);
 
             // particulas/aneis/rastro por cima do mundo e da barra
             E.fx.draw();
 
             // pausa por cima de tudo; Continuar/Limpar/Sair
-            if (paused) {
-                var pact = E.ui.pause({ labels: PAUSE_LB });
-                if (pact === "resume") {
-                    paused = false;
-                    E.audio.sfx("ui");
-                } else if (pact === "restart") {
-                    novoMundo();
-                    paused = false;
-                    E.audio.sfx("back");
-                } else if (pact === "quit") {
-                    paused = false;
-                    E.audio.sfx("back");
-                    E.goto("titulo", { transition: "fade", ms: 300 });
-                }
-            }
+            if (paused) drawPausa();
         }
     }
 }, "titulo");

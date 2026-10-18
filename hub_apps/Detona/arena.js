@@ -51,6 +51,7 @@ function centerOf(i) { return (i + 0.5) * st.cell; }
 // ------------------------------------------------------------------ fase --
 
 function iniciar(mundo, nivel, plano) {
+    gver++;
     st = {
         mundo: mundo, nivel: nivel, tema: plano.tema, bpm: plano.bpm || 128,
         t0: S.millis(), cell: 0, ox: 0, oy: 0,
@@ -115,10 +116,16 @@ function state() { return st; }
 // toda escrita na grade passa aqui: a celula entra em st.mudou e o render
 // repinta so ela (antes o main varria as 195 celulas por quadro: ~7 ms
 // de Duktape no SmartDisplay)
+// versao da grade: cresce a cada celula trocada (a IA so recalcula o
+// campo de fluxo quando a grade ou a celula do jogador mudam)
+var gver = 0;
+function versao() { return gver; }
+
 function setG(c, r, ch) {
     if (st.grid[r][c] === ch) return;
     st.grid[r][c] = ch;
     st.mudou.push(c, r);
+    gver++;
 }
 
 function em(c, r) {
@@ -695,5 +702,5 @@ module.exports = {
     addBomba: addBomba, chutar: chutar, tocarPlayer: tocarPlayer,
     rivalAlvo: rivalAlvo, rivalMorreu: rivalMorreu, pegarRival: pegarRival,
     beatNow: beatNow, beatLen: beatLen, celulaPlayer: celulaPlayer,
-    em: em, setIA: setIA, perigo: perigo, bloqueado: bloqueado
+    em: em, setIA: setIA, perigo: perigo, bloqueado: bloqueado, versao: versao
 };

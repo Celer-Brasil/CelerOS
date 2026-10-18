@@ -30,6 +30,10 @@ var PADDLE_W = 48, PADDLE_H = 8, PADDLE_Y = H - 22;
 var BALL_R = 3;
 
 var ROW_COLORS = [T.err, T.warn, T.ok, T.accent, T.accentD];
+// tom escuro do gradiente de cada linha (o painter repinta tijolos a cada
+// caixa suja: mixColor por tijolo por caixa era chamada nativa a toa)
+var ROW_DARK = [];
+for (var rd = 0; rd < ROW_COLORS.length; rd++) ROW_DARK.push(System.mixColor(ROW_COLORS[rd], 0, 35));
 var ROW_POINTS = [50, 40, 30, 20, 10];
 
 // ------------------------------------------------------------- fundo AI ----
@@ -88,7 +92,7 @@ var bricks, score, lives, level, speed;
 var paddleX, ball;
 var nextLife = 500;                       // vida extra a cada 500 pts (max 5)
 var novoRec = false;
-var paused = false, pauseAct = null;      // menu de pausa (acao do draw)
+var paused = false;                       // pausa empilhada por cima (E.push)
 var overAct = null;                       // menu de fim (acao do draw)
 var PB = { x: W - 28, y: 3, w: 22, h: 18 };   // botao de pausa no HUD
 var help = null;                          // dialogo retido do "Como jogar"
@@ -147,16 +151,23 @@ function levelCleared() {
 
 // ------------------------------------------------------- formas (collide) --
 // a bola e um circulo, mas o sweep da engine trabalha com AABB: a caixa
-// de 2r x 2r e a mesma que o jogador ve; raquete/tijolo sao retangulos
+// de 2r x 2r e a mesma que o jogador ve; raquete/tijolo sao retangulos.
+// Caixas em scratch (o passo testa 40 tijolos ate 12x por quadro a 60 fps:
+// um objeto novo por teste era GC constante no Duktape)
+var _ar = { x: 0, y: 0, w: BALL_R * 2, h: BALL_R * 2 };
+var _pr = { x: 0, y: 0, w: PADDLE_W, h: PADDLE_H };
+var _br = { x: 0, y: 0, w: BRICK_W - 2, h: BRICK_H };
 function ballRect() {
-    return { x: ball.x - BALL_R, y: ball.y - BALL_R, w: BALL_R * 2, h: BALL_R * 2 };
+    _ar.x = ball.x - BALL_R; _ar.y = ball.y - BALL_R;
+    return _ar;
 }
 
 function paddleRect() {
-    return { x: paddleX, y: PADDLE_Y, w: PADDLE_W, h: PADDLE_H };
+    _pr.x = paddleX; _pr.y = PADDLE_Y;
+    return _pr;
 }
 
-function brickRect(b) { return { x: b.x, y: b.y, w: BRICK_W - 2, h: BRICK_H }; }
+function brickRect(b) { _br.x = b.x; _br.y = b.y; return _br; }
 
 // -------------------------------------------------------------- eventos ----
 // "brick": juice + som do tijolo quebrado (quem quebrou ja cuidou do resto)
@@ -370,8 +381,9 @@ game = E.fsm(null, {
 }, "serve");
 
 // ------------------------------------------------------------- desenho -----
+var _ballO = { smooth: true };
 function drawBall(y) {
-    E.gfx.circle(ball.x, y, BALL_R, T.text, { smooth: true });
+    E.gfx.circle(ball.x, y, BALL_R, T.text, _ballO);
 }
 
 function drawPaddle() {
@@ -393,8 +405,7 @@ function paintField(x, y, w, h) {
         if (!b.alive) continue;
         var bx = b.x, by = b.y, bw = BRICK_W - 2;
         if (bx >= x2 || bx + bw <= x || by >= y2 || by + BRICK_H <= y) continue;
-        System.fillGradient(bx, by, bw, BRICK_H, ROW_COLORS[b.r],
-                            System.mixColor(ROW_COLORS[b.r], 0, 35), 3);
+        System.fillGradient(bx, by, bw, BRICK_H, ROW_COLORS[b.r], ROW_DARK[b.r], 3);
     }
     // moldura do campo quando a caixa toca as bordas
     if (x <= FX + 2 || x2 >= FX + FW - 2 || y <= FY + 2 || y2 >= FY + FH - 2) {
@@ -428,7 +439,13 @@ function drawHeader() {
 
 // ------------------------------------------------------------------ cenas ---
 E.run({
+    // static: o titulo so repinta no toque/dialogo (antes redesenhava a tela
+    // inteira a 60 fps parado no menu)
     titulo: {
+        static: true,
+        // dialogo datilografa; tap fora dos botoes tambem comeca (o draw
+        // precisa rodar no quadro do tap para ve-lo)
+        update: function () { if (help || E.input.tap) E.redraw(); },
         draw: function () {
             E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
             // faixa de tijolos decorativa no rodape (identidade do jogo)
@@ -459,7 +476,6 @@ E.run({
         enter: function () {
             newGame();
             paused = false;
-            pauseAct = null;
             trail.start();
             E.dirty.enable(paintField);   // 1o quadro: campo inteiro
             // o apagar/redesenho do mundo nao sobe alem do placar: sem o
@@ -470,33 +486,22 @@ E.run({
             hudKey = -1;
             drawHeader();
         },
+        // volta da pausa (E.pop): a camada suja da cena volta e repinta
+        // tudo; "restart" recomeca a partida
+        resume: function (arg) {
+            paused = false;
+            trail.start();
+            hudKey = -1;
+            if (arg === "restart") newGame();
+        },
         update: function (dt) {
-            if (paused) {
-                var act = pauseAct;
-                pauseAct = null;
-                if (act === "resume") {
-                    paused = false;
-                    trail.start();
-                } else if (act === "restart") {
-                    paused = false;
-                    trail.start();
-                    newGame();
-                    hudKey = -1;
-                    E.dirty.full();
-                } else if (act === "quit") {
-                    paused = false;
-                    trail.stop();
-                    E.goto("titulo", { transition: "fade", ms: 300 });
-                    return;
-                } else {
-                    return;   // menu aberto: update congelado
-                }
-            }
-            // botao de pausa no HUD
+            // botao de pausa no HUD: a pausa e uma cena static por cima (o
+            // veu desenha 1x; antes ele e o campo inteiro repintavam a cada
+            // quadro com a camada suja ligada)
             if (E.hit(PB)) {
                 paused = true;
-                pauseAct = null;
                 trail.stop();
+                E.push("pausa");
                 return;
             }
             // arrasto da raquete (serve acompanha a bola na saida)
@@ -521,14 +526,6 @@ E.run({
             }
         },
         draw: function () {
-            if (paused) {
-                // veu de pausa por cima do jogo congelado; solta o recorte
-                // para o veu cobrir tambem a faixa do HUD
-                E.dirty.unclip();
-                var act = E.ui.pause({ title: "PAUSA" });
-                if (act) pauseAct = act;
-                return;
-            }
             game.draw();   // serve/play/levelup desenham bola, raquete e fx
         },
         exit: function () {
@@ -538,7 +535,21 @@ E.run({
         }
     },
 
+    pausa: {
+        static: true,
+        draw: function () {
+            var act = E.ui.pause({ title: "PAUSA" });
+            if (act === "resume") E.pop();
+            else if (act === "restart") E.pop({ arg: "restart" });
+            else if (act === "quit") {
+                trail.stop();
+                E.goto("titulo", { transition: "fade", ms: 300 });
+            }
+        }
+    },
+
     fim: {
+        static: true,
         enter: function () {
             overAct = null;
             if (novoRec) E.audio.sfx("record");

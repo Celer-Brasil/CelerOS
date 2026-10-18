@@ -167,6 +167,15 @@ E.spr.grid("ai", { file: "ai_atlas", cols: 4, rows: 4, tw: 64, th: 64,
 E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256,
                       regions: { bg: [0, 0, 256, 256] } });
 var temAtlas = E.spr.backed("ai0");
+// trem/moeda/heroi JA na escala da tela (spr 1.5 prescale, 1 slot): o
+// stamp com escala por quadro era drawSprite afim por entidade a 60 fps
+// (~1,25 ms cada no 4848). Sem slot os nomes "@" sao apelidos do original
+if (temAtlas && E.spr.prescale) {
+    E.spr.prescale([["ai1", 1.25, "@trem"], ["ai2", 0.35, "@moeda"], ["ai0", 0.75, "@heroi"]],
+                   { key: AI_KEY, name: "runner_ps" });
+}
+var _tremO = { key: AI_KEY, ax: 0.5, ay: 0 };
+var _centroO = { key: AI_KEY, ax: 0.5, ay: 0.5 };
 
 // Fundo: o PNG da cidade vira UM sprite de tela cheia cozido na entrada
 // (2 tiles de 240 px de altura) em vez de reescalar a folha em cada caixa
@@ -496,8 +505,7 @@ var DASH_O = { r: 2, screen: true };   // scratch: 12 dashes x quadro sem alocar
 
 function desenhaTrem(e) {
     if (temAtlas) {
-        E.spr.stamp("ai1", Math.round(LANES[e.lane]), Math.round(e.y),
-                    { scale: 1.25, key: AI_KEY, ax: 0.5, ay: 0 });
+        E.spr.stamp("@trem", Math.round(LANES[e.lane]), Math.round(e.y), _tremO);
     } else {
         paintTrem(56, 80, Math.round(LANES[e.lane]) - 28, Math.round(e.y));
     }
@@ -505,16 +513,14 @@ function desenhaTrem(e) {
 function desenhaMoeda(e) {
     var yy = e.y + Math.round(Math.sin((distance + e.y) / 18) * 2);
     if (temAtlas) {
-        E.spr.stamp("ai2", Math.round(LANES[e.lane]), yy,
-                    { scale: 0.35, key: AI_KEY, ax: 0.5, ay: 0.5 });
+        E.spr.stamp("@moeda", Math.round(LANES[e.lane]), yy, _centroO);
     } else {
         paintMoeda(20, 20, Math.round(LANES[e.lane]) - 10, yy - 10);
     }
 }
 function desenhaHeroi() {
     if (temAtlas) {
-        E.spr.stamp("ai0", Math.round(playerX), Math.round(playerY + playerBob),
-                    { scale: 0.75, key: AI_KEY, ax: 0.5, ay: 0.5 });
+        E.spr.stamp("@heroi", Math.round(playerX), Math.round(playerY + playerBob), _centroO);
     } else {
         paintHeroi(36, 48, Math.round(playerX) - 18, Math.round(playerY - 24 + playerBob));
     }

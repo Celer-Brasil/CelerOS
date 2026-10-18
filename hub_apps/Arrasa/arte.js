@@ -220,6 +220,7 @@ A.init = function (W, H, dir, pkg) {
     A.base = achaBase(dir, pkg);
     carregaIA();                 // atlas + campo de flores (2 slots)
     carregaFundo();              // cenario composto (usa o campo/catapulta)
+    preEscala();                 // goblins/pedras do atlas na escala da tela (1 slot)
     // personagens: o circulo do corpo ocupa ~78% do sprite (orelhas/coroa).
     // Com o atlas de IA os PNGs antigos nem entram no pool (nem no pacote).
     if (!A.temAtlas) {
@@ -404,15 +405,40 @@ A.caixa = function (c, x, y, a) {
     return BOX;
 };
 
+// goblin, rei e pedras do atlas JA no tamanho do vidro (spr 1.5 prescale):
+// o stamp em escala por quadro era drawSprite afim por corpo (~1,25 ms cada
+// no 4848). PRE["ai0_7"] = nome gravado do goblin de raio 7. Raio que nao
+// esta na tabela segue no stamp com escala (mesmo desenho)
+var PRE = {};
+function kGoblin(r) { return (r * 2 * 1.45 * A.ESC) / 64; }
+function kPedra(r) { return (r * 2 * 1.2 * A.ESC) / 64; }
+function preEscala() {
+    if (!A.temAtlas || !E.spr.prescale) return;
+    var L = [["ai0", kGoblin(7), "@g7"], ["ai1", kGoblin(10), "@r10"],
+             ["ai3", kPedra(M.TIRO.pedra.r), "@p" + M.TIRO.pedra.r],
+             ["ai3", kPedra(M.TIRO.pedrao.r), "@p" + M.TIRO.pedrao.r]];
+    E.spr.prescale(L, { key: MAGENTA, name: "arrasa_ps" });
+    PRE.ai0_7 = "@g7";
+    PRE.ai1_10 = "@r10";
+    PRE["ai3_" + M.TIRO.pedra.r] = "@p" + M.TIRO.pedra.r;
+    PRE["ai3_" + M.TIRO.pedrao.r] = "@p" + M.TIRO.pedrao.r;
+}
+var _atO = { scale: 1, key: 0, ax: 0.5, ay: 0.5 };
+// stamp do atlas: nome gravado em escala 1, ou o original com escala k
+function atlas(nome, r, k, X, Y) {
+    var pre = PRE[nome + "_" + r];
+    _atO.key = MAGENTA;
+    _atO.scale = pre ? 1 : k;
+    return E.spr.stamp(pre || nome, X, Y, _atO);
+}
+
 A.goblin = function (c, x, y, a) {
     var X = sx(x), Y = sy(y);
     var desenhou = false;
     if (A.temAtlas) {
         // ai0 goblin / ai1 rei: 64 px de celula, corpo do circulo ocupa
         // ~69% dela (mesma proporcao dos PNGs antigos: r * 1.45)
-        var k = (c.r * 2 * 1.45 * A.ESC) / 64;
-        desenhou = E.spr.stamp(c.tipo === "rei" ? "ai1" : "ai0", X, Y,
-                               { scale: k, key: MAGENTA, ax: 0.5, ay: 0.5 });
+        desenhou = atlas(c.tipo === "rei" ? "ai1" : "ai0", c.r, kGoblin(c.r), X, Y);
     }
     if (desenhou) {
         // atlas ja desenhou
@@ -447,8 +473,7 @@ A.tiro = function (tipo, x, y, a, t) {
     if (pedra && A.temAtlas) {
         // ai3: a pedra do atlas; a celula tem ~87% de pedra, entao 1.2 de
         // folga deixa o diametro visual igual ao corpo fisico
-        var kp = (r * 2 * 1.2 * A.ESC) / 64;
-        desenhou = E.spr.stamp("ai3", X, Y, { scale: kp, key: MAGENTA, ax: 0.5, ay: 0.5 });
+        desenhou = atlas("ai3", r, kPedra(r), X, Y);
     }
     if (desenhou) {
         // atlas ja desenhou a pedra

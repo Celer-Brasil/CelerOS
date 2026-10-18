@@ -502,6 +502,31 @@ E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256, tw: 64, th: 64,
 var USA_ATLAS = E.spr.backed("ai0");    // PNG do atlas num slot real
 var USA_AIBG = E.spr.backed("aibg0");   // PNG do piso num slot real
 
+// arte do atlas JA na escala da celula (spr 1.5 prescale, 1 slot): o stamp
+// de 64 px em escala por quadro era drawSprite afim a cada bomba, bicho,
+// jogador e lajota repintada (~20 por quadro, ~1,25 ms cada no 4848). Os
+// nomes "@" desenham em escala 1 pelo pushSprite; sem slot sao apelidos
+// do original (o desenho e o mesmo)
+var MINI_W = Math.round(SZ.jogador * 0.7);
+var PS = [];
+if (USA_ATLAS) {
+    PS.push(["ai0", SZ.jogador / 64, "@jog"], ["ai1", SZ.jogador / 64, "@slime"],
+            ["ai1", MINI_W / 64, "@mini"], ["ai2", SZ.bomba / 64, "@bomba"],
+            ["ai3", (CELL * 0.9) / 64, "@orbe"]);
+}
+if (USA_AIBG) {
+    for (var pq = 0; pq < 4; pq++) PS.push(["aibg" + pq, CELL / 64, "@piso" + pq]);
+}
+if (PS.length) E.spr.prescale(PS, { key: 0xF81F, name: "detona_ps" });
+// os opts do stamp por quadro (scratch: um literal por entidade era GC)
+var _stPiso = { key: null };
+var _stCentro = { key: 0xF81F, ax: 0.5, ay: 0.5 };
+var _stPe = { key: 0xF81F, ax: 0.5, ay: 1 };
+
+// com o atlas IA os fallbacks jogador/bomba/balao/mini/rival nunca
+// desenham: fora da lista, nao queimam 5 vagas do pool (que sobram pros
+// bichos da fase)
+var COBERTOS_ATLAS = { jogador: 1, bomba: 1, balao: 1, mini: 1, rival: 1 };
 E.spr.load([
     // blocos do tema (2 slots recarregados por fase)
     { name: "macio", file: USA_PNG ? "bloco_macio_1" : null,
@@ -538,7 +563,7 @@ E.spr.load([
       w: SZ.jogador, h: SZ.jogador, paint: painterLadrao },
     { name: "rival", file: USA_PNG ? "rival" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterRival }
-]);
+].filter(function (d) { return !(USA_ATLAS && COBERTOS_ATLAS[d.name]); }));
 
 var BICHOS_PNG = { balao: "balao", fantasma: "fantasma", cacador: "perseguidor",
                    chefe: "chefe", cuspidor: "cuspidor", ladrao: "ladrao",
@@ -699,7 +724,7 @@ function paintCell(c, r, x, y, w, h) {
         // piso de pedra do ai_bg: 4 recortes de 64 giram pela celula e pelo
         // mundo (o tema continua na junta e nos respingos da seed)
         var q = (c + r * 2 + s.mundo) & 3;
-        E.spr.stamp("aibg" + q, x, y, { scale: w / 64, key: null });
+        E.spr.stamp("@piso" + q, x, y, _stPiso);
     } else {
         System.fillRect(x, y, w, h, v > 0.85 ? System.mixColor(base, t.detalhe, 8) : base);
     }
@@ -762,8 +787,7 @@ function paintCell(c, r, x, y, w, h) {
         if (USA_ATLAS) {
             // orbe do atlas + selo pequeno com o glifo do tipo (a cor diz o
             // powerup de longe; o selo mantem a leitura na mesma celula)
-            E.spr.stamp("ai3", x + w / 2, y + h / 2,
-                        { scale: (w * 0.9) / 64, key: 0xF81F, ax: 0.5, ay: 0.5 });
+            E.spr.stamp("@orbe", x + w / 2, y + h / 2, _stCentro);
             if (w >= 26) {
                 var bw = Math.max(8, Math.round(w * 0.34));
                 System.fillRect(x + w - bw - 1, y + h - bw - 1, bw, bw, C.preto);
@@ -986,8 +1010,7 @@ function drawEntidades(s, beat, pulso) {
         var bcx = Math.round(OX + (bo.fx + 0.5) * CELL);
         var bcy = Math.round(OY + (bo.fy + 0.5) * CELL - Math.floor(2 * pulso));
         if (USA_ATLAS) {
-            E.spr.stamp("ai2", bcx, bcy, { scale: SZ.bomba / 64, key: 0xF81F,
-                                           ax: 0.5, ay: 0.5 });
+            E.spr.stamp("@bomba", bcx, bcy, _stCentro);
         } else {
             var bx = Math.round(OX + bo.fx * CELL + (CELL - SZ.bomba) / 2);
             var by = Math.round(OY + bo.fy * CELL + (CELL - SZ.bomba) / 2 - Math.floor(2 * pulso));
@@ -1026,8 +1049,7 @@ function drawEntidades(s, beat, pulso) {
             var ey0 = Math.round(cy - ew / 2 + ebob);
             if (USA_ATLAS && (nome === "balao" || nome === "mini")) {
                 // slime do atlas (balao vira slime; mini usa o mesmo corpo)
-                E.spr.stamp("ai1", cx, cy + ebob, { scale: ew / 64, key: 0xF81F,
-                                                    ax: 0.5, ay: 0.5 });
+                E.spr.stamp(nome === "mini" ? "@mini" : "@slime", cx, cy + ebob, _stCentro);
             } else {
                 E.spr.blit(BICHO_SLOT[nome] || nome, ex0, ey0);
             }
@@ -1054,8 +1076,7 @@ function drawEntidades(s, beat, pulso) {
         var rx = OX + s.rival.x, ry = OY + s.rival.y;
         var rbob = Math.floor(2 * Math.sin(beat * Math.PI * 2 + 1.7));
         if (USA_ATLAS) {
-            E.spr.stamp("ai0", rx, ry + SZ.jogador / 2 + rbob,
-                        { scale: SZ.jogador / 64, key: 0xF81F, ax: 0.5, ay: 1 });
+            E.spr.stamp("@jog", rx, ry + SZ.jogador / 2 + rbob, _stPe);
             // faixa laranja no pe: o rival usa o MESMO astronauta do atlas
             System.fillRect(Math.round(rx - SZ.jogador * 0.28),
                             Math.round(ry + SZ.jogador * 0.34 + rbob),
@@ -1072,8 +1093,7 @@ function drawEntidades(s, beat, pulso) {
         var px = OX + s.player.x, py = OY + s.player.y;
         var bob = Math.floor(2 * Math.sin(beat * Math.PI * 2));
         if (USA_ATLAS) {
-            E.spr.stamp("ai0", px, py + SZ.jogador / 2 + bob,
-                        { scale: SZ.jogador / 64, key: 0xF81F, ax: 0.5, ay: 1 });
+            E.spr.stamp("@jog", px, py + SZ.jogador / 2 + bob, _stPe);
         } else {
             E.spr.blit("jogador", Math.round(px - SZ.jogador / 2),
                        Math.round(py - SZ.jogador / 2 + bob));

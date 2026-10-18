@@ -110,8 +110,25 @@ E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256, tw: 64, th: 64,
 var HAS_ATLAS = !!(E.spr.backed("ai0") && E.spr.backed("ai1") && E.spr.backed("ai2") &&
                    E.spr.backed("ai3") && E.caps.clip &&
                    typeof System.drawSprite === "function");
+var SYS = System;   // blitSprite (API 34) so com typeof
 var HAS_BG = !!(E.spr.backed("bg") && E.caps.clip &&
                 typeof System.drawSprite === "function");
+
+// arte do atlas JA no tamanho do vidro (spr 1.5 prescale, 1 slot): o stamp
+// em escala size/64 por quadro era drawSprite afim por nave/inimigo/orbe
+// (~1,25 ms cada no 4848). "@" + nome + tamanho desenha em escala 1 pelo
+// pushSprite; sem slot vira apelido do original (mesmo desenho)
+var ART = {};
+if (HAS_ATLAS) {
+    var _ps = [["ai0", SZ.nave], ["ai1", SZ.drone], ["ai1", SZ.sentinel],
+               ["ai2", SZ.chefe], ["ai3", SZ.orbe]], _pl = [];
+    for (var pi = 0; pi < _ps.length; pi++) {
+        var an = "@" + _ps[pi][0] + "_" + _ps[pi][1];
+        ART[_ps[pi][0] + "_" + _ps[pi][1]] = an;
+        _pl.push([_ps[pi][0], _ps[pi][1] / 64, an]);
+    }
+    E.spr.prescale(_pl, { key: 0xF81F, name: "supernova_ps" });
+}
 
 // opts compartilhados do stamp (nunca um literal por quadro)
 var _artO = { scale: 1, key: 0xF81F, ax: 0.5, ay: 0.5 };
@@ -121,8 +138,9 @@ var _bgO = { scale: 1, key: null, ax: 0, ay: 0 };
 // fecha o recorte do sistema ao terminar — devolve o recorte da arena.
 function drawArt(name, x, y, size) {
     if (!HAS_ATLAS) return false;
-    _artO.scale = size / 64;
-    E.spr.stamp(name, x, y, _artO);
+    var pre = ART[name + "_" + size];
+    _artO.scale = pre ? 1 : size / 64;
+    E.spr.stamp(pre || name, x, y, _artO);
     if (E.caps.clip) System.setClip(0, HUD_H + 1, W, H - HUD_H - 1);
     return true;
 }
@@ -213,7 +231,36 @@ var dustLayer = E.fx.parallax([
 // poeira. A caixa e recortada antes da arte; o stamp de celula fecha o
 // recorte, entao ele e reposto (arena) ou limpo (faixa do HUD no fim de
 // um veu) antes da poeira.
+// nebulosa ancorada GRAVADA uma vez num sprite do vidro inteiro: o painter
+// copia so a caixa (blitSprite, API 34) — antes cada caixa estampava as
+// celulas de 64 px que tocava (~60 pushSprite por quadro). Sem slot ou
+// firmware velho segue o caminho por celula
+var NEB_S = 0;
+function bakeNebulosa() {
+    if (NEB_S || !HAS_BG || typeof SYS.blitSprite !== "function") return;
+    var id = System.createSprite(W, H);
+    if (!id) return;
+    System.useSprite(id);
+    System.fillScreen(C.espaco);
+    E.spr.alvo = id;
+    for (var by = 0; by < H; by += 64) {
+        for (var bx = 0; bx < W; bx += 64) {
+            _bgO.scale = 1;
+            E.spr.stamp("bg" + ((by / 64 % 4) * 4 + (bx / 64 % 4)), bx, by, _bgO);
+        }
+    }
+    E.spr.alvo = 0;
+    System.useSprite(0);
+    NEB_S = id;
+}
+bakeNebulosa();
+
 function paintFundo(x, y, w, h) {
+    if (NEB_S) {
+        SYS.blitSprite(NEB_S, x, y, w, h);
+        dustLayer.draw(x, y, w, h);
+        return;
+    }
     System.fillRect(x, y, w, h, C.espaco);
     if (HAS_BG) {
         if (E.caps.clip) System.setClip(x, y, w, h);

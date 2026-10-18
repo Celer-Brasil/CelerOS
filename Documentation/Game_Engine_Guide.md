@@ -392,6 +392,75 @@ var a = E.ui.pause({});            // 'resume' | 'restart' | 'quit'
 var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
 ```
 
+## 14c. Modules for complex games (optional)
+
+Six small modules, each its own dep (`app.json` "deps") decorating the same
+`E`: adopt only what the game needs. All are ES5, allocation-free in the hot
+path, and tested in `test/sdk/celergame_mods.js`.
+
+| Dep | Gives | Typical use |
+|---|---|---|
+| `celeros.game.fsm` | `E.fsm(owner, states, first)` | enemy AI, hero states, boss phases |
+| `celeros.game.events` | `E.on/once/off/emit/emitLater`, `E.bus()` | decoupled systems (score, sound, achievements) |
+| `celeros.game.path` | `E.path.find/los/smooth/grid/follower` | A* chasers, line of sight, patrol routes |
+| `celeros.game.collide` | `E.collide.rect/circle/test/push/segRect/hash/move` | many bodies (spatial hash), platformer move-and-slide |
+| `celeros.game.pad` | `E.pad.stick/button/draw` | on-screen controls for action games |
+| `celeros.game.level` | `E.level.parse/progress` | ASCII levels with spawns, unlock progression |
+
+**FSM.** States are `{enter(m, arg), update(m, dt), exit(m, next), draw(m),
+after: [seconds, next], on: {event: fn}}`. A `m.go()` requested *inside* a
+callback applies when the callback returns (no state entering mid-update of
+another). `m.time` is seconds in the state, `m.data` a bag reset on every
+entry, `m.push/pop` stack a state (stunned over anything), `m.send(ev)` routes
+an event to the current state (a returned string is a transition).
+
+```js
+var ia = E.fsm(inimigo, {
+  patrulha: { update: function (m, dt) { if (vê(m.owner)) m.go("caca"); } },
+  caca:     { update: function (m, dt) { perseguir(m.owner, dt); if (m.time > 4) m.go("patrulha"); },
+              on: { dano: function (m) { return "atordoado"; } } },
+  atordoado:{ after: [0.8, "caca"] }
+}, "patrulha");
+```
+
+**Events.** Synchronous; a listener returning `false` stops propagation;
+`{prio}` orders; `{scene: true}` sleeps under an `E.push` and dies when its
+scene leaves. `E.emitLater` delivers next frame (safe from inside a collision
+loop).
+
+**Path.** `E.path.find(cols, rows, c0, r0, c1, r1, cost, {diag, max, near})`
+— `cost(c, r)` < 0 is a wall; diagonals never cut wall corners; `max` is a
+node budget (default 2000) so a big search returns `null` instead of eating
+the frame (`near: true` returns the path to the closest reachable cell).
+`E.path.grid(tilemap)` adapts the tilemap module; `smooth` removes grid
+zig-zags by line of sight; `follower(obj, path, speed, {cell})` walks an
+entity along it.
+
+**Collide.** Shapes are the engine's: rect `{x, y, w, h}` (corner) and circle
+`{x, y, r}` (center). `hash(cell)` is rebuilt per frame (`clear` + `add`) and
+`query(shape, fn)` calls `fn` once per real hit — bullets x enemies without
+O(n²). `move(body, dx, dy, tilemap)` moves X then Y in half-cell steps (a
+400 px fall does not tunnel through a 16 px floor), stops at walls, zeroes
+`vx/vy` on the axis that hit and returns `{hitX, hitY, ground, ceil}`.
+
+```js
+var r = E.collide.move(heroi, heroi.vx * dt, heroi.vy * dt, mapa);
+if (r.ground && pulo.pressed) heroi.vy = -260;
+```
+
+**Pad.** `stick({zone, r, float, dead, dirs})` gives `x/y` in -1..1, `mag`,
+`angle`, `dir`; `button({x, y, r, label})` gives `down/pressed/released`.
+**The touch panels are single-touch**: holding the stick and a button at
+the same time does not exist — `stick.tap` (a dry tap inside the stick zone)
+is the "A" action, and the physical button (`E.input.btn`) can be a second.
+
+**Level.** `E.level.parse(lines, {legend, cell})`: a plain legend value is a
+tile, `{spawn: type, tile}` is an entity (with what stays on the floor). A
+character missing from the legend throws with line and column. `lv.data`
+goes straight into `E.tilemap({data})`; `lv.spawn({type: factory})` builds
+entities. `E.level.progress(list, {save})` tracks the current level, saved
+unlocks (`next()`), and best-only stars per level.
+
 ## 15. Physics (`celeros.physics`, optional)
 
 **Most games need no physics module at all.** On a Duktape device an
@@ -549,9 +618,32 @@ module.exports.wire = function (env) {
 
 ```bash
 node tools/sdk/celer.js test MyGame       # headless run
+node tools/sdk/celer.js emu MyGame --serve --open        # live preview: play the game
 node tools/sdk/celer.js emu MyGame --ms 2000 --out tela.png
 node tools/sdk/celer.js emu MyGame --frames 0,600,1500   # PNG per milestone + pixel diff
+node tools/sdk/celer.js emu MyGame --gif run.gif --ms 4000 --fps 20 --seed 7
+node tools/sdk/celer.js emu MyGame --input toques.txt --frames 0,600,1500
 ```
+
+In the live preview the pointer/drag on the screen is a real touch, arrow
+keys/WASD synthesize a swipe from the center (Snake/2048/menus), space taps
+at the pointer, `P` pauses and `R` restarts the app (hot reload on save is
+automatic). The **Gravar** button records your session and downloads a
+`toques.txt` in exactly the `--input` format: play once by hand, then replay
+it headless. A scripted input file skips writing a `test.js`:
+
+```
+# toques.txt — time in ms of app, then the gesture
+0    tap 120,200          # JOGAR
+600  swipe 120,240 120,80 6
+900  down 120,160
+980  move 150,180
+1100 up 150,180
+```
+
+`--seed` pins `Math.random` (same seed = same run), `--grid` draws a
+coordinate grid on the PNG and `--mark 120,200` marks a point — the quickest
+way to find the touch coordinates of a button.
 
 In-app, expose an introspection hook like `if (typeof __harness !== "undefined") __harness.myGame = { state: ... };` and drive everything deterministically (see Quica's `test.js` pattern in Supernova).
 
@@ -565,26 +657,112 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 - `E.audio.sfx` is non-blocking on API 32 (`System.sfx`); on older firmware it is **blocking** (`playTone`): keep melodies under ~300 ms.
 - Pure-JS bursts longer than ~1 s trip the firmware exec-timeout — the `E.run` loop yields every frame, so stay inside it.
 
+## 18b. CelerGame 1.1 (core 1.1.0, fx/spr/tilemap/ui/sfx 1.1.0)
+
+Additive release: every 1.0 call keeps working. Declare `^1.1.0` in `app.json`
+to use what is below (the scaffold already does — it reads the module versions).
+
+**Pause and slow motion.** `E.pause(true|false)` (no arg toggles; `E.paused`
+reads it): the scene `update` keeps running with `dt = 0` so it can drive a
+pause menu, while fx, camera, timers and tweens freeze — on resume every
+deadline is pushed by the paused time. `E.timeScale = 0.3` scales the `dt` of
+update/fx/camera (timers and tweens stay on the wall clock).
+
+```js
+update: function (dt) {
+    if (E.input.doubleTap) E.pause();
+    if (E.paused) { var a = E.ui.pause(); if (a === "resume") E.pause(false); return; }
+    // ... game ...
+}
+```
+
+**Input.** `E.input.doubleTap` (second dry tap near the first within
+`E.input.dblMs`, default 300). `E.hit(rect, pad)` / `E.press(rect, pad)` take a
+touch slop in px — a 12 px coin stays tappable without growing on screen.
+
+**Time.** `E.every(ms, fn, times)` stops after `times` shots (`t.left`).
+`E.tween(obj, to, ms, {yoyo, repeat, onUpdate})`: `repeat` = extra laps
+(`-1` forever), `yoyo` flips each lap. Fixes: the tween reads its *from* value
+when it starts (after `delay`), and a prop missing on `obj` starts at 0 (it
+was `NaN`).
+
+**Math.** `E.m.angDiff(a, b)` (shortest turn), `smoothstep`, `chance(p, rnd)`,
+`shuffle(arr, rnd)`; easings `inCubic/outCubic/inOutCubic/outElastic/outBounce`.
+`E.rng(seed)` now carries `.int(a, b)`, `.range(a, b)` and `.pick(arr)`.
+Fixes: `E.m.wrap(-10, 0, 10)` is `0` (was `10`), `E.m.randInt(n)` is `0..n`
+(was `NaN`).
+
+**Camera.** `E.cam.follow(target, lerp, {deadzone: {w, h}})` — the target
+walks inside the central box without moving the camera.
+`E.cam.worldX(sx)` / `worldY(sy)` turn a touch into map coordinates.
+
+**Entities and save.** `pool.spawn()` resumes from the last slot (no rescan of
+the live prefix); `group.sort("y")` (stable draw order) and `group.remove(o)`.
+`E.save.obj(key, def)` / `setObj(key, val)` (JSON; corrupt JSON returns `def`)
+and `E.save.del(key)`.
+
+**Scenes and diagnostics.** `E.goto("typo")` throws right away, listing the
+scenes that exist. `E.debug = true` (or `E.init({debug: true})`) draws fps,
+frame ms (`E.frameMs`), dirty boxes and live particles in the corner.
+
+**Modules.**
+- fx: `E.fx.clear()` (call it in the scene `exit` — particles no longer leak
+  into the menu); `popText(..., {vy, grow})`; fix: `burst({n: 0})` spawned 12.
+- spr: `blit(name, x, y, {ax, ay})` anchor (`ax: 0.5, ay: 1` = feet on the
+  ground); `E.spr.size(name)`; `E.anim` gains `reset()`, `play(frames, fps)`
+  (same clip does not restart — safe to call per frame), `onEnd`, loop mode
+  `'pingpong'`, and no `NaN` with an empty frame list.
+- tilemap: optional data layer — `E.tilemap({..., data: ['#..#', ...],
+  solid: function (v) { return v === '#'; }})`; `get/set` (`set` marks the cell
+  for the next `flush`), `each`, `cellRect`, and collision queries
+  `solidAt(x, y)` / `rectSolid(x, y, w, h)` (outside the grid is solid unless
+  `outside: false`).
+- ui: `E.ui.confirm(msg, {title})` -> `'yes'|'no'|null`; `E.ui.toast(msg, {ms})`
+  is drawn by the engine on top of the scene (no draw call, works on static
+  scenes); `list` scrolls with inertia and has `scrollTo(i)`; the ready-made
+  screens no longer allocate option objects per frame. Needs core `^1.1.0`.
+- sfx: `SFX.varia(mel, semi, rnd)` (random pitch per play) and
+  `SFX.junta(a, b, {pausa})`; `SFX.via(..., {varia: 2})`.
+
+**Core 1.2 / fx, spr, tilemap, sfx 1.2.** Scene stack: `E.push(name)` opens a
+scene over the current one (which gets `pause()` and freezes — no update, no
+draw), `E.pop()` returns to it (`resume()`, its dirty layer restored);
+`E.goto` with a full stack leaves them all; `E.depth()`. A scene with
+`cleanup: true` kills the timers and tweens it created when it leaves;
+`E.killTweensOf(obj)`. Math: `E.m.noise(x, y, seed)` (smooth 0..1 value
+noise), `lerpAngle`, `snap`. `E.input.heldMs` (charge shots). `group.find/
+countIf`, `pool.spawn(init)`. `E.cam.inView(x, y, w, h, pad)` (cull what is
+off screen) and `follow(t, lerp, {offset})` (look ahead). `E.gfx.wrap`,
+`E.gfx.textBox(str, x, y, w, {max})`, `E.gfx.poly(pts, color)` and text
+`{shadow: color}`. `E.audio.gap` (default 40 ms): the same named sfx twice
+inside the gap plays once. `E.save.inc(key)`. fx: `E.fx.play("explosao", x, y)`
+with `E.fx.presets` (explosao, faisca, fumaca, confete, poeira, gosma, cura).
+spr: `E.spr.grid(name, {file, cols, rows, tw, th})` + `E.spr.frames(prefix, a, b)`.
+tilemap: `fill(c, r, w, h, v)`, `find(v)`. sfx: `SFX.arpejo(base, semitones, ms)`.
+
 ## 19. API cheat sheet
 
 | Call | Does |
 |---|---|
 | `E.init(opts)` / `E.run(scenes, first)` | detect caps / own the loop |
 | `E.goto(name, {transition})` / `E.quit()` | switch scene (veil: fade/iris/wipe/bands) / leave the loop |
-| `E.input`, `E.hit(r)`, `E.press(r)` | touch state, tap in rect, held in rect |
+| `E.input`, `E.hit(r, pad)`, `E.press(r, pad)` | touch state (+ `doubleTap`), tap in rect, held in rect |
+| `E.pause()`, `E.paused`, `E.timeScale`, `E.debug` | game pause, slow motion, fps overlay (§18b) |
 | `E.gfx.*`, `E.cam` | camera-aware drawing, scroll/shake/follow |
 | `E.u(v)`, `E.U`, `E.font(px)`, `E.ts` | project-unit scale, pixel-height typography |
 | `scene.static`, `E.redraw()` | menus that draw only when something changes |
 | `E.dirty.enable/clip/unclip/add/full/erase`, `E.tilemap` | erase-and-redraw only what changed (tilemap: optional module) |
-| `E.group()`, `E.pool(n, f)` | entity lists, pre-allocated recycling |
+| `E.group()` (+ `sort/remove`), `E.pool(n, f)` | entity lists, pre-allocated recycling |
 | `E.spr.load/blit`, `E.spr.sheet`, `E.anim(frames, fps)` | PNG sprites, spritesheet regions, flipbooks (optional module) |
 | `E.fx.burst/ring/popText/flash/stars/draw` | juice |
 | `E.fx.emitter/trail/parallax` | continuous sources, entity trails, camera parallax (fx module) |
 | `E.tween/seq/after/every/cancel/clear*` | engine-ticked time, tween timelines |
-| `E.ui.menu/list/dialog/title/pause/gameOver` | ready game UI (optional module — §14b) |
+| `E.ui.menu/list/dialog/title/pause/gameOver/confirm/toast` | ready game UI (optional module — §14b) |
 | `E.audio.music/beat/sfx/stop/mute/volume` | chiptune + polite sfx |
-| `E.save.get/set/num/best` | NVS persistence |
-| `E.m.*`, `E.rng(seed)` | math, deterministic RNG |
+| `E.save.get/set/num/best/obj/setObj/del` | NVS persistence (objects as JSON) |
+| `E.m.*`, `E.rng(seed)` | math (+ `noise`), deterministic RNG |
+| `E.push/pop/depth`, scene `cleanup` | scene stack (inventory over the game), auto-kill of scene timers |
+| `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | modules for complex games (§14c) |
 | `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 
-Editor autocomplete ships in the scaffold: the `.d.ts` of each adopted module (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) alongside `celer.d.ts` (firmware API); `require("celeros.engine")` games keep the all-in-one `celeros.engine.d.ts`.
+Editor autocomplete ships in the scaffold: the `.d.ts` of each adopted module (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) alongside `celer.d.ts` (firmware API); `require("celeros.engine")` games keep the all-in-one `celeros.engine.d.ts`, GENERATED from the module `.d.ts` files by `node tools/sdk/lib/engine_dts.js` (edit the module's file, then rerun; `test/sdk` fails on drift and on any public engine member without a type).

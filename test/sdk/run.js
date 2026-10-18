@@ -234,8 +234,11 @@ function check(name, ok, detail) {
     // cabecalho era apagado pelo painter full do 1o quadro antes do clip
     // do HUD); o 2D Runner (Neon Surfer) roda o menu static com sprites
     // PNG renderizados (decodePng) sem primitiva nao renderizada
-    var rb = runAppFolder(path.join(ROOT, 'hub_apps', 'Breakout'),
-                          { render: true, stopAtMs: 2500 });
+    var rb = runAppFolder(path.join(ROOT, 'hub_apps', 'Breakout'), {
+        render: true, stopAtMs: 2500,
+        // o jogo abre no titulo: toca JOGAR para o HUD existir no 1o repaint
+        events: function (env) { env.__harness.tap(120, 160); }
+    });
     check('Breakout roda limpo no emu', rb.err === null, rb.err);
     var linhasHud = 0;
     for (var ly = 4; ly <= 32; ly += 4) {
@@ -1065,7 +1068,7 @@ function depsSize(nomes) {
         E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
         check('familia enxuta (jsstrip) preserva as linhas e roda o loop',
               linhasIguais && marks.length === 3 &&
-              E2.version === '1.2.6' && E2._mods.length === 3,
+              E2.version === '1.4.0' && E2._mods.length === 3,
               'linhas=' + linhasIguais);
     })();
 
@@ -1502,7 +1505,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.0.2' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.2.0' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1526,7 +1529,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.0.2',
+          out.fx[2] === '1.2.0',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro
@@ -1554,8 +1557,8 @@ function depsSize(nomes) {
         env.__harness.grab = function (k, v) { out[k] = v; };
         fn4(env.System, env.Storage, env.__harness, req);
     } catch (e) { out.shim = 'erro: ' + e; }
-    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.2.6',
-          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.2.6' &&
+    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.4.0',
+          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.4.0' &&
           out.shim[2] === 'fx,spr,tilemap' && out.shim[3] === 'function' &&
           out.shim[4] === 'function' && out.shim[5] === 'function',
           JSON.stringify(out.shim));
@@ -2077,7 +2080,9 @@ function depsSize(nomes) {
 
     var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-ui-'));
     fs.writeFileSync(path.join(tmp, 'app.json'),
-                     JSON.stringify({ deps: { 'celeros.game.ui': '^1.0.0' } }));
+                     JSON.stringify({ deps: { 'celeros.game': '^1.0.0',
+                                              'celeros.game.fx': '^1.0.0',
+                                              'celeros.game.ui': '^1.0.0' } }));
 
     function runSnippet(code, setup) {
         var env = harness.makeEnv();
@@ -2188,15 +2193,94 @@ function depsSize(nomes) {
         '  } } }, "s");' +
         '__harness.grab("telas", acts);',
         function (env) {
-            // title: JOGAR em ~H*0.5 (y 160, h 44); pause: 1a opcao y ~96;
-            // gameOver: 'De novo' em y ~166 (menu y = H*0.52)
+            // title: JOGAR em ~H*0.5 (y 160, h 44); pause: 1a opcao y ~96
+            // (menu default 0.30H); gameOver: 'De novo' em y ~192 (menu 0.60H)
             env.__harness.pushTouch([{ x: 120, y: 180, touched: 1 }, { x: 120, y: 180, touched: 0 },
                                      { x: 120, y: 108, touched: 1 }, { x: 120, y: 108, touched: 0 },
-                                     { x: 120, y: 175, touched: 1 }, { x: 120, y: 175, touched: 0 }]);
+                                     { x: 120, y: 210, touched: 1 }, { x: 120, y: 210, touched: 0 }]);
         });
     check('title/pause/gameOver: acoes dos taps na sequencia',
           JSON.stringify(r.telas) === JSON.stringify(['start', 'resume', 'again']),
           JSON.stringify(r.telas));
+
+    // list: item disabled nao pega (o menu ja tinha; a lista ficou de fora)
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var lst = E.ui.list({ items: [{ label: "A", value: "a" },' +
+        '  { label: "B", value: "b", disabled: true }], row: 28 });' +
+        'var q = 0, pego = null;' +
+        'E.run({ s: { update: function () {' +
+        '  q++;' +
+        '  if (q === 5) __harness.tap(120, 122);' +          // linha disabled
+        '  if (q === 12) { if (lst.picked) pego = "dis:" + lst.picked; __harness.tap(120, 94); }' +
+        '  if (q === 20) { if (lst.picked) pego = lst.picked; E.quit(); }' +
+        '}, draw: function () { lst.draw(20, 80, 200, 100); } } }, "s");' +
+        '__harness.grab("ldis", [pego, lst.picked]);');
+    check('list: item disabled nao pega o tap',
+          r.ldis[0] === 'a', JSON.stringify(r.ldis));
+
+    // title com start:null esconde o botao e o extra sobe para o centro
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var act = null, q = 0;' +
+        'E.run({ s: { update: function () { q++; if (q === 5) __harness.tap(120, 170);' +
+        '  if (q > 20) E.quit(); },' +
+        '  draw: function () { var a = E.ui.title({ game: "X", start: null, extra: "Opcoes" });' +
+        '    if (a) act = a; } } }, "s");' +
+        '__harness.grab("tsn", act);');
+    check('title: start null esconde o botao (tap cai no extra)',
+          r.tsn === 'extra', JSON.stringify(r.tsn));
+
+    // gameOver: detail desenha a linha extra (placar do adversario etc.)
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var v = [], ds = System.drawString;' +
+        'System.drawString = function (s, x, y, f) { v.push(String(s)); ds(s, x, y, f); };' +
+        'var q = 0;' +
+        'E.run({ s: { update: function () { if (++q > 3) E.quit(); },' +
+        '  draw: function () { E.ui.gameOver({ score: 1, best: 2, detail: "Adversario: 3" }); } } }, "s");' +
+        '__harness.grab("det", v.join("|"));');
+    check('gameOver: detail desenha a linha extra',
+          r.det.indexOf('Adversario: 3') >= 0, r.det);
+
+    // pause(clear): nao pinta o fundo da tela (a cena congelada fica)
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var cheios = 0, fr = System.fillRect;' +
+        'System.fillRect = function (x, y, w, h, c) {' +
+        '  if (w === E.W && h === E.H) cheios++; fr(x, y, w, h, c); };' +
+        'var q = 0;' +
+        'E.run({ s: { update: function () { if (++q > 2) E.quit(); },' +
+        '  draw: function () { E.ui.pause({ clear: true }); } } }, "s");' +
+        '__harness.grab("clr", cheios);');
+    check('pause(clear): nao pinta o fundo da tela',
+          r.clr === 0, String(r.clr));
+
+    // emitter once: duracao vencida libera a vaga sozinha
+    r = runSnippet(
+        'var E = require("celeros.game.fx"); E.init({ particles: 16 });' +
+        'E.fx.emitter({ x: 10, y: 10, rate: 10, duration: 50, once: true });' +
+        'var n = -1, q = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  if (++q === 40) { n = E.fx._emitters.length; E.quit(); }' +
+        '} } }, "s");' +
+        '__harness.grab("once", n);');
+    check('fx.emitter once: sai da lista ao fim da duracao',
+          r.once === 0, String(r.once));
+
+    // E.transitioning publico (antes os apps liam o E._trans privado)
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var viu = false, fim = false, q = 0;' +
+        'E.run({ a: { update: function () {' +
+        '  if (++q === 2) E.goto("b", { transition: "fade", ms: 200 });' +
+        '  if (E.transitioning) viu = true; } },' +
+        '  b: { enter: function () { E.after(400, function () {' +
+        '    fim = !E.transitioning; E.quit(); }); } } }, "a");' +
+        '__harness.grab("tr", [viu, fim]);');
+    check('E.transitioning: true durante o veu e false depois',
+          r.tr[0] === true && r.tr[1] === true, JSON.stringify(r.tr));
 
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
@@ -2764,6 +2848,11 @@ function depsSize(nomes) {
     var nt = P.trem([], 1, { speed: 150, hudH: 34 });
     check('trem novo sempre carrega h', !!nt && nt.h === 80, JSON.stringify(nt));
 })();
+
+// CelerGame 1.1 (core/fx/spr/tilemap/ui/sfx) + drift dos d.ts da engine
+require('./celergame_next.js')(check);
+// modulos p/ jogos complexos (fsm/events/path/collide/pad/level) + core 1.2
+require('./celergame_mods.js')(check);
 
 // resumo
 console.log('');

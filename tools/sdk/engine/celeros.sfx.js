@@ -10,7 +10,11 @@
 // freq 0 = pausa que avanca o tempo. Sons curtos de verdade: o falante do
 // device tem um canal so (musica OU sfx; o E.audio.duck resolve a disputa).
 
-var SFX = { version: '1.0.1' };
+// 1.1.0: SFX.varia (afinacao sorteada por toque — o mesmo "hit" 20x
+// seguidas nao cansa) e SFX.junta (concatena melodias com pausa).
+// 1.2.0: SFX.arpejo(base, semitons, ms) — fanfarra/acorde sem tabela.
+
+var SFX = { version: '1.2.0' };
 
 // Tabela por intencao. "p" = pausa curta de articulacao.
 var T = {
@@ -72,9 +76,47 @@ SFX.tempo = function (mel, fator) {
     });
 };
 
+// varia(mel, semi, rnd) — transpoe por um sorteio em [-semi, +semi]
+// semitons (inteiros); rnd opcional (E.rng) para replay deterministico
+SFX.varia = function (mel, semi, rnd) {
+    var s = semi === undefined ? 2 : semi;
+    var k = Math.round(((rnd ? rnd() : Math.random()) * 2 - 1) * s);
+    return k ? SFX.transpor(mel, k) : mel.map(function (n) { return n.slice(0); });
+};
+
+// junta(a, b, ..., {pausa: ms}) — melodias (ou nomes da tabela) em fila;
+// a ultima arg objeto define a pausa entre elas (default 0)
+SFX.junta = function () {
+    var out = [], pausa = 0, args = [];
+    for (var i = 0; i < arguments.length; i++) args.push(arguments[i]);
+    var last = args[args.length - 1];
+    if (last && !Array.isArray(last) && typeof last === 'object') {
+        pausa = last.pausa || 0;
+        args.pop();
+    }
+    for (var j = 0; j < args.length; j++) {
+        var m = typeof args[j] === 'string' ? SFX.mel(args[j]) :
+                (typeof args[j][0] === 'number' ? [args[j]] : args[j]);
+        if (!m) continue;
+        if (j > 0 && pausa > 0) out.push([0, pausa]);
+        for (var k = 0; k < m.length; k++) out.push([m[k][0], m[k][1]]);
+    }
+    return out;
+};
+
+// arpejo(base, semitons, ms) — notas base*2^(s/12) em fila: arpejo(523,
+// [0, 4, 7, 12], 70) = do maior subindo (vitoria, nivel novo)
+SFX.arpejo = function (base, semis, ms) {
+    var d = ms || 60, out = [];
+    for (var i = 0; i < semis.length; i++) {
+        out.push(semis[i] === null ? [0, d] : [Math.round(base * Math.pow(2, semis[i] / 12)), d]);
+    }
+    return out;
+};
+
 // via(audio, nome, opts) — toca pela engine com as manhas do canal unico:
 // opts.duck = ms para abafar a trilha (explosao), opts.oitava/velocidade
-// derivam variantes. Passa null/false se nao ha audio (vira no-op).
+// derivam variantes, opts.varia = semitons de sorteio (SFX.varia). Passa null/false se nao ha audio (vira no-op).
 SFX.via = function (audio, nome, opts) {
     if (!audio || typeof audio.sfx !== 'function') return false;
     opts = opts || {};
@@ -83,6 +125,7 @@ SFX.via = function (audio, nome, opts) {
     if (!mel) return false;
     if (opts.oitava) mel = SFX.transpor(mel, opts.oitava * 12);
     if (opts.velocidade && opts.velocidade > 0) mel = SFX.tempo(mel, 1 / opts.velocidade);
+    if (opts.varia) mel = SFX.varia(mel, opts.varia, opts.rnd);
     audio.sfx(mel);
     return true;
 };

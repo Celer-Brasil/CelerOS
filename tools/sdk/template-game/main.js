@@ -17,7 +17,8 @@
 // 1x e so repintam no press de botao), o jogo liga a camada suja E.dirty
 // (cada quadro apaga so o que o anterior desenhou — nada de fillScreen por
 // frame) e o texto vai por papel (ts: "title", "label"...) ou px, nunca
-// size cru: a escala acompanha a tela (E.u / E.U).
+// size cru: a escala acompanha a tela (E.u / E.U). Toque duplo pausa
+// (E.pause congela fx, camera, timers e tweens; o update recebe dt 0).
 // A familia CelerGame e DEP do app.json (instalada pelo hub em
 // /local/modules — sem copia dentro do jogo): este exemplo adota o core +
 // fx; cada modulo a mais e uma dep a mais no app.json.
@@ -110,7 +111,17 @@ E.run({
             resetJogo();
             E.dirty.enable(T.bg);   // apaga so o que mudou (1o quadro: tudo)
         },
+        exit: function () {
+            E.pause(false);
+            E.fx.clear();           // particulas do jogo nao vazam para o fim
+        },
         update: function (dt) {
+            // toque duplo pausa / tap seco retoma
+            if (E.input.doubleTap && !E.paused) { E.pause(true); return; }
+            if (E.paused) {
+                if (E.input.tap) E.pause(false);
+                return;
+            }
             // raquete segue o dedo (arraste em qualquer lugar da tela)
             if (E.input.down) {
                 g.paddleX = E.m.clamp(E.input.x, PADDLE_W / 2 + 4, W - PADDLE_W / 2 - 4);
@@ -156,6 +167,11 @@ E.run({
             E.gfx.text(String(g.score), 8, 6, { ts: "big", color: T.text, bg: T.bg });
             for (var l = 0; l < g.lives; l++) {
                 E.gfx.circle(W - 14 - l * 16, 14, 5, T.err);
+            }
+            if (E.paused) {
+                E.gfx.text("PAUSA - toque para seguir", W / 2, H / 2,
+                           { ts: "label", align: "center", valign: "middle",
+                             color: T.text, bg: T.bg, fit: W - 16 });
             }
             E.fx.draw();
         }

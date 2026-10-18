@@ -10,6 +10,12 @@
 //
 // E.init({ dir }) preenche E.spr.bases com as pastas de assets do app —
 // carregue o modulo ANTES do init (a ordem natural do require no topo).
+//
+// 1.1.0: blit com ancora {ax, ay} (0..1 — 0.5/1 = pe no chao) alem de
+// cx/cy; E.spr.size(nome); E.anim com reset/play/onEnd, modo pingpong e
+// frames vazios sem NaN.
+// 1.2.0: E.spr.grid (spritesheet em grade com nomes numerados, 1 slot so)
+// e E.spr.frames(prefixo, de, ate) -> lista de nomes para o E.anim.
 
 var E = require('celeros.game');
 var S = System;
@@ -17,7 +23,7 @@ var S = System;
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.0.1',
+    version: '1.2.0',
     bases: [],
     _slots: {},
     _sheets: {},        // spritesheets: 1 PNG inteiro + regioes nomeadas
@@ -64,6 +70,13 @@ E.spr = {
     },
 
     has: function (name) { return !!E.spr._slots[name]; },
+
+    // {w, h} do sprite/regiao carregado (null se nao existe) — layout e
+    // colisao sem repetir as medidas do load
+    size: function (name) {
+        var s = E.spr._slots[name];
+        return s ? { w: s.w, h: s.h } : null;
+    },
 
     // true se o sprite esta num slot real (blit com cor-chave rapido);
     // false = o blit vai cair no painter procedural
@@ -119,6 +132,29 @@ E.spr = {
         return out;
     },
 
+    // spritesheet em GRADE: cols x rows celulas de tw x th viram os nomes
+    // prefix + indice (0.. em linhas) — heroi0..heroi7 de uma tira de 8
+    // quadros. Mesmo slot unico do sheet; o.paint / o.w / o.h opcionais
+    grid: function (name, o) {
+        var cols = o.cols || 1, rows = o.rows || 1;
+        var tw = o.tw || 16, th = o.th || 16;
+        var pre = o.prefix === undefined ? name : o.prefix;
+        var regs = {};
+        for (var r = 0; r < rows; r++) {
+            for (var c = 0; c < cols; c++) regs[pre + (r * cols + c)] = [c, r];
+        }
+        return E.spr.sheet(name, { file: o.file, w: o.w || cols * tw, h: o.h || rows * th,
+                                   tw: tw, th: th, regions: regs, paint: o.paint });
+    },
+
+    // nomes prefix+a .. prefix+b (inclusivo) — a lista de quadros do anim
+    frames: function (prefix, a, b) {
+        var out = [];
+        if (a <= b) for (var i = a; i <= b; i++) out.push(prefix + i);
+        else for (var j = a; j >= b; j--) out.push(prefix + j);
+        return out;
+    },
+
     // libera o slot do sheet e todas as regioes dele
     freeSheet: function (name) {
         var sh = E.spr._sheets[name];
@@ -131,7 +167,8 @@ E.spr = {
         delete E.spr._sheets[name];
     },
 
-    // opts: { key: cor-chave (default preto), cx/cy: centralizar }
+    // opts: { key: cor-chave (default preto), cx/cy: centralizar, ax/ay:
+    // ancora 0..1 (ax 0.5 + ay 1 = x,y e o pe do personagem) }
     blit: function (name, x, y, opts) {
         var s = E.spr._slots[name];
         if (!s) return;
@@ -141,8 +178,13 @@ E.spr = {
         // comia o que estivesse embaixo do fantasma
         var pode = s.paint || (s.sheet ? (s.sheet.id && E.caps.clip) : s.id);
         if (!pode) return;
-        var dx = Math.round(opts && opts.cx ? x - s.w / 2 : x);
-        var dy = Math.round(opts && opts.cy ? y - s.h / 2 : y);
+        var ax = 0, ay = 0;
+        if (opts) {
+            ax = opts.ax !== undefined ? opts.ax : (opts.cx ? 0.5 : 0);
+            ay = opts.ay !== undefined ? opts.ay : (opts.cy ? 0.5 : 0);
+        }
+        var dx = Math.round(x - s.w * ax);
+        var dy = Math.round(y - s.h * ay);
         if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);
         var key = opts && opts.key !== undefined ? opts.key : 0x0000;
         if (s.sheet) {
@@ -185,27 +227,61 @@ E.spr = {
     }
 };
 
-// flipbook: frames = painters function(x,y) ou nomes de sprite carregado
+// flipbook: frames = painters function(x,y) ou nomes de sprite carregado.
+// loop: true (default) | false (para no ultimo, done = true) | 'pingpong'
+// (vai e volta). onEnd(anim) dispara no fim de cada volta (loop) ou uma
+// vez no fim (sem loop). play(frames, fps) troca de animacao (andar ->
+// pular) sem alocar outra; reset() recomeca.
 E.anim = function (frames, fps, loop) {
     return {
-        frames: frames, fps: fps || 6, loop: loop !== false,
-        t: 0, i: 0, done: false,
+        frames: frames, fps: fps || 6, loop: loop === undefined ? true : loop,
+        t: 0, i: 0, done: false, onEnd: null,
         tick: function (dt) {
+            var n = this.frames.length;
+            if (!n || this.done) return;
             this.t += dt;
             var fi = Math.floor(this.t * this.fps);
-            if (fi >= this.frames.length) {
-                if (this.loop) {
-                    fi = fi % this.frames.length;
+            if (this.loop === 'pingpong' && n > 1) {
+                var per = 2 * n - 2;
+                if (fi >= per) {
+                    fi = fi % per;
                     this.t = fi / this.fps;
+                    if (this.onEnd) this.onEnd(this);
+                }
+                this.i = fi < n ? fi : per - fi;
+                return;
+            }
+            if (fi >= n) {
+                if (this.loop) {
+                    fi = fi % n;
+                    this.t = fi / this.fps;
+                    if (this.onEnd) this.onEnd(this);
                 } else {
-                    fi = this.frames.length - 1;
+                    fi = n - 1;
                     this.done = true;
+                    if (this.onEnd) this.onEnd(this);
                 }
             }
             this.i = fi;
         },
+        reset: function () {
+            this.t = 0;
+            this.i = 0;
+            this.done = false;
+            return this;
+        },
+        // troca o clipe; o MESMO frames nao recomeca (nem terminado —
+        // chamar por quadro com o clipe do estado e seguro; reset() refaz)
+        play: function (fr, fp, lp) {
+            if (fr === this.frames) return this;
+            this.frames = fr;
+            if (fp) this.fps = fp;
+            if (lp !== undefined) this.loop = lp;
+            return this.reset();
+        },
         draw: function (x, y, opts) {
             var f = this.frames[this.i];
+            if (f === undefined) return;
             if (typeof f === 'function') f(x, y);
             else E.spr.blit(f, x, y, opts);
         }

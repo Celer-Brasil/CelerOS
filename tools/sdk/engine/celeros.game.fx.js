@@ -9,6 +9,12 @@
 // O tick entra no registro E._modTicks do core (chamado pelo E.run antes
 // do update da cena); o DRAW continua com a cena — ela chama E.fx.draw()
 // na ultima linha do proprio draw para ficar por cima do mundo.
+//
+// 1.1.0: burst {n: 0} semeava 12 (o `||` engolia o zero); E.fx.clear()
+// zera particulas/floaters/emissores/flash (exit de cena); popText com
+// vy (subida em px/s) e grow (escala no fim da vida).
+// 1.2.0: E.fx.presets + E.fx.play(nome, x, y, opts) — explosao, faisca,
+// fumaca, confete, poeira, sangue/gosma e cura prontos (o app so ajusta).
 
 var E = require('celeros.game');
 var S = System;
@@ -21,7 +27,7 @@ var _flo = { color: 0, align: 'center', font: null, px: 0, screen: false };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.0.2',
+    version: '1.2.0',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
@@ -69,7 +75,7 @@ E.fx = {
     //               size, grav, drag, shape dot|spark|ring})
     burst: function (x, y, o) {
         o = o || EMPTY;
-        var n = o.n || 12;
+        var n = o.n === undefined ? 12 : o.n;
         var sp = o.speed === undefined ? 60 : o.speed;
         var sp2 = o.speed2 === undefined ? sp : o.speed2;
         var a0 = o.angle === undefined ? 0 : o.angle;
@@ -102,13 +108,15 @@ E.fx = {
     },
 
     // texto flutuante (score, dano) que sobe e some; opts {color, life,
-    // px | ts (default 'label'), font (cru), screen}
+    // px | ts (default 'label'), font (cru), screen, vy (subida px/s,
+    // default 18; negativo desce), grow (escala extra no fim: 0.5 = +50%)}
     popText: function (x, y, str, o) {
         o = o || EMPTY;
         this._floaters.push({
             x: x, y: y, str: String(str),
             color: o.color === undefined ? 0xFFE0 : o.color,
             t: 0, life: o.life || 0.9, screen: !!o.screen,
+            vy: o.vy === undefined ? 18 : o.vy, grow: o.grow || 0,
             font: o.font, px: o.px !== undefined ? o.px :
                 (o.font ? undefined : (E.ts[o.ts || 'label'] || 15) * E.U)
         });
@@ -265,6 +273,59 @@ E.fx = {
         };
     },
 
+    // receitas por intencao: opts do burst (+ ring/flash/shake opcionais).
+    // Mude ou acrescente: E.fx.presets.meu = { n: 8, ... }
+    presets: {
+        explosao: { n: 18, colors: [0xFFE0, 0xFD20, 0xF800], speed: 50, speed2: 140,
+                    life: 0.6, size: 3, drag: 1.5, ring: { speed: 220, life: 0.35 },
+                    shake: [4, 0.25] },
+        faisca: { n: 8, colors: [0xFFFF, 0xFFE0], speed: 90, speed2: 160, life: 0.25,
+                  shape: 'spark' },
+        fumaca: { n: 6, colors: [0x7BEF, 0x528A], speed: 10, speed2: 30, life: 1.1,
+                  size: 5, grav: -20, drag: 0.8 },
+        confete: { n: 24, colors: [0xF800, 0x07E0, 0x001F, 0xFFE0, 0xF81F], speed: 60,
+                   speed2: 150, angle: -Math.PI / 2, spread: 2.2, life: 1.2, size: 2,
+                   grav: 160 },
+        poeira: { n: 5, colors: [0xC618, 0x8410], speed: 15, speed2: 40, angle: -Math.PI / 2,
+                  spread: 2.6, life: 0.4, size: 2, drag: 2 },
+        gosma: { n: 10, colors: [0x07E0, 0x0400], speed: 40, speed2: 100, life: 0.5,
+                 size: 3, grav: 240 },
+        cura: { n: 10, colors: [0x07E0, 0xAFE5], speed: 15, speed2: 35, angle: -Math.PI / 2,
+                spread: 1.2, life: 0.8, size: 2, grav: -40 }
+    },
+    // toca uma receita em (x, y) de mundo: opts sobrepoem os campos (cor,
+    // n...). Devolve false se o nome nao existe
+    play: function (name, x, y, opts) {
+        var pr = this.presets[name];
+        if (!pr) return false;
+        var o = pr;
+        if (opts) {
+            o = {};
+            var k;
+            for (k in pr) o[k] = pr[k];
+            for (k in opts) o[k] = opts[k];
+        }
+        this.burst(x, y, o);
+        if (o.ring) this.ring(x, y, { speed: o.ring.speed, life: o.ring.life,
+                                      color: o.ring.color === undefined ? o.colors && o.colors[0] : o.ring.color });
+        if (o.flash) this.flash(o.flash[0], o.flash[1]);
+        if (o.shake && E.cam) E.cam.shake(o.shake[0], o.shake[1]);
+        return true;
+    },
+
+    // zera TUDO (particulas, textos, emissores, flash) — exit de cena: o
+    // fx e do E (singleton), e sem isto a explosao do jogo terminava em
+    // cima do menu
+    clear: function () {
+        var ps = this._parts;
+        for (var i = 0; i < ps.length; i++) ps[i].dead = true;
+        this._live = 0;
+        this._floaters.length = 0;
+        for (var e = 0; e < this._emitters.length; e++) this._emitters[e].dead = true;
+        this._emitters.length = 0;
+        this._flashT = 0;
+    },
+
     _spawn: function () {
         for (var i = 0; i < this._parts.length; i++) {
             var k = (this._cursor + i) % this._parts.length;
@@ -303,7 +364,13 @@ E.fx = {
             var o = em.opts;
             if (o.duration) {
                 em.t += dt * 1000;
-                if (em.t >= o.duration) { em.on = false; continue; }
+                if (em.t >= o.duration) {
+                    em.on = false;
+                    // once: emissor de UMA vez libera a vaga (sem isso o
+                    // app tinha que marcar dead e reciclar por conta)
+                    if (o.once) em.dead = true;
+                    continue;
+                }
             }
             var src = o.follow ? o.follow() : o;
             if (!src) continue;   // fonte movel indisponivel neste quadro
@@ -325,7 +392,7 @@ E.fx = {
         var fs = this._floaters;
         for (var j = fs.length - 1; j >= 0; j--) {
             fs[j].t += dt;
-            fs[j].y -= 18 * dt;
+            fs[j].y -= fs[j].vy * dt;
             if (fs[j].t >= fs[j].life) fs.splice(j, 1);
         }
         if (this._flashT > 0) this._flashT -= dt;
@@ -365,7 +432,7 @@ E.fx = {
             if (al < 0.4 && mix) fc = S.mixColor(f.color, 0x0000, Math.round(100 - al * 250));
             _flo.color = fc;
             _flo.font = f.font;
-            _flo.px = f.px;
+            _flo.px = f.grow && f.px ? f.px * (1 + f.grow * (1 - al)) : f.px;
             _flo.screen = f.screen;
             E.gfx.text(f.str, f.x, f.y, _flo);
         }

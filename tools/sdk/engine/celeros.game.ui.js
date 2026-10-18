@@ -13,6 +13,10 @@
 // excessoes roladas (list/dialog) sao objetos guardados pelo chamador.
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme).
+//
+// 1.1.0: E.ui.confirm (sim/nao modal), E.ui.toast (aviso que some sozinho,
+// desenhado pela engine por cima da cena), lista com inercia (fling) e
+// scrollTo, e title/pause/gameOver/dialog sem alocar opts por quadro.
 
 var E = require('celeros.game');
 var S = System;
@@ -34,6 +38,21 @@ var _dName = { ts: 'small', color: 0, screen: true };
 var _wM = { font: 0, size: 0 };
 var _PAUSA_LB = ['Continuar', 'Recomecar', 'Sair'];
 var _FIM_LB = ['De novo', 'Sair'];
+var _SN_LB = ['Sim', 'Nao'];
+// scratches das telas prontas (title/pause/gameOver/confirm/toast)
+var _tx = { ts: 'body', align: 'center', valign: undefined, color: 0, screen: true };
+var _bt = { primary: undefined, screen: true };
+var _mn = { y: undefined, x: undefined, w: undefined, row: undefined };
+var _dimO = { screen: true };
+var _arrow = { color: 0, screen: true };
+
+// texto centrado de tela (ts, cor) pelo scratch
+function ctext(str, y, ts, color) {
+    _tx.ts = ts;
+    _tx.color = color;
+    _tx.valign = undefined;
+    E.gfx.text(str, E.W / 2, y, _tx);
+}
 
 // quebra de linha por palavras dentro de maxW (px) — devolve as linhas
 function wrap(str, maxW, st) {
@@ -55,7 +74,7 @@ function wrap(str, maxW, st) {
 }
 
 E.ui = {
-    version: '1.0.1',
+    version: '1.1.0',
 
     // menu vertical immediate-mode: items = ["Jogar", ...] ou
     // [{label, value, danger, disabled}]. Devolve o value (ou label) do
@@ -85,11 +104,16 @@ E.ui = {
 
     // lista COM ROLAGEM (retida — guarde o retorno): arrastar rola, tap
     // seco devolve/calls onPick com o item. items: string ou
-    // {label, value}. o = {items, row, onPick(value, index)}
+    // {label, value, disabled}. o = {items, row, onPick(value, index)}
     list: function (o) {
         var st = { items: o.items || [], row: o.row || Math.round(28 * E.U),
-                   scroll: 0, _dragOn: false, _dragY: 0,
+                   scroll: 0, _dragOn: false, _dragY: 0, _vel: 0,
                    onPick: o.onPick || null, picked: null };
+        // rola ate a linha index ficar no topo (o draw clampa no fim)
+        st.scrollTo = function (index) {
+            st.scroll = index * st.row;
+            st._vel = 0;
+        };
         st.draw = function (x, y, w, h) {
             var T = E.theme || EMPTY;
             var i = E.input;
@@ -102,9 +126,20 @@ E.ui = {
             if (i.justDown && i.x >= x && i.x <= x + w && i.y >= y && i.y <= y + h) {
                 st._dragOn = true;
                 st._dragY = st.scroll + i.y;
+                st._vel = 0;          // dedo na lista segura o fling
             }
             if (!i.down) st._dragOn = false;
-            if (st._dragOn) st.scroll = st._dragY - i.y;
+            if (st._dragOn) {
+                var ns = st._dragY - i.y;
+                // velocidade suavizada (px/quadro) para o fling do soltar
+                st._vel = st._vel * 0.5 + (ns - st.scroll) * 0.5;
+                st.scroll = ns;
+            } else if (st._vel > 0.5 || st._vel < -0.5) {
+                // inercia: segue rolando e freia (8%/quadro); parede zera
+                st.scroll += st._vel;
+                st._vel *= 0.92;
+                if (st.scroll < 0 || st.scroll > maxScroll) st._vel = 0;
+            } else st._vel = 0;
             // dedo pra CIMA mostra o conteudo de baixo (scroll cresce),
             // como na rolagem de toque padrao
             if (st.scroll < 0) st.scroll = 0;
@@ -122,10 +157,11 @@ E.ui = {
                 if (typeof st.items[k] === 'string') { _lStr.label = st.items[k]; it = _lStr; }
                 else it = st.items[k];
                 var ry = y + k * st.row - st.scroll;
-                var noTap = !tap || tap.x < x || tap.x > x + w ||
+                var dis = !!it.disabled;   // item travado: desenha apagado, nao pega
+                var noTap = dis || !tap || tap.x < x || tap.x > x + w ||
                             tap.y < ry || tap.y > ry + st.row;
                 _lRect.x = x; _lRect.y = ry; _lRect.w = w; _lRect.h = st.row;
-                if (E.press(_lRect) || !noTap) {
+                if (!dis && (E.press(_lRect) || !noTap)) {
                     E.gfx.button(it.label, x + Math.round(2 * E.U), ry + 2,
                                  w - Math.round(4 * E.U), st.row - 4, _lRow);
                     if (!noTap) {
@@ -134,7 +170,8 @@ E.ui = {
                         if (st.onPick) st.onPick(st.picked, k);
                     }
                 } else {
-                    _lTxt.color = T.text;
+                    _lTxt.color = dis ? (T.textDim === undefined ? T.text : T.textDim)
+                                      : T.text;
                     E.gfx.text(it.label, x + Math.round(8 * E.U), ry + st.row / 2, _lTxt);
                 }
             }
@@ -192,8 +229,9 @@ E.ui = {
                            ty0 + li * Math.round(st.h + 2), _dTxt);
             }
             if (completo) {
+                _arrow.color = T.accent;
                 E.gfx.text('>', x + w - Math.round(14 * E.U), y + h - Math.round(12 * E.U),
-                           { color: T.accent, screen: true });
+                           _arrow);
             }
             var tap = E.input.tap;
             if (tap && tap.x >= x && tap.x <= x + w && tap.y >= y && tap.y <= y + h) {
@@ -210,46 +248,55 @@ E.ui = {
 
     // tela de titulo: devolve 'start' (ou o tap do botao extra), ou null.
     // o = {game, subtitle, start ('JOGAR'), extra (label do 2o botao), best}
+    // start: null/false esconde o botao (a cena poe o proprio menu no lugar);
+    // o extra sobe para o centro quando o start nao existe.
     title: function (o) {
         o = o || EMPTY;
         var T = E.theme || EMPTY;
         var y = Math.round(E.H * 0.2);
-        E.gfx.text(o.game || '', E.W / 2, y, { ts: 'title', align: 'center',
-                                               color: T.accent, screen: true });
-        if (o.subtitle) {
-            E.gfx.text(o.subtitle, E.W / 2, y + Math.round(38 * E.U),
-                       { ts: 'body', align: 'center', color: T.text, screen: true });
-        }
+        ctext(o.game || '', y, 'title', T.accent);
+        if (o.subtitle) ctext(o.subtitle, y + Math.round(38 * E.U), 'body', T.text);
         if (o.best !== undefined) {
-            E.gfx.text('Recorde: ' + o.best, E.W / 2, y + Math.round(62 * E.U),
-                       { ts: 'small', align: 'center', color: T.text, screen: true });
+            ctext('Recorde: ' + o.best, y + Math.round(62 * E.U), 'small', T.text);
         }
         var act = null;
         var w = Math.round(150 * E.U), h = Math.round(44 * E.U);
         var bx = Math.round((E.W - w) / 2);
-        var r = E.gfx.button(o.start || 'JOGAR', bx, Math.round(E.H * 0.5), w, h,
-                             { screen: true });
-        if (E.hit(r)) act = 'start';
+        var by = Math.round(E.H * 0.5);
+        var temStart = o.start !== null && o.start !== false;
+        if (temStart) {
+            _bt.primary = undefined;
+            var r = E.gfx.button(o.start || 'JOGAR', bx, by, w, h, _bt);
+            if (E.hit(r)) act = 'start';
+            by += h + Math.round(10 * E.U);
+        }
         if (o.extra) {
-            r = E.gfx.button(o.extra, bx, Math.round(E.H * 0.5) + h + Math.round(10 * E.U),
-                             w, Math.round(36 * E.U), { primary: false, screen: true });
+            _bt.primary = false;
+            r = E.gfx.button(o.extra, bx, by, w, Math.round(36 * E.U), _bt);
             if (E.hit(r)) act = 'extra';
         }
         return act;
     },
 
     // veu de pausa sobre o jogo congelado: devolve 'resume'|'restart'|
-    // 'quit' do tap, ou null. o = {title ('PAUSA'), labels: [3]}
+    // 'quit' do tap, ou null. o = {title ('PAUSA'), labels: [3], clear,
+    // veil}. clear: true nao pinta o fundo (a cena congelada ja esta no
+    // vidro); veil pinta a cor dada em vez do veu padrao.
     pause: function (o) {
         o = o || EMPTY;
         var T = E.theme || EMPTY;
-        var dim = E.caps.wide ? S.mixColor(T.bg === undefined ? 0x0000 : T.bg, 0x0000, 62)
-                              : 0x0000;
-        E.gfx.rect(0, 0, E.W, E.H, dim, { screen: true });
-        E.gfx.text(o.title || 'PAUSA', E.W / 2, Math.round(E.H * 0.24),
-                   { ts: 'big', align: 'center', color: T.text, screen: true });
+        if (o.clear !== true) {
+            var dim = o.veil !== undefined ? o.veil :
+                      (E.caps.wide ? S.mixColor(T.bg === undefined ? 0x0000 : T.bg, 0x0000, 62)
+                                   : 0x0000);
+            E.gfx.rect(0, 0, E.W, E.H, dim, _dimO);
+        }
+        ctext(o.title || 'PAUSA', Math.round(E.H * 0.18), 'big', T.text);
         var lb = o.labels || _PAUSA_LB;
-        var pick = E.ui.menu(lb, {});
+        // menu abaixo do titulo (o titulo sobe para 0.18H e o menu fica no
+        // default 0.30H: no 480 o 0.24H encostava na 1a opcao)
+        _mn.y = undefined;
+        var pick = E.ui.menu(lb, _mn);
         if (pick === lb[0]) return 'resume';
         if (pick === lb[1]) return 'restart';
         if (pick === lb[2]) return 'quit';
@@ -257,31 +304,107 @@ E.ui = {
     },
 
     // tela de fim: devolve 'again'|'quit' do tap, ou null. o = {title
-    // ('FIM DE JOGO'), score, best, isNew, labels: [2]}
+    // ('FIM DE JOGO'), score, detail (linha extra, ex. "Adversario: 3"),
+    // best, isNew, labels: [2], clear, veil}. O layout e responsivo: no 480
+    // o recorde ficava embaixo do primeiro botao (H*0.36 + 40U x H*0.52).
     gameOver: function (o) {
         o = o || EMPTY;
         var T = E.theme || EMPTY;
-        E.gfx.rect(0, 0, E.W, E.H, T.bg === undefined ? 0x0000 : T.bg, { screen: true });
-        E.gfx.text(o.title || 'FIM DE JOGO', E.W / 2, Math.round(E.H * 0.22),
-                   { ts: 'big', align: 'center', color: T.err, screen: true });
-        var y = Math.round(E.H * 0.36);
-        if (o.score !== undefined) {
-            E.gfx.text('Pontos: ' + o.score, E.W / 2, y,
-                       { ts: 'title', align: 'center', color: T.text, screen: true });
+        if (o.clear !== true) {
+            var bg = o.veil !== undefined ? o.veil :
+                     (E.caps.wide ? S.mixColor(T.bg === undefined ? 0x0000 : T.bg, 0x0000, 90)
+                                  : (T.bg === undefined ? 0x0000 : T.bg));
+            E.gfx.rect(0, 0, E.W, E.H, bg, _dimO);
         }
+        ctext(o.title || 'FIM DE JOGO', Math.round(E.H * 0.16), 'big', T.err);
+        var y = Math.round(E.H * 0.26);
+        if (o.score !== undefined) ctext('Pontos: ' + o.score, y, 'title', T.text);
+        if (o.detail) ctext(o.detail, y + Math.round(34 * E.U), 'label', T.text);
         if (o.best !== undefined) {
-            E.gfx.text((o.isNew ? 'NOVO RECORDE! ' : 'Recorde: ') + o.best,
-                       E.W / 2, y + Math.round(40 * E.U),
-                       { ts: 'label', align: 'center',
-                         color: o.isNew ? T.accent : T.text, screen: true });
+            ctext((o.isNew ? 'NOVO RECORDE! ' : 'Recorde: ') + o.best,
+                  y + Math.round(64 * E.U), 'label', o.isNew ? T.accent : T.text);
         }
         var lb = o.labels || _FIM_LB;
-        var pick = E.ui.menu(lb, { y: Math.round(E.H * 0.52) });
+        _mn.y = Math.round(E.H * 0.60);
+        var pick = E.ui.menu(lb, _mn);
         if (pick === lb[0]) return 'again';
         if (pick === lb[1]) return 'quit';
         return null;
-    }
+    },
+
+    // pergunta sim/nao sobre a cena (veu + painel): devolve 'yes'|'no' do
+    // tap, ou null. o = {title, labels: [2]} — "Sair sem salvar?"
+    confirm: function (msg, o) {
+        o = o || EMPTY;
+        var T = E.theme || EMPTY;
+        var dim = E.caps.wide ? S.mixColor(T.bg === undefined ? 0x0000 : T.bg, 0x0000, 62)
+                              : 0x0000;
+        E.gfx.rect(0, 0, E.W, E.H, dim, _dimO);
+        var pw = Math.round(Math.min(E.W - 24 * E.U, 210 * E.U));
+        var px = Math.round((E.W - pw) / 2);
+        var st = E.font((E.ts.body || 13) * E.U);
+        var lines = wrap(msg, pw - Math.round(20 * E.U), st);
+        var lh = Math.round(st.h + 3);
+        var top = o.title ? Math.round(26 * E.U) : Math.round(12 * E.U);
+        var bh = Math.round(36 * E.U);
+        var ph = top + lines.length * lh + Math.round(14 * E.U) + bh + Math.round(10 * E.U);
+        var py = Math.round((E.H - ph) / 2);
+        E.gfx.panel(px, py, pw, ph, _dimO);
+        if (o.title) ctext(o.title, py + Math.round(8 * E.U), 'label', T.accent);
+        for (var i = 0; i < lines.length; i++) {
+            ctext(lines[i], py + top + i * lh, 'body', T.text);
+        }
+        var lb = o.labels || _SN_LB;
+        var gap = Math.round(8 * E.U), bw = Math.round((pw - gap * 3) / 2);
+        var by = py + ph - bh - Math.round(10 * E.U);
+        _bt.primary = undefined;
+        var ry = E.gfx.button(lb[0], px + gap, by, bw, bh, _bt);
+        _bt.primary = false;
+        var rn = E.gfx.button(lb[1], px + gap * 2 + bw, by, bw, bh, _bt);
+        if (E.hit(ry)) return 'yes';
+        if (E.hit(rn)) return 'no';
+        return null;
+    },
+
+    // aviso curto que some sozinho ("Salvo!", "+1 vida"): a ENGINE desenha
+    // por cima da cena (E._modDraws) — chame uma vez, sem draw a mao. Um
+    // toast novo substitui o anterior. o = {ms (1500), color, y (0..1 da
+    // altura, default 0.82)}
+    toast: function (msg, o) {
+        o = o || EMPTY;
+        var t = E.ui._toast;
+        t.msg = String(msg);
+        t.until = S.millis() + (o.ms || 1500);
+        t.color = o.color;
+        t.y = o.y === undefined ? 0.82 : o.y;
+        E.redraw();
+    },
+    _toast: { msg: null, until: 0, color: undefined, y: 0.82 }
 };
+
+var _toTx = { ts: 'body', align: 'center', valign: 'middle', color: 0, fit: 0, screen: true };
+var _toBox = { r: 0, screen: true };
+// relogio REAL (a pausa congela os ticks, nao o aviso); cada draw com o
+// aviso vivo agenda o proximo (cena static) e o que expira agenda 1 a mais
+// — a camada suja / o redraw da cena apaga o resto
+// core < 1.1.0 nao tem o registro de overlays: o toast fica mudo (o
+// index.json pede ^1.1.0; a guarda cobre o --deps-local antigo)
+if (E._modDraws) E._modDraws.push(function () {
+    var t = E.ui._toast;
+    if (!t.msg) return;
+    E.redraw();
+    if (S.millis() >= t.until) { t.msg = null; return; }
+    var T = E.theme || EMPTY;
+    var tw = E.gfx.measure(t.msg, _toTx) + Math.round(24 * E.U);
+    var th = Math.round(28 * E.U);
+    if (tw > E.W - 16) tw = E.W - 16;
+    var x = Math.round((E.W - tw) / 2), y = Math.round(E.H * t.y - th / 2);
+    _toBox.r = Math.round(th / 2);
+    E.gfx.rect(x, y, tw, th, T.card === undefined ? 0x2104 : T.card, _toBox);
+    _toTx.color = t.color !== undefined ? t.color : (T.text === undefined ? 0xFFFF : T.text);
+    _toTx.fit = tw - Math.round(12 * E.U);
+    E.gfx.text(t.msg, E.W / 2, y + th / 2, _toTx);
+});
 
 E._mods.push('ui');
 

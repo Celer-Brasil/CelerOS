@@ -11,5 +11,11 @@
   "celeros.game.fx": { "deps": { "celeros.game": "^1.0.0" } },
   "celeros.game.spr": { "deps": { "celeros.game": "^1.0.0" } },
   "celeros.game.tilemap": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.ui": { "deps": { "celeros.game": "^1.0.0" } }
+  "celeros.game.ui": { "deps": { "celeros.game": "^1.1.0" } },
+  "celeros.game.fsm": { "deps": { "celeros.game": "^1.0.0" } },
+  "celeros.game.events": { "deps": { "celeros.game": "^1.2.0" } },
+  "celeros.game.path": { "deps": { "celeros.game": "^1.0.0" } },
+  "celeros.game.collide": { "deps": { "celeros.game": "^1.0.0" } },
+  "celeros.game.pad": { "deps": { "celeros.game": "^1.0.0" } },
+  "celeros.game.level": { "deps": { "celeros.game": "^1.0.0" } }
 }

@@ -40,8 +40,35 @@
 // pendurado pintando a tela inteira para sempre) e o fim do veu com
 // RECORTE ativo (dirty.clip) tambem repinta a faixa de fora do recorte
 // (o veu cobre a tela toda; o _full so cobre o clip).
+// 1.1.0 (registro E._modDraws: overlays de modulo apos o draw da cena).
+// 1.1.0: E.m.wrap no multiplo exato abaixo do intervalo devolvia b (fora
+// de [a, b)); randInt(n) de 1 arg dava NaN; tween de prop ausente no obj
+// dava NaN e o tween com delay lia o "de" na criacao (agora no inicio).
+// Novos: E.pause/E.paused, E.timeScale, every(ms, fn, vezes), tween com
+// yoyo/repeat/onUpdate, easings cubic/elastic/bounce, smoothstep/angDiff/
+// chance/shuffle, rng com .int/.range/.pick, cam.deadzone + worldX/worldY,
+// pool com cursor, group.sort/remove, save.obj/setObj/del, hit/press com
+// folga, input.doubleTap, goto valida a cena na hora, E.debug (overlay).
 
-var E = { version: '1.0.2' };
+// 1.2.0: pilha de cenas (E.push/E.pop com pause/resume e a camada suja
+// da cena de baixo restaurada), cena {cleanup: true} mata os timers/
+// tweens que criou ao sair, E.killTweensOf, E.m.lerpAngle/snap/noise,
+// input.heldMs, group.find/countIf, pool.spawn(init), cam.inView +
+// follow {offset}, gfx.poly/wrap/textBox + text {shadow}, sfx com
+// intervalo minimo por som (audio.gap) e save.inc.
+// 1.3.0: timers/tweens do MESMO quadro disparam na ordem de criacao (o laco
+// de tras para frente invertia: after(100, a); after(100, b) tocava b
+// antes); tween sem ms virava NaN e nunca terminava; every(0) era tiro
+// unico; E.m.map com a === b dava NaN; button/bar/panel ignoravam a cor
+// preta (0x0000 caia no `||`); textBox com max estourava a largura no
+// "..."; tick de modulo com fn.always roda tambem na pausa (o botao do
+// pad que despausa nao congelava). Novos: goto/push/pop {arg} chegam no
+// enter/resume, E.prevScene, E.timeLeft, tween relativo ("+=20"), seq com
+// {wait}/{call}, E.m.weighted/lerpColor/fmt/clock/moveToward,
+// group.closest, pool.find, cam.panTo, gfx.hearts, save.bool/toggle e o
+// overlay do debug com a cena e a pilha.
+
+var E = { version: '1.3.0' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -52,6 +79,9 @@ var EMPTY = {};
 // require e pendura function(dt, now) aqui — o loop chama antes do
 // update da cena (o fx morava colado no corpo do E.run)
 E._modTicks = [];
+// overlays dos modulos (toast do ui): function() chamada DEPOIS do draw da
+// cena, ainda dentro da camada suja — fica por cima e apaga sozinho
+E._modDraws = [];
 E._mods = [];       // nomes carregados (["fx", "spr", ...]) — diagnostico
 E._inited = false;  // modulo carregado DEPOIS do init se auto-inicializa
 
@@ -109,6 +139,7 @@ E.init = function (opts) {
         S.keepAwake(true);
     }
     E.save.prefix = opts.save || '';
+    if (opts.debug !== undefined) E.debug = !!opts.debug;
     // bases de assets e pool de particulas sao dos MODULOS adotados —
     // o core roda sozinho (um jogo core-only nao paga spr/fx)
     if (E.spr) {
@@ -185,13 +216,18 @@ E.ts = { tiny: 9, small: 11, body: 13, label: 15, big: 20, title: 28, huge: 40 }
 E.m = {
     clamp: function (v, a, b) { return v < a ? a : (v > b ? b : v); },
     lerp: function (a, b, t) { return a + (b - a) * t; },
-    map: function (v, a, b, c, d) { return c + (v - a) * (d - c) / (b - a); },
+    // intervalo de origem vazio (a === b) devolve c, nao NaN/Infinity
+    map: function (v, a, b, c, d) { return b === a ? c : c + (v - a) * (d - c) / (b - a); },
     rand: function (a, b) {
         if (a === undefined) { a = 0; b = 1; }
         else if (b === undefined) { b = a; a = 0; }
         return a + Math.random() * (b - a);
     },
-    randInt: function (a, b) { return Math.floor(E.m.rand(a, b + 1)); },
+    // randInt(n) = 0..n; randInt(a, b) = a..b (inclusivos)
+    randInt: function (a, b) {
+        if (b === undefined) { b = a; a = 0; }
+        return Math.floor(E.m.rand(a, b + 1));
+    },
     pick: function (arr) { return arr[Math.floor(Math.random() * arr.length)]; },
     dist: function (x0, y0, x1, y1) {
         var dx = x1 - x0, dy = y1 - y0;
@@ -206,10 +242,116 @@ E.m = {
         if (v < target) return v + delta > target ? target : v + delta;
         return v - delta < target ? target : v - delta;
     },
+    // v dentro de [a, b): o multiplo exato abaixo do intervalo cai em a
+    // (antes devolvia b — wrap(-10, 0, 10) era 10, fora do intervalo)
     wrap: function (v, a, b) {
-        if (v < a) return b - (a - v) % (b - a);
+        if (v < a) {
+            var r = (a - v) % (b - a);
+            return r === 0 ? a : b - r;
+        }
         if (v >= b) return a + (v - a) % (b - a);
         return v;
+    },
+    // diferenca angular mais curta de a para b, em (-PI, PI] (mira/rotacao
+    // que nao da a volta comprida)
+    angDiff: function (a, b) {
+        var d = (b - a) % (Math.PI * 2);
+        if (d > Math.PI) d -= Math.PI * 2;
+        else if (d <= -Math.PI) d += Math.PI * 2;
+        return d;
+    },
+    // interpola angulos pelo caminho curto (torre girando ate a mira)
+    lerpAngle: function (a, b, t) { return a + E.m.angDiff(a, b) * t; },
+    // arredonda ao multiplo de step (grade de 16 px, angulo de 45 graus)
+    snap: function (v, step) { return Math.round(v / step) * step; },
+    // ruido de valor suave 0..1 em 1D/2D (terreno, nuvem, tremor organico):
+    // mesma entrada = mesma saida; seed muda o mundo
+    noise: function (x, y, seed) {
+        if (y === undefined) y = 0;
+        var s = (seed || 0) | 0;
+        var xi = Math.floor(x), yi = Math.floor(y);
+        var xf = x - xi, yf = y - yi;
+        var u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+        var a = hash2(xi, yi, s), b = hash2(xi + 1, yi, s);
+        var c = hash2(xi, yi + 1, s), d = hash2(xi + 1, yi + 1, s);
+        return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+    },
+    // 0 abaixo de e0, 1 acima de e1, curva S no meio
+    smoothstep: function (e0, e1, v) {
+        var t = E.m.clamp((v - e0) / (e1 - e0), 0, 1);
+        return t * t * (3 - 2 * t);
+    },
+    // true com probabilidade p (0..1); rnd opcional (E.rng) p/ determinismo
+    chance: function (p, rnd) { return (rnd ? rnd() : Math.random()) < p; },
+    // embaralha NO LUGAR (Fisher-Yates) e devolve o mesmo array
+    shuffle: function (arr, rnd) {
+        for (var i = arr.length - 1; i > 0; i--) {
+            var j = Math.floor((rnd ? rnd() : Math.random()) * (i + 1));
+            var t = arr[i];
+            arr[i] = arr[j];
+            arr[j] = t;
+        }
+        return arr;
+    },
+    // sorteio com peso (tabela de loot): [[item, peso], ...] ou {item: peso}
+    // — devolve o item; rnd opcional (E.rng) p/ determinismo
+    weighted: function (table, rnd) {
+        var tot = 0, k, i, isArr = table && table.length !== undefined;
+        if (isArr) { for (i = 0; i < table.length; i++) tot += table[i][1] > 0 ? table[i][1] : 0; }
+        else for (k in table) tot += table[k] > 0 ? table[k] : 0;
+        if (!(tot > 0)) return undefined;
+        var x = (rnd ? rnd() : Math.random()) * tot;
+        if (isArr) {
+            for (i = 0; i < table.length; i++) {
+                var w = table[i][1] > 0 ? table[i][1] : 0;
+                if (x < w) return table[i][0];
+                x -= w;
+            }
+            return table[table.length - 1][0];
+        }
+        var last;
+        for (k in table) {
+            var w2 = table[k] > 0 ? table[k] : 0;
+            if (w2 > 0) last = k;
+            if (x < w2) return k;
+            x -= w2;
+        }
+        return last;
+    },
+    // mistura de cores RGB565 por canal (t 0..1) — roda sem o mixColor do
+    // firmware (harness/emu) e da a mesma cor em toda placa
+    lerpColor: function (c1, c2, t) {
+        if (t <= 0) return c1;
+        if (t >= 1) return c2;
+        var r1 = c1 >> 11, g1 = (c1 >> 5) & 63, b1 = c1 & 31;
+        var r = Math.round(r1 + ((c2 >> 11) - r1) * t);
+        var g = Math.round(g1 + (((c2 >> 5) & 63) - g1) * t);
+        var b = Math.round(b1 + ((c2 & 31) - b1) * t);
+        return (r << 11) | (g << 5) | b;
+    },
+    // 12345 -> "12.345" (placar legivel); sep opcional (default ".")
+    fmt: function (n, sep) {
+        var s = String(Math.floor(Math.abs(n))), out = '';
+        var sp = sep === undefined ? '.' : sep;
+        while (s.length > 3) { out = sp + s.slice(-3) + out; s = s.slice(0, -3); }
+        return (n < 0 ? '-' : '') + s + out;
+    },
+    // ms -> "m:ss" (ou "h:mm:ss" a partir de 1 h) — cronometro de fase
+    clock: function (ms) {
+        var t = Math.max(0, Math.floor(ms / 1000));
+        var h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
+        var ss = s < 10 ? '0' + s : '' + s;
+        if (h > 0) return h + ':' + (m < 10 ? '0' + m : m) + ':' + ss;
+        return m + ':' + ss;
+    },
+    // anda obj ({x, y}) ate (x, y) no maximo step px; true ao chegar
+    moveToward: function (obj, x, y, step) {
+        var dx = x - obj.x, dy = y - obj.y;
+        var d = Math.sqrt(dx * dx + dy * dy);
+        if (d <= step || d === 0) { obj.x = x; obj.y = y; return true; }
+        obj.x += dx / d * step;
+        obj.y += dy / d * step;
+        return false;
     },
     sign: function (v) { return v > 0 ? 1 : (v < 0 ? -1 : 0); },
     linear: function (t) { return t; },
@@ -220,13 +362,42 @@ E.m = {
         var s = 1.70158;
         t = t - 1;
         return t * t * ((s + 1) * t + s) + 1;
+    },
+    inCubic: function (t) { return t * t * t; },
+    outCubic: function (t) { t = t - 1; return t * t * t + 1; },
+    inOutCubic: function (t) {
+        return t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+    },
+    // mola que passa do alvo e assenta (pop de UI)
+    outElastic: function (t) {
+        if (t <= 0 || t >= 1) return t <= 0 ? 0 : 1;
+        return Math.pow(2, -10 * t) * Math.sin((t - 0.075) * (2 * Math.PI) / 0.3) + 1;
+    },
+    // quica no chao 3 vezes (queda de peca, moeda)
+    outBounce: function (t) {
+        var n = 7.5625, d = 2.75;
+        if (t < 1 / d) return n * t * t;
+        if (t < 2 / d) { t -= 1.5 / d; return n * t * t + 0.75; }
+        if (t < 2.5 / d) { t -= 2.25 / d; return n * t * t + 0.9375; }
+        t -= 2.625 / d;
+        return n * t * t + 0.984375;
     }
 };
 
-// PRNG deterministico (xorshift32) — testes e mundo procedural.
+// hash inteiro -> 0..1 (base do E.m.noise; Math.imul nao existe no ES5)
+function hash2(x, y, s) {
+    var h = (x * 374761393 + y * 668265263 + s * 1442695041) % 2147483647;
+    h = (h ^ (h >>> 13)) * 1274126177 % 2147483647;
+    h = h ^ (h >>> 16);
+    return ((h >>> 0) % 100000) / 100000;
+}
+
+// PRNG deterministico (xorshift32) — testes e mundo procedural. A funcao
+// devolvida carrega .range(a, b), .int(a, b) (inclusivo) e .pick(arr) —
+// a mesma semente da a mesma fase inteira sem passar o rnd a mao
 E.rng = function (seed) {
     var a = (seed >>> 0) || 0x9E3779B9;
-    return function () {
+    var r = function () {
         a ^= a << 13;
         a >>>= 0;
         a ^= a >>> 17;
@@ -234,6 +405,13 @@ E.rng = function (seed) {
         a >>>= 0;
         return a / 4294967296;
     };
+    r.range = function (x, y) { return x + r() * (y - x); };
+    r.int = function (x, y) {
+        if (y === undefined) { y = x; x = 0; }
+        return x + Math.floor(r() * (y - x + 1));
+    };
+    r.pick = function (arr) { return arr[Math.floor(r() * arr.length)]; };
+    return r;
 };
 
 // ----------------------------------------------------------- input -------
@@ -247,6 +425,7 @@ E.input = {
     dx: 0, dy: 0,          // delta desde o frame anterior
     holdDx: 0, holdDy: 0,  // delta desde o press
     tap: null,             // {x, y} — toque seco (< tapMs, sem arrastar)
+    doubleTap: null,       // {x, y} — 2o tap seco perto do 1o (< dblMs)
     swipe: null,           // {dir, dx, dy, dist}
     longpress: false,      // >= longMs sem arrastar (1 tiro por toque)
     btn: 0,                // botao fisico (devkit): 1 curto, 2 longo
@@ -254,7 +433,10 @@ E.input = {
     tapMs: 350,
     swipeMin: 30,
     longMs: 600,
-    _raw: { down: false, sx: 0, sy: 0, t0: 0, moved: false, longDone: false }
+    dblMs: 300,
+    heldMs: 0,             // ms com o dedo pousado (0 solto) — carga de tiro
+    _raw: { down: false, sx: 0, sy: 0, t0: 0, moved: false, longDone: false,
+            lastTapT: -1e9, lastTapX: 0, lastTapY: 0 }
 };
 
 E._pollInput = function (now) {
@@ -264,6 +446,7 @@ E._pollInput = function (now) {
     i.dx = 0;
     i.dy = 0;
     i.tap = null;
+    i.doubleTap = null;
     i.swipe = null;
     i.longpress = false;
     var t = S.getTouch();
@@ -285,6 +468,7 @@ E._pollInput = function (now) {
         i.x = t.x;
         i.y = t.y;
         i.down = true;
+        i.heldMs = now - r.t0;
         i.holdDx = t.x - r.sx;
         i.holdDy = t.y - r.sy;
         if (!r.moved && (Math.abs(i.holdDx) > i.dragThresh ||
@@ -297,9 +481,23 @@ E._pollInput = function (now) {
     } else if (r.down) {
         r.down = false;
         i.down = false;
+        i.heldMs = 0;
         i.justUp = true;
-        if (!r.moved && now - r.t0 < i.tapMs) i.tap = { x: r.sx, y: r.sy };
-        else if (r.moved) {
+        if (!r.moved && now - r.t0 < i.tapMs) {
+            i.tap = { x: r.sx, y: r.sy };
+            // duplo: 2o tap seco a < dblMs e < 2x o limiar do 1o (o 3o tap
+            // recomeca a contagem — triplo nao vira dois duplos)
+            if (now - r.lastTapT < i.dblMs &&
+                Math.abs(r.sx - r.lastTapX) <= i.dragThresh * 2 &&
+                Math.abs(r.sy - r.lastTapY) <= i.dragThresh * 2) {
+                i.doubleTap = i.tap;
+                r.lastTapT = -1e9;
+            } else {
+                r.lastTapT = now;
+                r.lastTapX = r.sx;
+                r.lastTapY = r.sy;
+            }
+        } else if (r.moved) {
             var dx = i.x - r.sx, dy = i.y - r.sy;
             if (dx * dx + dy * dy >= i.swipeMin * i.swipeMin) {
                 i.swipe = {
@@ -314,16 +512,21 @@ E._pollInput = function (now) {
     return t;
 };
 
-// toque seco dentro do rect {x,y,w,h}
-E.hit = function (b) {
+// toque seco dentro do rect {x,y,w,h}; pad = folga em px em volta (alvo
+// pequeno — moeda, peca de 12 px — fica tocavel sem crescer no desenho)
+E.hit = function (b, pad) {
     var t = E.input.tap;
-    return !!t && t.x >= b.x && t.x <= b.x + b.w && t.y >= b.y && t.y <= b.y + b.h;
+    var p = pad || 0;
+    return !!t && t.x >= b.x - p && t.x <= b.x + b.w + p &&
+           t.y >= b.y - p && t.y <= b.y + b.h + p;
 };
 
-// dedo pressionado dentro do rect (feedback de botao apertado)
-E.press = function (b) {
+// dedo pressionado dentro do rect (feedback de botao apertado); pad idem
+E.press = function (b, pad) {
     var i = E.input;
-    return i.down && i.x >= b.x && i.x <= b.x + b.w && i.y >= b.y && i.y <= b.y + b.h;
+    var p = pad || 0;
+    return i.down && i.x >= b.x - p && i.x <= b.x + b.w + p &&
+           i.y >= b.y - p && i.y <= b.y + b.h + p;
 };
 
 // ------------------------------------------------- cenas e loop ----------
@@ -339,10 +542,88 @@ E._redraw = true;       // cena static: pede 1 draw
 E._btns = [];           // botoes desenhados no ultimo draw (E.gfx.button)
 E._btnOn = -1;          // indice do botao sob o dedo (feedback de press)
 
+// cena inexistente falha AQUI (com a lista das que existem), nao no
+// quadro seguinte dentro do loop — o stack trace aponta quem chamou
 E.goto = function (name, opts) {
+    if (E._scenes && !E._scenes[name]) {
+        var nomes = [];
+        for (var k in E._scenes) nomes.push(k);
+        throw new Error('cena inexistente: ' + name + ' (cenas: ' + nomes.join(', ') + ')');
+    }
     E._next = name;
-    E._transReq = opts || null;
+    E._nextKind = 'goto';
+    E._nextArg = opts ? opts.arg : undefined;
+    E._transReq = transOf(opts);
 };
+// opts so com {arg} nao e pedido de veu (qualquer outra chave e, como
+// antes: {ms} sozinho abre o iris)
+function transOf(o) {
+    if (!o) return null;
+    for (var k in o) if (k !== 'arg') return o;
+    return null;
+}
+// cena anterior (nome) — o "voltar" de um menu de opcoes aberto de dois
+// lugares
+E.prevScene = '';
+E._nextArg = undefined;
+
+// PILHA de cenas: push abre a cena por cima SEM sair da atual (que recebe
+// pause() e fica parada — nem update nem draw; o quadro dela segue no
+// vidro), pop volta a ela (resume(), camada suja restaurada e repaint
+// integral). Inventario, mapa, dialogo de loja sobre o jogo. goto com a
+// pilha cheia sai de TODAS. Timers/tweens da cena de baixo seguem andando:
+// para congelar o jogo tambem, combine com E.pause()
+E._stack = [];
+E._nextKind = null;
+E.push = function (name, opts) {
+    E.goto(name, opts);
+    E._nextKind = 'push';
+};
+E.pop = function (opts) {
+    if (!E._stack.length) return false;
+    E._next = E._stack[E._stack.length - 1].name;
+    E._nextKind = 'pop';
+    E._nextArg = opts ? opts.arg : undefined;
+    E._transReq = transOf(opts);
+    return true;
+};
+// profundidade da pilha (0 = cena base)
+E.depth = function () { return E._stack.length; };
+
+// geracao da cena corrente: cresce a cada entrada — timers/tweens/ouvintes
+// marcam onde nasceram (cleanup e eventos {scene: true})
+E._sceneGen = 0;
+E._genSeq = 0;          // contador monotono (o pop devolve a geracao de baixo)
+
+// pausa do JOGO: com E.paused o update da cena recebe dt = 0 (e E.dt = 0),
+// fx/camera/timers/tweens congelam e o draw segue (o veu de pausa desenha
+// por cima — E.ui.pause). Timers e tweens contam no relogio do sistema: no
+// resume a engine empurra os prazos pelo tempo parado
+E.paused = false;
+E._pauseAt = 0;
+E.pause = function (on) {
+    on = on === undefined ? !E.paused : !!on;
+    if (on === E.paused) return E.paused;
+    var now = S.millis();
+    if (on) E._pauseAt = now;
+    else {
+        var gap = now - E._pauseAt, k;
+        for (k = 0; k < E._timers.length; k++) E._timers[k].at += gap;
+        for (k = 0; k < E._tweens.length; k++) E._tweens[k].t0 += gap;
+    }
+    E.paused = on;
+    E._redraw = true;
+    return on;
+};
+
+// camera lenta/rapida: escala o dt do update, do fx e da camera (0.3 =
+// camera lenta no golpe final). Timers e tweens seguem o relogio
+E.timeScale = 1;
+
+// overlay de diagnostico (E.debug = true ou init {debug}): fps, ms do
+// quadro e caixas da camada suja no canto superior esquerdo
+E.debug = false;
+E.frameMs = 0;          // ms gastos no ultimo quadro (update + draw)
 E.quit = function () { E._quit = true; };
 // cena static: agenda um draw (estado mudou). Em cena comum e no-op.
 E.redraw = function () { E._redraw = true; };
@@ -359,6 +640,9 @@ E.redraw = function () { E._redraw = true; };
 // por quadro — transicao e curta).
 E._trans = null;
 E._transReq = null;
+// publico (1.1.0): true enquanto um veu de E.goto esta ativo — cenas static
+// usam para nao pintar a tela inteira a cada quadro da transicao
+E.transitioning = false;
 E._drawTrans = function () {
     var t = E._trans;
     var p = t.t / t.ms;
@@ -430,25 +714,49 @@ function veilClean() {
 // antes do update da cena. static: true = a cena so desenha na entrada,
 // no E.redraw() e quando o dedo entra/sai de um E.gfx.button — menu
 // parado nao repinta (nem empurra) nada por quadro.
-E.run = function (scenes, first) {
+E.run = function (scenes, first, firstArg) {
     E._scenes = scenes;
+    E.sceneName = '';
+    E.prevScene = '';
     E._quit = false;
     E._next = null;
     var cur = null;
 
-    function enter(name) {
+    // arg (goto/push {arg}) chega no enter(arg): a fase escolhida no menu
+    // vai direto para a cena do jogo sem passar pelo E.data
+    function enter(name, arg) {
         cur = scenes[name];
         if (!cur) throw new Error('cena inexistente: ' + name);
         E._scene = cur;
+        if (E.sceneName) E.prevScene = E.sceneName;
         E.sceneName = name;
+        E._sceneGen = ++E._genSeq;
+        cur._gen = E._sceneGen;
         E._redraw = true;
         E._btns.length = 0;
         E._btnOn = -1;
         // a camada suja e da cena que a liga: a proxima recomeca do zero
         E.dirty.off();
-        if (cur && cur.enter) cur.enter();
+        if (cur && cur.enter) cur.enter(arg);
     }
-    enter(first);
+    // sai de uma cena: exit() + cleanup dos timers/tweens nascidos nela
+    function leave(sc) {
+        if (!sc) return;
+        if (sc.exit) sc.exit();
+        if (sc.cleanup) E._killGen(sc._gen);
+    }
+    function dirtySave() {
+        var d = E.dirty;
+        return { on: d.on, bg: d._bg, paint: d._paint, clip: d._clip };
+    }
+    function dirtyLoad(v) {
+        var d = E.dirty;
+        d.on = v.on; d._bg = v.bg; d._paint = v.paint; d._clip = v.clip;
+        d._prev.length = 0;
+        d._cur.length = 0;
+        d._full = true;
+    }
+    enter(first, firstArg);
     E._last = S.millis();
     E._fpsT = E._last;
     E._fpsN = 0;
@@ -470,8 +778,33 @@ E.run = function (scenes, first) {
             }
             if (troca) {
                 E._next = null;
-                if (cur && cur.exit) cur.exit();
-                enter(n);
+                var kind = E._nextKind || 'goto';
+                var narg = E._nextArg;
+                E._nextKind = null;
+                E._nextArg = undefined;
+                if (kind === 'push') {
+                    E._stack.push({ name: E.sceneName, scene: cur, gen: E._sceneGen,
+                                    dirty: dirtySave() });
+                    if (cur && cur.pause) cur.pause();
+                    enter(n, narg);
+                } else if (kind === 'pop' && E._stack.length) {
+                    leave(cur);
+                    var top = E._stack.pop();
+                    cur = top.scene;
+                    E._scene = cur;
+                    E.prevScene = E.sceneName;
+                    E.sceneName = top.name;
+                    E._sceneGen = top.gen;
+                    E._redraw = true;
+                    E._btns.length = 0;
+                    E._btnOn = -1;
+                    dirtyLoad(top.dirty);
+                    if (cur.resume) cur.resume(narg);
+                } else {
+                    leave(cur);
+                    while (E._stack.length) leave(E._stack.pop().scene);
+                    enter(n, narg);
+                }
                 E._last = S.millis();
                 if (E._transReq) {
                     var rq = E._transReq, k = rq.transition;
@@ -499,9 +832,13 @@ E.run = function (scenes, first) {
         E._last = now;
         if (dt > 0.1) dt = 0.1;
         if (dt < 0) dt = 0;
+        // o veu de transicao anda no tempo REAL (a pausa nao trava um fade)
+        var rdt = dt;
+        if (E.paused) dt = 0;
+        else if (E.timeScale !== 1) dt *= E.timeScale > 0 ? E.timeScale : 0;
         E.dt = dt;
         if (E._trans) {
-            E._trans.t += dt * 1000;
+            E._trans.t += rdt * 1000;
             if (E._trans.t >= E._trans.ms) {
                 if (E._trans.kind === 'fadeout') E._trans.done = true;
                 else {
@@ -516,6 +853,7 @@ E.run = function (scenes, first) {
                 }
             }
         }
+        E.transitioning = !!E._trans;
         E._fpsN++;
         if (now - E._fpsT >= 1000) {
             E.fps = E._fpsN;
@@ -524,11 +862,17 @@ E.run = function (scenes, first) {
         }
         E._pollInput(now);
         E.audio._tick();
-        E.cam._tick(dt);
         var mt = E._modTicks;
-        for (var mi = 0; mi < mt.length; mi++) mt[mi](dt, now);
-        E._tickTimers(now);
-        E._tickTweens(now);
+        if (!E.paused) {
+            E.cam._tick(dt);
+            for (var mi = 0; mi < mt.length; mi++) mt[mi](dt, now);
+            E._tickTimers(now);
+            E._tickTweens(now);
+        } else {
+            // tick com fn.always (input de modulo: o pad) roda na pausa —
+            // sem isto o botao "continuar" do pad nunca via o toque
+            for (var mj = 0; mj < mt.length; mj++) if (mt[mj].always) mt[mj](0, now);
+        }
         if (cur && cur.update) cur.update(dt);
         if (E._quit) break;
         if (cur && cur.draw) {
@@ -550,18 +894,37 @@ E.run = function (scenes, first) {
                     E.dirty._begin();
                 }
                 cur.draw();
+                var md = E._modDraws;
+                for (var di = 0; di < md.length; di++) md[di]();
+                if (E.debug) E._drawDebug();
                 if (E.dirty.on) E.dirty._end();
                 if (E._trans) E._drawTrans();
             }
         }
+        E.frameMs = S.millis() - now;
         // pacing: fps global, ou o da cena (cur.fps; 0 = sem teto)
         var fps = cur && cur.fps !== undefined ? cur.fps : E.fpsTarget;
         var frameMin = fps > 0 ? Math.floor(1000 / fps) : 0;
         var spent = S.millis() - now;
         S.delay(spent < frameMin ? frameMin - spent : 1);
     }
-    if (cur && cur.exit) cur.exit();
+    leave(cur);
+    while (E._stack.length) leave(E._stack.pop().scene);
     E._scene = null;
+};
+
+// overlay do E.debug: fps / ms do quadro / caixas sujas (+ particulas
+// vivas com o fx). Fundo opaco: com a camada suja ligada a caixa registra
+// e apaga sozinha quando o debug desliga
+var _dbgO = { color: 0x07E0, bg: 0x0000, px: 9, screen: true };
+E._drawDebug = function () {
+    var s = E.fps + 'fps ' + E.frameMs + 'ms ' + E.sceneName;
+    if (E._stack.length) s += '+' + E._stack.length;
+    if (E.dirty.on) s += ' d' + (E.dirty._cur.length / 4);
+    if (E.fx) s += ' p' + E.fx._live;
+    if (E.paused) s += ' II';
+    _dbgO.px = Math.round(9 * E.U);
+    E.gfx.text(s, 2, 2, _dbgO);
 };
 
 // ----------------------------------------------------- camada suja -------
@@ -704,74 +1067,155 @@ E.dirty = {
 // -------------------------------------------------- timers e tweens ------
 
 E._timers = [];
+// relogio dos prazos: criado DURANTE a pausa conta do instante da pausa
+// (o resume empurra todos pelo tempo parado — sem isto o novo pagava 2x)
+function clockNow() { return E.paused ? E._pauseAt : S.millis(); }
 E.after = function (ms, fn) {
-    var t = { at: S.millis() + ms, fn: fn, dead: false };
+    var t = { at: clockNow() + ms, fn: fn, dead: false, gen: E._sceneGen };
     E._timers.push(t);
     return t;
 };
-E.every = function (ms, fn) {
-    var t = { at: S.millis() + ms, every: ms, fn: fn, dead: false };
+// every(ms, fn, vezes): repete ate vezes disparos (sem = para sempre);
+// t.left conta os que faltam
+E.every = function (ms, fn, times) {
+    var t = { at: clockNow() + ms, every: ms, fn: fn, dead: false, gen: E._sceneGen,
+              left: times > 0 ? times : -1 };
     E._timers.push(t);
     return t;
 };
 E.cancel = function (t) { if (t) t.dead = true; };
 // limpa tudo de uma vez (chame no exit da cena que criou timers/tweens)
 E.clearTimers = function () { E._timers.length = 0; };
+// mata timers e tweens nascidos na geracao de cena g (cena {cleanup: true})
+E._killGen = function (g) {
+    var k;
+    for (k = 0; k < E._timers.length; k++) if (E._timers[k].gen === g) E._timers[k].dead = true;
+    for (k = 0; k < E._tweens.length; k++) if (E._tweens[k].gen === g) E._tweens[k].dead = true;
+};
+// cancela todo tween que mexe em obj (o inimigo morreu no meio do pulo);
+// devolve quantos
+E.killTweensOf = function (obj) {
+    var n = 0;
+    for (var k = 0; k < E._tweens.length; k++) {
+        var tw = E._tweens[k];
+        if (tw.obj === obj && !tw.dead) { tw.dead = true; n++; }
+    }
+    return n;
+};
 E.clearTweens = function () { E._tweens.length = 0; };
+// ordem de CRIACAO (o laco antigo andava de tras para frente e dois
+// prazos no mesmo quadro disparavam invertidos). Os criados durante o tick
+// esperam o proximo quadro; mortos saem numa compactacao no fim
 E._tickTimers = function (now) {
-    for (var k = E._timers.length - 1; k >= 0; k--) {
-        var t = E._timers[k];
-        if (!t) { continue; }   // fn de outro timer limpou a lista no meio do tick
-        if (t.dead) { E._timers.splice(k, 1); continue; }
-        if (now < t.at) continue;
-        if (t.every) {
+    var L = E._timers, n0 = L.length, k;
+    for (k = 0; k < n0 && k < L.length; k++) {
+        var t = L[k];
+        if (t.dead || now < t.at) continue;
+        if (t.every !== undefined) {
             t.at += t.every;
             if (t.at < now) t.at = now + t.every;
+            if (t.left > 0 && --t.left === 0) t.dead = true;
         } else {
             t.dead = true;
         }
         t.fn();
     }
+    // clearTimers no meio troca o conteudo: compacta o que sobrou
+    L = E._timers;
+    var w = 0;
+    for (k = 0; k < L.length; k++) if (!L[k].dead) L[w++] = L[k];
+    L.length = w;
+};
+// ms que faltam para o timer disparar (0 morto/vencido) — barra de recarga
+E.timeLeft = function (t) {
+    if (!t || t.dead) return 0;
+    var d = t.at - clockNow();
+    return d > 0 ? d : 0;
 };
 
-// tween de props numericas: E.tween(obj, {x: 100}, 500, {ease, delay, onDone})
+// tween de props numericas: E.tween(obj, {x: 100}, 500, {ease, delay,
+// onDone, onUpdate(obj, p), yoyo, repeat}). O "de" e lido quando o tween
+// COMECA (depois do delay — antes era na criacao e o obj que mudou no meio
+// saltava); prop ausente no obj parte de 0 (antes virava NaN). repeat = N
+// voltas extras (-1 = para sempre); yoyo = cada volta inverte o sentido
 E._tweens = [];
 E.tween = function (obj, to, ms, opts) {
     opts = opts || {};
-    var from = {};
-    for (var k in to) if (k in obj) from[k] = obj[k];
     var tw = {
-        obj: obj, from: from, to: to, ms: ms < 1 ? 1 : ms,
-        t0: S.millis() + (opts.delay || 0),
+        // ms ausente/NaN vira 1 (antes NaN: o tween nunca terminava)
+        obj: obj, from: null, to: to, ms: ms >= 1 ? ms : 1,
+        t0: clockNow() + (opts.delay || 0),
         ease: opts.ease || E.m.inOutQuad,
         onDone: opts.onDone || null,
+        onUpdate: opts.onUpdate || null,
+        yoyo: !!opts.yoyo,
+        repeat: opts.repeat || 0,
+        gen: E._sceneGen,
+        _rev: false,
         dead: false
     };
     E._tweens.push(tw);
     return tw;
 };
+// alvo relativo: "+=20" / "-=20" soma ao valor no INICIO do tween
+function tweenTo(v, from) {
+    if (typeof v !== 'string') return v;
+    var d = parseFloat(v.slice(2));
+    if (isNaN(d)) return from;
+    return v.charAt(0) === '-' ? from - d : from + d;
+}
 E._tickTweens = function (now) {
-    for (var k = E._tweens.length - 1; k >= 0; k--) {
-        var tw = E._tweens[k];
-        if (!tw) { continue; }  // onDone de outro tween limpou a lista no meio do tick
-        if (tw.dead) { E._tweens.splice(k, 1); continue; }
-        if (now < tw.t0) continue;
+    var L = E._tweens, n0 = L.length;
+    for (var k = 0; k < n0 && k < L.length; k++) {
+        var tw = L[k];
+        if (tw.dead || now < tw.t0) continue;
+        if (!tw.from) {
+            tw.from = {};
+            var rel = null;
+            for (var fk in tw.to) {
+                var fv = tw.obj[fk];
+                tw.from[fk] = typeof fv === 'number' ? fv : 0;
+                if (typeof tw.to[fk] === 'string') {
+                    if (!rel) rel = {};
+                    rel[fk] = tweenTo(tw.to[fk], tw.from[fk]);
+                }
+            }
+            if (rel) {
+                // copia: o literal do chamador (reusado num repeat) fica intacto
+                var nt = {};
+                for (var tk in tw.to) nt[tk] = rel[tk] !== undefined ? rel[tk] : tw.to[tk];
+                tw.to = nt;
+            }
+        }
         var p = (now - tw.t0) / tw.ms;
         var done = p >= 1;
         if (done) p = 1;
-        var e = tw.ease(p);
+        var e = tw.ease(tw._rev ? 1 - p : p);
         for (var kk in tw.to) {
             tw.obj[kk] = tw.from[kk] + (tw.to[kk] - tw.from[kk]) * e;
         }
+        if (tw.onUpdate) tw.onUpdate(tw.obj, p);
         if (done) {
+            if (tw.repeat !== 0) {
+                if (tw.repeat > 0) tw.repeat--;
+                tw.t0 += tw.ms;
+                if (tw.t0 + tw.ms < now) tw.t0 = now;   // quadro longo: nao acumula voltas
+                if (tw.yoyo) tw._rev = !tw._rev;
+                continue;
+            }
             tw.dead = true;
             if (tw.onDone) tw.onDone();
         }
     }
+    L = E._tweens;
+    var w = 0;
+    for (var q = 0; q < L.length; q++) if (!L[q].dead) L[w++] = L[q];
+    L.length = w;
 };
 
 // timeline de tweens NO MESMO obj: E.seq(obj, [passos], {onDone}) — cada
-// passo {to, ms, ease, delay} roda depois do anterior; {par: [passos]}
+// passo {to, ms, ease, delay} roda depois do anterior; {wait: ms} pausa,
+// {call: fn(obj)} chama (som, fx) e segue; {par: [passos]}
 // roda os filhos JUNTOS e espera o mais longo. Devolve {dead, done, step,
 // cancel()} — cancel corta a cadeia no passo atual (o tween em voo morre
 // junto). clearTweens da cena derruba a cadeia do mesmo jeito.
@@ -795,6 +1239,9 @@ E.seq = function (obj, steps, opts) {
             return;
         }
         var st = steps[h.step];
+        // {call: fn} roda e segue no mesmo quadro; {wait: ms} so espera
+        if (st.call) { st.call(obj); next(); return; }
+        if (st.wait !== undefined) { h._tw = E.after(st.wait, next); return; }
         if (st.par) {
             var pend = st.par.length;
             h._tw = [];
@@ -844,6 +1291,51 @@ E.group = function () {
         for (var i = 0; i < a.length; i++) fn(a[i]);
     };
     g.clear = function () { g.items.length = 0; g.count = 0; };
+    // 1o vivo que passa em fn (null) / quantos vivos passam
+    g.find = function (fn) {
+        var a = g.items;
+        for (var i = 0; i < a.length; i++) if (!a[i].dead && fn(a[i])) return a[i];
+        return null;
+    };
+    g.countIf = function (fn) {
+        var a = g.items, n = 0;
+        for (var i = 0; i < a.length; i++) if (!a[i].dead && (!fn || fn(a[i]))) n++;
+        return n;
+    };
+    // vivo mais perto de (x, y) que passa em fn (opcional), dentro de maxD
+    // px (opcional): mira automatica, inimigo que persegue o mais proximo
+    g.closest = function (x, y, fn, maxD) {
+        var a = g.items, best = null;
+        var bd = maxD > 0 ? maxD * maxD : Infinity;
+        for (var i = 0; i < a.length; i++) {
+            var o = a[i];
+            if (o.dead || (fn && !fn(o))) continue;
+            var dx = o.x - x, dy = o.y - y, d = dx * dx + dy * dy;
+            if (d < bd) { bd = d; best = o; }
+        }
+        return best;
+    };
+    // tira o objeto ja (fora do update — o dead e o caminho do meio do tick)
+    g.remove = function (o) {
+        var a = g.items, i = a.indexOf(o);
+        if (i < 0) return false;
+        a.splice(i, 1);
+        g.count = a.length;
+        return true;
+    };
+    // ordem de desenho: key = nome de prop (ex. 'y' — quem esta mais embaixo
+    // desenha por cima) ou comparador; estavel (empate mantem a ordem)
+    g.sort = function (key) {
+        var a = g.items;
+        var cmp = typeof key === 'function' ? key :
+                  function (p, q) { return p[key] - q[key]; };
+        // insercao: estavel, sem alocar, e quase ordenada quadro a quadro e O(n)
+        for (var i = 1; i < a.length; i++) {
+            var o = a[i], j = i - 1;
+            while (j >= 0 && cmp(a[j], o) > 0) { a[j + 1] = a[j]; j--; }
+            a[j + 1] = o;
+        }
+    };
     return g;
 };
 
@@ -855,14 +1347,23 @@ E.pool = function (n, factory) {
         o.dead = true;
         items.push(o);
     }
+    var cursor = 0;
     var p = {
         items: items, count: n, alive: 0,
-        spawn: function () {
-            for (var j = 0; j < items.length; j++) {
-                if (items[j].dead) {
-                    items[j].dead = false;
+        // procura a partir do ultimo spawn (cursor circular): pool cheio de
+        // vivos no comeco nao re-varre o prefixo a cada tiro
+        // init(o) opcional prepara o reciclado (zera vida, posicao...)
+        spawn: function (init) {
+            var L = items.length;
+            for (var j = 0; j < L; j++) {
+                var k = cursor + j;
+                if (k >= L) k -= L;
+                if (items[k].dead) {
+                    items[k].dead = false;
+                    cursor = k + 1 >= L ? 0 : k + 1;
                     p.alive++;
-                    return items[j];
+                    if (init) init(items[k]);
+                    return items[k];
                 }
             }
             return null;
@@ -887,6 +1388,13 @@ E.pool = function (n, factory) {
                 if (!items[j].dead) fn(items[j]);
             }
         },
+        // 1o vivo que passa em fn (null)
+        find: function (fn) {
+            for (var j = 0; j < items.length; j++) {
+                if (!items[j].dead && fn(items[j])) return items[j];
+            }
+            return null;
+        },
         clear: function () {
             for (var j = 0; j < items.length; j++) items[j].dead = true;
             p.alive = 0;
@@ -903,11 +1411,41 @@ E.cam = {
     bounds: null,        // {x,y,w,h} do mundo
     _target: null,
     _lerp: 1,
+    _dz: null,           // zona morta {w, h} centrada na tela
     _shT: 0, _shDur: 0, _shPow: 0,
 
-    follow: function (t, lerp) {
+    // segue t ({x, y} de mundo); lerp 0..1 por quadro; opts.deadzone {w, h}
+    // = caixa no centro da tela onde o alvo anda SEM mover a camera
+    // (plataforma: pulo curto nao sacode o cenario)
+    follow: function (t, lerp, opts) {
         this._target = t;
         this._lerp = lerp === undefined ? 1 : lerp;
+        this._dz = opts && opts.deadzone ? opts.deadzone : null;
+        // offset {x, y}: olha a frente do alvo (mude por quadro com a
+        // direcao — o lerp suaviza a virada)
+        this.offset = opts && opts.offset ? opts.offset : null;
+    },
+    offset: null,
+    // a caixa de MUNDO aparece na tela? (pad = folga em px) — pule o draw
+    // do que esta fora (mapa grande, 200 entidades)
+    inView: function (x, y, w, h, pad) {
+        var p = pad || 0;
+        var sx = x - this.x + this.ox, sy = y - this.y + this.oy;
+        return sx + (w || 0) >= -p && sy + (h || 0) >= -p &&
+               sx <= E.W + p && sy <= E.H + p;
+    },
+    // passeio da camera ate CENTRAR (x, y) em ms (cutscene: mostra a porta
+    // que abriu). Larga o follow; opts {ease, onDone}. Devolve o tween
+    panTo: function (x, y, ms, opts) {
+        var o = opts || EMPTY;
+        this._target = null;
+        var tx = x - E.W / 2, ty = y - E.H / 2;
+        var b = this.bounds;
+        if (b) {
+            tx = b.w <= E.W ? b.x + b.w / 2 - E.W / 2 : E.m.clamp(tx, b.x, b.x + b.w - E.W);
+            ty = b.h <= E.H ? b.y + b.h / 2 - E.H / 2 : E.m.clamp(ty, b.y, b.y + b.h - E.H);
+        }
+        return E.tween(this, { x: tx, y: ty }, ms, { ease: o.ease, onDone: o.onDone });
     },
     shake: function (pow, dur) {
         this._shPow = pow;
@@ -930,8 +1468,19 @@ E.cam = {
     _tick: function (dt) {
         if (this._target) {
             var k = E.m.clamp(this._lerp, 0, 1);
-            this.x += (this._target.x - E.W / 2 - this.x) * k;
-            this.y += (this._target.y - E.H / 2 - this.y) * k;
+            var tx = this._target.x - E.W / 2, ty = this._target.y - E.H / 2;
+            if (this.offset) { tx += this.offset.x || 0; ty += this.offset.y || 0; }
+            var dz = this._dz;
+            if (dz) {
+                // alvo dentro da zona morta = camera parada; fora, a camera
+                // anda so o que passou da borda
+                var hw = (dz.w || 0) / 2, hh = (dz.h || 0) / 2;
+                var ex = tx - this.x, ey = ty - this.y;
+                tx = ex > hw ? tx - hw : (ex < -hw ? tx + hw : this.x);
+                ty = ey > hh ? ty - hh : (ey < -hh ? ty + hh : this.y);
+            }
+            this.x += (tx - this.x) * k;
+            this.y += (ty - this.y) * k;
             this._clamp();
         }
         if (this._shT > 0) {
@@ -950,10 +1499,16 @@ E.cam = {
         this.ox = 0;
         this.oy = 0;
         this._target = null;
+        this._dz = null;
+        this.offset = null;
         this._shT = 0;
     },
+    // mundo -> tela
     wx: function (x) { return x - this.x + this.ox; },
-    wy: function (y) { return y - this.y + this.oy; }
+    wy: function (y) { return y - this.y + this.oy; },
+    // tela -> mundo (o toque em E.input.x/y vira coordenada do mapa)
+    worldX: function (sx) { return sx + this.x - this.ox; },
+    worldY: function (sy) { return sy + this.y - this.oy; }
 };
 
 // ------------------------------------------------------------ gfx --------
@@ -1107,6 +1662,14 @@ E.gfx = (function () {
             var datum = row + col;
             if (datum) S.setTextDatum(datum);
             if (st.size !== 1) S.setTextSize(st.size);
+            // sombra: o mesmo texto 1 px (x U) abaixo-direita na cor dada,
+            // ANTES do principal (legivel sobre cenario colorido)
+            if (o.shadow !== undefined) {
+                var sh = Math.max(1, Math.round(E.U));
+                S.setTextColor(o.shadow);
+                S.drawString(str, X + sh, Y + sh, st.font);
+                S.setTextColor(o.color === undefined ? 0xFFFF : o.color);
+            }
             S.drawString(str, X, Y, st.font);
             if (st.size !== 1) S.setTextSize(1);
             if (datum) S.setTextDatum(0);
@@ -1120,6 +1683,58 @@ E.gfx = (function () {
         },
         // largura em pixels do texto com as mesmas opts do text()
         measure: function (str, o) { return measure(String(str), textStyle(o || EMPTY)); },
+        // quebra por palavras dentro de maxW px (mesmas opts do text);
+        // palavra maior que a linha vai sozinha. Devolve as linhas
+        wrap: function (str, maxW, o) {
+            var st = textStyle(o || EMPTY);
+            var out = [], paras = String(str).split('\n');
+            for (var p = 0; p < paras.length; p++) {
+                var words = paras[p].split(' '), line = '';
+                for (var i = 0; i < words.length; i++) {
+                    var probe = line ? line + ' ' + words[i] : words[i];
+                    if (line && measure(probe, st) > maxW) { out.push(line); line = words[i]; }
+                    else line = probe;
+                }
+                out.push(line);
+            }
+            return out;
+        },
+        // texto em varias linhas (wrap + text) dentro de w; o.lh = altura
+        // da linha (default altura da fonte + 2), o.max = teto de linhas
+        // (a ultima ganha "..."). Devolve a altura usada em px
+        textBox: function (str, x, y, w, o) {
+            o = o || EMPTY;
+            var lines = g.wrap(str, w, o);
+            var st = textStyle(o);
+            var lh = o.lh || ((st.h || (S.fontHeight(st.font) * st.size)) + 2);
+            var n = lines.length;
+            if (o.max > 0 && n > o.max) {
+                n = o.max;
+                lines[n - 1] = lines[n - 1] + '...';
+            }
+            var ax = o.align === 'center' ? x + w / 2 : (o.align === 'right' ? x + w : x);
+            for (var i = 0; i < n; i++) g.text(lines[i], ax, y + i * lh, o);
+            return n * lh;
+        },
+        // poligono convexo cheio (leque de triangulos) ou contorno:
+        // pts = [x0, y0, x1, y1, ...] em coords de mundo (o.screen p/ HUD)
+        poly: function (pts, color, o) {
+            o = o || EMPTY;
+            var n = pts.length >> 1;
+            if (n < 2) return;
+            if (o.fill === false || n === 2) {
+                for (var i = 0; i < n; i++) {
+                    var j = (i + 1) % n;
+                    if (n === 2 && i === 1) break;
+                    g.line(pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1], color, o);
+                }
+                return;
+            }
+            for (var k = 1; k < n - 1; k++) {
+                g.tri(pts[0], pts[1], pts[k * 2], pts[k * 2 + 1],
+                      pts[k * 2 + 2], pts[k * 2 + 3], color, o);
+            }
+        },
         // botao immediate-mode: desenha e devolve o rect p/ E.hit(). O
         // rotulo escala com a altura do botao (px = 50% de h, encolhe ate
         // caber na largura). Registra o rect: cena static repinta sozinha
@@ -1241,8 +1856,21 @@ E.audio = {
     // o que: nome da tabela, [f, ms] ou melodia [[f,ms],...]. Firmware
     // com API 32: misturado por cima da trilha, NAO bloqueia. Antes disso
     // cai no playTone (bloqueante, e calado com musica tocando)
-    sfx: function (what) {
+    // intervalo minimo (ms) entre dois toques do MESMO som por nome: 10
+    // moedas no mesmo quadro viram um "coin", nao uma rajada que entope o
+    // canal. 0 desliga; opts.gap sobrepoe por chamada
+    gap: 40,
+    _lastAt: {},
+    sfx: function (what, opts) {
         if (E.audio.muted || !E.caps.speaker) return;
+        if (typeof what === 'string') {
+            var g = opts && opts.gap !== undefined ? opts.gap : E.audio.gap;
+            if (g > 0) {
+                var now = S.millis(), la = E.audio._lastAt[what];
+                if (la !== undefined && now - la < g) return;
+                E.audio._lastAt[what] = now;
+            }
+        }
         var mel = typeof what === 'string' ? E.audio.sfxTable[what] : what;
         if (!mel) return;
         if (typeof mel[0] === 'number') mel = [mel];
@@ -1323,6 +1951,28 @@ E.save = {
     num: function (key, def) {
         var v = parseFloat(E.save.get(key, def));
         return isNaN(v) ? def : v;
+    },
+    // objeto/array em JSON (opcoes, desbloqueios, fase salva); JSON podre
+    // ou ausente devolve def
+    obj: function (key, def) {
+        var v = E.save.get(key, null);
+        if (v === null) return def;
+        try { return JSON.parse(v); } catch (e) { return def; }
+    },
+    setObj: function (key, val) {
+        try { E.save.set(key, JSON.stringify(val)); } catch (e) {}
+    },
+    // contador persistente (mortes, partidas, moedas totais): devolve o novo
+    inc: function (key, n) {
+        var v = E.save.num(key, 0) + (n === undefined ? 1 : n);
+        E.save.set(key, v);
+        return v;
+    },
+    del: function (key) {
+        try {
+            if (typeof Storage.remove === 'function') Storage.remove(E.save.prefix + key);
+            else Storage.set(E.save.prefix + key, '');
+        } catch (e) {}
     },
     // true se virou novo recorde
     best: function (key, score) {

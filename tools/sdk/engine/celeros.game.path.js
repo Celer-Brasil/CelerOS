@@ -1,0 +1,227 @@
+// game.path.js — CelerGame PATH (dep "celeros.game.path"): caminho em
+// grade para IA — A* com custo por celula, linha de visao (Bresenham),
+// suavizacao do caminho e um seguidor que anda a entidade pelos pontos.
+// Decora o core no require:
+//
+//   var E = require("celeros.game");
+//   require("celeros.game.path");
+//   var cam = E.path.find(cols, rows, c0, r0, c1, r1, function (c, r) {
+//       return mapa[r][c] === '#' ? -1 : 1;      // custo; < 0 = parede
+//   }, { diag: true });                          // [{c, r}, ...] ou null
+//   // com o modulo tilemap: E.path.grid(mapa) da cols/rows/custo prontos
+//   var g = E.path.grid(tm);
+//   cam = E.path.find(g.cols, g.rows, c0, r0, c1, r1, g.cost);
+//
+// Orcamento: opts.max (default 2000 nos expandidos) — no ESP32 um A* de
+// 30x30 sem teto pode comer o quadro inteiro; estourou = null (tente de
+// novo no proximo quadro ou caia num passo guloso). Zero recursao; o heap
+// binario e as tabelas sao arrays planos reaproveitados entre chamadas.
+
+var E = require('celeros.game');
+
+// tabelas reaproveitadas (crescem sob demanda; cada busca usa um "selo"
+// novo em vez de zerar tudo)
+var _g = [], _from = [], _seen = [], _closed = [], _stamp = 0;
+var _heap = [], _hf = [];
+
+function heapPush(k, f) {
+    var i = _heap.length;
+    _heap.push(k);
+    _hf.push(f);
+    while (i > 0) {
+        var p = (i - 1) >> 1;
+        if (_hf[p] <= f) break;
+        _heap[i] = _heap[p]; _hf[i] = _hf[p];
+        i = p;
+    }
+    _heap[i] = k; _hf[i] = f;
+}
+function heapPop() {
+    var top = _heap[0];
+    var k = _heap.pop(), f = _hf.pop();
+    var n = _heap.length;
+    if (n) {
+        var i = 0;
+        for (;;) {
+            var l = i * 2 + 1, r = l + 1, m = i;
+            var mf = f;
+            if (l < n && _hf[l] < mf) { m = l; mf = _hf[l]; }
+            if (r < n && _hf[r] < mf) { m = r; mf = _hf[r]; }
+            if (m === i) break;
+            _heap[i] = _heap[m]; _hf[i] = _hf[m];
+            i = m;
+        }
+        _heap[i] = k; _hf[i] = f;
+    }
+    return top;
+}
+
+var DX4 = [1, -1, 0, 0], DY4 = [0, 0, 1, -1];
+var DX8 = [1, -1, 0, 0, 1, 1, -1, -1], DY8 = [0, 0, 1, -1, 1, -1, 1, -1];
+var SQ2 = Math.SQRT2;
+
+E.path = {
+    version: '1.0.0',
+    // nos expandidos na ultima busca (diagnostico/orcamento)
+    expanded: 0,
+
+    // A*: cost(c, r) -> custo de ENTRAR na celula (>= 1 recomendado; < 0
+    // ou nao-numero = bloqueada). opts {diag (8 vizinhos; nunca corta
+    // canto de parede), max (orcamento), near (sem caminho: devolve o
+    // caminho ate a celula alcancada mais perto do alvo)}
+    find: function (cols, rows, c0, r0, c1, r1, cost, opts) {
+        opts = opts || {};
+        var diag = !!opts.diag, max = opts.max || 2000;
+        if (c0 < 0 || r0 < 0 || c0 >= cols || r0 >= rows) return null;
+        if (c1 < 0 || r1 < 0 || c1 >= cols || r1 >= rows) return null;
+        var start = r0 * cols + c0, goal = r1 * cols + c1;
+        if (start === goal) return [{ c: c0, r: r0 }];
+        _stamp++;
+        if (_stamp > 1e9) {             // selo deu a volta: zera as tabelas
+            _stamp = 1;
+            _seen.length = 0;
+            _closed.length = 0;
+        }
+        _heap.length = 0;
+        _hf.length = 0;
+        var dxs = diag ? DX8 : DX4, dys = diag ? DY8 : DY4, nd = dxs.length;
+        function h(c, r) {
+            var dx = c > c1 ? c - c1 : c1 - c, dy = r > r1 ? r - r1 : r1 - r;
+            if (!diag) return dx + dy;
+            return dx > dy ? dx + (SQ2 - 1) * dy : dy + (SQ2 - 1) * dx;
+        }
+        _g[start] = 0;
+        _from[start] = -1;
+        _seen[start] = _stamp;
+        heapPush(start, h(c0, r0));
+        var best = start, bestH = h(c0, r0), n = 0, found = false;
+        while (_heap.length) {
+            var k = heapPop();
+            if (_closed[k] === _stamp) continue;
+            _closed[k] = _stamp;
+            if (k === goal) { found = true; break; }
+            if (++n > max) break;
+            var cc = k % cols, cr = (k - cc) / cols;
+            for (var d = 0; d < nd; d++) {
+                var nc = cc + dxs[d], nr = cr + dys[d];
+                if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+                var nk = nr * cols + nc;
+                if (_closed[nk] === _stamp) continue;
+                var w = cost(nc, nr);
+                if (!(w >= 0)) continue;
+                if (d >= 4) {
+                    // diagonal so com os dois lados livres (nao corta canto)
+                    var wa = cost(nc, cr), wb = cost(cc, nr);
+                    if (!(wa >= 0) || !(wb >= 0)) continue;
+                    w *= SQ2;
+                }
+                var ng = _g[k] + w;
+                if (_seen[nk] === _stamp && ng >= _g[nk]) continue;
+                _seen[nk] = _stamp;
+                _g[nk] = ng;
+                _from[nk] = k;
+                var hh = h(nc, nr);
+                if (hh < bestH) { bestH = hh; best = nk; }
+                heapPush(nk, ng + hh);
+            }
+        }
+        E.path.expanded = n;
+        var end = found ? goal : (opts.near ? best : -1);
+        if (end < 0 || end === start) return found ? [{ c: c0, r: r0 }] : null;
+        var out = [];
+        for (var q = end; q !== -1; q = _from[q]) {
+            var qc = q % cols;
+            out.push({ c: qc, r: (q - qc) / cols });
+        }
+        out.reverse();
+        return out;
+    },
+
+    // linha de visao entre celulas (Bresenham): true se nenhuma celula no
+    // meio for bloqueada por blocked(c, r)
+    los: function (c0, r0, c1, r1, blocked) {
+        var dx = Math.abs(c1 - c0), dy = -Math.abs(r1 - r0);
+        var sx = c0 < c1 ? 1 : -1, sy = r0 < r1 ? 1 : -1;
+        var err = dx + dy, c = c0, r = r0;
+        for (var guard = 0; guard < 4096; guard++) {
+            if ((c !== c0 || r !== r0) && (c !== c1 || r !== r1) && blocked(c, r)) return false;
+            if (c === c1 && r === r1) return true;
+            var e2 = 2 * err;
+            if (e2 >= dy) { err += dy; c += sx; }
+            if (e2 <= dx) { err += dx; r += sy; }
+        }
+        return true;
+    },
+
+    // corta os degraus: mantem so os pontos onde a linha de visao quebra
+    // (inimigo anda em diagonal livre em vez de zigue-zague de grade)
+    smooth: function (path, blocked) {
+        if (!path || path.length < 3) return path;
+        var out = [path[0]], a = 0;
+        for (var i = 2; i < path.length; i++) {
+            if (!E.path.los(path[a].c, path[a].r, path[i].c, path[i].r, blocked)) {
+                out.push(path[i - 1]);
+                a = i - 1;
+            }
+        }
+        out.push(path[path.length - 1]);
+        return out;
+    },
+
+    // adaptador do modulo tilemap: {cols, rows, cost, blocked} a partir do
+    // solidAt/get do mapa (opts.cost(v, c, r) sobrepoe o custo 1/parede)
+    grid: function (tm, opts) {
+        opts = opts || {};
+        var cost = function (c, r) {
+            var v = tm.get ? tm.get(c, r) : undefined;
+            if (opts.cost) return opts.cost(v, c, r);
+            var p = tm.cellRect(c, r);
+            return tm.solidAt(p.x + p.w / 2, p.y + p.h / 2) ? -1 : 1;
+        };
+        return {
+            cols: tm.cols, rows: tm.rows, cost: cost,
+            blocked: function (c, r) { return !(cost(c, r) >= 0); }
+        };
+    },
+
+    // seguidor: anda obj ({x, y} em PIXELS) pelos pontos do caminho a speed
+    // px/s. cell (px por celula) e ox/oy convertem celula -> centro em px.
+    // f.update(dt) devolve true ao chegar no fim; f.done, f.i (ponto alvo)
+    follower: function (obj, path, speed, o) {
+        o = o || {};
+        var cell = o.cell || 16, ox = o.ox || 0, oy = o.oy || 0;
+        var f = { obj: obj, path: path || [], i: 0, speed: speed || 60, done: false };
+        f.set = function (p) { f.path = p || []; f.i = 0; f.done = !f.path.length; };
+        f.target = function () {
+            var p = f.path[f.i];
+            return p ? { x: ox + p.c * cell + cell / 2, y: oy + p.r * cell + cell / 2 } : null;
+        };
+        f.update = function (dt) {
+            if (f.done) return true;
+            var step = f.speed * dt;
+            while (step > 0 && f.i < f.path.length) {
+                var p = f.path[f.i];
+                var tx = ox + p.c * cell + cell / 2, ty = oy + p.r * cell + cell / 2;
+                var dx = tx - obj.x, dy = ty - obj.y;
+                var d = Math.sqrt(dx * dx + dy * dy);
+                if (d <= step) {
+                    obj.x = tx; obj.y = ty;
+                    step -= d;
+                    f.i++;
+                } else {
+                    obj.x += dx / d * step;
+                    obj.y += dy / d * step;
+                    step = 0;
+                }
+            }
+            if (f.i >= f.path.length) f.done = true;
+            return f.done;
+        };
+        f.set(f.path);
+        return f;
+    }
+};
+
+E._mods.push('path');
+
+module.exports = E;

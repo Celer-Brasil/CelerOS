@@ -1,21 +1,18 @@
-// CelerOS System Info — painel do aparelho no tema do OS.
-// Cards de dispositivo, memoria, flash/armazenamento, rede, energia e
-// sensores (quando a placa tem). Uptime e RAM ao vivo (1s). ES5 (Duktape),
-// toolkit UI (API 22): UI.text redesenha so o valor que mudou.
+// CelerOS System Info — painel do aparelho no tema do OS, sobre o CelerKit
+// (deps celeros.app.*): as capacidades da placa vem de uma sonda unica
+// cacheada (celeros.app.caps) e a formatacao de bytes/uptime segue o mesmo
+// formato dos apps do sistema (celeros.app.fmt). Cards de dispositivo,
+// memoria, flash/armazenamento, rede e energia; uptime e RAM ao vivo (A.every,
+// 1 s). ES5 (Duktape), toolkit UI: UI.text redesenha so o valor que mudou.
 
-var T = System.theme();
-var W = 240, LX = 8, LW = W - 16;
+var A = require("celeros.app");
+require("celeros.app.caps");      // sonda unica da placa (board, api, psram...)
+require("celeros.app.fmt");       // bytes/uptime no formato do sistema
 
-var kb = function (n) {
-    if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
-    if (n >= 1024) return Math.round(n / 1024) + " KB";
-    return n + " B";
-};
-function fmtUptime(ms) {
-    var s = Math.floor(ms / 1000);
-    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-    return (h > 0 ? h + "h " : "") + m + "m " + (s % 60) + "s";
-}
+A.init();
+var T = A.T;
+var LX = A.L.x, LW = A.L.w;
+var cap = A.caps.probe();         // estatico: placa nao muda em execucao
 
 function card(y, h, titulo) {
     UI.card(LX, y, LW, h);
@@ -28,39 +25,41 @@ function row(y, label, value, col) {
 }
 
 var i = System.getInfo();
-var lastPoll = 0;
 var hasSensors = typeof Sensors !== "undefined" && !!Sensors.accel;
-while (true) {
-    UI.begin(T.bg);
-    if (System.millis() - lastPoll > 1000) {
-        lastPoll = System.millis();
-        i = System.getInfo();
+var livreLocal = 0;             // /local livre: consulta barata de mais para
+try { livreLocal = FS.getFreeSpace("/local"); } catch (e) { livreLocal = 0; }
+
+function telaPainel(c) {
+    if (A.every(1000)) i = System.getInfo();          // valores ao vivo
+    if (A.every(5000, "fs")) {
+        try { livreLocal = FS.getFreeSpace("/local"); } catch (e) { /* mantem */ }
     }
 
     // dispositivo
-    var y = card(6, 70, "Dispositivo");
-    row(y, "chip", i.chipModel + " r" + i.chipRevision);
-    row(y + 14, "CPU", i.chipCores + "x " + i.cpuFreqMHz + " MHz");
-    row(y + 28, "firmware", "CelerOS " + System.getOSVersion() + " · API " + System.getAPILevel());
+    var y = card(6, 84, "Dispositivo");
+    row(y, "placa", cap.board || "?");
+    row(y + 14, "chip", i.chipModel + " r" + i.chipRevision);
+    row(y + 28, "CPU", i.chipCores + "x " + i.cpuFreqMHz + " MHz");
+    row(y + 42, "firmware", "CelerOS " + System.getOSVersion() + " · API " + cap.api);
     UI.cardEnd();
 
     // memoria: barra de uso da RAM interna
-    y = card(82, 80, "Memória");
+    y = card(96, 80, "Memória");
     var used = i.totalRAM ? Math.round((i.totalRAM - i.freeRAM) * 100 / i.totalRAM) : 0;
-    row(y, "RAM livre", kb(i.freeRAM) + " de " + kb(i.totalRAM), i.freeRAM < 20000 ? T.warn : T.text);
+    row(y, "RAM livre", A.fmt.bytes(i.freeRAM) + " de " + A.fmt.bytes(i.totalRAM), i.freeRAM < 20000 ? T.warn : T.text);
     UI.progress(LX + 10, y + 16, LW - 20, 8, used);
-    row(y + 28, "maior bloco", kb(i.maxAllocRAM));
-    row(y + 42, "PSRAM", i.totalPSRAM ? kb(i.freePSRAM) + " de " + kb(i.totalPSRAM) : "não");
+    row(y + 28, "maior bloco", A.fmt.bytes(i.maxAllocRAM));
+    row(y + 42, "PSRAM", i.totalPSRAM ? A.fmt.bytes(i.freePSRAM) + " de " + A.fmt.bytes(i.totalPSRAM) : "não");
     UI.cardEnd();
 
     // armazenamento
-    y = card(168, 52, "Armazenamento");
-    row(y, "flash", kb(i.flashSize));
-    row(y + 14, "/local livre", kb(FS.getFreeSpace("/local")));
+    y = card(182, 52, "Armazenamento");
+    row(y, "flash", A.fmt.bytes(i.flashSize));
+    row(y + 14, "/local livre", A.fmt.bytes(livreLocal));
     UI.cardEnd();
 
     // rede + energia
-    y = card(226, 52, "Rede e energia");
+    y = card(240, 52, "Rede e energia");
     var w = System.wifiStatus();
     row(y, "Wi-Fi", w.connected ? System.getIPAddress() : "desligado", w.connected ? T.ok : T.warn);
     var energia = "--";
@@ -75,10 +74,11 @@ while (true) {
     if (hasSensors) {
         var a = Sensors.accel();
         UI.text("acel " + (a ? a.x.toFixed(1) + ", " + a.y.toFixed(1) + ", " + a.z.toFixed(1) : "--") +
-                "  ·  passos " + (Sensors.steps ? Sensors.steps() : "--"), 120, 290,
+                "  ·  passos " + (Sensors.steps ? Sensors.steps() : "--"), 120, 296,
                 { role: "caption", align: "center", color: T.textDim });
     } else {
-        UI.text("ligado há " + fmtUptime(i.uptimeMs), 120, 290, { role: "caption", align: "center", color: T.textDim });
+        UI.text("ligado há " + A.fmt.uptime(i.uptimeMs), 120, 296, { role: "caption", align: "center", color: T.textDim });
     }
-    UI.end(10);
 }
+
+A.run({ painel: telaPainel }, "painel", { fps: 10 });

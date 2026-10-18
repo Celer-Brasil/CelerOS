@@ -1,15 +1,17 @@
-// CelerOS Cubo 3D — renderizador 3D em JavaScript.
-// Cubo solido (algoritmo do pintor) ou em arestas, rotacao por arrasto,
-// giro automatico e contador de FPS. Render por fatias em sprite (RAM 16-bit);
-// menu no toolkit UI (API 22).
+// CelerOS Cubo 3D — renderizador 3D em JavaScript sobre o CelerKit
+// (dep celeros.app): o A.run e dono do laco e das pilhas de tela; as telas so
+// desenham e DEVOLvem ("cubo" empilha, A.BACK volta ao menu). Cubo solido
+// (algoritmo do pintor) ou em arestas, rotacao por arrasto, giro automatico e
+// contador de FPS. Render por fatias em sprite (RAM 16-bit). Demo didatica de
+// render: o coracao (vertices/faces/projecao/sprites) fica como esta — migrou
+// so o casco de menu/laco. ES5 puro (Duktape).
 
-var T = System.theme();
+var A = require("celeros.app");
+A.init();
+var T = A.T;
 var SW = System.screenWidth();
 var SH = System.screenHeight();
 
-var STATE_MENU = 0;
-var STATE_PLAYING = 1;
-var state = STATE_MENU;
 var wireframe = false;        // false = faces solidas | true = so arestas
 
 // vertices do cubo (x, y, z)
@@ -47,24 +49,19 @@ var frames = 0;
 var fpsWin = System.millis();
 var fps = 0;
 
-// Menu no toolkit UI (API 22): bloqueia ate "Girar"; o render 3D segue o
-// laco proprio (sprite por fatias)
-function menuLoop() {
-    UI.invalidate();
-    while (true) {
-        var full = UI.begin(T.bg);
-        if (full) System.fillGradient(16, 16, SW - 32, 116, T.accentD, T.bg, 14);
-        UI.text("Cubo 3D", SW / 2, 40, { role: "display", align: "center" });
-        UI.text("renderizador interativo", SW / 2, 92, { role: "caption", align: "center", color: T.textDim });
-        var m = UI.tabs(24, 146, SW - 48, 34, ["Sólido", "Arestas"], wireframe ? 1 : 0);
-        wireframe = m === 1;
-        if (UI.button("Girar", 24, 196, SW - 48, 52, { role: "title" })) return;
-        UI.text("arraste o dedo para girar; toque no topo volta ao menu", SW / 2, 266,
-                { role: "caption", align: "center", color: T.textDim, w: SW - 32, lines: 2 });
-        UI.end();
-    }
+// ---- menu (toolkit UI; "Girar" empilha a tela do cubo) ------------------------
+function telaMenu(c) {
+    if (c.full) System.fillGradient(16, 16, SW - 32, 116, T.accentD, T.bg, 14);
+    UI.text("Cubo 3D", SW / 2, 40, { role: "display", align: "center" });
+    UI.text("renderizador interativo", SW / 2, 92, { role: "caption", align: "center", color: T.textDim });
+    var m = UI.tabs(24, 146, SW - 48, 34, ["Sólido", "Arestas"], wireframe ? 1 : 0);
+    wireframe = m === 1;
+    if (UI.button("Girar", 24, 196, SW - 48, 52, { role: "title" })) return "cubo";
+    UI.text("arraste o dedo para girar; toque no topo volta ao menu", SW / 2, 266,
+            { role: "caption", align: "center", color: T.textDim, w: SW - 32, lines: 2 });
 }
 
+// ---- render por fatias em sprite (o mesmo de sempre) --------------------------
 function draw3DFrame() {
     var sinX = Math.sin(angleX); var cosX = Math.cos(angleX);
     var sinY = Math.sin(angleY); var cosY = Math.cos(angleY);
@@ -161,19 +158,14 @@ function draw3DFrame() {
     }
 }
 
-menuLoop();
-state = STATE_PLAYING;
-System.fillScreen(T.bg);
-
-while (true) {
+// ---- tela do cubo (arrasto gira; toque no topo volta ao menu) -----------------
+function telaCubo(c) {
     var t = System.getTouch();
 
     if (t.touched && t.y < 30 && t.x < 200 && !isDragging) {
-        // toque no topo (fora do X da faixa): volta ao menu. Antes o teste
-        // era feito SEM dedo (getTouch devolve y=0 solto) e o app voltava ao
-        // menu a cada quadro em que nao havia toque.
-        menuLoop();
-        System.fillScreen(T.bg);
+        // toque no topo (fora do X da faixa): volta ao menu. O teste e feito
+        // COM dedo (getTouch devolve y=0 solto).
+        return A.BACK;
     } else if (t.touched && t.x < 200) {
         if (!isDragging) {
             isDragging = true;
@@ -193,17 +185,17 @@ while (true) {
         isDragging = false;
     }
 
-    if (state === STATE_PLAYING) {
-        if (!isDragging) {                 // gira sozinho sem arrasto
-            angleX += 0.04;
-            angleY += 0.03;
-        }
-        var PI2 = Math.PI * 2;             // normaliza (precisao do float)
-        angleX = ((angleX % PI2) + PI2) % PI2;
-        angleY = ((angleY % PI2) + PI2) % PI2;
-
-        draw3DFrame();
+    if (!isDragging) {                 // gira sozinho sem arrasto
+        angleX += 0.04;
+        angleY += 0.03;
     }
+    var PI2 = Math.PI * 2;             // normaliza (precisao do float)
+    angleX = ((angleX % PI2) + PI2) % PI2;
+    angleY = ((angleY % PI2) + PI2) % PI2;
 
-    System.delay(10);
+    draw3DFrame();
 }
+telaCubo.fps = 30;
+
+// ---- laco -----------------------------------------------------------------------
+A.run({ menu: telaMenu, cubo: telaCubo }, "menu", { fps: 20 });

@@ -3690,8 +3690,8 @@ function holdFrames(x, y, n) {
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('mostra temperatura', j.indexOf('25 C') >= 0, j);
-    check('mostra condicao e dias', j.indexOf('Sol') >= 0 && j.indexOf('Amanha') >= 0 && j.indexOf('Chuva') >= 0, j);
+    check('mostra temperatura', j.indexOf('25°C') >= 0, j);
+    check('mostra condicao e dias', j.indexOf('Sol') >= 0 && j.indexOf('Amanhã') >= 0 && j.indexOf('Chuva') >= 0, j);
     check('consulta Open-Meteo', (r.env.__wxUrl || '').indexOf('api.open-meteo.com') >= 0);
     check('grava cache no appData', !!r.env.FS.readTextFile('/local/data/celeros.previsao/forecast.json'));
     check('instala plugin watchface',

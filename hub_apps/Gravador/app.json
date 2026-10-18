@@ -1,12 +1,19 @@
 {
   "name": "Gravador",
   "packageName": "celeros.gravador",
-  "version": "1.0.1",
-  "api": 22,
+  "version": "1.1.0",
+  "api": 30,
   "permissions": ["fs", "mic"],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
   "description": "Gravador de voz do aparelho: grave pelo microfone (API 19), veja o nivel ao vivo num medidor de arco, salve os WAVs no espaco privado do app e escute de novo (playWav). Duracao ajustavel de 2 a 10 s.",
-  "changelog": "1.0.1 - nivel do microfone centrado no medidor (datum 5: no LovyanGFX o 4 e middle-left); 1.0.0 - primeiro lancamento: gravacao com medidor de nivel em fillArc (API 22) e arco de progresso, lista de gravacoes com tamanho, reproducao nativa e exclusao com confirmacao; em placa sem microfone o app explica e continua sendo um player"
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.data": "^1.0.0",
+    "celeros.app.fmt": "^1.0.0",
+    "celeros.app.list": "^1.0.0",
+    "celeros.app.path": "^1.0.0"
+  },
+  "changelog": "1.1.0 - migrado para o CelerKit (deps celeros.app.*, API 30): duracao alvo persiste no NVS (celeros.app.data), lista de gravacoes so varre o disco quando muda (celeros.app.list), duracoes/tamanhos no formato do sistema (celeros.app.fmt) e caminhos via celeros.app.path; o botao voltar agora funciona (sair na tela principal, cancelar a gravacao em curso) e o espaco livre e conferido ANTES de gravar (nao perde mais o audio ao falhar a gravacao)\n1.0.1 - nivel do microfone centrado no medidor (datum 5: no LovyanGFX o 4 e middle-left); 1.0.0 - primeiro lancamento: gravacao com medidor de nivel em fillArc (API 22) e arco de progresso, lista de gravacoes com tamanho, reproducao nativa e exclusao com confirmacao; em placa sem microfone o app explica e continua sendo um player"
 }

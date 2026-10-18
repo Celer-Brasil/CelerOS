@@ -1,12 +1,15 @@
 {
   "name": "Cube 3D",
   "packageName": "celeros.cube3d",
-  "version": "1.3.0",
-  "api": 22,
+  "version": "1.4.0",
+  "api": 30,
   "permissions": [],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
   "description": "Cubo 3D interativo: arraste para girar, modo solido ou so arestas e contador de FPS. Renderizador por fatias sem flicker.",
-  "changelog": "1.3.0 - menu novo com o toolkit UI (API 22): abas solido/arestas e botao nativo\n1.2.1 - permissoes declaradas (nenhuma): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR"
+  "deps": {
+    "celeros.app": "^1.0.0"
+  },
+  "changelog": "1.4.0 - casco migrado para o CelerKit (dep celeros.app, API 30): menu e cubo viram telas do A.run (a pilha de telas substitui o laco manual e os estados); o render didatico (vertices/faces/projecao/sprites) segue intacto\n1.3.0 - menu novo com o toolkit UI (API 22): abas solido/arestas e botao nativo\n1.2.1 - permissoes declaradas (nenhuma): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR"
 }

@@ -1,18 +1,27 @@
-// Previsao — previsão do tempo via Open-Meteo (API 16)
-// ES5 puro (Duktape), toolkit UI (API 22). Busca o tempo atual + 4 dias, grava o cache no appData
-// e instala o plugin do watchface (appData/watchface.js) na primeira
-// execução — o relógio passa a mostrar a linha do tempo e o toque nela abre
-// este app (System.launchApp, API 16). Sem WiFi, cai para o clima do
-// celular (Gadgetbridge), como o app Clima do sistema.
+// Previsao — previsao do tempo via Open-Meteo sobre o CelerKit (deps celeros.app.*).
+// Busca o tempo atual + 4 dias, grava o cache no appData (celeros.app.data) e
+// instala o plugin do watchface (appData/watchface.js) na primeira execucao —
+// o relogio passa a mostrar a linha do tempo e o toque nela abre este app
+// (System.launchApp). Sem WiFi, cai para o clima do celular (Gadgetbridge).
+// A rede nao estoura (celeros.app.net), o seletor de cidade e o pedido de
+// lat/lon validado sao do celeros.app.form. ES5 puro (Duktape).
 
-var T = System.theme();
-var INFO = {};
-try { INFO = System.getInfo() || {}; } catch (e) { INFO = {}; }
-var HAS_PHONE = typeof Phone !== "undefined" && Phone && typeof Phone.weather === "function";
+var A = require("celeros.app");
+require("celeros.app.net");       // getJSON que nunca estoura + retry com backoff
+require("celeros.app.data");      // cache do clima em arquivo + cidade no NVS
+require("celeros.app.form");      // seletor bloqueante + askNum validado
+require("celeros.app.list");      // linhas dos dias cacheadas por carimbo
+require("celeros.app.text");      // saneamento Latin-1 do que vem de fora
+
+A.init();
+var T = A.T;
+var LX = A.L.x, LW = A.L.w;
 
 var DATA = FS.appData();              // "/local/data/celeros.previsao/"
 var CACHE = DATA + "forecast.json";
 var PLUGIN = DATA + "watchface.js";
+
+var HAS_PHONE = typeof Phone !== "undefined" && Phone && typeof Phone.weather === "function";
 
 var CIDADES = [
     { n: "Sao Paulo", la: -23.55, lo: -46.64 },
@@ -24,31 +33,42 @@ var CIDADES = [
     { n: "Salvador", la: -12.97, lo: -38.5 },
     { n: "Manaus", la: -3.12, lo: -60.02 }
 ];
-var DIA = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SAB"];
+var DIA = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 
-// ---- cidade escolhida (Storage: indice, ou "@lat,lon|Nome" p/ custom) ------
+// ---- cidade escolhida (NVS via celeros.app.data; le o formato antigo) --------
 var sel = 0;
 var custom = null;
-try {
-    var sv = Storage.get("city", "0");
-    if (sv && sv.charAt(0) === "@") {
-        var pp = sv.substring(1).split("|");
-        var ll = pp[0].split(",");
-        custom = { n: pp[1] || "Custom", la: parseFloat(ll[0]), lo: parseFloat(ll[1]) };
-        if (!(isFinite(custom.la) && isFinite(custom.lo))) { custom = null; sel = 0; }
-        else sel = -1;
-    } else {
-        sel = parseInt(sv, 10) || 0;
-        if (!(sel >= 0 && sel < CIDADES.length)) sel = 0;
+(function leCidade() {
+    var st = A.data.loadState("cidade", null);
+    if (st) {
+        if (typeof st.i === "number" && st.i >= 0 && st.i < CIDADES.length) sel = st.i;
+        else if (typeof st.la === "number" && typeof st.lo === "number") {
+            custom = { n: st.n || "Custom", la: st.la, lo: st.lo };
+            sel = -1;
+        }
+        return;
     }
-} catch (e) { sel = 0; }
+    try {                                    // formato antigo (ate a 1.1.0)
+        var sv = Storage.get("city", "");
+        if (sv && sv.charAt(0) === "@") {
+            var pp = sv.substring(1).split("|");
+            var ll = pp[0].split(",");
+            var la = parseFloat(ll[0]), lo = parseFloat(ll[1]);
+            if (isFinite(la) && isFinite(lo)) {
+                custom = { n: pp[1] || "Custom", la: la, lo: lo };
+                sel = -1;
+            }
+        } else if (sv !== "") {
+            var i = parseInt(sv, 10) || 0;
+            if (i >= 0 && i < CIDADES.length) sel = i;
+        }
+    } catch (e) { sel = 0; }
+})();
 
 function cidade() { return sel >= 0 ? CIDADES[sel] : custom; }
 function salvaCidade() {
-    try {
-        if (sel >= 0) Storage.set("city", String(sel));
-        else Storage.set("city", "@" + custom.la + "," + custom.lo + "|" + custom.n);
-    } catch (e) {}
+    if (sel >= 0) A.data.saveState("cidade", { i: sel });
+    else A.data.saveState("cidade", { la: custom.la, lo: custom.lo, n: custom.n });
 }
 
 // ---- codigo WMO -> texto pt -------------------------------------------------
@@ -64,22 +84,14 @@ function wmo(c) {
     return "-";
 }
 
-// ---- cache -------------------------------------------------------------------
+// ---- cache e frescura (o firmware nao expoe epoch: data/hora do aparelho) ----
 var d = null;
 var msg = "";
-function leCache() {
-    try {
-        var s = FS.readTextFile(CACHE);
-        d = s ? JSON.parse(s) : null;
-    } catch (e) { d = null; }
-}
-function gravaCache() {
-    try { FS.writeTextFile(CACHE, JSON.stringify(d)); } catch (e) {}
-}
+var ver = 0;                          // carimbo das linhas dos dias
+
 function horaAgora() {
     try { return parseInt(System.getTime().split(":")[0], 10) || 0; } catch (e) { return 0; }
 }
-// o firmware nao expoe epoch aos apps: staleness = data/hora do cache
 function velho() {
     if (!d || !d.date) return true;
     try {
@@ -90,15 +102,16 @@ function velho() {
 }
 
 // ---- busca (Open-Meteo; fallback Phone.weather) -------------------------------
-function busca() {
+function baixa() {
     var c = cidade();
-    msg = "Atualizando...";
-    frameAvulso();
     var url = "https://api.open-meteo.com/v1/forecast?latitude=" + c.la + "&longitude=" + c.lo +
         "&current=temperature_2m,relative_humidity_2m,weather_code" +
         "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto";
-    var r = null;
-    try { r = Net.getJSON(url); } catch (e) { r = null; }
+    // 1 tentativa extra com backoff: falha transitiva do gateway nao vira
+    // "Sem conexao" na primeira erro de rede
+    var r = A.net.retry(function () { return A.net.getJSON(url); },
+                        { n: 1, backoff: 1200,
+                          ok: function (v) { return !!(v && v.current && v.daily); } });
     if (r && r.current && r.daily) {
         d = {
             v: 1, city: c.n, t: Math.round(r.current.temperature_2m),
@@ -113,9 +126,8 @@ function busca() {
                 tn: Math.round(dl.temperature_2m_min[i]), txt: wmo(dl.weather_code[i])
             });
         }
-        gravaCache();
-        msg = "";
-        UI.invalidate();
+        A.data.save(CACHE, d);
+        ver++;
         return true;
     }
     if (HAS_PHONE) {
@@ -127,21 +139,26 @@ function busca() {
                     hum: typeof w.hum === "number" ? w.hum : -1, txt: w.txt || "",
                     date: System.getDate(), hour: horaAgora(), days: []
                 };
-                gravaCache();
-                msg = "";
-                UI.invalidate();
+                A.data.save(CACHE, d);
+                ver++;
                 return true;
             }
         } catch (e2) { }
     }
-    msg = "Sem conexao";
-    UI.invalidate();
     return false;
+}
+
+function busca() {
+    A.busy("Atualizando...");            // 1 frame antes da chamada bloqueante
+    if (!baixa()) msg = "Sem conexão";
+    else msg = "";
+    UI.invalidate();
+    return msg === "";
 }
 
 function diaLabel(iso, i) {
     if (i === 0) return "Hoje";
-    if (i === 1) return "Amanha";
+    if (i === 1) return "Amanhã";
     try {
         var y = parseInt(iso.substring(0, 4), 10), m = parseInt(iso.substring(5, 7), 10),
             dd = parseInt(iso.substring(8, 10), 10);
@@ -221,95 +238,73 @@ function instalaPlugin() {
     } catch (e) { }
 }
 
-// ---- UI -----------------------------------------------------------------------
-var view = "main";  // main | cidades
-var LX = 8, LW = 224;
-
-function drawMain(full) {
-    var c = cidade();
-    UI.text(c ? c.n : "?", 120, 12, { align: "center", color: T.textDim, id: 1 });
-    if (!d) {
-        UI.card(LX, 44, LW, 120);
-        UI.text("Sem dados ainda", 120, 76, { role: "title", align: "center", color: T.textDim });
-        UI.text(msg || "Toque em Atualizar", 120, 112, { role: "caption", align: "center", color: T.textDim });
-        UI.cardEnd();
-    } else {
-        // cartao principal: gradiente + temperatura grande
-        // (desenho proprio so no frame total: os textos por cima mudam com a busca,
-        // que marca o proximo frame como total)
-        if (full) System.fillGradient(LX, 40, LW, 124, T.accentD, T.card, 14);
-        UI.text(d.t + " C", 120, 54, { role: "display", align: "center", color: d.t >= 30 ? T.warn : T.text });
-        UI.text(d.txt, 120, 104, { role: "title", align: "center", color: T.accent });
-        if (d.hum >= 0) UI.text("umidade " + d.hum + "%", 120, 136, { role: "caption", align: "center", color: T.textDim });
-        // proximos dias
-        var rows = [];
-        for (var i = 1; i < d.days.length && i < 4; i++) {
-            var f = d.days[i];
-            rows.push({ label: diaLabel(f.dt, i), sub: f.txt, right: f.tn + "° / " + f.tx + "°" });
-        }
-        if (rows.length) UI.list("dias", LX, 172, LW, 3 * 30 + 4, rows, { rowH: 30 });
-    }
-    var info = msg || (d ? (velho() ? "dados de " + d.date : "de hoje, " + d.hour + "h") : "");
-    UI.text(info, 120, 268, { role: "caption", align: "center", color: msg === "Sem conexao" ? T.err : T.textDim, id: 2 });
-    if (UI.button("Atualizar", LX, 282, 132, 32)) busca();
-    if (UI.button("Cidade", LX + 140, 282, LW - 140, 32, { style: "ghost" })) {
-        view = "cidades";
-        UI.invalidate();
-    }
-}
-
-function rowsCidades() {
-    var rows = [];
-    for (var i = 0; i < CIDADES.length; i++) rows.push(CIDADES[i].n);
-    rows.push("Outra (lat,lon)");
-    return rows;
-}
-
-function drawCidades() {
-    if (UI.header("Cidade", { back: true })) {
-        view = "main";
-        UI.invalidate();
-        return;
-    }
-    var rows = rowsCidades();
-    var i = UI.list("cidades", LX, 48, LW, 264, rows, { selected: sel >= 0 ? sel : rows.length - 1 });
-    if (i < 0) return;
-    if (i === rows.length - 1) {
-        var s = "";
-        try { s = System.prompt("Latitude,longitude:", "-23.55,-46.64") || ""; } catch (e) { s = ""; }
-        UI.invalidate();
-        if (!s) return;
-        var ll = s.split(",");
-        var la = parseFloat(ll[0]), lo = parseFloat(ll[1] || "0");
-        if (!(isFinite(la) && isFinite(lo))) { UI.toast("Coordenada inválida"); return; }
+// ---- escolha de cidade (seletor do celeros.app.form, bloqueante) --------------
+function escolheCidade() {
+    var nomes = [];
+    for (var i = 0; i < CIDADES.length; i++) nomes.push(CIDADES[i].n);
+    nomes.push("Outra (lat,lon)");
+    var i = A.form.pick("Cidade", nomes, sel >= 0 ? sel : nomes.length - 1);
+    if (i < 0) return false;             // voltou sem escolher
+    if (i === nomes.length - 1) {
+        var la = A.form.askNum("Latitude", { min: -90, max: 90 });
+        if (la === null) return false;
+        var lo = A.form.askNum("Longitude", { min: -180, max: 180 });
+        if (lo === null) return false;
         custom = { n: "Custom", la: la, lo: lo };
         sel = -1;
     } else {
         sel = i;
     }
     salvaCidade();
-    view = "main";
-    d = null;
-    busca();
+    return true;
 }
 
-// frame avulso (antes da busca bloqueante): mostra o "Atualizando..."
-function frameAvulso() {
-    UI.invalidate();
-    UI.begin(T.bg);
-    drawMain(true);
-    UI.end();
+// ---- UI -----------------------------------------------------------------------
+// linhas dos dias: so reconstruem quando o carimbo muda (ver)
+var listaDias = A.list.make(
+    function () { return d ? ver : -1; },
+    function () {
+        var rows = [];
+        if (d) {
+            for (var i = 1; i < d.days.length && i < 4; i++) {
+                var f = d.days[i];
+                rows.push({ label: diaLabel(f.dt, i), sub: f.txt, right: f.tn + "° / " + f.tx + "°" });
+            }
+        }
+        return rows;
+    });
+
+function telaMain(c) {
+    var cid = cidade();
+    UI.text(cid ? A.text.fit(cid.n) : "?", 120, 12, { align: "center", color: T.textDim, id: 1 });
+    if (!d) {
+        UI.card(LX, 44, LW, 120);
+        UI.text("Sem dados ainda", 120, 76, { role: "title", align: "center", color: T.textDim });
+        UI.text(msg || "Toque em Atualizar", 120, 112, { role: "caption", align: "center", color: T.textDim });
+        UI.cardEnd();
+    } else {
+        // cartao principal: gradiente + temperatura grande (so no frame total)
+        if (c.full) System.fillGradient(LX, 40, LW, 124, T.accentD, T.card, 14);
+        UI.text(d.t + "°C", 120, 54, { role: "display", align: "center", color: d.t >= 30 ? T.warn : T.text });
+        UI.text(A.text.fit(d.txt), 120, 104, { role: "title", align: "center", color: T.accent });
+        if (d.hum >= 0) UI.text("umidade " + d.hum + "%", 120, 136, { role: "caption", align: "center", color: T.textDim });
+        var rows = listaDias.rows();
+        if (rows.length) UI.list("dias", LX, 172, LW, 3 * 30 + 4, rows, { rowH: 30 });
+    }
+    var info = msg || (d ? (velho() ? "dados de " + d.date : "de hoje, " + d.hour + "h") : "");
+    UI.text(info, 120, 268, { role: "caption", align: "center", color: msg === "Sem conexão" ? T.err : T.textDim, id: 2 });
+    if (UI.button("Atualizar", LX, 282, 132, 32)) busca();
+    if (UI.button("Cidade", LX + 140, 282, LW - 140, 32, { style: "ghost" })) {
+        if (escolheCidade()) {
+            d = null;                    // cidade nova: cache antigo nao engana
+            msg = "";
+            busca();
+        }
+    }
 }
 
 // ---- laco -----------------------------------------------------------------------
 instalaPlugin();
-leCache();
-if (!d || velho()) busca();  // cache frio: ja atualiza ao abrir
-UI.invalidate();
-
-while (true) {
-    var full = UI.begin(T.bg);
-    if (view === "cidades") drawCidades();
-    else drawMain(full);
-    UI.end(10);
-}
+d = A.data.load(CACHE, null);
+if (!d || velho()) busca();          // cache frio: ja atualiza ao abrir
+A.run({ main: telaMain }, "main", { fps: 10 });

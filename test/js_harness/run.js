@@ -3556,6 +3556,7 @@ function holdFrames(x, y, n) {
     var r = runApp('data/apps/Touch Test/main.js', function(env) {
         env.__harness.tap(120, 160);
         env.__harness.tap(60, 80);
+        env.__harness.tap2(100, 200, 140, 240);   // multitoque (API 43): 2 dedos + pinch no painel
     });
     check('Touch Test roda', r.err === null, r.err || '');
     var j = joinLog(r.log);

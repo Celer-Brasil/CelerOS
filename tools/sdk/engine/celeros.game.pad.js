@@ -31,6 +31,9 @@
 // quando algo apaga a area dele (parado nao custa nada por quadro).
 // 1.2.2: button.tap mede ate o ultimo quadro apertado (um quadro lento entre
 // o aperto e a soltura nao engole o toque).
+// 1.2.3: controle escondido (visible = false) apaga o proprio desenho (o
+// stick flutuante do Detona ficava como fantasma ao soltar o dedo); rotulo
+// e cor do botao entram na chave do redesenho.
 
 var E = require('celeros.game');
 var EMPTY = {};
@@ -52,6 +55,14 @@ function precisa(c, key, x, y, w, h) {
     return true;
 }
 function feito(c) { if (c._mudo) { E.dirty._mute--; c._mudo = false; } }
+// controle que saiu de cena: o desenho mudo nao some sozinho (antes a caixa
+// suja apagava no quadro seguinte). Escondido -> devolve a area ao fundo;
+// de outra cena (empilhada) -> so esquece, para redesenhar na volta
+function some(c, apaga) {
+    if (c._bb && apaga && E.dirty.on) E.dirty.erase(c._bb[0], c._bb[1], c._bb[2], c._bb[3]);
+    c._bb = null;
+    c._k = null;
+}
 var EMPTY_L = [];
 var _own = {};      // id do dedo -> ja tem dono neste quadro
 
@@ -77,7 +88,7 @@ var _knob = { screen: true, smooth: true };
 var _lbl = { align: 'center', valign: 'middle', screen: true, color: 0, px: 12 };
 
 E.pad = {
-    version: '1.2.2',
+    version: '1.2.3',
 
     // stick analogico. o = {zone {x,y,w,h} (onde o dedo PRESSIONA para
     // pegar o stick; default metade esquerda), r (raio em px, default
@@ -250,7 +261,7 @@ E.pad = {
         var dim = T.stroke === undefined ? 0x3186 : T.stroke;
         for (var k = 0; k < _sticks.length; k++) {
             var s = _sticks[k];
-            if (!s.visible || !live(s)) continue;
+            if (!s.visible || !live(s)) { if (s._bb) some(s, s.visible === false); continue; }
             var R = Math.ceil(s.r * 1.1) + 3;
             var ks = Math.round(s.cx) + ',' + Math.round(s.cy) + ',' + Math.round(s.x * 20) + ',' +
                      Math.round(s.y * 20) + (s.active ? 'a' : '');
@@ -262,18 +273,20 @@ E.pad = {
         }
         for (var b = 0; b < _buttons.length; b++) {
             var bt = _buttons[b];
-            if (!bt.visible || !live(bt)) continue;
+            if (!bt.visible || !live(bt)) { if (bt._bb) some(bt, bt.visible === false); continue; }
             var c = bt.color === undefined ? ac : bt.color;
+            // rotulo/cor entram na chave (botao B que mostra o item equipado)
+            var kb = (bt.down ? 'd' : 'u') + c + bt.label;
             if (bt.r !== undefined) {
                 var rr = bt.r + 3;
-                if (!precisa(bt, bt.down ? 'd' : 'u', bt.x - rr, bt.y - rr, rr * 2, rr * 2)) continue;
+                if (!precisa(bt, kb, bt.x - rr, bt.y - rr, rr * 2, rr * 2)) continue;
                 if (bt.down) E.gfx.circle(bt.x, bt.y, bt.r, c, _knob);
                 else E.gfx.circle(bt.x, bt.y, bt.r, c, _ring);
                 _lbl.color = bt.down ? (T.onAccent === undefined ? 0x0000 : T.onAccent) : c;
                 _lbl.px = Math.round(bt.r * 0.8);
                 if (bt.label) E.gfx.text(bt.label, bt.x, bt.y, _lbl);
             } else {
-                if (!precisa(bt, bt.down ? 'd' : 'u', bt.x - 2, bt.y - 2, bt.w + 4, bt.h + 4)) continue;
+                if (!precisa(bt, kb, bt.x - 2, bt.y - 2, bt.w + 4, bt.h + 4)) continue;
                 E.gfx.rect(bt.x, bt.y, bt.w, bt.h, c, bt.down ? _knob : _ring);
                 _lbl.color = bt.down ? (T.onAccent === undefined ? 0x0000 : T.onAccent) : c;
                 _lbl.px = Math.round(bt.h * 0.5);

@@ -88,8 +88,11 @@
 // vidro, as unicas que entregam o botao ao app.
 // 1.4.4: rect/circle/line/text arredondam inline (sem px/py/cam.wx/Math.round
 // por coordenada: 4-6 chamadas de funcao a menos por primitiva).
+// 1.4.5: E.save.set/setObj devolvem false (e avisam no log) quando o
+// Storage.set do firmware devolve false — NVS cheia nao lanca, so recusa,
+// e o save "dava certo" calado.
 
-var E = { version: '1.4.4' };
+var E = { version: '1.4.5' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -2154,7 +2157,11 @@ E.save = {
     // nome) e valor > 4 KB: antes o erro sumia e o save "salvava" calado
     set: function (key, val) {
         try {
-            Storage.set(E.save.prefix + key, String(val));
+            // o firmware DEVOLVE false (sem lancar) quando a NVS esta cheia
+            if (Storage.set(E.save.prefix + key, String(val)) === false) {
+                E._warn('save.set(' + E.save.prefix + key + '): NVS recusou (cheia?)');
+                return false;
+            }
             return true;
         } catch (e) {
             E._warn('save.set(' + E.save.prefix + key + '): ' + (e && e.message ? e.message : e));

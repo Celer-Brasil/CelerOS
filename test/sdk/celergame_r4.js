@@ -77,6 +77,49 @@ module.exports = function (check) {
         check('core 1.4.2: dedo parado 600 ms nao vira tap', !ct.E.input.tap);
     })();
 
+    // save.set: NVS cheia devolve false SEM lancar; chave longa lanca no
+    // aparelho — os dois viram false + aviso no log (antes "salvava" calado)
+    (function () {
+        var cs = fresh([], { save: 'r4.' }), avisos = [];
+        cs.S.print = function (m) { avisos.push(String(m)); };
+        cs.env.Storage.set = function () { return false; };
+        var a = cs.E.save.set('cheia', 'x');
+        cs.env.Storage.set = function () { throw new RangeError('Storage: chave deve ter 1 a 15 caracteres'); };
+        var b = cs.E.save.setObj('chave_longa_demais', { a: 1 });
+        cs.env.Storage.set = function () { return true; };
+        var c = cs.E.save.set('ok', 1);
+        check('save.set/setObj: NVS cheia (false) e chave recusada (throw) devolvem false e avisam no log',
+              a === false && b === false && c === true && avisos.length === 2, JSON.stringify([a, b, c, avisos]));
+    })();
+
+    // pad 1.2.3: controle escondido com a camada suja devolve a area ao
+    // fundo (o desenho mudo ficava como fantasma); rotulo novo redesenha
+    (function () {
+        var cg = fresh(['pad']), apagou = [], desenhos = 0;
+        var e0 = cg.E.dirty.erase;
+        cg.E.dirty.erase = function (x, y, w, h) { apagou.push([x, y, w, h]); return e0.apply(this, arguments); };
+        var st = cg.E.pad.stick({ zone: { x: 0, y: 160, w: 120, h: 160 }, r: 40, global: true });
+        var bt = cg.E.pad.button({ x: 200, y: 280, r: 24, label: 'A', global: true });
+        var g0 = cg.E.gfx.circle;
+        cg.E.gfx.circle = function () { desenhos++; return g0.apply(this, arguments); };
+        var cont = [], fq = 0;
+        runScenes(cg, { s: {
+            enter: function () { cg.E.dirty.enable(0x0000); },
+            update: function () {
+                fq++;
+                if (fq === 4) bt.label = 'B';
+                if (fq === 6) st.visible = false;
+                if (fq >= 8) cg.E.quit();
+            },
+            draw: function () { cg.E.pad.draw(); cont.push(desenhos); }
+        } }, 's');
+        // quadro 1 desenha os 2; 2-3 parados; 4 so o botao
+        var d1 = cont[0], d2 = cont[2], d3 = cont[3];
+        var apagouStick = apagou.some(function (b) { return b[0] <= st.cx - st.r && b[2] >= st.r * 2; });
+        check('pad 1.2.3: stick escondido apaga o desenho mudo; rotulo novo redesenha o botao',
+              d1 > 0 && d2 === d1 && d3 === d2 + 1 && apagouStick, JSON.stringify([d1, d2, d3, apagou]));
+    })();
+
     // path.flow: o BFS do custo uniforme e o heap do custo variado dao a
     // MESMA distancia que um Dijkstra de referencia (O(n^2), sem heap)
     (function () {

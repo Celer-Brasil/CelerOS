@@ -38,6 +38,9 @@
 // o nome novo vira apelido do original em escala (mesmo desenho, so mais lento).
 // 1.5.1: com System.copySprite (API 45) stamp em escala 1 e blit sao 1
 // chamada, inclusive gravando DENTRO de um sprite (a sala do world).
+// 1.5.2: stamp dentro de um sprite (E.spr.alvo: prescale, fundo gravado)
+// nao registra caixa suja de TELA — a coordenada e do sprite, e a caixa
+// falsa repintava um pedaco do vidro a toa no quadro seguinte.
 
 var E = require('celeros.game');
 var S = System;
@@ -61,7 +64,7 @@ function alias(s, x, y, o, k) {
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.5.1',
+    version: '1.5.2',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
@@ -283,7 +286,8 @@ E.spr = {
         // um sprite (E.spr.alvo) — dentro de sprite so havia o drawSprite
         // afim com recorte (~240 us por tile 32x32 no 4848; copySprite ~150-200)
         if (k === 1 && id && HAS_COPY) {
-            if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);
+            // dentro de um sprite (alvo) nao e caixa de TELA: nada a registrar
+            if (E.dirty.on && !E.spr.alvo) E.dirty.add(dx, dy, s.w, s.h);
             S.copySprite(id, s.sheet ? s.rx : 0, s.sheet ? s.ry : 0, s.w, s.h, dx, dy,
                          key === null ? undefined : key);
             return true;
@@ -322,13 +326,13 @@ E.spr = {
             } else {
                 S.drawSprite(id, dx + w / 2, dy + h / 2, 0, k, k, kk);
             }
-            if (E.dirty.on) E.dirty.add(dx, dy, W2, H2);
+            if (E.dirty.on && !E.spr.alvo) E.dirty.add(dx, dy, W2, H2);
             return true;
         }
         if (s.paint) {
             if (s.sheet) s.paint(name, dx, dy, k);
             else s.paint(w, h, dx, dy);
-            if (E.dirty.on) E.dirty.add(dx, dy, w, h);
+            if (E.dirty.on && !E.spr.alvo) E.dirty.add(dx, dy, w, h);
             return true;
         }
         return false;

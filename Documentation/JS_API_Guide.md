@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 44
+### API Level: 45
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2931,3 +2931,31 @@ with "module not found" and the collector deleted those modules from
 collector now skips the run instead of deleting anything. Nothing changes
 in the JS API: apps with a closure larger than 8 modules (a CelerGame
 adventure uses ~19) declare `"api": 44`.
+
+## 47. API Level 45 — `System.copySprite` (sprite region to the current target)
+
+#### `System.copySprite(id, sx, sy, w, h, dx, dy, key)` (API 45)
+Copies the region (sx, sy, w, h) of sprite `id` to (dx, dy) of the CURRENT target: the frame, or a sprite
+selected with `useSprite`. There is no scaling. `key` is optional: pixels of that RGB565 colour are not
+copied. The target's clip comes back as it was. Copying a sprite onto itself is ignored.
+
+It is the scale-1 sheet stamp in a single call:
+- **Onto the frame:** it replaces `setClip` + `useSprite` + `pushSprite` + `useSprite(0)` + `clearClip`.
+- **Into another sprite:** `pushSprite` only targets the frame, so baking a background (a 195-tile room)
+  had to go through the affine `drawSprite` with a clip (~240 µs per 32x32 tile on the 4848, against
+  ~150–200 µs here). Together with `celeros.game.world` 1.1 (`tile` option), a room change in the
+  Lenda went from ~250 ms to ~120 ms.
+
+S3 boards only (`CONFIG_CELEROS_JS_GAME_ACCEL`, like `drawSprite`), so feature-detect it. `celeros.game.spr`
+1.5.1 uses it inside `E.spr.stamp`/`E.spr.blit` when it exists.
+
+```javascript
+// room baked into a sprite, one call per tile (sheet of 32 px cells)
+System.useSprite(roomSpr);
+for (var k = 0; k < tiles.length; k++) {
+    var t = tiles[k];
+    if (System.copySprite) System.copySprite(sheet, t.sx, t.sy, 32, 32, t.x, t.y);
+    else System.drawSprite(sheet, ...);   // API 44 and older
+}
+System.useSprite(0);
+```

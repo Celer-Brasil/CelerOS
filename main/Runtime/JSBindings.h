@@ -103,6 +103,7 @@ private:
     static duk_ret_t js_rigidCount(duk_context *ctx);
     static duk_ret_t js_drawSprite(duk_context *ctx);
     static duk_ret_t js_blitSprite(duk_context *ctx);
+    static duk_ret_t js_copySprite(duk_context *ctx);
 
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);

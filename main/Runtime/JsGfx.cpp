@@ -274,6 +274,53 @@ duk_ret_t JSBindings::js_blitSprite(duk_context *ctx) {
     dst->setClipRect(ox, oy, ow, oh);
     return 0;
 }
+
+// API 45: copia a regiao (sx, sy, w, h) do sprite `id` para (dx, dy) do alvo
+// CORRENTE — o quadro/display ou um sprite selecionado com useSprite — sem
+// escala; 8o arg opcional = cor-chave RGB565 (pixels dessa cor nao copiam).
+// E o stamp de tile de folha em escala 1 DENTRO de um sprite (o world grava
+// a sala de 195 tiles: so havia o drawSprite afim com recorte, ~240 us por
+// tile 32x32 no 4848 contra ~150-200 aqui) e o mesmo stamp no quadro em 1
+// chamada no lugar de
+// setClip + useSprite + pushSprite + useSprite(0) + clearClip. O recorte do
+// alvo volta ao que era.
+duk_ret_t JSBindings::js_copySprite(duk_context *ctx) {
+    if (!tftInstance) return 0;
+    int id = duk_require_int(ctx, 0);
+    if (id < 1 || id > spriteCap() || s_spritePool[id - 1] == nullptr) return 0;
+    CelerSprite* src = s_spritePool[id - 1];
+    int sx = duk_require_int(ctx, 1), sy = duk_require_int(ctx, 2);
+    int w = duk_require_int(ctx, 3), h = duk_require_int(ctx, 4);
+    int dx = duk_require_int(ctx, 5), dy = duk_require_int(ctx, 6);
+    const bool chroma = !duk_is_null_or_undefined(ctx, 7);
+    const uint32_t key = chroma ? duk_require_uint(ctx, 7) : 0;
+    if (w <= 0 || h <= 0) return 0;
+    lgfx::LovyanGFX* dst;
+    if (useSprite && tftSprite) {
+        if (tftSprite == src) return 0;   // nao copia sobre si mesmo
+        dst = tftSprite;
+    } else if (s_frame != nullptr) {
+        dst = s_frame;                    // o FrameSprite marca so o recorte
+    } else {
+        dst = tftInstance;
+    }
+    // destino no mapa do alvo corrente; a origem DENTRO do sprite e escala
+    // pura (o offset da faixa no modo fixo nao vale para coords de sprite)
+    int cx = jsx(dx), cy = jsy(dy);
+    int cw = jsx(dx + w) - cx, ch = jsy(dy + h) - cy;
+    int px0 = jsx(sx) - jsx(0), py0 = jsy(sy) - jsy(0);
+    int32_t ox, oy, ow, oh;
+    dst->getClipRect(&ox, &oy, &ow, &oh);
+    int x0 = cx > ox ? cx : ox, y0 = cy > oy ? cy : oy;
+    int x1 = cx + cw < ox + ow ? cx + cw : ox + ow;
+    int y1 = cy + ch < oy + oh ? cy + ch : oy + oh;
+    if (x1 <= x0 || y1 <= y0) return 0;
+    dst->setClipRect(x0, y0, x1 - x0, y1 - y0);
+    if (chroma) src->pushSprite(dst, cx - px0, cy - py0, jsc(key));
+    else src->pushSprite(dst, cx - px0, cy - py0);
+    dst->setClipRect(ox, oy, ow, oh);
+    return 0;
+}
 #endif
 
 // API 29: o limite real do pool (8 com PSRAM, 1 sem) — engines e jogos

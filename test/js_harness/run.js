@@ -643,6 +643,7 @@ function makeEnv() {
     rigidCount: rigidStub.rigidCount,
     drawSprite: function() {},
     blitSprite: function() {},   // API 34: restaura o fundo (preview no emulador)
+    copySprite: function() {},   // API 45: regiao de sprite -> alvo corrente (preview no emulador)
     // nivel 3 / apps de sistema: PIN, config, web, OTA e hora (Settings)
     setPin: function() { return true; },
     verifyPin: function() { return true; },
@@ -3646,7 +3647,7 @@ function holdFrames(x, y, n) {
     r = runApp(W + 'Atividade/main.js');
     check('Atividade roda', r.err === null, r.err || '');
     check('Atividade mostra meta', joinLog(r.log).indexOf('de 8000 passos') >= 0);
-    r = runApp(W + 'Musica/main.js', function(env) { env.__harness.tap(120, 178); });
+    r = runApp(W + 'Musica/main.js', function(env) { env.__harness.tap(120, 218); });
     check('Musica roda', r.err === null, r.err || '');
     check('Musica manda playpause', r.env.__phoneSent.indexOf('music:playpause') >= 0);
     r = runApp(W + 'Celular/main.js', function(env) {
@@ -3659,7 +3660,7 @@ function holdFrames(x, y, n) {
     check('Celular esquece com confirmacao', r.env.__phoneSent.indexOf('forget') >= 0);
     r = runApp(W + 'Clima/main.js');
     check('Clima roda', r.err === null, r.err || '');
-    check('Clima mostra temperatura', joinLog(r.log).indexOf('24 C') >= 0);
+    check('Clima mostra temperatura', joinLog(r.log).indexOf('24°C') >= 0);
 })();
 
 // --- Previsao (hub_apps, API 16): Open-Meteo + plugin de watchface ----------

@@ -479,6 +479,28 @@ class Renderer {
                 for (let i = x0; i < x1; i++) r.px(i, j, sp.fb[j * sp.w + i]);
             }
         };
+        // API 45: regiao (sx, sy, w, h) do sprite id para (dx, dy) do alvo
+        // corrente (quadro ou sprite do useSprite), sem escala; key opcional
+        // = cor-chave (pixel dessa cor nao copia). O recorte do alvo vale
+        // (r.px ja o respeita)
+        S.copySprite = (id, sx, sy, w, h, dx, dy, key) => {
+            const sp = r.sprites[(id | 0) - 1];
+            if (!sp || (r.bound && r.sprite === sp)) return;
+            sx |= 0; sy |= 0; w |= 0; h |= 0; dx |= 0; dy |= 0;
+            const chroma = key !== undefined && key !== null;
+            const k = (key | 0) & 0xFFFF;
+            for (let j = 0; j < h; j++) {
+                const yy = sy + j;
+                if (yy < 0 || yy >= sp.h) continue;
+                for (let i = 0; i < w; i++) {
+                    const xx = sx + i;
+                    if (xx < 0 || xx >= sp.w) continue;
+                    const col = sp.fb[yy * sp.w + xx];
+                    if (chroma && col === k) continue;
+                    r.px(dx + i, dy + j, col);
+                }
+            }
+        };
         // PNG de arquivo no framebuffer do emulador: caminho do APP
         // ("/local|/sd/apps/<pasta>/...") resolve para as pastas do repo
         // (irma do appDir, data/apps, hub_apps e a propria pasta do app);
@@ -540,7 +562,7 @@ const RENDERED = [
     'setTextColor', 'setTextSize', 'setTextDatum', 'drawString', 'textWidth',
     'fontHeight', 'createSprite', 'bindSprite', 'useSprite', 'pushSprite', 'deleteSprite',
     'setClip', 'clearClip', 'fillGradient', 'fillArc', 'fillSmoothCircle',
-    'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite', 'blitSprite',
+    'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite', 'blitSprite', 'copySprite',
     'drawPNG', 'drawBMP', 'drawIcon',
 ];
 

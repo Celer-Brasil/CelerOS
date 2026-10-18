@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 44
+### Nível de API: 45
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -3219,3 +3219,31 @@ coletor apagava esses módulos de `/local/modules`. Quando um `deps.json`
 enche o teto (talvez cortado), o coletor agora pula a rodada em vez de
 apagar qualquer coisa. Nada muda na API JS: apps com fecho maior que 8
 módulos (uma aventura da CelerGame usa ~19) declaram `"api": 44`.
+
+## 47. Nível de API 45 — `System.copySprite` (região de sprite para o alvo corrente)
+
+#### `System.copySprite(id, sx, sy, w, h, dx, dy, key)` (API 45)
+Copia a região (sx, sy, w, h) do sprite `id` para (dx, dy) do alvo CORRENTE: o quadro, ou um sprite
+selecionado com `useSprite`. Não há escala. `key` é opcional: pixels dessa cor RGB565 não são copiados.
+O recorte do alvo volta ao que era. Copiar um sprite sobre si mesmo é ignorado.
+
+É o stamp de folha em escala 1 numa chamada só:
+- **No quadro:** substitui `setClip` + `useSprite` + `pushSprite` + `useSprite(0)` + `clearClip`.
+- **Dentro de outro sprite:** o `pushSprite` só empurra para o quadro, então gravar um fundo (uma sala
+  de 195 tiles) tinha que ir pelo `drawSprite` afim com recorte (~240 µs por tile 32x32 no 4848, contra
+  ~150–200 µs aqui). Junto com o `celeros.game.world` 1.1 (opção `tile`), a troca de sala da Lenda caiu
+  de ~250 ms para ~120 ms.
+
+Só placas S3 (`CONFIG_CELEROS_JS_GAME_ACCEL`, como o `drawSprite`), então detecte antes de usar. O
+`celeros.game.spr` 1.5.1 usa a função dentro do `E.spr.stamp`/`E.spr.blit` quando ela existe.
+
+```javascript
+// sala gravada num sprite, uma chamada por tile (folha de células de 32 px)
+System.useSprite(sprSala);
+for (var k = 0; k < tiles.length; k++) {
+    var t = tiles[k];
+    if (System.copySprite) System.copySprite(folha, t.sx, t.sy, 32, 32, t.x, t.y);
+    else System.drawSprite(folha, ...);   // API 44 e anteriores
+}
+System.useSprite(0);
+```

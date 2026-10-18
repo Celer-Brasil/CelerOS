@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 44 — 337 funcoes.
+// API level 45 — 338 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -74,6 +74,7 @@ declare const System: {
     rigidCount(id: string): any;
     drawSprite(id: string, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: string, smooth?: number): void;
     blitSprite(id: string, x: number, y: number, w: number, h: number): void;
+    copySprite(id: string, sx: number, sy: number, w: number, h: number, dx: number, dy: number, key?: string): void;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
     fillScreen(color: number): void;
     /** desenha retângulos vazados ou preenchidos. */

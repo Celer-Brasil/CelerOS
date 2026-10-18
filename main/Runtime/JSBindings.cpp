@@ -1150,6 +1150,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"rigidCount", js_rigidCount, 1},
         {"drawSprite", js_drawSprite, 8},
         {"blitSprite", js_blitSprite, 5},
+        {"copySprite", js_copySprite, 8},  // API 45: regiao de sprite -> alvo corrente
     };
     putFns(ctx, kFnsAccel);
 #endif

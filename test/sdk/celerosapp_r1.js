@@ -484,10 +484,10 @@ module.exports = function (check) {
     // ================================================================ kit
     c = fresh(['kit']);
     check('kit: pacote traz os 8 modulos do fecho decorados',
-          c.A.kit && c.A.kit.version === '1.0.0' &&
+          c.A.kit && c.A.kit.version === '1.0.1' &&
           c.A.fmt && c.A.path && c.A.data && c.A.net && c.A.text && c.A.form &&
-          c.A.list && c.A.caps &&
-          c.A._mods.indexOf('fmt') >= 0 && c.A._mods.indexOf('caps') >= 0, c.A._mods.join(','));
+          c.A.list && !c.A.caps &&
+          c.A._mods.indexOf('fmt') >= 0 && c.A._mods.indexOf('kit') >= 0, c.A._mods.join(','));
 
     // input 1.0.1: cancel reabre a MESMA sessao (maxLen preservado)
     c = fresh(['input'], function (env) {

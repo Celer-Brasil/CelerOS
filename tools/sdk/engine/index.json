@@ -8,25 +8,106 @@
       "celeros.game.tilemap": "^1.0.0"
     }
   },
-  "celeros.game.fx": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.spr": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.tilemap": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.ui": { "deps": { "celeros.game": "^1.1.0" } },
-  "celeros.game.fsm": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.events": { "deps": { "celeros.game": "^1.2.0" } },
-  "celeros.game.path": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.collide": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.pad": { "deps": { "celeros.game": "^1.4.0" } },
-  "celeros.game.level": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.script": { "deps": { "celeros.game": "^1.2.0" } },
-  "celeros.game.inv": { "deps": { "celeros.game": "^1.1.0" } },
-  "celeros.game.steer": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.gen": { "deps": { "celeros.game": "^1.1.0" } },
-  "celeros.game.stats": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.waves": { "deps": { "celeros.game": "^1.2.0" } },
-  "celeros.game.combat": { "deps": { "celeros.game": "^1.4.0", "celeros.game.collide": "^1.1.0" } },
-  "celeros.game.world": { "deps": { "celeros.game": "^1.2.0", "celeros.game.level": "^1.1.0" } },
-  "celeros.game.rpg": { "deps": { "celeros.game": "^1.1.0", "celeros.game.stats": "^1.1.0", "celeros.game.inv": "^1.0.0", "celeros.game.script": "^1.0.0" } },
+  "celeros.game.fx": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.spr": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.tilemap": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.ui": {
+    "deps": {
+      "celeros.game": "^1.1.0"
+    }
+  },
+  "celeros.game.fsm": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.events": {
+    "deps": {
+      "celeros.game": "^1.2.0"
+    }
+  },
+  "celeros.game.path": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.collide": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.pad": {
+    "deps": {
+      "celeros.game": "^1.4.0"
+    }
+  },
+  "celeros.game.level": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.script": {
+    "deps": {
+      "celeros.game": "^1.2.0"
+    }
+  },
+  "celeros.game.inv": {
+    "deps": {
+      "celeros.game": "^1.1.0"
+    }
+  },
+  "celeros.game.steer": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.gen": {
+    "deps": {
+      "celeros.game": "^1.1.0"
+    }
+  },
+  "celeros.game.stats": {
+    "deps": {
+      "celeros.game": "^1.0.0"
+    }
+  },
+  "celeros.game.waves": {
+    "deps": {
+      "celeros.game": "^1.2.0"
+    }
+  },
+  "celeros.game.combat": {
+    "deps": {
+      "celeros.game": "^1.4.0",
+      "celeros.game.collide": "^1.1.0"
+    }
+  },
+  "celeros.game.world": {
+    "deps": {
+      "celeros.game": "^1.2.0",
+      "celeros.game.level": "^1.1.0"
+    }
+  },
+  "celeros.game.rpg": {
+    "deps": {
+      "celeros.game": "^1.1.0",
+      "celeros.game.stats": "^1.1.0",
+      "celeros.game.inv": "^1.0.0",
+      "celeros.game.script": "^1.0.0"
+    }
+  },
   "celeros.game.kit": {
     "deps": {
       "celeros.game.world": "^1.0.0",
@@ -39,25 +120,115 @@
       "celeros.sfx": "^1.4.0"
     }
   },
-  "celeros.app.fmt": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.path": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.semver": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.data": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.caps": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.events": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.net": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.text": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.input": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.chat": { "deps": { "celeros.app": "^1.0.0", "celeros.app.text": "^1.0.0" } },
-  "celeros.app.form": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.list": { "deps": { "celeros.app": "^1.0.0" } },
-  "celeros.app.launch": { "deps": { "celeros.app": "^1.0.0", "celeros.app.semver": "^1.0.0", "celeros.app.path": "^1.0.0" } },
-  "celeros.app.history": { "deps": { "celeros.app": "^1.0.0", "celeros.app.data": "^1.0.0" } },
-  "celeros.app.ai": { "deps": { "celeros.app": "^1.0.0", "celeros.app.data": "^1.0.0", "celeros.app.text": "^1.0.0", "celeros.app.net": "^1.0.0" } },
-  "celeros.app.fsx": { "deps": { "celeros.app": "^1.0.0", "celeros.app.path": "^1.0.0" } },
-  "celeros.app.updater": { "deps": { "celeros.app": "^1.0.0", "celeros.app.semver": "^1.0.0", "celeros.app.net": "^1.0.0", "celeros.app.fsx": "^1.0.0", "celeros.app.path": "^1.0.0" } },
-  "celeros.app.svc": { "deps": { "celeros.app": "^1.0.0", "celeros.app.data": "^1.0.0" } },
-  "celeros.app.mesh": { "deps": { "celeros.app": "^1.0.0", "celeros.mesh": "^1.0.1" } },
+  "celeros.app.fmt": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.path": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.semver": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.data": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.caps": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.events": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.net": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.text": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.input": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.chat": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.text": "^1.0.0"
+    }
+  },
+  "celeros.app.form": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.list": {
+    "deps": {
+      "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.launch": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.semver": "^1.0.0",
+      "celeros.app.path": "^1.0.0"
+    }
+  },
+  "celeros.app.history": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.data": "^1.0.0"
+    }
+  },
+  "celeros.app.ai": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.data": "^1.0.0",
+      "celeros.app.text": "^1.0.0",
+      "celeros.app.net": "^1.0.0"
+    }
+  },
+  "celeros.app.fsx": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.path": "^1.0.0"
+    }
+  },
+  "celeros.app.updater": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.semver": "^1.0.0",
+      "celeros.app.net": "^1.0.0",
+      "celeros.app.fsx": "^1.0.0",
+      "celeros.app.path": "^1.0.0"
+    }
+  },
+  "celeros.app.svc": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.data": "^1.0.0"
+    }
+  },
+  "celeros.app.mesh": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.mesh": "^1.0.1"
+    }
+  },
   "celeros.app.kit": {
     "deps": {
       "celeros.app": "^1.0.0",
@@ -67,8 +238,7 @@
       "celeros.app.net": "^1.0.0",
       "celeros.app.text": "^1.0.0",
       "celeros.app.form": "^1.0.0",
-      "celeros.app.list": "^1.0.0",
-      "celeros.app.caps": "^1.0.0"
+      "celeros.app.list": "^1.0.0"
     }
   }
 }

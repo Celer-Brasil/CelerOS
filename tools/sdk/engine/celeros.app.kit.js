@@ -6,9 +6,10 @@
 //
 //   "deps": { "celeros.app.kit": "^1.0.0", "celeros.app.ai": "^1.0.0" }
 //
-// Fecho: core + fmt + path + data + net + text + form + list + caps.
-// Nao inclui chat/input/launch/updater/fsx/svc/mesh/ai/history/events/
-// semver — os apps que usam, declaram a parte.
+// Fecho: core + fmt + path + data + net + text + form + list (8 arestas —
+// o teto do hub e de 8 deps por modulo). Nao inclui caps nem chat/input/
+// launch/updater/fsx/svc/mesh/ai/history/events/semver — os apps que usam,
+// declaram a parte (caps e uma linha: require("celeros.app.caps")).
 
 var A = require('celeros.app');
 require('celeros.app.fmt');
@@ -18,9 +19,8 @@ require('celeros.app.net');
 require('celeros.app.text');
 require('celeros.app.form');
 require('celeros.app.list');
-require('celeros.app.caps');
 
-A.kit = { version: '1.0.0' };
+A.kit = { version: '1.0.1' };
 
 A._mods.push('kit');
 

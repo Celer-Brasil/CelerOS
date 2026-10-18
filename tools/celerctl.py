@@ -3836,6 +3836,16 @@ def _push_dep_module(link, name, ver, meta):
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td) / f"{name}.js"
         tmp.write_bytes(blob)
+        # o cache e versionado (nome/versao): reinstalar um app quase sempre
+        # acha o modulo JA la. A releitura com crc32 (a mesma da verificacao)
+        # custa metade do push e poupa a escrita na flash — o install da
+        # Lenda empurrava as ~18 deps inteiras a cada vez
+        try:
+            link.verify_file(str(tmp), f"{mod_dir}/{name}.js")
+            print(f"dep {name} {ver}: ja no cache do device ({len(blob)} B, conferida)")
+            return
+        except CelerError:
+            pass  # ausente ou diferente: escreve
         link.write_file(str(tmp), f"{mod_dir}/{name}.js")
         link.verify_file(str(tmp), f"{mod_dir}/{name}.js")
     print(f"dep {name} {ver}: no cache do device ({len(blob)} B, verificada)")
@@ -3850,7 +3860,9 @@ def _install_shared_deps(link, deps, hub, local=False):
     import celerhub  # mesma pasta tools/; so funcoes, main() e guardado
     try:
         status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
-    except Exception as e:  # noqa: BLE001 — offline vale com --deps-local
+    except (Exception, SystemExit) as e:  # noqa: BLE001 — offline vale com --deps-local
+        # celerhub.http falha de rede com die() (SystemExit): so Exception
+        # deixava o fallback do --deps-local morto (offline abortava)
         if not local:
             raise
         print(f"deps: hub indisponivel ({e}); so as do SDK local")

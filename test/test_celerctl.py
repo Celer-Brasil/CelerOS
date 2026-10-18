@@ -1405,6 +1405,32 @@ class TestAppsDeps(unittest.TestCase):
         idx["celeros.engine"]["1.99.0"] = {"url": "y", "deps": {}}
         self.assertEqual(celerhub.resolve_dep_ranges({"celeros.engine": "^1.0.0"}, idx)["celeros.engine"], "1.99.0")
 
+    def test_push_dep_pula_modulo_ja_no_cache(self):
+        # cache versionado: modulo identico ja no device nao e reescrito
+        # (so a releitura com crc32); ausente/diferente escreve e confere
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            src = Path(td) / "m.js"
+            src.write_text("var a = 1;\n")
+
+            class Lk:
+                def __init__(self, tem):
+                    self.tem, self.escritas, self.confs = tem, [], 0
+                def simple(self, *a):
+                    pass
+                def write_file(self, l, r):
+                    self.escritas.append(r)
+                    self.tem = True
+                def verify_file(self, l, r):
+                    self.confs += 1
+                    if not self.tem:
+                        raise C.CelerError("ausente")
+            for tem, esc in ((True, 0), (False, 1)):
+                lk = Lk(tem)
+                C._push_dep_module(lk, "m", "1.0.0", {"_local": str(src)})
+                self.assertEqual(len(lk.escritas), esc)
+                self.assertEqual(lk.confs, 1 + esc)
+
     def test_gc_plan_puro(self):
         modules = {"celeros.engine": {"1.2.1": 32000, "1.2.2": 32000},
                    "celeros.physics": {"1.4.0": 15000}}

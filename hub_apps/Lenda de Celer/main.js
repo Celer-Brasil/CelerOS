@@ -36,12 +36,40 @@ if (typeof __harness !== 'undefined') __harness.lenda = { E: E, J: J, A: A };
 var _tt = { align: 'center', valign: 'middle', px: 30, color: 0xFFE0, shadow: 0x0000, screen: true };
 var _ts = { align: 'center', px: 13, color: 0xC618, screen: true };
 var apagando = false;
-function desenhaTitulo() {
+// titulo decodificado UMA vez num sprite: o drawPNG cheio em cada
+// redesenho custava centenas de ms no 4848 — o quadro do press estourava
+// a janela do tap (350 ms entre o press e o release amostrados) e o toque
+// so piscava o botao, nunca virava escolha
+var _tituloSlot = 0;
+function slotTitulo() {
+    if (_tituloSlot) return _tituloSlot;
+    if (!E.caps.sprites || !E.caps.png) return 0;
+    try { _tituloSlot = S.createSprite(E.W, E.H) || 0; } catch (e) { _tituloSlot = 0; }
+    if (!_tituloSlot) return 0;
+    E.spr._used++;
+    S.useSprite(_tituloSlot);
     S.fillScreen(0x0000);
     var ok = false;
     for (var i = 0; i < E.spr.bases.length && !ok; i++) {
-        try { ok = !!S.drawPNG(E.spr.bases[i] + 'titulo.png', Math.round((E.W - 480) / 2), 0); }
+        try { ok = !!S.drawPNG(E.spr.bases[i] + 'titulo.png', 0, 0); }
         catch (e) { ok = false; }
+    }
+    S.useSprite(0);
+    if (!ok) {
+        try { S.deleteSprite(_tituloSlot); } catch (e) {}
+        _tituloSlot = 0;
+        E.spr._used--;
+    }
+    return _tituloSlot;
+}
+function desenhaTitulo() {
+    S.fillScreen(0x0000);
+    var sl = slotTitulo();
+    if (sl && typeof S.blitSprite === 'function') {
+        S.blitSprite(sl, Math.round((E.W - 480) / 2), 0, E.W, E.H);
+    } else for (var i = 0; i < E.spr.bases.length; i++) {
+        try { S.drawPNG(E.spr.bases[i] + 'titulo.png', Math.round((E.W - 480) / 2), 0); break; }
+        catch (e) {}
     }
     _tt.px = Math.round(28 * E.U);
     _tt.fit = Math.round(E.W * 0.92);
@@ -59,6 +87,14 @@ var cenas = {};
 cenas.titulo = {
     static: true,
     enter: function () { SOM.tocar('casa'); apagando = false; },
+    exit: function () {
+        // o sprite do titulo sai com a cena: o mundo do jogo precisa dos slots
+        if (_tituloSlot) {
+            try { S.deleteSprite(_tituloSlot); } catch (e) {}
+            _tituloSlot = 0;
+            E.spr._used--;
+        }
+    },
     draw: function () {
         desenhaTitulo();
         var w = Math.round(E.W * 0.78), x = Math.round((E.W - w) / 2), row = Math.round(E.H * 0.1);

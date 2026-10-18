@@ -1,10 +1,13 @@
-// CelerOS Qwen — assistente de voz (API 19: Mic.* + provider openrouter do AI)
-// ES5 puro (Duktape). Fale no microfone e leia a resposta: segurar o botao
-// grava (Mic.start/stop devolve o WAV em base64), o pedido vai como content
-// part input_audio e a resposta chega em texto pelo callback do AI.chat
-// (HTTPS em task propria). A chave fica no aparelho (/local/openrouter_key.txt)
-// — o app nunca a ve. topbar: false — o chrome e daqui (o cao nao tem touch
-// para o X da faixa e cada face precisa do vidro inteiro).
+// CelerOS Qwen — assistente de voz (Mic.* + provider openrouter do AI) sobre
+// o CelerKit (deps celeros.app.*): bolhas/rolagem no celeros.app.chat, linha
+// de digitacao com teclado dockado no celeros.app.input, historico
+// persistido no celeros.app.data (mesmo arquivo de antes) e saneamento
+// Latin-1 no celeros.app.text. O PEDIDO de IA segue feito aqui: o
+// celeros.app.ai ainda nao aceita provider nem content part de audio
+// (input_audio) nem reasoning.effort — e a voz e bench-sensitiva. ES5 puro
+// (Duktape). A chave fica no aparelho (/local/openrouter_key.txt) — o app
+// nunca a ve. topbar: false — o chrome e daqui (o cao nao tem touch para o
+// X da faixa e cada face precisa do vidro inteiro).
 //
 // Duas caras:
 //  - placas com touch: transcript rolavel + fileira de botoes + botao redondo
@@ -16,7 +19,15 @@
 //    como o Dog Face. Entrada: pad capacitivo (System.touchPad) — segurar
 //    fala, tocar rola a resposta, 3 toques rapidos saem.
 
-var T = System.theme();
+var A = require("celeros.app");
+require("celeros.app.text");
+require("celeros.app.input");
+require("celeros.app.chat");
+require("celeros.app.data");
+require("celeros.app.net");
+
+A.init();
+var T = A.T;
 var INFO = System.getInfo();
 var W = 240, H = 320;
 var IS_DOG = (INFO.board === "spotpear-dog");
@@ -31,34 +42,22 @@ var SYSTEM_PROMPT = "Você é o Qwen, assistente de voz do CelerOS, sistema " +
     "direta, sem usar emojis.";
 var CTX_MSGS = 12;               // mensagens de contexto enviadas
 var MAX_MSGS = 20;               // mensagens guardadas no historico
-
-var msgs = [];                   // conversa: {r: "user"|"assistant", s: texto}
 var busy = false;                // requisicao em curso
-var histFile = (typeof FS.appData === "function" ? FS.appData() : "");
-histFile += "historico.json";
 
 // ------------------------------------------------------------ historico ---
-(function loadHist() {
-    if (!histFile || histFile === "historico.json") return;
-    var raw = FS.readTextFile(histFile);
-    if (!raw) return;
-    try {
-        var arr = JSON.parse(raw);
-        if (arr && arr.length) msgs = arr;
-    } catch (e) { msgs = []; }
-})();
+// Conversa: {r: "user"|"assistant", s}. Persistencia no celeros.app.data
+// (best-effort: historico nunca derruba o chat); o arquivo e o mesmo da
+// versao anterior — nada se perde na migracao.
+var histFile = A.data.file("historico.json");
+var msgs = A.data.load(histFile, []);
+if (!msgs || typeof msgs.length !== "number") msgs = [];
 
-function saveHist() {
-    if (!histFile || histFile === "historico.json") return;
-    try {
-        FS.writeTextFile(histFile, JSON.stringify(msgs.slice(-MAX_MSGS)));
-    } catch (e) { /* historico e melhor esforco: nunca derruba o chat */ }
-}
+function saveHist() { A.data.save(histFile, msgs); }
 
-// Fonts do touch cobrem Latin-1: emoji/simbolos da IA viram nada
-function fit(s) {
-    return String(s === null || s === undefined ? "" : s)
-        .replace(/[^\u0000-\u00FF\n]/g, "");
+function pushMsg(role, s) {
+    msgs.push({ r: role, s: A.text.fit(s) });
+    if (msgs.length > MAX_MSGS) msgs.shift();
+    saveHist();
 }
 
 // ------------------------------------------------------------------ envio --
@@ -98,8 +97,9 @@ function request(audioB64, isRetry) {
         answerSink({ ok: false, error: "sem chave (tools/push_ai_key.py " + PROV + ")" });
         return true;
     }
-    if (!Net.isConnected()) { answerSink({ ok: false, error: "sem WiFi" }); return true; }
+    if (!A.net.online()) { answerSink({ ok: false, error: "sem WiFi" }); return true; }
     busy = true;
+    if (t) t.busy = true;            // balao de pensando (sem transcript no cao)
     var opts = {
         provider: PROV,
         messages: buildPayload(audioB64),
@@ -113,6 +113,7 @@ function request(audioB64, isRetry) {
         started = AI.chat(opts,
             function (r) {
                 busy = false;
+                if (t) t.busy = false;
                 if (!isRetry && r && !r.ok &&
                     (r.status === 502 || r.status === 504 || r.status === 429)) {
                     if (answerSink) answerSink({ ok: false, retrying: true });
@@ -121,19 +122,19 @@ function request(audioB64, isRetry) {
                 }
                 cue(1320, 60);
                 if (r && r.ok && r.content) {
-                    msgs.push({ r: "assistant", s: fit(r.content) });
-                    if (msgs.length > MAX_MSGS) msgs.shift();
-                    saveHist();
+                    pushMsg("assistant", r.content);
                 }
                 if (answerSink) answerSink(r || { ok: false, error: "sem resposta" });
             });
     } catch (e) {
         busy = false;
+        if (t) t.busy = false;
         if (answerSink) answerSink({ ok: false, error: String(e) });
         return true;
     }
     if (!started) {
         busy = false;
+        if (t) t.busy = false;
         // slot ocupado: quase sempre uma requisicao orfa (app fechado no
         // meio) ou o retry da pergunta anterior ainda no ar — nao e erro do
         // dono, e "espere a resposta chegar"
@@ -147,9 +148,7 @@ var questionSink = null;
 
 function sendText(text) {
     if (!text) return;
-    msgs.push({ r: "user", s: fit(text) });
-    if (msgs.length > MAX_MSGS) msgs.shift();
-    saveHist();
+    pushMsg("user", text);
     if (questionSink) questionSink(text);
     request(null);
 }
@@ -157,9 +156,7 @@ function sendText(text) {
 function sendRecording(b64) {
     // o stop do Mic devolve o base64 do WAV pronto para o input_audio
     if (!b64) { answerSink({ ok: false, error: "não capturou áudio" }); return; }
-    msgs.push({ r: "user", s: "(voz)" });
-    if (msgs.length > MAX_MSGS) msgs.shift();
-    saveHist();
+    pushMsg("user", "(voz)");
     request(b64);
 }
 
@@ -167,98 +164,85 @@ function sendRecording(b64) {
 // INTERFACE TOUCH (relogio, SmartDisplay, CYD): transcript + botao de voz
 // =============================================================================
 if (!IS_DOG) {
-// Conversa em baloes no toolkit UI (API 22): mesma area rolavel do Chat IA
-// (segue o fim), fileira de botoes no topo e o botao redondo de voz embaixo.
+// Conversa em baloes no celeros.app.chat (top: 36 = abaixo da fileira de
+// botoes): bolhas medidas na entrada, rolagem por inercia que segue o fim.
 var REC_MS = 8000;               // teto da captura no touch
 var MIN_MS = 700;                // abaixo disso descarta (toque perdido)
 var MIC_CY = H - 44;
 var MIC_R = 30;
 var TOP = 36;                    // conversa abaixo da fileira de botoes
-var BW = 180, PAD = 8, MAX_VIEW = 60;
 
-var view = [];                   // baloes: {k: "user"|"assistant"|"note", s, c, h, bw}
-var kbOpen = false;
-var kbTop = H;
+var t = A.chat.new({ top: TOP });
 var rec = false;                 // gravando (botao segurado)
 var recStart = 0;
 var micSig = "";                 // ultimo estado desenhado do botao de voz
 
-function pushView(k, s, c) {
-    var it = { k: k, s: s, c: c };
-    if (k === "note") {
-        it.h = UI.measureWrap(s, W - 24, "caption");
-    } else {
-        var one = UI.measure(s, "body") + 2 * PAD;
-        it.bw = one < BW ? Math.max(one, 40) : BW;
-        it.h = UI.measureWrap(s, it.bw - 2 * PAD, "body") + 12;
-    }
-    view.push(it);
-    if (view.length > MAX_VIEW) view.shift();
-    UI.scrollTo("chat", 1e6);
-    UI.invalidate();
-}
-function note(s, c) { pushView("note", s, c || T.textDim); }
+function note(s, c) { t.note(s, c); UI.invalidate(); }
 
-(function renderHist() {
-    for (var i = 0; i < msgs.length; i++) pushView(msgs[i].r, msgs[i].s);
-})();
+// conversa anterior (o historico mora no A.data; a vista, na transcript)
+for (var hi = 0; hi < msgs.length; hi++) {
+    if (msgs[hi].r === "user") t.user(msgs[hi].s);
+    else t.bot(msgs[hi].s);
+}
 
 // resultado da IA: entra na conversa (o frame seguinte redesenha)
-questionSink = function (text) { pushView("user", fit(text)); };
+questionSink = function (text) { t.user(text); UI.invalidate(); };
 answerSink = function (r) {
-    if (r && r.retrying) { note("repetindo..."); return; }
-    if (r && r.ok && r.content) {
-        pushView("assistant", fit(r.content));
-        if (r.usage && r.usage.total_tokens) note("(" + r.usage.total_tokens + " tokens)");
+    if (r && r.retrying) {
+        t.note("repetindo...");
+    } else if (r && r.ok && r.content) {
+        t.bot(r.content);
+        if (r.usage && r.usage.total_tokens) t.note("(" + r.usage.total_tokens + " tokens)");
     } else if (r && r.ok) {
-        note("Qwen: resposta vazia", T.err);
+        t.err("Qwen: resposta vazia");
     } else {
-        note("erro: " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)), T.err);
-        if (r && r.detail) note("detalhe: " + fit(r.detail));
+        t.err("erro: " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)));
+        if (r && r.detail) t.note("detalhe: " + A.text.fit(r.detail));
     }
+    UI.invalidate();
 };
 
-function chatBottom() { return kbOpen ? kbTop - 44 : H - 96; }
-function chatHeight() {
-    var y = 6;
-    for (var i = 0; i < view.length; i++) y += view[i].h + 8;
-    return y + (busy ? 36 : 0);
+// -------------------------------------------------------------- gravacao ---
+function startRec() {
+    if (rec || busy || !HAS_MIC) return;
+    if (!Mic.start({ ms: REC_MS })) { note("microfone ocupado ou sem RAM", T.err); return; }
+    rec = true;
+    recStart = System.millis();
 }
-function drawChat(full) {
-    var h = chatBottom() - TOP;
-    if (h <= 0) return;
-    var off = UI.scrollBegin("chat", 0, TOP, W, h, Math.max(h, chatHeight()));
-    var y = TOP + 6 - off;
-    for (var i = 0; i < view.length; i++) {
-        var it = view[i];
-        var vis = y + it.h >= TOP && y < TOP + h;
-        if (full && vis) {
-            if (it.k === "note") {
-                UI.text(it.s, W / 2, y, { role: "caption", align: "center", color: it.c, w: W - 24, lines: 64, id: i });
-            } else {
-                var mine = it.k === "user";
-                var x = mine ? W - 8 - it.bw : 8;
-                var bg = mine ? T.accentD : T.raised;
-                System.fillRoundRect(x, y, it.bw, it.h, 12, bg);
-                UI.text(it.s, x + PAD, y + 6, { w: it.bw - 2 * PAD, lines: 64, bg: bg, id: i });
-            }
-        }
-        y += it.h + 8;
+// fim do dedo/teto de tempo: envia (ou descarta se curtinho demais)
+function finishRec() {
+    if (!rec) return;
+    rec = false;
+    var el = System.millis() - recStart;
+    if (el < MIN_MS) {
+        Mic.stop();  // descarta o pinguinho
+        note("(muito curto, tente de novo)");
+        return;
     }
-    if (busy) {
-        if (full) System.fillRoundRect(8, y, 64, 28, 12, T.raised);
-        UI.spinner(40, y + 14, 9);
-    } else if (!view.length && full) {
-        UI.text(HAS_MIC ? "Segure o botão e fale com o Qwen" : "Pergunte algo ao Qwen...", W / 2, TOP + h / 2 - 8,
-                { role: "caption", align: "center", color: T.textDim });
-    }
-    UI.scrollEnd();
+    t.user("(voz)");  // a pergunta aparece na conversa
+    UI.invalidate();
+    sendRecording(Mic.stop());
+}
+function cancelRec() {
+    if (!rec) return;
+    rec = false;
+    Mic.stop();
+    note("(cancelado)");
+}
+function openKeypad() {
+    if (rec) cancelRec();
+    A.input.open({ maxLen: 256 });
+    UI.invalidate();
+}
+function closeKeypad() {
+    A.input.close();
+    UI.invalidate();
 }
 
 // Botao de voz: circulo que enche pelo tempo + nucleo pulsando pelo nivel.
 // Desenho proprio: so quando o estado muda (gravando: a cada frame)
 function drawMic(full) {
-    if (kbOpen || !HAS_MIC) return;
+    if (A.input.ativo() || !HAS_MIC) return;
     var lvl = rec ? Math.max(0, Mic.level()) : 0;
     var el = rec ? System.millis() - recStart : 0;
     var sig = rec ? "r" + Math.floor(el / 100) + ":" + Math.round(lvl / 10) : (busy ? "b" : "i");
@@ -286,131 +270,81 @@ function drawMic(full) {
     }
 }
 
-function drawInput() {
-    if (!kbOpen) return;
-    var y = kbTop - 36;
-    UI.card(6, y, W - 12, 30, { radius: 15, stroke: true });
-    var s = System.keypadText();
-    var cur = (Math.floor(System.millis() / 500) % 2) ? "_" : " ";
-    var shown = s;
-    while (shown.length && UI.measure(shown + "_", "body") > W - 40) shown = shown.substring(1);
-    UI.text(s.length ? shown + cur : "Mensagem", 18, y + 7, { color: s.length ? T.text : T.textDim, id: 1 });
-    UI.cardEnd();
-}
-
-// -------------------------------------------------------------- gravacao ---
-function startRec() {
-    if (rec || busy || !HAS_MIC) return;
-    if (!Mic.start({ ms: REC_MS })) { note("microfone ocupado ou sem RAM", T.err); return; }
-    rec = true;
-    recStart = System.millis();
-}
-// fim do dedo/teto de tempo: envia (ou descarta se curtinho demais)
-function finishRec() {
-    if (!rec) return;
-    rec = false;
-    var el = System.millis() - recStart;
-    if (el < MIN_MS) {
-        Mic.stop();  // descarta o pinguinho
-        note("(muito curto, tente de novo)");
-        return;
-    }
-    pushView("user", "(voz)");  // a pergunta aparece na conversa
-    sendRecording(Mic.stop());
-    UI.invalidate();
-}
-function cancelRec() {
-    if (!rec) return;
-    rec = false;
-    Mic.stop();
-    note("(cancelado)");
-}
-function openKeypad() {
-    if (rec) cancelRec();
-    kbOpen = System.keypadOpen({ field: false, maxLen: 256 });
-    if (kbOpen) kbTop = System.keypadRect().y;
-    UI.invalidate();
-}
-function closeKepad() {
-    if (typeof System.keypadClose === "function") System.keypadClose();
-    kbOpen = false;
-    kbTop = H;
-    UI.invalidate();
-}
-
 // Fileira de botoes (topbar:false: o chrome e daqui). No relogio redondo os
-// cantos sao zona morta — fileira centrada com folga nas bordas.
+// cantos sao zona morta — fileira centrada com folga nas bordas. Devolve
+// true quando pediu sair (a tela devolve A.EXIT ao A.run).
 function chrome() {
-    if (UI.button((kbOpen && HAS_MIC) ? "Voz" : "Teclado", 14, 4, 66, 26, { style: "ghost" })) {
-        if (kbOpen && HAS_MIC) closeKepad();
+    if (UI.button((A.input.ativo() && HAS_MIC) ? "Voz" : "Teclado", 14, 4, 66, 26, { style: "ghost" })) {
+        if (A.input.ativo() && HAS_MIC) closeKeypad();
         else openKeypad();
     }
     if (UI.button(busy ? "Cancelar" : "Limpar", 86, 4, 68, 26, { style: "ghost" })) {
-        if (busy && hasAI && AI.cancel()) {
-            busy = false;
-            note("cancelado");
-        } else if (!busy) {
+        if (busy) {
+            if (hasAI && AI.cancel()) {
+                busy = false;
+                note("cancelado");
+            }
+        } else {
             if (rec) cancelRec();
             msgs = [];
-            view = [];
+            t.clear();
             try { FS.deleteFile(histFile); } catch (e) {}
             note("conversa apagada");
         }
     }
     if (UI.button("Sair", 160, 4, 66, 26, { style: "ghost" })) {
         if (rec) cancelRec();
-        System.exitApp();
+        return true;
     }
+    return false;
 }
 
 // ------------------------------------------------------------------ main ---
-note("Qwen " + VER, T.accent);
-if (!hasAI) note("requer firmware com API >= 18", T.err);
-else if (!AI.configured(PROV)) note("sem chave: rode tools/push_ai_key.py " + PROV, T.err);
-if (!HAS_MIC) note("sem microfone aqui: use o teclado");
-else note("fale segurando o botão; arraste para rever");
+// A.run e dono do UI.begin/UI.end; a tela so desenha.
+t.note("Qwen " + VER, T.accent);
+if (!hasAI) t.err("requer firmware com API >= 18");
+else if (!AI.configured(PROV)) t.err("sem chave: rode tools/push_ai_key.py " + PROV);
+if (!HAS_MIC) t.note("sem microfone aqui: use o teclado");
+else t.note("fale segurando o botão; arraste para rever");
 
 // Sem microfone o teclado abre direto (chat de texto puro)
-if (!HAS_MIC && typeof System.keypadOpen === "function") openKeypad();
+if (!HAS_MIC) openKeypad();
 
-var wasBusy = busy;
-while (true) {
-    if (kbOpen) {
-        var ev = System.keypadPoll();
+A.run({
+    chat: function (c) {
+        // eventos do teclado chegam antes do frame (o firmware entrega no present)
+        var ev = A.input.poll();
         if (ev) {
             if (ev.type === "enter") {
                 if (ev.text) sendText(ev.text);
                 UI.invalidate();
-            } else if (ev.type === "cancel") {
-                // voltar ao modo voz (se houver mic) em vez de reabrir o teclado
-                if (HAS_MIC) closeKepad();
-                else { System.keypadOpen({ field: false, maxLen: 256 }); kbTop = System.keypadRect().y; UI.invalidate(); }
+            } else if (ev.type === "cancel" && HAS_MIC) {
+                // o poll ja reabriu a sessao sozinho: com mic, volta ao modo voz
+                closeKeypad();
             }
         }
-    }
-    if (busy !== wasBusy) { wasBusy = busy; UI.invalidate(); }
+        if (chrome()) return A.EXIT;
 
-    var full = UI.begin(T.bg);
-    if (full && kbOpen) System.keypadDraw();
-    chrome();
-    drawChat(full);
-    drawInput();
+        var bottom = A.input.ativo() ? A.input.top() - 44 : H - 96;
+        A.input.redraw(c.full);           // frame total apaga o teclado acoplado
+        t.draw(c.full, bottom - TOP);     // conversa entre a fileira e o teclado/voz
+        if (A.input.ativo()) A.input.line("Mensagem");
 
-    // botao de voz: segurar dentro do circulo grava; soltar envia; arrastar
-    // para fora cancela
-    if (HAS_MIC && !kbOpen) {
-        var t = UI.touch();
-        var d2 = (t.x - 120) * (t.x - 120) + (t.y - MIC_CY) * (t.y - MIC_CY);
-        if (!rec && t.down && d2 <= (MIC_R + 6) * (MIC_R + 6) && !busy) startRec();
-        else if (rec) {
-            if (t.down && d2 > (MIC_R + 26) * (MIC_R + 26)) cancelRec();
-            else if (!t.down) finishRec();
+        // botao de voz: segurar dentro do circulo grava; soltar envia; arrastar
+        // para fora cancela
+        if (HAS_MIC && !A.input.ativo()) {
+            var tp = UI.touch();
+            var d2 = (tp.x - 120) * (tp.x - 120) + (tp.y - MIC_CY) * (tp.y - MIC_CY);
+            if (!rec && tp.down && d2 <= (MIC_R + 6) * (MIC_R + 6) && !busy) startRec();
+            else if (rec) {
+                if (tp.down && d2 > (MIC_R + 26) * (MIC_R + 26)) cancelRec();
+                else if (!tp.down) finishRec();
+            }
         }
+        drawMic(c.full);
+        if (typeof __harness !== "undefined") __harness.qwenRec = rec;
     }
-    drawMic(full);
-    if (typeof __harness !== "undefined") __harness.qwenRec = rec;
-    UI.end();
-}
+}, "chat", { fps: 20 });
 }  // fim da interface touch
 
 // =============================================================================
@@ -614,11 +548,11 @@ answerSink = function (r) {
     if (r && r.retrying) { stD = "busy"; dirtyD = true; return; }  // repete em silencio
     stD = "idle";
     if (r && r.ok && r.content) {
-        answerLines = dogWrap(fit(r.content));
+        answerLines = dogWrap(A.text.fit(r.content));
         answerPage = 0;
     } else {
         var msg = "ERRO: " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0));
-        if (r && r.detail) msg += " " + fit(r.detail).substring(0, 40);
+        if (r && r.detail) msg += " " + A.text.fit(r.detail).substring(0, 40);
         answerLines = dogWrap(msg);
         answerPage = 0;
     }

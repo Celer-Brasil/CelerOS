@@ -1,8 +1,18 @@
-// Matilha — painel do bando de CelerOS (API 27). A malha BLE (CelerNet)
-// carrega a presença com o PAPEL de cada um (som, mic, tela, patas, leds,
-// rede) e os envelopes do OS: mensagem direta por membro e a FESTA que
-// viaja — a música chiptune em curso continua no vizinho com alto-falante,
-// do mesmo ponto. Em placa sem Bluetooth mostra um aviso e sai.
+// Matilha — painel do bando de CelerOS sobre o CelerKit (deps
+// celeros.app.*). A malha BLE (CelerNet) carrega a presenca com o PAPEL de
+// cada um (som, mic, tela, patas, leds, rede) e os envelopes do OS:
+// mensagem direta por membro e a FESTA que viaja — a musica chiptune em
+// curso continua no vizinho com alto-falante, do mesmo ponto. Em placa sem
+// Bluetooth mostra um aviso.
+//
+// Migrado para o CelerKit: pilha de telas no core (A.run: painel / entrar /
+// aguardar / convidar), protocolo de app da malha no celeros.app.mesh —
+// familia "b" isola o trafego deste app; o broadcast de texto vai no quadro
+// "b*texto" — e a lista do bando com cache por carimbo e sort estavel no
+// celeros.app.list (antes: linhas recriadas e ordenacao nenhuma, todo
+// frame). A mensagem DIRETA segue no envelope selado do Pack e a tela
+// Entrar usa System.prompt direto (o A.form.askText passa as opcoes no
+// argumento errado do prompt — GAP conhecido do kit).
 //
 // API 40: a tela "Entrar" junta os tres pilares — a matilha privada por
 // nome+senha (Pack.join), o CONVITE pelo CelerLink (o aparelho novo mostra
@@ -10,33 +20,41 @@
 // selada com Pack.invite) e o status da rede. O cabo (celerctl mesh join) e
 // a terceira porta, fora do app.
 
-var hasMesh = typeof CelerNet !== "undefined" && typeof Pack !== "undefined";
+var A = require("celeros.app");
+require("celeros.app.mesh");
+require("celeros.app.list");
+
+A.init();
+A.mesh.family("b");    // 1a letra dos quadros DESTE app (c/m/s/a ja tem dono)
+
+var hasMesh = (typeof CelerNet !== "undefined" && typeof Pack !== "undefined");
+var hasJoin = hasMesh && typeof CelerLink !== "undefined" &&
+              typeof Pack.join === "function";  // firmware API 40+
+
 var rx = [];               // log do que chega (mais novo primeiro)
-var members = [];
-var membersAt = -10000;
+var members = [];          // presenca crua (Pack.members, ordenada no cache)
+var membersAt = 0;         // carimbo da ultima coleta (stamp do cache)
 var me = null;
-var tela = "painel";       // painel | entrar | aguardar | convidar
 var achados = [];          // scan do CelerLink na tela convidar
 var sairAt = 0;            // 2 toques para sair da matilha
 var entrarSig = "";        // estado desenhado da tela Aguardar (repaint so na mudanca)
 var convSig = "";          // idem na tela Convidar
-var hasJoin = hasMesh && typeof CelerLink !== "undefined" &&
-              typeof Pack.join === "function";  // firmware API 40+
 
 function pushRx(quem, texto) {
     rx.unshift(quem + ": " + texto);
     if (rx.length > 3) rx.pop();
 }
 
-function drainRx() {
-    var got = false, m;
-    while ((m = CelerNet.poll()) !== null) {
-        // broadcast livre (sem envelope): texto do app
-        var t = "" + m.msg;
-        try { var o = JSON.parse(t); if (o && o.texto) t = o.texto; } catch (e) {}
-        pushRx(m.fromName || m.from, t);
+// quadros da familia "b" (broadcast "*": texto cru) + envelopes do OS
+// (mensagem direta selada pelo Pack, fila propria)
+function drenaMesh() {
+    var got = false;
+    A.mesh.each(function (from, op, rest, m) {
+        if (op !== "*") return;   // pedido/quadro de outra familia: ignora
+        pushRx(m.fromName || m.from, rest);
         got = true;
-    }
+    });
+    var m;
     while ((m = Pack.poll()) !== null) {
         var d = "" + m.data;
         try { var p = JSON.parse(d); if (p && p.texto) d = p.texto; } catch (e) {}
@@ -65,10 +83,11 @@ function sendDirect(name) {
     }
 }
 
-function sendAll(myName) {
+function sendAll() {
     var txt = System.prompt("Mensagem para a matilha", "");
     if (txt === "") return;
-    if (!CelerNet.broadcast({ type: "msg", de: myName, texto: txt })) {
+    // broadcast do app: quadro "b*" + texto cru (o remetente viaja no frame)
+    if (!A.mesh.send(null, "*", txt, { ttl: 4 })) {
         UI.toast("Malha desligada ou fila cheia");
     }
 }
@@ -101,8 +120,104 @@ function convidar(peer) {
     }
 }
 
-function telaEntrar() {
-    if (UI.header("Entrar na matilha", { back: true })) { tela = "painel"; return; }
+// linhas do bando: cache por carimbo (celeros.app.list) — sort estavel e
+// montagem das linhas so rodam quando a coleta de 1 s muda o carimbo
+var listaBando = A.list.make(
+    function () { return membersAt; },
+    function () {
+        A.list.sort(members, function (m) { return String(m.name || m.id); });
+        var rows = [];
+        for (var i = 0; i < members.length; i++) {
+            var mb = members[i];
+            rows.push({ label: mb.name || mb.id,
+                        sub: roleStr(mb.caps) + " · há " + mb.lastSeen + " s",
+                        right: mb.rssi + " dBm" });
+        }
+        if (rows.length === 0) rows.push({ label: "Ninguém ouvido ainda", enabled: false });
+        return rows;
+    }
+);
+
+// ------------------------------------------------------------------ telas ---
+// A.run e dono do UI.begin/UI.end; a tela desenha e DEVOLVE
+// (A.BACK = volta na pilha, "nome" = empilha, undefined = fica).
+
+function telaPainel(c) {
+    if (!hasMesh) {
+        if (A.header("Matilha")) return A.BACK;
+        UI.card(10, 56, 220, 90);
+        UI.text("Esta placa não tem Bluetooth no firmware.", 22, 70,
+                { role: "body", w: 196, lines: 3 });
+        UI.cardEnd();
+        UI.text("A matilha existe nas placas com BLE (SmartDisplay, cachorro e relógio).", 10, 160,
+                { role: "caption", w: 220, lines: 3 });
+        return;
+    }
+    if (A.header("Matilha")) return A.BACK;   // raiz: encerra o app
+
+    var st = CelerNet.status();
+    var y = A.L.top;   // 48
+
+    // coleta de presenca 1x/s (o carimbo manda reconstruir as linhas)
+    if (A.every(1000, "bando")) {
+        me = Pack.me();
+        members = Pack.members();
+        membersAt = System.millis();
+    }
+
+    // liga/desliga + quem sou eu
+    UI.card(10, y, 220, 64);
+    var on = UI.toggle(20, y + 8, st.active);
+    UI.text("Malha " + (on ? "ativa" : "desligada"), 74, y + 8);
+    if (hasJoin && UI.button("Entrar", 168, y + 6, 54, 24, { style: "ghost" })) {
+        return "entrar";
+    }
+    if (on !== st.active) {
+        var ok = on ? CelerNet.start({}) : CelerNet.stop();
+        if (!ok && on) UI.toast("Sem RAM para o rádio agora");
+        UI.invalidate();
+    }
+    st = CelerNet.status();
+    UI.text(me.name + " · " + roleStr(me.caps), 20, y + 32, { role: "caption", w: 200, lines: 1 });
+    UI.text((me.provisioned ? "matilha " : "rede ") + st.net + " · " + st.heard + " ouvidos", 20, y + 46,
+            { role: "caption", w: 200, lines: 1 });
+    UI.cardEnd();
+    y += 72;
+
+    // bando: tap = mensagem direta pra aquele membro
+    var hit = UI.list("members", 10, y, 220, 96, listaBando.rows(), { rowH: 32 });
+    if (hit >= 0 && members[hit]) sendDirect(members[hit].name || members[hit].id);
+    y += 104;
+
+    // a festa viaja: passa a musica em curso pro vizinho com speaker
+    var tocando = System.musicPlaying();
+    if (UI.button(tocando ? "Passar a música" : "Passar a música (nada tocando)",
+                  10, y, 220, 30,
+                  { style: tocando && st.active ? "primary" : "ghost",
+                    disabled: !tocando || !st.active })) {
+        if (Pack.handoffMusic()) UI.toast("A festa seguiu viagem");
+        else UI.toast("Ninguém com alto-falante por perto");
+    }
+    y += 38;
+
+    if (UI.button("Mensagem para todos", 10, y, 220, 30,
+                  { style: st.active ? "solid" : "ghost", disabled: !st.active })) {
+        sendAll();
+    }
+    y += 38;
+
+    // log do que chega
+    UI.text("Chegou:", 10, y, { role: "caption" });
+    for (var k = 0; k < rx.length; k++) {
+        UI.text(rx[k], 10, y + 16 + k * 16, { role: "caption", w: 220, lines: 1 });
+    }
+
+    drenaMesh();
+}
+
+function telaEntrar(c) {
+    if (A.header("Entrar na matilha")) return A.BACK;
+    me = Pack.me();
     var y = 56;
     UI.card(10, y, 220, 50);
     UI.text(me.provisioned ? "Matilha " + me.net : "Rede aberta (sem matilha)", 20, y + 8,
@@ -115,14 +230,14 @@ function telaEntrar() {
     if (UI.button("Nome e senha", 10, y, 220, 34, { style: "primary" })) entrarComSenha();
     y += 42;
     if (UI.button("Aguardar convite", 10, y, 220, 34, { style: "solid" })) {
-        if (Pack.acceptInvite(true)) tela = "aguardar";
-        else UI.toast("Bluetooth indisponível");
+        if (Pack.acceptInvite(true)) return "aguardar";
+        UI.toast("Bluetooth indisponível");
     }
     y += 42;
     if (UI.button("Convidar aparelho", 10, y, 220, 34,
                   { style: me.provisioned ? "solid" : "ghost", disabled: !me.provisioned })) {
         achados = [];
-        tela = "convidar";
+        return "convidar";
     }
     y += 42;
     if (me.provisioned) {
@@ -140,12 +255,12 @@ function telaEntrar() {
     }
 }
 
-function telaAguardar() {
-    if (UI.header("Aguardar convite", { back: true })) {
+function telaAguardar(c) {
+    if (A.header("Aguardar convite")) {
         Pack.acceptInvite(false);
-        tela = "entrar";
-        return;
+        return A.BACK;
     }
+    me = Pack.me();
     var est = Pack.inviteStatus();
     var lk = CelerLink.status();
     UI.card(10, 56, 220, 120);
@@ -167,11 +282,10 @@ function telaAguardar() {
     if (sig !== entrarSig) { entrarSig = sig; UI.invalidate(); }
 }
 
-function telaConvidar() {
-    if (UI.header("Convidar", { back: true })) {
+function telaConvidar(c) {
+    if (A.header("Convidar")) {
         CelerLink.disconnect();
-        tela = "entrar";
-        return;
+        return A.BACK;
     }
     var est = Pack.inviteStatus();
     if (est !== convSig) { convSig = est; UI.invalidate(); }
@@ -193,98 +307,9 @@ function telaConvidar() {
     if (h >= 0 && achados[h]) convidar(achados[h]);
 }
 
-while (true) {
-    UI.begin();
-
-    if (hasMesh && tela !== "painel") {
-        me = Pack.me();
-        if (tela === "entrar") telaEntrar();
-        else if (tela === "aguardar") telaAguardar();
-        else telaConvidar();
-        UI.end();
-        continue;
-    }
-
-    if (UI.header("Matilha", { back: true })) {
-        System.exitApp();
-    }
-
-    if (!hasMesh) {
-        UI.card(10, 56, 220, 90);
-        UI.text("Esta placa não tem Bluetooth no firmware.", 22, 70,
-                { role: "body", w: 196, lines: 3 });
-        UI.cardEnd();
-        UI.text("A matilha existe nas placas com BLE (SmartDisplay, cachorro e relógio).", 10, 160,
-                { role: "caption", w: 220, lines: 3 });
-        UI.end();
-        continue;
-    }
-
-    var st = CelerNet.status();
-    me = Pack.me();
-    var y = 56;
-
-    // liga/desliga + quem sou eu
-    UI.card(10, y, 220, 64);
-    var on = UI.toggle(20, y + 8, st.active);
-    UI.text("Malha " + (on ? "ativa" : "desligada"), 74, y + 8);
-    if (hasJoin && UI.button("Entrar", 168, y + 6, 54, 24, { style: "ghost" })) {
-        tela = "entrar";
-        UI.invalidate();
-    }
-    if (on !== st.active) {
-        var ok = on ? CelerNet.start({}) : CelerNet.stop();
-        if (!ok && on) UI.toast("Sem RAM para o rádio agora");
-        UI.invalidate();
-    }
-    st = CelerNet.status();
-    UI.text(me.name + " · " + roleStr(me.caps), 20, y + 32, { role: "caption", w: 200, lines: 1 });
-    UI.text((me.provisioned ? "matilha " : "rede ") + st.net + " · " + st.heard + " ouvidos", 20, y + 46,
-            { role: "caption", w: 200, lines: 1 });
-    UI.cardEnd();
-    y += 72;
-
-    // bando (atualiza 1x/s): tap = mensagem direta pra aquele membro
-    if (System.millis() - membersAt > 1000) {
-        membersAt = System.millis();
-        members = Pack.members();
-        UI.invalidate();
-    }
-    var items = [];
-    for (var i = 0; i < members.length; i++) {
-        var mb = members[i];
-        items.push({ label: mb.name || mb.id,
-                     sub: roleStr(mb.caps) + " · há " + mb.lastSeen + " s",
-                     right: mb.rssi + " dBm" });
-    }
-    if (items.length === 0) items.push({ label: "Ninguém ouvido ainda", enabled: false });
-    var hit = UI.list("members", 10, y, 220, 96, items, { rowH: 32 });
-    if (hit >= 0 && members[hit]) sendDirect(members[hit].name || members[hit].id);
-    y += 104;
-
-    // a festa viaja: passa a música em curso pro vizinho com speaker
-    var tocando = System.musicPlaying();
-    if (UI.button(tocando ? "Passar a música" : "Passar a música (nada tocando)",
-                  10, y, 220, 30,
-                  { style: tocando && st.active ? "primary" : "ghost",
-                    disabled: !tocando || !st.active })) {
-        if (Pack.handoffMusic()) UI.toast("A festa seguiu viagem");
-        else UI.toast("Ninguém com alto-falante por perto");
-    }
-    y += 38;
-
-    if (UI.button("Mensagem para todos", 10, y, 220, 30,
-                  { style: st.active ? "solid" : "ghost", disabled: !st.active })) {
-        sendAll(me.name);
-    }
-    y += 38;
-
-    // log do que chega
-    UI.text("Chegou:", 10, y, { role: "caption" });
-    for (var k = 0; k < rx.length; k++) {
-        UI.text(rx[k], 10, y + 16 + k * 16, { role: "caption", w: 220, lines: 1 });
-    }
-
-    drainRx();
-    UI.end();
-}
+A.run({
+    painel: telaPainel,
+    entrar: telaEntrar,
+    aguardar: telaAguardar,
+    convidar: telaConvidar
+}, "painel", { fps: 20 });

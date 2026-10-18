@@ -3371,6 +3371,33 @@ function holdFrames(x, y, n) {
     check('estado do Wi-Fi no menu', j.indexOf('Desligado') >= 0);
 })();
 
+// Settings: gate de PIN bloqueante antes do A.run (entra com o PIN certo;
+// 3 erros -> "Acesso negado" e saida; cancelar tambem sai)
+(function() {
+    console.log('Settings (gate de PIN):');
+    function comPin(prompts, taps) {
+        return runApp('data/apps/Settings/main.js', function(env) {
+            env.System.pinState = function() { return 1; };
+            env.System.verifyPin = function(p) { return p === '1234'; };
+            env.__alerts = [];   // dialogo nativo e bloqueante: espiona e segue
+            env.UI.alert = function(title, msg) { env.__alerts.push(title + ': ' + msg); return true; };
+            env.__harness.pushPrompt(prompts);
+            (taps || []).forEach(function(p) { env.__harness.tap(p[0], p[1]); });
+        });
+    }
+    // 1o tap e comido pelo frame do gate; o 2o e o voltar do menu
+    var r = comPin(['1234'], [[120, 66], [20, 20]]);
+    var j = joinLog(r.log);
+    check('PIN certo entra no menu', r.err === null && j.indexOf('Aplicativos') >= 0, r.err || '');
+    check('voltar do menu sai (gate desenhou 1x so)', r.err === null &&
+          (j.match(/App protegido por PIN/g) || []).length === 1, j);
+    r = comPin(['1', '2', '3']);
+    check('3 erros -> Acesso negado e saida', r.err === null &&
+          r.env.__alerts.indexOf('PIN: Acesso negado') >= 0, JSON.stringify(r.env.__alerts));
+    r = comPin([]);
+    check('cancelar no gate sai limpo', r.err === null, r.err || '');
+})();
+
 (function() {
     console.log('Settings (hora: toggle NTP):');
     var calls = [];

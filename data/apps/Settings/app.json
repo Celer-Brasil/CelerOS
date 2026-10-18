@@ -1,12 +1,12 @@
 {
   "name": "Settings",
   "packageName": "celeros.settings",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "author": "CelerOS",
   "description": "Configuracoes do sistema: Wi-Fi, apps, hora, seguranca (PIN nativo com salt + senha web), tela, atualizacao OTA e sobre.",
   "type": "System",
   "category": "System",
-  "api": 22,
+  "api": 30,
   "system": true,
   "order": 30,
   "icon": "settings",
@@ -16,5 +16,9 @@
     "net",
     "system"
   ],
-  "changelog": "1.8.0 - visual novo com o toolkit UI (API 22): listas com rolagem por inercia, toggles, sliders, abas e dialogos nativos\n1.7.0 - ajuste \"Sono profundo após\" (watch, API 19): deep sleep automatico com sentinela ULP (tecla PWR acorda)\n1.6.0 - pagina Relogio (watch, API 15): levantar p/ acordar, AOD, tempos de tela, meta de passos, WiFi ocioso\n1.5.0 - pagina Som (slider de volume + teste, API 13) e pagina Sensores ao vivo (watch, API 13)\n1.4.2 - tempo de tela e notificacoes"
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.form": "^1.0.0"
+  },
+  "changelog": "1.9.0 - migrado para o CelerKit (deps celeros.app.*): o laco de telas e o cabecalho sao do core (A.run/A.header; o app nao chama mais UI.begin/UI.end), Seguranca/Relogio/Notificacoes viraram telas do A.form, o fuso usa o seletor A.form.pick, o ajuste manual de hora mostra progresso entre os prompts (A.progress) e o gate de PIN e uma tela propria do A.run; verificacao e reset usam os overlays do kit\n1.8.0 - visual novo com o toolkit UI (API 22): listas com rolagem por inercia, toggles, sliders, abas e dialogos nativos\n1.7.0 - ajuste \"Sono profundo após\" (watch, API 19): deep sleep automatico com sentinela ULP (tecla PWR acorda)\n1.6.0 - pagina Relogio (watch, API 15): levantar p/ acordar, AOD, tempos de tela, meta de passos, WiFi ocioso\n1.5.0 - pagina Som (slider de volume + teste, API 13) e pagina Sensores ao vivo (watch, API 13)\n1.4.2 - tempo de tela e notificacoes"
 }

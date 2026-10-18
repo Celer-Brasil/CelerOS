@@ -1,12 +1,19 @@
 // CelerOS Settings — app de sistema (W8): PIN, Wi-Fi, apps, hora, seguranca,
-// tela, som, relogio, OTA, sobre e reset. Canvas 240x320, toolkit UI (API 22):
-// cabecalho/listas/toggles/sliders/dialogos nativos do sistema.
+// tela, som, relogio, OTA, sobre e reset. Migrado para o CelerKit (deps
+// celeros.app.*): o loop de telas e o cabecalho sao do core (A.run/A.header —
+// o app nao chama UI.begin/UI.end), as telas de lista (Seguranca, Relogio,
+// Notificacoes) e o seletor de fuso sao do A.form. Telas com widgets
+// proprios (sliders, abas, cards, gauges, OTA) continuam no toolkit UI.*,
+// desenhadas dentro do frame do A.run. ES5 puro (Duktape), canvas 240x320.
 
-var T = System.theme();
+var A = require("celeros.app");
+require("celeros.app.form");
+
+A.init();
+var T = A.T;
+var LX = A.L.x, LW = A.L.w, TOP = A.L.top;   // 8 / 224 / 48
+
 var INSTALL_SD = "/local/config_install_sd.txt";
-
-var TOP = 48;          // conteudo abaixo do UI.header (40) + respiro
-var LX = 8, LW = 224;  // coluna das listas e cards
 
 // ---- helpers ---------------------------------------------------------------
 
@@ -46,19 +53,19 @@ function toggleRow(label, y, on) {
 
 // ---- estado ----------------------------------------------------------------
 
-var tela = "menu";
 var rows = [];         // linhas da lista da tela atual: {label, right, sub, enabled, a}
 var appsArr = [];      // apps encontrados em /local/apps e /sd/apps
 var selApp = 0;
-var otaState = "idle"; // idle|checking|nowifi|failed|uptodate|avail|installing|done
+var otaState = "idle"; // idle|nowifi|failed|uptodate|avail|installing|done
 var otaInfo = null;
 var otaErrTitle = "";
 var otaErr = "";
 var otaPct = 0;
 var otaBodyH = 0;      // altura do changelog (medida no ultimo desenho)
+var installing0 = false; // primeiro frame do estado "installing" (roda o otaStart)
 var blLvl = 60, blSaved = 60;
 var volLvl = 50, volSaved = 50;
-var lastAuto = 0;
+var gateTry = 0;       // tentativas de PIN na entrada
 
 var TZS = [
     ["UTC-12 Baker Is", "UTC12"], ["UTC-11 Midway", "UTC11"],
@@ -83,6 +90,11 @@ function tzLabel(tz) {
         if (TZS[i][1] === tz) return TZS[i][0].split(" ")[0];
     }
     return tz;
+}
+function tzIndex() {
+    var cur = System.getTimezone();
+    for (var i = 0; i < TZS.length; i++) if (TZS[i][1] === cur) return i;
+    return -1;
 }
 
 // ---- PIN (nativo desde a 1.3: System.setPin/verifyPin — salt SHA-256 no
@@ -119,56 +131,11 @@ function askPin(title) {
     return true;
 }
 
-// ---- navegacao -------------------------------------------------------------
-
-function titleNow() {
-    if (tela === "appdetail" && appsArr[selApp]) return appsArr[selApp].name;
-    var map = {
-        time: "Hora e fuso", tz: "Fuso horário", security: "Segurança", display: "Tela",
-        som: "Som", sensors: "Sensores", update: "Atualização", about: "Sobre", wifi: "Wi-Fi",
-        apps: "Aplicativos", reset: "Reset", notif: "Notificações", watch: "Relógio"
-    };
-    return map[tela] || "Ajustes";
-}
-function rebuildRows() {
-    if (tela === "menu") rows = buildMenu();
-    else if (tela === "apps") rows = buildApps();
-    else if (tela === "tz") rows = buildTz();
-    else if (tela === "security") rows = buildSec();
-    else if (tela === "about") rows = buildAbout();
-    else if (tela === "notif") rows = buildNotif();
-    else if (tela === "watch") rows = buildWatch();
-    else if (tela === "time") rows = buildTimeNav();
-    else rows = [];
-}
-function go(s) {
-    tela = s;
-    if (s === "display") {
-        blLvl = blSaved = Math.max(5, System.getBrightness());
-    } else if (s === "som") {
-        volLvl = volSaved = System.getVolume ? System.getVolume() : 50;
-    } else if (s === "update") {
-        otaState = "idle";
-        otaInfo = null;
-        otaErr = "";
-        otaErrTitle = "";
-        UI.resetScroll("ota");
-    }
-    UI.resetScroll("list:" + s);
-    rebuildRows();
-    UI.invalidate();
-}
-function back() {
-    if (tela === "appdetail") go("apps");
-    else if (tela === "tz") go("time");
-    else if (tela === "menu") System.exitApp();
-    else go("menu");
-}
+// ---- listas ----------------------------------------------------------------
 
 // Lista padrao da tela (ocupa ate `bottom`); devolve a linha tocada ou null
-function listRows(bottom, selected) {
-    var i = UI.list("list:" + tela, LX, TOP, LW, (bottom || 312) - TOP, rows,
-                    { selected: selected === undefined ? -1 : selected });
+function listRows(id, bottom) {
+    var i = UI.list(id, LX, TOP, LW, (bottom || 312) - TOP, rows, { selected: -1 });
     return i >= 0 ? rows[i] : null;
 }
 
@@ -215,7 +182,7 @@ function buildMenu() {
     return a;
 }
 
-// ---- Relogio (watch) -------------------------------------------------------
+// ---- Relogio (watch): choices do A.form — toque cicla a opcao --------------
 
 var WOPT = [
     "raise_wake|1|Levantar p/ acordar|1:Sim,0:Não",
@@ -229,46 +196,62 @@ var WOPT = [
     "wifi_sleep_min|10|WiFi dorme após|5:5 min,10:10 min,30:30 min,0:Nunca",
     "imu_wake|0|Movimento acorda|0:Não,1:Sim"
 ];
-function wOpt(i) {
-    var p = WOPT[i].split("|"), v = System.setting(p[0]) || p[1], o = p[3].split(","), k = 0;
-    for (var j = 0; j < o.length; j++) if (o[j].split(":")[0] === v) k = j;
-    return { key: p[0], label: p[2], o: o, k: k };
-}
-function buildWatch() {
-    var a = [];
-    for (var i = 0; i < WOPT.length; i++) {
-        var w = wOpt(i);
-        a.push({ label: w.label, right: w.o[w.k].split(":")[1], a: "w" + i });
-    }
-    return a;
-}
-function watchTap(act) {
-    var w = wOpt(parseInt(act.substring(1), 10));
-    System.setting(w.key, w.o[(w.k + 1) % w.o.length].split(":")[0]);
+// Tela de ajustes do relogio (bloqueante; o A.form reconstroi apos cada toque)
+function watchFlow() {
+    A.form.run("Relógio", function () {
+        var a = [];
+        for (var i = 0; i < WOPT.length; i++) (function (i) {
+            var p = WOPT[i].split("|");
+            var o = p[3].split(","), vals = [], labs = [];
+            for (var j = 0; j < o.length; j++) {
+                var kv = o[j].split(":");
+                vals.push(kv[0]);
+                labs.push(kv[1]);
+            }
+            a.push(A.form.choice(p[2], function () {
+                var v = System.setting(p[0]) || p[1];
+                for (var k = vals.length - 1; k >= 0; k--) if (vals[k] === v) return k;
+                return 0;
+            }, function (n) {
+                System.setting(p[0], vals[n]);
+            }, labs));
+        })(i);
+        return a;
+    });
 }
 
-// ---- Notificacoes (API 12) -------------------------------------------------
+// ---- Notificacoes (API 12): linhas cruas + acao no A.form ------------------
 
+// Tela de notificacoes (bloqueante)
+function notifFlow() {
+    A.form.run("Notificações", function () {
+        var a = [];
+        var l = notifList();
+        for (var i = l.length - 1; i >= 0; i--) {
+            a.push({ label: l[i].title, sub: l[i].msg || "", right: notifWhen(l[i].epoch), enabled: false });
+        }
+        if (l.length === 0) a.push({ label: "Nenhuma notificação", enabled: false });
+        a.push(A.form.action("Limpar notificações", function () {
+            if (UI.confirm("Limpar notificações?", "O histórico será apagado.", { yes: "Limpar", danger: true })) {
+                System.notificationsClear();
+                UI.toast("Histórico apagado");
+            }
+        }));
+        return a;
+    });
+}
+// "27/09 10:32" a partir de epoch em segundos
 function notifWhen(ep) {
     if (!ep) return "";
     var d = new Date(ep * 1000);
     function p2(v) { return (v < 10 ? "0" : "") + v; }
     return p2(d.getDate()) + "/" + p2(d.getMonth() + 1) + " " + p2(d.getHours()) + ":" + p2(d.getMinutes());
 }
-function buildNotif() {
-    var a = [];
-    var l = notifList();
-    for (var i = l.length - 1; i >= 0; i--) {
-        a.push({ label: l[i].title, sub: l[i].msg || "", right: notifWhen(l[i].epoch), enabled: false });
-    }
-    if (l.length === 0) a.push({ label: "Nenhuma notificação", enabled: false });
-    a.push({ label: "Limpar notificações", a: "clearnot" });
-    return a;
-}
 
 // ---- Wi-Fi -----------------------------------------------------------------
 
-function drawWifi() {
+function scrWifi(c) {
+    if (A.header("Wi-Fi")) return A.BACK;
     var w = System.wifiStatus();
     UI.card(LX, TOP, LW, 92);
     infoRow("Estado", w.connected ? "Conectado" : "Desconectado", TOP + 12, w.connected ? T.ok : T.warn);
@@ -342,23 +325,29 @@ function buildApps() {
     if (appsArr.length === 0) a.push({ label: "Nenhum app instalado", enabled: false });
     return a;
 }
-function drawApps() {
-    var r = listRows(270);
+function scrApps(c) {
+    if (c.entered) {
+        rows = buildApps();
+        UI.resetScroll("list:apps");
+    }
+    if (A.header("Aplicativos")) return A.BACK;
+    var r = listRows("list:apps", 270);
     UI.text("Interno: " + spaceStr("/local"), LX + 4, 278, { role: "caption", color: T.textDim });
     UI.text("SD: " + spaceStr("/sd"), LX + 4, 296, { role: "caption", color: T.textDim });
     if (!r) return;
     if (r.a === "dest") {
         if (installSd()) FS.deleteFile(INSTALL_SD);
         else FS.writeTextFile(INSTALL_SD, "1");
-        rebuildRows();
+        rows = buildApps();
     } else if (r.a && r.a.indexOf("app:") === 0) {
         selApp = parseInt(r.a.substring(4), 10);
-        go("appdetail");
+        return "appdetail";
     }
 }
-function drawAppDetail() {
+function scrAppDetail(c) {
     var ap = appsArr[selApp];
-    if (!ap) return;
+    if (!ap) return A.BACK;
+    if (A.header(ap.name)) return A.BACK;
     UI.card(LX, TOP, LW, 96);
     infoRow("Versão", ap.ver ? "v" + ap.ver : "--", TOP + 10);
     infoRow("API", ap.api ? ap.api : "--", TOP + 30);
@@ -368,18 +357,17 @@ function drawAppDetail() {
     UI.text("Descrição", LX + 4, TOP + 108, { role: "caption", color: T.accent });
     UI.text(ap.desc || "Sem descrição.", LX + 4, TOP + 126,
             { role: "caption", color: T.textDim, w: LW - 8, lines: 6 });
-    if (UI.button("Desinstalar", LX, 268, LW, 40, { style: "danger" })) askUninstall();
+    if (UI.button("Desinstalar", LX, 268, LW, 40, { style: "danger" }) && askUninstall(ap)) return A.BACK;
 }
-function askUninstall() {
-    var ap = appsArr[selApp];
+function askUninstall(ap) {
     if (ap.sys && !UI.confirm("App do sistema", "Este app faz parte do sistema. Remover mesmo assim?",
-                              { yes: "Continuar" })) return;
-    if (!UI.confirm("Desinstalar?", "Remover " + ap.name + "?", { yes: "Remover", danger: true })) return;
+                              { yes: "Continuar" })) return false;
+    if (!UI.confirm("Desinstalar?", "Remover " + ap.name + "?", { yes: "Remover", danger: true })) return false;
     if (FS.isDirectory(ap.dir)) FS.removeDirectory(ap.dir);
     else FS.deleteFile(ap.dir);
     System.rescanApps();
     UI.toast(ap.name + " removido");
-    go("apps");
+    return true;
 }
 
 // ---- Hora e fuso -----------------------------------------------------------
@@ -390,7 +378,13 @@ function buildTimeNav() {
         { label: "Ajuste manual", enabled: !System.getNtpEnabled(), a: "manual" }
     ];
 }
-function drawTime() {
+function scrTime(c) {
+    if (c.entered) {
+        rows = buildTimeNav();
+        UI.resetScroll("list:time");
+    }
+    if (A.header("Hora e fuso")) return A.BACK;
+
     UI.card(LX, TOP, LW, 64);
     UI.text(System.getTime(), LX + 12, TOP + 8, { role: "title" });
     UI.text(System.getDate(), LX + 12, TOP + 38, { role: "caption", color: T.textDim });
@@ -401,27 +395,28 @@ function drawTime() {
     var nNtp = toggleRow("Hora pela internet", TOP + 84, ntp);
     if (nNtp !== ntp) {
         System.setNtpEnabled(nNtp);
-        rebuildRows();
+        rows = buildTimeNav();
     }
     var h24 = !!System.get24hFormat();
     var n24 = toggleRow("Formato 24 horas", TOP + 122, h24);
     if (n24 !== h24) System.set24hFormat(n24);
     UI.cardEnd();
 
-    var r = UI.list("list:time", LX, TOP + 164, LW, 76, rows);
+    var r = UI.list("list:time", LX, TOP + 164, LW, 76, rows, { selected: -1 });
     if (r < 0) return;
-    if (rows[r].a === "tz") go("tz");
-    else if (rows[r].a === "manual") runManual();
+    if (rows[r].a === "tz") tzPick();
+    else if (rows[r].a === "manual") manualFlow();
 }
-function buildTz() {
-    var a = [];
-    for (var i = 0; i < TZS.length; i++) a.push({ label: TZS[i][0] });
-    return a;
-}
-function tzIndex() {
-    var cur = System.getTimezone();
-    for (var i = 0; i < TZS.length; i++) if (TZS[i][1] === cur) return i;
-    return -1;
+// Seletor de fuso (A.form.pick): devolve o indice escolhido ou -1 se voltou
+function tzPick() {
+    var labels = [];
+    for (var i = 0; i < TZS.length; i++) labels.push(TZS[i][0]);
+    var p = A.form.pick("Fuso horário", labels, tzIndex());
+    if (p >= 0) {
+        System.setTimezone(TZS[p][1]);
+        UI.toast("Fuso: " + tzLabel(TZS[p][1]));
+        rows = buildTimeNav();
+    }
 }
 function nowHM() {
     var s = System.getTime();
@@ -432,20 +427,7 @@ function nowHM() {
     if (s.indexOf("AM") >= 0 && h === 12) h = 0;
     return [h, mi];
 }
-// Tela entre os prompts do ajuste manual (fora do laco principal)
-function drawManual(step, vals) {
-    UI.invalidate();
-    UI.begin(T.bg);
-    UI.header("Ajuste manual", { sub: "campo " + Math.min(step + 1, 5) + " de 5" });
-    var names = ["Ano", "Mês", "Dia", "Hora", "Minuto"];
-    UI.card(LX, TOP, LW, 5 * 34 + 12);
-    for (var i = 0; i < 5; i++) {
-        var col = i < step ? T.text : (i === step ? T.accent : T.textDim);
-        UI.text(names[i], LX + 12, TOP + 10 + i * 34, { color: col });
-        UI.text(String(vals[i]), LX + LW - 12, TOP + 10 + i * 34, { color: col, align: "right" });
-    }
-    UI.cardEnd();
-}
+// Numero validado na faixa; null se cancelou (prompt nativo, teclado numerico)
 function askNum(label, cur, lo, hi) {
     while (true) {
         var init = (cur < 10 ? "0" : "") + cur;
@@ -459,59 +441,58 @@ function askNum(label, cur, lo, hi) {
         UI.alert(label, "Valor inválido: use " + lo + " a " + hi);
     }
 }
-function runManual() {
+// Ajuste manual: 5 passos; o A.progress mostra onde esta entre os prompts
+function manualFlow() {
     var hm = nowHM();
     var vals = [System.getYear(), System.getMonth(), System.getDay(), hm[0], hm[1]];
     var labels = ["Ano", "Mês", "Dia", "Hora", "Minuto"];
     var lo = [2000, 1, 1, 0, 0];
     var hi = [2100, 12, 31, 23, 59];
     for (var i = 0; i < 5; i++) {
-        drawManual(i, vals);
+        A.progress(Math.round(((i + 0.5) / 5) * 100), "Ajuste manual: " + labels[i] + " (" + (i + 1) + "/5)");
         var n = askNum(labels[i], vals[i], lo[i], hi[i]);
-        if (n === null) { go("time"); return; }
+        if (n === null) return;
         vals[i] = n;
     }
     System.setManualTime(vals[0], vals[1], vals[2], vals[3], vals[4]);
     UI.toast("Hora ajustada");
-    go("time");
 }
 
-// ---- Seguranca -------------------------------------------------------------
+// ---- Seguranca: tela de ajustes do A.form ----------------------------------
 
-function buildSec() {
-    var st = System.pinState();  // 0 sem, 1 ativo, 2 corrompido
-    var a = [];
-    a.push({ label: "PIN do Ajustes", right: st === 1 ? "ativo" : (st === 2 ? "corrompido" : "desativado"), enabled: false });
-    if (st === 1) {
-        a.push({ label: "Trocar PIN", a: "chg" });
-        a.push({ label: "Remover PIN", a: "rm" });
-    } else {
-        a.push({ label: "Definir PIN", a: "set" });
-    }
-    a.push({ label: "Senha web", right: System.webAuthInfo().pass, enabled: false });
-    a.push({ label: "Trocar senha web", a: "wpw" });
-    return a;
-}
-function secTap(a) {
-    if (a === "set") {
-        flowNewPin();
-    } else if (a === "chg") {
-        if (askPin("PIN atual")) flowNewPin();
-    } else if (a === "rm") {
-        if (!askPin("PIN atual")) return;
-        System.pinClear();
-        UI.toast("PIN removido");
-    } else if (a === "wpw") {
-        var np = System.prompt("Nova senha web (6+ chars)", "");
-        if (np === null || np === "") return;
-        if (!System.webAuthSetPass(np)) {
-            UI.alert("Segurança", "Use de 6 a 31 caracteres");
-            return;
+// Tela de seguranca (bloqueante; o A.form reconstroi apos cada acao)
+function secFlow() {
+    A.form.run("Segurança", function () {
+        var st = System.pinState();  // 0 sem, 1 ativo, 2 corrompido
+        var a = [];
+        a.push(A.form.info("PIN do Ajustes", st === 1 ? "ativo" : (st === 2 ? "corrompido" : "desativado")));
+        if (st === 1) {
+            a.push(A.form.action("Trocar PIN", function () {
+                if (askPin("PIN atual")) flowNewPin();
+            }));
+            a.push(A.form.action("Remover PIN", function () {
+                if (askPin("PIN atual")) {
+                    System.pinClear();
+                    UI.toast("PIN removido");
+                }
+            }));
+        } else {
+            a.push(A.form.action("Definir PIN", function () {
+                flowNewPin();
+            }));
         }
-        UI.toast("Senha web alterada");
-    }
-    rebuildRows();
-    UI.invalidate();
+        a.push(A.form.info("Senha web", System.webAuthInfo().pass));
+        a.push(A.form.action("Trocar senha web", function () {
+            var np = System.prompt("Nova senha web (6+ chars)", "");
+            if (np === null || np === "") return;
+            if (!System.webAuthSetPass(np)) {
+                UI.alert("Segurança", "Use de 6 a 31 caracteres");
+                return;
+            }
+            UI.toast("Senha web alterada");
+        }));
+        return a;
+    });
 }
 
 // ---- Tela (brilho, automatico, tempo de tela) ---------------------------------
@@ -526,7 +507,11 @@ function tmoIndex() {
     for (var i = 0; i < TMOPTS.length; i++) if (TMOPTS[i][0] === v) return i;
     return 0;
 }
-function drawDisplay() {
+function scrDisplay(c) {
+    if (c.entered) {
+        blLvl = blSaved = Math.max(5, System.getBrightness());
+    }
+    if (A.header("Tela")) return A.BACK;
     var y = TOP;
     if (!System.backlightSupported()) {
         UI.card(LX, y, LW, 70);
@@ -567,7 +552,11 @@ function drawDisplay() {
 
 // ---- Som (API 13) ------------------------------------------------------------
 
-function drawSom() {
+function scrSom(c) {
+    if (c.entered) {
+        volLvl = volSaved = System.getVolume ? System.getVolume() : 50;
+    }
+    if (A.header("Som")) return A.BACK;
     UI.card(LX, TOP, LW, 84);
     UI.text("Volume", LX + 12, TOP + 10);
     UI.text(volLvl + "%", LX + LW - 12, TOP + 10, { color: T.accent, align: "right" });
@@ -585,7 +574,8 @@ function drawSom() {
 
 // ---- Sensores (API 13, watch) ---------------------------------------------------
 
-function drawSensors(full) {
+function scrSensors(c) {
+    if (A.header("Sensores")) return A.BACK;
     var a = Sensors.accel();
     UI.card(LX, TOP, LW, 96);
     UI.text("Acelerômetro (g)", LX + 12, TOP + 8, { role: "caption", color: T.textDim });
@@ -595,7 +585,7 @@ function drawSensors(full) {
             var yy = TOP + 28 + i * 22;
             UI.text(names[i] + " " + vals[i].toFixed(2), LX + 12, yy);
             // barra horizontal por eixo: -2g..+2g (desenho proprio, so no frame total)
-            if (full) {
+            if (c.full) {
                 var v = Math.max(-2, Math.min(2, vals[i]));
                 System.fillRoundRect(140, yy + 4, 72, 8, 4, T.raised);
                 var cx = Math.max(141, Math.min(211, 176 + Math.round(v * 17)));
@@ -612,6 +602,7 @@ function drawSensors(full) {
     infoRow("Temperatura", Sensors.temp ? Sensors.temp().toFixed(1) + " °C" : "-", TOP + 146);
     UI.cardEnd();
     UI.text("atualiza ao vivo", 120, TOP + 192, { role: "caption", align: "center", color: T.textDim });
+    if (A.every(1000, "sens")) UI.invalidate();  // barras desenhadas a mao
 }
 
 // ---- Atualizacao (OTA) -----------------------------------------------------
@@ -622,6 +613,18 @@ function otaText() {
     if (otaInfo.guide) s += (s ? "  " : "") + "Como instalar: " + otaInfo.guide;
     return s;
 }
+function scrUpdate(c) {
+    if (c.entered) {
+        otaState = "idle";
+        otaInfo = null;
+        otaErr = "";
+        otaErrTitle = "";
+        installing0 = false;
+        UI.resetScroll("ota");
+    }
+    if (A.header("Atualização")) return A.BACK;
+    drawUpdate(c.full);
+}
 function drawUpdate(full) {
     var ver = "CelerOS v" + System.getOSVersion();
     if (otaState === "idle") {
@@ -631,19 +634,32 @@ function drawUpdate(full) {
         UI.cardEnd();
         if (UI.button("Procurar atualização", LX, TOP + 84, LW, 44)) doCheck();
         UI.text("Requer Wi-Fi conectado", 120, TOP + 140, { role: "caption", align: "center", color: T.textDim });
-    } else if (otaState === "checking") {
-        UI.spinner(120, 150, 18);
-        UI.text("Verificando atualizações...", 120, 182, { align: "center", color: T.textDim });
     } else if (otaState === "installing") {
         UI.text("Atualizando o sistema", 120, TOP + 30, { role: "title", align: "center" });
         UI.text("Não desligue a alimentação!", 120, TOP + 62, { role: "caption", align: "center", color: T.err });
         UI.text(otaPct + "%", 120, TOP + 96, { align: "center", color: T.accent });
         UI.progress(LX + 16, TOP + 124, LW - 32, 14, otaPct);
+        if (!installing0) {
+            installing0 = true;
+            // o callback roda dentro do otaStart: atualiza so os widgets acima
+            var res = System.otaStart(otaInfo.url, function (p) {
+                otaPct = p;
+                UI.text(p + "%", 120, TOP + 96, { align: "center", color: T.accent });
+                UI.progress(LX + 16, TOP + 124, LW - 32, 14, p);
+            });
+            if (res && res.ok) {
+                otaState = "done";
+            } else {
+                otaState = "failed";
+                otaErrTitle = "Falha na instalação";
+                otaErr = (res && res.error) ? res.error : "erro desconhecido";
+            }
+            UI.invalidate();
+        }
     } else if (otaState === "done") {
         UI.text("Atualização concluída!", 120, TOP + 40, { role: "title", align: "center", color: T.ok });
         UI.text("Reinicie para concluir.", 120, TOP + 74, { role: "caption", align: "center", color: T.textDim });
         if (UI.button("Reiniciar agora", LX, TOP + 110, LW, 44)) System.restart();
-        return;
     } else if (otaState === "avail") {
         UI.badge(otaInfo.type || "Atualização disponível", LX + 4, TOP);
         UI.text("v" + System.getOSVersion() + "  >  v" + otaInfo.version, LX + 4, TOP + 24, { role: "title", w: LW - 8 });
@@ -656,12 +672,11 @@ function drawUpdate(full) {
         }
         UI.scrollEnd();
         if (otaInfo.hasFirmware) {
-            if (UI.button("Instalar", LX, 252, 108, 40, { style: "primary" })) startInstall();
+            if (UI.button("Instalar", LX, 252, 108, 40, { style: "primary" })) installFlow();
         } else {
             UI.text("Canal sem firmware: siga o guia.", LX + 4, 262, { role: "caption", color: T.textDim, w: 108, lines: 2 });
         }
         if (UI.button("Verificar", LX + 116, 252, 108, 40, { style: "ghost" })) doCheck();
-        return;
     } else {
         // nowifi | failed | uptodate
         var title = otaState === "nowifi" ? "Sem conexão Wi-Fi" : (otaState === "uptodate" ? "Sistema atualizado!" : otaErrTitle);
@@ -673,14 +688,18 @@ function drawUpdate(full) {
         if (UI.button("Verificar de novo", LX, 252, LW, 40, { style: "ghost" })) doCheck();
     }
 }
-function doCheck() {
-    otaState = "checking";
+// Confirma e entra no estado "installing"; a propia tela roda o otaStart no
+// primeiro frame do estado (o app nao abre frame proprio)
+function installFlow() {
+    if (!UI.confirm("Instalar atualização?", "O aparelho não pode desligar durante a gravação.", { yes: "Instalar" })) return;
+    otaState = "installing";
+    otaPct = 0;
+    installing0 = false;
     UI.invalidate();
-    // mostra o "verificando" antes do otaCheck bloqueante
-    UI.begin(T.bg);
-    UI.header(titleNow(), { back: true });
-    drawUpdate(true);
-    UI.end();
+}
+// Verificacao OTA: UM frame de "verificando" (A.busy) antes do otaCheck bloqueante
+function doCheck() {
+    A.busy("Verificando atualização...");
     if (!Net.isConnected()) {
         otaState = "nowifi";
     } else {
@@ -697,29 +716,6 @@ function doCheck() {
             otaBodyH = 0;
             UI.resetScroll("ota");
         }
-    }
-    UI.invalidate();
-}
-function startInstall() {
-    if (!UI.confirm("Instalar atualização?", "O aparelho não pode desligar durante a gravação.", { yes: "Instalar" })) return;
-    otaState = "installing";
-    otaPct = 0;
-    UI.invalidate();
-    UI.begin(T.bg);
-    UI.header(titleNow());
-    drawUpdate(true);
-    // o callback roda dentro do otaStart: atualiza so os widgets do progresso
-    var res = System.otaStart(otaInfo.url, function (p) {
-        otaPct = p;
-        UI.text(p + "%", 120, TOP + 96, { align: "center", color: T.accent });
-        UI.progress(LX + 16, TOP + 124, LW - 32, 14, p);
-    });
-    if (res && res.ok) {
-        otaState = "done";
-    } else {
-        otaState = "failed";
-        otaErrTitle = "Falha na instalação";
-        otaErr = (res && res.error) ? res.error : "erro desconhecido";
     }
     UI.invalidate();
 }
@@ -742,10 +738,16 @@ function buildAbout() {
     a.push({ label: "Ligado há", right: fmtUptime(inf.uptimeMs) });
     return a;
 }
+function scrAbout(c) {
+    if (c.entered || A.every(1000, "about")) rows = buildAbout();
+    if (A.header("Sobre")) return A.BACK;
+    listRows("list:about");
+}
 
 // ---- Reset -----------------------------------------------------------------
 
-function drawReset() {
+function scrReset(c) {
+    if (A.header("Reset")) return A.BACK;
     UI.card(LX, TOP, LW, 116);
     UI.text("Limpar configurações", LX + 12, TOP + 10);
     UI.text("Apaga Wi-Fi, PIN, brilho e outras configurações. Apps são mantidos.", LX + 12, TOP + 34,
@@ -772,13 +774,8 @@ function drawReset() {
     }
 }
 function doReset(mode) {
-    UI.invalidate();
-    UI.begin(T.bg);
-    UI.header("Reset");
-    UI.spinner(120, 140, 18);
-    UI.text(mode === "total" ? "Formatando..." : "Limpando...", 120, 172, { role: "title", align: "center" });
-    UI.text("o aparelho vai reiniciar", 120, 204, { role: "caption", align: "center", color: T.textDim });
-    UI.end();
+    // frame unico de "ocupado" (A.busy) antes das chamadas que reiniciam
+    A.busy(mode === "total" ? "Formatando o aparelho..." : "Limpando configurações...");
     System.delay(400);
     System.factoryReset(mode);
     System.delay(600);
@@ -786,106 +783,71 @@ function doReset(mode) {
 }
 
 // ---- gate de PIN na entrada ------------------------------------------------
+// Fluxo BLOQUEANTE antes do A.run: como tela, o "gate" ficava na pilha e o
+// voltar do menu desempilhava o pedido de PIN em vez de sair.
 
-function drawGate(title, line1, line2, col) {
-    UI.invalidate();
-    UI.begin(T.bg);
-    UI.header("Ajustes");
-    UI.text(title, 120, 110, { role: "title", align: "center", color: col || T.text });
-    UI.text(line1, 120, 146, { role: "caption", align: "center", color: T.textDim, w: LW });
-    if (line2) UI.text(line2, 120, 168, { role: "caption", align: "center", color: T.accent });
-    UI.end();
-}
-function pinGate() {
-    for (var attempt = 0; attempt < 3; attempt++) {
-        drawGate("App protegido por PIN", "Digite o PIN para continuar", "Tentativas: " + (3 - attempt));
+function gatePin() {
+    gateTry = 0;
+    for (;;) {
+        UI.begin(T.bg);
+        A.header("Ajustes", { back: false });
+        UI.text("App protegido por PIN", 120, 110, { role: "title", align: "center" });
+        UI.text("Digite o PIN para continuar", 120, 146, { role: "caption", align: "center", color: T.textDim, w: LW });
+        UI.text("Tentativas: " + (3 - gateTry), 120, 168, { role: "caption", align: "center", color: T.accent });
+        UI.end(20);
         var pin = System.prompt("PIN do Ajustes", "", {hint: "num", mask: true});
-        if (pin === null || pin === "") System.exitApp();  // cancelou: volta
-        if (System.verifyPin(pin)) return;
+        if (pin === null || pin === "") return false;  // cancelou: fora
+        if (System.verifyPin(pin)) return true;
         UI.alert("PIN", "PIN incorreto");
+        gateTry++;
+        if (gateTry >= 3) {
+            UI.alert("PIN", "Acesso negado");
+            return false;
+        }
     }
-    UI.alert("PIN", "Acesso negado");
-    System.exitApp();
 }
 // Flag NVS diz que ha PIN mas o arquivo nao existe (apagaram por fora):
 // exigir redefinicao em vez de abrir destravado.
-function pinCorruptGate() {
-    drawGate("PIN corrompido", "O arquivo do PIN foi apagado. Defina um novo PIN.", "", T.warn);
-    if (!flowNewPin()) System.exitApp();
+function gateCorrupt() {
+    UI.begin(T.bg);
+    A.header("Ajustes", { back: false });
+    UI.text("PIN corrompido", 120, 110, { role: "title", align: "center", color: T.warn });
+    UI.text("O arquivo do PIN foi apagado. Defina um novo PIN.", 120, 146,
+            { role: "caption", align: "center", color: T.textDim, w: LW });
+    UI.end(20);
+    return !!flowNewPin();
 }
 
-// ---- loop principal --------------------------------------------------------
+// ---- menu (tela raiz) --------------------------------------------------------
 
-function frame(full) {
-    if (UI.header(titleNow(), { back: true })) {
-        back();
-        return;
-    }
-    var r;
-    if (tela === "menu") {
-        r = listRows();
-        if (r) go(r.a);
-    } else if (tela === "wifi") {
-        drawWifi();
-    } else if (tela === "apps") {
-        drawApps();
-    } else if (tela === "appdetail") {
-        drawAppDetail();
-    } else if (tela === "time") {
-        drawTime();
-    } else if (tela === "tz") {
-        var i = UI.list("list:tz", LX, TOP, LW, 312 - TOP, rows, { selected: tzIndex() });
-        if (i >= 0) {
-            System.setTimezone(TZS[i][1]);
-            UI.toast("Fuso: " + tzLabel(TZS[i][1]));
-            go("time");
-        }
-    } else if (tela === "security") {
-        r = listRows();
-        if (r) secTap(r.a);
-    } else if (tela === "display") {
-        drawDisplay();
-    } else if (tela === "som") {
-        drawSom();
-    } else if (tela === "sensors") {
-        drawSensors(full);
-    } else if (tela === "update") {
-        drawUpdate(full);
-    } else if (tela === "about") {
-        listRows();
-    } else if (tela === "notif") {
-        r = listRows();
-        if (r && r.a === "clearnot" &&
-            UI.confirm("Limpar notificações?", "O histórico será apagado.", { yes: "Limpar", danger: true })) {
-            System.notificationsClear();
-            UI.toast("Histórico apagado");
-            rebuildRows();
-        }
-    } else if (tela === "watch") {
-        r = listRows();
-        if (r) {
-            watchTap(r.a);
-            rebuildRows();
-        }
-    } else if (tela === "reset") {
-        drawReset();
-    }
+function scrMenu(c) {
+    // atualizacao periodica: valores vivos (Wi-Fi, hora, brilho, notificacoes)
+    if (c.entered || A.every(1000, "menu")) rows = buildMenu();
+    if (A.header("Ajustes")) return A.BACK;
+    var r = listRows("list:menu");
+    if (!r) return;
+    // telas de lista do A.form sao modais bloqueantes: rodam dentro do frame;
+    // ao voltar, o menu se redesenha na hora (valores podem ter mudado)
+    if (r.a === "security") { secFlow(); rows = buildMenu(); return; }
+    if (r.a === "watch") { watchFlow(); rows = buildMenu(); return; }
+    if (r.a === "notif") { notifFlow(); rows = buildMenu(); return; }
+    return r.a;
 }
+
+// ---- laco principal (A.run e dono do UI.begin/UI.end) -----------------------
 
 var pinSt0 = System.pinState();
-if (pinSt0 === 1) pinGate();
-else if (pinSt0 === 2) pinCorruptGate();
-
-go("menu");
-while (true) {
-    var full = UI.begin(T.bg);
-    frame(full);
-    // atualizacao periodica: valores vivos (Wi-Fi, hora, brilho, sensores);
-    // a lista e o UI.text se redesenham sozinhos quando o conteudo muda
-    if (System.millis() - lastAuto > 1000) {
-        lastAuto = System.millis();
-        if (tela === "menu" || tela === "about" || tela === "time") rebuildRows();
-        else if (tela === "sensors") UI.invalidate();  // barras desenhadas a mao
-    }
-    UI.end();
-}
+var liberado = pinSt0 === 1 ? gatePin() : (pinSt0 === 2 ? gateCorrupt() : true);
+if (liberado) A.run({
+    menu: scrMenu,
+    wifi: scrWifi,
+    apps: scrApps,
+    appdetail: scrAppDetail,
+    time: scrTime,
+    display: scrDisplay,
+    som: scrSom,
+    sensors: scrSensors,
+    update: scrUpdate,
+    about: scrAbout,
+    reset: scrReset
+}, "menu");

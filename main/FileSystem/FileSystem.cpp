@@ -352,14 +352,18 @@ std::string FileSystem::readTextFile(const char* path) {
         return "";
     }
 
+    // UMA leitura direto no destino: em fatias de 512 B cada fread virava
+    // uma ida ao VFS/LittleFS (~100 por modulo de 48 KB) mais a copia do
+    // buffer de pilha para a string
     std::string content;
-    content.reserve((size_t)st.st_size);
-
-    char buffer[512];
-    size_t bytesRead = 0;
-    while ((bytesRead = fread(buffer, 1, sizeof(buffer), f)) > 0) {
-        content.append(buffer, bytesRead);
+    content.resize((size_t)st.st_size);
+    size_t total = 0;
+    while (total < content.size()) {
+        size_t n = fread(&content[total], 1, content.size() - total, f);
+        if (n == 0) break;
+        total += n;
     }
+    content.resize(total);
 
     fclose(f);
     return content;

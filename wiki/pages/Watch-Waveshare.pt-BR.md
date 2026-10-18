@@ -62,7 +62,8 @@ família da placa do cachorro).
   lanterna, ajustes, celular, achar celular); centro, a **central de
   notificações**; o terço direito revela a topbar retrátil do app (jogos).
   Da borda de baixo, puxe para cima também abre a **central de notificações**
-  (toque expande, deslize de lado apaga, limpar tudo); da borda esquerda,
+  (toque expande, deslize de lado apaga, limpar tudo, X no topo fecha); da
+  borda esquerda,
   deslize para a direita para sair do app. Painel aberto a partir do
   mostrador volta para ele.
 * **Launcher** em lista vertical (`launcherList`), com bateria em % e

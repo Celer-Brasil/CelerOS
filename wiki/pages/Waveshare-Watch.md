@@ -62,7 +62,7 @@ GPIO10 is **not** a button on this hardware: it reads LOW with a pull-up
   find phone), center for the **notification center**; the right third
   reveals the retractable app topbar (games). Bottom edge pull up also opens
   the **notification center** (tap to expand, swipe sideways to dismiss,
-  clear all); from the left edge swipe right to leave an app. Opening a panel
+  clear all, X in the header closes); from the left edge swipe right to leave an app. Opening a panel
   from the watch face returns to it.
 * **Launcher** is a vertical list (`launcherList`) with the battery % and
   charging state in the status bar.

@@ -270,13 +270,19 @@ public:
         c.fill(THEME_BG);
         const int m = sideMargin();
         const int top = headerH();
+        // cabecalho: titulo a esquerda + X de fechar a direita (arrastar para
+        // baixo a partir do topo continua fechando)
         char hdr[32];
         snprintf(hdr, sizeof(hdr), "Notificações (%d)", (int)m_notes.size());
-        c.text(hdr, UI::cx(), top / 2 + UI::inset / 4, kui::type::title(), THEME_TEXT, MC_DATUM);
+        c.text(c.ellipsize(hdr, kui::type::title(), UI::W - 2 * m - closeRect().w - UI::sx(8)), m,
+               top / 2 + UI::inset / 4, kui::type::title(), THEME_TEXT, ML_DATUM);
+        const kui::Rect xr = closeRect();
+        c.fillRoundRect(xr, xr.h / 3, kui::isPressed(xr) ? THEME_RAISED : THEME_CARD);
+        c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, kui::type::body(), THEME_TEXT, MC_DATUM);
 
         if (m_notes.empty()) {
             c.text("Nada por aqui", UI::cx(), UI::cy(), kui::type::body(), THEME_TEXT_DIM, MC_DATUM);
-            c.text("arraste para baixo para fechar", UI::cx(), UI::H - UI::sy(14) - UI::inset / 3,
+            c.text("toque no X ou arraste para baixo", UI::cx(), UI::H - UI::sy(14) - UI::inset / 3,
                    kui::type::caption(), THEME_STROKE, MC_DATUM);
             return;
         }
@@ -288,6 +294,7 @@ public:
             y += h;
         }
         c.clearClip();
+        drawScrollbar(c);
         kui::Rect clr = clearRect();
         c.fillRoundRect(clr, clr.h / 2, kui::isPressed(clr) ? THEME_RAISED : THEME_CARD);
         c.text("Limpar tudo", clr.x + clr.w / 2, clr.y + clr.h / 2, kui::type::body(), THEME_TEXT,
@@ -295,14 +302,20 @@ public:
     }
 
     bool onTouch(const kui::TouchEvent& ev) override {
+        const kui::Rect xr = closeRect();
         if (ev.type == kui::TouchEvent::Drag) {
-            if (abs(ev.dy()) > abs(ev.dx())) {
+            // arrasto que nasce no X nao rola a lista (e chrome)
+            if (!xr.contains(ev.startX, ev.startY) && abs(ev.dy()) > abs(ev.dx())) {
                 m_scroll -= ev.y - ev.prevY;
                 clampScroll();
             }
             return true;
         }
         if (ev.type != kui::TouchEvent::Release) return true;
+        if (ev.isTap() && xr.contains(ev.x, ev.y)) {
+            closePanel();
+            return true;
+        }
         const kui::TouchEvent::Swipe sw = ev.swipe();
         // fechar: arrastar para baixo a partir do topo da lista / borda esquerda
         if ((sw == kui::TouchEvent::SwipeDown && (m_scroll == 0 || ev.startY < headerH())) ||
@@ -343,7 +356,27 @@ private:
         const int w = UI::sx(140);
         return {(UI::W - w) / 2, listBottom() + UI::sy(8), w, UI::sy(36)};
     }
+    kui::Rect closeRect() const {
+        const int h = UI::sy(32);
+        return {UI::W - sideMargin() - UI::sx(44), (headerH() - h) / 2, UI::sx(44), h};
+    }
     int rowH(int i) const { return i == m_expanded ? UI::sy(120) : UI::sy(56); }
+
+    int totalH() const {
+        int total = 0;
+        for (int i = 0; i < (int)m_notes.size(); i++) total += rowH(i);
+        return total;
+    }
+
+    // polegar a direita (dentro da margem) quando a lista transborda
+    void drawScrollbar(kui::Canvas& c) const {
+        const int view = listBottom() - headerH();
+        const int total = totalH();
+        if (total <= view) return;
+        const int th = view * view / total;
+        const int ty = headerH() + (view - th) * m_scroll / (total - view);
+        c.fillRoundRect({UI::W - UI::sx(6), ty, UI::sx(3), th}, UI::sx(3) / 2, THEME_STROKE);
+    }
 
     int rowAt(int py) const {
         int y = headerH() - m_scroll;
@@ -356,9 +389,7 @@ private:
     }
 
     void clampScroll() {
-        int total = 0;
-        for (int i = 0; i < (int)m_notes.size(); i++) total += rowH(i);
-        int maxS = total - (listBottom() - headerH());
+        int maxS = totalH() - (listBottom() - headerH());
         if (maxS < 0) maxS = 0;
         if (m_scroll > maxS) m_scroll = maxS;
         if (m_scroll < 0) m_scroll = 0;

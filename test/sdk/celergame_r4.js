@@ -245,6 +245,20 @@ module.exports = function (check) {
     W2.go('campo', 1, 0);
     check('world: flags/visitas no E.save (restore em outro mundo ve a mesma sala mexida)',
           tinha && W2.visited['campo:1,0'] && W2.get(3, 2) === 'bau_aberto' && W2.spawns().length === 0);
+    // 1.0.1: mundo sem sala corrente (criado, ainda sem go/restore — o app
+    // recria o mundo no meio da cena) responde "fora" na colisao em vez de
+    // ler data de null e derrubar o app no primeiro update
+    var W3 = c.E.world({ cols: 7, rows: 5, cell: 16, areas: areas,
+                         legend: { '#': 1, '.': 0, '~': 2 }, paint: function () {} });
+    c.req('celeros.game.collide');
+    var semSala = true;
+    try {
+        semSala = W3.room === null && W3.solidAt(10, 40) === true &&
+                  W3.rectSolid(0, 32, 8, 8) === true && W3.cost(1, 1) === -1 &&
+                  c.E.collide.move({ x: 10, y: 40, w: 8, h: 8, vx: 0, vy: 0 }, 4, 0, W3) !== null;
+    } catch (e) { semSala = false; }
+    check('world 1.0.1: solidAt/rectSolid/move sem sala (mundo trocado em voo) nao quebram', semSala);
+    W3.free();
     // agua animada: o tick troca o quadro e a celula repinta no draw
     W.go('campo', 0, 0);
     var antes = pintadas;

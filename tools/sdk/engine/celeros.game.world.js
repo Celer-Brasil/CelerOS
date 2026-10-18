@@ -31,6 +31,10 @@
 //
 // Coordenadas: tudo em pixels de TELA (sala fixa na tela: a camera fica
 // parada). celula (c, r) da sala -> x = ox + c * cell, y = oy + r * cell.
+//
+// 1.0.1: solidAt/rectSolid sem sala corrente (mundo criado, ainda sem
+// go/restore — o app recria o mundo no meio da cena) devolvem o outside em
+// vez de ler data de null e derrubar o app no primeiro update.
 
 var E = require('celeros.game');
 require('celeros.game.level');
@@ -176,13 +180,18 @@ E.world = function (o) {
         }
         return out;
     };
-    // mapa de colisao (collide.move/ray, combat.shot, path.grid)
+    // mapa de colisao (collide.move/ray, combat.shot, path.grid). Mundo sem
+    // sala corrente (criado, ainda sem go/restore — o app troca o mundo no
+    // meio da cena): responde "fora" em vez de ler data de null e derrubar
+    // o app no update seguinte
     W.solidAt = function (x, y) {
+        if (!W.room) return W.outside;
         var c = Math.floor((x - ox) / cell), r = Math.floor((y - oy) / cell);
         if (c < 0 || r < 0 || c >= cols || r >= rows) return W.outside;
         return !!solid(W.room.data[r * cols + c], c, r);
     };
     W.rectSolid = function (x, y, w, h) {
+        if (!W.room) return W.outside;
         var c0 = Math.floor((x - ox) / cell), c1 = Math.floor((x + w - 1 - ox) / cell);
         var r0 = Math.floor((y - oy) / cell), r1 = Math.floor((y + h - 1 - oy) / cell);
         for (var r = r0; r <= r1; r++) {
@@ -477,7 +486,7 @@ E.world = function (o) {
     return W;
 };
 var _live = [];
-E.world.version = '1.0.0';
+E.world.version = '1.0.1';
 
 E._modTicks.push(function (dt) {
     for (var i = 0; i < _live.length; i++) _live[i]._tick(dt);

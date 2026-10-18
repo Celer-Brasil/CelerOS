@@ -253,6 +253,7 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         "  xxd <arq> [n]           dump hexadecimal (default 1024 bytes)\r\n"
         "  md5sum <arq...>         md5 do arquivo lido agora no device\r\n"
         "  df                      espaco em /local e /sd\r\n"
+        "  sd [format]             cartao SD; format = formata em FAT32 (APAGA)\r\n"
         "sistema:\r\n"
         "  free / ps / top [ms] / uptime / date / uname / info / reboot\r\n"
 #if CONFIG_CELEROS_BLUETOOTH
@@ -471,6 +472,40 @@ int cmdDf(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "%-8s %-9s total %-7s usado %-7s livre %s\r\n", d.path, d.label,
               humanSize(total).c_str(), humanSize(used).c_str(), humanSize(total - used).c_str());
     }
+    return 0;
+}
+
+// sd [format] — estado do cartao e formatacao explicita em FAT32.
+// O mount normal NUNCA formata (cartao do usuario pode ter dados no PC:
+// exFAT le de la), entao o formato existe so como comando explicito.
+int cmdSd(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc >= 2 && strcmp(argv[1], "format") == 0) {
+        if (!FileSystem::formatSD()) {
+            print(ctx, "SD: nao gravou o pedido de formato\r\n");
+            return 1;
+        }
+        print(ctx, "SD: formato agendado — o aparelho vai REINICIAR e "
+                   "formatar o cartao em FAT32 no boot (APAGA TUDO)...\r\n");
+        vTaskDelay(pdMS_TO_TICKS(600));   // descarrega a resposta antes de cair
+        esp_restart();
+    }
+    if (argc >= 2 && strcmp(argv[1], "apps") == 0) {
+        // cria /sd/apps no cartao ja formatado (o store do celular escaneia)
+        print(ctx, FileSystem::exists("/sd/apps") ? "SD: /sd/apps existe\r\n"
+                                                  : "SD: /sd/apps criado\r\n");
+        return 0;
+    }
+    if (!FileSystem::sdMounted()) {
+        print(ctx, "SD: nao montado. Cartao exFAT/virgem formata com `sd format`"
+                   " (APAGA TUDO); cartao ausente = contato/cartao\r\n");
+        return 1;
+    }
+    uint64_t total = FileSystem::getTotalSpace("/sd");
+    uint64_t used = FileSystem::getUsedSpace("/sd");
+    print(ctx, "SD: FAT32 total %s usado %s livre %s (%s)\r\n",
+          humanSize(total).c_str(), humanSize(used).c_str(),
+          humanSize(total - used).c_str(),
+          FileSystem::exists("/sd/apps") ? "/sd/apps ok" : "sem /sd/apps");
     return 0;
 }
 
@@ -2271,6 +2306,7 @@ struct ShellCmd {
 const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
+    {"sd", cmdSd},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"top", cmdTop},
 #if CONFIG_IDF_TARGET_ESP32S3

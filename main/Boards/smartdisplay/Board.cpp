@@ -10,6 +10,7 @@
 #include <soc/lcd_cam_struct.h>
 #include <hal/lcd_hal.h>
 #include <esp_lcd_io_i80.h>
+#include <driver/gpio.h>
 
 // Perfil da Guition ESP32-S3-4848S040 (SmartDisplay 4").
 //
@@ -197,6 +198,21 @@ static const BoardProfile s_profile = {
 #endif
 
 void init() {
+    // SD (CS/SCK/MISO/MOSI) para GPIO com pull-up e cartao DESSELECIONADO
+    // antes do init do painel: o 3-wire do ST7701 compartilha SCK/MOSI com o
+    // cartao e, com o CS flutuando, ele ve lixo de comando e o mount falha
+    // ("failed to mount card") no primeiro boot apos ligar na tomada.
+    const int sdPins[4] = { s_profile.sd.cs, s_profile.sd.sck,
+                            s_profile.sd.miso, s_profile.sd.mosi };
+    for (int i = 0; i < 4; i++) {
+        if (sdPins[i] < 0) continue;
+        gpio_reset_pin((gpio_num_t)sdPins[i]);
+        gpio_set_pull_mode((gpio_num_t)sdPins[i], GPIO_PULLUP_ONLY);
+    }
+    if (s_profile.sd.cs >= 0) {
+        gpio_set_direction((gpio_num_t)s_profile.sd.cs, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)s_profile.sd.cs, 1);   // desseleciona o cartao
+    }
     initDisplayOnCore1();
     // Arrays RGB565 padrao (icones, BMPs de apps JS) e o readRect (screencap)
     // exigem a conversao de ordem de bytes: o framebuffer nativo do LCD_CAM

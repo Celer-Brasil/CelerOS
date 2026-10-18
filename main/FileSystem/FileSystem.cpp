@@ -44,6 +44,28 @@ static bool s_spi_bus_ready = false;
 static volatile bool s_sdFreeReady = false;  // contagem em cache no FatFs
 static volatile bool s_sdFreeBusy = false;   // varredura em curso (segura o volume)
 
+// Pedido de formato (NVS) — "sd format" grava e reinicia: o cartao responde
+// de forma confiavel SO NO BOOT (um init depois de um mount falho nao o
+// traz de volta: send_if_cond devolve 0x108), entao o formato acontece no
+// mount de boot com format_if_mount_failed.
+static bool sdFormatFlagGet() {
+    nvs_handle_t h;
+    if (nvs_open("fs", NVS_READONLY, &h) != ESP_OK) return false;
+    uint8_t v = 0;
+    nvs_get_u8(h, "sd_fmt", &v);
+    nvs_close(h);
+    return v != 0;
+}
+static void sdFormatFlagSet(bool on) {
+    nvs_handle_t h;
+    if (nvs_open("fs", NVS_READWRITE, &h) != ESP_OK) return;
+    if (on) nvs_set_u8(h, "sd_fmt", 1);
+    else nvs_erase_key(h, "sd_fmt");
+    nvs_commit(h);
+    nvs_close(h);
+}
+static bool s_sdFormatNext = false;          // mount corrente formata (pedido do NVS)
+
 static void sdFreeScanTask(void*) {
     FATFS* fs = nullptr;
     DWORD freeClusters = 0;
@@ -134,6 +156,21 @@ bool FileSystem::mountSD() {
     spi_host_device_t sdHost = (sd.spiHost >= 0)
         ? (spi_host_device_t)sd.spiHost : (spi_host_device_t)CELEROS_SD_SPI_HOST;
 
+    // RESET + PULL-UP nas 4 linhas ANTES de tocar no bus. O boot log da
+    // 4848 (2026-10-18) mostrou "failed to mount card" com o CS (GPIO42)
+    // preso na funcao de IOMUX de UART1 ("gpio conflict found") — um pino
+    // em funcao de periferico nao responde como CS e o CMD0 nunca volta.
+    // gpio_reset_pin devolve o pino para GPIO com pull-up; o bus que ja e
+    // do display reconfigura os dele logo abaixo (mesmo contrato).
+    {
+        const int sdPins[4] = { sd.cs, sd.sck, sd.miso, sd.mosi };
+        for (int i = 0; i < 4; i++) {
+            if (sdPins[i] < 0) continue;
+            gpio_reset_pin((gpio_num_t)sdPins[i]);       // IOMUX -> GPIO, pull-up
+            gpio_set_pull_mode((gpio_num_t)sdPins[i], GPIO_PULLUP_ONLY);
+        }
+    }
+
     if (!s_spi_bus_ready) {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = sd.mosi;
@@ -181,20 +218,55 @@ bool FileSystem::mountSD() {
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = sdHost;
-    if (Board::profile().sd.freqKhz > 0) {
-        host.max_freq_khz = Board::profile().sd.freqKhz;
-    }
 
     esp_vfs_fat_mount_config_t mountcfg = {};
-    mountcfg.format_if_mount_failed = false;
+    s_sdFormatNext = sdFormatFlagGet();   // "sd format" pediu: formata no boot
+    mountcfg.format_if_mount_failed = s_sdFormatNext;
     mountcfg.max_files = 5;
     mountcfg.allocation_unit_size = 16 * 1024;
 
-    esp_err_t err = esp_vfs_fat_sdspi_mount("/sd", &host, &slot, &mountcfg, &s_sd_card);
-    if (err != ESP_OK) {
-        ESP_LOGW(FS_TAG, "sdspi mount falhou: %s", esp_err_to_name(err));
+    // Tentativa 1 no clock do perfil; tentativa 2 em 400 kHz. Cartao
+    // grande/oxidado responde CMD no clock baixo e o mount degrade so o
+    // throughput (nao sobe de volta sozinho: o proximo boot tenta 1o).
+    const int kHz[2] = { (Board::profile().sd.freqKhz > 0) ? Board::profile().sd.freqKhz : 4000, 400 };
+    esp_err_t err = ESP_FAIL;
+    esp_err_t err1 = ESP_FAIL;
+    for (int i = 0; i < 2; i++) {
+        host.max_freq_khz = kHz[i];
+        err = esp_vfs_fat_sdspi_mount("/sd", &host, &slot, &mountcfg, &s_sd_card);
+        if (err == ESP_OK) break;
+        if (i == 0) err1 = err;
+        ESP_LOGW(FS_TAG, "sdspi mount falhou a %d kHz: %s", kHz[i],
+                 esp_err_to_name(err));
         s_sd_card = nullptr;
+        if (i == 0) {
+            // linhas de volta ao GPIO com pull-up antes da 2a tentativa (o
+            // mount falho pode ter deixado o CS na funcao de IOMUX)
+            const int sdPins[4] = { sd.cs, sd.sck, sd.miso, sd.mosi };
+            for (int p = 0; p < 4; p++) {
+                if (sdPins[p] < 0) continue;
+                gpio_reset_pin((gpio_num_t)sdPins[p]);
+                gpio_set_pull_mode((gpio_num_t)sdPins[p], GPIO_PULLUP_ONLY);
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+    if (err != ESP_OK) {
+        if (err1 == ESP_FAIL)
+            // o card init passou e o f_mount devolveu FR_NO_FILESYSTEM (13):
+            // exFAT ou virgem (o FatFs do IDF nao le exFAT)
+            ESP_LOGW(FS_TAG, "SD: cartao OK mas SEM volume FAT32 (exFAT ou "
+                             "virgem) — `sd format` formata (APAGA TUDO)");
+        else
+            ESP_LOGW(FS_TAG, "SD: cartao sem resposta (%s) — veja contato/"
+                             "cartao", esp_err_to_name(err1));
+        if (s_sdFormatNext)
+            ESP_LOGW(FS_TAG, "SD: pedido de formato segue para o proximo boot");
         return false;
+    }
+    if (s_sdFormatNext) {
+        sdFormatFlagSet(false);
+        ESP_LOGI(FS_TAG, "SD formatado no boot (FAT32) e montado");
     }
     ESP_LOGI(FS_TAG, "SD montado em /sd (%s)", s_sd_card->cid.name);
     // Contagem de livres fora do caminho de quem chamou (ver sdFreeScanTask).
@@ -229,7 +301,18 @@ void FileSystem::unmountSD() {
 }
 
 bool FileSystem::formatSD() {
-    return false;  // FATFS format em runtime nao suportado (igual ao comportamento original)
+#if CONFIG_CELEROS_SD_CARD
+    // DESTRUTIVO: so pelo comando explicito do shell ("sd format") ou da Web
+    // UI — o mount normal NUNCA formata (o cartao do usuario pode ter dados
+    // legiveis no PC, mesmo exFAT). O cartao responde de forma confiavel so
+    // no boot (o re-init apos um mount falho nao o traz de volta), entao o
+    // pedido vai em NVS e o aparelho reinicia: o mount de boot formata em
+    // FAT32 (format_if_mount_failed) e limpa o pedido.
+    sdFormatFlagSet(true);
+    return true;
+#else
+    return false;
+#endif
 }
 
 // ---------------------------------------------------------------------------

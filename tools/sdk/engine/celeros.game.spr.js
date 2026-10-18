@@ -16,6 +16,12 @@
 // frames vazios sem NaN.
 // 1.2.0: E.spr.grid (spritesheet em grade com nomes numerados, 1 slot so)
 // e E.spr.frames(prefixo, de, ate) -> lista de nomes para o E.anim.
+// 1.3.0: load/sheet de um nome JA carregado vazava o slot nativo antigo
+// (enter de cena que carrega a cada entrada esgotava o pool em 4 voltas)
+// — o antigo e liberado antes; anim.play com o MESMO clipe ignorava fps/
+// loop novos (correr mais rapido nao acelerava). Novos: anim.speed
+// (multiplicador) e anim.onFrame(anim, i) ao trocar de quadro; a volta
+// do loop guardava so fi/fps e perdia a sobra do quadro (o ciclo atrasava).
 
 var E = require('celeros.game');
 var S = System;
@@ -23,7 +29,7 @@ var S = System;
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.2.0',
+    version: '1.3.0',
     bases: [],
     _slots: {},
     _sheets: {},        // spritesheets: 1 PNG inteiro + regioes nomeadas
@@ -37,6 +43,8 @@ E.spr = {
         var out = {};
         for (var i = 0; i < defs.length; i++) {
             var d = defs[i];
+            // recarregar o mesmo nome devolve o slot velho ao pool antes
+            if (E.spr._slots[d.name]) E.spr.free(d.name);
             var slot = { id: 0, w: d.w, h: d.h, paint: d.paint || null };
             if (E.caps.sprites && E.spr._used < E.caps.slots) {
                 var id = S.createSprite(d.w, d.h);
@@ -93,6 +101,7 @@ E.spr = {
     // Regiao sem setClip (firmware velho) cai no paint(nome, x, y).
     // Devolve os slots das regioes; libere com freeSheet(name).
     sheet: function (name, o) {
+        if (E.spr._sheets[name]) E.spr.freeSheet(name);
         var sh = { id: 0, w: o.w, h: o.h, name: name, regs: [] };
         if (E.caps.sprites && E.spr._used < E.caps.slots) {
             var id = S.createSprite(o.w, o.h);
@@ -235,17 +244,25 @@ E.spr = {
 E.anim = function (frames, fps, loop) {
     return {
         frames: frames, fps: fps || 6, loop: loop === undefined ? true : loop,
-        t: 0, i: 0, done: false, onEnd: null,
+        t: 0, i: 0, done: false, onEnd: null, onFrame: null,
+        speed: 1,           // multiplicador (2 = corre o dobro sem trocar fps)
         tick: function (dt) {
             var n = this.frames.length;
             if (!n || this.done) return;
+            var i0 = this.i;
+            this._tick(dt * this.speed, n);
+            if (this.onFrame && this.i !== i0) this.onFrame(this, this.i);
+        },
+        _tick: function (dt, n) {
             this.t += dt;
             var fi = Math.floor(this.t * this.fps);
             if (this.loop === 'pingpong' && n > 1) {
                 var per = 2 * n - 2;
                 if (fi >= per) {
                     fi = fi % per;
-                    this.t = fi / this.fps;
+                    // guarda a sobra dentro do quadro (fi/fps jogava fora o
+                    // resto e a volta atrasava um pouco a cada ciclo)
+                    this.t = this.t % (per / this.fps);
                     if (this.onEnd) this.onEnd(this);
                 }
                 this.i = fi < n ? fi : per - fi;
@@ -254,7 +271,7 @@ E.anim = function (frames, fps, loop) {
             if (fi >= n) {
                 if (this.loop) {
                     fi = fi % n;
-                    this.t = fi / this.fps;
+                    this.t = this.t % (n / this.fps);
                     if (this.onEnd) this.onEnd(this);
                 } else {
                     fi = n - 1;
@@ -273,7 +290,12 @@ E.anim = function (frames, fps, loop) {
         // troca o clipe; o MESMO frames nao recomeca (nem terminado —
         // chamar por quadro com o clipe do estado e seguro; reset() refaz)
         play: function (fr, fp, lp) {
-            if (fr === this.frames) return this;
+            if (fr === this.frames) {
+                // mesmo clipe: so ajusta velocidade/modo, sem recomecar
+                if (fp) this.fps = fp;
+                if (lp !== undefined) this.loop = lp;
+                return this;
+            }
             this.frames = fr;
             if (fp) this.fps = fp;
             if (lp !== undefined) this.loop = lp;

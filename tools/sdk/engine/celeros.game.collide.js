@@ -17,13 +17,22 @@
 // Formas: retangulo {x, y, w, h} (x,y = canto) e circulo {x, y, r} (x,y =
 // centro) — o mesmo do resto da engine (E.hit usa rect de canto). Para
 // corpo rigido/cordas use a dep celeros.physics.
+//
+// 1.1.0: move() com dx/dy NaN/Infinity (velocidade envenenada por divisao
+// por zero) travava o quadro num laco eterno — vira 0; o hash de mundo que
+// ROLA crescia sem fim (uma chave por celula ja visitada) e agora recicla
+// as celulas quando passam de 4096. Novos: C.ray (raio contra o tilemap,
+// DDA — tiro instantaneo, laser, visao em pixels) e C.sweep (AABB em
+// movimento: fracao do 1o contato).
 
 var E = require('celeros.game');
 
 var _res = { hitX: false, hitY: false, ground: false, ceil: false, dx: 0, dy: 0 };
+var _ray = { hit: false, x: 0, y: 0, c: 0, r: 0, dist: 0 };
 
 E.collide = {
-    version: '1.0.0',
+    version: '1.1.0',
+    normal: { x: 0, y: 0 },   // normal do ultimo sweep com contato
 
     // retangulo x retangulo (bordas encostando NAO contam)
     rect: function (a, b) {
@@ -76,6 +85,70 @@ E.collide = {
         return t0;
     },
 
+    // AABB a andando (vx, vy) neste quadro contra b parado: fracao 0..1 do
+    // 1o contato (-1 sem contato) + normal em C.normal {x, y} — bala rapida e
+    // dash que atravessariam o alvo entre dois quadros
+    sweep: function (a, vx, vy, b) {
+        var S2 = E.collide.normal;
+        S2.x = 0; S2.y = 0;
+        var ix0, ix1, iy0, iy1;
+        if (vx > 0) { ix0 = b.x - (a.x + a.w); ix1 = b.x + b.w - a.x; }
+        else { ix0 = b.x + b.w - a.x; ix1 = b.x - (a.x + a.w); }
+        if (vy > 0) { iy0 = b.y - (a.y + a.h); iy1 = b.y + b.h - a.y; }
+        else { iy0 = b.y + b.h - a.y; iy1 = b.y - (a.y + a.h); }
+        var tx0, tx1, ty0, ty1;
+        if (vx === 0) {
+            if (a.x + a.w <= b.x || a.x >= b.x + b.w) return -1;
+            tx0 = -Infinity; tx1 = Infinity;
+        } else { tx0 = ix0 / vx; tx1 = ix1 / vx; }
+        if (vy === 0) {
+            if (a.y + a.h <= b.y || a.y >= b.y + b.h) return -1;
+            ty0 = -Infinity; ty1 = Infinity;
+        } else { ty0 = iy0 / vy; ty1 = iy1 / vy; }
+        var t0 = Math.max(tx0, ty0), t1 = Math.min(tx1, ty1);
+        if (t0 > t1 || t1 < 0 || t0 > 1) return -1;
+        if (t0 < 0) return 0;          // ja encostado/dentro
+        if (tx0 > ty0) S2.x = vx > 0 ? -1 : 1;
+        else S2.y = vy > 0 ? -1 : 1;
+        return t0;
+    },
+
+    // raio (x0,y0) -> (x1,y1) em PIXELS contra o tilemap (solidAt ou
+    // qualquer {cw, ch, ox, oy, solidAt}) por DDA de celula: devolve o
+    // resultado reaproveitado {hit, x, y, c, r, dist} — x,y = onde entrou
+    // na 1a celula solida (ou o fim do raio sem hit)
+    ray: function (x0, y0, x1, y1, map) {
+        var R = _ray;
+        var cw = map.cw || 8, ch = map.ch || 8, ox = map.ox || 0, oy = map.oy || 0;
+        var dx = x1 - x0, dy = y1 - y0;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        R.hit = false; R.x = x1; R.y = y1; R.dist = len;
+        var c = Math.floor((x0 - ox) / cw), r = Math.floor((y0 - oy) / ch);
+        R.c = c; R.r = r;
+        if (map.solidAt(x0, y0)) { R.hit = true; R.x = x0; R.y = y0; R.dist = 0; return R; }
+        if (len === 0) return R;
+        var ux = dx / len, uy = dy / len;
+        var sc = ux > 0 ? 1 : -1, sr = uy > 0 ? 1 : -1;
+        var tdx = ux !== 0 ? Math.abs(cw / ux) : Infinity;
+        var tdy = uy !== 0 ? Math.abs(ch / uy) : Infinity;
+        var nbx = ox + (c + (sc > 0 ? 1 : 0)) * cw, nby = oy + (r + (sr > 0 ? 1 : 0)) * ch;
+        var tmx = ux !== 0 ? (nbx - x0) / ux : Infinity;
+        var tmy = uy !== 0 ? (nby - y0) / uy : Infinity;
+        for (var guard = 0; guard < 4096; guard++) {
+            var t;
+            if (tmx < tmy) { t = tmx; tmx += tdx; c += sc; }
+            else { t = tmy; tmy += tdy; r += sr; }
+            if (t > len) return R;
+            var px = x0 + ux * t, py = y0 + uy * t;
+            // ponto na borda da celula nova: amostra meio passo para dentro
+            if (map.solidAt(ox + (c + 0.5) * cw, oy + (r + 0.5) * ch)) {
+                R.hit = true; R.x = px; R.y = py; R.c = c; R.r = r; R.dist = t;
+                return R;
+            }
+        }
+        return R;
+    },
+
     // hash espacial: celulas de `cell` px; add(o) indexa pela caixa (rect ou
     // circulo). Recrie por quadro (clear + add) — barato e sem estado velho.
     // query(caixa, fn) chama fn(o) UMA vez por candidato que de fato colide
@@ -103,7 +176,10 @@ E.collide = {
             h.count++;
         };
         h.clear = function () {
-            for (var i = 0; i < used.length; i++) cells[used[i]].length = 0;
+            // mundo que rola visita celulas novas sem parar: passou do teto,
+            // recomeca o dicionario (senao a memoria so cresce)
+            if (used.length > 4096) { cells = {}; used = []; }
+            else for (var i = 0; i < used.length; i++) cells[used[i]].length = 0;
             h.count = 0;
         };
         h.query = function (q, fn) {
@@ -153,6 +229,9 @@ E.collide = {
     // {hitX, hitY, ground, ceil, dx, dy} (objeto reaproveitado)
     move: function (b, dx, dy, map) {
         var R = _res;
+        // NaN/Infinity: o laco de passos nunca zerava o resto (quadro preso)
+        if (!isFinite(dx)) dx = 0;
+        if (!isFinite(dy)) dy = 0;
         R.hitX = R.hitY = R.ground = R.ceil = false;
         R.dx = R.dy = 0;
         var cw = map.cw || 8, ch = map.ch || 8;

@@ -7,6 +7,8 @@ declare namespace E {
         update?: (m: Fsm<O>, dt: number) => void;
         exit?: (m: Fsm<O>, next: string) => void;
         draw?: (m: Fsm<O>) => void;
+        /** volta pelo pop() (bolsa e tempo restaurados); sem resume o pop chama enter */
+        resume?: (m: Fsm<O>, arg?: any) => void;
         /** saida automatica: [segundos no estado, proximo | (m) => proximo] */
         after?: [number, string | ((m: Fsm<O>) => string | null)];
         /** handlers do m.send(ev, arg); devolver string = transicao */
@@ -34,7 +36,8 @@ declare namespace E {
         send(ev: string, arg?: any): boolean;
         draw(): void;
     }
-    /** Maquina de estados (IA, heroi, chefe com fases). */
+    /** Maquina de estados (IA, heroi, chefe com fases). Estado "*" = coringa:
+     *  on/update dele valem em todo estado. */
     const fsm: {
         version: string;
         <O>(owner: O, states: Record<string, FsmState<O>>, first?: string, opts?: {

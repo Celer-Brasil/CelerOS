@@ -55,9 +55,13 @@ declare namespace E {
         done: boolean;
         /** fim de cada volta (loop/pingpong) ou fim unico (sem loop) */
         onEnd: ((a: Anim) => void) | null;
+        /** ao trocar de quadro (passo com som, golpe que acerta no quadro 3) */
+        onFrame: ((a: Anim, i: number) => void) | null;
+        /** multiplicador do tempo (2 = o dobro) */
+        speed: number;
         tick(dt: number): void;
         reset(): Anim;
-        /** troca o clipe; o MESMO frames nao recomeca (seguro por quadro) */
+        /** troca o clipe; o MESMO frames nao recomeca (so ajusta fps/loop — seguro por quadro) */
         play(frames: AnimFrame[], fps?: number, loop?: AnimLoop): Anim;
         draw(x: number, y: number, opts?: { key?: number; cx?: boolean; cy?: boolean;
                                              ax?: number; ay?: number }): void;

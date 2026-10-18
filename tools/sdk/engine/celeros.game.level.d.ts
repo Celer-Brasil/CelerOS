@@ -14,6 +14,9 @@ declare namespace E {
         all(type: string): Spawn[];
         /** factories[tipo](spawn) -> entidade; devolve as criadas */
         spawn(factories: Record<string, (s: Spawn) => any>): any[];
+        /** E.tilemap pronto da fase (precisa de celeros.game.tilemap) */
+        tilemap(o: { paint: (c: number, r: number, x: number, y: number, w: number, h: number) => void;
+                     solid?: (v: any, c: number, r: number) => boolean; outside?: boolean }): Tilemap;
     }
     interface Progress {
         list: any[];
@@ -26,6 +29,10 @@ declare namespace E {
         next(): boolean;
         /** guarda a nota se melhorou; sem n le */
         stars(i: number, n?: number): number | boolean;
+        /** fim de fase: guarda estrelas e desbloqueia a seguinte; true se ha proxima */
+        complete(i?: number, stars?: number): boolean;
+        /** soma das estrelas */
+        totalStars(): number;
         reset(): void;
     }
     const level: {

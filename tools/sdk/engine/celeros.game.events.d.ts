@@ -12,6 +12,7 @@ declare namespace E {
     }
     type Listener = (a1?: any, a2?: any, a3?: any) => boolean | void;
     interface Bus {
+        /** nome "*" = coringa: fn(nome, a1, a2) para todo evento */
         on(name: string, fn: Listener, o?: SubOpts): Sub;
         once(name: string, fn: Listener, o?: SubOpts): Sub;
         /** Sub ou nome (todos do nome) */

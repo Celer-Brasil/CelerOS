@@ -22,6 +22,10 @@ declare namespace E {
         fill(c: number, r: number, w: number, h: number, v: any): void;
         /** celulas com valor v (ou fn true) */
         find(v: any): { c: number; r: number }[];
+        /** mascara 0..15 dos vizinhos iguais: 1 cima, 2 direita, 4 baixo, 8 esquerda */
+        autotile(c: number, r: number, same?: (v: any, viz: any) => boolean): number;
+        /** fn por vizinho dentro da grade (4, ou 8 com diag) */
+        neighbors(c: number, r: number, fn: (c: number, r: number, v: any) => void, diag?: boolean): void;
         /** ponto em pixels numa celula solida (o.solid ou valor truthy; fora = o.outside) */
         solidAt(x: number, y: number): boolean;
         /** caixa em pixels toca alguma celula solida */

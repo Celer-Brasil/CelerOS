@@ -30,7 +30,11 @@
 // fallback JS (um castelo de 30 pecas nao fecha o quadro no interpretado):
 // em firmware sem o binding P.rigid devolve null e o app avisa.
 
-var P = { version: '2.1.0' };
+// 2.1.1: verletFast com os mundos nativos ESGOTADOS (verletNew -> -1)
+// devolvia um objeto "nativo" morto (todo step/add ia ao id -1 em silencio
+// e a corda nunca aparecia) — cai no fallback JS como o firmware antigo.
+
+var P = { version: '2.1.1' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 
@@ -151,6 +155,7 @@ P.verletFast = function (opts) {
     opts = opts || {};
     if (typeof System === "undefined" || !System.verletNew) return verletFastJS(opts);
     var id = System.verletNew(opts.iterations || 4, opts.radius || 0);
+    if (!(id > 0)) return verletFastJS(opts);
     var v = {
         native: true, id: id,
         step: function (dt, o) {

@@ -10,6 +10,10 @@ declare namespace E {
         i: number;
         speed: number;
         done: boolean;
+        /** voltas completas (loop/pingpong) */
+        laps: number;
+        /** 1 indo, -1 voltando (pingpong) */
+        dir: number;
         set(path: Cell[] | null): void;
         /** centro em px do ponto alvo, ou null */
         target(): { x: number; y: number } | null;
@@ -24,9 +28,15 @@ declare namespace E {
         find(cols: number, rows: number, c0: number, r0: number, c1: number, r1: number,
              cost: (c: number, r: number) => number,
              opts?: { diag?: boolean; max?: number; near?: boolean }): Cell[] | null;
-        /** linha de visao entre celulas (as pontas nao contam) */
+        /** linha de visao entre celulas (as pontas nao contam); strict = diagonal exige os dois lados livres */
         los(c0: number, r0: number, c1: number, r1: number,
-            blocked: (c: number, r: number) => boolean): boolean;
+            blocked: (c: number, r: number) => boolean, strict?: boolean): boolean;
+        /** mapa de distancias ate (c1, r1) com o mesmo cost do find: next(c, r) da o passo (objeto reaproveitado) */
+        flow(cols: number, rows: number, c1: number, r1: number,
+             cost: (c: number, r: number) => number, opts?: { diag?: boolean }): {
+            dist(c: number, r: number): number;
+            next(c: number, r: number): Cell | null;
+        };
         /** corta os degraus mantendo so as quebras de visao */
         smooth(path: Cell[] | null, blocked: (c: number, r: number) => boolean): Cell[] | null;
         /** adaptador do tilemap: {cols, rows, cost, blocked} */
@@ -37,6 +47,10 @@ declare namespace E {
         };
         /** anda obj (px) pelos centros das celulas a speed px/s */
         follower(obj: { x: number; y: number }, path: Cell[] | null, speed?: number,
-                 o?: { cell?: number; ox?: number; oy?: number }): PathFollower;
+                 o?: { cell?: number; ox?: number; oy?: number;
+                       /** volta ao 1o ponto */
+                       loop?: boolean;
+                       /** vai e volta */
+                       pingpong?: boolean }): PathFollower;
     };
 }

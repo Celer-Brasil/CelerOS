@@ -15,9 +15,31 @@
 // zona do stick vira o "A" (stick.tap), e o botao fisico (E.input.btn)
 // pode servir de 2a acao. Desenhe jogos que caibam nisso: arrasta = move,
 // solta e toca = age.
+//
+// 1.1.0: o tick roda tambem com E.paused (o botao "continuar" do pad nao
+// via o toque na pausa); dedo que DESCE num botao nao pega o stick por
+// baixo (zona padrao e botao sobrepostos andavam e pulavam juntos);
+// controles nascem presos a CENA (somem quando ela sai e dormem sob um
+// E.push — {global: true} mantem) e o botao ganha heldMs + tap.
 
 var E = require('celeros.game');
 var EMPTY = {};
+
+// controle vivo na cena corrente? (global = sempre); morto = saiu de vez
+function stacked(g) {
+    var st = E._stack;
+    if (st) for (var i = 0; i < st.length; i++) if (st[i].gen === g) return true;
+    return false;
+}
+// criado fora de cena (topo do main.js, antes do E.run) = global
+function genOf(o) { return o.global || !E._sceneGen ? null : E._sceneGen; }
+function live(c) { return c.gen === null || c.gen === E._sceneGen; }
+function purge(L) {
+    for (var i = L.length - 1; i >= 0; i--) {
+        var c = L[i];
+        if (c.gen !== null && c.gen !== E._sceneGen && !stacked(c.gen)) L.splice(i, 1);
+    }
+}
 
 var _sticks = [], _buttons = [];
 var _ring = { fill: false, screen: true };
@@ -25,7 +47,7 @@ var _knob = { screen: true, smooth: true };
 var _lbl = { align: 'center', valign: 'middle', screen: true, color: 0, px: 12 };
 
 E.pad = {
-    version: '1.0.0',
+    version: '1.1.0',
 
     // stick analogico. o = {zone {x,y,w,h} (onde o dedo PRESSIONA para
     // pegar o stick; default metade esquerda), r (raio em px, default
@@ -47,6 +69,7 @@ E.pad = {
             dead: o.dead === undefined ? 0.15 : o.dead,
             dirs: o.dirs || 4,
             visible: o.visible !== false,
+            gen: genOf(o),
             _home: { x: o.x || 0, y: o.y || 0 }
         };
         if (!s.zone) s.zone = { x: 0, y: Math.round(E.H * 0.4), w: Math.round(E.W / 2), h: E.H - Math.round(E.H * 0.4) };
@@ -56,10 +79,13 @@ E.pad = {
     },
 
     // botao circular {x, y, r, label, color} ou retangular {x, y, w, h}:
-    // b.down (segurando), b.pressed (desceu neste quadro), b.released
+    // b.down (segurando), b.pressed (desceu neste quadro), b.released,
+    // b.heldMs (ms segurando — tiro carregado), b.tap (soltou em < 250 ms)
     button: function (o) {
         var b = { x: o.x, y: o.y, r: o.r, w: o.w, h: o.h, label: o.label || '',
                   color: o.color, down: false, pressed: false, released: false,
+                  heldMs: 0, tap: false, _t0: 0,
+                  gen: genOf(o),
                   visible: o.visible !== false };
         _buttons.push(b);
         return b;
@@ -76,17 +102,27 @@ E.pad = {
         return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
     },
 
-    _tick: function () {
+    _tick: function (dt, now) {
         var i = E.input;
+        purge(_sticks);
+        purge(_buttons);
+        // o toque que desce num botao e do botao (nao arma o stick embaixo)
+        var onBtn = false;
+        if (i.justDown) {
+            for (var q = 0; q < _buttons.length; q++) {
+                if (live(_buttons[q]) && E.pad._in(_buttons[q], i.x, i.y)) { onBtn = true; break; }
+            }
+        }
         for (var k = 0; k < _sticks.length; k++) {
             var s = _sticks[k], z = s.zone;
             s.tap = false;
+            if (!live(s)) { s.active = false; s.x = s.y = s.mag = 0; s.dir = null; continue; }
             var inZone = i.x >= z.x && i.x <= z.x + z.w && i.y >= z.y && i.y <= z.y + z.h;
-            if (i.justDown && inZone) {
+            if (i.justDown && inZone && !onBtn) {
                 s.active = true;
                 if (s.float) { s.cx = i.x; s.cy = i.y; }
             }
-            if (i.tap && i.tap.x >= z.x && i.tap.x <= z.x + z.w &&
+            if (i.tap && !onBtn && i.tap.x >= z.x && i.tap.x <= z.x + z.w &&
                 i.tap.y >= z.y && i.tap.y <= z.y + z.h) s.tap = true;
             if (!i.down) {
                 s.active = false;
@@ -107,11 +143,15 @@ E.pad = {
                 s.x = 0; s.y = 0; s.mag = 0; s.dir = null;
             }
         }
+        var t = now === undefined ? 0 : now;
         for (var b = 0; b < _buttons.length; b++) {
             var bt = _buttons[b];
-            var on = i.down && E.pad._in(bt, i.x, i.y);
+            var on = live(bt) && i.down && E.pad._in(bt, i.x, i.y);
             bt.pressed = on && !bt.down;
             bt.released = !on && bt.down;
+            bt.tap = bt.released && t - bt._t0 < 250;
+            if (bt.pressed) bt._t0 = t;
+            bt.heldMs = on ? t - bt._t0 : 0;
             bt.down = on;
         }
     },
@@ -134,14 +174,14 @@ E.pad = {
         var dim = T.stroke === undefined ? 0x3186 : T.stroke;
         for (var k = 0; k < _sticks.length; k++) {
             var s = _sticks[k];
-            if (!s.visible) continue;
+            if (!s.visible || !live(s)) continue;
             E.gfx.circle(s.cx, s.cy, s.r, s.active ? ac : dim, _ring);
             E.gfx.circle(s.cx + s.x * s.r * 0.7, s.cy + s.y * s.r * 0.7,
                          Math.round(s.r * 0.38), s.active ? ac : dim, _knob);
         }
         for (var b = 0; b < _buttons.length; b++) {
             var bt = _buttons[b];
-            if (!bt.visible) continue;
+            if (!bt.visible || !live(bt)) continue;
             var c = bt.color === undefined ? ac : bt.color;
             if (bt.r !== undefined) {
                 if (bt.down) E.gfx.circle(bt.x, bt.y, bt.r, c, _knob);
@@ -159,7 +199,10 @@ E.pad = {
     }
 };
 
-E._modTicks.push(function () { E.pad._tick(); });
+// always: o pad e input — roda com E.paused (o core passa dt 0)
+var _pt = function (dt, now) { E.pad._tick(dt, now); };
+_pt.always = true;
+E._modTicks.push(_pt);
 E._mods.push('pad');
 
 module.exports = E;

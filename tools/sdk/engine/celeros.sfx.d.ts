@@ -21,6 +21,8 @@ declare namespace SFX {
     function junta(...partes: (string | number[] | Mel | { pausa?: number })[]): Mel;
     /** Notas base*2^(s/12) em fila (null = pausa). */
     function arpejo(base: number, semis: (number | null)[], ms?: number): Mel;
+    /** k-esima pegada do combo sobe k semitons (ate teto, default 12). */
+    function combo(mel: string | Mel | number[], k: number, teto?: number): Mel | null;
     /** Toca pelo E.audio: opts {duck ms (abafa a trilha), oitava, velocidade, varia (semitons)}. */
     function via(audio: { sfx(what: any): void; duck?(ms: number): boolean } | null,
                  nome: string, opts?: { duck?: number; oitava?: number; velocidade?: number;

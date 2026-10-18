@@ -16,6 +16,13 @@
 // 30x30 sem teto pode comer o quadro inteiro; estourou = null (tente de
 // novo no proximo quadro ou caia num passo guloso). Zero recursao; o heap
 // binario e as tabelas sao arrays planos reaproveitados entre chamadas.
+//
+// 1.1.0: alvo BLOQUEADO (sem near) gastava o orcamento inteiro varrendo o
+// mapa a cada quadro ate desistir — sai na hora com null; smooth cortava
+// quina de parede (o Bresenham passa entre duas paredes em diagonal) e o
+// inimigo atravessava o canto — agora usa a linha de visao estrita. Novos:
+// E.path.flow (mapa de distancias com custo: N inimigos, 1 busca) e o
+// seguidor com {loop} / {pingpong} (patrulha).
 
 var E = require('celeros.game');
 
@@ -61,7 +68,7 @@ var DX8 = [1, -1, 0, 0, 1, 1, -1, -1], DY8 = [0, 0, 1, -1, 1, -1, 1, -1];
 var SQ2 = Math.SQRT2;
 
 E.path = {
-    version: '1.0.0',
+    version: '1.1.0',
     // nos expandidos na ultima busca (diagnostico/orcamento)
     expanded: 0,
 
@@ -76,6 +83,8 @@ E.path = {
         if (c1 < 0 || r1 < 0 || c1 >= cols || r1 >= rows) return null;
         var start = r0 * cols + c0, goal = r1 * cols + c1;
         if (start === goal) return [{ c: c0, r: r0 }];
+        // alvo dentro da parede: sem near nao ha o que buscar
+        if (!opts.near && !(cost(c1, r1) >= 0)) { E.path.expanded = 0; return null; }
         _stamp++;
         if (_stamp > 1e9) {             // selo deu a volta: zera as tabelas
             _stamp = 1;
@@ -138,8 +147,9 @@ E.path = {
     },
 
     // linha de visao entre celulas (Bresenham): true se nenhuma celula no
-    // meio for bloqueada por blocked(c, r)
-    los: function (c0, r0, c1, r1, blocked) {
+    // meio for bloqueada por blocked(c, r). strict: passo diagonal exige os
+    // dois lados livres (o corpo nao espreme entre duas quinas)
+    los: function (c0, r0, c1, r1, blocked, strict) {
         var dx = Math.abs(c1 - c0), dy = -Math.abs(r1 - r0);
         var sx = c0 < c1 ? 1 : -1, sy = r0 < r1 ? 1 : -1;
         var err = dx + dy, c = c0, r = r0;
@@ -147,8 +157,10 @@ E.path = {
             if ((c !== c0 || r !== r0) && (c !== c1 || r !== r1) && blocked(c, r)) return false;
             if (c === c1 && r === r1) return true;
             var e2 = 2 * err;
-            if (e2 >= dy) { err += dy; c += sx; }
-            if (e2 <= dx) { err += dx; r += sy; }
+            var mx = e2 >= dy, my = e2 <= dx;
+            if (strict && mx && my && (blocked(c + sx, r) || blocked(c, r + sy))) return false;
+            if (mx) { err += dy; c += sx; }
+            if (my) { err += dx; r += sy; }
         }
         return true;
     },
@@ -159,13 +171,80 @@ E.path = {
         if (!path || path.length < 3) return path;
         var out = [path[0]], a = 0;
         for (var i = 2; i < path.length; i++) {
-            if (!E.path.los(path[a].c, path[a].r, path[i].c, path[i].r, blocked)) {
+            if (!E.path.los(path[a].c, path[a].r, path[i].c, path[i].r, blocked, true)) {
                 out.push(path[i - 1]);
                 a = i - 1;
             }
         }
         out.push(path[path.length - 1]);
         return out;
+    },
+
+    // mapa de distancias ate o alvo (Dijkstra com o MESMO cost do find):
+    // uma busca serve a horda inteira — cada inimigo pergunta next(c, r).
+    // Devolve {dist(c, r) (-1 inalcancavel), next(c, r) -> {c, r} | null}.
+    // Recalcule quando o alvo troca de celula, nao por quadro
+    flow: function (cols, rows, c1, r1, cost, opts) {
+        opts = opts || {};
+        var diag = !!opts.diag, n = cols * rows, i;
+        var dist = [];
+        for (i = 0; i < n; i++) dist.push(-1);
+        var dxs = diag ? DX8 : DX4, dys = diag ? DY8 : DY4, nd = dxs.length;
+        if (c1 < 0 || r1 < 0 || c1 >= cols || r1 >= rows) {
+            return { dist: function () { return -1; }, next: function () { return null; } };
+        }
+        _heap.length = 0;
+        _hf.length = 0;
+        var g0 = r1 * cols + c1;
+        dist[g0] = 0;
+        heapPush(g0, 0);
+        while (_heap.length) {
+            var f = _hf[0], k = heapPop();
+            if (f > dist[k]) continue;          // entrada velha do heap
+            var cc = k % cols, cr = (k - cc) / cols;
+            // custo de ENTRAR em k vindo do vizinho = cost(k): a celula do
+            // alvo e a origem; anda-se "ao contrario" pagando o destino
+            var wk = cost(cc, cr);
+            if (!(wk >= 0)) wk = 1;
+            for (var d = 0; d < nd; d++) {
+                var nc = cc + dxs[d], nr = cr + dys[d];
+                if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+                if (!(cost(nc, nr) >= 0)) continue;
+                var w = wk;
+                if (d >= 4) {
+                    if (!(cost(nc, cr) >= 0) || !(cost(cc, nr) >= 0)) continue;
+                    w *= SQ2;
+                }
+                var nk = nr * cols + nc, nv = dist[k] + w;
+                if (dist[nk] >= 0 && nv >= dist[nk]) continue;
+                dist[nk] = nv;
+                heapPush(nk, nv);
+            }
+        }
+        var out = { c: 0, r: 0 };
+        function at(c, r) {
+            if (c < 0 || r < 0 || c >= cols || r >= rows) return -1;
+            return dist[r * cols + c];
+        }
+        return {
+            dist: at,
+            // vizinho com a menor distancia (objeto reaproveitado)
+            next: function (c, r) {
+                var d0 = at(c, r);
+                if (d0 <= 0) return null;
+                var best = -1, bc = 0, br = 0;
+                for (var q = 0; q < nd; q++) {
+                    var xc = c + dxs[q], xr = r + dys[q];
+                    var dv = at(xc, xr);
+                    if (dv < 0 || dv >= d0) continue;
+                    if (q >= 4 && (at(xc, r) < 0 || at(c, xr) < 0)) continue;
+                    if (best < 0 || dv < best) { best = dv; bc = xc; br = xr; }
+                }
+                if (best < 0) return null;
+                out.c = bc; out.r = br;
+                return out;
+            }
+        };
     },
 
     // adaptador do modulo tilemap: {cols, rows, cost, blocked} a partir do
@@ -186,20 +265,26 @@ E.path = {
 
     // seguidor: anda obj ({x, y} em PIXELS) pelos pontos do caminho a speed
     // px/s. cell (px por celula) e ox/oy convertem celula -> centro em px.
-    // f.update(dt) devolve true ao chegar no fim; f.done, f.i (ponto alvo)
+    // f.update(dt) devolve true ao chegar no fim; f.done, f.i (ponto alvo).
+    // Patrulha: {loop: true} volta ao 1o ponto; {pingpong: true} vai e volta
+    // (nunca termina — f.laps conta as voltas)
     follower: function (obj, path, speed, o) {
         o = o || {};
         var cell = o.cell || 16, ox = o.ox || 0, oy = o.oy || 0;
-        var f = { obj: obj, path: path || [], i: 0, speed: speed || 60, done: false };
-        f.set = function (p) { f.path = p || []; f.i = 0; f.done = !f.path.length; };
+        var f = { obj: obj, path: path || [], i: 0, speed: speed || 60, done: false,
+                  laps: 0, dir: 1 };
+        f.set = function (p) {
+            f.path = p || []; f.i = 0; f.dir = 1; f.laps = 0;
+            f.done = !f.path.length;
+        };
         f.target = function () {
             var p = f.path[f.i];
             return p ? { x: ox + p.c * cell + cell / 2, y: oy + p.r * cell + cell / 2 } : null;
         };
         f.update = function (dt) {
             if (f.done) return true;
-            var step = f.speed * dt;
-            while (step > 0 && f.i < f.path.length) {
+            var step = f.speed * dt, L = f.path.length, spins = 0;
+            while (step > 0 && f.i >= 0 && f.i < L) {
                 var p = f.path[f.i];
                 var tx = ox + p.c * cell + cell / 2, ty = oy + p.r * cell + cell / 2;
                 var dx = tx - obj.x, dy = ty - obj.y;
@@ -207,14 +292,24 @@ E.path = {
                 if (d <= step) {
                     obj.x = tx; obj.y = ty;
                     step -= d;
-                    f.i++;
+                    f.i += f.dir;
+                    if (o.pingpong && L > 1 && (f.i >= L || f.i < 0)) {
+                        f.dir = -f.dir;
+                        f.i += 2 * f.dir;
+                        f.laps++;
+                    } else if (o.loop && f.i >= L) {
+                        f.i = 0;
+                        f.laps++;
+                    }
+                    // caminho de 1 ponto em loop: nao gira em falso no quadro
+                    if (++spins > L * 2 + 2) break;
                 } else {
                     obj.x += dx / d * step;
                     obj.y += dy / d * step;
                     step = 0;
                 }
             }
-            if (f.i >= f.path.length) f.done = true;
+            if (f.i >= f.path.length || f.i < 0) f.done = true;
             return f.done;
         };
         f.set(f.path);

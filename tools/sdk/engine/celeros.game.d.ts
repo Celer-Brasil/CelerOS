@@ -72,6 +72,8 @@ declare namespace E {
     let fpsTarget: number;
     const data: Record<string, any>;
     let sceneName: string;
+    /** nome da cena anterior ('' na primeira) */
+    let prevScene: string;
     /** true enquanto um veu de E.goto esta ativo (cena static nao repinta a toa). */
     let transitioning: boolean;
 
@@ -116,16 +118,17 @@ declare namespace E {
         static?: boolean;
         /** ao sair (goto/pop) mata os timers e tweens criados durante a cena */
         cleanup?: boolean;
-        enter?: () => void;
+        /** arg = goto/push(nome, {arg}) */
+        enter?: (arg?: any) => void;
         update?: (dt: number) => void;
         draw?: () => void;
         exit?: () => void;
         /** coberta por um E.push */
         pause?: () => void;
         /** descoberta pelo E.pop */
-        resume?: () => void;
+        resume?: (arg?: any) => void;
     }
-    function run(scenes: Record<string, Scene>, first: string): void;
+    function run(scenes: Record<string, Scene>, first: string, firstArg?: any): void;
     /** Troca de cena (cena inexistente lanca NA HORA, com a lista); opts = {transition: 'fade'|'iris'|'wipe'|'bands', ms, color, dir} desenha um veu.
      *  Sem opts no meio de um fade: a troca e seca e o veu que fechava e descartado (nunca fica pendurado). */
     function goto(name: string, opts?: {
@@ -134,6 +137,8 @@ declare namespace E {
         color?: number;
         /** direcao do wipe (default 'left') */
         dir?: 'left' | 'right' | 'up' | 'down';
+        /** chega no enter(arg) da cena (no resume(arg) com pop); so {arg} nao abre veu */
+        arg?: any;
     }): void;
     function quit(): void;
     /** Abre a cena POR CIMA da atual (que recebe pause() e fica parada); pop() volta (resume()). */
@@ -180,10 +185,12 @@ declare namespace E {
     function cancel(t: Timer | Tween): void;
     function clearTimers(): void;
     function clearTweens(): void;
-    /** Tween de props numericas. Dois tweens na MESMA prop: o mais antigo
-     *  vence (escreve por cima a cada quadro — o tick percorre a lista de
-     *  tras pra frente); cancele o antigo antes de retweenar. */
-    function tween(obj: any, to: Record<string, number>, ms: number,
+    /** ms que faltam para o timer disparar (0 morto/vencido) */
+    function timeLeft(t: Timer): number;
+    /** Tween de props numericas ("+=20"/"-=20" = relativo ao valor no inicio).
+     *  Timers e tweens do mesmo quadro rodam na ordem de criacao: dois tweens
+     *  na MESMA prop, o mais novo vence — use killTweensOf antes de retweenar. */
+    function tween(obj: any, to: Record<string, number | string>, ms: number,
                    opts?: { ease?: (t: number) => number; delay?: number;
                             onDone?: () => void;
                             /** por quadro, com o progresso 0..1 */
@@ -199,6 +206,10 @@ declare namespace E {
         delay?: number;
         /** passos que rodam JUNTOS (o seq espera o mais longo) */
         par?: SeqStep[];
+        /** so espera ms */
+        wait?: number;
+        /** chama e segue no mesmo quadro */
+        call?: (obj: any) => void;
     }
     interface Seq {
         dead: boolean;
@@ -228,13 +239,15 @@ declare namespace E {
         find(fn: (o: Entity) => boolean): Entity | null;
         /** quantos vivos passam em fn (sem fn = todos os vivos) */
         countIf(fn?: (o: Entity) => boolean): number;
+        /** vivo mais perto de (x, y) que passa em fn, dentro de maxD px */
+        closest(x: number, y: number, fn?: ((o: Entity) => boolean) | null, maxD?: number): Entity | null;
         /** tira ja (fora do update); false se nao estava */
         remove(o: Entity): boolean;
         /** ordem de desenho estavel: nome de prop ('y') ou comparador */
         sort(key: string | ((a: Entity, b: Entity) => number)): void;
     }
     function group(): Group;
-    interface Pool extends Omit<Group, 'add' | 'remove' | 'sort' | 'find' | 'countIf'> {
+    interface Pool extends Omit<Group, 'add' | 'remove' | 'sort' | 'countIf' | 'closest'> {
         /** init(o) prepara o reciclado */
         spawn(init?: (o: Entity) => void): Entity | null;
         alive: number;
@@ -269,6 +282,16 @@ declare namespace E {
         chance(p: number, rnd?: () => number): boolean;
         /** Fisher-Yates NO LUGAR; devolve o mesmo array */
         shuffle<T>(arr: T[], rnd?: () => number): T[];
+        /** sorteio com peso: [[item, peso], ...] ou {item: peso} */
+        weighted<T = any>(table: [T, number][] | Record<string, number>, rnd?: () => number): T;
+        /** mistura RGB565 por canal (t 0..1) */
+        lerpColor(c1: number, c2: number, t: number): number;
+        /** 12345 -> "12.345" */
+        fmt(n: number, sep?: string): string;
+        /** ms -> "m:ss" (ou "h:mm:ss") */
+        clock(ms: number): string;
+        /** anda obj ate (x, y) no maximo step px; true ao chegar */
+        moveToward(obj: { x: number; y: number }, x: number, y: number, step: number): boolean;
         sign(v: number): number;
         linear(t: number): number;
         inQuad(t: number): number;
@@ -308,6 +331,9 @@ declare namespace E {
         /** a caixa de mundo aparece na tela (pad = folga)? */
         inView(x: number, y: number, w?: number, h?: number, pad?: number): boolean;
         shake(pow: number, dur: number): void;
+        /** passeio ate centrar (x, y) em ms (larga o follow); devolve o tween */
+        panTo(x: number, y: number, ms: number,
+              opts?: { ease?: (t: number) => number; onDone?: () => void }): Tween;
         center(x: number, y: number): void;
         reset(): void;
         wx(x: number): number;
@@ -365,6 +391,10 @@ declare namespace E {
         panel(x: number, y: number, w: number, h: number, o?: {
             bg?: number; stroke?: number; r?: number; screen?: boolean;
         }): void;
+        /** vida em coracoes (hp .5 = meio); devolve a largura */
+        hearts(hp: number, max: number, x: number, y: number, o?: {
+            size?: number; gap?: number; color?: number; empty?: number; screen?: boolean;
+        }): number;
     };
 
     // ----------------------------------------------------------- audio --
@@ -403,5 +433,9 @@ declare namespace E {
         del(key: string): void;
         /** contador persistente; devolve o novo valor */
         inc(key: string, n?: number): number;
+        /** liga/desliga persistente */
+        bool(key: string, def?: boolean): boolean;
+        /** inverte o bool e devolve o novo */
+        toggle(key: string, def?: boolean): boolean;
     };
 }

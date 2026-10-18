@@ -1068,7 +1068,7 @@ function depsSize(nomes) {
         E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
         check('familia enxuta (jsstrip) preserva as linhas e roda o loop',
               linhasIguais && marks.length === 3 &&
-              E2.version === '1.4.0' && E2._mods.length === 3,
+              E2.version === '1.5.0' && E2._mods.length === 3,
               'linhas=' + linhasIguais);
     })();
 
@@ -1113,13 +1113,13 @@ function depsSize(nomes) {
         r = runEngine(
             'var E = require("celeros.engine"); E.init({});' +
             'var rodou = 0; var t0 = System.millis();' +
-            'E.after(100, function () { rodou++; });' +          // indice 0: vence o clear
-            'E.after(100, function () { E.clearTimers(); });' +  // indice 1: roda PRIMEIRO (reverse)
+            'E.after(100, function () { rodou++; });' +          // indice 0: roda PRIMEIRO (ordem de criacao, core 1.3)
+            'E.after(100, function () { E.clearTimers(); });' +  // indice 1: limpa a lista depois
             'E.run({ s: { update: function () { if (System.millis() > t0 + 250) E.quit(); } } }, "s");' +
             '__harness.grab("rodou", rodou);');
     } catch (e) { erroTimer = String(e); }
     check('timer cujo callback limpa a lista no meio do tick nao derruba o run',
-          erroTimer === null && r.grabbed.rodou === 0,
+          erroTimer === null && r.grabbed.rodou === 1,
           erroTimer || ('rodou=' + r.grabbed.rodou));
 
     var erroTween = null;
@@ -1505,7 +1505,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.2.0' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.3.0' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1529,7 +1529,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.2.0',
+          out.fx[2] === '1.3.0',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro
@@ -1558,7 +1558,7 @@ function depsSize(nomes) {
         fn4(env.System, env.Storage, env.__harness, req);
     } catch (e) { out.shim = 'erro: ' + e; }
     check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.4.0',
-          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.4.0' &&
+          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.5.0' &&
           out.shim[2] === 'fx,spr,tilemap' && out.shim[3] === 'function' &&
           out.shim[4] === 'function' && out.shim[5] === 'function',
           JSON.stringify(out.shim));
@@ -1778,8 +1778,9 @@ function depsSize(nomes) {
           r.par[3] === true && r.par[4] === 0,
           JSON.stringify(r.par));
 
-    // 5) dois tweens na MESMA propriedade: o criado primeiro vence (o tick
-    // percorre a lista de tras pra frente — o valor final e o do antigo)
+    // 5) dois tweens na MESMA propriedade: o criado POR ULTIMO vence (core
+    // 1.3: o tick anda na ordem de criacao — o mais novo escreve depois;
+    // antes, de tras pra frente, o antigo vencia)
     r = runSnippet(
         'var E = require("celeros.game"); E.init({});' +
         'var obj = { x: 0 };' +
@@ -1787,8 +1788,8 @@ function depsSize(nomes) {
         'E.tween(obj, { x: 50 }, 100, { ease: E.m.linear });' +
         'var t0 = System.millis();' +
         'E.run({ s: { update: function () { if (System.millis() > t0 + 300) { __harness.grab("tw", obj.x); E.quit(); } } } }, "s");');
-    check('dois tweens na mesma prop: o primeiro criado vence (documentado)',
-          r.tw === 10, 'x=' + r.tw);
+    check('dois tweens na mesma prop: o criado por ultimo vence',
+          r.tw === 50, 'x=' + r.tw);
 
     // 6) trail cujo alvo morreu (getXY devolve null): nao explode (antes
     // TypeError no p.x) e o rastro PARA de semear
@@ -2404,7 +2405,7 @@ function depsSize(nomes) {
                      JSON.stringify({ deps: { 'celeros.physics': '^2.0.0' } }));
     var env = harness.makeEnv();
     var P = harness.makeRequire(tmp, env)('celeros.physics');
-    check('physics 2.1.0 exporta rigid', typeof P.rigid === 'function' && P.version === '2.1.0');
+    check('physics 2.1.1 exporta rigid', typeof P.rigid === 'function' && P.version === '2.1.1');
     var w = P.rigid({ iterations: 10 });
     check('rigid usa o binding (stub do harness = espelho do Rigid2D.h)', w !== null && w.id > 0);
     var chao = w.box(160, 270, 400, 20, { static: true });
@@ -2853,6 +2854,7 @@ function depsSize(nomes) {
 require('./celergame_next.js')(check);
 // modulos p/ jogos complexos (fsm/events/path/collide/pad/level) + core 1.2
 require('./celergame_mods.js')(check);
+require('./celergame_r3.js')(check);
 
 // resumo
 console.log('');

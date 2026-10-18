@@ -13,6 +13,12 @@
 // cena troca — o menu nao continua ouvindo o "morreu" do jogo.
 // E.emitLater(nome, arg) entrega no PROXIMO quadro (evento disparado no
 // meio de um laco de colisao nao reentra no laco).
+//
+// 1.1.0: emit REENTRANTE (ouvinte que emite o mesmo evento) varria os
+// mortos da lista no emit de dentro e o de fora pulava ouvintes (indice
+// deslocado pelo splice) — a varredura agora espera o emit mais externo.
+// Ouvinte coringa "*" recebe (nome, a1, a2) de todo evento (log, replay,
+// conquistas que contam tudo).
 
 var E = require('celeros.game');
 
@@ -25,6 +31,7 @@ function stacked(g) {
 
 E.bus = function () {
     var subs = {};          // nome -> [sub]
+    var depth = 0;          // emits em voo (a varredura espera o de fora)
     var b = {};
     function list(name) { return subs[name] || (subs[name] = []); }
     b.on = function (name, fn, o) {
@@ -57,9 +64,7 @@ E.bus = function () {
     };
     // entrega sincrona; um ouvinte que devolve false PARA a propagacao
     // (o escudo come o "dano" antes do HUD). Devolve quantos ouviram
-    b.emit = function (name, a1, a2, a3) {
-        var L = subs[name];
-        if (!L) return 0;
+    function deliver(L, coringa, name, a1, a2, a3) {
         var n = 0;
         // so os inscritos ATE agora (ouvinte que inscreve outro nao o chama)
         for (var i = 0, n0 = L.length; i < n0 && i < L.length; i++) {
@@ -72,11 +77,33 @@ E.bus = function () {
             }
             if (s.once) s.dead = true;
             n++;
-            if (s.fn(a1, a2, a3) === false) break;
+            var r = coringa ? s.fn(name, a1, a2) : s.fn(a1, a2, a3);
+            if (r === false && !coringa) return -n;   // parou a propagacao
         }
-        // varre os mortos fora do laco (ouvinte que se desliga no meio)
+        return n;
+    }
+    function sweep(name) {
+        var L = subs[name];
+        if (!L) return;
         for (var k = L.length - 1; k >= 0; k--) if (L[k].dead) L.splice(k, 1);
         if (!L.length) delete subs[name];
+    }
+    b.emit = function (name, a1, a2, a3) {
+        var L = subs[name], W = name !== '*' ? subs['*'] : null;
+        if (!L && !W) return 0;
+        var n = 0;
+        depth++;
+        if (L) {
+            n = deliver(L, false, name, a1, a2, a3);
+            if (n < 0) n = -n;
+        }
+        // o coringa ouve depois dos ouvintes do nome (e ouve mesmo quando
+        // um deles parou a propagacao: e observador, nao participante)
+        if (W) deliver(W, true, name, a1, a2, a3);
+        depth--;
+        // varre os mortos so no emit mais externo: um emit de dentro que
+        // fizesse splice deslocava o indice do laco de fora
+        if (!depth) { sweep(name); if (W) sweep('*'); }
         return n;
     };
     b.count = function (name) {
@@ -105,7 +132,7 @@ E._modTicks.push(function () {
     for (var i = 0; i < q.length; i++) G.emit(q[i][0], q[i][1], q[i][2], q[i][3]);
 });
 
-E.events.version = '1.0.0';
+E.events.version = '1.1.0';
 E._mods.push('events');
 
 module.exports = E;

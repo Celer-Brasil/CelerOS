@@ -13,8 +13,14 @@
 // 1.1.0: SFX.varia (afinacao sorteada por toque — o mesmo "hit" 20x
 // seguidas nao cansa) e SFX.junta (concatena melodias com pausa).
 // 1.2.0: SFX.arpejo(base, semitons, ms) — fanfarra/acorde sem tabela.
+// 1.3.0: transpor/tempo/varia com nota UNICA [f, ms] (a forma curta que a
+// tabela e o playTone aceitam) davam [[NaN...]] — normalizam antes.
+// SFX.combo(mel, k, teto): sobe k semitons (moeda 1, 2, 3 do combo).
 
-var SFX = { version: '1.2.0' };
+var SFX = { version: '1.3.0' };
+
+// [f, ms] -> [[f, ms]] (melodia sempre lista de notas)
+function notas(mel) { return typeof mel[0] === 'number' ? [mel] : mel; }
 
 // Tabela por intencao. "p" = pausa curta de articulacao.
 var T = {
@@ -66,12 +72,12 @@ SFX.mel = function (nome) {
 // de chamada sem duplicar entrada na tabela
 SFX.transpor = function (mel, semi) {
     var r = Math.pow(2, semi / 12);
-    return mel.map(function (n) { return n[0] > 0 ? [Math.round(n[0] * r), n[1]] : [n[0], n[1]]; });
+    return notas(mel).map(function (n) { return n[0] > 0 ? [Math.round(n[0] * r), n[1]] : [n[0], n[1]]; });
 };
 
 // tempo(mel, fator) — estica (fator > 1) ou encurta as duracoes
 SFX.tempo = function (mel, fator) {
-    return mel.map(function (n) {
+    return notas(mel).map(function (n) {
         return [n[0], Math.max(15, Math.round(n[1] * fator))];
     });
 };
@@ -81,7 +87,16 @@ SFX.tempo = function (mel, fator) {
 SFX.varia = function (mel, semi, rnd) {
     var s = semi === undefined ? 2 : semi;
     var k = Math.round(((rnd ? rnd() : Math.random()) * 2 - 1) * s);
-    return k ? SFX.transpor(mel, k) : mel.map(function (n) { return n.slice(0); });
+    return k ? SFX.transpor(mel, k) : notas(mel).map(function (n) { return n.slice(0); });
+};
+
+// combo(mel|nome, k, teto) — a k-esima pegada seguida sobe k semitons (ate
+// teto, default 12): a 5a moeda do combo soa mais alta que a 1a
+SFX.combo = function (mel, k, teto) {
+    var m = typeof mel === 'string' ? SFX.mel(mel) : mel;
+    if (!m) return null;
+    var t = teto === undefined ? 12 : teto;
+    return SFX.transpor(m, Math.max(0, Math.min(k || 0, t)));
 };
 
 // junta(a, b, ..., {pausa: ms}) — melodias (ou nomes da tabela) em fila;

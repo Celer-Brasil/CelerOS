@@ -8,7 +8,10 @@
 //   var arena = GRID.classica(15, 13, GRID.rng(101), { dens: 0.55 });
 //   // arena.grid + arena.macios[{c,r}]
 
-var GRID = { version: '1.1.0' };
+// 1.1.1: flood com a origem fora da grade derrubava o app (ok[sr][sc] de
+// linha inexistente) — devolve conjunto vazio.
+
+var GRID = { version: '1.1.1' };
 
 // xorshift32 — mesmo esquema do E.rng/celeros.physics; modulo independente
 GRID.rng = function (seed) {
@@ -80,6 +83,7 @@ GRID.flood = function (grid, sc, sr, passavel) {
         return passavel(grid[r][c]);
     };
     var ok = GRID.nova(cols, rows, 0);
+    if (sr < 0 || sr >= rows || sc < 0 || sc >= cols) return { ok: ok, quantos: 0 };
     var fila = [sr * cols + sc];
     ok[sr][sc] = 1;
     var quantos = 1;

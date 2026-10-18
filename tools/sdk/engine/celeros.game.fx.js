@@ -15,6 +15,8 @@
 // vy (subida em px/s) e grow (escala no fim da vida).
 // 1.2.0: E.fx.presets + E.fx.play(nome, x, y, opts) — explosao, faisca,
 // fumaca, confete, poeira, sangue/gosma e cura prontos (o app so ajusta).
+// 1.3.0: E.fx.beam (laser/raio que some: linha grossa com nucleo claro) e
+// E.fx.count() (particulas vivas + textos — orcamento por quadro).
 
 var E = require('celeros.game');
 var S = System;
@@ -24,14 +26,16 @@ var EMPTY = {};
 
 // scratch do popText no draw: floater por quadro nao aloca opts
 var _flo = { color: 0, align: 'center', font: null, px: 0, screen: false };
+var _bmO = { w: 1 };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.2.0',
+    version: '1.3.0',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
     _floaters: [],
+    _beams: [],         // raios (beam)
     _emitters: [],      // emissores continuos (emitter/trail)
     _flashColor: 0,
     _flashT: 0,
@@ -48,6 +52,7 @@ E.fx = {
         this._live = 0;
         this._floaters = [];
         this._emitters = [];
+        this._beams = [];
         this._flashT = 0;
     },
 
@@ -313,6 +318,21 @@ E.fx = {
         return true;
     },
 
+    // raio/laser de (x0,y0) a (x1,y1) em coords de mundo que afina e some:
+    // {color, core (cor do nucleo, default branco), w (px, default 4*U),
+    // life (s, default 0.18)}. Ate 8 vivos (o mais velho cede a vaga)
+    beam: function (x0, y0, x1, y1, o) {
+        o = o || EMPTY;
+        this._beams.push({ x0: x0, y0: y0, x1: x1, y1: y1, t: 0,
+                           life: o.life || 0.18,
+                           w: o.w || Math.max(2, Math.round(4 * E.U)),
+                           color: o.color === undefined ? 0x07FF : o.color,
+                           core: o.core === undefined ? 0xFFFF : o.core });
+        if (this._beams.length > 8) this._beams.shift();
+    },
+    // vivos agora: particulas + textos + raios
+    count: function () { return this._live + this._floaters.length + this._beams.length; },
+
     // zera TUDO (particulas, textos, emissores, flash) — exit de cena: o
     // fx e do E (singleton), e sem isto a explosao do jogo terminava em
     // cima do menu
@@ -321,6 +341,7 @@ E.fx = {
         for (var i = 0; i < ps.length; i++) ps[i].dead = true;
         this._live = 0;
         this._floaters.length = 0;
+        this._beams.length = 0;
         for (var e = 0; e < this._emitters.length; e++) this._emitters[e].dead = true;
         this._emitters.length = 0;
         this._flashT = 0;
@@ -395,6 +416,11 @@ E.fx = {
             fs[j].y -= fs[j].vy * dt;
             if (fs[j].t >= fs[j].life) fs.splice(j, 1);
         }
+        var bs = this._beams;
+        for (var bi = bs.length - 1; bi >= 0; bi--) {
+            bs[bi].t += dt;
+            if (bs[bi].t >= bs[bi].life) bs.splice(bi, 1);
+        }
         if (this._flashT > 0) this._flashT -= dt;
     },
 
@@ -422,6 +448,17 @@ E.fx = {
                 if (r <= 1) S.fillRect(x, y, 2, 2, col);
                 else S.fillCircle(x, y, r, col);
                 if (D.on) D.add(x - r, y - r, r * 2 + 1, r * 2 + 1);
+            }
+        }
+        var bs = this._beams;
+        for (var b = 0; b < bs.length; b++) {
+            var be = bs[b], kb = 1 - be.t / be.life;
+            var bw = Math.max(1, Math.round(be.w * kb));
+            _bmO.w = bw;
+            E.gfx.line(be.x0, be.y0, be.x1, be.y1, be.color, _bmO);
+            if (bw > 2) {
+                _bmO.w = Math.max(1, Math.round(bw / 3));
+                E.gfx.line(be.x0, be.y0, be.x1, be.y1, be.core, _bmO);
             }
         }
         var fs = this._floaters;

@@ -1555,6 +1555,21 @@ E.gfx = (function () {
     var _btnLo = { color: 0, align: 'center', valign: 'middle', screen: false,
                    fit: 0, font: undefined, px: 12 };
 
+    // 1o definido entre a cor pedida, a do tema e o default (0 vale)
+    function pick(a, b, c) { return a !== undefined && a !== null ? a : (b !== undefined && b !== null ? b : c); }
+    var _hO = { screen: false };
+    function heart(x, y, sz, r, c, scr) {
+        _hO.screen = scr;
+        g.circle(x + r, y + r, r, c, _hO);
+        g.circle(x + sz - r, y + r, r, c, _hO);
+        g.tri(x, y + r * 1.3, x + sz, y + r * 1.3, x + sz / 2, y + sz, c, _hO);
+    }
+    function halfHeart(x, y, sz, r, c, scr) {
+        _hO.screen = scr;
+        g.circle(x + r, y + r, r, c, _hO);
+        g.tri(x, y + r * 1.3, x + sz / 2, y + r * 1.3, x + sz / 2, y + sz, c, _hO);
+    }
+
     var g = {
         // rect(x,y,w,h,cor,{fill=true, r (cantos), screen})
         rect: function (x, y, w, h, color, o) {
@@ -1710,7 +1725,11 @@ E.gfx = (function () {
             var n = lines.length;
             if (o.max > 0 && n > o.max) {
                 n = o.max;
-                lines[n - 1] = lines[n - 1] + '...';
+                // o "..." cabe na largura: corta letras ate caber (antes
+                // estourava a caixa na ultima linha)
+                var last = lines[n - 1];
+                while (last.length && measure(last + '...', st) > w) last = last.slice(0, -1);
+                lines[n - 1] = last.replace(/\s+$/, '') + '...';
             }
             var ax = o.align === 'center' ? x + w / 2 : (o.align === 'right' ? x + w : x);
             for (var i = 0; i < n; i++) g.text(lines[i], ax, y + i * lh, o);
@@ -1743,25 +1762,26 @@ E.gfx = (function () {
             o = o || EMPTY;
             var T = E.theme || EMPTY;
             var r = { x: x, y: y, w: w, h: h };
-            var accent = o.color || T.accent || 0x07FF;
+            // cor 0x0000 (preto) e cor valida: `||` a trocava pelo tema
+            var accent = pick(o.color, T.accent, 0x07FF);
             var on = E.press(r);
             var primary = o.primary !== false;
             var fill = primary ?
                 (on ? accent : (E.caps.wide ? S.mixColor(accent, 0x0000, 25) : accent)) :
-                (on ? (E.caps.wide ? S.mixColor(o.bg !== undefined ? o.bg : (T.card || 0x1082), 0xFFFF, 18) : accent)
-                    : (o.bg !== undefined ? o.bg : (T.card || 0x1082)));
+                (on ? (E.caps.wide ? S.mixColor(pick(o.bg, T.card, 0x1082), 0xFFFF, 18) : accent)
+                    : pick(o.bg, T.card, 0x1082));
             var rad = o.r === undefined ? Math.round(Math.min(h * 0.28, 12 * E.U)) : o.r;
             _ro.r = rad; _ro.screen = o.screen;
             g.rect(x, y, w, h, fill, _ro);
             if (!primary && o.stroke !== false) {
                 _roS.r = rad; _roS.screen = o.screen;
-                g.rect(x, y, w, h, o.stroke || accent, _roS);
+                g.rect(x, y, w, h, pick(o.stroke, accent, accent), _roS);
             }
             // scratch dos labels (g.text so le): label de botao a cada quadro
             // nao aloca
             var lo = _btnLo;
             lo.color = o.textColor !== undefined ? o.textColor :
-                       (primary ? (T.onAccent || 0x0000) : (T.text || 0xFFFF));
+                       (primary ? pick(T.onAccent, 0x0000, 0) : pick(T.text, 0xFFFF, 0xFFFF));
             lo.align = 'center'; lo.valign = 'middle'; lo.screen = o.screen;
             lo.fit = w - Math.round(12 * E.U);
             if (o.font) { lo.font = o.font; lo.px = undefined; }
@@ -1776,10 +1796,10 @@ E.gfx = (function () {
             var T = E.theme || EMPTY;
             var f = E.m.clamp(frac, 0, 1);
             _ro.r = o.r; _ro.screen = o.screen;
-            g.rect(x, y, w, h, o.bg || (T.stroke || 0x3186), _ro);
+            g.rect(x, y, w, h, pick(o.bg, T.stroke, 0x3186), _ro);
             if (f > 0.01) {
                 g.rect(x + 1, y + 1, Math.max(1, (w - 2) * f), h - 2,
-                       o.fg || (T.accent || 0x07FF), _ro);
+                       pick(o.fg, T.accent, 0x07FF), _ro);
             }
         },
         // painel/card com borda
@@ -1788,9 +1808,28 @@ E.gfx = (function () {
             var T = E.theme || EMPTY;
             var rad = o.r === undefined ? Math.round(10 * E.U) : o.r;
             _ro.r = rad; _ro.screen = o.screen;
-            g.rect(x, y, w, h, o.bg || (T.card || 0x1082), _ro);
+            g.rect(x, y, w, h, pick(o.bg, T.card, 0x1082), _ro);
             _roS.r = rad; _roS.screen = o.screen;
-            g.rect(x, y, w, h, o.stroke || (T.stroke || 0x3186), _roS);
+            g.rect(x, y, w, h, pick(o.stroke, T.stroke, 0x3186), _roS);
+        },
+        // vida em coracoes: hp de max (meio coracao = hp fracionario .5),
+        // o {size (px, default 12*U), gap, color, empty, screen}. Desenho
+        // procedural (2 circulos + triangulo) — sem sprite. Devolve a largura
+        hearts: function (hp, max, x, y, o) {
+            o = o || EMPTY;
+            var sz = o.size || Math.round(12 * E.U);
+            var gap = o.gap === undefined ? Math.round(sz * 0.25) : o.gap;
+            var full = o.color === undefined ? 0xF800 : o.color;
+            var vazio = o.empty === undefined ? 0x4208 : o.empty;
+            var r = sz / 4;
+            for (var i = 0; i < max; i++) {
+                var hx = x + i * (sz + gap);
+                var v = hp - i;   // >= 1 cheio, 0.5 metade, <= 0 vazio
+                heart(hx, y, sz, r, vazio, o.screen);
+                if (v >= 1) heart(hx, y, sz, r, full, o.screen);
+                else if (v >= 0.5) halfHeart(hx, y, sz, r, full, o.screen);
+            }
+            return max > 0 ? max * sz + (max - 1) * gap : 0;
         }
     };
     return g;
@@ -1973,6 +2012,17 @@ E.save = {
             if (typeof Storage.remove === 'function') Storage.remove(E.save.prefix + key);
             else Storage.set(E.save.prefix + key, '');
         } catch (e) {}
+    },
+    // liga/desliga persistente (som, vibracao, tutorial visto)
+    bool: function (key, def) {
+        var v = E.save.get(key, null);
+        if (v === null) return !!def;
+        return v === 'true' || v === '1';
+    },
+    toggle: function (key, def) {
+        var v = !E.save.bool(key, def);
+        E.save.set(key, v);
+        return v;
     },
     // true se virou novo recorde
     best: function (key, score) {

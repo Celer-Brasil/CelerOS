@@ -13,18 +13,28 @@ declare namespace E {
         tap: boolean;
         cx: number; cy: number; r: number;
         zone: Rect; float: boolean; dead: number; dirs: 4 | 8; visible: boolean;
+        /** geracao da cena dona (null = global) */
+        gen: number | null;
     }
     interface PadButton {
         x: number; y: number; r?: number; w?: number; h?: number;
         label: string; color?: number;
         down: boolean; pressed: boolean; released: boolean; visible: boolean;
+        /** ms segurando (0 solto) */
+        heldMs: number;
+        /** soltou em < 250 ms neste quadro */
+        tap: boolean;
+        /** geracao da cena dona (null = global) */
+        gen: number | null;
     }
     const pad: {
         version: string;
         stick(o?: { zone?: Rect; x?: number; y?: number; r?: number; float?: boolean;
-                    dead?: number; dirs?: 4 | 8; visible?: boolean }): PadStick;
+                    dead?: number; dirs?: 4 | 8; visible?: boolean;
+                    /** sobrevive a troca de cena (criado fora de cena ja e global) */
+                    global?: boolean }): PadStick;
         button(o: { x: number; y: number; r?: number; w?: number; h?: number;
-                    label?: string; color?: number; visible?: boolean }): PadButton;
+                    label?: string; color?: number; visible?: boolean; global?: boolean }): PadButton;
         /** remove sticks e botoes (troca de cena) */
         clear(): void;
         /** desenha tudo (screen) */

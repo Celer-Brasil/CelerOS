@@ -75,5 +75,10 @@ declare namespace E {
         play(name: string, x: number, y: number, opts?: Record<string, any>): boolean;
         /** Zera particulas, textos, emissores e flash (exit de cena). */
         clear(): void;
+        /** Raio/laser de mundo que afina e some (ate 8 vivos). */
+        beam(x0: number, y0: number, x1: number, y1: number,
+             o?: { color?: number; core?: number; w?: number; life?: number }): void;
+        /** particulas + textos + raios vivos */
+        count(): number;
     };
 }

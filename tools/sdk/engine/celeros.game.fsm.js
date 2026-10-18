@@ -17,6 +17,14 @@
 // bolsa do estado corrente (zerada a cada entrada), m.time os segundos no
 // estado. A troca pedida DENTRO de um callback vale no fim dele (nada de
 // enter de um estado rodando no meio do update de outro).
+//
+// 1.1.0: handler de send que chamava m.go("x") E devolvia "y" terminava
+// em "x" (o go direto aplicava "y" e o flush aplicava o "x" pendente por
+// cima) — a string devolvida agora vence. push/pop guardam a bolsa e o
+// tempo do estado de baixo: pop VOLTA a ele (hook resume(m, arg); sem
+// resume cai no enter como antes) em vez de recomecar do zero. Estado
+// coringa "*": on/update dele valem em TODO estado ("morreu" de qualquer
+// lugar, cronometro global) — o do estado corrente tem prioridade no on.
 
 var E = require('celeros.game');
 
@@ -31,7 +39,7 @@ E.fsm = function (owner, states, first, opts) {
         data: {},           // bolsa do estado (nova a cada entrada)
         history: [],        // ultimos nomes (opts.history, default 8)
         onChange: opts.onChange || null,   // (m, de, para)
-        _pend: null, _pendArg: undefined, _busy: false, _stack: []
+        _pend: null, _pendArg: undefined, _pendSaved: null, _busy: false, _stack: []
     };
     var histMax = opts.history === undefined ? 8 : opts.history;
 
@@ -44,21 +52,23 @@ E.fsm = function (owner, states, first, opts) {
         }
         return s;
     }
-    function apply(name, arg) {
+    var ANY = states['*'] || null;
+    function apply(name, arg, saved) {
         var to = st(name);
         var from = m.state ? states[m.state] : null;
         m._busy = true;
         if (from && from.exit) from.exit(m, name);
         m.prev = m.state;
         m.state = name;
-        m.time = 0;
-        m.data = {};
+        m.time = saved ? saved.time : 0;
+        m.data = saved ? saved.data : {};
         if (histMax > 0) {
             m.history.push(name);
             if (m.history.length > histMax) m.history.shift();
         }
         if (m.onChange) m.onChange(m, m.prev, name);
-        if (to.enter) to.enter(m, arg);
+        if (saved && to.resume) to.resume(m, arg);
+        else if (to.enter) to.enter(m, arg);
         m._busy = false;
     }
     // troca pedida dentro de um callback: aplica quando ele termina (laco
@@ -66,18 +76,20 @@ E.fsm = function (owner, states, first, opts) {
     function flush() {
         var guard = 0;
         while (m._pend !== null && guard++ < 16) {
-            var n = m._pend, a = m._pendArg;
+            var n = m._pend, a = m._pendArg, sv = m._pendSaved;
             m._pend = null;
             m._pendArg = undefined;
-            apply(n, a);
+            m._pendSaved = null;
+            apply(n, a, sv);
         }
     }
 
     // vai para o estado (arg chega no enter). Mesmo estado: so com force
     m.go = function (name, arg, force) {
         if (name === m.state && !force) return false;
+        if (name === '*') throw new Error('fsm: "*" e o estado coringa, nao um destino');
         st(name);
-        if (m._busy) { m._pend = name; m._pendArg = arg; return true; }
+        if (m._busy) { m._pend = name; m._pendArg = arg; m._pendSaved = null; return true; }
         apply(name, arg);
         flush();
         return true;
@@ -86,19 +98,24 @@ E.fsm = function (owner, states, first, opts) {
     // empilha: o estado atual fica guardado e pop() volta a ele (atordoado
     // por cima de qualquer coisa, menu dentro do jogo)
     m.push = function (name, arg) {
-        if (m.state) m._stack.push(m.state);
+        if (m.state) m._stack.push({ state: m.state, data: m.data, time: m.time });
         return m.go(name, arg, true);
     };
     m.pop = function (arg) {
         if (!m._stack.length) return false;
-        return m.go(m._stack.pop(), arg, true);
+        var sv = m._stack.pop();
+        if (m._busy) { m._pend = sv.state; m._pendArg = arg; m._pendSaved = sv; return true; }
+        apply(sv.state, arg, sv);
+        flush();
+        return true;
     };
     m.update = function (dt) {
         if (!m.state) return;
         var s = states[m.state];
         m.time += dt;
         m._busy = true;
-        if (s.update) s.update(m, dt);
+        if (ANY && ANY.update) ANY.update(m, dt);
+        if (s.update && m._pend === null) s.update(m, dt);
         // saida automatica: after = [segundos, proximo] (ou fn(m) -> nome)
         if (m._pend === null && s.after && m.time >= s.after[0]) {
             var nx = typeof s.after[1] === 'function' ? s.after[1](m) : s.after[1];
@@ -112,14 +129,18 @@ E.fsm = function (owner, states, first, opts) {
     m.send = function (ev, arg) {
         if (!m.state) return false;
         var s = states[m.state];
-        var h = s.on && s.on[ev];
+        var h = (s.on && s.on[ev]) || (ANY && ANY.on && ANY.on[ev]);
         if (!h) return false;
+        var was = m._busy;
         m._busy = true;
         var r = h(m, arg);
-        m._busy = false;
-        // string devolvida pelo handler = transicao
-        if (typeof r === 'string') m.go(r);
-        else flush();
+        m._busy = was;
+        // string devolvida pelo handler = transicao (vence um go pendente)
+        if (typeof r === 'string' && r !== m.state) {
+            st(r);
+            m._pend = r; m._pendArg = undefined; m._pendSaved = null;
+        }
+        if (!was) flush();
         return true;
     };
     m.draw = function () {
@@ -130,7 +151,7 @@ E.fsm = function (owner, states, first, opts) {
     if (first) m.go(first, opts.arg);
     return m;
 };
-E.fsm.version = '1.0.0';
+E.fsm.version = '1.1.0';
 
 E._mods.push('fsm');
 

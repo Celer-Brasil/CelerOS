@@ -20,15 +20,27 @@
 // Legenda: valor simples = tile; {spawn: tipo, tile: valor-que-fica-no-
 // chao (default null)} = entidade. Caractere fora da legenda = erro claro
 // com linha e coluna (fase digitada errada falha no teste, nao no device).
+//
+// 1.1.0: texto com CRLF (fase salva no Windows/colada de outro editor)
+// estourava "caractere fora da legenda" no \r; progress de lista vazia
+// dava unlocked -1. Novos: lv.tilemap(o) monta o E.tilemap da fase (com o
+// modulo tilemap), progress.complete(i, estrelas) e totalStars().
 
 var E = require('celeros.game');
 
 E.level = {
-    version: '1.0.0',
+    version: '1.1.0',
 
     parse: function (lines, o) {
         o = o || {};
         if (typeof lines === 'string') lines = lines.split('\n');
+        // \r do CRLF sai de cada linha (string colada ou array de arquivo)
+        var clean = [];
+        for (var li = 0; li < lines.length; li++) {
+            var ln = lines[li];
+            clean.push(ln.charAt(ln.length - 1) === '\r' ? ln.slice(0, -1) : ln);
+        }
+        lines = clean;
         // linhas vazias nas pontas (template string colado) saem
         while (lines.length && !lines[0].length) lines = lines.slice(1);
         while (lines.length && !lines[lines.length - 1].length) lines = lines.slice(0, -1);
@@ -72,6 +84,15 @@ E.level = {
         };
         // fabrica por tipo: factories[tipo](spawn) -> entidade (tipo sem
         // fabrica e ignorado); devolve a lista criada
+        // E.tilemap da fase (modulo celeros.game.tilemap): cols/rows/cell/
+        // ox/oy/data prontos; o = {paint, solid, outside} do tilemap
+        lv.tilemap = function (tmo) {
+            if (!E.tilemap) throw new Error('level.tilemap: carregue celeros.game.tilemap');
+            tmo = tmo || {};
+            var t = { cols: cols, rows: rows, cell: cell, ox: ox, oy: oy, data: data };
+            for (var k in tmo) t[k] = tmo[k];
+            return E.tilemap(t);
+        };
         lv.spawn = function (factories) {
             var out = [];
             for (var i = 0; i < spawns.length; i++) {
@@ -91,7 +112,7 @@ E.level = {
         o = o || {};
         var key = o.save || 'level';
         var p = { list: list, cur: 0, unlocked: 0 };
-        p.unlocked = Math.min(list.length - 1, Math.max(0, Math.floor(E.save.num(key, 0))));
+        p.unlocked = Math.max(0, Math.min(list.length - 1, Math.floor(E.save.num(key, 0))));
         p.def = function () { return list[p.cur]; };
         p.isLast = function () { return p.cur >= list.length - 1; };
         p.go = function (i) {
@@ -115,6 +136,24 @@ E.level = {
             if (n === undefined) return cur;
             if (n > cur) { E.save.set(k, n); return true; }
             return false;
+        };
+        // fim de fase num passo: guarda as estrelas (se melhorou) e
+        // desbloqueia a seguinte. Devolve true se havia proxima
+        p.complete = function (i, n) {
+            if (i === undefined) i = p.cur;
+            if (n !== undefined) p.stars(i, n);
+            var nx = i + 1;
+            if (nx < list.length && nx > p.unlocked) {
+                p.unlocked = nx;
+                E.save.set(key, nx);
+            }
+            return nx < list.length;
+        };
+        // soma das estrelas de todas as fases (porta que abre com 10)
+        p.totalStars = function () {
+            var t = 0;
+            for (var i = 0; i < list.length; i++) t += p.stars(i);
+            return t;
         };
         p.reset = function () {
             p.cur = 0;

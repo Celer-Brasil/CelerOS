@@ -17,7 +17,8 @@ require('celeros.game.spr');
 require('celeros.game.tilemap');
 
 // versao da COMPATIBILIDADE (o core carrega '1.1.0' em E.version; apps
-// que leem E.version veem a linha 1.x da engine; 1.3.0 = core 1.1.0, 1.4.0 = core 1.2.0)
-E.version = '1.4.0';
+// que leem E.version veem a linha 1.x da engine; 1.3.0 = core 1.1.0, 1.4.0 =
+// core 1.2.0, 1.5.0 = core 1.3.0)
+E.version = '1.5.0';
 
 module.exports = E;

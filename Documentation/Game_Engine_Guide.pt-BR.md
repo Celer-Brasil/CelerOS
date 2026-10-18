@@ -462,6 +462,75 @@ fora da legenda lança com linha e coluna. `lv.data` vai direto no
 `E.level.progress(lista, {save})` guarda a fase atual, o desbloqueio salvo
 (`next()`) e as estrelas por fase (só a melhor).
 
+## 14d. Mais módulos: roteiro, inventário, steering, geração, atributos, ondas
+
+Mais seis deps sobre o mesmo `E` (testadas em `test/sdk/celergame_r3.js`):
+
+| Dep | Dá | Uso típico |
+|---|---|---|
+| `celeros.game.script` | `E.script(passos, {onDone})` | cutscene, tutorial, coreografia de chefe |
+| `celeros.game.inv` | `E.inv.items(defs)`, `E.inv.bag({slots})` | mochila de RPG, cinto de poções, baú, loja |
+| `celeros.game.steer` | `E.steer.agent(obj, {speed, force})` | morcego, peixe, nave, bando em espaço aberto |
+| `celeros.game.gen` | `E.gen.rooms/cave/maze/scatter/lines` | masmorra de roguelike, caverna, labirinto por semente |
+| `celeros.game.stats` | `E.stats(base, {iframes, xp})` | vida com invencibilidade, buffs, recargas, XP/nível |
+| `celeros.game.waves` | `E.waves(lista, {spawn, alive})` | diretor de ondas de shooter / tower defense / arena |
+
+**Script.** Lista de passos rodados em ordem no tick da engine (tempo de jogo:
+congela no `E.pause`, segue o `E.timeScale`): `{call: fn}` (instantâneo),
+`{wait: ms}`, `{tween: obj, to, ms}` (espera terminar), `{until: fn}`, `{tap: true}`,
+`{par: [...]}` (filhos juntos, espera todos), `{label}` + `{loop: label, times}`,
+`{emit: nome, arg}`, `{scene: nome}`, ou uma função chamada a cada quadro até
+devolver algo diferente de `false`. O roteiro é da cena onde nasceu (dorme sob
+`E.push`, morre quando a cena sai; `{global: true}` sobrevive). `s.skip()`
+termina na hora: tweens vão ao valor final, esperas acabam e os `{call}`
+restantes rodam.
+
+```js
+E.script([
+  { call: function () { heroi.trava = true; } },
+  { tween: E.cam, to: { y: 200 }, ms: 800 },   // mostra a porta
+  { wait: 500 },
+  { call: function () { porta.abre(); } },
+  { until: function () { return porta.aberta; } },
+  { tween: E.cam, to: { y: 0 }, ms: 600 },
+  { call: function () { heroi.trava = false; } }
+]);
+```
+
+**Inv.** `E.inv.items({pocao: {max: 9, use: fn}})` registra as definições
+(`use(item, bag)` devolvendo `true` gasta um). `bag.add(id, n)` completa as
+pilhas existentes primeiro e devolve o que não coube; `remove`, `count`, `has`,
+`fits`, `move(i, j)` (mesmo item junta, outro troca), `split`, `use(i)`, `sort()`
+(junta e ordena pelo registro), `save(chave)` / `restore(chave)` pelo `E.save`.
+
+**Steer.** Steering de Reynolds: cada chamada soma uma força ponderada no
+quadro — `seek`, `flee(x, y, w, raio)`, `arrive(x, y, freio)`, `pursue/evade(alvo)`,
+`wander`, `separate/align/cohere(lista, raio)` (boids), `within(rect, margem)` —
+e `update(dt)` limita força e velocidade, move o `obj` e zera. Em labirinto use
+`celeros.game.path` e passe o próximo ponto ao `arrive`.
+
+**Gen.** Grades de caracteres (`grid[r][c]`) que vão direto no
+`E.level.parse(E.gen.lines(grid), ...)`: `rooms(cols, rows, {rnd, rooms})` (salas
+sem sobrepor ligadas por corredores em L — toda sala alcançável),
+`cave(cols, rows, {fill, steps})` (autômato celular; fica só a maior região
+livre), `maze(cols, rows, {loops})` (labirinto perfeito, backtracking iterativo),
+`scatter(grid, ch, n, {minDist})`. Passe `rnd: E.rng(semente)`: mesma semente,
+mesma fase. Gere na entrada da fase, nunca por quadro.
+
+**Stats.** `E.stats({hp: 10, atk: 3, def: 1}, {iframes: 600, onDeath, xp})`:
+`get(nome)` = (base + adds) x muls; `mod(nome, {add, mul, ms, id})` (o mesmo `id`
+substitui — poção tomada duas vezes renova em vez de empilhar); `damage(n,
+{pierce, force})` tira a `def` com mínimo 1 e devolve 0 na janela de
+invencibilidade; `heal`, `revive`, `frac()`; `cool(nome, ms)` devolve `true` e
+começa a recarga quando pronta (`coolFrac` para o ícone da habilidade);
+`addXp(n)` sobe de nível pela curva `base * grow^(nivel-1)`. Tudo no relógio do
+jogo (`E.stats.now()`), congelado pelo `E.pause`.
+
+**Waves.** `E.waves([{type, n, every}, {groups: [...], rest}], {spawn(tipo, w, i),
+alive(), onWave, onClear, onDone, endless: {grow}})`: nasce no ritmo, espera o
+`alive()` zerar, descansa e começa a próxima; `endless` repete a última onda
+crescendo `grow`. Estados: `wait`, `spawn`, `clear`, `done`.
+
 ## 15. Física (`celeros.physics`, opcional)
 
 **A maioria dos jogos não precisa de módulo de física.** Num device
@@ -737,6 +806,34 @@ com `E.fx.presets` (explosao, faisca, fumaca, confete, poeira, gosma, cura).
 spr: `E.spr.grid(nome, {file, cols, rows, tw, th})` + `E.spr.frames(prefixo, a, b)`.
 tilemap: `fill(c, r, w, h, v)`, `find(v)`. sfx: `SFX.arpejo(base, semitons, ms)`.
 
+**Core 1.3 / correções dos módulos.** Timers e tweens que vencem no mesmo
+quadro rodam na ordem de criação (dois tweens na mesma prop: o mais novo
+vence — use `E.killTweensOf` antes de retweenar); `E.tween` sem `ms` termina
+em vez de rodar `NaN` para sempre; `every(0, fn, n)` repete; `E.m.map` com
+intervalo vazio devolve `c`; `button/bar/panel` aceitam preto (`0x0000`);
+`textBox {max}` deixa o `...` dentro da largura; tick de módulo marcado
+`always` roda na pausa (o botão "continuar" do pad funciona). Novos:
+`goto/push(nome, {arg})` chega no `enter(arg)` e `pop({arg})` no `resume(arg)`
+(só `{arg}` não abre véu), `E.prevScene`, `E.run(cenas, primeira, arg)`,
+`E.timeLeft(timer)`, tween relativo (`{x: "+=20"}`), passos `{wait}` e `{call}`
+no `seq`, `E.m.weighted/lerpColor/fmt/clock/moveToward`, `group.closest`,
+`pool.find`, `E.cam.panTo(x, y, ms)`, `E.gfx.hearts(hp, max, x, y)`,
+`E.save.bool/toggle`, e o overlay de debug mostra a cena e a pilha.
+Módulos: events 1.1 (emit reentrante não pula mais ouvintes; ouvinte coringa
+`"*"`), pad 1.1 (funciona na pausa; toque que desce num botão não pega o
+stick; controles pertencem à cena; `heldMs`/`tap`), level 1.1 (texto CRLF;
+`lv.tilemap()`, `progress.complete/totalStars`), collide 1.1 (`move` com `NaN`
+não trava; o hash recicla células em mundo que rola; `ray` e `sweep`), path
+1.1 (alvo bloqueado sai na hora; `smooth` não corta quina de parede; mapas de
+distância `flow`; `follower {loop|pingpong}`), fsm 1.1 (string devolvida vence
+um `go` pendente; `pop` volta com a bolsa e o tempo do estado via `resume`;
+estado coringa `"*"`), tilemap 1.3 (`autotile`, `neighbors`), spr 1.3
+(recarregar um nome libera o slot antigo; `anim.play` do mesmo clipe aplica o
+fps novo; o loop guarda a sobra do tempo; `anim.speed`, `onFrame`), fx 1.3
+(`beam`, `count`), sfx 1.3 (nota única em `transpor/tempo/varia`; `combo`),
+grid 1.1.1 (`flood` com origem fora da grade), physics 2.1.1 (`verletFast` cai
+no JS quando os mundos nativos acabam).
+
 ## 19. Cola de API
 
 | Chamada | Faz |
@@ -760,6 +857,8 @@ tilemap: `fill(c, r, w, h, v)`, `find(v)`. sfx: `SFX.arpejo(base, semitons, ms)`
 | `E.m.*`, `E.rng(seed)` | matemática (+ `noise`), RNG determinístico |
 | `E.push/pop/depth`, `cleanup` da cena | pilha de cenas (inventário sobre o jogo), timers da cena mortos sozinhos |
 | `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | módulos para jogos complexos (§14c) |
+| `E.script`, `E.inv`, `E.steer`, `E.gen`, `E.stats`, `E.waves` | cutscene, inventário, steering, fase procedural, atributos de combate, diretor de ondas (§14d) |
+| `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | parâmetro de cena, recarga na tela, passeio de câmera, corações de vida (core 1.3) |
 | `P.verletFast`, `P.rigid`, `P.hit` | a escada de física: verlet nativo, corpo rígido nativo, sobreposição estática (módulo opcional — §15) |
 
 O autocomplete do editor vem no scaffold: o `.d.ts` de cada módulo adotado (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) junto do `celer.d.ts` (API do firmware); quem faz `require("celeros.engine")` segue com o `celeros.engine.d.ts` tudo-em-um, GERADO a partir dos `.d.ts` dos módulos por `node tools/sdk/lib/engine_dts.js` (edite o arquivo do módulo e rode de novo; o `test/sdk` falha com drift e com membro público da engine sem tipo).

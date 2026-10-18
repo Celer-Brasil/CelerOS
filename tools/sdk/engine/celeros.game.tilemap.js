@@ -13,8 +13,12 @@
 // + solidAt/rectSolid), cellRect e each.
 // 1.2.0: fill(c, r, w, h, v) (sala, buraco, ponte numa linha) e find(v)
 // (onde estao as chaves/portas).
+// 1.3.0: autotile(c, r, same) — mascara de 4 bits dos vizinhos iguais
+// (1 cima, 2 direita, 4 baixo, 8 esquerda) p/ escolher a peca de parede/
+// agua/estrada sem tabela a mao; neighbors(c, r, fn, diag).
 
 var E = require('celeros.game');
+var NX = [0, 1, 0, -1, 1, 1, -1, -1], NY = [-1, 0, 1, 0, -1, 1, 1, -1];
 
 // o cenario (chao, blocos) fica no quadro persistente e so as celulas
 // marcadas repintam no flush() — por baixo do que se moveu (E.dirty com
@@ -126,6 +130,31 @@ E.tilemap = function (o) {
             }
             return out;
         },
+        // mascara 0..15 dos vizinhos "iguais" (same(v, vizinho) ou ===):
+        // 1 = cima, 2 = direita, 4 = baixo, 8 = esquerda. Fora da grade
+        // conta como igual quando o.outside (parede emenda na borda)
+        autotile: function (c, r, same) {
+            var v = m.get(c, r), mask = 0;
+            function eq(cc, rr) {
+                if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) return o.outside !== false;
+                var u = data ? data[rr * cols + cc] : undefined;
+                return same ? !!same(v, u) : u === v;
+            }
+            if (eq(c, r - 1)) mask |= 1;
+            if (eq(c + 1, r)) mask |= 2;
+            if (eq(c, r + 1)) mask |= 4;
+            if (eq(c - 1, r)) mask |= 8;
+            return mask;
+        },
+        // fn(c, r, v) para cada vizinho dentro da grade (4, ou 8 com diag)
+        neighbors: function (c, r, fn, diag) {
+            var n = diag ? 8 : 4;
+            for (var i = 0; i < n; i++) {
+                var cc = c + NX[i], rr = r + NY[i];
+                if (cc < 0 || rr < 0 || cc >= cols || rr >= rows) continue;
+                fn(cc, rr, data ? data[rr * cols + cc] : undefined);
+            }
+        },
         // fn(c, r, v) por celula, em linhas
         each: function (fn) {
             for (var r = 0; r < rows; r++) {
@@ -161,7 +190,7 @@ E.tilemap = function (o) {
     };
     return m;
 };
-E.tilemap.version = '1.2.0';
+E.tilemap.version = '1.3.0';
 
 E._mods.push('tilemap');
 

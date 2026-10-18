@@ -15,6 +15,7 @@ declare namespace E {
         pairs(list: Shape[], fn: (a: Shape, b: Shape) => void): void;
     }
     interface MoveResult { hitX: boolean; hitY: boolean; ground: boolean; ceil: boolean; dx: number; dy: number }
+    interface RayResult { hit: boolean; x: number; y: number; c: number; r: number; dist: number }
     const collide: {
         version: string;
         rect(a: Rect, b: Rect): boolean;
@@ -28,6 +29,13 @@ declare namespace E {
         /** fracao 0..1 do 1o toque do segmento no retangulo, ou -1 */
         segRect(x0: number, y0: number, x1: number, y1: number, b: Rect): number;
         hash(cell?: number): SpatialHash;
+        /** AABB a andando (vx, vy) contra b: fracao 0..1 do 1o contato ou -1; normal em E.collide.normal */
+        sweep(a: Rect, vx: number, vy: number, b: Rect): number;
+        /** normal {x, y} do ultimo sweep com contato */
+        normal: { x: number; y: number };
+        /** raio em px contra o tilemap (DDA); resultado reaproveitado */
+        ray(x0: number, y0: number, x1: number, y1: number,
+            map: { solidAt(x: number, y: number): boolean; cw?: number; ch?: number; ox?: number; oy?: number }): RayResult;
         /** move-and-slide contra {rectSolid, cw, ch} (tilemap); zera vx/vy no eixo que bateu */
         move(b: Rect & { vx?: number; vy?: number }, dx: number, dy: number,
              map: { rectSolid(x: number, y: number, w: number, h: number): boolean; cw?: number; ch?: number }): MoveResult;

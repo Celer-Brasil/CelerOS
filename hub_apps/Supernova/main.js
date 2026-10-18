@@ -249,6 +249,14 @@ function bakeNebulosa() {
             E.spr.stamp("bg" + ((by / 64 % 4) * 4 + (bx / 64 % 4)), bx, by, _bgO);
         }
     }
+    // a poeira entra GRAVADA junto (camera parada): no painter ela rodava
+    // o parallax por celula de 32 px DENTRO de cada caixa suja — JS puro
+    // (~15 us por chamada de funcao no Duktape) em ~28 caixas por quadro, e
+    // so "andava" onde havia caixa (emendas no vidro)
+    var cx0 = E.cam.x, cy0 = E.cam.y;
+    E.cam.x = 0; E.cam.y = 0;
+    dustLayer.draw(0, 0, W, H);
+    E.cam.x = cx0; E.cam.y = cy0;
     E.spr.alvo = 0;
     System.useSprite(0);
     NEB_S = id;
@@ -258,7 +266,6 @@ bakeNebulosa();
 function paintFundo(x, y, w, h) {
     if (NEB_S) {
         SYS.blitSprite(NEB_S, x, y, w, h);
-        dustLayer.draw(x, y, w, h);
         return;
     }
     System.fillRect(x, y, w, h, C.espaco);

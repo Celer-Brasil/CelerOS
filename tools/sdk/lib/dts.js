@@ -112,6 +112,10 @@ function argType(name) {
     if (/([Pp]ath|[Aa]rquivo|[Nn]ome|[Nn]ame|[Ss]enha|[Mm]sg|[Uu]rl|[Tt]itulo)$/.test(name) &&
         /^[A-Za-z_$][\w$]*$/.test(name)) return 'string';
     if (/^(on|ok|down|touched|enabled)$/i.test(name)) return 'boolean';
+    // objeto de opcoes e callback: `number` mentia e o editor reclamava do
+    // literal {..} / da funcao passados como manda o guia
+    if (/^(opts|opcoes|options|cfg|config|song|musica)$/i.test(name)) return 'Record<string, any>';
+    if (/^(cb|callback|fn|handler|on[A-Z][\w$]*)$/.test(name)) return '(...args: any[]) => any';
     return 'number';
 }
 
@@ -156,14 +160,32 @@ const GLOBAL_SIGS = {
     require: { params: ['nome: string'], ret: 'any' },
 };
 
+// heading `fn({a, b, c})` chega partido em ['{a', 'b', 'c}']: um objeto de
+// opcoes e UM argumento so (opts)
+function collapseObjArgs(args) {
+    const out = [];
+    let depth = 0;
+    for (const a of args) {
+        const open = (a.match(/\{/g) || []).length, close = (a.match(/\}/g) || []).length;
+        if (depth === 0) out.push(open ? 'opts' : a);
+        depth += open - close;
+        if (depth < 0) depth = 0;
+    }
+    return out;
+}
+
 function fnSignature(objPath, fn, guide) {
     if (objPath === 'global' && GLOBAL_SIGS[fn.name]) return { params: GLOBAL_SIGS[fn.name].params, ret: GLOBAL_SIGS[fn.name].ret, doc: '', api: fn.apiLevel || null };
     const g = guide.get(objPath + '.' + fn.name);
+    const args = g ? collapseObjArgs(g.args) : [];
     const names = [];
-    const max = Math.max(fn.nargs || 0, g ? g.args.length : 0, fn.min || 0);
+    const max = Math.max(fn.nargs || 0, args.length, fn.min || 0);
     for (let i = 0; i < max; i++) {
-        const nm = g && g.args[i] ? g.args[i].replace(/[\[\]=]/g, '') : ('arg' + i);
-        names.push({ name: nm || ('arg' + i), optional: i >= (fn.min || 0) });
+        let nm = args[i] ? args[i].replace(/[\[\]=]/g, '').trim() : ('arg' + i);
+        // nome que nao e identificador (heading com desestruturacao ou
+        // reticencias) virava d.ts INVALIDO e o editor perdia o arquivo todo
+        if (!/^[A-Za-z_$][\w$]*$/.test(nm)) nm = 'arg' + i;
+        names.push({ name: nm, optional: i >= (fn.min || 0) });
     }
     const params = names.map((n) => n.name + (n.optional ? '?' : '') + ': ' +
         (PARAM_TYPES[objPath + '.' + fn.name + '.' + n.name] || argType(n.name)));

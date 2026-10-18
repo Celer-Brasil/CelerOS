@@ -166,8 +166,8 @@ declare const System: {
     getIPAddress(): any;
     /** devolve true se o ESP32 estiver conectado a uma rede WiFi. */
     isWiFiActive(): any;
-    prompt(promptMsg?: string, initialText?: number, options?: number): any;
-    keypadOpen(options?: number): any;
+    prompt(promptMsg?: string, initialText?: number, options?: Record<string, any>): any;
+    keypadOpen(options?: Record<string, any>): any;
     /** bombeia o toque para o teclado, redesenha as teclas quando necessário (feedback de pressionamento, páginas de layout, cursor piscando) */
     keypadPoll(): any;
     keypadText(): any;
@@ -222,7 +222,7 @@ declare const System: {
     playTone(arg0?: number): any;
     playWav(arg0: number): any;
     /** uma música por vez; um novo playMusic só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorm */
-    playMusic(song?: number, opcoes?: number): any;
+    playMusic(song?: Record<string, any>, opcoes?: Record<string, any>): any;
     musicStop(): any;
     sfx(melodia?: number): any;
     musicPlaying(): any;
@@ -408,7 +408,7 @@ declare const Net: {
     /** @permission "net" */
     post(url?: string, body?: string, contentType?: number): any;
     /** @permission "net+fs" */
-    download(url: string, caminho: number, onProgress?: number): any;
+    download(url: string, caminho: number, onProgress?: (...args: any[]) => any): any;
     /** @permission "net" */
     beginGet(url: string): any;
     /** @permission "net" */
@@ -429,10 +429,10 @@ declare const Net: {
 declare const AI: {
     /** Assíncrono: o POST HTTPS roda em task própria (timeout de 60 s) enquanto o app continua desenhando. O callback recebe {ok, status, content,  (API 18) */
     /** @permission "net" */
-    chat(opts: number, cb: number): any;
+    chat(opts: Record<string, any>, cb: (...args: any[]) => any): any;
     /** o download toca ao vivo (o som sai no primeiro byte da resposta, não no fim do arquivo; corpo de erro nunca toca no alto-falante). O callbac (API 24) */
     /** @permission "net" */
-    speak(opts: number, cb: number): any;
+    speak(opts: Record<string, any>, cb: (...args: any[]) => any): any;
     /** abre a conexão TLS com o provider agora, para o próximo AI.chat/AI.speak pular DNS + TCP + handshake (~2 s no S3). Não ocupa o slot serial:  (API 24) */
     /** @permission "net" */
     warm(provider?: number): any;
@@ -446,10 +446,10 @@ declare const AI: {
 declare const Mic: {
     /** Inicia a captura. No teto de ms o gravador para sozinho (Mic.recording() vira false; o buffer espera o Mic.stop()). (API 19) */
     /** @permission "mic" */
-    start(opts?: number): any;
+    start(opts?: Record<string, any>): any;
     /** Encerra a captura e devolve o áudio. Uma gravação por vez. O silêncio das pontas sai cortado (160 ms antes da primeira voz, 240 ms depois da (API 19) */
     /** @permission "mic" */
-    stop(opts?: number): any;
+    stop(opts?: Record<string, any>): any;
     /** @permission "mic" */
     recording(): any;
     /** Para o medidor VU ao vivo. Com gravação em curso, o System.micLevel() devolve o mesmo nível ao vivo (compartilham o canal I2S). (API 19) */
@@ -459,7 +459,7 @@ declare const Mic: {
 
 declare const Camera: {
     /** @permission "camera" */
-    setup({framesize?: number, pixformat?: number, fbcount?: number, xclkMhz}?: number): any;
+    setup(opts?: Record<string, any>): any;
     /** @permission "camera" */
     capture(): any;
     /** @permission "camera+fs" */
@@ -469,7 +469,7 @@ declare const Camera: {
     /** @permission "camera" */
     led(on: boolean): void;
     /** @permission "camera" */
-    scanQR({timeoutMs?: number, attempts?: number, led}?: number): any;
+    scanQR(opts?: Record<string, any>): any;
 };
 
 declare const WakeWord: {
@@ -554,7 +554,7 @@ declare const FS: {
 declare const CelerLink: CelerLinkApi | undefined
 
 interface CelerLinkApi {
-    start(nome?: string, opcoes?: number): any;
+    start(nome?: string, opcoes?: Record<string, any>): any;
     stop(): any;
     scan(timeoutMs?: number): any;
     connect(idOuNome: string, timeoutMs?: number): any;
@@ -574,7 +574,7 @@ declare const CelerNet: {
     start(opcoes?: { name?: string; /** ignorado desde a API 37 */ net?: string; relay?: boolean }): boolean;
     stop(): boolean;
     broadcast(mensagem?: string | object, ttl?: number): boolean;
-    send(destino: string, mensagem?: number, opcoes?: number): any;
+    send(destino: string, mensagem?: number, opcoes?: Record<string, any>): any;
     poll(): MeshMessage | null;
     nodes(): MeshNode[];
     status(): MeshStatus;
@@ -583,7 +583,7 @@ declare const CelerNet: {
 declare const Pack: {
     me(): any;
     members(): any;
-    send(destino: string, mensagem?: number, opcoes?: number): any;
+    send(destino: string, mensagem?: number, opcoes?: Record<string, any>): any;
     poll(): any;
     handoffMusic(destino?: string): any;
     join(nome: string, senha: string): any;

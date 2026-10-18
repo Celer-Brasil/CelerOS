@@ -358,9 +358,14 @@ duk_ret_t JSBindings::js_drawPixel(duk_context *ctx) {
     // quadro); aqui e escrita + caixa suja, microssegundos. A cor segue
     // RGB565 crua (o buffer do quadro e 16 bpp; o jsc expande p/ 888 so
     // porque o LGFX decide formato pelo tipo do argumento).
-    if (s_frame != nullptr && !useSprite && !clipActive() &&
-        s_frame->pokePixel(px, py, (uint16_t)(color & 0xFFFF))) {
-        return 0;
+    if (s_frame != nullptr && !useSprite && !clipActive()) {
+        // o System.setClip do app com quadro recorta o PROPRIO quadro (nao o
+        // display): o fast path respeita esse recorte (antes a estrela
+        // vazava por cima do HUD que a arena recortava)
+        int32_t cx, cy, cw, ch;
+        s_frame->getClipRect(&cx, &cy, &cw, &ch);
+        if (px < cx || py < cy || px >= cx + cw || py >= cy + ch) return 0;
+        if (s_frame->pokePixel(px, py, (uint16_t)(color & 0xFFFF))) return 0;
     }
     gfx()->drawPixel(px, py, jsc(color));
     return 0;

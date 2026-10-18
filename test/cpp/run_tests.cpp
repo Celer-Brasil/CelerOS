@@ -912,6 +912,24 @@ static void testSfxVoice() {
     CHECK(buf[0] == 1234 && buf[63] == 1234);
 }
 
+// K do quadro (FrameSprite::kMaxDirty = 32): estrelas/poeira espalhadas
+// (30 pixels pela tela) continuam caixas PEQUENAS — com 8 vagas elas viravam
+// uniões de quase a tela inteira e o present empurrava ~200 mil px por
+// quadro (Supernova, bancada 2026-10-18)
+static void testDirtyRectsScattered() {
+    celer::DirtyRects<32> d;
+    celer::DirtyRect out[32];
+    for (int i = 0; i < 30; i++) {
+        const int x = (i * 97) % 470, y = (i * 61) % 470;
+        d.add(x, y, x, y);
+    }
+    const int n = d.take(out, 480, 480);
+    long area = 0;
+    for (int k = 0; k < n; k++) area += (long)(out[k].r - out[k].l + 1) * (out[k].b - out[k].t + 1);
+    CHECK(n > 1);
+    CHECK(area < 480L * 480L / 10);   // < 10% da tela (com K=8 dava 44%)
+}
+
 // FrameSprite: varias caixas sujas no lugar da uniao (tremor da 4848)
 static void testDirtyRects() {
     celer::DirtyRects<8> d;
@@ -2653,6 +2671,7 @@ int main() {
     testMusicHandoff();
     testSfxVoice();
     testDirtyRects();
+    testDirtyRectsScattered();
     testJsonMap();
     testNetFrame();
     testResProto();

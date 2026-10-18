@@ -215,6 +215,11 @@ void JSBindings::appWait(duk_context *ctx, int ms) {
         // subtracao sem sinal dava a volta e um delay(6) virava ~49 dias.
         const uint32_t spent = millis() - t0;
         uint32_t remain = spent < (uint32_t)ms ? (uint32_t)ms - spent : 0;
+        // cede PELO MENOS 1 tick: com o present/GC acima comendo o prazo do
+        // delay(1) do loop de jogo, a main (prio 1) nao bloqueava nunca e o
+        // IDLE0 passava fome ate o TWDT reiniciar a placa (Supernova pesado:
+        // era a leitura I2C sincrona do toque que, por acaso, cedia o nucleo)
+        if (remain == 0) remain = 1;
         while (remain > 0) {
             esp_task_wdt_reset();
             uint32_t slice = remain > 4000 ? 4000 : remain;

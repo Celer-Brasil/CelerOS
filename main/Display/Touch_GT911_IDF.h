@@ -17,12 +17,25 @@
 //     stale apos >128ms sem leitura (flush + retry);
 //   - tenta 0x5D e 0x14 (enderecos alternativos do GT911).
 //
+// Leitura em SEGUNDO PLANO (task "gt911", nucleo 0): a task le o chip no
+// ritmo dele (refresh com dedo, kIdleMs parado) e publica o ultimo estado;
+// getTouchRaw so copia. Antes o I2C rodava no getTouch do app: ~2 ms por
+// quadro em todo jogo e, com o loop do app acima de 128 ms (jogo pesado a
+// < 8 fps), TODA leitura caia no flush + espera de amostra nova (ate 24 x
+// delay(1)) - ~30 ms travando a thread do JS a cada quadro, um ciclo
+// vicioso (bancada 2026-10-18, Supernova a 6 fps). Sem a task (sem RAM)
+// segue o caminho sincrono de antes.
+//
 // Layout dos pontos (a partir de 0x814F, 8 bytes por ponto):
 //   [track][x_lo][x_hi][y_lo][y_hi][sz_lo][sz_hi][rsv]
 
 #include "lgfx/v1/Touch.hpp"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/idf_additions.h"
+#include <string.h>
 
 namespace lgfx
 {
@@ -67,6 +80,7 @@ namespace lgfx
             ESP_LOGI("celer.touch", "GT911 init OK (addr 0x%02X refresh %ums id=%c%c%c)",
                      (unsigned)_cfg.i2c_addr, (unsigned)_refresh_rate,
                      productId[0], productId[1], productId[2]);
+            startPoller();
             return true;
         }
         // alterna o endereco e tenta de novo
@@ -86,6 +100,23 @@ namespace lgfx
       if (!_inited || tp == nullptr || count == 0) return 0;
       if (count > 5) count = 5;
 
+      if (_task != nullptr) {
+        // task de fundo: so copia o ultimo estado publicado (sem I2C aqui)
+        uint8_t snap[sizeof(_readdata)];
+        portENTER_CRITICAL(&_mux);
+        memcpy(snap, _shared, sizeof(snap));
+        portEXIT_CRITICAL(&_mux);
+        return parse(snap, tp, count);
+      }
+      poll();
+      return parse(_readdata, tp, count);
+    }
+
+  private:
+    // leitura no ritmo do chip (sincrona: chamada pela task ou, sem ela,
+    // pelo getTouchRaw como antes)
+    void poll(void)
+    {
       uint32_t msec = lgfx::millis();
       uint32_t diff_msec = msec - _last_update;
       // Sem dedo na ultima leitura: consulta no maximo a cada kIdleMs (a
@@ -114,11 +145,14 @@ namespace lgfx
           updateData();
         }
       }
+    }
 
-      uint32_t points = std::min<uint_fast8_t>(count, _readdata[0] & 0x0F);
+    uint_fast8_t parse(const uint8_t* rd, touch_point_t* tp, uint_fast8_t count)
+    {
+      uint32_t points = std::min<uint_fast8_t>(count, rd[0] & 0x0F);
       for (size_t idx = 0; idx < points; ++idx)
       {
-        auto data = reinterpret_cast<uint16_t*>(&_readdata[idx * 8]);
+        auto data = reinterpret_cast<const uint16_t*>(&rd[idx * 8]);
         tp[idx].id   = data[0] >> 8;
         tp[idx].x    = data[1];
         tp[idx].y    = data[2];
@@ -132,8 +166,37 @@ namespace lgfx
       return points;
     }
 
-  private:
+    static void pollTask(void* arg)
+    {
+      auto* self = static_cast<Touch_GT911_IDF*>(arg);
+      for (;;) {
+        self->poll();
+        portENTER_CRITICAL(&self->_mux);
+        memcpy(self->_shared, self->_readdata, sizeof(self->_shared));
+        portEXIT_CRITICAL(&self->_mux);
+        // proxima amostra no ritmo do chip (com dedo) ou kIdleMs (parado)
+        const uint32_t iv = (self->_readdata[0] & 0x0F) ? self->_refresh_rate
+                          : std::max<uint32_t>(self->_refresh_rate, kIdleMs);
+        vTaskDelay(pdMS_TO_TICKS(iv > 1 ? iv : 1));
+      }
+    }
+
+    void startPoller(void)
+    {
+      if (_task != nullptr) return;
+      // nucleo 0 (o da main/Duktape, WiFi e audio): longe da ISR do VSYNC do
+      // painel RGB no nucleo 1. Prioridade 2 > main: a amostra sai no ritmo
+      // do chip, e a task passa quase todo o tempo bloqueada no I2C
+      BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(pollTask, "gt911", 3072, this, 2, &_task, 0,
+                                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+      if (ok != pdPASS) ok = xTaskCreatePinnedToCore(pollTask, "gt911", 3072, this, 2, &_task, 0);
+      if (ok != pdPASS) _task = nullptr;   // segue sincrono (getTouchRaw faz o poll)
+    }
+
     static constexpr uint32_t kIdleMs = 20;
+    TaskHandle_t _task = nullptr;
+    portMUX_TYPE _mux = portMUX_INITIALIZER_UNLOCKED;
+    uint8_t _shared[5 * 8 + 2] = {};
 
     i2c_master_bus_handle_t _bus = nullptr;
     i2c_master_dev_handle_t _dev = nullptr;

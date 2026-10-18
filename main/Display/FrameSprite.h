@@ -41,7 +41,7 @@ public:
         return buf;
     }
 
-    static constexpr int kMaxDirty = 8;
+    static constexpr int kMaxDirty = 32;
 
     /// Pixel direto no buffer (fast path do System.drawPixel: pixel
     /// ESPALHADO pelo caminho completo do LGFX custava ~0,2 ms — as

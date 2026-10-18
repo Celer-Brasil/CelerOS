@@ -84,6 +84,18 @@ Problemas comuns, em ordem aproximada de "você vai bater nisso".
   **só ES5** — sem arrow functions, `let`/`const`, `class` ou template
   literals. Teste os apps embutidos no host com
   `node test/js_harness/run.js`.
+* **Notificação "install.sh falhou" em todo boot.** Um app traz um
+  `install.sh` (setup do serviço em segundo plano, API 42) que falhou —
+  a falha não grava o marcador de versão, então o script é reexecutado e
+  re-notificado em TODO boot até passar. Ele roda no `sh` restrito do
+  device: dialeto `if COND` / `else` / `end` (não é o Bourne — não
+  existe `then`/`fi`), sem aspas, e só caminhos absolutos dentro da
+  pasta do app e de `/local/data/<pkg>`. O corpo da notificação nomeia o
+  app; a linha de erro do shell está nas entradas `[setup]` de
+  `celerctl shell "cat /local/log/kern.log"` (atenção: o log em disco só
+  é descarregado com a tela apagada — prefira `celerctl logcat --dump`).
+  Depois de corrigir, rode `celerctl shell "svc setup <pkg>"`; silêncio
+  significa que o marcador fechou.
 * **`CelerLink is not defined`.** A placa foi compilada sem Bluetooth
   (`CONFIG_CELEROS_BLUETOOTH`; maduro na SmartDisplay, experimental na
   CYD). Apps detectam com `typeof CelerLink !== "undefined"`.

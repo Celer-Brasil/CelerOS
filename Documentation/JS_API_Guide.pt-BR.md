@@ -3156,7 +3156,18 @@ mic, câmera. O serviço herda o consentimento do app (só faz o que o app
 pode); erro em callback PARA o serviço (app `system:true` reinicia 1x
 após 60 s). Sem PSRAM, o heap do serviço suspende com app aberto; com
 PSRAM segue no ar. Companheiro do serviço: o `install.sh` na pasta do
-app roda 1x por versão no `sh` restrito (veja `data/AGENTS.md`).
+app roda 1x por versão no `sh` do device em modo RESTRITO (só comandos
+de arquivo, na jaula da pasta do app e de `/local/data/<pkg>`, ≤16 KB).
+O dialeto é o shell do CelerOS, não o Bourne: blocos são `if COND` /
+`else` / `end` — não existe `then`/`fi`, e no `sh -e` comando
+desconhecido para o script na hora. O shell não tem aspas; tem
+redireção `>`/`>>`, expansão `$VAR`/`$?` e os comandos de arquivo de
+sempre (`test`, `echo`, `cp`, `rm`...). Caminhos ABSOLUTOS (`../data`
+resolve `/local/apps/data` e é negado); o `echo` junta argumentos com
+um espaço — reconstrói JSON byte a byte. Sucesso grava o marcador de
+versão; falha o deixa vazio e o script roda — e notifica — em TODO boot
+até passar. Rode uma vez na bancada (`celerctl shell "svc setup
+<pkg>"`) antes de publicar.
 
 #### `System.appOpen()` → bool (API 42)
 true com um app JS em primeiro plano. Gate da política: o check de

@@ -26,7 +26,11 @@ void kern(const char* line, size_t n);
 void app(const char* pkg, const char* msg);
 
 // Servico "logpersist" (CelerServices, ALWAYS): flush do staging para o
-// arquivo a cada ~3 s (ou buffer quase cheio).
+// arquivo de 3 em 3 s QUANDO a janela abre — sem audio tocando, sem
+// varredura do SD e com o vidro APAGADO (escrever na flash suspende o
+// cache e estaciona o nucleo: o DMA do painel RGB embaralha o quadro, o
+// I2S engasga). Tela acesa o arquivo em disco ATRASA — o ring RAM do
+// logcat segue como sempre (buffer rapido).
 void tick();
 
 }  // namespace LogPersist

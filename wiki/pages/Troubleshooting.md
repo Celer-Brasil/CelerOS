@@ -82,6 +82,18 @@ Common problems, in rough order of "you will hit this".
   **ES5 only** — no arrow functions, `let`/`const`, `class` or template
   literals. Test the bundled apps on the host with
   `node test/js_harness/run.js`.
+* **"install.sh falhou" notification on every boot.** An app ships an
+  `install.sh` (background-service setup, API level 42) that failed —
+  failure leaves its version marker unset, so the script is retried and
+  re-notified at EVERY boot until it passes. It runs in the device `sh`
+  restricted mode: dialect `if COND` / `else` / `end` (not Bourne — no
+  `then`/`fi`), no quotes, absolute paths inside the app folder and
+  `/local/data/<pkg>` only. The notification body names the app; the
+  shell's error line is in the `[setup]` entries of
+  `celerctl shell "cat /local/log/kern.log"` (note: the on-disk log
+  flushes only with the screen off — prefer `celerctl logcat --dump`).
+  After fixing, rerun with `celerctl shell "svc setup <pkg>"`; silence
+  means the marker closed.
 * **`CelerLink is not defined`.** The board was built without Bluetooth
   (`CONFIG_CELEROS_BLUETOOTH`; solid on the SmartDisplay, experimental on
   the CYD). Apps feature-detect with `typeof CelerLink !== "undefined"`.

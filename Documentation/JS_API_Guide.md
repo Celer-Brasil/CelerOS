@@ -2871,8 +2871,19 @@ app's consent (it can only do what the app may); a throwing callback
 STOPS that service (`system:true` apps get one restart after 60 s).
 Without PSRAM the service heap suspends while an app is in the
 foreground; with PSRAM it stays up. The service's companion: `install.sh`
-in the app folder runs once per version under the restricted `sh`
-(see `data/AGENTS.md`).
+in the app folder runs once per version under the device `sh` in
+RESTRICTED mode (filesystem commands only, jailed to the app folder and
+`/local/data/<pkg>`, ≤16 KB). The dialect is the CelerOS shell, not
+Bourne: blocks are `if COND` / `else` / `end` — there is no `then`/`fi`,
+and under `sh -e` an unknown command stops the script right there. The
+shell has no quotes; it has `>`/`>>` redirection, `$VAR`/`$?` expansion
+and the usual file commands (`test`, `echo`, `cp`, `rm`...). Paths must
+be ABSOLUTE (`../data` resolves to `/local/apps/data` and is denied);
+`echo` joins its arguments with single spaces, which rebuilds JSON
+verbatim. Success records the version marker; failure leaves it unset,
+so the script runs — and posts a notification — on EVERY boot until it
+passes. Always run it once on the bench (`celerctl shell "svc setup
+<pkg>"`) before publishing.
 
 #### `System.appOpen()` → bool (API 42)
 true while a JS app is in the foreground. Policy gate: the Nucleo

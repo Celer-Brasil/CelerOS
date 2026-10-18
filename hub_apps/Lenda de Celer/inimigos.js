@@ -58,7 +58,7 @@ I.polvo = function (sp, J) {
                     var v = DV[e.dir], c = centro(e);
                     E.combat.shot(e, { x: c.x + v[0] * C * 0.4, y: c.y + v[1] * C * 0.4,
                                        vx: v[0] * C * 5, vy: v[1] * C * 5, r: Math.round(C * 0.16),
-                                       dmg: 1, knock: C * 5, map: J.W, team: 'monstro',
+                                       dmg: 1, knock: C * 5, map: J.W.fechado, team: 'monstro',
                                        onWall: function (s) { E.fx.play('pedrinha', s.x, s.y); } });
                 }
                 if (m.time > 0.8) m.go('anda');
@@ -68,7 +68,7 @@ I.polvo = function (sp, J) {
     e.update = function (dt) {
         e.t += dt;
         if (!E.combat.stunned(e)) e.fsm.update(dt);
-        var r = E.combat.move(e, dt, J.W);
+        var r = E.combat.move(e, dt, J.W.fechado);
         if (r && (r.hitX || r.hitY) && e.fsm.is('anda')) e.fsm.go('anda', null, true);
     };
     e.draw = function () { desenhar(e, A.INI.polvo[Math.floor(e.t * 5) % 2]); };
@@ -98,6 +98,10 @@ I.morcego = function (sp, J) {
                 ag.update(dt);
             }
         }
+        // voa por cima de tudo, mas nao sai da sala (nem sobe no HUD)
+        var Wm = J.W;
+        e.x = E.m.clamp(e.x, Wm.ox, Wm.ox + Wm.pw - e.w);
+        e.y = E.m.clamp(e.y, Wm.oy, Wm.oy + Wm.ph - e.h);
         // o steer ja moveu o corpo: aqui so o empurrao do golpe (voa: sem mapa)
         if (E.combat.knocked(e)) {
             var svx = e.vx, svy = e.vy;
@@ -134,7 +138,7 @@ I.esqueleto = function (sp, J) {
                 e.dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
             } else { e.vx = 0; e.vy = 0; }
         }
-        E.combat.move(e, dt, J.W);
+        E.combat.move(e, dt, J.W.fechado);
     };
     e.draw = function () { desenhar(e, A.INI.esqueleto[e.dir === 'left' ? 1 : 0]); };
     return e;
@@ -163,7 +167,7 @@ I.geleia = function (sp, J) {
                 e.salto = 0.7 + Math.random() * 0.7;
             }
         }
-        E.combat.move(e, dt, J.W);
+        E.combat.move(e, dt, J.W.fechado);
     };
     e.draw = function () { desenhar(e, A.INI.geleia[e.voando > 0 ? 0 : 1]); };
     return e;
@@ -184,7 +188,7 @@ I.chefe = function (sp, J) {
         for (var i = 0; i < n; i++) {
             var a = n === 1 ? a0 : a0 + (i - (n - 1) / 2) * abre;
             E.combat.shot(e, { x: c.x, y: c.y, vx: Math.cos(a) * C * 4.5, vy: Math.sin(a) * C * 4.5,
-                               r: Math.round(C * 0.22), dmg: 1, knock: C * 6, map: J.W, team: 'monstro',
+                               r: Math.round(C * 0.22), dmg: 1, knock: C * 6, map: J.W.fechado, team: 'monstro',
                                onWall: function (s) { E.fx.play('pedrinha', s.x, s.y); } });
         }
         SOM.fx('boom');
@@ -241,7 +245,7 @@ I.chefe = function (sp, J) {
     e.update = function (dt) {
         e.t += dt;
         e.fsm.update(dt);
-        var r = E.combat.move(e, dt, J.W);
+        var r = E.combat.move(e, dt, J.W.fechado);
         if (r && (r.hitX || r.hitY) && e.fsm.is('investe')) e.fsm.go('tonto');
     };
     e.draw = function () {
@@ -264,8 +268,8 @@ I.sabio = function (sp, J) {
         A.at('ini' + A.INI.sabio[0], c.x, c.y - C * 0.1);
         // chamas azuis ao lado (a gruta e magica)
         var f = Math.floor(e.t * 6) % 2;
-        A.at('ini' + A.INI.chama[f], c.x - C * 1.6, c.y, 0.8);
-        A.at('ini' + A.INI.chama[1 - f], c.x + C * 1.6, c.y, 0.8);
+        A.at('ini' + A.INI.chama[f], c.x - C * 1.6, c.y);
+        A.at('ini' + A.INI.chama[1 - f], c.x + C * 1.6, c.y);
     };
     e.morrer = function () { e.dead = true; };
     return e;

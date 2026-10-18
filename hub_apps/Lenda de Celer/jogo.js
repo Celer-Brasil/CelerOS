@@ -185,7 +185,8 @@ J.pickup = function (item, x, y, spawn) {
     p.draw = function () {
         if (p.vida && p.t > p.vida - 2 && Math.floor(p.t * 10) % 2) return;
         var bob = Math.sin(p.t * 5) * C * 0.06;
-        var k = p.item === 'relicario' ? 1.6 : 0.9;
+        // escala 1 = caminho rapido do stamp (pushSprite); so o relicario cresce
+        var k = p.item === 'relicario' ? 1.6 : 1;
         var idx = A.ITEM[p.item === 'relicario' ? 'cristal5' : p.item];
         A.at('item' + idx, p.x + p.w / 2, p.y + p.h / 2 + bob, k);
     };
@@ -315,7 +316,7 @@ J.loja = function (sp) {
         } else if (!em) l.longe = true;
     };
     l.draw = function () {
-        A.at('item' + A.ITEM.bomba, l.x + l.w / 2, l.y + l.h / 2 - C * 0.1, 0.9);
+        A.at('item' + A.ITEM.bomba, l.x + l.w / 2, l.y + l.h / 2 - C * 0.1);
         _lo.px = Math.round(C * 0.38);
         E.gfx.text('10', l.x + l.w / 2, l.y + l.h + C * 0.15, _lo);
     };
@@ -507,6 +508,24 @@ J.update = function (dt) {
 };
 
 var _sombra = { color: 0x0000, px: 12, align: 'center' };
+// linha de diagnostico na bancada (J.debug.hud = true pelo gancho de
+// teste/__harness ou numa copia de bancada):
+// slide, dialogo, estado da heroina, hitstop, monstros e dedos
+var _dbg = { px: 11, color: 0x07E0, bg: 0x0000, screen: true };
+function linhaDebug() {
+    var W = J.W, h = J.h;
+    var s = 'sl' + (W.sliding ? 1 : 0) + ' p' + W.slideP.toFixed(2) + ' dlg' + (J.dlg ? 1 : 0) +
+            ' ' + h.fsm.state + ' fz' + (E.frozen() ? 1 : 0) + ' ps' + (E.paused ? 1 : 0) +
+            ' m' + J.monstros() + ' t' + E.input.touches.length + ' dt' + E.dt.toFixed(3) + ' ' + E.fps + 'fps';
+    var c0 = W.toCell(h.x + h.w + 1, h.y + 1), c1 = W.toCell(h.x + h.w + 1, h.y + h.h - 1);
+    s += ' x' + Math.round(h.x) + ',' + Math.round(h.y) + ' fr ' + (c0 ? c0.c + ',' + c0.r + '=' + W.get(c0.c, c0.r) : '-') +
+         ' ' + (c1 ? c1.c + ',' + c1.r + '=' + W.get(c1.c, c1.r) : '-');
+    // fora da camada suja (nao repinta o HUD por quadro) e com fundo opaco
+    E.dirty._mute++;
+    S.fillRect(0, A.HUD - 16, E.W, 15, 0x0000);
+    E.gfx.text(s, 2, A.HUD - 15, _dbg);
+    E.dirty._mute--;
+}
 J.draw = function () {
     var W = J.W, h = J.h, C = A.CELL;
     W.draw();
@@ -515,6 +534,7 @@ J.draw = function () {
         // a heroina atravessa junto com a tela
         H.draw(h, sh.x - d[0] * W.pw, sh.y - d[1] * W.ph);
         J.hud();
+        if (J.debug.hud) linhaDebug();
         return;
     }
     J.ents.sort('y');
@@ -522,12 +542,12 @@ J.draw = function () {
     for (var i = 0; i < J.bombas.length; i++) {
         var b = J.bombas[i];
         var pisca = b.t > 1 && Math.floor(b.t * 12) % 2;
-        A.at('item' + A.ITEM.bomba, b.x, b.y, pisca ? 1.05 : 0.9);
+        if (!pisca) A.at('item' + A.ITEM.bomba, b.x, b.y);
     }
     H.draw(h, 0, 0);
     E.combat.drawShots(function (s) {
-        if (s.owner === h) A.at('item' + A.ITEM.bumerangue, s.x, s.y, 0.8);
-        else A.at('ini' + A.INI.pedra, s.x, s.y, 0.9);
+        if (s.owner === h) A.at('item' + A.ITEM.bumerangue, s.x, s.y);
+        else A.at('ini' + A.INI.pedra, s.x, s.y);
     });
     E.fx.draw();
     if (J.nomeT > 0 && J.nomeSala) {
@@ -536,9 +556,11 @@ J.draw = function () {
         _sombra.shadow = 0x0000;
         E.gfx.text(J.nomeSala, A.OX + W.pw / 2, A.OY + C * 0.6, _sombra);
     }
-    if (J.dlg) J.dlg.draw(A.OX + C * 0.5, A.OY + W.ph - C * 4.2, W.pw - C);
+    // no TOPO da sala: embaixo ficam o stick e os botoes (o polegar cobria)
+    if (J.dlg) J.dlg.draw(A.OX + C * 0.5, A.OY + C * 0.4, W.pw - C);
     E.pad.draw();
     J.hud();
+    if (J.debug.hud) linhaDebug();
 };
 
 // --------------------------------------------------------------- HUD ---
@@ -570,11 +592,13 @@ J.hud = function () {
         E.gfx.text('x' + d.chaves, x + C * 4.1, y1, _ht);
     }
     // caixa do item B
-    var bx = A.OX + C * 8.2, by = Math.round(HH * 0.12), bs = Math.round(HH * 0.76);
+    // B e pausa no CENTRO do HUD: o terco direito da faixa do topo e do
+    // sistema (o toque ali e o gesto que revela a topbar — o app nunca ve)
+    var by = Math.round(HH * 0.12), bs = Math.round(HH * 0.76);
+    var bx = Math.round(E.W / 2 - bs - C * 0.25);
     E.gfx.rect(bx, by, bs, bs, 0xFD20, { fill: false, screen: true });
     if (d.itemB) A.at('item' + A.ITEM[d.itemB === 'bomba' ? 'bomba' : 'bumerangue'], bx + bs / 2, by + bs / 2, 0.7);
-    // botao de pausa (centro-direita do HUD; o canto direito e do sistema)
-    var px = bx + bs + C * 0.6;
+    var px = Math.round(E.W / 2 + C * 0.25);
     J.btnPausa.x = px; J.btnPausa.y = by; J.btnPausa.w = bs; J.btnPausa.h = bs;
     E.gfx.rect(px, by, bs, bs, 0x2124, { screen: true, r: Math.round(C * 0.15) });
     E.gfx.rect(px + bs * 0.3, by + bs * 0.25, bs * 0.13, bs * 0.5, 0xFFFF, { screen: true });

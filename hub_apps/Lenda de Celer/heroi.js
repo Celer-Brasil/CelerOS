@@ -101,7 +101,7 @@ H.usarItem = function (h, J) {
         SOM.fx('bumerangue');
         J.bumerangue = E.combat.shot(h, {
             x: cx, y: cy, vx: d[0], vy: d[1], r: Math.round(A.CELL * 0.3), dmg: 0,
-            team: 'heroi', stun: 1500, map: J.W,
+            team: 'heroi', stun: 1500, map: J.W.fechado,
             boomerang: { range: A.CELL * 5, speed: A.CELL * 9 },
             onHit: function (alvo) { if (alvo.tipo === 'pickup') alvo.pegar(); }
         });

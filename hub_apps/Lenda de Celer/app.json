@@ -1,7 +1,7 @@
 {
   "name": "Lenda de Celer",
   "packageName": "celeros.lenda",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 44,
   "permissions": [],
   "requires": [
@@ -11,15 +11,15 @@
   "type": "Game",
   "category": "Aventura",
   "description": "Aventura de acao vista de cima: explore a campina em telas que deslizam, ganhe a espada do Sabio, ache a chave, o mapa e o bumerangue no Templo do Cristal e derrote o Guardiao de pedra. Ande com o stick e golpeie ao mesmo tempo (multitoque), bombas abrem paredes rachadas, tres arquivos de jogo salvos no aparelho. Arte gerada por IA e musica original.",
-  "changelog": "1.0.0 - primeiro lancamento: overworld de 12 telas, gruta do Sabio com loja, Templo do Cristal com 7 salas e o Guardiao de pedra em 3 fases; vitrine da CelerGame 1.4 (world, combat, pad multitoque, kit)",
+  "changelog": "1.0.1 - bugs da bancada: o stick descansa no canto inferior esquerdo (antes no meio da tela); a heroina ja comeca com uma lamina e o A sempre golpeia (o Sabio da a Espada de Celer, forca 2); B sem item avisa; monstros e tiros nao saem mais da sala pelas aberturas (andavam por cima do HUD); botao de pausa e item B no centro do HUD (o terco direito do topo e o gesto da topbar); dialogo no topo da sala (cobria o stick); ~14 -> ~21 fps no 4848 (celula de 32 px, combat 1.0.1, pad 1.2.1, spr 1.4.1); exige API 44 (fecho de 19 deps)\n1.0.0 - primeiro lancamento: overworld de 12 telas, gruta do Sabio com loja, Templo do Cristal com 7 salas e o Guardiao de pedra em 3 fases; vitrine da CelerGame 1.4 (world, combat, pad multitoque, kit)",
   "deps": {
     "celeros.game": "^1.4.0",
     "celeros.game.kit": "^1.0.0",
-    "celeros.game.combat": "^1.0.0",
-    "celeros.game.world": "^1.0.0",
-    "celeros.game.pad": "^1.2.0",
+    "celeros.game.combat": "^1.0.1",
+    "celeros.game.world": "^1.0.2",
+    "celeros.game.pad": "^1.2.1",
     "celeros.game.ui": "^1.2.0",
     "celeros.game.fx": "^1.4.0",
-    "celeros.game.spr": "^1.4.0"
+    "celeros.game.spr": "^1.4.1"
   }
 }

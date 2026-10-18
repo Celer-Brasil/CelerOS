@@ -15,7 +15,10 @@ var A = {};
 // celula da sala: 15x13 celulas cabem na tela com HUD em cima (4848:
 // 32 px e HUD de 64). K = escala da arte de 32 px
 A.setup = function () {
-    var cw = Math.floor(E.W / 15), ch = Math.floor((E.H - 40 * E.U) / 13);
+    // HUD minimo de 28*U: no 480x480 a celula fica em 32 (a arte em escala
+    // 1 vai pelo pushSprite recortado — com 30 px tudo passava pelo
+    // drawSprite com zoom, afim por pixel, e o 4848 caia para ~14 fps)
+    var cw = Math.floor(E.W / 15), ch = Math.floor((E.H - 28 * E.U) / 13);
     A.CELL = Math.max(12, Math.min(cw, ch));
     A.K = A.CELL / 32;
     A.HUD = E.H - 13 * A.CELL;

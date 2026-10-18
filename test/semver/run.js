@@ -10,6 +10,7 @@
 //                                (o celerctl e o hub importam daqui)
 //   data/apps/App Store/main.js  depRangeOk / resolveDeps (device)
 //   test/js_harness/run.js       satisfiesRange (host)
+//   tools/sdk/engine/celeros.app.semver.js  rangeOk / resolve (CelerKit)
 //
 // Gramatica normativa: "^X.Y.Z" = mesma major E >= base (major = breaking;
 // minor/patch sao upgrades automaticos — mesmo modelo do ^ do Dart pub) ou
@@ -61,6 +62,18 @@ const RANGES = [
 // que o BFS unico errava: aresta de pick vencido vazava (pino de "e"
 // sobrando) e a aresta do pick novo ("f") nao era coletada.
 const CLOSURES = [
+    {
+        // pino exato que chega DEPOIS rebaixa o pick: a aresta do pick
+        // vencido (a 1.1.0 -> d) nao pode sobrar no fecho
+        nome: 'S0 pino tardio rebaixa e a aresta vencida sai',
+        want: { a: '^1.0.0', b: '^1.0.0' },
+        index: {
+            a: { '1.0.0': { deps: {} }, '1.1.0': { deps: { d: '^1.0.0' } } },
+            b: { '1.0.0': { deps: { a: '1.0.0' } } },
+            d: { '1.0.0': {} },
+        },
+        esperado: { a: '1.0.0', b: '1.0.0' },
+    },
     {
         nome: 'S1 cadeia simples',
         want: { a: '^1.0.0' },
@@ -156,6 +169,12 @@ const harnessSrc = fs.readFileSync(path.join(ROOT, 'test', 'js_harness', 'run.js
 const satisfiesRange = new Function(
     grabFn(harnessSrc, 'satisfiesRange') + '\nreturn satisfiesRange;')();
 
+// CelerKit: o modulo inteiro, com um core falso no require
+const kitSrc = fs.readFileSync(path.join(ROOT, 'tools', 'sdk', 'engine', 'celeros.app.semver.js'), 'utf8');
+const kitMod = { exports: {} };
+new Function('require', 'module', 'System', kitSrc)(function () { return { _mods: [] }; }, kitMod, {});
+const kit = kitMod.exports.semver;
+
 function pythonCheck(payload) {
     const script = [
         "import sys, json",
@@ -207,6 +226,7 @@ RANGES.forEach((r, i) => {
     if (loja.depRangeOk(rng, ver) !== esperado) falha('Loja', 'range', caso, loja.depRangeOk(rng, ver), esperado);
     if (satisfiesRange(rng, ver) !== esperado) falha('harness', 'range', caso, satisfiesRange(rng, ver), esperado);
     if (py.ranges[i] !== esperado) falha('celerhub.py', 'range', caso, py.ranges[i], esperado);
+    if (kit.rangeOk(ver, rng) !== esperado) falha('CelerKit', 'range', caso, kit.rangeOk(ver, rng), esperado);
 });
 
 CLOSURES.forEach((c, i) => {
@@ -215,12 +235,14 @@ CLOSURES.forEach((c, i) => {
     const want = canon(c.esperado);
     if (gotLoja !== want) falha('Loja', 'fecho', c.nome, gotLoja, want);
     if (gotPy !== want) falha('celerhub.py', 'fecho', c.nome, gotPy, want);
+    const gotKit = canon(kit.resolve(c.want, c.index));
+    if (gotKit !== want) falha('CelerKit', 'fecho', c.nome, gotKit, want);
 });
 
-const total = RANGES.length * 3 + CLOSURES.length * 2;
+const total = RANGES.length * 4 + CLOSURES.length * 3;
 if (falhas) {
     console.log(`FALHOU: ${falhas} divergencia(s) de ${total} casos`);
     process.exit(1);
 }
-console.log(`OK: ${total} casos (${RANGES.length} ranges x 3, ${CLOSURES.length} fechos x 2) ` +
-            `concordam entre celerhub.py, Loja e harness`);
+console.log(`OK: ${total} casos (${RANGES.length} ranges x 4, ${CLOSURES.length} fechos x 3) ` +
+            `concordam entre celerhub.py, Loja, harness e CelerKit`);

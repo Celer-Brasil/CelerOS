@@ -76,7 +76,7 @@
 // com outro dedo na tela, o primario vira soltura + toque novo (sem pulo
 // de posicao que viraria swipe falso).
 
-var E = { version: '1.4.0' };
+var E = { version: '1.4.1' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -1950,6 +1950,7 @@ E.audio = {
     _duckFrom: 0,          // ms de retomada (ponto onde parou)
     _duckUntil: 0,
     _retryAt: 0,           // teto de retry do restart: playMusic falhando nao martela por quadro
+    _startAt: 0,           // ms do ultimo playMusic aceito (morte rapida = falha)
 
     // song = {bpm, loops, tracks:[...]} (API 25); opts {startMs} retoma
     music: function (song, opts) {
@@ -1957,8 +1958,10 @@ E.audio = {
         E.audio._song = song;
         E.audio._bpm = song.bpm || 120;
         try {
-            return !!S.playMusic(song, opts && opts.startMs !== undefined ?
-                                 { startMs: opts.startMs } : undefined);
+            var ok = !!S.playMusic(song, opts && opts.startMs !== undefined ?
+                                   { startMs: opts.startMs } : undefined);
+            if (ok) E.audio._startAt = S.millis();
+            return ok;
         } catch (e) {
             return false;
         }
@@ -2052,12 +2055,19 @@ E.audio = {
         }
         // reinicia a trilha quando os loops acabam (falha de playMusic so
         // tenta de novo a cada 2 s — sem isso um falha persistente martelava
-        // o canal a cada quadro)
+        // o canal a cada quadro). O playMusic aceita o pedido e o firmware
+        // abre o canal depois: trilha que morre em < 1,5 s tambem e falha
+        // (sem canal I2S o restart por quadro recriava canal+DMA sem parar)
         if (E.audio._song && !E.audio.playing()) {
-            if (S.millis() >= E.audio._retryAt) {
+            var now = S.millis();
+            if (E.audio._startAt && now - E.audio._startAt < 1500 && E.audio._retryAt < now) {
+                E.audio._retryAt = now + 2000;
+            }
+            if (now >= E.audio._retryAt) {
                 var ok = false;
                 try { ok = S.playMusic(E.audio._song); } catch (e) {}
-                E.audio._retryAt = ok ? 0 : S.millis() + 2000;
+                if (ok) E.audio._startAt = now;
+                E.audio._retryAt = ok ? 0 : now + 2000;
             }
         }
     }

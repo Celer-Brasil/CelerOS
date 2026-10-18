@@ -56,6 +56,18 @@ module.exports = function (check) {
     var zerados = dts.filter(function (d) { return d[1] === 0; }).length;
     check('core: E.freeze(ms) zera o dt por ~ms e volta sozinho',
           zerados >= 2 && dts[dts.length - 1][1] > 0 && !c.E.frozen(), JSON.stringify(dts.slice(0, 8)));
+    // audio: firmware aceita o playMusic mas o canal I2S nao abre (RAM
+    // interna sem DMA) — o restart nao pode virar um playMusic por quadro
+    var pedidos = 0;
+    c = fresh([], {}, function (env) {
+        env.System.playMusic = function () { pedidos++; return true; };
+        env.System.musicPlaying = function () { return false; };
+    });
+    c.E.caps.music = true;
+    c.E.audio.music({ bpm: 120, tracks: [{ notes: [[60, 16]] }] });
+    frames(c, 60, function () { c.E.audio._tick(); });
+    check('audio: trilha que morre logo apos o playMusic entra no backoff (sem restart por quadro)',
+          pedidos >= 1 && pedidos <= 3, 'playMusic x' + pedidos);
     c = fresh([], { save: 'r4.' });
     c.E.save.set('opcao', 'global');
     c.E.save.slot(2);

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 43
+### Nível de API: 44
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -2550,6 +2550,10 @@ uma única cópia por versão no dispositivo, compartilhada pelos apps. O
   do hub (`/store/deps.json`) que satisfaz o range e grava a escolha em
   `<pasta do app>/deps.json` (a fonte do `require` em runtime). Um update do
   app re-resolve os ranges.
+- O `deps.json` guarda o **fecho transitivo** (as deps das deps vêm
+  junto). O runtime lê até **32** módulos por app a partir da API 44; até a
+  API 43 lia só 8 e o resto do fecho falhava no `require`. App cujo fecho
+  passa de 8 módulos declara `"api": 44`.
 - O hub valida no publish: as deps existem no repositório, a soma dos `.js`
   do pacote **+ deps resolvidas** conta no teto de 48/128 KB (a dep segue
   compilando no heap de cada app) e `api` do app ≥ `minApi` da dep.
@@ -3178,3 +3182,13 @@ Hora válida (SNTP/manual/celular desde o boot).
 Grava o epoch no NVS (o saveEpoch de 10 min do TimeManager virou
 política do serviço Nucleo; o nativo vira watchdog e retoma se o
 serviço ficar 15 min sem girar).
+
+## 46. Nível de API 44 — 32 dependências compartilhadas por app
+
+O runtime e o coletor de módulos do launcher leem o `deps.json` do app (o
+fecho transitivo resolvido no install) até **32** módulos. Até a API 43 os
+dois paravam em 8: o resto do fecho falhava com "módulo não encontrado" e o
+coletor apagava esses módulos de `/local/modules`. Quando um `deps.json`
+enche o teto (talvez cortado), o coletor agora pula a rodada em vez de
+apagar qualquer coisa. Nada muda na API JS: apps com fecho maior que 8
+módulos (uma aventura da CelerGame usa ~19) declaram `"api": 44`.

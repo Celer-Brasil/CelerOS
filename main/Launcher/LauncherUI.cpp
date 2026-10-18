@@ -1,5 +1,6 @@
 #include "LauncherUI.h"
 #include <algorithm>
+#include <new>
 #include "../Utils/AppPerms.h"  // parsePermissions/PERM_* (testavel no host)
 #include "../Utils/AppGrants.h"
 #include "../USBDevice/LogSink.h"
@@ -391,8 +392,21 @@ void LauncherUI::gcSharedModules() {
             depsJson += "deps.json";
             if (!FileSystem::exists(depsJson.c_str())) continue;
             std::string json = FileSystem::readTextFile(depsJson.c_str());
-            JsonStringPair pairs[8];
-            int n = FileSystem::parseJsonStringMap(json, pairs, 8);
+            // mesmo teto do runtime (JsModules, API 44: 32 — o deps.json e o
+            // FECHO transitivo). Ate a API 43 o GC lia so 8 pares e APAGAVA
+            // o resto do fecho de um app instalado. Pares no heap; sem
+            // memoria ou lista cheia (talvez cortada) o GC desiste: na
+            // duvida, nada sai do disco
+            const int kMaxRefs = 32;
+            JsonStringPair* pairs = new (std::nothrow) JsonStringPair[kMaxRefs];
+            if (!pairs) return;
+            int n = FileSystem::parseJsonStringMap(json, pairs, kMaxRefs);
+            if (n >= kMaxRefs) {
+                delete[] pairs;
+                celer_log_printf("[launcher] gc modules: %s com %d+ deps, GC adiado\n",
+                                 depsJson.c_str(), kMaxRefs);
+                return;
+            }
             for (int p = 0; p < n; p++) {
                 std::string ref = pairs[p].key + "/" + pairs[p].value;
                 bool dup = false;
@@ -401,6 +415,7 @@ void LauncherUI::gcSharedModules() {
                 }
                 if (!dup) refs.push_back(std::move(ref));
             }
+            delete[] pairs;
         }
     }
 

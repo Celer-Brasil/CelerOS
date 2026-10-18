@@ -53,6 +53,11 @@ inline int parseJsonStringMap(const std::string& j, JsonStringPair* o, int m) {
     return celer::parseJsonStringMap(j, o, m);
 }
 }
+// shim do heap do IDF (API 44: a tabela de deps vive no heap so com deps)
+#define MALLOC_CAP_SPIRAM 1
+#define MALLOC_CAP_8BIT 2
+inline void* heap_caps_malloc(size_t n, unsigned) { return malloc(n); }
+inline void heap_caps_free(void* p) { free(p); }
 extern "C" duk_bool_t celer_exec_timeout_check(void* udata) { (void)udata; return 0; }
 namespace CelerKernel { inline void noteAppYield() {} }
 std::string s_appDir;
@@ -90,6 +95,7 @@ int main(int argc, char** argv) {
 def extract_require():
     s = open(os.path.join(ROOT, 'main', 'Runtime', 'JsModules.cpp')).read()
     body = s[s.index('namespace {'):]
+    body = body.replace('#include "esp_heap_caps.h"', '')
     body = body.replace('duk_ret_t JSBindings::js_require(duk_context* ctx) {',
                         'static duk_ret_t js_require(duk_context* ctx) {')
     return body

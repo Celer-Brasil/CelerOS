@@ -37,6 +37,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
+#include "esp_heap_caps.h"
 
 // Pasta do app em execucao (dirname do main.js; vazia p/ .js avulso do
 // shell). Alimentada pelo CelerKernel::runFile, lida pelo require.
@@ -49,13 +51,17 @@ namespace {
 // compile ~8,5KB). Teto explicito e baixo em vez de stack overflow.
 constexpr int kMaxRequireDepth = 8;
 int g_depth = 0;
-// Deps compartilhadas do app corrente (deps.json resolvido no install).
-constexpr int kMaxSharedDeps = 8;
+// Deps compartilhadas do app corrente (deps.json resolvido no install). O
+// deps.json guarda o FECHO transitivo — uma aventura da CelerGame passa de
+// 19 modulos. Ate a API 43 o teto era 8 e o resto do fecho sumia (require
+// "modulo nao encontrado"); API 44: 32. A tabela vive no heap SO enquanto
+// o app tem deps (PSRAM primeiro): nenhuma RAM fixa na CYD.
+constexpr int kMaxSharedDeps = 32;
 struct SharedDep {
     char name[64];
     char ver[24];
 };
-SharedDep s_sharedDeps[kMaxSharedDeps];
+SharedDep* s_sharedDeps = nullptr;
 int s_sharedDepCount = 0;
 
 // Nome de modulo: [A-Za-z0-9_.-], 1..63 chars (sufixo ".js" opcional). O
@@ -103,11 +109,24 @@ void jsLoadAppDeps(const char* appDir) {
     // RESOLVIDA do range do app.json). Chamado no runFile junto com o
     // s_appDir; sem pasta/deps.json = nenhuma dep (vendoring puro).
     s_sharedDepCount = 0;
+    if (s_sharedDeps) {
+        heap_caps_free(s_sharedDeps);
+        s_sharedDeps = nullptr;
+    }
     if (appDir == nullptr || appDir[0] == '\0') return;
     std::string json = FileSystem::readTextFile((std::string(appDir) + "/deps.json").c_str());
     if (json.empty()) return;
-    JsonStringPair pairs[kMaxSharedDeps];
+    // pares no heap (32 x 2 std::string nao cabem com folga na pilha da
+    // task do app, 20KB na CYD); sem memoria = sem deps (erro claro no require)
+    JsonStringPair* pairs = new (std::nothrow) JsonStringPair[kMaxSharedDeps];
+    if (!pairs) return;
     int n = FileSystem::parseJsonStringMap(json, pairs, kMaxSharedDeps);
+    if (n > 0) {
+        size_t sz = sizeof(SharedDep) * (size_t)n;
+        s_sharedDeps = (SharedDep*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_sharedDeps) s_sharedDeps = (SharedDep*)heap_caps_malloc(sz, MALLOC_CAP_8BIT);
+    }
+    if (!s_sharedDeps) n = 0;
     for (int i = 0; i < n && s_sharedDepCount < kMaxSharedDeps; i++) {
         const char* nm = pairs[i].key.c_str();
         const char* vr = pairs[i].value.c_str();
@@ -118,6 +137,7 @@ void jsLoadAppDeps(const char* appDir) {
         d.name[sizeof(d.name) - 1] = '\0';
         strcpy(d.ver, vr);
     }
+    delete[] pairs;
 }
 
 duk_ret_t JSBindings::js_require(duk_context* ctx) {

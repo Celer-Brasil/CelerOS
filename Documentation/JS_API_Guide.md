@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 43
+### API Level: 44
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2269,6 +2269,10 @@ resolves the fallback.
   version from the hub index (`/store/deps.json`) that satisfies the range
   and writes the choice to `<app folder>/deps.json` (the runtime source for
   `require`). Updating the app re-resolves the ranges.
+- `deps.json` holds the **transitive closure** (a dep's own deps come
+  along). The runtime reads up to **32** modules per app from API 44; up to
+  API 43 it read only 8 and the rest of the closure failed to `require`.
+  An app whose closure has more than 8 modules declares `"api": 44`.
 - The hub validates at publish: deps exist in the repository, the package's
   `.js` sum **+ resolved deps** counts toward the 48/128 KB ceiling (the dep
   still compiles inside each app's heap) and the app's `api` ≥ the dep's
@@ -2894,3 +2898,14 @@ Time is valid (SNTP/manual/phone since boot).
 Persists the epoch to NVS (the TimeManager's 10-min saveEpoch became
 the Nucleo service's policy; the native side is now a watchdog and
 takes over if the service goes silent for 15 min).
+
+## 46. API Level 44 — 32 shared dependencies per app
+
+The runtime and the launcher's module garbage collector read the app's
+`deps.json` (the transitive closure resolved at install) up to **32**
+modules. Up to API 43 both stopped at 8: the rest of the closure failed
+with "module not found" and the collector deleted those modules from
+`/local/modules`. When a `deps.json` fills the ceiling (possibly cut) the
+collector now skips the run instead of deleting anything. Nothing changes
+in the JS API: apps with a closure larger than 8 modules (a CelerGame
+adventure uses ~19) declare `"api": 44`.

@@ -257,6 +257,247 @@ function check(name, ok, detail) {
     check('celer.js test aceita --ms (para no marco)', true);
 })();
 
+// ------------------------------------------- emulador: ferramentas novas --
+(function () {
+    console.log('SDK emulador (BMP, input, gif, seed, erro, live):');
+    var cp = require('child_process');
+    var { Renderer } = require('../../tools/sdk/lib/renderer.js');
+    var { decodeBmp } = require('../../tools/sdk/lib/bmp.js');
+    var { parseInputScript, wireInput } = require('../../tools/sdk/lib/input.js');
+    var { encodeGif } = require('../../tools/sdk/lib/gif.js');
+    var { runAppFolder } = require('../../tools/sdk/lib/runner.js');
+    var harness = require('../../test/js_harness/run.js');
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-emu-'));
+
+    function writeApp(dir, main, name) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify({
+            name: name || path.basename(dir), packageName: 'br.celer.teste', version: '0.1.0',
+            api: 42, type: 'App', category: 'Teste', permissions: [],
+        }));
+        fs.writeFileSync(path.join(dir, 'main.js'), main);
+        return dir;
+    }
+
+    // BMP 24 bits bottom-up (o que o firmware e os geradores emitem)
+    function bmp24(w, h, rows) {   // rows[0] = topo da imagem
+        var stride = Math.ceil(w * 3 / 4) * 4;
+        var data = Buffer.alloc(stride * h);
+        for (var y = 0; y < h; y++) {
+            for (var x = 0; x < w; x++) {
+                var c = rows[y][x];
+                var o = (h - 1 - y) * stride + x * 3;   // bottom-up
+                data[o] = c[2]; data[o + 1] = c[1]; data[o + 2] = c[0];
+            }
+        }
+        var head = Buffer.alloc(54);
+        head.write('BM', 0);
+        head.writeUInt32LE(54 + data.length, 2);
+        head.writeUInt32LE(54, 10);
+        head.writeUInt32LE(40, 14);
+        head.writeInt32LE(w, 18); head.writeInt32LE(h, 22);
+        head.writeUInt16LE(1, 26); head.writeUInt16LE(24, 28);
+        head.writeUInt32LE(data.length, 34);
+        return Buffer.concat([head, data]);
+    }
+    var bmp = bmp24(2, 2, [[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [255, 255, 255]]]);
+    var bi = decodeBmp(bmp);
+    check('decodeBmp 24 bits: dimensoes e linhas bottom-up',
+          bi.w === 2 && bi.h === 2 && bi.rgba[0] === 255 && bi.rgba[1] === 0 &&
+          bi.rgba[(1 * 2 + 0) * 4] === 0 && bi.rgba[(1 * 2 + 0) * 4 + 2] === 255);
+    var bmpPath = path.join(tmp, 'arte.bmp');
+    fs.writeFileSync(bmpPath, bmp);
+    var envB = harness.makeEnv();
+    var rB = new Renderer();
+    rB.wire(envB);
+    envB.System.fillScreen(0);
+    check('drawBMP desenha no framebuffer do preview', envB.System.drawBMP(bmpPath, 3, 4) === true);
+    check('drawBMP: pixel vermelho em (3,4)', rB.fb[4 * 240 + 3] === 0xF800);
+    check('drawBMP: pixel azul em (3,5)', rB.fb[5 * 240 + 3] === 0x001F);
+
+    // script de entrada: tap = down+up, swipe interpola passos e solta
+    var sc = parseInputScript('# exemplo\n0 tap 10,20\n100 swipe 0,0 30,40 3 90\n');
+    check('input: tap vira down+up', sc[0].t === 0 && sc[0].frame.touched === 1 &&
+          sc[1].frame.touched === 0 && sc[1].frame.y === 20);
+    var sw = sc.filter(function (e) { return e.t >= 100; });
+    check('input: swipe interpola 3 passos + release', sw.length === 5 &&
+          sw[3].frame.x === 30 && sw[3].frame.y === 40 && sw[4].frame.touched === 0 &&
+          sw[4].t > 190);
+    var threwIn = false;
+    try { parseInputScript('0 foo 1,2'); } catch (e) { threwIn = /acao desconhecida/.test(e.message); }
+    check('input: acao invalida aponta o erro', threwIn);
+
+    // GIF: assinatura, dimensoes e quadro repetido fundido
+    var red = Buffer.alloc(4 * 3, 0); red.fill(255, 0, 3);
+    var blue = Buffer.alloc(4 * 3, 0); blue.fill(255, 2, 3);
+    var gif = encodeGif(2, 2, [{ rgb: red, delayMs: 100 }, { rgb: red, delayMs: 100 },
+                               { rgb: blue, delayMs: 100 }]);
+    check('gif: assinatura e dimensoes', gif.toString('ascii', 0, 6) === 'GIF89a' &&
+          gif.readUInt16LE(6) === 2 && gif.readUInt16LE(8) === 2);
+    // anda os blocos do GIF para contar imagens sem procurar bytes no LZW
+    function gifFrames(buf) {
+        var p = 13 + 256 * 3, n = 0;
+        while (p < buf.length) {
+            var b = buf[p];
+            if (b === 0x3B) break;
+            if (b === 0x21) {
+                p += 2;
+                while (p < buf.length && buf[p]) p += buf[p] + 1;
+                p++;
+            } else if (b === 0x2C) {
+                n++;
+                p += 10;
+                p++;   // min code size
+                while (p < buf.length && buf[p]) p += buf[p] + 1;
+                p++;
+            } else break;
+        }
+        return n;
+    }
+    check('gif: quadros iguais fundidos (2 imagens)', gifFrames(gif) === 2, 'frames=' + gifFrames(gif));
+
+    // seed: mesma semente = mesma sequencia; semente nova muda
+    var seedApp = writeApp(path.join(tmp, 'Semente'),
+        'System.print("r=" + Math.random());');
+    var R0 = Math.random;
+    var sa = runAppFolder(seedApp, { seed: 42 });
+    var sb = runAppFolder(seedApp, { seed: 42 });
+    var sc2 = runAppFolder(seedApp, { seed: 7 });
+    Math.random = R0;
+    check('seed: mesma semente reproduz a partida', sa.log.join('|') === sb.log.join('|') &&
+          /r=0\.\d+/.test(sa.log.join('')));
+    check('seed: semente diferente muda a sequencia', sa.log.join('|') !== sc2.log.join('|'));
+
+    // --input no wire: o app fica vermelho quando o dedo desce
+    var touchApp = writeApp(path.join(tmp, 'Toque'),
+        'while (true) { var t = System.getTouch();' +
+        ' System.fillScreen(t.touched ? 0xF800 : 0x001F); System.delay(33); }');
+    var rt = runAppFolder(touchApp, {
+        render: true, frames: [0, 60, 120, 240],
+        events: function (env) { wireInput(env, parseInputScript('30 tap 120,160')); },
+    });
+    var viuVermelho = rt.frames.some(function (f) { return f.fb[(160 * 240) + 120] === 0xF800; });
+    var voltouAzul = rt.frames[rt.frames.length - 1].fb[(160 * 240) + 120] === 0x001F;
+    check('input no emulador: tap pinta e solta', rt.err === null && viuVermelho && voltouAzul);
+
+    // erro: --out salva a tela do erro e o processo sai 1
+    var errApp = writeApp(path.join(tmp, 'Quebra'),
+        'System.fillScreen(0xF800); throw new Error("boom de proposito");');
+    var errCode = 0;
+    try {
+        cp.execSync('node tools/sdk/celer.js emu ' + JSON.stringify(errApp) + ' --ms 100',
+                    { cwd: ROOT, stdio: 'pipe' });
+    } catch (e) { errCode = e.status; }
+    check('emu: erro do app sai com codigo 1', errCode === 1);
+    check('emu: erro salva a tela em .dev/erro.png',
+          fs.existsSync(path.join(errApp, '.dev', 'erro.png')));
+
+    // --gif pela CLI (Snake: o countdown muda a tela)
+    var gifOut = path.join(tmp, 'snake.gif');
+    cp.execSync('node tools/sdk/celer.js emu data/apps/Snake --ms 600 --fps 10 --gif ' +
+                JSON.stringify(gifOut), { cwd: ROOT, stdio: 'pipe' });
+    var gifCli = fs.readFileSync(gifOut);
+    check('emu --gif grava GIF animado com mais de um quadro',
+          gifCli.toString('ascii', 0, 6) === 'GIF89a' && gifFrames(gifCli) > 1,
+          'frames=' + gifFrames(gifCli));
+
+    // live: servidor sobe, serve a pagina, /frame.png e o toque muda a tela
+    var liveApp = writeApp(path.join(tmp, 'Live'),
+        'while (true) { var t = System.getTouch();' +
+        ' System.fillScreen(t.touched ? 0xF800 : 0x001F); System.delay(33); }', 'LiveTeste');
+    var client = path.join(tmp, 'cliente.js');
+    fs.writeFileSync(client, [
+        "const http = require('http');",
+        "const { spawn } = require('child_process');",
+        "const ROOT = " + JSON.stringify(ROOT) + ";",
+        "const APP = " + JSON.stringify(liveApp) + ";",
+        "const srv = spawn(process.execPath, ['tools/sdk/celer.js','emu',APP,'--serve','--port','0'],",
+        "                  { cwd: ROOT, stdio: ['ignore','pipe','pipe'] });",
+        "let out = '', started = false, port = 0;",
+        "const sleep = (ms) => new Promise(r => setTimeout(r, ms));",
+        "function req(method, path, body) {",
+        "  return new Promise((resolve, reject) => {",
+        "    const data = body ? Buffer.from(JSON.stringify(body)) : null;",
+        "    const r = http.request({ host:'127.0.0.1', port, path, method,",
+        "        headers: data ? {'Content-Type':'application/json','Content-Length':data.length} : {} },",
+        "      (res) => { const c = []; res.on('data', d => c.push(d));",
+        "                  res.on('end', () => resolve({ status:res.statusCode, body:Buffer.concat(c) })); });",
+        "    r.on('error', reject); if (data) r.write(data); r.end();",
+        "  });",
+        "}",
+        "const jget = (p) => req('GET', p).then(r => JSON.parse(r.body.toString()));",
+        "function centro(buf) {",
+        "  const p = require(ROOT + '/tools/sdk/lib/png.js').decodePng(buf);",
+        "  const k = ((p.h >> 1) * p.w + (p.w >> 1)) * 4;",
+        "  return { w: p.w, h: p.h, px: [p.rgba[k], p.rgba[k+1], p.rgba[k+2]] };",
+        "}",
+        "async function run() {",
+        "  const res = { ok: false };",
+        "  try {",
+        "    const home = await req('GET', '/');",
+        "    res.html = home.body.toString().indexOf('id=\"screen\"') >= 0 &&",
+        "               home.body.toString().indexOf('LiveTeste') >= 0;",
+        "    const st = await jget('/state');",
+        "    res.state = st.app === 'LiveTeste' && st.running === true && st.clients === 0;",
+        "    let png = null;",
+        "    for (let i = 0; i < 40 && !png; i++) {",
+        "      const f = await req('GET', '/frame.png');",
+        "      if (f.status === 200 && f.body[0] === 0x89) png = f.body; else await sleep(100);",
+        "    }",
+        "    res.frame = !!png;",
+        "    if (png) { const c = centro(png); res.size = c.w + 'x' + c.h; res.azul = c.px[2] === 255; }",
+        "    await req('POST', '/input', { down:1, x:120, y:160 });",
+        "    let red = null;",
+        "    for (let i = 0; i < 30 && !red; i++) {",
+        "      await sleep(120);",
+        "      const f = await req('GET', '/frame.png');",
+        "      if (f.status === 200 && centro(f.body).px[0] === 255) red = true;",
+        "    }",
+        "    res.vermelho = !!red;",
+        "    await req('POST', '/input', { down:0, x:120, y:160 });",
+        "    let blue = null;",
+        "    for (let i = 0; i < 30 && !blue; i++) {",
+        "      await sleep(150);",
+        "      const f = await req('GET', '/frame.png');",
+        "      if (f.status === 200 && centro(f.body).px[2] === 255) blue = true;",
+        "    }",
+        "    res.soltou = !!blue;",
+        "    res.pause = (await req('POST', '/control', { paused:true })).status === 200;",
+        "    const a = await jget('/state'); await sleep(300); const b = await jget('/state');",
+        "    res.pausaParou = a.ms === b.ms;",
+        "    await req('POST', '/control', { record:true });",
+        "    await req('POST', '/input', { down:1, x:40, y:50 });",
+        "    await req('POST', '/input', { down:0, x:40, y:50 });",
+        "    await req('POST', '/control', { record:false });",
+        "    const recTxt = (await req('GET', '/record')).body.toString();",
+        "    res.gravou = /down\\s+40,50/.test(recTxt) && /up\\s+40,50/.test(recTxt);",
+        "    res.ok = res.html && res.state && res.frame && res.azul && res.vermelho &&",
+        "             res.soltou && res.pause && res.pausaParou && res.gravou;",
+        "  } catch (e) { res.err = String(e && e.stack || e); }",
+        "  console.log(JSON.stringify(res));",
+        "  srv.kill('SIGTERM');",
+        "  setTimeout(() => process.exit(0), 100);",
+        "}",
+        "srv.stdout.on('data', (d) => {",
+        "  out += d.toString();",
+        "  const m = out.match(/http:\\/\\/127\\.0\\.0\\.1:(\\d+)/);",
+        "  if (m && !started) { started = true; port = Number(m[1]); run(); }",
+        "});",
+        "srv.stderr.on('data', (d) => { /* o app loga no painel, nao aqui */ });",
+        "setTimeout(() => { if (!started) { console.log(JSON.stringify({ ok:false, err:'timeout' })); process.exit(1); } }, 15000);",
+    ].join('\n'));
+    var live = { ok: false, err: 'sem saida' };
+    try {
+        var raw = cp.execSync(process.execPath + ' ' + JSON.stringify(client),
+                              { cwd: ROOT, timeout: 40000, stdio: 'pipe' }).toString();
+        live = JSON.parse(raw.trim().split('\n').pop());
+    } catch (e) { live = { ok: false, err: String(e.message).slice(0, 300) }; }
+    check('emu --serve: pagina + /state + /frame.png + toque + pausa + gravacao',
+          live.ok === true, JSON.stringify(live));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------- Detona: sim ----
 // A simulacao do Detona direto (sem cenas): movimento de grade, bomba
 // atravessavel so ate sair dela, quina assistida, deslize ao soltar,

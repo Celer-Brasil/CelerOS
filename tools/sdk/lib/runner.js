@@ -21,8 +21,10 @@ function loadAppWire(appDir) {
     return fn;
 }
 
-// Roda o app: opts { render, stopAtMs, frames, events }.
+// Roda o app: opts { render, renderer, stopAtMs, frames, events, seed, noAppWire }.
 //   render    -> instala o renderer e devolve `renderer` no resultado
+//   renderer  -> usa um Renderer ja criado (o modo --serve precisa da
+//                referencia viva para publicar quadros)
 //   stopAtMs  -> para o app quando o relogio virtual passa disso (apps sao
 //                loops infinitos; default 1200ms quando render, senao o
 //                LIMIT do harness manda)
@@ -30,6 +32,9 @@ function loadAppWire(appDir) {
 //                RELOGIO DO APP (0 = estado inicial); o app para apos o
 //                ultimo. Resultado ganha r.frames = [{ms, fb, png}]
 //   events    -> wire extra (CLI --events), roda apos o renderer
+//   seed      -> Math.random deterministico (mesma rodada = mesma partida)
+//   noAppWire -> nao carrega o test.js do app (modo live: o smoke brigaria
+//                com o toque do usuario)
 function runAppFolder(appDir, opts = {}) {
     const dir = path.resolve(appDir);
     let entry = 'main.js';
@@ -43,7 +48,7 @@ function runAppFolder(appDir, opts = {}) {
     const mainAbs = path.join(dir, entry);
     if (!fs.existsSync(mainAbs)) throw new Error('entrypoint nao encontrado: ' + mainAbs);
 
-    const renderer = opts.render ? new Renderer() : null;
+    const renderer = opts.renderer || (opts.render ? new Renderer() : null);
     if (renderer) renderer.appDir = dir;   // drawPNG resolve /local|/sd/apps a partir daqui
     const frames = Array.isArray(opts.frames) && opts.frames.length
         ? opts.frames.map(Number).sort((a, b) => a - b) : null;
@@ -56,6 +61,20 @@ function runAppFolder(appDir, opts = {}) {
         : (opts.stopAtMs != null ? FR_BASE + opts.stopAtMs : (opts.render ? 1200 : null));
 
     const wires = [];
+    if (opts.seed != null) {
+        // mulberry32: Math.random deterministico para reproduzir partidas
+        // (apps de jogo usam Math.random para nascer inimigos/pista)
+        wires.push(() => {
+            let a = (opts.seed >>> 0) || 1;
+            Math.random = function () {
+                a = (a + 0x6D2B79F5) >>> 0;
+                let t = a;
+                t = Math.imul(t ^ (t >>> 15), t | 1);
+                t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        });
+    }
     if (renderer) wires.push((env) => renderer.wire(env));
     if (stopAtMs != null) {
         wires.push((env) => {
@@ -65,7 +84,8 @@ function runAppFolder(appDir, opts = {}) {
                 // snapshot dos marcos vencidos ANTES de avancar o relogio
                 if (frames && renderer && env.__framesOut) {
                     while (idx < frames.length && env.System.millis() >= FR_BASE + frames[idx]) {
-                        env.__framesOut.push({ ms: frames[idx], fb: renderer.fb.slice(), png: renderer.png() });
+                        env.__framesOut.push({ ms: frames[idx], fb: renderer.fb.slice(),
+                                               png: opts.framesPng === false ? null : renderer.png() });
                         idx++;
                     }
                 }
@@ -93,7 +113,7 @@ function runAppFolder(appDir, opts = {}) {
             env.__profileSamples = samples;
         });
     }
-    const appWire = loadAppWire(dir);
+    const appWire = opts.noAppWire ? null : loadAppWire(dir);
     if (appWire) wires.push(appWire);
 
     // runApp espera caminho relativo ao ROOT do repo; path.relative resolve

@@ -286,9 +286,10 @@ recomendado:
 #    icon.png e celer.d.ts para autocomplete no VS Code)
 node tools/sdk/celer.js new MeuApp
 
-# 2) itere localmente: lint a cada save, emulador com preview da tela
+# 2) itere localmente: lint a cada save, preview ao vivo no navegador
 node tools/sdk/celer.js lint MeuApp
-node tools/sdk/celer.js emu MeuApp            # salva MeuApp/.dev/tela.png
+node tools/sdk/celer.js emu MeuApp --serve --open   # ao vivo: mouse/toque, teclas, hot reload
+node tools/sdk/celer.js emu MeuApp                  # salva MeuApp/.dev/tela.png
 
 # 3) dev loop no aparelho: watch dos arquivos, reinstalla o que mudou,
 #    encerra o app em execucao (shell `exit`) e reabre, com logs ao vivo
@@ -339,11 +340,31 @@ Detalhes que valem saber:
   `jsconfig.json`. É artefato gerado do código do firmware; ao mudar a API,
   regenere e commite (o `celer.js check` acusa drift no CI).
 * **Emulador** (`emu`): roda o app no harness Node com desenhos reais num
-  framebuffer 240x320 e salva um PNG da tela. É uma aproximação (fonte 8x8,
-  `drawPNG`/`drawBMP` não renderizam) — a tela final sempre é a do aparelho.
+  framebuffer 240x320 (480x480 quando o app usa o canvas nativo). `--serve`
+  abre um **preview ao vivo** no navegador: ponteiro = toque de verdade,
+  setas/WASD = swipe, espaço = tap, além de pausa/passo/velocidade e hot
+  reload ao salvar um arquivo; o loop roda no relógio do próprio app. Modos
+  headless: um PNG (`--out`), um PNG por marco com diff de pixels
+  (`--frames`) ou um GIF animado (`--gif out.gif --ms 3000 --fps 20`).
+  `--input ARQ` roteiriza toques/arrastos por tempo, `--seed N` deixa o
+  `Math.random` reproduzível, `--grid`/`--mark x,y` acham coordenadas e
+  `--scale N` amplia o PNG. O botão **Gravar** do preview ao vivo registra
+  os toques e baixa um arquivo que você reaproveita no `--input`. É uma
+  aproximação (fonte 8x8; `drawPNG`/`drawBMP`/`drawIcon` renderizam a arte
+  de verdade, `drawJPG` ainda não) — a tela final sempre é a do aparelho.
 * **`test`/`emu` aceitam script de eventos**: crie `test.js` na pasta do app
   exportando `wire(env)` (toques via `env.__harness.tap/pushTouch`, respostas
-  de rede, estado do CelerLink) e o runner injeta antes de executar.
+  de rede, estado do CelerLink) e o runner injeta antes de executar. Para
+  entrada reproduzível sem código, use `--input ARQ`:
+
+```
+# toques.txt — tempo em ms do app, depois o gesto
+0    tap 120,200
+600  swipe 120,240 120,80 6
+900  down 120,160
+980  move 150,180
+1100 up 150,180
+```
 * **`celerctl dev`** negocia 921600 baud sozinho e mantém um keepalive com o
   aparelho (o canal cai para console após 8s sem tráfego do host). O comando
   `exit` do shell do aparelho encerra o app em execução de forma limpa —

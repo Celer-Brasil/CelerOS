@@ -21,6 +21,9 @@ const { generate } = require('./lib/dts.js');
 const { runAppFolder } = require('./lib/runner.js');
 const { encodePng } = require('./lib/png.js');
 const { glyph } = require('./lib/font8x8.js');
+const { Renderer } = require('./lib/renderer.js');
+const { parseInputScript, wireInput } = require('./lib/input.js');
+const { encodeGif } = require('./lib/gif.js');
 
 const ROOT = path.resolve(__dirname, '../..');
 const TYPES_OUT = path.join(__dirname, 'types', 'celer.d.ts');
@@ -41,9 +44,16 @@ function usage() {
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
     console.log('  types [--out ARQ]                            (re)gera celer.d.ts do manifest');
-    console.log('  test PASTA [--ms N] [--events ARQ]           roda o app no harness (stubs Node)');
+    console.log('  test PASTA [--ms N] [--events ARQ] [--input ARQ] [--seed N] roda o app no harness (stubs Node)');
     console.log('  emu PASTA [--events ARQ] [--ms N] [--out ARQ] roda + snapshot PNG da tela (240x320; 480x480 no canvas nativo)');
-    console.log('  bench PASTA [--ms N] [--events ARQ] [--vs B]  ms reais por quadro no harness (A/B com --vs)');
+    console.log('      --input ARQ      script de toques (tap/swipe/down/up com tempo em ms)');
+    console.log('      --frames 0,600   PNG por marco do relogio + diff de pixels');
+    console.log('      --gif ARQ        grava a rodada num GIF animado (com --ms e --fps)');
+    console.log('      --seed N         Math.random deterministico (mesma partida)');
+    console.log('      --grid [N]       grade de coordenadas no PNG (default 20px)');
+    console.log('      --scale N        amplia o PNG por vizinho mais proximo');
+    console.log('  emu PASTA --serve [--port P] [--open]      preview AO VIVO no navegador (toque, teclado, hot reload)');
+    console.log('  bench PASTA [--ms N] [--events ARQ] [--input ARQ] [--seed N] [--vs B]  ms reais por quadro (A/B com --vs)');
     console.log('  check                                        drift: codigo x docs x stubs x types x emulador');
     console.log('  publish PASTA... [--dry]                     publica na loja (celerhub)');
     console.log('  publish-dep ARQUIVO.js [--hub URL] [--force] publica dependencia no repo do hub');
@@ -299,19 +309,34 @@ function printRun(r) {
     }
 }
 
-function cmdTest(args) {
-    const flags = parseFlags(args);
-    const folder = flags._[0];
-    if (!folder) die('test: informe a PASTA do app');
+// wire de eventos comum a test/emu/bench: --events ARQ (JS) e/ou --input ARQ
+// (script declarativo de toques). O input roda DEPOIS do events, envolvendo
+// o delay que o events ja tenha envolvido.
+function buildEvents(flags) {
     let events = null;
     if (flags.events) {
         const m = require(path.resolve(flags.events));
         events = typeof m === 'function' ? m : m.events;
         if (typeof events !== 'function') die(flags.events + ': exporte `events(env)`');
     }
+    if (flags.input) {
+        const script = parseInputScript(fs.readFileSync(path.resolve(flags.input), 'utf8'));
+        const base = events;
+        events = (env) => { if (base) base(env); wireInput(env, script); };
+    }
+    return events;
+}
+
+function cmdTest(args) {
+    const flags = parseFlags(args);
+    const folder = flags._[0];
+    if (!folder) die('test: informe a PASTA do app');
     try {
-        printRun(runAppFolder(path.resolve(folder), { stopAtMs: flags.ms ? +flags.ms : undefined,
-                                                      events }));
+        printRun(runAppFolder(path.resolve(folder), {
+            stopAtMs: flags.ms ? +flags.ms : undefined,
+            seed: flags.seed != null ? (+flags.seed >>> 0) : null,
+            events: buildEvents(flags),
+        }));
     } catch (e) { die(e.message); }
 }
 
@@ -329,14 +354,11 @@ function cmdBench(args) {
     const flags = parseFlags(args);
     const folder = flags._[0];
     if (!folder) die('bench: informe a PASTA do app');
-    let events = null;
-    if (flags.events) {
-        const m = require(path.resolve(flags.events));
-        events = typeof m === 'function' ? m : m.events;
-        if (typeof events !== 'function') die(flags.events + ': exporte `events(env)`');
-    }
     const ms = flags.ms ? +flags.ms : 5000;
-    const run = (f) => runAppFolder(path.resolve(f), { stopAtMs: ms, events, profile: true });
+    const seed = flags.seed != null ? (+flags.seed >>> 0) : null;
+    const run = (f) => runAppFolder(path.resolve(f), { stopAtMs: ms,
+                                                       events: buildEvents(flags), seed,
+                                                       profile: true });
     const a = run(folder);
     if (a.err && !/harnessStop/.test(String(a.err))) {
         console.error('erro do app:');
@@ -368,12 +390,63 @@ function cmdBench(args) {
     else console.log(path.resolve(folder) + ': ' + fmtProfile(a.profile));
 }
 
+// --grid/--mark/--scale no PNG: aplica sobre uma COPIA do framebuffer (o
+// fb vivo do renderer nao pode ser sujo entre quadros do app)
+function decoratePng(fb, w, h, opts) {
+    const tmp = Object.create(Renderer.prototype);
+    tmp.w = w; tmp.h = h; tmp.fb = fb.slice();
+    if (opts.grid) tmp.gridOverlay(opts.grid);
+    if (opts.marks) for (const m of opts.marks) tmp.marker(m[0], m[1]);
+    return tmp.pngScaled(opts.scale || 1);
+}
+
+function parseMarks(flags) {
+    const raw = flags.marks != null ? flags.marks : flags.mark;
+    if (!raw || raw === true) return null;
+    const out = [];
+    for (const part of String(raw).split(';')) {
+        const m = /^\s*(-?\d+)\s*,\s*(-?\d+)\s*$/.exec(part);
+        if (!m) die('--mark: esperava X,Y (ex. --mark 120,200;80,160)');
+        out.push([+m[1], +m[2]]);
+    }
+    return out.length ? out : null;
+}
+
+function fbToRgb(fb) {
+    const out = Buffer.alloc(fb.length * 3);
+    for (let i = 0, k = 0; i < fb.length; i++, k += 3) {
+        const p = fb[i];
+        out[k] = ((p >> 11) & 0x1F) * 255 / 31 | 0;
+        out[k + 1] = ((p >> 5) & 0x3F) * 255 / 63 | 0;
+        out[k + 2] = (p & 0x1F) * 255 / 31 | 0;
+    }
+    return out;
+}
+
 function cmdEmu(args) {
     const flags = parseFlags(args);
     const folder = flags._[0];
     if (!folder) die('emu: informe a PASTA do app');
     const dir = path.resolve(folder);
+
+    // --serve: emulador ao vivo. Nao retorna: o servidor HTTP segura o
+    // processo (Ctrl+C encerra). O app roda num Worker com o harness.
+    if (flags.serve) {
+        const { startLive } = require('./lib/live_server.js');
+        startLive({
+            appDir: dir,
+            port: flags.port != null ? +flags.port : 8420,
+            fps: flags.fps ? +flags.fps : 30,
+            open: !!flags.open,
+            seed: flags.seed != null ? (+flags.seed >>> 0) : null,
+        });
+        return;
+    }
+
     const out = flags.out ? path.resolve(flags.out) : path.join(dir, '.dev', 'tela.png');
+    const decor = { grid: flags.grid ? (isNaN(+flags.grid) ? 20 : +flags.grid) : 0,
+                    marks: parseMarks(flags),
+                    scale: flags.scale ? Math.max(1, Math.min(8, +flags.scale | 0)) : 1 };
 
     let events = null;
     if (flags.events) {
@@ -381,25 +454,49 @@ function cmdEmu(args) {
         events = typeof m === 'function' ? m : m.events;
         if (typeof events !== 'function') die(flags.events + ': exporte `events(env)` (use env.__harness.tap/pushTouch)');
     }
+    if (flags.input) {
+        const script = parseInputScript(fs.readFileSync(path.resolve(flags.input), 'utf8'));
+        const base = events;
+        events = (env) => { if (base) base(env); wireInput(env, script); };
+    }
 
-    // --frames "0,600,1500": um PNG por marco do relogio do app (0 = estado
-    // inicial) + diff de pixels entre consecutivos — ver a UI andar sem GUI
-    let frames = null;
-    if (flags.frames != null) {
+    // --gif: quadros na grade do relogio (--ms de app, --fps de captura) e
+    // encode GIF no fim; sem PNG intermediario (framesPng: false)
+    let frames = null, gifPath = null, gifFps = 20;
+    if (flags.gif) {
+        gifPath = path.resolve(flags.gif);
+        const ms = flags.ms ? Math.max(100, +flags.ms) : 3000;
+        gifFps = Math.max(1, Math.min(30, flags.fps ? +flags.fps : 20));
+        frames = [];
+        for (let t = 0; t <= ms + 0.5; t += 1000 / gifFps) frames.push(Math.round(t));
+    } else if (flags.frames != null) {
         frames = String(flags.frames).split(',').map((s) => parseInt(s.trim(), 10));
         if (frames.some((n) => isNaN(n) || n < 0)) die('--frames: lista de ms nao-negativos, ex. "0,600,1500"');
     }
 
     try {
-        const r = runAppFolder(dir, { render: true, stopAtMs: flags.ms ? +flags.ms : undefined,
-                                      frames, events });
+        const r = runAppFolder(dir, { render: true,
+                                      stopAtMs: flags.ms ? +flags.ms : undefined,
+                                      frames, events,
+                                      seed: flags.seed != null ? (+flags.seed >>> 0) : null,
+                                      framesPng: !gifPath });
         fs.mkdirSync(path.dirname(out), { recursive: true });
-        if (frames) {
+        if (gifPath) {
+            const g = [];
+            for (let i = 0; i < r.frames.length; i++) {
+                const f = r.frames[i];
+                const next = i + 1 < r.frames.length ? r.frames[i + 1].ms : f.ms + 1000 / gifFps;
+                g.push({ rgb: fbToRgb(f.fb), delayMs: Math.max(20, next - f.ms) });
+            }
+            fs.writeFileSync(gifPath, encodeGif(r.renderer.w, r.renderer.h, g));
+            console.log('gif: ' + gifPath + ' (' + g.length + ' quadros, ' + gifFps + ' fps, ' +
+                        r.renderer.w + 'x' + r.renderer.h + ')');
+        } else if (frames) {
             let prev = null;
             for (const f of r.frames) {
                 const fout = path.join(path.dirname(out),
                                        'tela-' + String(f.ms).padStart(4, '0') + '.png');
-                fs.writeFileSync(fout, f.png);
+                fs.writeFileSync(fout, decoratePng(f.fb, r.renderer.w, r.renderer.h, decor));
                 if (prev) {
                     let diff = 0;
                     for (let i = 0; i < prev.fb.length; i++) if (prev.fb[i] !== f.fb[i]) diff++;
@@ -412,12 +509,20 @@ function cmdEmu(args) {
                 prev = f;
             }
         } else {
-            fs.writeFileSync(out, r.renderer.png());
+            fs.writeFileSync(out, decoratePng(r.renderer.fb, r.renderer.w, r.renderer.h, decor));
         }
         printRun(r);
+        if (r.err && r.renderer) {
+            const errOut = path.join(path.dirname(out), 'erro.png');
+            fs.writeFileSync(errOut, decoratePng(r.renderer.fb, r.renderer.w, r.renderer.h, decor));
+            console.log('erro: tela do erro salva em ' + errOut);
+        }
         if (!frames) {
+            const extra = r.renderer.unsupported.size
+                ? '; nao renderizado: ' + Array.from(r.renderer.unsupported).join(', ') : '';
             console.log('tela: ' + out + ' (' + r.renderer.w + 'x' + r.renderer.h +
-                        (r.renderer.unsupported.size ? '; nao renderizado: ' + Array.from(r.renderer.unsupported).join(', ') : '') + ')');
+                        (decor.scale > 1 ? ' x' + decor.scale : '') +
+                        (decor.grid ? '; grade ' + decor.grid + 'px' : '') + extra + ')');
         }
         process.exit(r.err ? 1 : 0);
     } catch (e) { die(e.message); }
@@ -445,7 +550,7 @@ function cmdCheck() {
     // 3) emulador: primitivas de desenho do manifest sem render
     const { RENDERED } = require('./lib/renderer.js');
     const manifest = buildManifest();
-    const KNOWN_UNRENDERED = new Set(['drawBMP', 'drawPNG', 'drawIcon']);  // por projeto (runtime avisa)
+    const KNOWN_UNRENDERED = new Set(['drawJPG']);  // TJpgDec nao tem decoder no host (runtime avisa)
     const isDraw = (name) => /^(fill|draw|push|create|bind|use)[A-Z]/.test(name) ||
                           ['setTextColor', 'setTextSize', 'setTextDatum', 'textWidth', 'fontHeight', 'deleteSprite'].includes(name);
     const missing = [];

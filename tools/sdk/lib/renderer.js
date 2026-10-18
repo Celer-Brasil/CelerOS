@@ -8,12 +8,13 @@
 //   - texto: glifos 8x8 (font8x8 public domain), metrica {1:6, 2:8, 4:16}px
 //     por caractere (textWidth coerente com o desenho — layouts centrados
 //     batem entre si, nao com a fonte real do firmware);
-//   - drawPNG/drawIcon renderizam a arte DE VERDADE (decodePng: color types
-//     0/2/3/4/6, alfa composto no RGB565; caminhos /local|/sd/apps/<pasta>/
-//     sao resolvidos para as pastas do repo); drawJPG/drawBMP seguem no-op.
+//   - drawPNG/drawBMP/drawIcon renderizam a arte DE VERDADE (decodePng/
+//     decodeBmp; caminhos /local|/sd/apps/<pasta>/ sao resolvidos para as
+//     pastas do repo); drawJPG segue no-op (nao ha decoder JPEG no host).
 
 const { glyph } = require('./font8x8.js');
 const { encodePng, decodePng } = require('./png.js');
+const { decodeBmp } = require('./bmp.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -302,6 +303,45 @@ class Renderer {
 
     png() { return encodePng(this.w, this.h, this.rgb888(), false); }
 
+    // PNG ampliado por vizinho mais proximo (--scale): screenshot legivel
+    // em apresentacao/issue sem depender do zoom do visualizador
+    pngScaled(n) {
+        n = Math.max(1, n | 0);
+        if (n === 1) return this.png();
+        const w = this.w * n, h = this.h * n;
+        const src = this.rgb888();
+        const out = Buffer.alloc(w * h * 3);
+        for (let y = 0; y < h; y++) {
+            const sy = (y / n) | 0;
+            for (let x = 0; x < w; x++) {
+                const s = (sy * this.w + ((x / n) | 0)) * 3;
+                const d = (y * w + x) * 3;
+                out[d] = src[s]; out[d + 1] = src[s + 1]; out[d + 2] = src[s + 2];
+            }
+        }
+        return encodePng(w, h, out, false);
+    }
+
+    // grade de coordenadas (--grid): achar o pixel do botao para o
+    // tap/swipe do script de entrada. Linha a cada `step`, mais clara a
+    // cada 5 (e nas bordas do painel virtual 240x320)
+    gridOverlay(step) {
+        step = Math.max(4, (step | 0) || 20);
+        const dim = 0x39E7, hi = 0x7BEF;   // cinzas RGB565
+        for (let x = step; x < this.w; x += step) this.vLine(x, 0, this.h, (x % (step * 5) === 0) ? hi : dim);
+        for (let y = step; y < this.h; y += step) this.hLine(0, y, this.w, (y % (step * 5) === 0) ? hi : dim);
+        return this;
+    }
+
+    // cruz no ponto (--mark): confere a coordenada que o toque vai usar
+    marker(x, y, color) {
+        x |= 0; y |= 0;
+        const c = color == null ? 0xF800 : (color & 0xFFFF);
+        this.hLine(x - 5, y, 11, c);
+        this.vLine(x, y - 5, 11, c);
+        return this;
+    }
+
     // ---------------------------------------------------------------- wire
     // Sobrepoe os stubs de desenho do makeEnv (mantem o resto: touch, FS,
     // relógio, etc). wire de teste do usuario roda DEPOIS e pode ajustar.
@@ -467,6 +507,15 @@ class Renderer {
             catch (e) { return false; }
             return true;
         };
+        // BMP do arquivo (BI_RGB 1/4/8/16/24/32 + BITFIELDS): arte de jogo
+        // legada e o caminho mais rapido de blit no firmware
+        S.drawBMP = (p, x, y) => {
+            const f = resolveAsset(p);
+            if (!f) return false;
+            try { r.blitRGBA(decodeBmp(fs.readFileSync(f)), x, y); }
+            catch (e) { r.unsupported.add('drawBMP'); return false; }
+            return true;
+        };
         // icone do sistema (data/icons do repo; void como o firmware)
         S.drawIcon = (name, x, y) => {
             const f = path.join(REPO, 'data', 'icons', String(name) + '.png');
@@ -474,7 +523,7 @@ class Renderer {
             try { r.blitRGBA(decodePng(fs.readFileSync(f)), x, y); } catch (e) {}
         };
         // ainda nao renderizados no emulador (mesmo comportamento do harness + aviso)
-        for (const name of ['drawJPG', 'drawBMP']) {
+        for (const name of ['drawJPG']) {
             const orig = S[name];
             S[name] = (...args) => { r.unsupported.add(name); return orig(...args); };
         }
@@ -492,7 +541,7 @@ const RENDERED = [
     'fontHeight', 'createSprite', 'bindSprite', 'useSprite', 'pushSprite', 'deleteSprite',
     'setClip', 'clearClip', 'fillGradient', 'fillArc', 'fillSmoothCircle',
     'fillSmoothRoundRect', 'drawWideLine', 'mixColor', 'drawSprite', 'blitSprite',
-    'drawPNG', 'drawIcon',
+    'drawPNG', 'drawBMP', 'drawIcon',
 ];
 
 module.exports = { Renderer, W, H, RENDERED };

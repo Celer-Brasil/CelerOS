@@ -194,9 +194,10 @@ flow:
 #    icon.png and celer.d.ts for VS Code autocomplete)
 node tools/sdk/celer.js new MyApp
 
-# 2) iterate locally: lint on every save, emulator with a screen preview
+# 2) iterate locally: lint on every save, live preview in the browser
 node tools/sdk/celer.js lint MyApp
-node tools/sdk/celer.js emu MyApp            # saves MyApp/.dev/tela.png
+node tools/sdk/celer.js emu MyApp --serve --open   # live: mouse/touch, keys, hot reload
+node tools/sdk/celer.js emu MyApp                  # saves MyApp/.dev/tela.png
 
 # 3) dev loop on the device: watches files, reinstalls what changed,
 #    terminates the running app (shell `exit`) and reopens it, with live logs
@@ -247,13 +248,32 @@ Worth knowing:
   after changing the API, regenerate and commit it (`celer.js check` flags
   drift in CI).
 * **Emulator** (`emu`): runs the app in the Node harness with real drawing
-  onto a 240x320 framebuffer and saves a PNG of the screen. It is an
-  approximation (8x8 font, `drawPNG`/`drawBMP` not rendered) — the final
-  screen is always the device's.
+  onto a 240x320 framebuffer (480x480 when the app uses the native canvas).
+  `--serve` opens a **live preview** in the browser: pointer = real touch,
+  arrows/WASD = swipe, space = tap, plus pause/step/speed and hot reload when
+  you save a file; the game loop runs at the app's own clock. Headless modes:
+  a PNG (`--out`), a PNG per milestone with a pixel diff (`--frames`), or an
+  animated GIF (`--gif out.gif --ms 3000 --fps 20`). `--input FILE` scripts
+  taps/swipes by time, `--seed N` makes `Math.random` reproducible,
+  `--grid`/`--mark x,y` find coordinates and `--scale N` enlarges the PNG.
+  The live preview's **Gravar** button records your touches and downloads a
+  file you can replay with `--input`.
+  It is an approximation (8x8 font; `drawPNG`/`drawBMP`/`drawIcon` render
+  the real art, `drawJPG` is not rendered yet) — the final screen is always
+  the device's.
 * **`test`/`emu` accept an event script**: create a `test.js` in the app
   folder exporting `wire(env)` (taps via `env.__harness.tap/pushTouch`,
   network responses, CelerLink state) and the runner injects it before
-  running.
+  running. For reproducible input without code, use `--input FILE`:
+
+```
+# toques.txt — time in ms of app, then the gesture
+0    tap 120,200
+600  swipe 120,240 120,80 6
+900  down 120,160
+980  move 150,180
+1100 up 150,180
+```
 * **`celerctl dev`** negotiates 921600 baud by itself and keeps a keepalive
   with the device (the channel falls back to console after 8s without host
   traffic). The device shell's `exit` command cleanly terminates the running

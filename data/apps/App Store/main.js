@@ -854,6 +854,28 @@ function screenList() {
             }
         } else if (curTab === 1) {
             if (UI.button("Atualizar tudo", LX, 282, LW, 34, { disabled: updCount === 0 })) return "batch";
+        } else {
+            // 2.9.3: escolha do destino de instalacao. A mesma preferencia do
+            // Settings (install_sd no NVS); installOnSd() roda no ato do
+            // install, entao virar a chave aqui basta. Firmware sem escrita
+            // de setting cai no arquivo legado. Sem cartao, o rotulo avisa.
+            var sdOn = installOnSd();
+            var noSd = null;   // null = firmware sem o cheque de espaco
+            try { noSd = FS.getFreeSpace("/sd") <= 0; } catch (eSD) { noSd = null; }
+            if (UI.button("Instalar no: " + (sdOn ? "cartao SD" : "memoria interna") +
+                          (sdOn && noSd ? " (sem cartao!)" : ""),
+                          LX, 282, LW, 34, { style: "ghost" })) {
+                var want = sdOn ? "0" : "1";
+                var wrote = false;
+                if (System.setting) {
+                    try { wrote = System.setting("install_sd", want); } catch (eS2) { wrote = false; }
+                }
+                if (!wrote) {   // firmware antigo: o arquivo legado cobre
+                    if (want === "1") FS.writeTextFile(FLAG_SD, "1");
+                    else { try { FS.deleteFile(FLAG_SD); } catch (eS3) {} }
+                }
+                UI.invalidate();
+            }
         }
         UI.end();
     }

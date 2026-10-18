@@ -1,11 +1,17 @@
 // CelerOS Help (Central de Ajuda) — app de sistema. Porte do HelpCenterUI.cpp
 // (commit 64ccfc8): menu Offline/Online, categorias e topicos offline (textos
-// originais resumidos em PT-BR), ajuda online buscada no hub via Net.getJSON
-// (indice -> categoria -> artigo) e leitor com rolagem por inercia.
-// Interface no toolkit UI (API 22). X no canto sup. direito sai.
+// originais resumidos em PT-BR) e ajuda online buscada no hub. Migrado para o
+// CelerKit (deps celeros.app.*): o leitor rolavel com saneamento Latin-1
+// virou A.text.viewer, a rede virou A.net (getJSON que nunca estoura) e as
+// listas usam cache por carimbo do A.list. A.run e dono do frame; X do
+// topbar sai.
 
-var T = System.theme();
-var LX = 8, LW = 224, TOP = 48;
+var A = require("celeros.app");
+require("celeros.app.net");
+require("celeros.app.text");
+require("celeros.app.list");
+
+A.init();
 
 // ---- conteudo offline (porte do HelpCenterUI.cpp, PT-BR resumido) ----------
 var CATS = [
@@ -47,182 +53,127 @@ var CATS = [
     ]}
 ];
 
-// ---- lista generica: devolve o indice tocado ou -1 (voltar) -----------------
-var L_title = "", L_items = [], L_sub = null, L_id = 0;
+// ---- estado ----------------------------------------------------------------
+var gato = 0;        // categoria offline aberta
+var ocats = null;    // indice online (cache da sessao): [{name,url}]
+var oarts = null;    // artigos da categoria online aberta
+var ocat = 0;
 
-function setList(title, items, subs) {
-    L_title = title;
-    L_items = items;
-    L_sub = subs;
-    L_id++;  // lista nova comeca no topo (estado de rolagem por id)
-}
-function listLoop() {
-    var rows = [];
-    for (var i = 0; i < L_items.length; i++) {
-        rows.push({ label: L_items[i], sub: L_sub !== null ? (L_sub[i] || "") : "" });
+// ---- listas com cache por carimbo (celeros.app.list) ------------------------
+// getStamp e barato (referencia/indice); build so roda quando muda.
+var linhasCat = A.list.make(function () { return CATS; }, function () {
+    var out = [];
+    for (var i = 0; i < CATS.length; i++) {
+        var n = CATS[i].topics.length;
+        out.push({ label: CATS[i].name, sub: n + (n === 1 ? " tópico" : " tópicos") });
     }
-    UI.invalidate();
-    while (true) {
-        UI.begin(T.bg);
-        if (UI.header(L_title, { back: true })) return -1;
-        var k = UI.list("l" + L_id, LX, TOP, LW, 312 - TOP, rows);
-        if (k >= 0) return k;
-        UI.end();
-    }
-}
+    return out;
+});
+var linhasTop = A.list.make(function () { return gato; }, function () {
+    var tp = CATS[gato].topics, out = [];
+    for (var i = 0; i < tp.length; i++) out.push({ label: tp[i].t, sub: tp[i].d });
+    return out;
+});
+var linhasOcat = A.list.make(function () { return ocats; }, function () {
+    var out = [];
+    for (var i = 0; i < ocats.length; i++) out.push({ label: ocats[i].name });
+    return out;
+});
+var linhasOart = A.list.make(function () { return oarts; }, function () {
+    var out = [];
+    for (var i = 0; i < oarts.length; i++) out.push({ label: oarts[i].title });
+    return out;
+});
 
-// ---- leitor de topico: paragrafos com quebra por palavra + rolagem --------
-var V_title = "", V_paras = [], V_h = 0, V_id = 0;
-
-function setViewer(title, content) {
-    V_title = title;
-    V_paras = String(content).replace(/\r/g, "").split("\n");
-    V_h = 0;
-    V_id++;
-}
-function viewerLoop() {
-    UI.invalidate();
-    var top = TOP, h = 312 - TOP;
-    while (true) {
-        var full = UI.begin(T.bg);
-        if (UI.header(V_title, { back: true })) return;
-        var off = UI.scrollBegin("v" + V_id, LX, top, LW, h, Math.max(h, V_h));
-        if (full) {
-            var y = top + 4 - off;
-            for (var i = 0; i < V_paras.length; i++) {
-                if (V_paras[i] === "") { y += 10; continue; }
-                y += UI.text(V_paras[i], LX + 4, y, { w: LW - 14, lines: 64, id: i }) + 6;
-            }
-            V_h = y + off - top + 8;
-        }
-        UI.scrollEnd();
-        UI.end();
-    }
-}
-
-// ---- menu principal -----------------------------------------------------
-// devolve 0 = offline, 1 = online
-function menuLoop() {
-    UI.invalidate();
-    while (true) {
-        UI.begin(T.bg);
-        UI.header("Central de Ajuda");
-        UI.card(LX, TOP, LW, 64);
-        UI.text("Como usar o CelerOS:", LX + 12, TOP + 10, { role: "title" });
-        UI.text("gestos, Wi-Fi, apps e mais.", LX + 12, TOP + 38, { role: "caption", color: T.textDim });
-        UI.cardEnd();
-        if (UI.button("Ajuda Offline", LX, TOP + 80, LW, 44)) return 0;
-        if (UI.button("Ajuda Online", LX, TOP + 134, LW, 44, { style: "ghost" })) return 1;
-        UI.text("A ajuda online lê a central no hub (precisa de Wi-Fi).", 120, TOP + 192,
-                { role: "caption", align: "center", color: T.textDim, w: LW, lines: 2 });
-        UI.end();
-    }
-}
-
-// ---- ajuda online (CelerOS Hub, mesmo formato do HelpCenterUI.cpp) ---------
+// ---- busca online -----------------------------------------------------------
+// UM frame de ocupado, Wi-Fi conferido (A.wifiWait deixa o usuario ligar a
+// rede) e getJSON que nunca estoura; null = aviso ja mostrado.
 var IDX_URL = "https://os.celer.tec.br/help/index.json";
-var errMsg = "";
-
-function loading(msg) {
-    UI.invalidate();
-    UI.begin(T.bg);
-    UI.header("Ajuda Online");
-    UI.spinner(120, 140, 18);
-    UI.text(msg, 120, 172, { align: "center", color: T.textDim });
-    UI.end();
-}
-
-// busca JSON com tratamento de erro; em falha retorna null e seta errMsg
-function fetchJSON(url, msg) {
-    loading(msg);
-    if (!Net.isConnected()) {
-        errMsg = "Ligue o Wi-Fi primeiro!";
-        return null;
-    }
-    var d = null;
-    try {
-        d = Net.getJSON(url);
-    } catch (e) {
-        errMsg = "Erro ao ler os dados.";
-        return null;
-    }
-    if (d === null || d === undefined) {
-        errMsg = "Sem conexão. Use a Ajuda Offline.";
-        return null;
-    }
+function buscar(url, msg) {
+    A.busy(msg);
+    if (!A.net.online() && !A.wifiWait("A ajuda online precisa de Wi-Fi.")) return null;
+    var d = A.net.getJSON(url);
+    if (!d) A.error("Ajuda Online", "Sem conexão. Use a Ajuda Offline.");
     return d;
 }
-function showError() {
-    UI.alert("Ajuda Online", errMsg);
-}
 
-function onlineFlow() {
-    var d = fetchJSON(IDX_URL, "Buscando índice...");
-    if (d === null) { showError(); return; }
-    var catNames = [], catUrls = [];
-    var cats = d.categories || [];
-    for (var i = 0; i < cats.length && i < 25; i++) {
-        catNames.push(String(cats[i].name));
-        catUrls.push(String(cats[i].url));
-    }
-    if (catNames.length === 0) { errMsg = "Índice vazio."; showError(); return; }
-    while (true) {
-        setList("Ajuda Online", catNames, null);
-        var c = listLoop();
-        if (c < 0) return;
-        var a = fetchJSON(catUrls[c], "Carregando tópicos...");
-        if (a === null) { showError(); return; }
-        var artTitles = [], artUrls = [];
-        var arts = a.articles || [];
-        for (var j = 0; j < arts.length && j < 25; j++) {
-            artTitles.push(String(arts[j].title));
-            artUrls.push(String(arts[j].url));
+// ---- telas ------------------------------------------------------------------
+A.run({
+    menu: function (c) {
+        var T = A.T;
+        A.header("Central de Ajuda", { back: false });
+        UI.card(A.L.x, A.L.top, A.L.w, 64);
+        UI.text("Como usar o CelerOS:", A.L.x + 12, A.L.top + 10, { role: "title" });
+        UI.text("gestos, Wi-Fi, apps e mais.", A.L.x + 12, A.L.top + 38, { role: "caption", color: T.textDim });
+        UI.cardEnd();
+        if (UI.button("Ajuda Offline", A.L.x, A.L.top + 80, A.L.w, 44)) return "offline";
+        if (UI.button("Ajuda Online", A.L.x, A.L.top + 134, A.L.w, 44, { style: "ghost" })) return "online";
+        UI.text("A ajuda online lê a central no hub (precisa de Wi-Fi).", 120, A.L.top + 192,
+                { role: "caption", align: "center", color: T.textDim, w: A.L.w, lines: 2 });
+    },
+    offline: function (c) {
+        if (c.entered) UI.resetScroll("cat");
+        if (A.header("Ajuda Offline")) return A.BACK;
+        var i = UI.list("cat", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasCat.rows());
+        if (i >= 0) { gato = i; return "topicos"; }
+    },
+    topicos: function (c) {
+        if (c.entered) UI.resetScroll("top");
+        if (A.header(CATS[gato].name)) return A.BACK;
+        var tp = CATS[gato].topics;
+        var i = UI.list("top", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasTop.rows());
+        if (i >= 0) {
+            var topico = tp[i];
+            // o viewer do kit nao invalida a 1a moldura (gap contornado
+            // aqui): sem isso, o spinner de um A.busy anterior queima no
+            // frame parcial de entrada
+            UI.invalidate();
+            A.text.viewer(topico.t, function () { return topico.c; });   // bloqueante
         }
-        if (artTitles.length === 0) { errMsg = "Nenhum artigo."; showError(); return; }
-        while (true) {
-            setList(catNames[c], artTitles, null);
-            var k = listLoop();
-            if (k < 0) break;
-            var art = fetchJSON(artUrls[k], "Carregando artigo...");
-            if (art === null) { showError(); return; }
-            var content = "Conteúdo não encontrado.";
-            if (art.content !== undefined && art.content !== null) content = String(art.content);
-            setViewer(artTitles[k], content);
-            viewerLoop();
-        }
-    }
-}
-
-// ---- fluxo offline: categorias -> topicos -> leitor ------------------------
-function offlineFlow() {
-    while (true) {
-        var names = [], subs = [];
-        for (var i = 0; i < CATS.length; i++) {
-            names.push(CATS[i].name);
-            subs.push(CATS[i].topics.length + (CATS[i].topics.length === 1 ? " tópico" : " tópicos"));
-        }
-        setList("Ajuda Offline", names, subs);
-        var c = listLoop();
-        if (c < 0) return;
-        var tp = CATS[c].topics;
-        while (true) {
-            var tnames = [], tsubs = [];
-            for (var j = 0; j < tp.length; j++) {
-                tnames.push(tp[j].t);
-                tsubs.push(tp[j].d);
+    },
+    online: function (c) {
+        if (c.entered) UI.resetScroll("ocat");
+        if (A.header("Ajuda Online")) return A.BACK;
+        if (!ocats) {
+            // indice com cache de sessao: voltar de uma categoria nao refaz
+            // as tres buscas (o menu refetchava a cada entrada)
+            var d = buscar(IDX_URL, "Buscando índice...");
+            if (!d) return A.BACK;
+            var cs = d.categories || [], out = [];
+            for (var i = 0; i < cs.length && i < 25; i++) {
+                out.push({ name: String(cs[i].name), url: String(cs[i].url) });
             }
-            setList(CATS[c].name, tnames, tsubs);
-            var k = listLoop();
-            if (k < 0) break;
-            setViewer(tp[k].t, tp[k].c);
-            viewerLoop();
+            if (!out.length) { A.error("Ajuda Online", "Índice vazio."); return A.BACK; }
+            ocats = out;
+            UI.invalidate();
+        }
+        var i2 = UI.list("ocat", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasOcat.rows());
+        if (i2 >= 0) {
+            var a = buscar(ocats[i2].url, "Carregando tópicos...");
+            if (!a) return;
+            var arts = a.articles || [], tps = [];
+            for (var j = 0; j < arts.length && j < 25; j++) {
+                tps.push({ title: String(arts[j].title), url: String(arts[j].url) });
+            }
+            if (!tps.length) { A.error("Ajuda Online", "Nenhum artigo."); return; }
+            oarts = tps;
+            ocat = i2;
+            UI.invalidate();
+            return "otopicos";
+        }
+    },
+    otopicos: function (c) {
+        if (c.entered) UI.resetScroll("oart");
+        if (A.header(ocats[ocat].name)) return A.BACK;
+        var i = UI.list("oart", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasOart.rows());
+        if (i >= 0) {
+            var art = buscar(oarts[i].url, "Carregando artigo...");
+            if (!art) return;
+            var conteudo = (art.content === undefined || art.content === null)
+                ? "Conteúdo não encontrado." : String(art.content);
+            var titulo = oarts[i].title;
+            UI.invalidate();   // ver nota do gap no leitor (topicos)
+            A.text.viewer(titulo, function () { return conteudo; });     // bloqueante
         }
     }
-}
-
-// ---- main -------------------------------------------------------------------
-while (true) {
-    var modo = menuLoop();
-    if (modo === 0) offlineFlow();
-    else onlineFlow();
-}
+}, "menu", { fps: 15 });

@@ -38,5 +38,37 @@
       "celeros.game.steer": "^1.0.0",
       "celeros.sfx": "^1.4.0"
     }
+  },
+  "celeros.app.fmt": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.path": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.semver": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.data": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.caps": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.events": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.net": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.text": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.input": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.chat": { "deps": { "celeros.app": "^1.0.0", "celeros.app.text": "^1.0.0" } },
+  "celeros.app.form": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.list": { "deps": { "celeros.app": "^1.0.0" } },
+  "celeros.app.launch": { "deps": { "celeros.app": "^1.0.0", "celeros.app.semver": "^1.0.0", "celeros.app.path": "^1.0.0" } },
+  "celeros.app.history": { "deps": { "celeros.app": "^1.0.0", "celeros.app.data": "^1.0.0" } },
+  "celeros.app.ai": { "deps": { "celeros.app": "^1.0.0", "celeros.app.data": "^1.0.0", "celeros.app.text": "^1.0.0", "celeros.app.net": "^1.0.0" } },
+  "celeros.app.fsx": { "deps": { "celeros.app": "^1.0.0", "celeros.app.path": "^1.0.0" } },
+  "celeros.app.updater": { "deps": { "celeros.app": "^1.0.0", "celeros.app.semver": "^1.0.0", "celeros.app.net": "^1.0.0", "celeros.app.fsx": "^1.0.0", "celeros.app.path": "^1.0.0" } },
+  "celeros.app.svc": { "deps": { "celeros.app": "^1.0.0", "celeros.app.data": "^1.0.0" } },
+  "celeros.app.mesh": { "deps": { "celeros.app": "^1.0.0", "celeros.mesh": "^1.0.1" } },
+  "celeros.app.kit": {
+    "deps": {
+      "celeros.app": "^1.0.0",
+      "celeros.app.fmt": "^1.0.0",
+      "celeros.app.path": "^1.0.0",
+      "celeros.app.data": "^1.0.0",
+      "celeros.app.net": "^1.0.0",
+      "celeros.app.text": "^1.0.0",
+      "celeros.app.form": "^1.0.0",
+      "celeros.app.list": "^1.0.0",
+      "celeros.app.caps": "^1.0.0"
+    }
   }
 }

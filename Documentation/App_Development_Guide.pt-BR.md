@@ -307,6 +307,18 @@ node tools/sdk/celer.js publish MeuApp --dry  # valida offline
 node tools/sdk/celer.js publish MeuApp
 ```
 
+### CelerKit: módulos compartilhados para apps gerais
+
+Para apps não-jogo, a família de deps `celeros.app.*` (CelerKit) entrega
+loop de telas pronto, overlays, formulários, listas, transcript de chat,
+cliente de IA e mais — veja `Documentation/App_Kit_Guide.pt-BR.md`. Scaffold
+com o kit:
+
+```bash
+node tools/sdk/celer.js new MeuApp --appkit   # deps: celeros.app.kit
+```
+
+
 ### Depurando no aparelho
 
 Placas com o debugger (as ESP32-S3 por padrão:

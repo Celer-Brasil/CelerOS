@@ -36,6 +36,7 @@ data/
 - Persist state under `/local/...`, never inside another app's folder.
 - Optional `test.js` next to `main.js`: exports `wire(env)` (taps via `env.__harness.*`, canned Net/CelerLink state) and is auto-injected by `node tools/sdk/celer.js test|emu <folder>`. It never ships to the device (filtered by the hub publish, `celerctl apps install` and the lint; README.md/jsconfig.json/*.d.ts from the SDK scaffold are dev-only too).
 - Multi-file packages (API 23): flat `.js` modules load with `require("nome")` (CommonJS `module.exports`/`exports`, cached per run, modules require modules); assets (`.js .png .wav .qoa .json .bin`) ship with the package — max 16 extras, 128KB each, 256KB of assets. The size ceiling is the SUM of all `.js` (48KB / 128KB with `requires psram`).
+- Factory apps with `deps` (shared JS dependencies, API 30) ship the closure IN THE IMAGE: `data/modules/<nome>/<versão>/<nome>.js` (stripped, byte-identical to what the hub serves — e.g. the CelerKit modules of Chat IA) + `<app pasta>/deps.json` with the resolved versions. The device `require()` falls back to `/local/modules/...` (exactly where the image puts it) and the launcher GC keeps any version a `deps.json` references — factory ones included. When a module version changes in `tools/sdk/engine/`, regenerate both sides (see Chat IA 1.3.0 as the working example).
 - UI strings are Portuguese, with accents (the fonts cover Latin-1: á é ç ã õ ô °...; not em dash, curly quotes or emoji). `python3 tools/acentuar.py --write <main.js>` restores accents inside strings.
 
 ## ANTI-PATTERNS

@@ -109,6 +109,7 @@ function cmdNew(args) {
     const dir = path.join(base, name);
     if (fs.existsSync(dir)) die('new: ' + dir + ' ja existe');
     const game = !!flags.game;
+    const appkit = !!flags.appkit;
 
     // packageName: default br.celer.<slug> (autor troca pelo proprio)
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -145,6 +146,18 @@ function cmdNew(args) {
             'celeros.game.fx': '^' + engineVersion('celeros.game.fx.js'),
         };
     }
+    if (appkit) {
+        // app geral sobre o CelerKit: o pacote kit (core + fmt + path + data
+        // + net + text + form + list + caps) numa unica dep — o fecho cabe
+        // de sobra no teto de 48KB sem psram (~14KB stripped). Modulos fora
+        // do kit (chat/input/ai/launch/...) entram a parte no app.json (ver
+        // App Kit Guide)
+        appJson.permissions = ['fs'];
+        appJson.description = 'App CelerOS feito com o CelerKit';
+        appJson.deps = {
+            'celeros.app.kit': '^' + engineVersion('celeros.app.kit.js'),
+        };
+    }
 
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(appJson, null, 2) + '\n');
@@ -170,8 +183,18 @@ function cmdNew(args) {
         fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.game.fx.d.ts'),
                         path.join(dir, 'celeros.game.fx.d.ts'));
     }
+    if (appkit) {
+        fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.app.d.ts'),
+                        path.join(dir, 'celeros.app.d.ts'));
+        ['fmt', 'path', 'data', 'net', 'text', 'form', 'list', 'caps', 'kit'].forEach(function (m) {
+            fs.copyFileSync(path.join(ENGINE_DIR, 'celeros.app.' + m + '.d.ts'),
+                            path.join(dir, 'celeros.app.' + m + '.d.ts'));
+        });
+    }
 
-    console.log('criado: ' + dir + ' (api ' + api + (game ? ', jogo com deps celeros.game + fx' : '') + ')');
+    console.log('criado: ' + dir + ' (api ' + api +
+                (game ? ', jogo com deps celeros.game + fx' : '') +
+                (appkit ? ', app com dep celeros.app.kit' : '') + ')');
     console.log('proximos passos:');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);

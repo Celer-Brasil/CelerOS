@@ -209,6 +209,17 @@ node tools/sdk/celer.js publish MyApp --dry  # offline validation
 node tools/sdk/celer.js publish MyApp
 ```
 
+### CelerKit: shared modules for general apps
+
+For non-game apps, the `celeros.app.*` dependency family (CelerKit) gives
+you a ready screen loop, overlays, forms, lists, chat transcript, AI client
+and more — see `Documentation/App_Kit_Guide.md`. Scaffold with the kit:
+
+```bash
+node tools/sdk/celer.js new MyApp --appkit   # deps: celeros.app.kit
+```
+
+
 ### Debugging on the device
 
 Boards with the debugger (the ESP32-S3 ones by default:

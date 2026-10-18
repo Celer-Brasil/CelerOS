@@ -1,259 +1,79 @@
-// CelerOS Chat IA — assistente DeepSeek (API 18: objeto AI)
-// ES5 puro (Duktape). Teclado do OS ancorado no rodape; cada OK envia a
-// mensagem para a IA e a resposta chega pelo callback enquanto o app
-// bombeia o loop (o framework faz o HTTPS em task propria). A chave fica
-// no aparelho (/local/deepseek_key.txt) — o app nunca a ve.
-// Conversa em baloes no toolkit UI (API 22): area rolavel com inercia que
-// segue o fim quando chega mensagem nova.
+// CelerOS Chat IA — assistente DeepSeek sobre o CelerKit (deps celeros.app.*).
+// O app era o molde do par transcript+cliente de IA que o Qwen copiava:
+// bolhas/rolagem viraram celeros.app.chat, o tratamento do AI.chat (retry dos
+// transientes, busy, historico) virou celeros.app.ai, a linha de digitacao
+// com teclado dockado virou celeros.app.input. Aqui so fica a cola do app.
+// ES5 puro (Duktape). A chave fica no aparelho — o app nunca a ve.
 
-var T = System.theme();
-var W = 240;
+var A = require("celeros.app");
+require("celeros.app.text");
+require("celeros.app.input");
+require("celeros.app.chat");
+require("celeros.app.ai");
 
-var hasAI = (typeof AI !== "undefined") && (typeof AI.chat === "function");
 var VER = System.getOSVersion();
+A.init();
 
 // Personalidade curta: resposta curta gasta menos token, latencia e tela
-var SYSTEM_PROMPT = "Você é o assistente do CelerOS, um sistema para " +
-    "dispositivos ESP32 com tela pequena. Responda em português, de forma " +
-    "curta e direta, sem usar emojis.";
-var CTX_MSGS = 12;               // quantas mensagens enviar de contexto
-var MAX_MSGS = 20;               // quantas guardar no historico
-var MAX_VIEW = 60;               // baloes na tela (conversa + avisos)
-
-var msgs = [];                   // conversa: {r: "user"|"assistant", s: texto}
-var view = [];                   // baloes: {k: "user"|"assistant"|"note", s, c, h}
-var busy = false;
-var histFile = (typeof FS.appData === "function" ? FS.appData() : "");
-histFile += "historico.json";
-
-var kbTop = 320;
-var useKeypad = false;
-var hasChips = (typeof System.topbarButtons === "function");
-var contentH = 0;                // altura da conversa (soma dos baloes)
-var BW = 180;                    // largura maxima do balao
-var PAD = 8;
-
-// ------------------------------------------------------------- historico ---
-(function loadHist() {
-    if (!histFile || histFile === "historico.json") return;
-    var raw = FS.readTextFile(histFile);
-    if (!raw) return;
-    try {
-        var arr = JSON.parse(raw);
-        if (arr && arr.length) msgs = arr;
-    } catch (e) { msgs = []; }
-})();
-
-function saveHist() {
-    if (!histFile || histFile === "historico.json") return;
-    try {
-        FS.writeTextFile(histFile, JSON.stringify(msgs.slice(-MAX_MSGS)));
-    } catch (e) { /* historico e melhor esforco: nunca derruba o chat */ }
-}
-// ---------------------------------------------------------------- saida ----
-// As fonts so desenham Latin-1: emoji/simbolos da IA viram nada
-function fit(s) {
-    return String(s === null || s === undefined ? "" : s)
-        .replace(/[^\u0000-ÿ\n]/g, "");
-}
-
-// Novo balao: mede uma vez (altura e largura) e segue o fim da conversa
-function pushView(k, s, c) {
-    var it = { k: k, s: s, c: c };
-    if (k === "note") {
-        it.h = UI.measureWrap(s, W - 24, "caption");
-    } else {
-        var oneLine = UI.measure(s, "body") + 2 * PAD;
-        it.bw = oneLine < BW ? Math.max(oneLine, 40) : BW;
-        it.h = UI.measureWrap(s, it.bw - 2 * PAD, "body") + 2 * 6;
-    }
-    view.push(it);
-    if (view.length > MAX_VIEW) view.shift();
-    UI.scrollTo("chat", 1e6);
-}
-function pushMsg(role, text) {
-    msgs.push({ r: role, s: text });
-    if (msgs.length > MAX_MSGS) msgs.shift();
-    pushView(role, text);
-    saveHist();
-}
-function pushHint(s) { pushView("note", s, T.textDim); }
-function pushErr(s) { pushView("note", s, T.err); }
-
-// ------------------------------------------------------------------ envio --
-// Um pedido em voo. 502/504/429 do gateway sao transientes: uma retentativa
-// silenciosa (2 s) evita o erro na cara do dono, como no Qwen.
-function ask(payload, isRetry) {
-    if (busy) return false;   // retry atrasado nao atropela uma pergunta nova
-    busy = true;
-    var started = false;
-    // AI.chat LANCA quando o WiFi cai entre o check e a chamada (ou a chave
-    // sumiu): sem o catch, busy ficava preso e o app morria com erro
-    try {
-        started = AI.chat({ messages: payload, max_tokens: 400 }, function (r) {
-            busy = false;
-            if (!isRetry && r && !r.ok &&
-                (r.status === 502 || r.status === 504 || r.status === 429)) {
-                pushHint("repetindo...");
-                setTimeout(function () { ask(payload, true); }, 2000);
-                return;
-            }
-            try { if (typeof System.beep === "function") System.beep(1320, 60); } catch (e) {}
-            if (r && r.ok && r.content) {
-                pushMsg("assistant", fit(r.content));
-                if (r.usage && r.usage.total_tokens) {
-                    pushHint("(" + r.usage.total_tokens + " tokens)");
-                }
-            } else if (r && r.ok) {
-                pushErr("IA: resposta vazia");
-            } else {
-                pushErr("IA: erro " + (r && r.error ? r.error : "HTTP " + (r ? r.status : 0)));
-                if (r && r.detail) pushHint("detalhe: " + fit(r.detail));
-            }
-            UI.invalidate();
-        });
-    } catch (e) {
-        busy = false;
-        pushErr("IA: " + (e && e.message ? e.message : e));
+var ia = A.ai.client({
+    system: "Você é o assistente do CelerOS, um sistema para " +
+            "dispositivos ESP32 com tela pequena. Responda em português, de forma " +
+            "curta e direta, sem usar emojis.",
+    onmsg: function (papel, s) {
+        if (papel === "user") t.user(s);
+        else t.bot(s);
         UI.invalidate();
-        return false;
-    }
-    if (!started) {
-        busy = false;
-        pushErr("IA: ocupado, tente de novo");
-    }
-    UI.invalidate();
-    return started;
+    },
+    note: function (s) { t.note(s); UI.invalidate(); },
+    err: function (s) { t.err(s); UI.invalidate(); }
+});
+
+// transcript (celeros.app.chat): bolhas medidas, rolagem que segue o fim
+var t = A.chat.new();
+
+// cabecalho + conversa anterior (o historico mora no cliente de IA)
+t.note("Chat IA " + VER, A.T.accent);
+if (!ia.ok) t.err("requer firmware com API >= 18");
+else t.note("DeepSeek; histórico local; arraste para rever");
+for (var i = 0; i < ia.hist.length; i++) {
+    var m = ia.hist[i];
+    if (m.r === "user") t.user(m.s);
+    else t.bot(m.s);
 }
 
-function send(text) {
-    if (busy) { pushHint("(a IA ainda está respondendo)"); return; }
-    if (!hasAI) { pushErr("sem AI no firmware (requer API >= 18)"); return; }
-    if (!AI.configured()) { pushErr("sem chave: rode tools/push_deepseek_key.py"); return; }
-    if (!Net.isConnected()) { pushErr("sem WiFi"); return; }
+// teclado dockado + chips da faixa (Limpar zera; Cancelar esquece a requisicao)
+var kb = A.input.open({ maxLen: 256, chips: ["Limpar", "Cancelar"] });
+var busyAntes = false;
 
-    pushMsg("user", text);
-    var payload = [{ role: "system", content: SYSTEM_PROMPT }];
-    var start = Math.max(0, msgs.length - CTX_MSGS);
-    for (var i = start; i < msgs.length; i++) {
-        payload.push({ role: msgs[i].r, content: msgs[i].s });
-    }
-    ask(payload, false);
-}
-
-// -------------------------------------------------------------- desenho ----
-// Conversa: area rolavel; baloes so no frame total (rolar marca o proximo)
-// altura total conhecida ANTES do scrollBegin (cada balao foi medido ao
-// entrar): o scrollTo(fim) limita ao conteudo certo ja no primeiro frame
-function chatHeight() {
-    var y = 6;
-    for (var i = 0; i < view.length; i++) y += view[i].h + 8;
-    return y + (busy ? 36 : 0);
-}
-function drawChat(full) {
-    var top = 4, h = kbTop - 44;
-    contentH = chatHeight();
-    var off = UI.scrollBegin("chat", 0, top, W, h, Math.max(h, contentH));
-    if (typeof __harness !== "undefined") {
-        __harness.chatOff = off;
-        __harness.chatMax = Math.max(0, contentH - h);
-    }
-    var y = top + 6 - off;
-    for (var i = 0; i < view.length; i++) {
-        var it = view[i];
-        var vis = y + it.h >= top && y < top + h;
-        if (it.k === "note") {
-            if (full && vis) UI.text(it.s, W / 2, y, { role: "caption", align: "center", color: it.c,
-                                                       w: W - 24, lines: 64, id: i });
-        } else {
-            var mine = it.k === "user";
-            var x = mine ? W - 8 - it.bw : 8;
-            var bg = mine ? T.accentD : T.raised;
-            if (full && vis) {
-                System.fillRoundRect(x, y, it.bw, it.h, 12, bg);
-                UI.text(it.s, x + PAD, y + 6, { w: it.bw - 2 * PAD, lines: 64, bg: bg, id: i });
-            }
-        }
-        y += it.h + 8;
-    }
-    if (busy) {
-        // balao "pensando" com spinner (anima a cada frame)
-        if (full) System.fillRoundRect(8, y, 64, 28, 12, T.raised);
-        UI.spinner(40, y + 14, 9);
-        y += 36;
-    } else if (!view.length && full) {
-        UI.text("Pergunte algo ao assistente...", W / 2, top + h / 2 - 8,
-                { role: "caption", align: "center", color: T.textDim });
-    }
-    UI.scrollEnd();
-}
-
-// Linha de digitacao acima do teclado (o campo do teclado e do app)
-function drawInput() {
-    var y = kbTop - 36;
-    UI.card(6, y, W - 12, 30, { radius: 15, stroke: true });
-    var s = System.keypadText();
-    var cur = (Math.floor(System.millis() / 500) % 2) ? "_" : " ";
-    var shown = s.length ? s : "";
-    while (shown.length && UI.measure(shown + "_", "body") > W - 40) shown = shown.substring(1);  // cauda
-    if (s.length || cur === "_") {
-        UI.text(shown + cur, 18, y + 7, { color: s.length ? T.text : T.textDim, id: 1 });
-    } else {
-        UI.text("Mensagem", 18, y + 7, { color: T.textDim, id: 1 });
-    }
-    UI.cardEnd();
-}
-
-// ------------------------------------------------------------------ main ---
-useKeypad = System.keypadOpen({ field: false, maxLen: 256 });
-if (useKeypad) kbTop = System.keypadRect().y;
-
-pushView("note", "Chat IA " + VER, T.accent);
-if (hasAI) {
-    pushHint("DeepSeek; histórico local; arraste para rever");
-} else {
-    pushErr("requer firmware com API >= 18");
-}
-// A conversa anterior aparece no boot (o arrasto tem o que rever)
-for (var hi = 0; hi < msgs.length; hi++) pushView(msgs[hi].r, msgs[hi].s);
-
-// chips da faixa (API 6): Limpar zera a conversa; Cancelar esquece a
-// requisicao em curso
-if (useKeypad && hasChips) System.topbarButtons(["Limpar", "Cancelar"]);
-
-while (true) {
-    if (useKeypad) {
-        var ev = System.keypadPoll();
+A.run({
+    chat: function (c) {
+        // eventos do teclado chegam antes do frame (o firmware entrega no present)
+        var ev = A.input.poll();
         if (ev) {
-            if (ev.type === "enter") {
-                if (ev.text) send(ev.text);
-            } else if (ev.type === "cancel") {
-                System.keypadOpen({ field: false, maxLen: 256 });
-                kbTop = System.keypadRect().y;
-                UI.invalidate();
-            }
+            if (ev.type === "enter" && ev.text) ia.send(ev.text);
+            UI.invalidate();
         }
-
-        var chip = System.topbarPop ? System.topbarPop() : null;
+        var chip = A.input.chip();
         if (chip === "Limpar") {
-            msgs = [];
-            view = [];
-            try { FS.deleteFile(histFile); } catch (e) {}
-            pushHint("conversa apagada");
+            ia.clear();
+            t.clear();
+            t.note("conversa apagada");
             UI.invalidate();
         } else if (chip === "Cancelar") {
-            if (busy && hasAI && AI.cancel()) {
-                busy = false;
-                pushHint("cancelado");
-            }
+            if (ia.cancel()) t.note("cancelado");
             UI.invalidate();
         }
-    }
 
-    var full = UI.begin(T.bg);
-    // o fundo total apaga o teclado acoplado: redesenha por cima
-    if (full && useKeypad) System.keypadDraw();
-    drawChat(full);
-    drawInput();
-    UI.end();
-}
+        // a resposta chegou: bip curto (a IA entregou no yield do frame passado)
+        if (busyAntes && !ia.busy) {
+            try { if (typeof System.beep === "function") System.beep(1320, 60); } catch (e) {}
+        }
+        busyAntes = ia.busy;
+
+        t.busy = ia.busy;                       // balao "pensando" com spinner
+        var h = kb ? A.input.top() - 44 : 320 - 48 - 4;
+        A.input.redraw(c.full);                 // frame total apaga o teclado
+        t.draw(c.full, h);
+        if (kb) A.input.line("Mensagem");
+    }
+}, "chat", { fps: 20 });

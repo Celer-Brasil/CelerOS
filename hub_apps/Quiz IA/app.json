@@ -1,12 +1,12 @@
 {
   "name": "Quiz IA",
   "packageName": "celeros.quizia",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "api": 22,
   "permissions": ["net", "fs"],
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
   "description": "Quiz de perguntas geradas na hora pela IA do aparelho (DeepSeek/OpenRouter, API 18): escolha tema e dificuldade, responda 8 perguntas e some a sequencia. Sem chave de IA configurada o jogo roda num banco offline embutido.",
-  "changelog": "1.0.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.0.0 - primeiro lancamento: perguntas dinamicas via AI.chat com parse tolerante de JSON, 6 temas x 3 dificuldades, feedback colorido no toolkit UI (API 22), banco offline de fallback e recorde salvo no appData"
+  "changelog": "1.0.2 - o selo 'novo recorde!' fica na tela de fim (antes sumia no quadro seguinte: o recorde virava o placar no proprio desenho); textos com acento (História, fórmula, sequência, fácil/média/difícil...); a origem conta a partida inteira (X de 8 perguntas da IA)\n1.0.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.0.0 - primeiro lancamento: perguntas dinamicas via AI.chat com parse tolerante de JSON, 6 temas x 3 dificuldades, feedback colorido no toolkit UI (API 22), banco offline de fallback e recorde salvo no appData"
 }

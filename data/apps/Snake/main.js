@@ -84,24 +84,32 @@ function onSnake(x, y) {
     return false;
 }
 
+// livre = fora da cobra E fora da outra fruta (a normal nascia em cima da
+// dourada: comer uma apagava a outra do desenho e ela virava invisivel)
+function busy(x, y) {
+    return onSnake(x, y) || (food && food.x === x && food.y === y) ||
+           (gold && gold.x === x && gold.y === y);
+}
+
 function freeCell() {
     var tries = 0;
     while (tries < 300) {
         var x = Math.floor(Math.random() * COLS);
         var y = Math.floor(Math.random() * ROWS);
-        if (!onSnake(x, y)) return { x: x, y: y };
+        if (!busy(x, y)) return { x: x, y: y };
         tries++;
     }
     // campo quase cheio: primeira celula livre
     for (var j = 0; j < ROWS; j++) {
         for (var i2 = 0; i2 < COLS; i2++) {
-            if (!onSnake(i2, j)) return { x: i2, y: j };
+            if (!busy(i2, j)) return { x: i2, y: j };
         }
     }
     return null;  // venceu de verdade
 }
 
 function spawnFood() {
+    food = null;          // a fruta comida nao bloqueia a celula da nova
     food = freeCell();
     if (!food) { saveHi(); state = "over"; }
 }

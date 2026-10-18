@@ -287,7 +287,8 @@ function play(x, y) {
 
 var ajuda = null;
 var AJUDA = "Toque para abrir: o primeiro toque nunca é mina. Bandeira marca " +
-            "minas; tocar num número com as bandeiras certas abre os vizinhos. " +
+            "minas (segure a célula ou use o modo bandeira); tocar num número " +
+            "com as bandeiras certas abre os vizinhos. " +
             "Abra todas as células sem mina para vencer. O melhor tempo fica salvo.";
 
 // ------------------------------------------------------------------ fluxo ---
@@ -390,6 +391,20 @@ var fluxo = E.fsm(app, {
                 var gy = Math.floor((t.y - gridY) / CELL);
                 if (board.cell(gx, gy)) play(gx, gy);
             }
+            // segurar uma celula fechada poe/tira a bandeira em qualquer modo
+            // (o atalho classico — sem ir ao botao de modo a cada mina)
+            var ip = E.input;
+            if (ip.longpress && ip.x >= gridX && ip.y >= gridY && ip.y < gridEnd) {
+                var lx = Math.floor((ip.x - gridX) / CELL);
+                var ly = Math.floor((ip.y - gridY) / CELL);
+                var lc = board.cell(lx, ly);
+                if (lc && !lc.open && !board.lost() && !board.won()) {
+                    if (!started) { started = true; startMs = System.millis(); }
+                    var on = board.toggleFlag(lx, ly);
+                    E.emit("flag", lx, ly, on);
+                    E.dirty.add(gridX + lx * CELL, gridY + ly * CELL, CELL, CELL);
+                }
+            }
             if (E.hit(BTN_MODO)) flagMode = !flagMode;
             if (E.hit(BTN_NOVO)) {
                 newGame();
@@ -448,5 +463,11 @@ var fluxo = E.fsm(app, {
 app.enter = function () { fluxo.go("menu"); };
 app.update = function (dt) { fluxo.update(dt); };
 app.draw = function () { fluxo.draw(); };
+
+// estado para testes/CI; no aparelho __harness nao existe
+if (typeof __harness !== "undefined") {
+    __harness.minado = { E: E, fluxo: fluxo, board: function () { return board; },
+                         geo: function () { return { x: gridX, y: gridY, cell: CELL }; } };
+}
 
 E.run({ app: app }, "app");

@@ -8,8 +8,8 @@
 var T = System.theme();
 var W = 240, H = 320;
 
-var TOPICS = ["Geral", "Ciências", "Historia", "Geografia", "Esportes", "Tecnologia"];
-var DIFS = ["facil", "media", "dura"];
+var TOPICS = ["Geral", "Ciências", "História", "Geografia", "Esportes", "Tecnologia"];
+var DIFS = ["fácil", "média", "difícil"];
 var TOTAL = 8;
 
 var DATA = (FS.appData ? FS.appData() : "/local/");
@@ -34,23 +34,23 @@ function tone(hz, ms) {
 // fallback quando nao ha chave de IA (ou a chamada falha): 3 por tema
 var BANK = {
     "Geral": [
-        { q: "Qual e o maior oceano da Terra?", a: ["Atlântico", "Indico", "Pacifico", "Ártico"], c: 2 },
+        { q: "Qual é o maior oceano da Terra?", a: ["Atlântico", "Índico", "Pacífico", "Ártico"], c: 2 },
         { q: "Quantos lados tem um hexágono?", a: ["5", "6", "7", "8"], c: 1 },
-        { q: "Qual e a moeda do Japão?", a: ["Yuan", "Won", "Iene", "Dólar"], c: 2 }
+        { q: "Qual é a moeda do Japão?", a: ["Yuan", "Won", "Iene", "Dólar"], c: 2 }
     ],
     "Ciências": [
-        { q: "Qual gás as plantas absorvem na fotossintese?", a: ["Oxigênio", "Nitrogênio", "CO2", "Hélio"], c: 2 },
-        { q: "Qual o osso mais longo do corpo humano?", a: "Umero,Fêmur,Tíbia,Radio".split(","), c: 1 },
-        { q: "Qual e a formula da agua?", a: ["CO2", "H2O", "O2", "NaCl"], c: 1 }
+        { q: "Qual gás as plantas absorvem na fotossíntese?", a: ["Oxigênio", "Nitrogênio", "CO2", "Hélio"], c: 2 },
+        { q: "Qual o osso mais longo do corpo humano?", a: "Úmero,Fêmur,Tíbia,Rádio".split(","), c: 1 },
+        { q: "Qual é a fórmula da água?", a: ["CO2", "H2O", "O2", "NaCl"], c: 1 }
     ],
-    "Historia": [
+    "História": [
         { q: "Em que ano o Brasil foi descoberto?", a: ["1492", "1500", "1522", "1549"], c: 1 },
         { q: "Quem pintou a Mona Lisa?", a: ["Van Gogh", "Picasso", "Da Vinci", "Michelangelo"], c: 2 },
-        { q: "Qual tratado encerrou a Guerra dos 30 anos?", a: ["Versalhes", "Westfalia", "Tordesilhas", "Utrecht"], c: 1 }
+        { q: "Qual tratado encerrou a Guerra dos 30 anos?", a: ["Versalhes", "Vestfália", "Tordesilhas", "Utrecht"], c: 1 }
     ],
     "Geografia": [
         { q: "Qual a capital da Austrália?", a: ["Sidney", "Melbourne", "Canberra", "Perth"], c: 2 },
-        { q: "Qual o rio mais extenso do Brasil?", a: ["São Francisco", "Amazonas", "Parana", "Tocantins"], c: 1 },
+        { q: "Qual o rio mais extenso do Brasil?", a: ["São Francisco", "Amazonas", "Paraná", "Tocantins"], c: 1 },
         { q: "Em qual continente fica o Egito?", a: ["Ásia", "África", "Europa", "Oceania"], c: 1 }
     ],
     "Esportes": [
@@ -72,7 +72,9 @@ var topic = 0, dif = 0;
 var q = null;              // {q, a[4], c, offline}
 var qIndex = 0, score = 0, streak = 0, bestStreak = 0;
 var answered = -1;         // indice escolhido (-1 = nao respondida)
-var lastOrigin = "";       // origem da ultima pergunta (IA / banco offline)
+var lastOrigin = "";       // de onde vieram as perguntas da partida
+var aiCount = 0;           // perguntas que vieram da IA nesta partida
+var novoRec = false;       // o fim bateu o recorde (decidido 1x ao entrar)
 
 function goState(s) {
     state = s;
@@ -81,8 +83,8 @@ function goState(s) {
 
 function feedbackLine() {
     if (!q) return "";
-    if (answered === q.c) return streak >= 3 ? "certo! sequencia x" + streak : "certo!";
-    return "a certa e a letra " + String.fromCharCode(65 + q.c);
+    if (answered === q.c) return streak >= 3 ? "certo! sequência x" + streak : "certo!";
+    return "a certa é a letra " + String.fromCharCode(65 + q.c);
 }
 
 function pickOffline() {
@@ -127,7 +129,7 @@ function nextQuestion() {
     }
 
     goState("wait");
-    var sys = "Você gera perguntas de quiz em português do Brasil. Responda SOMENTE com um objeto JSON exato, sem texto ao redor, no formato {\"q\":\"pergunta curta\",\"a\":[\"alternativa 1\",\"alternativa 2\",\"alternativa 3\",\"alternativa 4\"],\"c\":índice_da_correta_0_a_3}. As 4 alternativas devem ser plausiveis e embaralhadas; a pergunta deve ser curta.";
+    var sys = "Você gera perguntas de quiz em português do Brasil. Responda SOMENTE com um objeto JSON exato, sem texto ao redor, no formato {\"q\":\"pergunta curta\",\"a\":[\"alternativa 1\",\"alternativa 2\",\"alternativa 3\",\"alternativa 4\"],\"c\":índice_da_correta_0_a_3}. As 4 alternativas devem ser plausíveis e embaralhadas; a pergunta deve ser curta.";
     var user = "Tema: " + TOPICS[topic] + ". Dificuldade: " + DIFS[dif] + ". Gere UMA pergunta.";
     var ok = AI.chat({
         messages: [
@@ -139,6 +141,7 @@ function nextQuestion() {
         if (state !== "wait") return;        // usuario saiu / ja nao espera
         var parsed = (r && r.ok && r.content) ? parseQuestion(r.content) : null;
         q = parsed || pickOffline();
+        if (parsed) aiCount++;
         goState("ask");
     });
     if (!ok) {
@@ -153,6 +156,8 @@ function startRound() {
     streak = 0;
     bestStreak = 0;
     usedOffline = [];
+    aiCount = 0;
+    novoRec = false;
     nextQuestion();
 }
 
@@ -162,7 +167,7 @@ while (true) {
         UI.begin(T.bg);
         UI.text("Quiz IA", W / 2, 40, { role: "display", align: "center" });
         var sel = UI.list("temas", 16, 62, W - 32, 128,
-                          [{ label: "Geral" }, { label: "Ciências" }, { label: "Historia" },
+                          [{ label: "Geral" }, { label: "Ciências" }, { label: "História" },
                            { label: "Geografia" }, { label: "Esportes" }, { label: "Tecnologia" }],
                           { rowH: 30, selected: topic });
         if (sel >= 0 && sel !== topic) { topic = sel; UI.invalidate(); }
@@ -230,7 +235,16 @@ while (true) {
                     color: answered === q.c ? T.ok : T.err });
             if (UI.button(qIndex + 1 >= TOTAL ? "Ver resultado" : "Próxima", 60, 290, 120, 28)) {
                 if (qIndex + 1 >= TOTAL) {
-                    lastOrigin = q.offline ? "banco offline" : "perguntas geradas pela IA";
+                    lastOrigin = aiCount === TOTAL ? "perguntas geradas pela IA" :
+                                 aiCount ? aiCount + " de " + TOTAL + " perguntas da IA" :
+                                 "banco offline";
+                    // recorde decidido AQUI: no draw ele virava hi no 1o
+                    // quadro e o selo "novo recorde!" sumia no seguinte
+                    novoRec = score > hi;
+                    if (novoRec) {
+                        hi = score;
+                        FS.writeTextFile(HI_FILE, String(hi));
+                    }
                     goState("end");
                 } else {
                     qIndex++;
@@ -248,11 +262,9 @@ while (true) {
         UI.text("Fim do quiz", W / 2, 52, { role: "display", align: "center" });
         UI.badge(score + " de " + TOTAL + " certas", 12, 96,
                  { color: score >= TOTAL / 2 ? T.ok : T.accentD });
-        UI.text("melhor sequencia: " + bestStreak, W / 2, 136, { role: "title", align: "center" });
-        if (score > hi) {
+        UI.text("melhor sequência: " + bestStreak, W / 2, 136, { role: "title", align: "center" });
+        if (novoRec) {
             UI.badge("novo recorde!", 12, 160, { color: T.warn, textColor: T.onAccent });
-            hi = score;
-            FS.writeTextFile(HI_FILE, String(hi));
         } else {
             UI.text("recorde: " + hi + "/" + TOTAL, W / 2, 166,
                     { role: "caption", align: "center", color: T.textDim });

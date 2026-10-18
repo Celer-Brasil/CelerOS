@@ -159,7 +159,10 @@ function onMsg(m, now) {
         if (kr !== round) return;
         if (transit && kn >= transit.n) transit = null;
         if (kn >= passN) {
-            if (holding && m.from !== me.id) holding = false;   // a batata voltou por engano: quem confirmou fica
+            if (holding && m.from !== me.id) {   // a batata voltou por engano: quem confirmou fica
+                holding = false;
+                led(0, 0, 0);
+            }
             passN = kn;
             holder = m.from;
             UI.invalidate();
@@ -180,6 +183,9 @@ function onMsg(m, now) {
 function tick(now) {
     var dt = lastFrame ? now - lastFrame : 0;
     lastFrame = now;
+    // quadro longo (malha caiu e o gate segurou o loop, dialogo do sistema):
+    // o pavio nao queima o tempo parado de uma vez so
+    if (dt > 250) dt = 250;
     if (now - helloAt > 3000) {
         helloAt = now;
         CelerNet.broadcast("bh" + (state === LOBBY ? "l" : "g"), 6);

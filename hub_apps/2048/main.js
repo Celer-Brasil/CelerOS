@@ -72,6 +72,7 @@ var ANIM_MS = 110;                      // deslize (curto: ~3 quadros a 30 fps)
 var POP_MS = 130;                       // estouro da peca fundida / nova
 
 var BTN_UNDO = { x: 12, y: 284, w: 104, h: 30 };
+var _undoO = { primary: false, textColor: undefined, stroke: undefined };
 var BTN_NEW = { x: 124, y: 284, w: 104, h: 30 };
 var BTN_CONT = { x: 68, y: 196, w: 104, h: 34 };   // "continuar" do 2048
 var BTN_PAUSE = { x: W - 38, y: 8, w: 30, h: 22 }; // canto do HUD
@@ -333,14 +334,18 @@ function dimColor(c) {
     return E.caps.wide ? System.mixColor(c, T.bg, 50) : c;
 }
 
+// opts em scratch: 16 pecas por redesenho (e ~30 redesenhos por jogada
+// animada) com um literal novo cada eram GC no Duktape
+var _tileR = { r: 8 };
+var _tileT = { ts: "big", align: "center", valign: "middle", color: 0 };
+
 // tile (retangulo arredondado + valor) com lado size e canto em px/py
 function drawTile(px, py, size, v, dim) {
     var c = tileColors(v);
-    E.gfx.rect(px, py, size, size, dim ? dimColor(c.bg) : c.bg, { r: 8 });
-    var papel = v < 100 ? "big" : (v < 1000 ? "body" : "small");
-    E.gfx.text(String(v), px + size / 2, py + size / 2,
-               { ts: papel, align: "center", valign: "middle",
-                 color: dim ? dimColor(c.fg) : c.fg });
+    E.gfx.rect(px, py, size, size, dim ? dimColor(c.bg) : c.bg, _tileR);
+    _tileT.ts = v < 100 ? "big" : (v < 1000 ? "body" : "small");
+    _tileT.color = dim ? dimColor(c.fg) : c.fg;
+    E.gfx.text(String(v), px + size / 2, py + size / 2, _tileT);
 }
 
 function drawBoard(dim) {
@@ -359,8 +364,7 @@ function drawBoard(dim) {
             var v = board[idx(x, y)];
             var px = GX + x * (CELL + GAP), py = GY + y * (CELL + GAP);
             if (!v) {
-                E.gfx.rect(px, py, CELL, CELL, dim ? dimColor(T.bg) : T.bg,
-                           { r: 8 });
+                E.gfx.rect(px, py, CELL, CELL, dim ? dimColor(T.bg) : T.bg, _tileR);
             } else if (!hold[idx(x, y)]) {
                 drawTile(px, py, CELL, v, dim);
             }
@@ -404,7 +408,12 @@ E.run({
     },
 
     ajuda: {
-        // comum (nao static): o dialogo revela o texto no draw
+        // static: repinta so enquanto o texto datilografa (antes a tela
+        // inteira seguia a 30 fps esperando o toque)
+        static: true,
+        update: function () {
+            if ((ajudaDlg && !ajudaDlg.done) || E.input.tap) E.redraw();
+        },
         enter: function () {
             ajudaDlg = E.ui.dialog(
                 "Deslize para mover as peças. Iguais se juntam e dobram de valor. " +
@@ -427,7 +436,13 @@ E.run({
         update: function (dt) {
             if (paused) return;   // congelado: o menu vive no draw
             var alive = pruneAnims();                       // deslizes/pops
-            if (juiceT > 0) { juiceT -= dt; alive++; }      // particulas
+            // particulas/textos/flash vivos de verdade (o 0,8 s fixo seguia
+            // repintando a tela inteira depois que o fx ja tinha acabado)
+            if (juiceT > 0) {
+                juiceT -= dt;
+                if (E.fx.count() > 0 || E.fx._flashT > 0) alive++;
+                else juiceT = 0;
+            }
             if (alive > 0) E.redraw();
             if (E.hit(BTN_PAUSE)) { paused = true; E.redraw(); return; }
             if (E.hit(BTN_UNDO)) { undo(); return; }
@@ -452,8 +467,10 @@ E.run({
             drawBoard();
             E.gfx.text("deslize para mover", W / 2, 268,
                        { ts: "small", align: "center", color: T.textDim });
-            E.gfx.button("Desfazer", BTN_UNDO.x, BTN_UNDO.y, BTN_UNDO.w, BTN_UNDO.h,
-                         { primary: false });
+            // sem jogada para desfazer o botao aparece apagado
+            _undoO.textColor = prevBoard ? undefined : T.textDim;
+            _undoO.stroke = prevBoard ? undefined : T.stroke;
+            E.gfx.button("Desfazer", BTN_UNDO.x, BTN_UNDO.y, BTN_UNDO.w, BTN_UNDO.h, _undoO);
             E.gfx.button("Novo jogo", BTN_NEW.x, BTN_NEW.y, BTN_NEW.w, BTN_NEW.h,
                          { primary: false });
             E.gfx.button("II", BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w, BTN_PAUSE.h,

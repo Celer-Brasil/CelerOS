@@ -9,12 +9,14 @@
 // 2.06 precisa do reg 0xA5 (power mode = monitor) escrito no init — sem isso
 // o chip hiberna e as leituras voltam vazias; o Touch_FT5x06 nativo nao faz.
 //
-// Porte fiel do peripherals/touch.rs do firmware Rust do watch
-// (waveshare-watch-rs):
+// Porte do peripherals/touch.rs do firmware Rust do watch
+// (waveshare-watch-rs), estendido ao MULTITOUCH (API 43):
 //   - reset fisico: TP_RESET low 10 ms, high 50 ms;
 //   - reg 0xA5 = 0x01 (monitor mode);
-//   - leitura: reg 0x02 = numero de dedos; regs 0x03..0x06 = X/Y do ponto 1
-//     (12 bits: (h & 0x0F) << 8 | l).
+//   - leitura: reg 0x02 = numero de dedos; a partir do 0x03, blocos de
+//     6 bytes por ponto (layout padrao FT5x06 — molde no Touch_FT5x06.inl
+//     vendored): x = (b0 & 0x0F) << 8 | b1, y = (b2 & 0x0F) << 8 | b3,
+//     track id = b2 >> 4. O Rust le so o ponto 1; aqui vao os 5 do chip.
 // O chip entrega coordenadas ja em resolucao do painel — o firmware Rust usa
 // o valor cru direto como pixel; aqui so limitamos aos bounds do vidro.
 
@@ -44,8 +46,9 @@ namespace lgfx
   {
     static constexpr const uint8_t default_addr   = 0x38;
     static constexpr const uint8_t REG_FINGER_NUM = 0x02;
-    static constexpr const uint8_t REG_XY1        = 0x03;  // x_h, x_l, y_h, y_l
+    static constexpr const uint8_t REG_POINTS     = 0x03;  // blocos de 6 B por ponto
     static constexpr const uint8_t REG_POWER_MODE = 0xA5;
+    static constexpr const uint8_t MAX_POINTS     = 5;     // familia FT5x06
 
     Touch_FT3168_IDF(void)
     {
@@ -131,23 +134,30 @@ namespace lgfx
       uint8_t fingers = 0;
       _down = false;
       if (!readReg(REG_FINGER_NUM, &fingers)) return 0;
-      if ((fingers & 0x0F) == 0) return 0;
+      uint_fast8_t points = fingers & 0x0F;
+      if (points == 0) return 0;
+      if (points > MAX_POINTS) points = MAX_POINTS;
+      if (points > count) points = count;
       _down = true;
 
-      uint8_t xy[4] = {0, 0, 0, 0};
-      if (!readRegBurst(REG_XY1, xy, 4)) return 0;
+      // blocos de 6 bytes por ponto (0x03..): XH XL YH YL weight area —
+      // track id no nibble alto do YH
+      uint8_t xy[MAX_POINTS * 6] = {0};
+      if (!readRegBurst(REG_POINTS, xy, points * 6)) return 0;
+      for (uint_fast8_t idx = 0; idx < points; ++idx)
+      {
+        const uint8_t* d = &xy[idx * 6];
+        tp[idx].x = (int16_t)(((d[0] & 0x0F) << 8) | d[1]);
+        tp[idx].y = (int16_t)(((d[2] & 0x0F) << 8) | d[3]);
+        tp[idx].id = d[2] >> 4;
+        tp[idx].size = 1;
 
-      // So o ponto 1 (o firmware Rust tambem le apenas ele).
-      tp[0].id = 0;
-      tp[0].x = (int16_t)(((xy[0] & 0x0F) << 8) | xy[1]);
-      tp[0].y = (int16_t)(((xy[2] & 0x0F) << 8) | xy[3]);
-      tp[0].size = 1;
-
-      if (tp[0].x < _cfg.x_min) tp[0].x = _cfg.x_min;
-      if (tp[0].x > _cfg.x_max) tp[0].x = _cfg.x_max;
-      if (tp[0].y < _cfg.y_min) tp[0].y = _cfg.y_min;
-      if (tp[0].y > _cfg.y_max) tp[0].y = _cfg.y_max;
-      return 1;
+        if (tp[idx].x < _cfg.x_min) tp[idx].x = _cfg.x_min;
+        if (tp[idx].x > _cfg.x_max) tp[idx].x = _cfg.x_max;
+        if (tp[idx].y < _cfg.y_min) tp[idx].y = _cfg.y_min;
+        if (tp[idx].y > _cfg.y_max) tp[idx].y = _cfg.y_max;
+      }
+      return points;
     }
 
   private:

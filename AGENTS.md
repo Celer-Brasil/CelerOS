@@ -96,6 +96,14 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 
 ## COMMANDS
 ```bash
+# ESP-IDF 6.1 REQUIRED (~/esp/v6.1/esp-idf). `get_idf` in ~/.bashrc activates it (fixed 2026-10-17:
+# it used to point to v6.0/py3.13). It uses the system python3 3.14 (tools env idf6.1_py3.14_env).
+# PITFALL: never put uv's py3.13 on PATH before export.sh — export then looks for idf6.1_py3.13_env
+# (does not exist) and fails silently, printing rc 0. Verify activation: `get_idf` must print
+# "ESP-IDF ativo: ESP-IDF v6.1". In the ZCode sandbox shell `command -v idf.py` may stay empty even
+# after export — call `python3 $IDF_PATH/tools/idf.py ...` directly there.
+# Existing bench build dirs (build*, build-dog, build-cyd*) were all configured under 6.1.
+
 # SmartDisplay (ESP32-S3)
 idf.py -B build -DSDKCONFIG=build/sdkconfig \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/smartdisplay/sdkconfig.defaults" \

@@ -55,6 +55,14 @@
    "src": "Documentation/JS_API_Guide.md"
   },
   {
+   "page": "Games-and-CelerGame",
+   "src": "wiki/pages/Games-and-CelerGame.md"
+  },
+  {
+   "page": "Jogos-e-CelerGame",
+   "src": "wiki/pages/Jogos-e-CelerGame.pt-BR.md"
+  },
+  {
    "page": "Contributing",
    "src": "wiki/pages/Contributing.md"
   },

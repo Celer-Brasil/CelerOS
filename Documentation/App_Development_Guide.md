@@ -168,7 +168,7 @@ never assume a peripheral exists.
 
 ### Games: CelerGame as shared dependencies
 
-For 2D games the engine itself comes from the hub as the **CelerGame dependency family**: `celeros.game` (the core — scenes, loop, camera, entities, dirty layer, save) plus optional modules `celeros.game.fx` (particles/flash), `.spr` (sprites + flipbooks), `.tilemap` (dirty-cell grid) and `.ui`; every module decorates the same `E` object, so adopting little costs little. Physics is the `celeros.physics` dep (2.1 — `P.hit`, `P.verlet`/`P.verletFast`, `P.rigid`), AI/tile grids are `celeros.grid` and table-driven sounds are `celeros.sfx`. The old monolithic `celeros.engine` remains on the hub as a 1.2.5 compatibility shim that assembles the family. Games target the PSRAM S3 boards — declare `"requires": ["psram"]` and `"topbar": false` (the `new --game` scaffold does it for you):
+For 2D games the engine comes from the hub as the **CelerGame dependency family** (1.4): `celeros.game` (the core — scenes, loop, multitouch input, gfx, camera, entities, dirty layer, audio, save) plus the optional modules that decorate the same `E` object: `celeros.game.fx` (particles), `.spr` (sprites/sheets/flipbooks), `.tilemap`, `.ui` (title/pause/game-over screens, menus, lists, `toast`), `.pad` (joystick and buttons with multitouch) and the "brain" modules: `.collide`, `.events`, `.fsm`, `.level`, `.path`, `.steer`, `.gen`, `.inv`, `.script`, `.stats`, `.waves` and the aggregators `.combat` (hitboxes/projectiles) and `.world` (rooms). The `celeros.game.kit` bundle carries the whole brain in one dep, to fit the **8-dependency ceiling** of `app.json`. Physics is the `celeros.physics` dep (2.1 — `P.hit`, `P.verlet`/`P.verletFast`, `P.rigid`) and table-driven sounds are `celeros.sfx`. Big games target the PSRAM S3 boards — declare `"requires": ["psram"]` and `"topbar": false` (the `new --game` scaffold does it for you):
 
 ```bash
 node tools/sdk/celer.js new MyGame --game     # scaffold + celeros.game(+fx) in app.json deps
@@ -178,6 +178,39 @@ node tools/sdk/celer.js deps set celeros.game.spr ^1.0.0 MyApp
 
 > [!NOTE]
 > **Migrating off physics 2.0:** `P.world`, `P.tiles` and `P.flow` were removed in celeros.physics 2.0 — use the `celeros.grid` dep for tile/AI grids and `System.rigid*` (API 33) for tumbling rigid bodies. `P.verlet`/`P.verletFast` (and the native `System.verlet*` path) are unchanged.
+
+### AI-generated sprite art (text2d / texture2d)
+
+Store-game sprites and backdrops are generated with the bench AI CLIs and
+ship **flat in the app root** (the hub package carries no subdirectories):
+
+```bash
+text2d generate "game goblin, cartoon, transparent background" \
+  -o MyGame/ai_goblin.png -W 512 -H 512 --category icon --transparent
+texture2d generate "seamless grass texture, top-down" \
+  -o MyGame/ai_bg.png -W 256 -H 256 -s 20
+```
+
+Pack the sprites into an atlas (`ai_atlas.png`, 64 px cells over
+**magenta** — the key color is 0xF81F) and load it through the spr module;
+keep a procedural fallback for boards without PNG (`E.spr.backed()` tells
+you what is live):
+
+```js
+E.init({ dir: "MyGame", bases: ["/local/apps/MyGame/", "/sd/apps/MyGame/"] });
+E.spr.grid("ai", { file: "ai_atlas", cols: 4, rows: 4, tw: 64, th: 64, prefix: "ai" });
+E.spr.stamp("ai0", x, y, { scale: 0.5, key: 0xF81F, ax: 0.5, ay: 0.5 });
+E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256, regions: { bg: [0, 0, 256, 256] } });
+```
+
+### Big apps on the SD card (`apps store --sd`)
+
+The flash partition is small (3.4 MB): games with assets install into the SD
+card — `celerctl apps store --sd celeros.mygame` (the launcher scans
+`/local/apps` **and** `/sd/apps`; keep the app in exactly one of them). The
+card must be **FAT32**: exFAT is unreadable by FatFs, and the device shell
+has `sd format` (schedules the format for the next boot and **WIPES the
+card**). Pin/limit details in `boards/AGENTS.md`.
 
 Full documentation: **[Game Engine Guide](Game_Engine_Guide.md)**.
 

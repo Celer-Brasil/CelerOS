@@ -25,3 +25,11 @@ Nine suites, all host-side (Node/Python/g++), no hardware needed. They are the g
 - New app (anywhere under data/apps, hub_apps, boards/*/data/apps): give it harness coverage in `js_harness/run.js` — the repo lint (`node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`) runs automatically over it in CI.
 - Arity fixtures (`fixtures/aridade.js`): `min` comes from require-style calls in the C++ body — `duk_require_*` AND helpers shaped `requireXxx(ctx, i)` (requirePin, requireKey). If you rename such a helper, the manifest regresses silently: run the fixture suite.
 - Tests are deterministic and fast (<1 min total). If something only reproduces on hardware, it belongs on the bench, not here — but encode the pure logic (parsers, calculators, framing) in `cpp/` instead.
+
+## ENGINE MODULES + APP MODULE GATES (celeros.game.*, 2026-10-18)
+- Each `tools/sdk/engine/celeros.game.*.js` needs: its own `.d.ts`, an `index.json` edge for **every require it makes** (transitive edges do NOT count — point at the bundle that pulls it), a `version` and a unique `E._mods` name, and a citation in the Game Engine Guide (EN **and** pt-BR) — both gates fail otherwise.
+- The hub accepts at most **8 deps** per app/dep; bundles exist for that: `celeros.game.rpg` (stats+inv+script) and `celeros.game.kit` (world+combat+rpg+fsm+events+path+steer+sfx = 8 edges). Apps list at most 8 in `app.json`.
+- SDK suites load app modules STANDALONE (Detona's `ia.js` runs without `main.js`/kit): any app module that uses a shared dep must `require` it itself — never count on main's require order.
+- js_harness shares ONE pool of 8 setTimeout slots between app, test wire and stubs (mirrors the firmware). Batteries that need many marks schedule in a CHAIN (one timer at a time — see Physics Drop `test.js`); the harness logs every dropped timer.
+- Emulador: `celer.js emu --out` writes a PNG even with a `.json` extension; `runAppFolder(..., {noAppWire:true, events})` renders titles without the app battery, and the app dir's PNG assets DO render (decodePng) — visual smoke before publishing.
+- meshsim Detona lobby is the engine's E.ui.list: accept-the-invite taps the FIRST row (240,142 in the 480 sim) — update the scenario when the lobby layout moves.

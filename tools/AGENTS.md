@@ -47,7 +47,24 @@ node tools/sdk/celer.js check                                # drift: docs x stu
 node tools/app_lint/lint.js "data/apps/Settings"             # linta um app (parse ES5 + API do firmware)
 ```
 
+## DEVICE DIAGNOSTICS (BENCH)
+- The debug bridge accepts ONE celerctl session per target; the second gets `bridge ocupado por outra sessao celerctl`. `pgrep -af celerctl` before benching — parallel sessions (human + other agents) are routine here. `logcat` holds the bridge while it runs; to observe without holding it, read the persisted logs afterwards: `celerctl shell "cat /local/log/kern.log"` (uptime-stamped per boot; HttpClient logs EVERY request with status/bytes/ms — first stop for "app nao baixa") and `/local/log/apps.log` (`celerctl crash` summarizes the last app death). Mind the LogPersist flush: the on-disk file only gets lines when the window opens (screen blank, no audio, no SD scan — writing flash with the RGB panel lit scrambles the frame), so with the screen on `kern.log` LAGS by minutes; `logcat --dump` (ring) is the live view and `/local/notifications.txt` is written immediately.
+- `celerctl debug --app <Nome> --eval "<expr>"` evaluates ONCE in the live app (pauses at global(), runs in app scope, resumes and exits). Blocking Net calls work inside the eval — use it to measure a real fetch on the device (e.g. `Net.download` of a hub file) instead of guessing from the PC.
+- `screencap` takes the output path positionally (`screencap /tmp/t.png`; there is no `-o`). `tap X Y` uses PHYSICAL pixels of the glass (480x480 on the 4848; the footer "Recarregar catalogo" button sits at y≈451).
+- Device shell has no flag-style arguments (`ls -la`, `tail -n` fail with "caminho invalido") — use `cat <path>` and filter on the host; `df /local` works; quotes are not parsed.
+- LittleFS fills up silently on the bench (3.4 MB partition, dozens of test apps installed): `df /local` before installs/pushes. The App Store reload alone needs ~180 KB free (see data/AGENTS.md "HUB CATALOG").
+
 ## ANTI-PATTERNS
 - Replacing icon art by editing `data/icons/` directly. Delete `icons_src/<id>.png` and/or edit `icons.json`, then rerun `make_icons.py`. A hand-made 512px PNG in `icons_src/` is respected.
 - Committing `__pycache__/`.
 - Running `celerctl` while `idf.py monitor` holds the same port.
+
+## STORE PACKAGE + DEPLOY LIMITS (hub gate e bancada, 2026-10-18)
+- O pacote do hub e **FLAT**: extras = arquivos na raiz do app apenas (≤16 arquivos, ≤256 KB no total, ≤128 KB cada; .js/.png/.wav/.qoa/.json/.bin/.sh). Subpastas (`assets/`) NUNCA sobem — arte de jogo vai na raiz (padrao `ai_atlas.png`/`ai_bg.png` gerado por text2d/texture2d, key magenta 0xF81F) e o `E.init({bases:[...]})` aponta para a raiz.
+- Teto de tamanho: .js enxuto do app **+ modulos das deps** > 48 KB exige `requires: ["psram"]` (teto absoluto 1 MB); `app.json` aceita **no maximo 8 deps** — agrupe cerebro com `celeros.game.kit` (puxa `celeros.game.rpg` = stats+inv+script).
+- Apps NAO-jogo tem a familia **CelerKit** (`celeros.app.*`) no mesmo dir: core com loop de telas/overlays + fmt/path/semver/data/history/net/caps/events/text/input/form/list/launch/ai/chat/updater/fsx/svc/mesh/kit. `celer.js new Nome --appkit` scafolta com o pacote `celeros.app.kit` (8 deps numa). Doc: `Documentation/App_Kit_Guide.md` (+pt-BR); gates em `test/sdk/celerosapp_r1.js`.
+- `celerhub publish` so sobe arquivos COMMITADOS (arvore suja recusa) e o hub recusa downgrade de versao — suba `version` + changelog.
+- A loja serve URLs **absolutas** (meta/app/icon) e o app.json publicado leva campos computados (`size`, `md5`, `published_at`, `publisher`, `zip`); `celerctl apps store` aceita os dois formatos e tira os campos antes do lint (`_hub_url`).
+- `celerhub publish-dep` aceita no maximo **8 --dep** por dependencia (o kit virou world+combat+rpg+fsm+events+path+steer+sfx).
+- Deploy em 4848 API 44+: o HostLink USB derruba push grande (`sem ACK`, `payload grande demais`) — prefira **WiFi** (`-p IP:5555`) e `--win 1`; segunda sessao celerctl no mesmo aparelho devolve `sessao ativa em outro canal` (pgrep antes; USB0=.160 e USB1=.134 sao OS MESMOS dois aparelhos — nunca rode os dois canais de um deles em paralelo).
+- App grande demais para a flash: `apps store --sd` instala em `/sd/apps` (cartao FAT32; exFAT → `sd format`, ver boards/AGENTS.md). `apps deps --gc --yes` libera versoes orfas de /local/modules; `shell df /local` antes de instalacao grande (LittleFS 3.4 MB).

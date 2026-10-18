@@ -1,0 +1,33 @@
+{
+  "timestamp": 1792293487.343416,
+  "prompt": "seamless grass texture, short dense mowed turf seen from directly above, uniform green carpet, seamless lush green grass texture, short grass blades, top-down, flat even lighting, game ground tile, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+  "params": {
+    "backend": "sd-circular",
+    "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "vae_id": "stabilityai/sd-vae-ft-mse",
+    "seed": 8501,
+    "prompt_final": "seamless grass texture, short dense mowed turf seen from directly above, uniform green carpet, seamless lush green grass texture, short grass blades, top-down, flat even lighting, game ground tile, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+    "prompt": "seamless grass texture, short dense mowed turf seen from directly above, uniform green carpet, seamless lush green grass texture, short grass blades, top-down, flat even lighting, game ground tile, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+    "negative_prompt": "brown, dead, mud, artificial, aerial view, satellite image, drone shot, landscape, horizon, sky, trees, bushes, buildings, roads, water, isometric view, oblique angle, perspective, tilted camera, side view, macro photography, extreme close-up, individual grass blades leaning sideways, 3d render, depth of field, bokeh, strong directional shadows, deep relief, ambient occlusion, high contrast, dramatic lighting, blurry, low quality, watermark, text, signature, frame, border, visible seam, tiling artifacts",
+    "guidance_scale": 7.0,
+    "num_inference_steps": 30,
+    "width": 512,
+    "height": 512,
+    "seamless_mode": "late",
+    "scheduler": "DDIMScheduler",
+    "hires": false,
+    "vae_tiled_decode": false,
+    "tileability": {
+      "score": 1.0,
+      "edge_mse_horizontal": 283.00390625,
+      "edge_mse_vertical": 288.7799377441406,
+      "max_abs_edge_diff": 68,
+      "width": 512,
+      "height": 512,
+      "verdict": "PASS"
+    },
+    "seam_healed": false
+  },
+  "image_path": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/CelerOS/tools/lenda_src/t_grama_src.png",
+  "filename": "t_grama_src.png"
+}

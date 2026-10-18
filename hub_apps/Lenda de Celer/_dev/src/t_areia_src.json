@@ -1,0 +1,33 @@
+{
+  "timestamp": 1792293492.549263,
+  "prompt": "seamless dirt texture, packed brown earth soil surface from directly above, seamless light brown dirt path texture with tiny pebbles, top-down, flat even lighting, game ground tile, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+  "params": {
+    "backend": "sd-circular",
+    "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "vae_id": "stabilityai/sd-vae-ft-mse",
+    "seed": 8502,
+    "prompt_final": "seamless dirt texture, packed brown earth soil surface from directly above, seamless light brown dirt path texture with tiny pebbles, top-down, flat even lighting, game ground tile, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+    "prompt": "seamless dirt texture, packed brown earth soil surface from directly above, seamless light brown dirt path texture with tiny pebbles, top-down, flat even lighting, game ground tile, top-down close-up photograph of flat ground surface, seamless tileable game texture, albedo material, even diffuse lighting, uniform fine detail",
+    "negative_prompt": "grass, clean, polished, artificial, aerial view, satellite image, drone shot, landscape, horizon, sky, trees, bushes, buildings, roads, water, isometric view, oblique angle, perspective, tilted camera, side view, macro photography, extreme close-up, individual grass blades leaning sideways, 3d render, depth of field, bokeh, strong directional shadows, deep relief, ambient occlusion, high contrast, dramatic lighting, blurry, low quality, watermark, text, signature, frame, border, visible seam, tiling artifacts",
+    "guidance_scale": 7.0,
+    "num_inference_steps": 30,
+    "width": 512,
+    "height": 512,
+    "seamless_mode": "late",
+    "scheduler": "DDIMScheduler",
+    "hires": false,
+    "vae_tiled_decode": false,
+    "tileability": {
+      "score": 0.9920384755875832,
+      "edge_mse_horizontal": 15.471354484558105,
+      "edge_mse_vertical": 15.765625,
+      "max_abs_edge_diff": 14,
+      "width": 512,
+      "height": 512,
+      "verdict": "PASS"
+    },
+    "seam_healed": false
+  },
+  "image_path": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/CelerOS/tools/lenda_src/t_areia_src.png",
+  "filename": "t_areia_src.png"
+}

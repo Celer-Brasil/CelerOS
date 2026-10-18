@@ -1,0 +1,33 @@
+{
+  "timestamp": 1792293519.67291,
+  "prompt": "seamless wood texture, natural grain, high detail, tiling pattern, seamless wooden bridge planks texture, horizontal planks, top-down, flat even lighting",
+  "params": {
+    "backend": "sd-circular",
+    "model_id": "stable-diffusion-v1-5/stable-diffusion-v1-5",
+    "vae_id": "stabilityai/sd-vae-ft-mse",
+    "seed": 8506,
+    "prompt_final": "seamless wood texture, natural grain, high detail, tiling pattern, seamless wooden bridge planks texture, horizontal planks, top-down, flat even lighting",
+    "prompt": "seamless wood texture, natural grain, high detail, tiling pattern, seamless wooden bridge planks texture, horizontal planks, top-down, flat even lighting",
+    "negative_prompt": "blurry, low quality, distorted, blurry, low quality, watermark, text, signature, frame, border, visible seam, tiling artifacts",
+    "guidance_scale": 7.5,
+    "num_inference_steps": 50,
+    "width": 512,
+    "height": 512,
+    "seamless_mode": "late",
+    "scheduler": "DDIMScheduler",
+    "hires": false,
+    "vae_tiled_decode": false,
+    "tileability": {
+      "score": 1.0,
+      "edge_mse_horizontal": 55.48958206176758,
+      "edge_mse_vertical": 18.30599021911621,
+      "max_abs_edge_diff": 28,
+      "width": 512,
+      "height": 512,
+      "verdict": "PASS"
+    },
+    "seam_healed": false
+  },
+  "image_path": "/media/maikeu/b1e73891-ddde-49a0-9382-903accb68b49/GitClones/CelerOS/tools/lenda_src/t_madeira_src.png",
+  "filename": "t_madeira_src.png"
+}

@@ -1,0 +1,69 @@
+{
+ "heroi": [
+  "heroi_baixo",
+  "heroi_baixo:flip",
+  "heroi_cima",
+  "heroi_cima:flip",
+  "heroi_lado",
+  "heroi_lado:flip",
+  "espada:up",
+  "espada:right",
+  "espada:down",
+  "espada:left"
+ ],
+ "inimigos": [
+  "polvo",
+  "polvo:flip",
+  "morcego",
+  "morcego:flip",
+  "esqueleto",
+  "esqueleto:flip",
+  "geleia",
+  "geleia:squash",
+  "sabio",
+  "chama",
+  "chama:flip",
+  "pedra"
+ ],
+ "itens": [
+  "coracao",
+  "cristal",
+  "cristal_azul",
+  "chave",
+  "bomba",
+  "bumerangue",
+  "mapa",
+  "bussola",
+  "conteiner",
+  "espada:up"
+ ],
+ "tileset": [
+  "t_grama",
+  "t_areia",
+  "t_agua",
+  "t_agua:shift",
+  "t_chao",
+  "t_parede",
+  "t_madeira",
+  "arvore",
+  "rocha",
+  "arbusto",
+  "flores",
+  "lapide",
+  "estatua",
+  "bloco",
+  "bau",
+  "bau_aberto",
+  "porta",
+  "porta_chave",
+  "porta_grade",
+  "rachada",
+  "escada",
+  "caverna",
+  "tocha"
+ ],
+ "chefe": [
+  "chefe",
+  "chefe:hurt"
+ ]
+}

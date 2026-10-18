@@ -1,0 +1,18 @@
+[
+  {
+    "id": "bumerangue",
+    "prompt": "classic curved wooden boomerang weapon, banana shaped V boomerang with red painted tips, flat lying, top-down three-quarter view from above, single centered sprite filling most of the frame, on pure solid black background, 16-bit fantasy adventure game pixel style, crisp clean edges, vivid colors, no text, no letters, no watermark, no border",
+    "seed": 8316,
+    "output": "bumerangue_src.png",
+    "width": 512,
+    "height": 512
+  },
+  {
+    "id": "porta",
+    "prompt": "open stone archway doorway, pitch black dark opening inside a stone frame, front view, top-down three-quarter view from above, single centered sprite filling most of the frame, on pure solid black background, 16-bit fantasy adventure game pixel style, crisp clean edges, vivid colors, no text, no letters, no watermark, no border",
+    "seed": 8620,
+    "output": "porta_src.png",
+    "width": 512,
+    "height": 512
+  }
+]

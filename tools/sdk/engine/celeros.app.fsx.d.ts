@@ -9,8 +9,8 @@ declare namespace A {
     }
     const fsx: {
         version: string;
-        free(): number;
-        hasRoom(bytes: number): boolean;
+        free(drive?: string): number;
+        hasRoom(bytes: number, drive?: string): boolean;
         /** mkdir -p: cria a arvore; false no primeiro erro */
         ensureDir(p: string): boolean;
         /** bytes da arvore (pastas recursivas) */

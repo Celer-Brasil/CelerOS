@@ -50,7 +50,7 @@ function rowsOf(rows) {
 }
 
 A.form = {
-    version: '1.0.0',
+    version: '1.0.1',
 
     // ---- construtores de linha ---------------------------------------------
     info: function (label, value, color) {
@@ -121,25 +121,35 @@ A.form = {
     },
 
     // ---- pedidos via prompt -------------------------------------------------
+    // opcoes: { hint, mask, initial } — o firmware le as opcoes no 3o
+    // argumento de System.prompt (JsKeypad.cpp); antes elas iam no 2o (que e
+    // o texto inicial) e hint/mask nunca chegavam ao aparelho. nullOnCancel
+    // distingue cancelar (null) de confirmar vazio ("").
     askText: function (title, o) {
         o = o || {};
         try {
-            return System.prompt(title, { hint: o.hint, mask: !!o.mask });
+            return System.prompt(title, o.initial || '',
+                { hint: o.hint, mask: !!o.mask, nullOnCancel: true });
         } catch (e) { return null; }
     },
 
-    // numero validado: cancelou = null; fora da faixa = erro e pergunta de novo
+    // numero validado: cancelou = null; fora da faixa = erro e pergunta de
+    // novo (re-semeado com o que digitou). o.int aceita so inteiro.
     askNum: function (title, o) {
         o = o || {};
+        var semente = o.initial === undefined || o.initial === null ? '' : String(o.initial);
         for (;;) {
-            var s = A.form.askText(title, o);
+            var s = A.form.askText(title, { hint: o.hint, initial: semente });
             if (s === null || s === '') return null;
+            semente = s;
             var v = parseFloat(String(s).replace(',', '.'));
             var bad = isNaN(v) ||
+                (o.int && Math.round(v) !== v) ||
                 (o.min !== undefined && v < o.min) ||
                 (o.max !== undefined && v > o.max);
             if (!bad) return v;
-            A.error('Valor invalido', 'Digite um numero' +
+            A.error('Valor inválido', 'Digite um número' +
+                (o.int ? ' inteiro' : '') +
                 (o.min !== undefined && o.max !== undefined ? ' entre ' + o.min + ' e ' + o.max : ''));
         }
     }

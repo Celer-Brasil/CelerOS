@@ -20,12 +20,15 @@ var A = require('celeros.app');
 require('celeros.app.path');
 
 A.fsx = {
-    version: '1.0.0',
+    version: '1.0.1',
 
-    free: function () {
-        try { return FS.getFreeSpace() || 0; } catch (e) { return 0; }
+    // bytes livres no drive (default "/local"; use "/sd" no cartao). O
+    // binding exige o drive (JsFs.cpp): chamar sem argumento lancava e o
+    // catch devolvia 0 — hasRoom() ficava sempre false no aparelho.
+    free: function (drive) {
+        try { return FS.getFreeSpace(drive || '/local') || 0; } catch (e) { return 0; }
     },
-    hasRoom: function (bytes) { return A.fsx.free() > bytes; },
+    hasRoom: function (bytes, drive) { return A.fsx.free(drive) > bytes; },
 
     // mkdir -p: cria a arvore inteira; false no primeiro erro
     ensureDir: function (p) {

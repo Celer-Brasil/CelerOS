@@ -29,7 +29,7 @@ var A = require('celeros.app');
 var mesh = require('celeros.mesh');
 
 A.mesh = {
-    version: '1.0.0',
+    version: '1.0.1',
     _fam: 'a',
     _seq: 0,
     _pend: {},          // nonce -> {fn}
@@ -94,6 +94,9 @@ A.mesh = {
      * Drena a fila de quadros (chame 1x por frame). Respostas dos req()
      * pendentes disparam os callbacks; os outros quadros da familia vao ao
      * handler(from, op, rest, m); quadros de OUTRA familia chegam com op "".
+     * Resposta "=" SEM req() pendente (ex.: o app perguntou em broadcast e N
+     * nos responderam) tambem vai ao handler com op "=" e rest "NN|dados" —
+     * antes era engolida, e consulta com multiplas respostas era impossivel.
      * Devolve quantos quadros processou.
      */
     each: function (handler) {
@@ -115,6 +118,8 @@ A.mesh = {
                     p.fn = null;
                     delete A.mesh._pend[nonce];
                     fn(rest.length > 3 ? rest.substring(3) : '', m.from);
+                } else if (!p && A.mesh._fresh(nonce)) {
+                    handler(m.from, '=', rest, m);   // resposta orfa (dedup de replay)
                 }
                 continue;
             }

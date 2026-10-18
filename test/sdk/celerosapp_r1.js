@@ -489,6 +489,102 @@ module.exports = function (check) {
           c.A.list && c.A.caps &&
           c.A._mods.indexOf('fmt') >= 0 && c.A._mods.indexOf('caps') >= 0, c.A._mods.join(','));
 
+    // input 1.0.1: cancel reabre a MESMA sessao (maxLen preservado)
+    c = fresh(['input'], function (env) {
+        env.__kbOpens = [];
+        var ko = env.System.keypadOpen;
+        env.System.keypadOpen = function (o) { env.__kbOpens.push(o); return ko(o); };
+        env.__harness.pushKb({ type: 'cancel' });
+    });
+    var kb1 = c.A.input.open({ maxLen: 96 });
+    c.A.input.poll();
+    check('input 1.0.1: cancel reabre com os opts da sessao (maxLen)',
+          kb1 === true && c.env.__kbOpens.length === 2 &&
+          c.env.__kbOpens[1].maxLen === 96, JSON.stringify(c.env.__kbOpens));
+
+    // ============================================== rodada 1.0.1 (fixes)
+    // fsx.free manda o drive ao binding (antes: sem arg lancava e virava 0)
+    c = fresh(['fsx'], function (env) {
+        env.FS.getFreeSpace = function (drive) { env.__drive = drive; return 4321; };
+    });
+    var livre = c.A.fsx.free();
+    var livreSd = c.A.fsx.free('/sd');
+    var tem4k = c.A.fsx.hasRoom(4000);
+    var tem5k = c.A.fsx.hasRoom(5000);
+    check('fsx 1.0.1: free passa o drive ("/local" default) e hasRoom usa',
+          livre === 4321 && livreSd === 4321 && tem4k === true && tem5k === false &&
+          c.env.__drive === '/local', String(c.env.__drive));
+
+    // form.askText: opcoes no 3o arg do System.prompt + nullOnCancel
+    c = fresh(['form'], function (env) {
+        env.__pArgs = null;
+        var p = env.System.prompt;
+        env.System.prompt = function (ti, ini, opts) {
+            env.__pArgs = [ti, ini, opts];
+            return p(ti, ini, opts);
+        };
+    });
+    c.env.__harness.pushPrompt(['42']);
+    var txt = c.A.form.askText('Idade', { hint: 'num', initial: '30' });
+    var pa = c.env.__pArgs;
+    c.env.__harness.pushPrompt([null]);
+    var cancelou = c.A.form.askText('Idade', {});
+    check('form 1.0.1: askText manda initial + opts no 3o arg; cancelar = null',
+          txt === '42' && cancelou === null && !!pa && pa[1] === '30' && pa[2] &&
+          pa[2].hint === 'num' && pa[2].nullOnCancel === true, JSON.stringify(pa));
+
+    // form.askNum: semente initial e validacao de inteiro
+    c = fresh(['form'], function (env) {
+        var p = env.System.prompt;
+        env.System.prompt = function (ti, ini, opts) { env.__pIni = ini; return p(ti, ini, opts); };
+    });
+    c.env.__harness.pushPrompt(['7']);
+    var nInt = c.A.form.askNum('Porta', { min: 1, max: 48, int: true, initial: 9 });
+    var pIni1 = c.env.__pIni;          // semente do 1o prompt (o de cancelar regrava)
+    c.env.__harness.pushPrompt([null]);
+    var nCancel = c.A.form.askNum('Porta', {});
+    check('form 1.0.1: askNum semeia o initial; inteiro valido; cancelar = null',
+          nInt === 7 && pIni1 === '9' && nCancel === null,
+          nInt + '/' + JSON.stringify(pIni1) + '/' + nCancel);
+
+    // fmt.clock so cola segundos em "HH:MM"; sw() cronometro com centesimos
+    c = fresh(['fmt'], function (env) {
+        env.System.getTime = function () { return env.__hora; };
+        env.System.getSeconds = function () { return 5; };
+    });
+    c.env.__hora = '10:32';
+    var comSecs = c.A.fmt.clock(true);
+    c.env.__hora = '02:30 PM';
+    var dozeH = c.A.fmt.clock(true);
+    check('fmt 1.0.1: clock guarda o formato; sw com centesimos',
+          comSecs === '10:32:05' && dozeH === '02:30 PM' &&
+          c.A.fmt.sw(303220) === '05:03.22' &&
+          c.A.fmt.sw(3903220) === '1:05:03.22' &&
+          c.A.fmt.sw(0) === '00:00.00', comSecs + '|' + dozeH);
+
+    // mesh.each: resposta "=" sem req pendente vai ao handler (dedup replay)
+    c = fresh(['mesh'], function (env) { env.__exposeMesh = true; });
+    c.env.CelerNet.start({});
+    c.A.mesh.family('t');
+    var orfas = [];
+    c.env.__harness.pushMesh([
+        { from: 'A1B2', msg: 't=3k|achado', hops: 1, unicast: false },
+        { from: 'A1B2', msg: 't=3k|achado', hops: 1, unicast: false },
+        { from: 'C3D4', msg: 't=9z|outro', hops: 1, unicast: false }
+    ]);
+    c.A.mesh.each(function (from, op, rest) { orfas.push(from + op + rest); });
+    check('mesh 1.0.1: "=" sem req pendente chega ao handler (replay 1x)',
+          orfas.join(';') === 'A1B2=3k|achado;C3D4=9z|outro', orfas.join(';'));
+
+    // text.viewer: moldura inteira na entrada (invalidate antes do 1o frame)
+    c = fresh(['text']);
+    var invals = 0;
+    var invReal = c.env.UI.invalidate;
+    c.env.UI.invalidate = function () { invals++; if (invReal) return invReal(); };
+    tap(c.env, 24, 20);
+    try { c.A.text.viewer('Leitor', function () { return 'x'; }); } catch (eSai) { /* voltar */ }
+    check('text 1.0.1: viewer invalida a entrada (nao queima overlay)', invals >= 1, String(invals));
+
     // ============================================== gates de familia do SDK
     var modulos = fs.readdirSync(ENGINE_DIR)
         .filter(function (f) { return /^celeros\.app(\.[a-z0-9]+)?\.js$/.test(f); })

@@ -15,7 +15,7 @@
 var A = require('celeros.app');
 
 A.text = {
-version: '1.0.0',
+version: '1.0.1',
 
 
 fit: function (s) {
@@ -34,6 +34,7 @@ viewer: function (title, getText) {
 var T = A.T || System.theme();
 var s = A.text.fit(getText());
 UI.resetScroll('kit:leitor');
+UI.invalidate();
 var top = 48;
 var h = 320 - top - 6;
 for (;;) {

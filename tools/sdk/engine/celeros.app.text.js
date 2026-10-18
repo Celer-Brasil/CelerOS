@@ -15,7 +15,7 @@
 var A = require('celeros.app');
 
 A.text = {
-    version: '1.0.0',
+    version: '1.0.1',
 
     // fora do Latin-1 (e fora do \n) some — as fontes nao tem o glifo
     fit: function (s) {
@@ -34,7 +34,8 @@ A.text = {
         var T = A.T || System.theme();
         var s = A.text.fit(getText());
         UI.resetScroll('kit:leitor');
-        var top = 48;
+        UI.invalidate();   // 1a moldura inteira: aberto apos um overlay, o
+        var top = 48;      // spinner dele queimava no framebuffer
         var h = 320 - top - 6;
         for (;;) {
             UI.begin(T.bg);

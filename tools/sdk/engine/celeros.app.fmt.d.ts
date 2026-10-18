@@ -16,5 +16,7 @@ declare namespace A {
         when(epochSecs: number): string;
         /** "2.3 s" (1 casa), "1m 05s" */
         dur(ms: number): string;
+        /** cronometro: "05:03.22" (ou "1:05:03.22" acima de 1h) */
+        sw(ms: number): string;
     };
 }

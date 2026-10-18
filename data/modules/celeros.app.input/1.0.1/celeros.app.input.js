@@ -21,14 +21,16 @@
 var A = require('celeros.app');
 
 A.input = {
-version: '1.0.0',
+version: '1.0.1',
 _kb: false,
 _top: 320,
+_last: null,
 
 
 
 open: function (o) {
 o = o || {};
+A.input._last = o;
 var ok = false;
 try { ok = !!System.keypadOpen({ field: false, maxLen: o.maxLen || 256 }); }
 catch (e) { ok = false; }
@@ -63,7 +65,7 @@ var ev = null;
 try { ev = System.keypadPoll(); } catch (e) { return null; }
 if (!ev) return null;
 if (ev.type === 'cancel') {
-A.input.open({});
+A.input.open(A.input._last || {});
 UI.invalidate();
 }
 return ev;

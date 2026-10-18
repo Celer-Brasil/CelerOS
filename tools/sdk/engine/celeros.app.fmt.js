@@ -18,7 +18,7 @@
 var A = require('celeros.app');
 
 A.fmt = {
-    version: '1.0.0',
+    version: '1.0.1',
 
     // bytes: "512 B", "1.5 KB" (1 casa, sem ".0"), "2.3 MB"; vazio se <= 0
     bytes: function (n) {
@@ -48,10 +48,13 @@ A.fmt = {
     // "07" (padding so para inteiros 0..99)
     pad2: function (n) { return (n < 10 ? '0' : '') + n; },
 
-    // hora do aparelho; com segundos: "10:32:05"
+    // hora do aparelho; com segundos: "10:32:05". getTime() e "HH:MM" — se
+    // um dia vier em outro formato (ex. 12h com sufixo), os segundos nao sao
+    // colados (evita "02:30 PM:05")
     clock: function (withSecs) {
         var t = System.getTime();
-        return withSecs ? t + ':' + A.fmt.pad2(System.getSeconds()) : t;
+        if (!withSecs || !/^\d\d:\d\d$/.test(t)) return t;
+        return t + ':' + A.fmt.pad2(System.getSeconds());
     },
 
     // data do aparelho com hora: "27/09 10:32" (epoch em SEGUNDOS, como as
@@ -73,6 +76,19 @@ A.fmt = {
         var m = Math.floor(ms / 60000);
         var rs = Math.round((ms % 60000) / 1000);
         return m + 'm ' + A.fmt.pad2(rs) + 's';
+    },
+
+    // cronometro com centesimos: "05:03.22" (ou "1:05:03.22" acima de 1h) —
+    // o formato fixo do Cronometro, que antes cada app recompunha
+    sw: function (ms) {
+        if (!ms || ms < 0) ms = 0;
+        var cs = Math.floor(ms / 10) % 100;
+        var s = Math.floor(ms / 1000) % 60;
+        var m = Math.floor(ms / 60000);
+        var fim = A.fmt.pad2(s) + '.' + A.fmt.pad2(cs);
+        if (m < 60) return A.fmt.pad2(m) + ':' + fim;
+        var h = Math.floor(m / 60);
+        return h + ':' + A.fmt.pad2(m % 60) + ':' + fim;
     }
 };
 

@@ -537,7 +537,14 @@ function makeEnv() {
     topbarText: function() {},
     topbarButtons: function() { return 0; },
     topbarPop: function() { return null; },
-    prompt: function() { return ''; },
+    // System.prompt(title, initial, opts) — o firmware (JsKeypad.cpp) le as
+    // opcoes no 3o arg (mask/hint/nullOnCancel). Testes enfileiram respostas
+    // em pushPrompt (string = digitado, null = cancelar); sem fila = cancelar.
+    prompt: function(title, initial, opts) {
+        var v = promptQ.length ? promptQ.shift() : null;
+        if (v === null) return opts && opts.nullOnCancel ? null : '';
+        return String(v);
+    },
     print: function(s) { log.push('[serial] ' + String(s)); },
     exitApp: function() { throw 'OS_EXIT'; },
     // API 16: pedido ao launcher + saida limpa (igual ao firmware)
@@ -998,6 +1005,7 @@ function makeEnv() {
     // __harness.pushMesh / pushMeshNodes — o mesmo contrato de
     // poll()/nodes()/send() do firmware.
     var meshRx = [];
+    var promptQ = [];   // respostas de System.prompt (pushPrompt)
     var meshNodes = [];
     var meshOn = false;
     var meshSent = [];
@@ -1191,6 +1199,7 @@ function makeEnv() {
     pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
     pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },
     pushMesh: function(list) { meshRx = meshRx.concat(list); },
+    pushPrompt: function(list) { promptQ = promptQ.concat(list); },
     pushMeshNodes: function(list) { meshNodes = list; },
     pushPack: function(list) { packRx = packRx.concat(list); },
     setResources: function(list) { resList = list; },

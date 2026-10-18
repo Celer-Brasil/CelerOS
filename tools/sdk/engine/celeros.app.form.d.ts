@@ -15,8 +15,8 @@ declare namespace A {
         run(title: string, build: () => FormRow[]): void;
         /** seletor BLOQUEANTE; indice escolhido ou -1 se voltou */
         pick(title: string, items: string[], selected?: number): number;
-        askText(title: string, o?: { hint?: string; mask?: boolean }): string | null;
+        askText(title: string, o?: { hint?: string; mask?: boolean; initial?: string }): string | null;
         /** numero validado na faixa; null se cancelou */
-        askNum(title: string, o?: { min?: number; max?: number; hint?: string }): number | null;
+        askNum(title: string, o?: { min?: number; max?: number; hint?: string; initial?: string; int?: boolean }): number | null;
     };
 }

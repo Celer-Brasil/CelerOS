@@ -71,6 +71,12 @@ var contentH = y;
 t.height = contentH;
 var hh = h || (320 - t.top - 44);
 var off = UI.scrollBegin('kit:chat', 0, t.top, W, hh, Math.max(hh, contentH));
+
+
+if (typeof __harness !== 'undefined') {
+__harness.chatOff = off;
+__harness.chatMax = Math.max(0, contentH - hh);
+}
 y = t.top + 6 - off;
 for (i = 0; i < t.view.length; i++) {
 it = t.view[i];

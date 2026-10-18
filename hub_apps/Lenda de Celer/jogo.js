@@ -67,6 +67,9 @@ J.criarMundo = function () {
     J.W = E.world({
         cols: 15, rows: 13, cell: A.CELL, ox: A.OX, oy: A.OY, areas: M.AREAS,
         paint: function (v, x, y) { A.tile(v, x, y); },
+        // world 1.1: a sala grava pela regiao do tile (copySprite direto,
+        // sem o paint por celula); o paint fica para firmware/engine antigos
+        tile: function (v) { return 'tile' + (A.TILE[v] === undefined ? A.TILE.chao : A.TILE[v]); },
         solid: M.solid, outside: false, bg: 0x0000, save: 'mundo',
         anim: { ms: 450, frames: { agua: ['agua', 'agua2'] } },
         slideMs: 520,

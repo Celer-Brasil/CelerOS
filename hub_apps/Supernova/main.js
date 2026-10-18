@@ -1,4 +1,4 @@
-// Supernova 2.5 — atirador espacial construido sobre a game engine do SDK,
+// Supernova 2.6 — atirador espacial construido sobre a game engine do SDK,
 // tela cheia nos PIXELS NATIVOS do vidro (API 28; 480x480 no SmartDisplay
 // 4"). A trilha chiptune segue sendo o metronomo (ondas caem na batida via
 // beat clock) e a carga dos orbes detona a SUPERNOVA. SENTINELA-MOR (chefe
@@ -13,25 +13,29 @@
 // quando um numero muda. No firmware de caixas sujas (API 32) so essas
 // caixas vao ao vidro: o painel RGB nao treme mais.
 //
-// 2.5: fundo em profundidade (nebulosa/poeira em E.fx.parallax servidas
-// como PAINTER da camada suja + duas levas de E.fx.stars com stride),
-// rastro da nave (E.fx.trail) e escapamento continuo nos propulsores
-// (E.fx.emitter), aura da carga da supernova; pausa e fim nas telas
-// prontas da dep celeros.game.ui (static, sobre a arena congelada) e sons
-// pela E.audio.sfxTable do core (trilha/duck preservados).
+// 2.6: arte dos personagens no atlas de IA (ai_atlas.png, grade 4x4 de
+// 64x64, key magenta: ai0 nave, ai1 inimigo/olho, ai2 chefe, ai3 orbe) e o
+// fundo no ai_bg.png (nebulosa) servido como celulas de 64 px do
+// E.fx.parallax no PAINTER da camada suja — cada celula vira um stamp
+// RECORTADO, entao so as caixas sujas vao ao vidro (com E.dirty._mute o
+// stamp nao registra caixa). Sem sprite/PNG (harness) ou sem drawSprite
+// (firmware velho) os painters procedurais e a nebulosa de circulos
+// assumem, como antes. A simulacao (ondas/IA/tiros/fsm do chefe) mora no
+// jogo.js; aqui ficam cenas, visao, HUD e o fundo.
 //
 // Modulos: main.js (cenas/visao/HUD) + jogo.js (simulacao). A engine e DEP
-// do hub (app.json "deps"; API 30); os projeteis vivem em pools proprios
-// com colisao por distancia (sem fisica desde a 2.3). Layout em unidades do
-// projeto 240 (E.u): 2x no 480, ~1,7x no relogio.
+// do hub (app.json "deps"; API 30); os tiros/hitboxes sao do E.combat
+// (2.6). Layout em unidades do projeto 240 (E.u): 2x no 480, ~1,7x no
+// relogio.
 
 var E = require("celeros.game");       // familia CelerGame: adota so o que usa
 require("celeros.game.fx");
 require("celeros.game.spr");
 require("celeros.game.ui");           // pausa/fim prontos (menu do tema)
-var jogo = require("jogo");
+var jogo = require("jogo");           // waves/steer/combat/fsm (deps do app)
 
-E.init({ dir: "Supernova", fps: 30, native: true, save: "supernova.", particles: 120 });
+E.init({ dir: "Supernova", fps: 30, native: true, save: "supernova.", particles: 120,
+         bases: ["/local/apps/Supernova/", "/sd/apps/Supernova/"] });
 var W = E.W, H = E.H, u = E.u, K = E.U / 2;
 var T = E.theme;
 
@@ -55,8 +59,12 @@ if (typeof __harness !== "undefined") {
 }
 
 // ------------------------------------------------------------- sprites ---
-// PNGs (arte por IA) masterizados no 480; os painters escalam com K e
-// assumem quando o PNG falta (harness, slot esgotado).
+// Arte de IA no pacote FLAT: ai_atlas.png (grade 4x4 de 64x64, fundo
+// magenta 0xF81F) com ai0 = nave, ai1 = inimigo/olho, ai2 = chefe e
+// ai3 = orbe. O grid inteiro ocupa UM slot; o ai_bg.png (nebulosa) ocupa
+// o segundo. Os painters procedurais ficam como fallback (harness, placa
+// sem sprite/PNG ou firmware sem drawSprite — o stamp de regiao precisa
+// de setClip+drawSprite).
 var BASES = ["/local/apps/Supernova/assets/", "/sd/apps/Supernova/assets/"];
 
 function paintNave(w, h, x, y) {
@@ -78,26 +86,62 @@ function paintOrbe(w, h, x, y) {
     System.fillCircle(x + w / 2, y + h / 2, w / 4, C.branco);
 }
 
-var SPR = { nave: Math.round(72 * K), inimigo: Math.round(56 * K), orbe: Math.round(44 * K) };
-// PNG so no tamanho de mestre (K = 1); fora disso o painter desenha na escala
-var USA_PNG = Math.abs(K - 1) < 0.05;
-E.spr.load([
-    { name: "nave", file: USA_PNG ? "nave" : null, w: SPR.nave, h: SPR.nave, paint: paintNave },
-    { name: "inimigo", file: USA_PNG ? "inimigo" : null, w: SPR.inimigo, h: SPR.inimigo, paint: paintDrone },
-    { name: "olho", file: USA_PNG ? "olho" : null, w: SPR.inimigo, h: SPR.inimigo, paint: paintOlho },
-    { name: "orbe", file: USA_PNG ? "orbe" : null, w: SPR.orbe, h: SPR.orbe, paint: paintOrbe }
-], { bases: BASES });
+// tamanho de cada arte no vidro (o stamp escala tamanho/64)
+var SZ = { nave: Math.round(72 * K), drone: Math.round(56 * K),
+           sentinel: Math.round(64 * K), chefe: Math.round(132 * K),
+           orbe: Math.round(44 * K) };
+
+// UM slot para o atlas inteiro (ai0..ai15); as celulas 4..15 do PNG sao
+// so o fundo magenta e nunca sao desenhadas
+E.spr.grid("ai", { file: "ai_atlas", cols: 4, rows: 4, tw: 64, th: 64, prefix: "ai" });
+
+// ai_bg: a regiao bg (256x256) e o fallback de tela cheia; bg0..bg15 sao
+// as celulas de 64 px que o painter da camada suja estampa UMA a UMA —
+// cada stamp clipa so a propria celula (nunca a nebulosa inteira por
+// caixa), que e o que mantem o painel RGB fora da disputa de banda
+var AIGB_REG = { bg: [0, 0, 256, 256] };
+(function () {
+    for (var r = 0; r < 4; r++) {
+        for (var c = 0; c < 4; c++) AIGB_REG["bg" + (r * 4 + c)] = [c, r];
+    }
+})();
+E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256, tw: 64, th: 64,
+                      regions: AIGB_REG });
+var HAS_ATLAS = !!(E.spr.backed("ai0") && E.spr.backed("ai1") && E.spr.backed("ai2") &&
+                   E.spr.backed("ai3") && E.caps.clip &&
+                   typeof System.drawSprite === "function");
+var HAS_BG = !!(E.spr.backed("bg") && E.caps.clip &&
+                typeof System.drawSprite === "function");
+
+// opts compartilhados do stamp (nunca um literal por quadro)
+var _artO = { scale: 1, key: 0xF81F, ax: 0.5, ay: 0.5 };
+var _bgO = { scale: 1, key: null, ax: 0, ay: 0 };
+
+// stamp de um personagem centrado em (x, y). O stamp de regiao de folha
+// fecha o recorte do sistema ao terminar — devolve o recorte da arena.
+function drawArt(name, x, y, size) {
+    if (!HAS_ATLAS) return false;
+    _artO.scale = size / 64;
+    E.spr.stamp(name, x, y, _artO);
+    if (E.caps.clip) System.setClip(0, HUD_H + 1, W, H - HUD_H - 1);
+    return true;
+}
 
 // ------------------------------------------------------------- fundo ----
-// Profundidade em camadas atras da arena: nebulosa/poeira em parallax
-// (E.fx.parallax servido como PAINTER da camada suja — cada caixa apagada
-// repinta so as celulas que toca, entao nao existe fillScreen por quadro)
-// e duas levas de estrelas em E.fx.stars com velocidades e stride
-// diferentes (cada estrela apaga/cura o proprio pixel antigo). O painter e
-// chamado no _begin antes do draw, com E.cam.x/y posicionados pela rolagem
-// da nave; o draw da cena zera a camera para o mundo/particulas nao
-// deslocarem. Tudo pre-calculado: o hot path so roda hash + primitiva.
+// Profundidade em camadas atras da arena: a nebulosa ai_bg.png fica
+// ANCORADA e e servida como PAINTER da camada suja — cada caixa apagada
+// repinta so as celulas de 64 px que toca (bg0..bg15 da folha). Ela nao
+// rola: com recorte sujo, uma imagem de tela inteira que anda so seria
+// repintada dentro das caixas e o resto do vidro ficaria na fase antiga
+// (retangulos de nebulosa costurados). O parallax de profundidade fica
+// com a poeira fina (E.fx.parallax) e as duas levas de E.fx.stars.
+// Cada stamp clipa so a propria celula e o _mute impede que ele registre
+// caixa na camada — o custo acompanha a caixa suja, nunca a tela inteira.
+// O painter roda no _begin antes do draw; o draw da cena zera a camera
+// para o mundo/particulas nao deslocarem. Sem sprite/PNG cai na nebulosa
+// de circulos procedural.
 var bgY = 0;              // rolagem acumulada do voo (unidades de camera)
+var BG_SPEED = 0;         // nebulosa ancorada (ver comentario acima)
 
 function bgHash(x, y) {
     var n = ((x | 0) * 374761393 + (y | 0) * 668265263) | 0;
@@ -105,6 +149,8 @@ function bgHash(x, y) {
     n = (n * 48271) | 0;
     return (n ^ (n >>> 16)) >>> 0;
 }
+
+function mod(a, n) { return ((a % n) + n) % n; }
 
 var NEB = [
     System.mixColor(0x0000, 0x07FF, 5),    // azul
@@ -136,16 +182,50 @@ function paintPoeira(x, y) {
                      POEIRA[(n >>> 13) & 1]);
 }
 
-var bgLayer = E.fx.parallax([
-    { speed: 0.05, gap: 64, rowH: 64, paint: paintNebulosa },
+// celula da nebulosa: a origem (x, y) vem do grid de 64 px do parallax; a
+// celula da folha (bg0..bg15) e o modulo de 256 px do scroll na origem.
+// O stamp de regiao fecha o recorte do sistema; nao ha o que restaurar
+// aqui (o painter restaura a arena depois da camada inteira).
+function paintBgCell(x, y) {
+    var ix = Math.floor(mod(x + E.cam.x * BG_SPEED, 256) / 64);
+    var iy = Math.floor(mod(y + E.cam.y * BG_SPEED, 256) / 64);
+    _bgO.scale = 1;
+    // fora da camada suja: o stamp nao pode registrar a caixa da celula
+    // (a celula e so fundo; quem manda no que apagar e o indice do jogo)
+    E.dirty._mute++;
+    E.spr.stamp("bg" + (iy * 4 + ix), x, y, _bgO);
+    E.dirty._mute--;
+}
+
+var bgImgLayer = E.fx.parallax([
+    { speed: BG_SPEED, gap: 64, rowH: 64, paint: paintBgCell }
+]);
+var bgProcLayer = E.fx.parallax([
+    { speed: 0.05, gap: 64, rowH: 64, paint: paintNebulosa }
+]);
+var dustLayer = E.fx.parallax([
     { speed: 0.12, gap: 32, rowH: 32, paint: paintPoeira }
 ]);
+
 // painter da camada suja: PRIMEIRO o preto (o contrato do painter e
 // repintar a caixa inteira; so as celulas do parallax deixariam o desenho
-// velho aparecendo — a nave virava fantasma), depois nebulosa/poeira
+// velho aparecendo — a nave virava fantasma), depois a nebulosa e a
+// poeira. A caixa e recortada antes da arte; o stamp de celula fecha o
+// recorte, entao ele e reposto (arena) ou limpo (faixa do HUD no fim de
+// um veu) antes da poeira.
 function paintFundo(x, y, w, h) {
     System.fillRect(x, y, w, h, C.espaco);
-    bgLayer.draw(x, y, w, h);
+    if (HAS_BG) {
+        if (E.caps.clip) System.setClip(x, y, w, h);
+        bgImgLayer.draw(x, y, w, h);
+        if (E.caps.clip) {
+            if (y < HUD_H) System.clearClip();
+            else System.setClip(0, HUD_H + 1, W, H - HUD_H - 1);
+        }
+    } else {
+        bgProcLayer.draw(x, y, w, h);
+    }
+    dustLayer.draw(x, y, w, h);
 }
 
 // Estrelas em 2 planos, cada campo guardado no E.data (sobrevive as
@@ -258,8 +338,7 @@ function botoes(y, rotulo1, rotulo2, cor) {
 var D = E.dirty;
 
 // opts compartilhados dos desenhos que rodam TODO quadro (a engine so
-// le): um literal por blit/primitiva era lixo para o GC do Duktape
-var _blitOpt = { cx: true, cy: true, key: C.espaco };
+// le): um literal por primitiva era lixo para o GC do Duktape
 var _barOpt = { fg: C.magenta, bg: C.cinzaD, screen: true };
 var _circOpt = { smooth: true, screen: true };
 var _screenOpt = { screen: true };
@@ -272,19 +351,23 @@ function drawOrb(o, shx, shy, pulse) {
     var r = Math.round((26 + pulso * 5 + pulse * 3) * K);
     System.fillSmoothCircle(x, y, r, System.mixColor(C.ouro, C.espaco, 55 - pulso * 25));
     D.add(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3);
-    E.spr.blit("orbe", x, y, _blitOpt);
+    if (!drawArt("ai3", x, y, SZ.orbe)) {
+        paintOrbe(SZ.orbe, SZ.orbe, x - SZ.orbe / 2, y - SZ.orbe / 2);
+    }
 }
 
 function drawEnemy(e, shx, shy, ms) {
     var x = Math.round(e.x + shx), y = Math.round(e.y + shy), r;
     if (e.kind === 2) {
-        // SENTINELA-MOR: olho grande com aura, nucleo pela vida e
-        // escudos orbitando; na fase rapida a aura fecha
+        // SENTINELA-MOR: aura, arte do atlas e nucleo pela vida; os
+        // escudos orbitando continuam procedurais
         var fast = e.hp < e.hpMax / 2;
         r = Math.round((60 + Math.sin(ms / 110) * 5) * K);
         System.fillSmoothCircle(x, y, r, System.mixColor(C.magenta, C.espaco, fast ? 35 : 55));
         D.add(x - r - 1, y - r - 1, r * 2 + 3, r * 2 + 3);
-        E.spr.blit("olho", x, y, _blitOpt);
+        if (!drawArt("ai2", x, y, SZ.chefe)) {
+            paintOlho(SZ.chefe, SZ.chefe, x - SZ.chefe / 2, y - SZ.chefe / 2);
+        }
         var hpk = e.hp / e.hpMax;
         System.fillCircle(x, y, Math.round(8 * K), hpk > 0.5 ? C.verde : (hpk > 0.25 ? C.ouro : C.vermelho));
         var a = ms / 300, orb = 52 * K, rr = Math.round(4 * K) + 1;
@@ -299,8 +382,12 @@ function drawEnemy(e, shx, shy, ms) {
         System.fillTriangle(x, y - t, x - l, y + 8 * K, x + l, y + 8 * K, C.laranja);
         D.add(x - l - 1, y - t - 1, l * 2 + 3, t + 8 * K + 3);
     } else {
-        E.spr.blit(e.kind === 1 ? "olho" : "inimigo", x, y, _blitOpt);
-        // nucleo pulsante POR CIMA do blit: animacao sem slot extra
+        var sz = e.kind === 1 ? SZ.sentinel : SZ.drone;
+        if (!drawArt("ai1", x, y, sz)) {
+            if (e.kind === 1) paintOlho(sz, sz, x - sz / 2, y - sz / 2);
+            else paintDrone(sz, sz, x - sz / 2, y - sz / 2);
+        }
+        // nucleo pulsante POR CIMA da arte: animacao sem slot extra
         var nkY = 0, nkR = 3, nkP = 90, nkC = C.magenta;
         if (e.kind === 1) { nkY = 0; nkR = 4; nkP = 130; nkC = C.verde; }
         else if (e.kind === 3) { nkY = 8; nkR = 4; nkP = 70; nkC = C.ouro; }
@@ -324,7 +411,9 @@ function drawPlayer(p, shx, shy, ms) {
     var fy = Math.round(34 * K);
     System.fillTriangle(px - 9 * K, py + fy, px + 9 * K, py + fy, px, py + fy + fl, C.ciano);
     D.add(px - mx - mr - 1, py + fy - 1, (mx + mr) * 2 + 3, Math.max(my + mr, fy + fl) - fy + 3);
-    E.spr.blit("nave", px, py, _blitOpt);
+    if (!drawArt("ai0", px, py, SZ.nave)) {
+        paintNave(SZ.nave, SZ.nave, px - SZ.nave / 2, py - SZ.nave / 2);
+    }
 }
 
 function drawGame(s, pulse) {
@@ -338,25 +427,27 @@ function drawGame(s, pulse) {
         if (all[i].cat === 'enemy') drawEnemy(all[i], shx, shy, ms);
     }
     if (!s.over || s.overT < 0.4) drawPlayer(s.player, shx, shy, ms);
-    // projeteis direto dos pools do jogo (nada de varrer world.all por cat)
-    var bp = jogo.bullets();
-    var bl = Math.round(14 * K), er = Math.max(2, Math.round(4 * K));
-    for (i = 0; i < bp.pbn; i++) {
-        b = bp.pb[i];
+    // projeteis do E.combat: o array e o MESMO do modulo (sem copia por
+    // quadro); o team separa o traco ciano do inimigo magenta
+    var sh = jogo.shots();
+    var bl = Math.round(14 * K);
+    for (i = 0; i < sh.length; i++) {
+        b = sh[i];
+        if (b.dead) continue;
         bx = Math.round(b.x + shx);
         by = Math.round(b.y + shy);
-        System.drawFastVLine(bx, by, bl, C.ciano);
-        System.drawFastVLine(bx + 1, by + 2, bl - 4, C.cianoD);
-        System.drawPixel(bx, by + bl + 1, C.branco);
-        D.add(bx - 1, by - 1, 4, bl + 4);
-    }
-    for (i = 0; i < bp.ebn; i++) {
-        b = bp.eb[i];
-        bx = Math.round(b.x + shx);
-        by = Math.round(b.y + shy);
-        System.fillCircle(bx, by, er, C.magenta);
-        System.drawPixel(bx, by, C.branco);
-        D.add(bx - er - 1, by - er - 1, er * 2 + 3, er * 2 + 3);
+        if (b.team === "player") {
+            var y0 = by - (bl >> 1);
+            System.drawFastVLine(bx, y0, bl, C.ciano);
+            System.drawFastVLine(bx + 1, y0 + 2, bl - 4, C.cianoD);
+            System.drawPixel(bx, y0 + bl + 1, C.branco);
+            D.add(bx - 1, y0 - 1, 4, bl + 4);
+        } else {
+            var er = Math.max(2, Math.round(b.r));
+            System.fillCircle(bx, by, er, C.magenta);
+            System.drawPixel(bx, by, C.branco);
+            D.add(bx - er - 1, by - er - 1, er * 2 + 3, er * 2 + 3);
+        }
     }
 }
 
@@ -481,6 +572,7 @@ E.run({
     jogando: {
         fps: 30,   // teto de quadros: sem ele o push corre solto e cintila
         enter: function () {
+            E.pause(false);   // a pausa congela os modulos; voltar sempre solta
             E.cam.reset();
             // camada suja com o parallax de fundo: cada caixa apagada
             // repinta so as celulas de nebulosa/poeira que toca (painter),
@@ -599,10 +691,16 @@ E.run({
         // E.ui.pause (dep celeros.game.ui) desenha o veu + Continuar/
         // Recomecar/Sair sobre a arena congelada; a cena continue static
         // (1 draw + repintura no press). A trilha para e volta do ponto.
+        // E.pause(true) congela o tick dos MODULOS: sem isso o E.combat
+        // seguia movendo os tiros e o E.waves nascendo inimigo atras do veu.
         static: true,
         enter: function () {
+            E.pause(true);
             E.audio.stop();
             this.act = null;
+        },
+        exit: function () {
+            E.pause(false);
         },
         update: function () {
             var a = this.act;

@@ -1,10 +1,10 @@
-// test.js — smoke do Supernova 2.5 no harness: titulo -> jogando -> arrasto
+// test.js — smoke do Supernova 2.6 no harness: titulo -> jogando -> arrasto
 // -> MORTE (hit deterministico via __harness.supernova.jogo) -> fim ->
-// de novo -> rajada do chefe no POOL de ebullets -> SUPERNOVA (detonacao
+// de novo -> rajada do chefe nos tiros do E.combat -> SUPERNOVA (detonacao
 // com carga furada) -> pausa -> continuar, parando no watchdog. No harness
-// roda a via procedural (sem createSprite/drawPNG) no canvas nativo do stub
-// (480x480), provando a degradacao graciosa sem assets/sprites — e os
-// acertos sao por distancia nos pools (sem fisica desde a 2.3).
+// roda a via procedural (sem PNG/arte real) no canvas nativo do stub
+// (480x480), provando a degradacao graciosa sem assets — a simulacao
+// (ondas/steer/combat/fsm) e a mesma do device.
 //
 // ATENCAO: os agendamentos usam env.setTimeout (relogio virtual do harness,
 // disparado no delay/getTouch) — o setTimeout do Node nunca rodaria: a
@@ -48,11 +48,15 @@ module.exports.wire = function (env) {
         ]);
     }, 800);
 
-    // morte deterministica: 1 vida + tiro inimigo em cima da nave
+    // morte deterministica: 1 vida + tiro inimigo em cima da nave. Antes,
+    // o diretor E.waves tem que ter aberto a onda 1 (delay de 900 ms).
     at(function () {
         var m = h.supernova;
         if (!m) return;
         var s = m.jogo.state();
+        if (!s.waves || s.waves.wave < 1) {
+            throw new Error('Supernova: E.waves nao iniciou a onda 1');
+        }
         s.lives = 1;
         s.player.invuln = 0;
         m.jogo.debugHit();

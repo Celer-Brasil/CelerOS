@@ -7,19 +7,31 @@
 // arte gerada + pecas giradas + elastico), niveis.js (as 8 fases) e a
 // CelerGame UI (lista de fases, pausa e menu de fim).
 //
-// Render (engine 1.2): camada suja com o cenario num sprite de tela
+// Render (engine 1.4): camada suja com o cenario num sprite de tela
 // inteira (painter = pushSprite recortado). Por quadro so redesenha o que
 // se MEXE (corpo acordado, pedra, elastico, particulas) e o que a borracha
 // do quadro anterior TOCOU — pilha dormindo nao custa nada.
+//
+// 1.3.0: arte de IA (atlas de personagens/pedra + campo de flores), hitbox
+// de combate nos projeteis, goblins com steering e progressao via
+// E.level.progress (chaves est*/pts* antigas continuam valendo).
 
 var E = require("celeros.game");       // familia CelerGame: adota so o que usa
 require("celeros.game.fx");
+require("celeros.game.spr");           // atlas ai_atlas + ai_bg
 require("celeros.game.ui");            // lista de fases, pausa e fim prontos
+require("celeros.game.combat");        // E.combat(shot/blast/knock)
+require("celeros.game.level");         // E.level.progress (estrelas/unlock)
+require("celeros.game.steer");         // E.steer.agent (passeio dos goblins)
 var M = require("mundo");
 var A = require("arte");
 var NIV = require("niveis");
 
-E.init({ dir: "Arrasa", fps: 30, native: true, save: "arrasa.", particles: 140 });
+// assets flat na RAIZ do app: a loja instala em <pacote> e o celerctl dev
+// usa a pasta do repo — as duas pastas valem (como no achaBase da arte)
+E.init({ dir: "Arrasa", fps: 30, native: true, save: "arrasa.", particles: 140,
+         bases: ["/local/apps/celeros.arrasa/", "/sd/apps/celeros.arrasa/",
+                 "/local/apps/Arrasa/", "/sd/apps/Arrasa/"] });
 var W = E.W, H = E.H, u = E.u, S = System;
 var temArte = A.init(W, H, "Arrasa", "celeros.arrasa");
 var C = A.C;
@@ -105,14 +117,31 @@ var FIM_PROX = ["PRÓXIMA", "DE NOVO", "FASES"];
 var FIM_SO = ["DE NOVO", "FASES"];
 
 // --------------------------------------------------------------- save ----
-function estrelasDe(n) { return E.save.num("est" + n, 0); }
+// progressao pela E.level.progress (chave nova "nivel"): estrelas por fase
+// e o desbloqueio sequencial. As chaves antigas est<fase> (estrelas) e
+// pts<fase> (recorde) continuam sendo escritas/lidas — save de quem ja
+// jogou nao se perde e a bateria do app segue conferindo est0/pts0.
+var LISTA_FASES = [];
+for (var nf = 0; nf < NIV.total; nf++) LISTA_FASES.push({ nome: NIV.fase(nf).nome });
+var PROG = E.level.progress(LISTA_FASES, { save: "nivel" });
+
+// migra o progresso antigo (estrelas eram a unica fonte do desbloqueio)
+(function migraProgresso() {
+    var maxLib = 0;
+    for (var i = 0; i < NIV.total; i++) {
+        var v = E.save.num("est" + i, 0);
+        if (v > 0) {
+            if (v > PROG.stars(i)) PROG.stars(i, v);
+            if (i + 1 < NIV.total && i + 1 > maxLib) maxLib = i + 1;
+        }
+    }
+    if (PROG.unlocked < maxLib) PROG.unlocked = maxLib;
+})();
+
+function estrelasDe(n) { return PROG.stars(n); }
 function recordeDe(n) { return E.save.num("pts" + n, 0); }
-function liberada(n) { return n === 0 || estrelasDe(n - 1) > 0; }
-function totalEstrelas() {
-    var t = 0;
-    for (var n = 0; n < NIV.total; n++) t += estrelasDe(n);
-    return t;
-}
+function liberada(n) { return n === 0 || n <= PROG.unlocked; }
+function totalEstrelas() { return PROG.totalStars(); }
 
 // texto da lista: nome da fase + estrelas do NVS em ASCII (as fontes cobrem
 // Latin-1; nada de emoji). Bloqueada leva "[x]" — o rotulo curto cabe na
@@ -415,12 +444,14 @@ function desenhaMundo() {
         else A.peca(c, s[o], s[o + 1], s[o + 2]);
         c.hpVisto = c.hp;
     }
-    // projeteis em voo (e os rachados da tripla)
+    // projeteis em voo (e os rachados da tripla): o tiro principal com
+    // E.combat.shot e desenhado pelo drawShots (o espelho segue o corpo)
     var t = M.tiro;
     if (t && (t.estado === "voando" || t.estado === "assentando")) {
         for (k = -1; k < t.extras.length; k++) {
             i = k < 0 ? t.idx : t.extras[k];
             if (i < 0) continue;
+            if (k < 0 && t.shot && !t.shot.dead) continue;
             c = M.corpos[i];
             o = i * NS;
             if (!c || !(s[o + 5] & 1)) continue;
@@ -428,6 +459,17 @@ function desenhaMundo() {
             D.add(b.x, b.y, b.w, b.h);
         }
     }
+}
+
+// projeteis do E.combat: o shot da vez desenha o mesmo sprite do corpo
+// fisico (a pose vem do solver, sincronizada no step do mundo)
+function desenhaShots() {
+    if (!E.combat.shots().length) return;
+    E.combat.drawShots(function (s) {
+        if (s.dead || !s.tipo) return;
+        var b = A.tiro(s.tipo, s.x, s.y, s.ang || 0, M.t);
+        D.add(b.x, b.y, b.w, b.h);
+    });
 }
 
 function desenhaRastro() {
@@ -597,25 +639,6 @@ E.run({
         static: true,
         enter: function () {
             E.cam.reset();
-            // o rei grande do titulo: PNG cru no slot livre, ampliado com AA
-            // a cada desenho (cena static: so na entrada e no hover)
-            this.rei = 0;
-            if (temArte && typeof S.drawSprite === "function") {
-                var id = S.createSprite(64, 64);
-                if (id) {
-                    S.useSprite(id);
-                    S.fillScreen(A.KEY);
-                    var ok = false;
-                    try { ok = !!S.drawPNG(A.base + "rei.png", 0, 0); } catch (e) { ok = false; }
-                    S.useSprite(0);
-                    if (ok) this.rei = id;
-                    else S.deleteSprite(id);
-                }
-            }
-        },
-        exit: function () {
-            if (this.rei) S.deleteSprite(this.rei);
-            this.rei = 0;
         },
         update: function () {
             if (!this.btn) return;
@@ -638,12 +661,10 @@ E.run({
             var fake = { k: "goblin", r: 7, tipo: "goblin", hp: 1, hp0: 1 };
             A.goblin(fake, 222, M.GROUND - 7, 0.15);
             A.goblin(fake, 298, M.GROUND - 7, -0.2);
-            if (this.rei) {
-                var zr = 46 * A.ESC / 64;
-                S.drawSprite(this.rei, A.sx(262), A.sy(M.GROUND - 20), -6, zr, zr, A.KEY, true);
-            } else {
-                A.goblin({ k: "goblin", r: 10, tipo: "rei", hp: 1, hp0: 1 }, 262, M.GROUND - 10, -0.1);
-            }
+            // o rei do titulo usa o quadro grande do atlas (ai1); sem atlas,
+            // cai no goblin procedural do tamanho do corpo
+            var rr = A.temAtlas ? 20 : 10;
+            A.goblin({ k: "goblin", r: rr, tipo: "rei", hp: 1, hp0: 1 }, 262, M.GROUND - rr, -0.1);
             var pp = { x: M.BERCO.x - 16, y: M.BERCO.y + 8, tipo: "pedra" };
             A.elastico("tras", pp, 0.55, 0);
             A.tiro("pedra", pp.x, pp.y, 0, 0);
@@ -778,6 +799,7 @@ E.run({
             desenhaRastro();
             desenhaFila();
             desenhaMundo();
+            desenhaShots();
             desenhaEstilingue(mexe);
             desenhaBanner();
             E.fx.draw();
@@ -826,7 +848,11 @@ E.run({
             var est = M.estrelas();
             G.recorde = false;
             if (M.venceu) {
-                if (est > estrelasDe(G.fase)) E.save.set("est" + G.fase, est);
+                // E.level.progress guarda a nota e desbloqueia a seguinte;
+                // o espelho est<fase> mantem o formato antigo do save
+                var antes = PROG.stars(G.fase);
+                PROG.complete(G.fase, est);
+                if (est > antes) E.save.set("est" + G.fase, est);
                 G.recorde = E.save.best("pts" + G.fase, M.pontos);
                 for (var k = 0; k < est; k++) {
                     E.after(450 + k * 380, function () {

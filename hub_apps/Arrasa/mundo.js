@@ -2,6 +2,14 @@
 // (celeros.physics P.rigid -> System.rigid*, API 33). Tudo em UNIDADES DO
 // MUNDO (320 de largura, chao em y=290): a vista so escala.
 //
+// 1.3.0: cada corpo do solver ganha um corpo espelho no E.combat (time
+// "mundo") e cada lance cria um E.combat.shot que acompanha o projetil
+// fisico — o shot e a HITBOX (onWall/onHit) usada pelo knockback e pelos
+// efeitos, enquanto o solver continua dono do movimento, do giro e do
+// empilhamento. A explosao tambem registra um E.combat.blast. Os goblins e
+// o rei vagueiam com E.steer.agent (wander/within) entre os turnos, quando
+// a pilha ja assentou: o solver nao muda.
+//
 //   pecas    — caixas que giram e empilham (madeira, gelo, pedra, TNT) e
 //              plataformas de rocha fixas; goblins sao circulos
 //   dano     — o solver devolve por corpo o maior impulso de impacto do
@@ -26,6 +34,9 @@
 // no Duktape uma chamada custa mais que o resto do corpo do laco.
 
 var P = require("celeros.physics");
+var E = require("celeros.game");
+require("celeros.game.combat");       // E.combat.shot/blast/knock
+require("celeros.game.steer");        // E.steer.agent (goblins)
 var NIV = require("niveis");
 
 // campos do estado por corpo (P.rigid: [x, y, ang, hit, rapidez, flags])
@@ -40,6 +51,14 @@ var PUXAO_MAX = 42;                      // raio maximo do puxao
 var K_LANCE = 9.2;                       // v = puxao * K (max ~386 u/s)
 var CARENCIA = 1.0;                      // s sem dano: a pilha assenta
 var LIMIAR = { bloco: 55, goblin: 32 };  // dv minimo que machuca (u/s)
+
+// mapa do E.combat.shot: o solver ja colide o projetil de verdade; aqui o
+// "solido" e o chao (o shot morre ao encostar nele, como o projetil fisico
+// perde o voo). As pecas ficam fora para o shot espelho nao morrer antes de
+// o solver resolver o impacto.
+var MAPA = { solidAt: function (x, y) { return y > GROUND; } };
+// area de passeio dos goblins entre os turnos (dentro da fortaleza)
+var AREA_GOB = { x: 165, y: GROUND - 150, w: MW - 165, h: 150 };
 
 var MAT = {
     madeira: { dens: 0.6, atrito: 0.75, quique: 0.05, hp: 150, pts: 100 },
@@ -78,13 +97,47 @@ var M = {
     rastroNovo: [],
     venceu: false,
     acabou: false,
-    sem: false               // firmware sem corpo rigido (API 33)
+    sem: false,              // firmware sem corpo rigido (API 33)
+    interagiu: false,        // ja houve lance (bateria/telemetria)
+    lances: 0,               // lancamentos da fase (passeio so apos o 2o)
+    shot: null               // E.combat.shot espelho do projetil da vez
 };
 
 function massa(c) {
     var m = MAT[c.mat] || TIRO[c.tipo];
     var d = m && m.dens ? m.dens : 1;
     return c.r ? d * 3.14159265 * c.r * c.r : d * c.w * c.h;
+}
+
+// --------------------------------------------------------- E.combat -------
+// Corpo espelho: o solver e o dono do movimento; o E.combat so enxerga uma
+// caixa (AABB) para as hitboxes/projeteis. hp alto porque quem calcula dano
+// e o solver (o blast usa onHit, que so dispara com dano > 0).
+function ligaCombat(c) {
+    var e = { x: 0, y: 0, w: 12, h: 12, hp: 1e9, _c: c };
+    if (c.k === "goblin") { e.w = c.r * 2; e.h = c.r * 2; }
+    else { e.w = c.w; e.h = c.h; }
+    c.ent = e;
+    E.combat.body(e, { team: "mundo", knockRes: 1, iframes: 0 });
+}
+
+// estado do solver -> caixas dos espelhos (chamado depois de cada state()).
+// O array s e o mesmo do quadro; nada e alocado por corpo.
+function atualizaCombat(s) {
+    var n = M.w ? M.w.count() : 0;
+    for (var i = 0; i < n; i++) {
+        var c = M.corpos[i];
+        if (!c || !c.ent) continue;
+        var o = i * NS;
+        if (!(s[o + SFL] & 1)) { c.ent.dead = true; continue; }
+        if (c.k === "goblin") {
+            c.ent.x = s[o + SX] - c.r;
+            c.ent.y = s[o + SY] - c.r;
+        } else {
+            c.ent.x = s[o + SX] - c.w / 2;
+            c.ent.y = s[o + SY] - c.h / 2;
+        }
+    }
 }
 
 function addCorpo(c) {
@@ -105,15 +158,20 @@ function addCorpo(c) {
     c.rachas = null;         // desenho: rachaduras sorteadas no 1o dano
     c.semente = (i * 7919 + M.fase * 104729) % 9973;
     M.corpos[i] = c;
+    ligaCombat(c);
     return i;
 }
 
 // ------------------------------------------------------------- fase -------
 M.carregar = function (n) {
     if (M.w) M.w.free();
+    E.combat.clear();        // corpos/hitboxes/tiros da fase anterior
     M.w = P.rigid({ iterations: 10 });
     M.sem = !M.w;
     M.fase = n;
+    M.shot = null;
+    M.interagiu = false;
+    M.lances = 0;
     M.corpos = [];
     M.goblins = 0;
     M.t = 0;
@@ -205,6 +263,32 @@ M.lancar = function (v) {
     t.t = 0;
     M.pull.x = 0; M.pull.y = 0;
     M.rastroNovo = [p.x, p.y];
+    M.interagiu = true;
+    M.lances++;
+    // hitbox do projetil: acompanha o corpo fisico (sync no step). O solver
+    // resolve a colisao/pancada; o shot da o onWall/onHit e o Knockback.
+    var sh = E.combat.shot(null, {
+        x: p.x, y: p.y, vx: v.vx, vy: v.vy, r: def.r,
+        dmg: 0, knock: 0, life: 120000, team: "tiro", pierce: true,
+        map: MAPA,
+        onWall: function (s) { t.parede = true; },
+        onHit: function (ent, s) {
+            var dv = Math.sqrt(s.vx * s.vx + s.vy * s.vy) || 1;
+            var k = dv > 220 ? 220 : dv;
+            E.combat.knock(ent, s.vx / dv * k, s.vy / dv * k, 180);
+            var c = ent._c;
+            if (!c || c.fixo || c.morto || !c.m) return;
+            // o impulso extra e so tempero: o pancadao e o do solver
+            if (!M.w.awake(c.i, M.s)) return;
+            M.w.impulse(c.i, s.vx / dv * 24 * c.m, s.vy / dv * 24 * c.m);
+        }
+    });
+    sh.tipo = t.tipo;
+    sh.ang = 0;
+    sh.estado = "voando";
+    M.corpos[i].shot = sh;
+    t.shot = sh;
+    M.shot = sh;
     return { t: "lancou", x: p.x, y: p.y, tipo: t.tipo };
 };
 
@@ -288,7 +372,20 @@ M.habilidade = function (ev) {
 // ----------------------------------------------------------- explosao -----
 M.explodir = function (x, y, R, dvMax, ev) {
     var s = M.s = M.w.state();
+    atualizaCombat(s);
     if (ev) ev.push({ t: "boom", x: x, y: y, r: R });
+    // hitbox de combate: o dano/impulso de verdade e o laco do solver
+    // abaixo; o blast registra a area e devolve o knockback nos espelhos
+    E.combat.blast(x, y, R, {
+        team: "*", dmg: 0.01, knock: 0, ms: 1, stop: 0,
+        onHit: function (ent, hb) {
+            var ex = ent.x + (ent.w || 0) / 2 - x;
+            var ey = ent.y + (ent.h || 0) / 2 - y;
+            var d = Math.sqrt(ex * ex + ey * ey) || 1;
+            var f = d < R ? 1 - d / R : 0;
+            if (f > 0) E.combat.knock(ent, ex / d * 200 * f, (ey / d - 0.35) * 200 * f, 220);
+        }
+    });
     for (var i = 0; i < M.corpos.length; i++) {
         var c = M.corpos[i], o = i * NS;
         if (!c || c.fixo || c.k === "chao" || !(s[o + SFL] & 1)) continue;
@@ -314,6 +411,8 @@ M.ferir = function (c, dano, ev) {
 M.remover = function (i, ev, semPontos) {
     var c = M.corpos[i];
     if (!c) return;
+    if (c.ent) c.ent.dead = true;               // espelho do E.combat
+    if (c.shot && !c.shot.dead) c.shot.dead = true;
     var s = M.s;
     var x = M.w.x(i, s), y = M.w.y(i, s), a = M.w.angle(i, s);
     M.w.remove(i);
@@ -333,6 +432,35 @@ M.remover = function (i, ev, semPontos) {
 
 function fora(x, y) { return x < -50 || x > MW + 50 || y > GROUND + 70; }
 
+// -------------------------------------------------------------- passeio ---
+// Goblins/rei vagam entre os turnos (E.steer wander + within): o agente
+// so decide a direcao; o impulso horizontal entra no solver, que continua
+// dono da posicao. So roda com a pilha assentada e um tiro ja armado —
+// durante o voo/quebra nada se mexe (a mira e a queda continuam previsiveis).
+function vagueia(dt, s) {
+    var t = M.tiro;
+    // so depois do 2o lance: o primeiro tiro nao poe a fortaleza em
+    // movimento (a queda/mira do primeiro turno continua previsivel e a
+    // bateria do app nao ve goblin passeando antes da hora)
+    if (M.lances < 2 || !t || (t.estado !== "pronto" && t.estado !== "carregando")) return;
+    if (M.calmo < 0.5) return;
+    var n = M.w ? M.w.count() : 0;
+    for (var i = 0; i < n; i++) {
+        var c = M.corpos[i];
+        if (!c || c.k !== "goblin" || c.morto) continue;
+        var o = i * NS;
+        if (!(s[o + SFL] & 1)) continue;
+        if (!c.ag) c.ag = E.steer.agent(c, { speed: 14, force: 36, agility: 5 });
+        // o agente integra x/y no descritor; a posicao real vem do solver
+        c.x = s[o + SX];
+        c.y = s[o + SY];
+        c.ag.wander(1, { dist: 7, r: 9, jitter: 1.2 });
+        c.ag.within(AREA_GOB, 12, 2);
+        c.ag.update(dt);
+        if (c.ag.obj.vx) M.w.impulse(i, c.m * c.ag.obj.vx * dt * 4, 0);
+    }
+}
+
 // ------------------------------------------------------------- step -------
 M.step = function (dt) {
     var ev = [];
@@ -346,6 +474,7 @@ M.step = function (dt) {
     }
     M.w.step(dt, { gravity: { x: 0, y: GRAV }, maxSub: 12 });
     var s = M.s = M.w.state();
+    atualizaCombat(s);
     var n = M.w.count(), i, c, o;
 
     // dano por impacto (fora da carencia de montagem)
@@ -388,6 +517,14 @@ M.step = function (dt) {
                     t.v.x = (tx - t.px) / dt; t.v.y = (ty - t.py) / dt;
                 }
                 t.px = tx; t.py = ty;
+                // o shot espelho acompanha o corpo fisico (o combate roda
+                // antes do update da cena: este sync vale para o proximo)
+                if (t.shot && !t.shot.dead) {
+                    t.shot.x = tx; t.shot.y = ty;
+                    t.shot.vx = t.v ? t.v.x : 0;
+                    t.shot.vy = t.v ? t.v.y : 0;
+                    t.shot.ang = s[oj + SA];
+                }
                 if (t.bateu < 0 && s[oj + SHIT] > 0 && t.t > 0.05) {
                     t.bateu = t.t;
                     ev.push({ t: "impacto", x: tx, y: ty, forca: s[oj + SHIT] / M.corpos[j].m });
@@ -441,6 +578,7 @@ M.step = function (dt) {
         }
         if (!algum) break;
         s = M.s = M.w.state();
+        atualizaCombat(s);
     }
 
     // turno: assentar e decidir
@@ -466,6 +604,7 @@ M.step = function (dt) {
         // goblins zerados com o tiro ainda pronto (TNT em cadeia): vitoria
         if (!t || t.estado === "pronto" || t.estado === "carregando") M.vitoria(ev);
     }
+    vagueia(dt, s);
     return ev;
 };
 

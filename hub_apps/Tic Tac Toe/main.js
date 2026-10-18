@@ -1,13 +1,16 @@
 // CelerOS Tic Tac Toe — jogo da velha no tema do OS. Porte CelerGame com a
-// familia completa: core + fx + ui. Tela de titulo com "Como jogar", menu de
-// modo/dificuldade, pausa no meio da partida, fim de jogo com o tabuleiro
-// visivel e sons na sfxTable do core. O bot joga pelo E.after (o loop nao
-// bloqueia), o placar vive no NVS e o score.txt da versao anterior entra
-// como migracao opcional.
+// familia completa: core + fx + ui + fsm + events. O fluxo titulo -> jogo ->
+// fim vive num E.fsm (enter/update/draw/after), o turno jogador/bot em outro,
+// a pausa empilha por cima (push/pop) e o tabuleiro segue visivel. O bot joga
+// pelo E.after (o loop nao bloqueia), o placar vive no NVS e o score.txt da
+// versao anterior entra como migracao opcional. Sons e efeitos ouvem os
+// eventos mark/win/draw/score (E.events), e um recorde novo vira toast.
 
 var E = require("celeros.game");       // familia CelerGame: core
 require("celeros.game.fx");            // decoradores: particulas e juice
-require("celeros.game.ui");            // telas de titulo/menu/pausa/fim
+require("celeros.game.ui");            // telas de titulo/menu/pausa/fim + toast
+require("celeros.game.fsm");           // fluxo titulo -> jogo -> fim e turno
+require("celeros.game.events");        // barramento mark/win/draw/score
 
 E.init({ dir: "Tic Tac Toe", fps: 30, save: "velha." });
 var T = E.theme, W = E.W, H = E.H;
@@ -50,7 +53,7 @@ var difficulty = 1;                         // 0 facil | 1 medio | 2 impossivel
 var diffNames = ["Fácil", "Médio", "Impossível"];
 var botPend = null;                         // timer do "bot pensando"
 var juiceT = 0;                             // particulas vivas: repinta
-var paused = false;                         // veu de pausa em cima do jogo
+var paused = false;                         // estado de pausa (veu por cima)
 
 // tabuleiro um pouco menor que a versao anterior: sobram ~70 px embaixo
 // para o botao de pausa (jogo) e para o menu de fim (tabuleiro visivel)
@@ -94,6 +97,7 @@ function minimax(b, depth, bot) {
     return best;
 }
 
+// devolve a casa escolhida (o evento mark leva o indice)
 function botMove() {
     var empty = [];
     for (var e = 0; e < 9; e++) if (board[e] === 0) empty.push(e);
@@ -103,7 +107,7 @@ function botMove() {
     else if (difficulty === 1) rnd = Math.random() > 0.6;
     var choice = -1;
 
-    if (empty.length === 0) return;
+    if (empty.length === 0) return choice;
     if (rnd) {
         choice = empty[Math.floor(Math.random() * empty.length)];
     } else if (empty.length === 9) {
@@ -122,6 +126,7 @@ function botMove() {
         }
     }
     if (choice >= 0) board[choice] = 2;
+    return choice;
 }
 
 // ---------------------------------------------------------------- desenho ----
@@ -195,47 +200,87 @@ function drawBoard() {
     }
 }
 
+// tela de jogo inteira (jogo, pausa e anuncio compartilham): o tabuleiro
+// fica no vidro por baixo do veu e durante o fim
+function drawGame() {
+    E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
+    drawBoard();
+    if (!winner) {
+        E.gfx.button("Pausa", BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w,
+                     BTN_PAUSE.h, { primary: false });
+    }
+    E.fx.draw();
+}
+
+// ---------------------------------------------------------------- eventos ---
+// O jogo so anuncia o que aconteceu; som e efeitos moram nos ouvintes.
+E.on("mark", function () {
+    E.audio.sfx("mark");
+});
+
+E.on("win", function (p) {
+    var c;
+    if (p.two || p.who === 1) {
+        E.audio.sfx("win");
+        E.fx.flash(T.ok, 260);
+        c = lineCenter(p.line);
+        E.fx.ring(c.x, c.y, { r0: 14, speed: 210, color: T.ok, life: 0.6 });
+        E.fx.popText(c.x, c.y, p.two ? ((p.who === 1 ? "X" : "O") + " VENCEU") : "VITÓRIA",
+                     { color: T.ok, life: 0.9, ts: "title" });
+        // estouro nas celulas da linha vencedora
+        var base = p.line * 3;
+        for (var k = 0; k < 3; k++) {
+            var cc = cellCenter(WINS[base + k]);
+            E.fx.burst(cc.x, cc.y, { n: 10, color: T.ok, speed: 80, life: 0.6, size: 2 });
+        }
+    } else {
+        E.audio.sfx("lose");
+        E.fx.flash(T.err, 260);
+        c = lineCenter(p.line);
+        E.fx.ring(c.x, c.y, { r0: 14, speed: 210, color: T.err, life: 0.6 });
+        E.fx.popText(c.x, c.y, "DERROTA", { color: T.err, life: 0.9, ts: "title" });
+    }
+});
+
+E.on("draw", function () {
+    E.audio.sfx("draw");
+    E.fx.flash(T.stroke, 220);
+    var c = boardCenter();
+    E.fx.ring(c.x, c.y, { r0: 12, speed: 170, color: T.textDim, life: 0.6 });
+    E.fx.popText(c.x, c.y, "EMPATE", { color: T.textDim, life: 0.9, ts: "title" });
+});
+
+// persistencia e comemoracao saem do fluxo do jogo
+E.on("score", function (s) {
+    saveScore();
+    if (s.novo) E.ui.toast("NOVO RECORDE!", { ms: 1600 });
+});
+
 // ------------------------------------------------------------------ fluxo ----
 function finishTurn() {
     var r = checkBoard(board);
     if (!r) return false;
     winner = r.who;
     winLine = r.line;
-    var c = boardCenter();
     if (winner === 3) {
         score.e++;
-        E.audio.sfx("draw");
-        E.fx.flash(T.stroke, 220);
-        E.fx.ring(c.x, c.y, { r0: 12, speed: 170, color: T.textDim, life: 0.6 });
-        E.fx.popText(c.x, c.y, "EMPATE", { color: T.textDim, life: 0.9, ts: "title" });
+        E.emit("draw");
+        E.emit("score", { v: score.v, d: score.d, e: score.e, novo: false, kind: "draw" });
     } else if (twoPlayers || winner === 1) {
+        var antes = score.v;
         if (!twoPlayers) score.v++;
-        E.audio.sfx("win");
-        E.fx.flash(T.ok, 260);
-        c = lineCenter(winLine);
-        E.fx.ring(c.x, c.y, { r0: 14, speed: 210, color: T.ok, life: 0.6 });
-        E.fx.popText(c.x, c.y, twoPlayers ? ((winner === 1 ? "X" : "O") + " VENCEU") : "VITÓRIA",
-                     { color: T.ok, life: 0.9, ts: "title" });
-        // estouro nas celulas da linha vencedora
-        var base = winLine * 3;
-        for (var k = 0; k < 3; k++) {
-            var cc = cellCenter(WINS[base + k]);
-            E.fx.burst(cc.x, cc.y, { n: 10, color: T.ok, speed: 80, life: 0.6, size: 2 });
-        }
+        E.emit("win", { who: winner, line: winLine, two: twoPlayers });
+        E.emit("score", { v: score.v, d: score.d, e: score.e,
+                          novo: !twoPlayers && score.v > antes, kind: "win" });
     } else {
         score.d++;
-        E.audio.sfx("lose");
-        E.fx.flash(T.err, 260);
-        c = lineCenter(winLine);
-        E.fx.ring(c.x, c.y, { r0: 14, speed: 210, color: T.err, life: 0.6 });
-        E.fx.popText(c.x, c.y, "DERROTA", { color: T.err, life: 0.9, ts: "title" });
+        E.emit("win", { who: winner, line: winLine, two: false });
+        E.emit("score", { v: score.v, d: score.d, e: score.e, novo: false, kind: "lose" });
     }
-    saveScore();
     juiceT = 1.2;
-    // deixa o anuncio tocar e leva pro fim, que redesenha o tabuleiro inteiro
-    E.after(900, function () {
-        E.goto("fim", { transition: "iris", ms: 450 });
-    });
+    // o anuncio (0.9 s) e o "after" do estado; o tabuleiro e os efeitos
+    // continuam no vidro ate a tela de fim
+    if (flow) flow.go("anuncio");
     return true;
 }
 
@@ -246,6 +291,7 @@ function resetGame() {
     winLine = -1;
     paused = false;
     if (botPend) { E.cancel(botPend); botPend = null; }
+    turnFsm.go("jogador", null, true);
 }
 
 // agenda a jogada do bot (o "pensando" vira espera viva, nao bloqueante)
@@ -253,12 +299,13 @@ function agendaBot() {
     if (botPend) return;
     botPend = E.after(300, function () {
         botPend = null;
-        if (paused || winner) return;       // retoma ao continuar
-        botMove();
+        if (paused || winner || !flow.is("jogo")) return;   // retoma ao continuar
+        var idx = botMove();
         if (!finishTurn()) {
-            E.audio.sfx("mark");
+            E.emit("mark", idx);
             turn = 1;
         }
+        turnFsm.go("jogador");
         E.redraw();
     });
 }
@@ -272,15 +319,29 @@ function pauseGame() {
 
 function resumeGame() {
     paused = false;
-    if (!winner && !twoPlayers && turn === 2) agendaBot();
+    if (!winner && !twoPlayers && turn === 2) turnFsm.go("bot", null, true);
     E.redraw();
 }
 
+// turno de 1 jogador: "jogador" espera o toque, "bot" agenda o E.after.
+// Em 2 jogadores o estado fica em "jogador" (os dois se revezam no toque).
+var turnFsm = E.fsm(null, {
+    jogador: {},
+    bot: {
+        enter: function () { agendaBot(); },
+        exit: function () {
+            if (botPend) { E.cancel(botPend); botPend = null; }
+        }
+    }
+}, "jogador");
+
 // ------------------------------------------------------------------ cenas ---
-E.run({
+// Uma cena estatica so: quem manda no desenho e o E.fsm do fluxo.
+// "anuncio" usa o after do fsm (0.9 s) e mantem o tabuleiro visivel.
+var flow = E.fsm(null, {
     titulo: {
-        static: true,
-        draw: function () {
+        enter: function () { E.redraw(); },
+        draw: function (m) {
             E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
             var act = E.ui.title({
                 game: "TIC TAC TOE",
@@ -290,15 +351,16 @@ E.run({
             });
             if (act === "start") {
                 E.audio.sfx("ui");
-                E.goto("menu", { transition: "fade", ms: 300 });
+                m.go("menu");
             } else if (act === "extra") {
                 E.audio.sfx("ui");
-                E.goto("ajuda", { transition: "fade", ms: 250 });
+                m.go("ajuda");
             }
         }
     },
 
-    // texto datilografado: cena NAO-static (a revelacao avanca no draw)
+    // texto datilografado: a revelacao avanca no draw, entao o update pede
+    // redraw enquanto o dialogo nao termina (cena estatica)
     ajuda: {
         enter: function () {
             this.dlg = E.ui.dialog(
@@ -309,18 +371,20 @@ E.run({
                 "mesmo aparelho. O placar fica salvo no aparelho.",
                 { name: "COMO JOGAR", speed: 55 });
         },
-        draw: function () {
+        update: function () {
+            if (this.dlg && (!this.dlg.done || E.input.tap)) E.redraw();
+        },
+        draw: function (m) {
             E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
-            if (!this.dlg.draw(16, 74, W - 32)) {
+            if (!this.dlg || !this.dlg.draw(16, 74, W - 32)) {
                 E.audio.sfx("ui");
-                E.goto("titulo", { transition: "fade", ms: 250 });
+                m.go("titulo");
             }
         }
     },
 
     menu: {
-        static: true,
-        draw: function () {
+        draw: function (m) {
             E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
             E.gfx.text("JOGO DA VELHA", W / 2, 18, { ts: "title", align: "center" });
             E.gfx.panel(16, 54, 208, 52);
@@ -351,7 +415,7 @@ E.run({
             } else if (pick === 3) {
                 resetGame();
                 E.audio.sfx("ok");
-                E.goto("jogo", { transition: "fade", ms: 300 });
+                m.go("jogo");
             }
             E.gfx.text("toque na dificuldade para trocar", W / 2, 290,
                        { ts: "tiny", align: "center", color: T.textDim });
@@ -359,22 +423,22 @@ E.run({
     },
 
     jogo: {
-        static: true,
         enter: function () { paused = false; E.redraw(); },
-        // sem reset no exit: a cena fim desenha o tabuleiro final com a
+        // volta da pausa: o turno do bot e reagendado se era a vez dele
+        resume: function () { resumeGame(); },
+        // sem reset no exit: o estado fim desenha o tabuleiro final com a
         // linha vencedora (o reset acontece ao ENTRAR numa partida nova);
-        // o timer do bot morre para nao jogar na cena seguinte
+        // o timer do bot morre para nao jogar no estado seguinte
         exit: function () {
             if (botPend) { E.cancel(botPend); botPend = null; }
         },
-        update: function (dt) {
+        update: function (m, dt) {
             if (!paused && juiceT > 0) { juiceT -= dt; E.redraw(); }
-            if (paused) return;                 // o veu trata o toque no draw
-            if (!winner && E.input.tap && E.hit(BTN_PAUSE)) {
-                pauseGame();
+            var t = E.input.tap;
+            if (!winner && t && E.hit(BTN_PAUSE)) {
+                m.push("pausa");
                 return;
             }
-            var t = E.input.tap;
             if (winner || !t) return;
             if (turn === 2 && !twoPlayers) return;   // vez do bot (agendado)
             if (t.x < OX || t.x >= OX + CELL * 3 || t.y < OY || t.y >= OY + CELL * 3) return;
@@ -382,47 +446,69 @@ E.run({
             if (board[idx] !== 0) return;
             board[idx] = turn;
             if (!finishTurn()) {
-                E.audio.sfx("mark");
+                E.emit("mark", idx);
                 turn = turn === 1 ? 2 : 1;
-                if (!twoPlayers && turn === 2) agendaBot();
+                if (!twoPlayers && turn === 2) turnFsm.go("bot");
             }
             E.redraw();
         },
-        draw: function () {
-            E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
-            drawBoard();
-            if (!winner) {
-                E.gfx.button("Pausa", BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w,
-                             BTN_PAUSE.h, { primary: false });
-            }
-            E.fx.draw();
-            if (paused) {
-                // veu imediato-mode por cima do tabuleiro congelado
-                var act = E.ui.pause({});
-                if (act === "resume") resumeGame();
-                else if (act === "restart") { resetGame(); E.redraw(); }
-                else if (act === "quit") {
-                    E.audio.sfx("back");
-                    E.goto("menu", { transition: "fade", ms: 300 });
-                }
+        draw: function () { drawGame(); }
+    },
+
+    // tabuleiro congelado + veu; o E.ui.pause e imediato-mode por cima
+    pausa: {
+        enter: function () { pauseGame(); },
+        draw: function (m) {
+            drawGame();
+            var act = E.ui.pause({});
+            if (act === "resume") m.pop();
+            else if (act === "restart") {
+                resetGame();
+                m.pop();
+            } else if (act === "quit") {
+                E.audio.sfx("back");
+                m.pop();
+                m.go("menu");
             }
         }
     },
 
+    // anuncio do resultado: particulas vivas e tabuleiro no vidro; o fsm
+    // sai sozinho para o fim depois de 0.9 s
+    anuncio: {
+        enter: function () { E.redraw(); },
+        update: function (m, dt) {
+            if (juiceT > 0) juiceT -= dt;
+            E.redraw();                       // efeitos avancam no draw
+        },
+        draw: function () { drawGame(); },
+        after: [0.9, "fim"]
+    },
+
     fim: {
-        static: true,
-        draw: function () {
+        draw: function (m) {
             E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
-            drawBoard();                       // tabuleiro final continua visivel
+            drawBoard();                      // tabuleiro final continua visivel
             var pick = E.ui.menu(["De novo", "Menu"], { y: 252, row: 34 });
             if (pick === "De novo") {
                 resetGame();
                 E.audio.sfx("ui");
-                E.goto("jogo", { transition: "wipe", ms: 300 });
+                m.go("jogo");
             } else if (pick === "Menu") {
                 E.audio.sfx("ui");
-                E.goto("menu", { transition: "fade", ms: 300 });
+                m.go("menu");
             }
         }
     }
-}, "titulo");
+}, "titulo", {
+    onChange: function () { E.redraw(); }
+});
+
+// cena unica: o fsm do fluxo e quem recebe update/draw
+E.run({
+    velha: {
+        static: true,
+        update: function (dt) { flow.update(dt); },
+        draw: function () { flow.draw(); }
+    }
+}, "velha");

@@ -1,17 +1,24 @@
-// Neon Surfer (2D Runner) — corrida infinita em 3 faixas. Revamp 2.3:
-// titulo, pausa e fim de jogo pela CelerGame UI (celeros.game.ui), fundo em
-// 3 camadas procedurais (E.fx.parallax) rolando com a corrida, rastro da
-// prancha + escapamento e anel na moeda, sons de tabela no E.audio. A cena
-// de jogo continua na camada suja (redraw integral afundava a 8 fps no
-// 4848) e a troca de faixa segue decidida no PRESS. ES5 puro (Duktape).
+// Neon Surfer (2D Runner) — corrida infinita em 3 faixas. Revamp 2.4:
+// arte de IA (atlas 4x4 de 64 px e cidade 256x256) desenhada por
+// E.spr.stamp; a cidade e cozida 1x num sprite de tela cheia e o painter
+// da camada suja restaura so a caixa pedida (System.blitSprite, API 34) —
+// o jogo segue a 60 fps no 4848. Stick inferior do E.pad troca de faixa no
+// multitoque; toque na faixa e deslize continuam valendo. A pista nasce de
+// padroes do E.gen (scatter de trens + salas/corredores para as moedas,
+// com semente) e um drone do E.steer.agent persegue o heroi (seek/evade/
+// within). ES5 puro (Duktape).
 
-var E = require("celeros.game");       // familia CelerGame: core + fx + spr + ui
+var E = require("celeros.game");       // familia CelerGame: core + modulos
 require("celeros.game.fx");
 require("celeros.game.spr");
 require("celeros.game.ui");
-var PISTA = require("pista");          // regras de nascimento (fuzz no sdk)
+require("celeros.game.pad");           // stick do 4848 (multitoque)
+require("celeros.game.gen");           // padroes de pista/obstaculos
+require("celeros.game.steer");         // drone perseguidor
+var PISTA = require("pista");          // regras de justica do nascimento
 
-E.init({ dir: "2D Runner", fps: 60, save: "surfer." });
+E.init({ dir: "2D Runner", fps: 60, save: "surfer.",
+         bases: ["/local/apps/2D Runner/", "/sd/apps/2D Runner/"] });
 var T = E.theme, W = E.W, H = E.H, S = System;
 
 var ROAD_X = 20, ROAD_W = 200;          // pista com 3 faixas de ~66 px
@@ -19,14 +26,8 @@ var LANE_W = ROAD_W / 3;
 var LANES = [ROAD_X + LANE_W / 2, ROAD_X + 3 * LANE_W / 2, ROAD_X + 5 * LANE_W / 2];
 var HUD_H = 34;
 var ROAD_BG = S.mixColor(T.bg, T.raised, 45);
-
-// paleta do fundo: cores derivadas do tema, calculadas 1x (o painter roda a
-// cada caixa suja — nada de mixColor por celula/quadro)
-var STAR_C = S.mixColor(T.bg, T.text, 60);
-var STAR_C2 = S.mixColor(T.bg, T.accent, 45);
-var WIN_C = S.mixColor(ROAD_BG, T.accentD, 75);
-var WIN_C2 = S.mixColor(ROAD_BG, T.warn, 22);
-var GRID_C = S.mixColor(ROAD_BG, T.accent, 22);
+var AI_KEY = 0xF81F;                    // magenta do fundo do atlas de IA
+var PAD_Y = H - 66;                     // faixa inferior do stick
 
 // recorde: NVS do core — o valor do appData entra como migacao 1x
 // (opcional: sem a perm "fs" o runtime nao registra o objeto FS)
@@ -47,6 +48,7 @@ E.audio.sfxTable.lane = [620, 18];
 E.audio.sfxTable.coin = [[988, 45], [1319, 70]];
 E.audio.sfxTable.crash = [[150, 220], [90, 160]];
 E.audio.sfxTable.record = [[784, 70], [1047, 110]];
+E.audio.sfxTable.alerta = [[880, 55], [660, 55], [880, 90]];
 function sfx(what) { E.audio.sfx(what); }
 
 // ---------------------------------------------------------------- estado ---
@@ -57,17 +59,33 @@ var showTemp = E.save.num("aj.tmp", 0) === 1;
 var playerLane, playerY, playerBob, playerX;   // playerX anima a troca
 var score, coins, speed, distance, entities, spawnT, newRecord;
 var rastro = null, escap = null;
-var pausado = false, pressPause = false;
+var pausado = false, pressPause = false, pressPad = false;
 var dlg = null;                                // dialogo do "Como jogar"
 var pressT = 0, marco = 0;                     // piso do toque e marco de pontos
 var RASTRO = { x: 0, y: 0 };                   // scratch da fonte do rastro
 var XAUSTO = { x: 0, y: 0 };                   // scratch do escapamento
 
+// pista gerada (E.gen): 10 linhas de 3 faixas; a semente vem do run para
+// a mesma partida do emulador reproduzir os mesmos padroes
+var PLAN_H = 10;
+var rnd = null;                                // E.rng do run (gen + drone)
+var planoObs = null, planoCoin = null, planoRow = 0;
+
+// drone perseguidor (E.steer.agent): alvo scratch para nao alocar por
+// trem/quadro; AREA_DRONE e o corredor onde ele voa
+var drone = null, droneVoo = 0, droneEspera = 10;
+var AREA_DRONE = { x: ROAD_X + 4, y: HUD_H + 4, w: ROAD_W - 8, h: H - HUD_H - 8 };
+var DRONE_ALVO = { x: 0, y: 0, vx: 0, vy: 0 };
+
+// stick do pad (criado no enter da cena jogo)
+var stk = null, stickLock = 0, ultimoStickX = W / 2;
+
 var BTN_AJ = { x: W / 2 - 48, y: H - 40, w: 96, h: 26 };
 var BTN_PAUSE = { x: W - 34, y: 4, w: 28, h: 26 };
-var COMO_JOGAR = "Toque na faixa para onde quer ir ou deslize para os lados. " +
-                 "Desvie dos trens, colete as moedas e bata o recorde. " +
-                 "A velocidade aumenta com o tempo. O botão de pausa fica no topo.";
+var COMO_JOGAR = "Toque na faixa para onde quer ir, deslize para os lados ou arraste o " +
+                 "stick da faixa de baixo. Desvie dos trens e do drone, colete as moedas " +
+                 "e bata o recorde. A velocidade aumenta com o tempo. O botao de pausa " +
+                 "fica no topo.";
 
 function resetGame() {
     playerLane = 1;
@@ -84,11 +102,19 @@ function resetGame() {
     pressT = 0;
     marco = 0;
     pressPause = false;
+    pressPad = false;
+    rnd = E.rng((Math.random() * 2147483647) | 0);
+    novoPlano();
+    drone = null;
+    droneVoo = 0;
+    droneEspera = 10;
 }
 
 // ------------------------------------------------------------- sprites -----
-// PNG nos slots nativos (drawPNG 1x no load; blit com cor-chave preta);
-// sem slots/PNG (CYD) o painter procedural desenha a arte vetorial antiga.
+// Atlas de IA 4x4 de 64 px: ai0 heroi, ai1 trem, ai2 moeda (ai3 e o resto da
+// folha fica magenta = vazio). A folha do fundo e um PNG 256x256 com a
+// cidade. Os painters procedurais sao o fallback de quando o PNG nao carrega
+// (harness/firmware sem drawPNG): E.spr.backed() decide o caminho.
 function paintHeroi(w, h, x, y) {
     var cx = x + w / 2, cy = y + h / 2;
     E.gfx.circle(cx, y + h - 5, 10, T.accentD, { smooth: true });
@@ -114,50 +140,188 @@ function paintCidade(w, h, x, y) {
         E.gfx.rect(x + i * 30, y + h - alt[i], 26, alt[i], T.accentD);
     }
 }
-E.spr.load([
-    { name: "heroi", file: "heroi", w: 36, h: 48, paint: paintHeroi },
-    { name: "trem", file: "trem", w: 56, h: 80, paint: paintTrem },
-    { name: "moeda", file: "moeda", w: 20, h: 20, paint: paintMoeda },
-    { name: "cidade", file: "cidade", w: 240, h: 76, paint: paintCidade }
-]);
 
-// ------------------------------------------------------------- paralaxe ----
-// 3 camadas procedurais atras da pista (estrelas, janelas da cidade e grid
-// neon). O paint desenha UMA celula em coords de tela com System direto:
-// nao registra caixa suja e cabe inteiro na celula, entao o painter da
-// camada suja repinta qualquer recorte sem deixar buraco. Nada aloca por
-// celula. O E.cam.y e o motor do scroll (a cena nao usa a camera).
-function hash2(x, y) {
-    var h = (x * 374761393 + y * 668265263) | 0;
-    h = ((h ^ (h >> 13)) * 1274126177) | 0;
-    return (h ^ (h >> 16)) >>> 0;
-}
-function paintEstrela(x, y) {
-    var k = hash2(x, y);
-    if ((k & 3) === 0) return;                 // 1/4 das celulas vazia
-    S.fillRect(x + 2 + (k % 30), y + 2 + ((k >> 4) % 30), 1, 1,
-               (k & 8) ? STAR_C : STAR_C2);
-}
-function paintJanela(x, y) {
-    var k = hash2(x + 101, y + 57);
-    if ((k % 3) !== 0) return;            // 1/3 das celulas acende
-    var n = 1 + (k % 2);
-    var bx = x + 2 + ((k >> 5) % 36);   // espalha na celula (sem coluna fixa)
-    var by = y + 2 + ((k >> 9) % 24);
-    for (var i = 0; i < n; i++) {
-        S.fillRect(bx, by + i * 6, 3, 3, (i & 1) ? WIN_C : WIN_C2);
+// fallback do atlas quando o slot existe mas o firmware nao tem drawSprite:
+// desenha a mesma peca (simplificada) escalada na caixa da regiao
+function paintAi(nome, x, y, k) {
+    var s = 64 * (k || 1), cx = x + s / 2, cy = y + s / 2;
+    if (nome === "ai0") {
+        S.fillCircle(cx, y + s * 0.9, s * 0.16, T.accentD);
+        S.fillCircle(cx, y + s * 0.9, s * 0.09, T.accent);
+        S.fillRect(cx - s * 0.2, cy - s * 0.28, s * 0.4, s * 0.52, T.accent);
+        S.fillRect(cx - s * 0.12, cy - s * 0.2, s * 0.24, s * 0.16, T.onAccent);
+        S.fillCircle(cx, cy + s * 0.04, s * 0.065, T.text);
+    } else if (nome === "ai1") {
+        S.fillRect(x + s * 0.03, y + s * 0.04, s * 0.94, s * 0.92, T.err);
+        S.fillRect(x + s * 0.13, y + s * 0.12, s * 0.74, s * 0.24, T.onAccent);
+        S.fillRect(x + s * 0.1, y + s * 0.74, s * 0.19, s * 0.12, T.warn);
+        S.fillRect(x + s * 0.71, y + s * 0.74, s * 0.19, s * 0.12, T.warn);
+    } else {
+        S.fillCircle(cx, cy, s * 0.34, T.warn);
+        S.fillCircle(cx - s * 0.03, cy - s * 0.03, s * 0.16,
+                     S.mixColor(T.warn, T.text, 40));
     }
 }
-function paintGrid(x, y) {
-    var k = hash2(x + 7, y + 13);
-    if ((k & 3) !== 0) return;
-    S.fillRect(x + (k % 24), y + ((k >> 6) % 28), 10, 1, GRID_C);
+E.spr.grid("ai", { file: "ai_atlas", cols: 4, rows: 4, tw: 64, th: 64,
+                   prefix: "ai", paint: paintAi });
+E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256,
+                      regions: { bg: [0, 0, 256, 256] } });
+var temAtlas = E.spr.backed("ai0");
+
+// Fundo: o PNG da cidade vira UM sprite de tela cheia cozido na entrada
+// (2 tiles de 240 px de altura) em vez de reescalar a folha em cada caixa
+// suja. O painter restaura so o recorte com System.blitSprite (API 34) ou,
+// no firmware anterior, com setClip + pushSprite. Sem PNG/slot, o painter
+// cai no fundo chapado e o menu na cidade procedural antiga.
+var bgSpr = 0;
+function montaFundo() {
+    bgSpr = 0;
+    if (!E.spr.backed("bg")) return;
+    if (typeof S.createSprite !== "function" || typeof S.drawSprite !== "function") return;
+    var id = S.createSprite(W, H);
+    if (!id) return;
+    var on = E.dirty.on;
+    E.dirty.on = false;                 // cozimento nao e desenho de quadro
+    S.useSprite(id);
+    S.fillScreen(T.bg);
+    var k = W / 256;
+    E.spr.stamp("bg", 0, 0, { scale: k, key: null });
+    E.spr.stamp("bg", 0, Math.round(256 * k), { scale: k, key: null });
+    S.useSprite(0);
+    E.dirty.on = on;
+    bgSpr = id;
 }
-var fundo = E.fx.parallax([
-    { speed: 0.16, gap: 36, rowH: 36, paint: paintEstrela },
-    { speed: 0.34, gap: 44, rowH: 44, paint: paintJanela },
-    { speed: 0.62, gap: 40, rowH: 40, paint: paintGrid }
-]);
+function desenhaFundo(x, y, w, h) {
+    if (!bgSpr) return false;
+    if (typeof S.blitSprite === "function") {
+        S.blitSprite(bgSpr, x, y, w, h);
+        return true;
+    }
+    if (E.caps.clip && typeof S.setClip === "function") {
+        S.setClip(x, y, w, h);
+        S.useSprite(bgSpr);
+        S.pushSprite(0, 0);
+        S.useSprite(0);
+        // o painter da camada suja ja estava recortado na area de jogo
+        if (E.dirty.on) S.setClip(0, HUD_H, W, H - HUD_H);
+        else S.clearClip();
+        return true;
+    }
+    return false;
+}
+montaFundo();
+
+// ------------------------------------------------------------- paralaxe ----
+// A cidade de IA substitui as 3 camadas procedurais antigas (estrelas,
+// janelas e grid): o fundo agora e uma imagem unica e estatica, repintada
+// so nas caixas sujas — nada de hash/celulas por quadro.
+
+// ------------------------------------------------------------ pista gen ---
+// Cada plano usa a semente do run: E.gen.scatter espalha os trens numa
+// grade 3xPLAN_H e E.gen.rooms gera salas/corredores cujas celulas livres
+// viram moedas (E.gen.scatter + findAll). A moeda nunca cai na mesma
+// celula/faixa de um trem do plano e o PISTA valida contra o que ja existe
+// na pista antes de nascer — sobreposicao impossivel.
+function novoPlano() {
+    planoObs = E.gen.grid(3, PLAN_H, ".");
+    E.gen.scatter(planoObs, "T", 14, { rnd: rnd, on: ".", minDist: 2 });
+    var mapa = E.gen.rooms(9, PLAN_H, { rnd: rnd, rooms: 5, min: 2, max: 3, tries: 120 });
+    E.gen.scatter(mapa.grid, "c", 9, { rnd: rnd, on: ".", minDist: 2 });
+    planoCoin = E.gen.grid(3, PLAN_H, ".");
+    var cs = E.gen.findAll(mapa.grid, "c");
+    for (var i = 0; i < cs.length; i++) {
+        var ln = cs[i].c % 3;
+        if (planoObs[cs[i].r][ln] === "T") continue;
+        planoCoin[cs[i].r][ln] = "c";
+    }
+    planoRow = 0;
+}
+
+// Uma linha do plano por nascimento: no maximo um trem e uma moeda/fileira,
+// com a justica do pista.js (espaco na mesma faixa e teia entre vizinhas).
+function nascerDoPlano() {
+    if (!planoObs) novoPlano();
+    if (planoRow >= PLAN_H) novoPlano();
+    var r = planoRow++;
+    var cfg = { speed: speed, hudH: HUD_H };
+    var tremLane = -1, i;
+    for (i = 0; i < 3; i++) {
+        if (planoObs[r][i] === "T" && (tremLane < 0 || rnd() < 0.5)) tremLane = i;
+    }
+    if (tremLane >= 0) {
+        var tr = PISTA.trem(entities, tremLane, cfg);
+        if (tr) entities.push(tr);
+    }
+    var yF = HUD_H + 26;
+    for (i = 0; i < 3; i++) {
+        if (planoCoin[r][i] !== "c") continue;
+        if (rnd() < 0.3) {
+            if (!PISTA.seguraPraMoeda(entities, i, yF - 60, yF + 20, cfg)) continue;
+            for (var c = 0; c < 3; c++) {
+                entities.push({ type: "coin", lane: i, y: yF - c * 30 });
+            }
+        } else {
+            if (!PISTA.seguraPraMoeda(entities, i, yF - 20, yF + 20, cfg)) continue;
+            entities.push({ type: "coin", lane: i, y: yF });
+        }
+        break;                          // uma fileira/moeda por linha
+    }
+}
+
+// ------------------------------------------------------------- drone ------
+// Perseguidor do E.steer: seek no heroi, evade dos trens que passam e
+// within no corredor da pista. Depois de 14 s ele sobe e sai (o jogador
+// ganha um respiro ate o proximo). Aviso pelo fx e som proprio.
+function nasceDrone() {
+    var ln = Math.floor(rnd() * 3);
+    drone = { x: LANES[ln], y: HUD_H - 14, vx: 0, vy: 0, t: 0, fuga: false };
+    drone.ag = E.steer.agent(drone, {
+        speed: 86 + Math.min(40, score / 250),
+        force: 300,
+        agility: 5
+    });
+    E.fx.popText(W / 2, HUD_H + 18, "DRONE!", { color: T.err, life: 1.0 });
+    sfx("alerta");
+}
+function atualizaDrone(dt) {
+    if (!drone) {
+        droneVoo += dt;
+        if (droneVoo > droneEspera && distance > 900) {
+            droneVoo = 0;
+            droneEspera = 12 + rnd() * 6;
+            nasceDrone();
+        }
+        return false;
+    }
+    var d = drone, i, e;
+    d.t += dt;
+    if (d.t > 14) {
+        // fim da perseguicao: sobe reto e libera a tela
+        if (!d.fuga) { d.fuga = true; d.ag.stop(); }
+        d.x += d.vx * dt;
+        d.y -= 170 * dt;
+        if (d.y < HUD_H - 30) drone = null;
+    } else {
+        d.ag.seek(playerX, playerY + playerBob, 1);
+        for (i = 0; i < entities.length; i++) {
+            e = entities[i];
+            if (e.type !== "train") continue;
+            DRONE_ALVO.x = LANES[e.lane];
+            DRONE_ALVO.y = e.y + e.h / 2;
+            DRONE_ALVO.vx = 0;
+            DRONE_ALVO.vy = speed;
+            d.ag.evade(DRONE_ALVO, 1.4, 64);
+        }
+        d.ag.within(AREA_DRONE, 14, 2);
+        d.ag.update(dt);
+    }
+    if (!d.fuga && Math.abs(d.x - playerX) < 16 &&
+        Math.abs(d.y - (playerY + playerBob)) < 22) {
+        bater();
+        return true;
+    }
+    return false;
+}
 
 // ------------------------------------------------------------- simulacao ---
 function move(dir) {
@@ -170,11 +334,56 @@ function move(dir) {
 // faixa mais proxima do x tocado (limites no meio das faixas 0|1 e 1|2)
 function laneAt(x) { return x < 87 ? 0 : (x < 153 ? 1 : 2); }
 
+// stick do pad: um passo por empurrao (volta ao centro rearma); o tap seco
+// na faixa inferior vira o toque na faixa (fallback do toque unico)
+function lePad() {
+    if (!stk) return;
+    if (stk.active) ultimoStickX = stk.cx;
+    if (stk.tap) {
+        var alvo = laneAt(ultimoStickX);
+        if (alvo > playerLane) move(1);
+        else if (alvo < playerLane) move(-1);
+        return;
+    }
+    if (!stk.active) { stickLock = 0; return; }
+    if (stk.x > 0.55) {
+        if (stickLock !== 1) { move(1); stickLock = 1; }
+    } else if (stk.x < -0.55) {
+        if (stickLock !== -1) { move(-1); stickLock = -1; }
+    } else if (Math.abs(stk.x) < 0.3) {
+        stickLock = 0;
+    }
+}
+
+// toque extra (multitoque) no botao de pausa: o dedo primario pode estar
+// segurando o stick quando o segundo toca o HUD
+function toquePausaExtra() {
+    var ts = E.input.touches;
+    if (!ts) return false;
+    for (var i = 0; i < ts.length; i++) {
+        var f = ts[i];
+        if (f.primary || !f.justUp || f.moved) continue;
+        if (f.x >= BTN_PAUSE.x - 3 && f.x <= BTN_PAUSE.x + BTN_PAUSE.w + 3 &&
+            f.y >= BTN_PAUSE.y - 3 && f.y <= BTN_PAUSE.y + BTN_PAUSE.h + 3) return true;
+    }
+    return false;
+}
+
+function bater() {
+    sfx("crash");
+    if (score > hi) { hi = score; newRecord = true; E.save.set("hi", hi); }
+    if (newRecord) sfx("record");
+    E.fx.ring(playerX, playerY, { color: T.err, r0: 8, speed: 220, life: 0.5 });
+    E.fx.burst(playerX, playerY, { n: 22, color: T.err, colors: [T.err, T.warn],
+                                   speed: 140, life: 0.7, grav: 160 });
+    E.fx.flash(T.err, 250);
+    E.goto("fim", { transition: "iris", ms: 500 });
+}
+
 function update(dt) {
     var move_ = speed * dt;
     distance += move_;
     playerBob = Math.sin(S.millis() / 150.0) * 5;
-    E.cam.y = -distance;   // so o parallax usa a camera (o draw zera o mundo)
 
     // troca de faixa suave (interp para o centro da faixa alvo)
     var target = LANES[playerLane];
@@ -185,19 +394,7 @@ function update(dt) {
     var rate = Math.max(0.24, 1.0 - speed / 1000.0);
     if (spawnT > rate) {
         spawnT = 0;
-        // justica do nascimento vive no pista.js (I1 espaco na mesma faixa,
-        // I2 teia entre faixas vizinhas, I3 moeda alcancavel, I4 saturacao
-        // desiste): o que sai daqui e sempre passavel
-        var n = PISTA.nascer(entities, { speed: speed, hudH: HUD_H });
-        if (n) {
-            if (n.type === "fileira") {
-                for (var c = 0; c < 3; c++) {
-                    entities.push({ type: "coin", lane: n.lane, y: n.y - c * 30 });
-                }
-            } else {
-                entities.push(n);
-            }
-        }
+        nascerDoPlano();
     }
 
     var px = playerX - 15, pw = 30, py = playerY - 20 + playerBob, ph = 40;
@@ -214,14 +411,7 @@ function update(dt) {
         if (!near) continue;
         if (e.type === "train") {
             if (py < e.y + e.h && py + ph > e.y) {
-                sfx("crash");
-                if (score > hi) { hi = score; newRecord = true; E.save.set("hi", hi); }
-                if (newRecord) sfx("record");
-                E.fx.ring(playerX, playerY, { color: T.err, r0: 8, speed: 220, life: 0.5 });
-                E.fx.burst(playerX, playerY, { n: 22, color: T.err, colors: [T.err, T.warn],
-                                               speed: 140, life: 0.7, grav: 160 });
-                E.fx.flash(T.err, 250);
-                E.goto("fim", { transition: "iris", ms: 500 });
+                bater();
                 return;
             }
         } else if (py < e.y + 10 && py + ph > e.y - 10) {
@@ -236,21 +426,18 @@ function update(dt) {
             entities.splice(i, 1);
         }
     }
+    if (atualizaDrone(dt)) return;
     speed += dt * 5.0;
 }
 
 // ---------------------------------------------------------------- desenho ---
-// painter da camada suja: repita o CENARIO fixo (ceu, manto da estrada,
-// parallax, bordas neon) so dentro da caixa pedida — tracinhos, entidades,
-// heroi e fx se apagam sozinhos entre quadros. O parallax vem DEPOIS do
-// manto da pista para as camadas aparecerem tambem dentro dela (cor sutil,
-// nunca atrapalha a leitura das faixas).
+// painter da camada suja: restaura a cidade so no recorte pedido e repinta
+// o manto da pista + bordas neon. O manto cobre ROAD_X..ROAD_X+ROAD_W (sem
+// a folga antiga de 12 px), deixando a cidade aparecer nas laterais.
 function paintRoad(x, y, w, h) {
-    S.fillRect(x, y, w, h, T.bg);
-    var rx = ROAD_X - 12, rw = ROAD_W + 24;
-    var ix = Math.max(x, rx), ix2 = Math.min(x + w, rx + rw);
+    if (!desenhaFundo(x, y, w, h)) S.fillRect(x, y, w, h, T.bg);
+    var ix = Math.max(x, ROAD_X), ix2 = Math.min(x + w, ROAD_X + ROAD_W);
     if (ix2 > ix) S.fillRect(ix, y, ix2 - ix, h, ROAD_BG);
-    fundo.draw(x, y, w, h);
     if (y < HUD_H + 12 && y + h > HUD_H) {
         S.fillGradient(x, HUD_H, w, 12, T.raised, ROAD_BG);
     }
@@ -306,10 +493,49 @@ function drawHud(force) {
 }
 
 var DASH_O = { r: 2, screen: true };   // scratch: 12 dashes x quadro sem alocar
+
+function desenhaTrem(e) {
+    if (temAtlas) {
+        E.spr.stamp("ai1", Math.round(LANES[e.lane]), Math.round(e.y),
+                    { scale: 1.25, key: AI_KEY, ax: 0.5, ay: 0 });
+    } else {
+        paintTrem(56, 80, Math.round(LANES[e.lane]) - 28, Math.round(e.y));
+    }
+}
+function desenhaMoeda(e) {
+    var yy = e.y + Math.round(Math.sin((distance + e.y) / 18) * 2);
+    if (temAtlas) {
+        E.spr.stamp("ai2", Math.round(LANES[e.lane]), yy,
+                    { scale: 0.35, key: AI_KEY, ax: 0.5, ay: 0.5 });
+    } else {
+        paintMoeda(20, 20, Math.round(LANES[e.lane]) - 10, yy - 10);
+    }
+}
+function desenhaHeroi() {
+    if (temAtlas) {
+        E.spr.stamp("ai0", Math.round(playerX), Math.round(playerY + playerBob),
+                    { scale: 0.75, key: AI_KEY, ax: 0.5, ay: 0.5 });
+    } else {
+        paintHeroi(36, 48, Math.round(playerX) - 18, Math.round(playerY - 24 + playerBob));
+    }
+}
+function desenhaDrone() {
+    if (!drone) return;
+    var d = drone;
+    var y = d.y + Math.sin(d.t * 9) * 2;
+    // helices + corpo neon; o olho pisca para ler a direcao
+    E.gfx.line(d.x - 13, y - 9, d.x - 5, y - 9, T.textDim, { w: 2 });
+    E.gfx.line(d.x + 5, y - 9, d.x + 13, y - 9, T.textDim, { w: 2 });
+    E.gfx.circle(d.x - 13, y - 9, 3, T.accentD, { smooth: true });
+    E.gfx.circle(d.x + 13, y - 9, 3, T.accentD, { smooth: true });
+    E.gfx.circle(d.x, y, 8, T.err, { smooth: true });
+    E.gfx.circle(d.x, y, 4, T.warn, { smooth: true });
+    if (Math.floor(d.t * 6) % 4 !== 0) {
+        E.gfx.circle(d.x, y, 2, T.text, { smooth: true });
+    }
+}
+
 function drawJogo() {
-    // a camera so move o parallax; o mundo e desenhado em coords de tela
-    var camx = E.cam.x, camy = E.cam.y;
-    E.cam.x = 0; E.cam.y = 0;
     // tracinhos entre faixas rolando com a distancia (dinamicos)
     var off = Math.floor(distance) % 44;
     for (var y = -44; y < H; y += 44) {
@@ -318,16 +544,20 @@ function drawJogo() {
         E.gfx.rect(ROAD_X + LANE_W - 2, ry, 4, 22, T.stroke, DASH_O);
         E.gfx.rect(ROAD_X + 2 * LANE_W - 2, ry, 4, 22, T.stroke, DASH_O);
     }
-    // entidades (sprites com cor-chave; painters de fallback sem slot)
+    // entidades (atlas de IA com stamp escalado; painter sem slot/PNG)
     for (var i = 0; i < entities.length; i++) {
         var e = entities[i];
-        if (e.type === "train") E.spr.blit("trem", LANES[e.lane] - 28, e.y);
-        else E.spr.blit("moeda", LANES[e.lane] - 10, e.y - 10 + Math.round(Math.sin((distance + e.y) / 18) * 2));
+        if (e.type === "train") desenhaTrem(e);
+        else desenhaMoeda(e);
     }
-    // heroi
-    E.spr.blit("heroi", Math.round(playerX) - 18, Math.round(playerY - 24 + playerBob));
+    desenhaHeroi();
+    desenhaDrone();
     E.fx.draw();
-    E.cam.x = camx; E.cam.y = camy;
+    if (stk) E.pad.draw();
+    // o stamp/clip do sprite nao conhece o recorte do HUD: trem entrando
+    // pelo topo pode pintar por cima do placar. Quando alguma caixa deste
+    // quadro toca a faixa do HUD, o memo e forcado a repintar por cima.
+    if (E.dirty.touches(0, 0, W, HUD_H)) drawHud(true);
 }
 
 // liga/desliga os emissores com a pausa (pausado tambem congela o rastro)
@@ -355,8 +585,30 @@ function pausar() {
 
 function retomar() {
     pausado = false;
+    if (stk) stk.tap = false;   // toque da pausa nao vira troca de faixa
+    stickLock = 0;
     fxFonte(true);
     armaJogo();
+}
+
+// gancho do harness/emulador (test.js ou --events): estado para o smoke
+if (typeof __harness !== "undefined") {
+    __harness.runner = {
+        E: E,
+        estado: function () {
+            return {
+                score: score, distance: distance, lane: playerLane, pausado: pausado,
+                fps: E.fps,
+                drone: drone ? { x: drone.x, y: drone.y, t: drone.t, fuga: drone.fuga } : null,
+                linha: planoRow, entidades: entities ? entities.length : 0,
+                pad: stk ? { active: stk.active, x: stk.x, cx: stk.cx,
+                             tap: stk.tap, finger: stk.finger } : null,
+                atlas: temAtlas, fundo: bgSpr
+            };
+        },
+        forcarDrone: function () { distance = 1000; droneVoo = 99; droneEspera = 0; },
+        limpar: function () { if (entities) entities.length = 0; }
+    };
 }
 
 // ------------------------------------------------------------------ cenas ---
@@ -376,8 +628,9 @@ E.run({
         },
         draw: function () {
             E.gfx.gradient(0, 0, W, H, T.raised, T.bg, { screen: true });
-            fundo.draw();                       // parallax atras do titulo
-            E.spr.blit("cidade", 0, H - 76);
+            // cidade de IA no rodape (mesmo PNG do fundo do jogo; sem ele a
+            // skyline procedural antiga continua valendo)
+            if (!desenhaFundo(0, H - 140, W, 140)) paintCidade(W, 76, 0, H - 76);
             var act = E.ui.title({ game: "NEON SURFER", subtitle: "corra, desvie, colete",
                                    best: hi, extra: "Como jogar" });
             E.gfx.button("Ajustes", BTN_AJ.x, BTN_AJ.y, BTN_AJ.w, BTN_AJ.h,
@@ -456,6 +709,16 @@ E.run({
             E.cam.x = 0;
             E.cam.y = 0;
             armaJogo();
+            // stick da faixa inferior (multitoque no 4848: o dedo do stick
+            // tem dono e o segundo dedo segue livre, ex. para a pausa)
+            stk = E.pad.stick({
+                zone: { x: 0, y: PAD_Y, w: W, h: H - PAD_Y },
+                x: W / 2, y: H - 12, r: 18,
+                float: true, dead: 0.22, dirs: 4, visible: true
+            });
+            stickLock = 0;
+            ultimoStickX = W / 2;
+            pressPad = false;
             // rastro neon que segue a prancha (fonte parada nao deixa nada;
             // posicao em scratch — o follow rodava 26x/s e alocava um objeto
             // por chamada) + emissor continuo do escapamento (rate baixo)
@@ -477,6 +740,8 @@ E.run({
         exit: function () {
             if (rastro) { rastro.stop(); rastro.dead = true; rastro = null; }
             if (escap) { escap.stop(); escap.dead = true; escap = null; }
+            if (stk) { E.pad.clear(); stk = null; }
+            drone = null;
             pausado = false;
             E.dirty.off();
         },
@@ -487,13 +752,15 @@ E.run({
             }
             this.fps = 60;
             var i = E.input;
+            lePad();
             if (i.justDown) {
                 pressT = S.millis();
                 pressPause = i.y < HUD_H;   // toque comecou no HUD
+                pressPad = i.y >= PAD_Y;    // toque comecou na faixa do stick
             } else if (i.justUp && !i.moved) {
                 if (pressPause) {
                     if (E.hit(BTN_PAUSE)) { pausar(); return; }
-                } else if (S.millis() - pressT >= 40) {
+                } else if (!pressPad && S.millis() - pressT >= 40) {
                     // toque seco: um passo NA DIRECAO da faixa tocada. Decidido
                     // na liberacao (posicao final do dedo: a 1a amostra do touch
                     // bateria e movia pro lado errado) e com piso de 40 ms
@@ -502,10 +769,11 @@ E.run({
                     if (alvo > playerLane) move(1);
                     else if (alvo < playerLane) move(-1);
                 }
-            } else if (i.swipe && !pressPause) {
+            } else if (i.swipe && !pressPause && !pressPad) {
                 if (i.swipe.dir === "left") move(-1);
                 else if (i.swipe.dir === "right") move(1);
             }
+            if (toquePausaExtra()) { pausar(); return; }
             update(dt);
             // marco a cada 1000 pontos: popText + fanfarra curta
             var m = Math.floor(score / 1000);

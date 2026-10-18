@@ -1,15 +1,22 @@
-// Campo Minado — classico completo. Porte CelerGame: o motor do tabuleiro
-// segue em board.js (require local); o desenho incremental celula-a-celula
-// vira a camada suja E.dirty — o painter repinta so as celulas da caixa
-// tocada (arquitetura do Detona), cronometro/minas no cabecalho sujo,
-// estilhacos na abertura em cadeia e flash na mina. Menu, ajuda e fim de
-// jogo usam o modulo compartilhado celeros.game.ui. Os efeitos seguem
-// locais: a soma enxuta de main+board+core+ui+fx passaria do teto de 48 KB
-// da CYD, entao a dep celeros.game.fx nao entra. Melhor tempo por
-// dificuldade no NVS.
+// Campo Minado — classico completo sobre a familia CelerGame. O motor do
+// tabuleiro segue em board.js (require local). O fluxo de telas vive numa
+// E.fsm (menu -> jogo -> vitoria/derrota; o after de 0.6 s mantem o
+// tabuleiro visivel antes do fim de jogo) e o desenho incremental
+// celula-a-celula vira a camada suja E.dirty — o painter repinta so as
+// celulas da caixa tocada (arquitetura do Detona), cronometro/minas no
+// cabecalho sujo, estilhacos na abertura em cadeia e flash na mina. Som e
+// HUD saem do laco de jogada: ele so emite "open"/"flag"/"boom"/"win" e
+// ouvintes da E.events tocam a tabela do core e marcam a faixa do
+// cabecalho. Menu, ajuda e fim de jogo usam o celeros.game.ui; o melhor
+// tempo ganha o toast "NOVO RECORDE!" e segue salvo no NVS por
+// dificuldade. Efeitos locais seguem: a soma enxuta de main+board+core+ui
+// +fsm+events fica dentro do teto com PSRAM, mas a dep fx nao entra.
+// ES5 puro (Duktape).
 
 var E = require("celeros.game");       // familia CelerGame: core
-require("celeros.game.ui");            // E.ui: menu, dialogo e gameOver
+require("celeros.game.ui");            // E.ui: menu, dialogo, gameOver e toast
+require("celeros.game.fsm");           // E.fsm: fluxo menu/jogo/vitoria/derrota
+require("celeros.game.events");        // E.on/E.emit: som e HUD fora do laco
 
 E.init({ dir: "Campo Minado", fps: 30, save: "minado." });
 var T = E.theme, W = E.W, H = E.H;
@@ -164,13 +171,15 @@ function paintHeaderRaw() {
     System.setTextDatum(0);
 }
 
-// painter da camada suja: repinta celulas que tocam a caixa (estado atual
-// do board — celula aberta pinta aberta), a faixa do cabecalho quando
-// tocada e so fundo nas faixas de fora (botoes/trevos)
+// painter da camada suja: limpa a caixa inteira no fundo e repinta as
+// celulas que ela toca (estado atual do board — celula aberta pinta
+// aberta) e a faixa do cabecalho quando tocada. O fill do fundo cobre os
+// vaos de 1 px entre celulas e a faixa 26..gridY (restos da tela anterior
+// apareciam ali: a borracha so cobria o desenho das celulas)
 function paintField(x, y, w, h) {
     var x2 = x + w, y2 = y + h;
+    System.fillRect(x, y, w, h, T.bg);
     if (y < gridY) paintHeaderRaw();
-    if (y2 > gridEnd) System.fillRect(x, Math.max(y, gridEnd), w, y2 - Math.max(y, gridEnd), T.bg);
     var m = MODES[modeIdx];
     var c0 = Math.max(0, Math.floor((x - gridX) / CELL));
     var c1 = Math.min(m.cols - 1, Math.floor((x2 - gridX - 1) / CELL));
@@ -178,12 +187,6 @@ function paintField(x, y, w, h) {
     var r1 = Math.min(m.rows - 1, Math.floor((y2 - gridY - 1) / CELL));
     for (var ry = r0; ry <= r1; ry++) {
         for (var cx = c0; cx <= c1; cx++) paintCellRaw(cx, ry);
-    }
-    // faixas laterais do grid
-    if (x < gridX) System.fillRect(x, Math.max(y, gridY), gridX - x, h, T.bg);
-    if (x2 > gridX + m.cols * CELL) {
-        var gx2 = gridX + m.cols * CELL;
-        System.fillRect(Math.max(x, gx2), Math.max(y, gridY), x2 - Math.max(x, gx2), h, T.bg);
     }
 }
 
@@ -199,24 +202,52 @@ function cellCenter(x, y) {
     return { x: gridX + x * CELL + CELL / 2, y: gridY + y * CELL + CELL / 2 };
 }
 
+// ---------------------------------------------------- eventos (som + HUD) ---
+// O laco de jogada so chama E.emit; quem toca e quem marca a faixa suja do
+// cabecalho sao estes ouvintes, ligados na entrada do jogo e soltos na
+// saida (menu/ajuda/fim nao ficam ouvindo evento de partida).
+var inscricoes = [];
+
+function ouve(nome, fn) { inscricoes.push(E.on(nome, fn)); }
+
+function ligaEventos() {
+    ouve("open", function (n) {
+        if (n) E.audio.sfx("open");
+        E.dirty.add(0, 0, 120, 26);       // contador de minas
+    });
+    ouve("flag", function (x, y, on) {
+        if (on) E.audio.sfx("flag");
+        E.dirty.add(0, 0, 120, 26);       // contador de minas
+    });
+    ouve("boom", function (x, y) {
+        E.audio.sfx("boom");
+        fxFlash(T.err, 300);
+        var mc = cellCenter(x, y);
+        fxBurst(mc.x, mc.y, 20, T.err, 120, 0.7, 140);
+    });
+    ouve("win", function (ms, novo) {
+        E.audio.sfx("win");
+        if (novo) E.ui.toast("NOVO RECORDE!", { ms: 1600 });
+    });
+}
+
+function soltaEventos() {
+    for (var i = 0; i < inscricoes.length; i++) E.off(inscricoes[i]);
+    inscricoes.length = 0;
+}
+
 // ---------------------------------------------------------------- jogada ---
-var resultado = null;   // {won, ms, best, novo} — a cena fim le daqui
+var resultado = null;   // {won, ms, best, novo} — o estado vitoria/derrota le daqui
 
 function finish(win) {
     var antes = bestTime(modeIdx);
-    if (win) {
-        if (!antes || elapsedMs < antes) E.save.set("b" + MODES[modeIdx].name, elapsedMs);
-        E.audio.sfx("win");
-    } else {
-        E.audio.sfx("boom");
-        fxFlash(T.err, 300);
-    }
-    resultado = { won: win, ms: elapsedMs, best: bestTime(modeIdx),
-                  novo: win && (!antes || elapsedMs < antes) };
-    // deixa o tabuleiro (e a explosao) visivel antes da tela de fim
-    E.after(600, function () {
-        E.goto("fim", { transition: win ? "iris" : "fade", ms: 450 });
-    });
+    var novo = win && (!antes || elapsedMs < antes);
+    if (novo) E.save.set("b" + MODES[modeIdx].name, elapsedMs);
+    resultado = { won: win, ms: elapsedMs, best: bestTime(modeIdx), novo: novo };
+    // o som/estilhacos da derrota saem no "boom" da jogada; a vitoria
+    // avisa aqui para o ouvinte tocar e (no recorde) soltar o toast
+    if (win) E.emit("win", elapsedMs, novo);
+    fluxo.go("fimTabuleiro", win);
 }
 
 function play(x, y) {
@@ -224,9 +255,11 @@ function play(x, y) {
     if (!started) { started = true; startMs = System.millis(); }
 
     if (flagMode) {
-        if (board.toggleFlag(x, y)) E.audio.sfx("flag");
+        var f = board.cell(x, y);
+        if (!f || f.open) return;
+        var on = board.toggleFlag(x, y);
+        E.emit("flag", x, y, on);
         E.dirty.add(gridX + x * CELL, gridY + y * CELL, CELL, CELL);
-        E.dirty.add(0, 0, 120, 26);       // contador de minas
         return;
     }
     var c = board.cell(x, y);
@@ -238,20 +271,18 @@ function play(x, y) {
         fxBurst(cc.x, cc.y, 12, T.accent, 60, 0.5, 0);
     }
     if (r.hit) {
-        var mc = cellCenter(x, y);
-        fxBurst(mc.x, mc.y, 20, T.err, 120, 0.7, 140);
         // derrota revela todas as minas (classico): o board abre elas no
         // estado, mas so a tocada vinha na lista — as demais ficavam
         // escondidas (ninguem via onde elas estavam)
         board.eachMine(function (mx, my) {
             E.dirty.add(gridX + mx * CELL, gridY + my * CELL, CELL, CELL);
         });
+        E.emit("boom", x, y);
         finish(false);
         return;
     }
-    if (r.opened.length) E.audio.sfx("open");
+    if (r.opened.length) E.emit("open", r.opened.length);
     if (board.won()) { finish(true); return; }
-    E.dirty.add(0, 0, 120, 26);
 }
 
 var ajuda = null;
@@ -259,17 +290,57 @@ var AJUDA = "Toque para abrir: o primeiro toque nunca é mina. Bandeira marca " 
             "minas; tocar num número com as bandeiras certas abre os vizinhos. " +
             "Abra todas as células sem mina para vencer. O melhor tempo fica salvo.";
 
-// ------------------------------------------------------------------ cenas ---
-E.run({
+// ------------------------------------------------------------------ fluxo ---
+// A cena do E.run e uma so: quem manda e a E.fsm. `app.static` e trocado
+// pelo estado (menu/fim de jogo so repintam quando algo muda; jogo e o
+// intervalo do tabuleiro desenham a cada quadro). O estado fimTabuleiro usa
+// o after da FSM para deixar a explosao/tabuleiro visivel 0.6 s.
+var app = { static: true };
+
+function drawJogo() {
+    E.gfx.button(flagMode ? "Bandeira ON" : "Modo cavar",
+                 BTN_MODO.x, BTN_MODO.y, BTN_MODO.w, BTN_MODO.h,
+                 { primary: flagMode, px: 12 });
+    E.gfx.button("Novo", BTN_NOVO.x, BTN_NOVO.y, BTN_NOVO.w, BTN_NOVO.h,
+                 { primary: false, px: 12 });
+    fxDraw();
+}
+
+function desenhaFim(venceu) {
+    var r = resultado;
+    if (!r) return null;
+    var act = E.ui.gameOver({
+        title: venceu ? "VITORIA!" : "BOOM!",
+        labels: ["Jogar de novo", "Menu"]
+    });
+    E.gfx.text("Tempo " + fmtTime(r.ms), W / 2, 102,
+               { ts: "title", align: "center", color: T.text });
+    // o "NOVO RECORDE!" sai no toast do evento "win"; aqui fica so o tempo
+    E.gfx.text("Melhor " + (r.best ? fmtTime(r.best) : "--:--"), W / 2, 138,
+               { ts: "label", align: "center", color: r.novo ? T.accent : T.textDim });
+    return act;
+}
+
+var fluxo = E.fsm(app, {
     menu: {
-        static: true,
-        draw: function () {
+        enter: function (m) {
+            m.data.pick = null;
+            app.static = true;
+            E.dirty.off();
+            E.redraw();
+        },
+        update: function (m) {
+            var pick = m.data.pick;
+            m.data.pick = null;
+            if (pick === "Fácil") { modeIdx = 0; m.go("jogo"); }
+            else if (pick === "Duro") { modeIdx = 1; m.go("jogo"); }
+            else if (pick === "Como jogar") m.go("ajuda");
+        },
+        draw: function (m) {
+            E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
             E.gfx.text("Campo Minado", W / 2, 36,
                        { ts: "huge", align: "center", fit: W - 16 });
-            var pick = E.ui.menu(["Fácil", "Duro", "Como jogar"]);
-            if (pick === "Fácil") { modeIdx = 0; E.goto("jogo", { transition: "wipe", ms: 300 }); }
-            else if (pick === "Duro") { modeIdx = 1; E.goto("jogo", { transition: "wipe", ms: 300 }); }
-            else if (pick === "Como jogar") E.goto("ajuda", { transition: "fade", ms: 250 });
+            m.data.pick = E.ui.menu(["Fácil", "Duro", "Como jogar"]);
             var b0 = bestTime(0), b1 = bestTime(1);
             E.gfx.text("Fácil 9x11: " + (b0 ? fmtTime(b0) : "--:--"),
                        W / 2, 226, { ts: "small", align: "center", color: b0 ? T.text : T.textDim });
@@ -279,25 +350,30 @@ E.run({
     },
 
     ajuda: {
-        enter: function () {
-            ajuda = E.ui.dialog(AJUDA, { name: "Como jogar", speed: 50 });
+        enter: function (m) {
+            m.data.dlg = E.ui.dialog(AJUDA, { name: "Como jogar", speed: 50 });
+            m.data.fechou = false;
+            app.static = false;          // o dialogo revela o texto no draw
             E.dirty.enable(T.bg);
         },
-        exit: function () { E.dirty.off(); },
-        draw: function () {
-            if (!ajuda.draw(20, 60, 200))
-                E.goto("menu", { transition: "fade", ms: 250 });
+        update: function (m) {
+            if (m.data.fechou) m.go("menu");
+        },
+        draw: function (m) {
+            if (!m.data.dlg.draw(20, 60, 200)) m.data.fechou = true;
         }
     },
 
     jogo: {
         enter: function () {
+            app.static = false;
             newGame();
             wellCol = System.mixColor(T.bg, T.card, 60);
             E.dirty.enable(paintField);   // frame cheio: tudo pelo painter
+            ligaEventos();
         },
-        exit: function () { E.dirty.off(); },
-        update: function (dt) {
+        exit: function () { soltaEventos(); },
+        update: function (m, dt) {
             fxTick(dt);
             if (started && !board.lost() && !board.won()) {
                 elapsedMs = System.millis() - startMs;
@@ -322,31 +398,55 @@ E.run({
         },
         draw: function () {
             // so o que flutua por cima do cenario: particulas e botoes
-            E.gfx.button(flagMode ? "Bandeira ON" : "Modo cavar",
-                         BTN_MODO.x, BTN_MODO.y, BTN_MODO.w, BTN_MODO.h,
-                         { primary: flagMode, px: 12 });
-            E.gfx.button("Novo", BTN_NOVO.x, BTN_NOVO.y, BTN_NOVO.w, BTN_NOVO.h,
-                         { primary: false, px: 12 });
-            fxDraw();
+            drawJogo();
         }
     },
 
-    fim: {
-        static: true,
-        draw: function () {
-            var r = resultado;
-            var act = E.ui.gameOver({
-                title: r.won ? "VITORIA!" : "BOOM!",
-                labels: ["Jogar de novo", "Menu"]
-            });
-            E.gfx.text("Tempo " + fmtTime(r.ms), W / 2, 102,
-                       { ts: "title", align: "center", color: T.text });
-            E.gfx.text(r.novo ? "NOVO RECORDE! " + fmtTime(r.best)
-                              : "Melhor " + (r.best ? fmtTime(r.best) : "--:--"),
-                       W / 2, 138,
-                       { ts: "label", align: "center", color: r.novo ? T.accent : T.textDim });
-            if (act === "again") E.goto("jogo", { transition: "wipe", ms: 300 });
-            else if (act === "quit") E.goto("menu", { transition: "fade", ms: 300 });
-        }
+    // intervalo com o tabuleiro (e a explosao) visivel antes da tela de fim
+    fimTabuleiro: {
+        enter: function (m, arg) { m.data.venceu = !!arg; },
+        update: function (m, dt) { fxTick(dt); },
+        draw: function () { drawJogo(); },
+        after: [0.6, function (m) {
+            return m.data.venceu ? "vitoria" : "derrota";
+        }]
+    },
+
+    vitoria: {
+        enter: function (m) {
+            m.data.act = null;
+            app.static = true;
+            E.dirty.off();
+            E.redraw();
+        },
+        update: function (m) {
+            var act = m.data.act;
+            m.data.act = null;
+            if (act === "again") m.go("jogo");
+            else if (act === "quit") m.go("menu");
+        },
+        draw: function (m) { m.data.act = desenhaFim(true); }
+    },
+
+    derrota: {
+        enter: function (m) {
+            m.data.act = null;
+            app.static = true;
+            E.dirty.off();
+            E.redraw();
+        },
+        update: function (m) {
+            var act = m.data.act;
+            m.data.act = null;
+            if (act === "again") m.go("jogo");
+            else if (act === "quit") m.go("menu");
+        },
+        draw: function (m) { m.data.act = desenhaFim(false); }
     }
-}, "menu");
+});
+
+app.enter = function () { fluxo.go("menu"); };
+app.update = function (dt) { fluxo.update(dt); };
+app.draw = function () { fluxo.draw(); };
+
+E.run({ app: app }, "app");

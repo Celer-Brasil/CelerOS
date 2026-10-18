@@ -1,7 +1,7 @@
 {
   "name": "2048",
   "packageName": "celeros.2048",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "CelerOS",
   "description": "Deslize as pecas, junte iguais e chegue no 2048. Recorde salvo no aparelho.",
   "type": "Game",
@@ -11,10 +11,11 @@
   "requires": [
     "psram"
   ],
-  "changelog": "1.4.0 - adota o celeros.game.ui: tela de titulo com recorde e botao \"Como jogar\" (dialogo datilografado com as regras e a dica do Desfazer), pausa no HUD (Continuar/Recomecar/Sair) que congela o jogo, e fim de jogo com o tabuleiro visivel e menu (Jogar de novo/Menu); sons novos na tabela do E.audio (mover, juntar com o tom subindo conforme o valor, vitoria e derrota), anel de choque nas fusoes >= 64 e flash verde ao chegar no 2048; start e volta ao titulo com transicao fade; corrige o deslize sem fusao (o tabuleiro nao detectava movimento por posicao e a jogada morria sem spawn); pede psram (pacote + dep ui passa do teto de 48 KB da CYD)\n1.3.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.3.0 - portado para a familia CelerGame COM melhorias: transicao iris no fim de jogo e wipe ao recomecar, particulas + popText nos merges (celeros.game.fx), NOVO RECORDE destacado, recorde migrado do txt para o NVS e cena static (so repinta quando algo muda ou ha particulas vivas)\n1.2.0 - visual novo com o toolkit UI (API 22): pecas suavizadas, fontes do sistema, botoes e dialogos nativos\n1.1.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.0 - botao Desfazer (1 passo) e recorde destacado ao vivo; 1.0.0 - primeiro lancamento",
+  "changelog": "1.5.0 - adota o celeros.game.events: o move emite \"merge\" (valor + celula de destino), o recorde emite \"record\", o desfazer emite \"undo\" e o fim emite \"gameover\"; fx, som e toasts vivem nos ouvintes e o update fica so com o fluxo (swipe/move/spawn/fim); toasts da ui 1.2 no recorde (NOVO RECORDE!, 1600 ms, 1x por partida) e no desfazer (Jogada desfeita), desenhados pela engine por cima da cena static; as pecas que deslizam ganham tween curto de posicao (E.tween, 110 ms) e a peca fundida/nova estoura de escala (130 ms), com repaint apenas enquanto houver tween ou particula (E.redraw no update); corrige a celula das particulas de fusao em linhas com mais de um merge (a posicao usava a celula ocupada errada); deps: core 1.4 + fx 1.4 + ui 1.2 + events 1.1\n1.4.0 - adota o celeros.game.ui: tela de titulo com recorde e botao \"Como jogar\" (dialogo datilografado com as regras e a dica do Desfazer), pausa no HUD (Continuar/Recomecar/Sair) que congela o jogo, e fim de jogo com o tabuleiro visivel e menu (Jogar de novo/Menu); sons novos na tabela do E.audio (mover, juntar com o tom subindo conforme o valor, vitoria e derrota), anel de choque nas fusoes >= 64 e flash verde ao chegar no 2048; start e volta ao titulo com transicao fade; corrige o deslize sem fusao (o tabuleiro nao detectava movimento por posicao e a jogada morria sem spawn); pede psram (pacote + dep ui passa do teto de 48 KB da CYD)\n1.3.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.3.0 - portado para a familia CelerGame COM melhorias: transicao iris no fim de jogo e wipe ao recomecar, particulas + popText nos merges (celeros.game.fx), NOVO RECORDE destacado, recorde migrado do txt para o NVS e cena static (so repinta quando algo muda ou ha particulas vivas)\n1.2.0 - visual novo com o toolkit UI (API 22): pecas suavizadas, fontes do sistema, botoes e dialogos nativos\n1.1.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.1.0 - botao Desfazer (1 passo) e recorde destacado ao vivo; 1.0.0 - primeiro lancamento",
   "deps": {
-    "celeros.game": "^1.0.0",
-    "celeros.game.fx": "^1.0.0",
-    "celeros.game.ui": "^1.0.1"
+    "celeros.game": "^1.4.0",
+    "celeros.game.fx": "^1.4.0",
+    "celeros.game.ui": "^1.2.0",
+    "celeros.game.events": "^1.1.0"
   }
 }

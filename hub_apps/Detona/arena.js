@@ -73,7 +73,8 @@ function iniciar(mundo, nivel, plano) {
         duelo: plano.duelo || null,   // {id, nome, host} — versus pela malha
         rival: null,          // espelho do outro jogador (posicao por msg)
         onSfx: function () {}, onFx: function () {}, onFim: function () {},
-        onPegar: function () {}, onChutar: function () {}
+        onPegar: function () {}, onChutar: function () {},
+        onBomba: function () {}   // bomba plantada PELO jogador (evento do app)
     };
     st.player = { x: 0, y: 0, vx: 0, vy: 0, r: 0 };
     st.stats = { bombs: 1, flame: 2, vel: 1, kick: false, remote: false,
@@ -275,7 +276,9 @@ function plantar() {
     if (ok) {
         st.passa.push({ c: cel.c, r: cel.r });
         // a bomba e "sua" tambem para o pierce do momento do plantio
-        st.bombs[st.bombs.length - 1].pierce = st.stats.pierce;
+        var bo = st.bombs[st.bombs.length - 1];
+        bo.pierce = st.stats.pierce;
+        st.onBomba(bo);   // o app ouve (som/rede) fora do laco
     }
     return ok;
 }

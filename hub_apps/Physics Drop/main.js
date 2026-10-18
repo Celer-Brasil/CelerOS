@@ -1,9 +1,15 @@
-// Physics Drop 4.2 — sandbox de fisica VERLET NATIVO (celeros.physics,
+// Physics Drop 4.3 — sandbox de fisica VERLET NATIVO (celeros.physics,
 // API 31) com ferramentas de verdade no toque. Porte CelerGame: o loop e
 // os gestos vivem no core (cena + E.input), desenho com E.gfx, e a
 // ferramenta/gravidade da ultima sessao ficam lembradas no NVS.
-// 4.2: telas de titulo/pausa da dep celeros.game.ui, presets de cena,
-// juice com celeros.game.fx e sons de tabela (E.audio).
+// 4.3: as checagens manuais das ferramentas sairam — celeros.game.collide
+// faz os cortes (segRect varre o traco da tesoura), o PINO/PEGAR (point
+// acha o no no raio do dedo) e a borracha (test); a ferramenta virou uma
+// maquina celeros.game.fsm (pintar/pegar/pino/cortar/apagar) e os eventos
+// "tool"/"grav"/"clear" do celeros.game.events alimentam os avisos do
+// E.ui.toast. O fundo do sandbox usa a arte ai_bg do pacote por uma folha
+// do celeros.game.spr (256x256, sem slot fica o preto do tema). O juice da
+// 4.2 (particulas, aneis, rastro e flash) e os sons seguem iguais.
 //   Pintar — arraste cria a cadeia de nos/vinculos (como sempre)
 //   Pegar  — toque perto de um no o pega; arraste puxa (pano/corda
 //            seguem); soltar arremessa com a velocidade do dedo
@@ -14,11 +20,22 @@
 // vez de atravessar. Gravidade cicla no botao de status (ate invertida).
 
 var E = require("celeros.game");       // familia CelerGame: core
-require("celeros.game.ui");            // titulo/pausa e lista de cenas
+require("celeros.game.ui");            // titulo/pausa, lista de cenas, toast
 require("celeros.game.fx");            // particulas, aneis, rastro, flash
+require("celeros.game.spr");           // folha de sprite do fundo (ai_bg)
+require("celeros.game.collide");       // segRect/point/test das ferramentas
+require("celeros.game.fsm");           // estado da ferramenta
+require("celeros.game.events");        // barramento "tool"/"grav"/"clear"
 var P = require("celeros.physics");
 
-E.init({ dir: "Physics Drop", fps: 50, save: "drop." });
+E.init({ dir: "Physics Drop", fps: 50, save: "drop.",
+         bases: ["/local/apps/Physics Drop/", "/sd/apps/Physics Drop/"] });
+
+// fundo do sandbox: 1 PNG num slot so (regiao unica de 256x256). Sem PNG
+// ou sem slot livre o sheet nao tem id e o fundo continua o preto do tema.
+var bg = E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256,
+                               regions: { bg: [0, 0, 256, 256] } });
+var bgOn = !!(bg && bg.bg) && E.spr.backed("bg");
 var T = E.theme, SW = E.W, SH = E.H;
 var BAR_Y = 236;                      // topo da barra de ferramentas
 
@@ -31,6 +48,7 @@ E.audio.sfxTable.grav = [[440, 35], [660, 45], [440, 35]];
 // gravidade em presets (cicla no botao): normal, leve, lua, forte, invertida
 var GRAVS = [[0.4, "normal"], [0.2, "leve"], [0.07, "lua"], [0.9, "forte"], [-0.3, "invertida"]];
 var gravIdx = E.save.num("grav", 0) % GRAVS.length;
+if (gravIdx < 0) gravIdx += GRAVS.length;
 
 var TOOLS = [
     { label: "Pinta", w: 42 },
@@ -39,12 +57,30 @@ var TOOLS = [
     { label: "Corta", w: 42 },
     { label: "Apaga", w: 42 }
 ];
-var T_DRAW = 0, T_GRAB = 1, T_PIN = 2, T_CUT = 3, T_ERASE = 4;
+var T_DRAW = 0;                       // indice do Pintar (default do save)
+// nomes dos estados do E.fsm na MESMA ordem dos chips da barra
+var TOOL_STATES = ["pintar", "pegar", "pino", "cortar", "apagar"];
 var tool = E.save.num("tool", T_DRAW) % TOOLS.length;
+if (tool < 0) tool += TOOLS.length;
 
 var MAX_POINTS = 120;
 var GRAB_R = 22;                      // raio de pescar um no com o dedo
 var ERASE_R = 16;
+var CUT_PAD = 2;                      // folga do AABB do vinculo no segRect
+
+// eventos do jogo: a barra so emite; o FSM e os avisos reagem aqui. O
+// toast do E.ui e desenhado pela engine por cima da cena.
+E.on("tool", function (ti, label) {
+    toolFsm.go(TOOL_STATES[ti], null, true);
+    E.ui.toast("Ferramenta: " + label, { ms: 900, y: 0.5 });
+});
+E.on("grav", function (gi, label) {
+    E.ui.toast("Gravidade: " + label, { ms: 1000, y: 0.5,
+                                        color: gi === GRAVS.length - 1 ? T.err : undefined });
+});
+E.on("clear", function () {
+    E.ui.toast("Mundo limpo", { ms: 800, y: 0.5 });
+});
 
 var world = P.verletFast({ iterations: 4, radius: 2.5 });   // nos com corpo
 
@@ -107,11 +143,8 @@ function iniciarRastro() {
 function novoMundo() {
     world.free();
     world = P.verletFast({ iterations: 4, radius: 2.5 });
-    isDrawing = false;
-    lastPointIdx = -1;
-    grabbed = -1;
-    cutPrev = null;
-    pararRastro();
+    resetTransientes();
+    E.emit("clear");
 }
 
 function spawnRope() {
@@ -268,144 +301,226 @@ var listaCenas = E.ui.list({
     onPick: function (v) { abrirCena(v); }
 });
 
-// no mais proximo de (x, y) dentro do raio (ou -1)
+// no mais proximo de (x, y) dentro do raio (ou -1): o collide.point trata
+// o dedo como circulo e o no como ponto (mesmo hit-test das ferramentas)
+var _grabBrush = { x: 0, y: 0, r: GRAB_R };
 function nearest(x, y, r) {
-    var xy = world.xy(), best = -1, bd = r * r;
+    var xy = world.xy(), best = -1, bd = 0;
+    _grabBrush.x = x;
+    _grabBrush.y = y;
+    _grabBrush.r = r;
     for (var i = 0; i < xy.length; i += 2) {
+        if (!E.collide.point(xy[i], xy[i + 1], _grabBrush)) continue;
         var dx = x - xy[i], dy = y - xy[i + 1];
         var d2 = dx * dx + dy * dy;
-        if (d2 <= bd) { bd = d2; best = i / 2; }
+        if (best < 0 || d2 < bd) { bd = d2; best = i / 2; }
     }
     return best;
 }
 
-// intersecao de segmentos (traco do dedo x vinculo)
-function segCross(ax, ay, bx, by, cx, cy, dx, dy) {
-    var d1x = bx - ax, d1y = by - ay, d2x = dx - cx, d2y = dy - cy;
-    var den = d1x * d2y - d1y * d2x;
-    if (den === 0) return false;
-    var t = ((cx - ax) * d2y - (cy - ay) * d2x) / den;
-    var u = ((cx - ax) * d1y - (cy - ay) * d1x) / den;
-    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+// ------------------------------------------------------------ interacao ---
+// a ferramenta e o estado corrente da maquina: cada estado trata o
+// press/drag/release do toque. As checagens sao do celeros.game.collide
+// (point no PEGAR/PINO, segRect no CORTAR, test na borracha).
+var _fp = { x: 0, y: 0 };             // ponto do toque (sem alocar por quadro)
+var _cutRect = { x: 0, y: 0, w: 0, h: 0 };
+var _eraseBrush = { x: 0, y: 0, r: ERASE_R };
+var _erasePt = { x: 0, y: 0, r: 0 };
+
+function resetTransientes() {
+    isDrawing = false;
+    lastPointIdx = -1;
+    grabbed = -1;
+    cutPrev = null;
+    pararRastro();
 }
 
-// ------------------------------------------------------------ interacao ---
-// press/release/arrasto por ferramenta (o mesmo estado da 4.0, agora
-// alimentado pelo E.input)
+function toolIndex(nome) {
+    for (var i = 0; i < TOOL_STATES.length; i++) {
+        if (TOOL_STATES[i] === nome) return i;
+    }
+    return T_DRAW;
+}
+
+var toolFsm = E.fsm(null, {
+    pintar: {
+        enter: resetTransientes,
+        on: {
+            press: function (m, p) {
+                isDrawing = true;
+                if (world.count() < MAX_POINTS) {
+                    lastPointIdx = world.add(p.x, p.y);
+                    if (lastPointIdx !== -1) world.pin(lastPointIdx);
+                } else lastPointIdx = -1;
+            },
+            drag: function (m, p) {
+                if (!isDrawing || lastPointIdx === -1) return;
+                var xy = world.xy();
+                var lp = lastPointIdx * 2;
+                var dx = p.x - xy[lp], dy = p.y - xy[lp + 1];
+                var dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist > 15) {
+                    if (world.count() < MAX_POINTS) {
+                        var nIdx = world.add(p.x, p.y);
+                        if (nIdx !== -1) {
+                            world.stick(lastPointIdx, nIdx, dist);
+                            world.pin(nIdx);
+                            world.pin(lastPointIdx, false);
+                            lastPointIdx = nIdx;
+                        }
+                    }
+                } else {
+                    world.set(lastPointIdx, p.x, p.y);
+                }
+            },
+            release: function (m) {
+                isDrawing = false;
+                if (lastPointIdx !== -1) {
+                    world.pin(lastPointIdx, false);
+                    lastPointIdx = -1;
+                }
+            }
+        }
+    },
+
+    pegar: {
+        enter: resetTransientes,
+        exit: function (m) { grabbed = -1; pararRastro(); },
+        on: {
+            press: function (m, p) {
+                grabbed = nearest(p.x, p.y, GRAB_R);
+                if (grabbed >= 0) {
+                    var gxy = world.xy();
+                    _grabX = gxy[grabbed * 2];
+                    _grabY = gxy[grabbed * 2 + 1];
+                    iniciarRastro();
+                    E.audio.sfx("grab");
+                }
+                if (typeof __harness !== "undefined") {
+                    __harness.log.push('[grab] press em ' + p.x.toFixed(0) + ',' + p.y.toFixed(0) +
+                                       ' -> ' + grabbed + ' (nos ' + world.count() + ')');
+                }
+            },
+            drag: function (m, p) {
+                if (grabbed < 0) return;
+                world.set(grabbed, p.x, p.y);
+                _grabX = p.x;
+                _grabY = p.y;
+                // teto de log alto: com a engine os botoes da barra desenham
+                // todo frame (o toolkit so logava na mudanca) e o limite
+                // antigo de 400 caia antes do arrasto comecar
+                if (typeof __harness !== "undefined" && __harness.log.length < 4000) {
+                    var dxy = world.xy();
+                    __harness.log.push('[grab] drag dedo ' + p.x.toFixed(0) + ',' + p.y.toFixed(0) +
+                                       ' | no1 ' + dxy[2].toFixed(0) + ',' + dxy[3].toFixed(0));
+                }
+            },
+            release: function (m) {
+                grabbed = -1;   // soltou: a velocidade do dedo vira arremesso
+                pararRastro();
+            }
+        }
+    },
+
+    pino: {
+        enter: resetTransientes,
+        on: {
+            press: function (m, p) {
+                var pi = nearest(p.x, p.y, GRAB_R);
+                if (pi >= 0) {
+                    var pinsNow = world.pins();
+                    var pinOn = !pinsNow[pi];
+                    world.pin(pi, pinOn);
+                    var pxy = world.xy();
+                    E.fx.ring(pxy[pi * 2], pxy[pi * 2 + 1],
+                              { color: pinOn ? T.warn : T.accent, r0: 3, speed: 90, life: 0.35 });
+                    E.audio.sfx("pin");
+                }
+            }
+        }
+    },
+
+    cortar: {
+        enter: resetTransientes,
+        exit: function (m) { cutPrev = null; },
+        on: {
+            press: function (m, p) {
+                cutPrev = { x: p.x, y: p.y };
+            },
+            drag: function (m, p) {
+                if (!cutPrev) return;
+                var st = world.sticks();
+                var pts = world.xy();
+                var cuts = 0;
+                for (var ci = st.length / 2 - 1; ci >= 0; ci--) {   // do fim pro comeco (delStick faz swap)
+                    var a2 = st[ci * 2] * 2, b2 = st[ci * 2 + 1] * 2;
+                    var ax = pts[a2], ay = pts[a2 + 1];
+                    var bx = pts[b2], by = pts[b2 + 1];
+                    // AABB do vinculo com folga: o segRect varre o traco do
+                    // dedo e devolve a fracao (0 = ja dentro, -1 = nao cruzou)
+                    _cutRect.x = (ax < bx ? ax : bx) - CUT_PAD;
+                    _cutRect.y = (ay < by ? ay : by) - CUT_PAD;
+                    _cutRect.w = (ax > bx ? ax : bx) - _cutRect.x + CUT_PAD;
+                    _cutRect.h = (ay > by ? ay : by) - _cutRect.y + CUT_PAD;
+                    if (E.collide.segRect(cutPrev.x, cutPrev.y, p.x, p.y, _cutRect) < 0) continue;
+                    var mx = (ax + bx) / 2;
+                    var my = (ay + by) / 2;
+                    world.delStick(ci);
+                    if (cuts < 4) {          // juice vermelho no ponto do corte
+                        E.fx.burst(mx, my, { n: 5, color: T.err, speed: 55, speed2: 120,
+                                             life: 0.35, size: 2, grav: 120 });
+                        E.fx.ring(mx, my, { color: T.err, r0: 2, speed: 80, life: 0.3 });
+                    }
+                    cuts++;
+                }
+                if (cuts > 0) E.audio.sfx("cut");
+                cutPrev = { x: p.x, y: p.y };
+            },
+            release: function (m) { cutPrev = null; }
+        }
+    },
+
+    apagar: {
+        enter: resetTransientes,
+        on: {
+            drag: function (m, p) {
+                var exy = world.xy();          // uma leitura por frame
+                _eraseBrush.x = p.x;
+                _eraseBrush.y = p.y;
+                for (var ei = world.count() - 1; ei >= 0; ei--) {   // do fim pro comeco (delPoint faz swap)
+                    _erasePt.x = exy[ei * 2];
+                    _erasePt.y = exy[ei * 2 + 1];
+                    if (E.collide.test(_eraseBrush, _erasePt)) world.delPoint(ei);
+                }
+                grabbed = -1;
+                pararRastro();
+            }
+        }
+    }
+}, TOOL_STATES[tool], {
+    onChange: function (m, de, para) {
+        tool = toolIndex(para);
+        E.save.set("tool", tool);
+    }
+});
+
+// press/release/arrasto do E.input chegam ao estado corrente da ferramenta
 function press(x, y) {
     if (y >= BAR_Y - 6) return;
-    if (tool === T_DRAW) {
-        isDrawing = true;
-        if (world.count() < MAX_POINTS) {
-            lastPointIdx = world.add(x, y);
-            if (lastPointIdx !== -1) world.pin(lastPointIdx);
-        } else lastPointIdx = -1;
-    } else if (tool === T_GRAB) {
-        grabbed = nearest(x, y, GRAB_R);
-        if (grabbed >= 0) {
-            var gxy = world.xy();
-            _grabX = gxy[grabbed * 2];
-            _grabY = gxy[grabbed * 2 + 1];
-            iniciarRastro();
-            E.audio.sfx("grab");
-        }
-        if (typeof __harness !== "undefined") {
-            __harness.log.push('[grab] press em ' + x.toFixed(0) + ',' + y.toFixed(0) +
-                               ' -> ' + grabbed + ' (nos ' + world.count() + ')');
-        }
-    } else if (tool === T_PIN) {
-        var pi = nearest(x, y, GRAB_R);
-        if (pi >= 0) {
-            var pinsNow = world.pins();
-            var pinOn = !pinsNow[pi];
-            world.pin(pi, pinOn);
-            var pxy = world.xy();
-            E.fx.ring(pxy[pi * 2], pxy[pi * 2 + 1],
-                      { color: pinOn ? T.warn : T.accent, r0: 3, speed: 90, life: 0.35 });
-            E.audio.sfx("pin");
-        }
-    } else if (tool === T_CUT) {
-        cutPrev = { x: x, y: y };
-    }
+    _fp.x = x;
+    _fp.y = y;
+    toolFsm.send("press", _fp);
 }
 
 function release() {
-    if (tool === T_DRAW) {
-        isDrawing = false;
-        if (lastPointIdx !== -1) {
-            world.pin(lastPointIdx, false);
-            lastPointIdx = -1;
-        }
-    } else if (tool === T_GRAB) {
-        grabbed = -1;   // soltou: a velocidade do dedo vira arremesso
-        pararRastro();
-    } else if (tool === T_CUT) {
-        cutPrev = null;
-    }
+    toolFsm.send("release");
 }
 
 function drag(x, y) {
     if (y >= BAR_Y - 6) return;
-    if (tool === T_DRAW && isDrawing && lastPointIdx !== -1) {
-        var xy = world.xy();
-        var lp = lastPointIdx * 2;
-        var dx = x - xy[lp], dy = y - xy[lp + 1];
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > 15) {
-            if (world.count() < MAX_POINTS) {
-                var nIdx = world.add(x, y);
-                if (nIdx !== -1) {
-                    world.stick(lastPointIdx, nIdx, dist);
-                    world.pin(nIdx);
-                    world.pin(lastPointIdx, false);
-                    lastPointIdx = nIdx;
-                }
-            }
-        } else {
-            world.set(lastPointIdx, x, y);
-        }
-    } else if (tool === T_GRAB && grabbed >= 0) {
-        world.set(grabbed, x, y);
-        _grabX = x;
-        _grabY = y;
-        // teto de log alto: com a engine os botoes da barra desenham todo
-        // frame (o toolkit so logava na mudanca) e o limite antigo de 400
-        // caia antes do arrasto comecar
-        if (typeof __harness !== "undefined" && __harness.log.length < 4000) {
-            var dxy = world.xy();
-            __harness.log.push('[grab] drag dedo ' + x.toFixed(0) + ',' + y.toFixed(0) +
-                               ' | no1 ' + dxy[2].toFixed(0) + ',' + dxy[3].toFixed(0));
-        }
-    } else if (tool === T_CUT && cutPrev) {
-        var st = world.sticks();
-        var pts = world.xy();
-        var cuts = 0;
-        for (var ci = st.length / 2 - 1; ci >= 0; ci--) {   // do fim pro comeco (delStick faz swap)
-            var a2 = st[ci * 2] * 2, b2 = st[ci * 2 + 1] * 2;
-            if (segCross(cutPrev.x, cutPrev.y, x, y,
-                         pts[a2], pts[a2 + 1], pts[b2], pts[b2 + 1])) {
-                var mx = (pts[a2] + pts[b2]) / 2;
-                var my = (pts[a2 + 1] + pts[b2 + 1]) / 2;
-                world.delStick(ci);
-                if (cuts < 4) {          // juice vermelho no ponto do corte
-                    E.fx.burst(mx, my, { n: 5, color: T.err, speed: 55, speed2: 120,
-                                         life: 0.35, size: 2, grav: 120 });
-                    E.fx.ring(mx, my, { color: T.err, r0: 2, speed: 80, life: 0.3 });
-                }
-                cuts++;
-            }
-        }
-        if (cuts > 0) E.audio.sfx("cut");
-        cutPrev = { x: x, y: y };
-    } else if (tool === T_ERASE) {
-        var exy = world.xy();          // uma leitura por frame
-        for (var ei = world.count() - 1; ei >= 0; ei--) {   // do fim pro comeco (delPoint faz swap)
-            var edx = x - exy[ei * 2], edy = y - exy[ei * 2 + 1];
-            if (edx * edx + edy * edy <= ERASE_R * ERASE_R) world.delPoint(ei);
-        }
-        grabbed = -1;
-        pararRastro();
-    }
+    _fp.x = x;
+    _fp.y = y;
+    toolFsm.send("drag", _fp);
 }
 
 // ------------------------------------------------------------------ cenas ---
@@ -452,10 +567,7 @@ E.run({
         enter: function () {
             paused = false;
             touchDown = false;
-            isDrawing = false;
-            grabbed = -1;
-            cutPrev = null;
-            pararRastro();
+            resetTransientes();
         },
         update: function (dt) {
             var i = E.input;
@@ -464,13 +576,11 @@ E.run({
             if (!paused && E.hit(BTN_PAUSE)) {
                 paused = true;
                 touchDown = false;
-                isDrawing = false;
-                grabbed = -1;
-                cutPrev = null;
-                pararRastro();
+                resetTransientes();
                 E.audio.sfx("ui");
             }
             if (paused) return;
+            toolFsm.update(dt);   // relogio do estado da ferramenta
 
             var inWorld = i.down && i.y < BAR_Y - 6;
 
@@ -497,15 +607,12 @@ E.run({
                 E.save.set("grav", gravIdx);
                 E.fx.flash(gravIdx === GRAVS.length - 1 ? T.err : T.accent, 140);
                 E.audio.sfx("grav");
+                E.emit("grav", gravIdx, GRAVS[gravIdx][1]);
             }
             for (var ti = 0; ti < TOOLS.length; ti++) {
                 if (E.hit(BTN_TOOL[ti])) {
-                    tool = ti;
-                    E.save.set("tool", ti);
-                    grabbed = -1;
-                    cutPrev = null;
-                    isDrawing = false;
-                    pararRastro();
+                    // o listener de "tool" troca o estado do FSM e avisa
+                    E.emit("tool", ti, TOOLS[ti].label);
                     E.audio.sfx("ui");
                 }
             }
@@ -514,8 +621,14 @@ E.run({
             if (E.hit(BTN_LIMPAR)) { novoMundo(); E.audio.sfx("back"); }
         },
         draw: function () {
-            // mundo
+            // mundo (fundo da arte ai_bg quando o slot carregou; sem slot
+            // fica o preto do tema — stamp devolve false e nada e desenhado)
             E.gfx.rect(0, 0, SW, BAR_Y, T.bg, { screen: true });
+            if (bgOn) {
+                if (!E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null })) {
+                    E.spr.blit("bg", 0, 0);   // firmware sem drawSprite: 1:1
+                }
+            }
             System.drawFastHLine(0, BAR_Y - 1, SW, T.stroke);
 
             var xy = world.xy();
@@ -539,12 +652,12 @@ E.run({
             for (var j = 0; j < xy.length; j += 2) {
                 var idx = j / 2;
                 var col = pins[idx] ? T.warn : T.accent;
-                var r = idx === grabbed ? 4 : 2;
+                var r = (toolFsm.is("pegar") && idx === grabbed) ? 4 : 2;
                 E.gfx.circle(Math.floor(xy[j]), Math.floor(xy[j + 1]), r, col,
                              { smooth: true });
             }
             // traco da tesoura em vermelho enquanto corta
-            if (tool === T_CUT && cutPrev && E.input.down) {
+            if (toolFsm.is("cortar") && cutPrev && E.input.down) {
                 E.gfx.line(Math.floor(cutPrev.x), Math.floor(cutPrev.y),
                            Math.floor(E.input.x), Math.floor(E.input.y), T.err, { w: 2 });
             }

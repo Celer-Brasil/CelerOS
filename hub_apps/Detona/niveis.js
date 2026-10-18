@@ -6,8 +6,6 @@
 // mundo*100 + nivel — deterministica (testes e, no futuro, o versus
 // pela malha gera a mesma arena nos dois aparelhos).
 
-var GRID = require("celeros.grid");
-
 var COLS = 15, ROWS = 13;
 var NIVEIS_POR_MUNDO = 8;
 
@@ -100,6 +98,83 @@ var SONG_MENU = {
                   [45, 8], [52, 8], [55, 8], [52, 8]] }
     ]
 };
+
+// grade local (a dep celeros.grid saiu do pacote: o app.json tem teto de 8
+// deps e o kit ja traz o E.path da IA). As funcoes mantem a MESMA sequencia
+// de rng — a seed do duelo continua gerando a mesma arena nos dois vidros.
+function novaGrade(cols, rows, ch) {
+    var g = [];
+    for (var r = 0; r < rows; r++) {
+        var linha = [];
+        for (var c = 0; c < cols; c++) linha.push(ch);
+        g.push(linha);
+    }
+    return g;
+}
+
+// flood(grid, sc, sr, passavel) -> {ok: matriz, quantos}
+function flood(grid, sc, sr, passavel) {
+    var rows = grid.length, cols = rows ? grid[0].length : 0;
+    var ok = novaGrade(cols, rows, 0);
+    if (sr < 0 || sr >= rows || sc < 0 || sc >= cols) return { ok: ok, quantos: 0 };
+    var fila = [sr * cols + sc];
+    ok[sr][sc] = 1;
+    var quantos = 1, head = 0;
+    while (head < fila.length) {
+        var at = fila[head++];
+        var r = Math.floor(at / cols), c = at % cols;
+        var viz = [[c + 1, r], [c - 1, r], [c, r + 1], [c, r - 1]];
+        for (var v = 0; v < 4; v++) {
+            var nc = viz[v][0], nr = viz[v][1];
+            if (nc < 0 || nr < 0 || nc >= cols || nr >= rows) continue;
+            if (passavel(grid[nr][nc]) && !ok[nr][nc]) {
+                ok[nr][nc] = 1;
+                quantos++;
+                fila.push(nr * cols + nc);
+            }
+        }
+    }
+    return { ok: ok, quantos: quantos };
+}
+
+// arena classica: borda '#' + pilares pares + macios por densidade
+function classica(cols, rows, r, opts) {
+    opts = opts || {};
+    var dens = opts.dens === undefined ? 0.55 : opts.dens;
+    var protege = opts.protege || [[1, 1]];
+    var respira = opts.respira !== false;
+    var g = novaGrade(cols, rows, '.');
+    var macios = [];
+    var protegidas = {};
+    for (var p = 0; p < protege.length; p++) {
+        var pc = protege[p][0], pr = protege[p][1];
+        protegidas[pc + ',' + pr] = 1;
+        if (respira) {
+            protegidas[(pc + 1) + ',' + pr] = 1;
+            protegidas[pc + ',' + (pr + 1)] = 1;
+        }
+    }
+    for (var rr = 0; rr < rows; rr++) {
+        for (var cc = 0; cc < cols; cc++) {
+            if (rr === 0 || rr === rows - 1 || cc === 0 || cc === cols - 1) g[rr][cc] = '#';
+            else if (rr % 2 === 0 && cc % 2 === 0) g[rr][cc] = '#';
+            else if (!protegidas[cc + ',' + rr] && r() < dens) {
+                g[rr][cc] = '%';
+                macios.push({ c: cc, r: rr });
+            }
+        }
+    }
+    return { grid: g, macios: macios };
+}
+
+// primeiro candidato alcancavel explodindo macios (qualquer nao-'#')
+function escolheAlcancavel(grid, candidatos, sc, sr) {
+    var f = flood(grid, sc, sr, function (ch) { return ch !== '#'; });
+    for (var i = 0; i < candidatos.length; i++) {
+        if (f.ok[candidatos[i].r][candidatos[i].c]) return candidatos[i];
+    }
+    return candidatos.length ? candidatos[0] : null;
+}
 
 // mundo 2 (Forno): 140 BPM, maior e agressiva, em mi
 var SONG_FORNO = {
@@ -206,9 +281,9 @@ function sorteiaLivre(grid, r, minDist, evita) {
 }
 
 // conectividade: tudo que nao e '#' tem de ser alcancavel de (1,1) abrindo
-// macios (mesma nocao do GRID.escolheAlcancavel) — valida cada peca nova
+// macios (mesma nocao do escolheAlcancavel local) — valida cada peca nova
 function tudoAlcancavel(grid) {
-    var f = GRID.flood(grid, 1, 1, function (ch) { return ch !== '#'; });
+    var f = flood(grid, 1, 1, function (ch) { return ch !== '#'; });
     for (var r = 0; r < ROWS; r++)
         for (var c = 0; c < COLS; c++)
             if (grid[r][c] !== '#' && !f.ok[r][c]) return false;
@@ -306,12 +381,12 @@ function padronizar(mundo, nivel, grid, r) {
 function gerar(mundo, nivel, opts) {
     opts = opts || {};
     var p = params(mundo, nivel);
-    var r = GRID.rng(opts.seed !== undefined ? opts.seed
+    var r = rng(opts.seed !== undefined ? opts.seed
               : opts.sobrevivencia ? 9090 : mundo * 100 + nivel);
     var dens = opts.duelo ? 0.46 : opts.sobrevivencia ? 0.45 : p.dens;
-    // arena classica da dep celeros.grid: borda + pilares pares + macios
-    // por densidade, canto do spawn (1,1) respirando (no duelo os dois)
-    var arena_ = GRID.classica(COLS, ROWS, r, {
+    // arena classica local: borda + pilares pares + macios por densidade,
+    // canto do spawn (1,1) respirando (no duelo os dois)
+    var arena_ = classica(COLS, ROWS, r, {
         dens: dens,
         protege: opts.duelo ? [[1, 1], [COLS - 2, ROWS - 2]] : [[1, 1]]
     });
@@ -350,7 +425,7 @@ function gerar(mundo, nivel, opts) {
         var longe = [];
         for (var lf = 0; lf < macios.length; lf++)
             if (macios[lf].c + macios[lf].r > 12) longe.push(macios[lf]);
-        var escolhido = GRID.escolheAlcancavel(grid, longe.length ? longe : macios, 1, 1);
+        var escolhido = escolheAlcancavel(grid, longe.length ? longe : macios, 1, 1);
         if (escolhido) exit = { c: escolhido.c, r: escolhido.r };
     }
     // powerups sob macios distintos da saida (kinds basicos aqui; o
@@ -427,5 +502,7 @@ module.exports = {
     COLS: COLS, ROWS: ROWS, NIVEIS_POR_MUNDO: NIVEIS_POR_MUNDO, MUNDOS: MUNDOS,
     TEMAS: TEMAS, SONG_BATALHA: SONG_BATALHA, SONG_MENU: SONG_MENU,
     SONG_FORNO: SONG_FORNO, SONG_NUCLEO: SONG_NUCLEO, SONG_CHEFE: SONG_CHEFE,
-    musica: musica, params: params, gerar: gerar, rng: rng
+    musica: musica, params: params, gerar: gerar, rng: rng,
+    // utilitarios de grade puros (o harness/detona.GRID usa o flood)
+    flood: flood, classica: classica, escolheAlcancavel: escolheAlcancavel
 };

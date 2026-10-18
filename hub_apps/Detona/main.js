@@ -4,7 +4,13 @@
 // BATIDA e as correntes cascateiam de meio tempo em meio tempo — a
 // explosao cai no compasso. Modulos: main.js (cenas/visao/HUD/rede) +
 // arena.js (simulacao) + niveis.js (geracao por seed, temas, trilhas) +
-// ia.js (bichos). Engine/ui/sfx/grid/mesh sao deps do hub (API 30).
+// ia.js (bichos). A familia CelerGame vem do hub: game/fx/spr/tilemap/ui +
+// o KIT (path/fsm/events + E.sfx) + pad, e a malha em celeros.mesh.
+//
+// 0.10.0: a arte de IA entra pelo atlas ai_atlas (4x4 de 64, fundo magenta)
+// e o ai_bg vira o piso por fase. A IA usa E.path.flow (custo do mundo), o
+// fluxo campanha/duelo/round e uma E.fsm, os eventos do jogo passam pela
+// E.events e o joystick flutuante e o E.pad.stick (multitoque).
 //
 // DUELO pela malha CelerNet (api 26+, dep celeros.mesh): o radio faz
 // ~8 quadros/s de ate 16 B sem ACK — o protocolo e de EVENTOS DISCRETOS
@@ -35,24 +41,28 @@
 // inteiro ia ao painel a cada frame. O HUD fica fora do recorte da arena e
 // so repinta quando um numero muda. Menus sao cenas `static`.
 //
-// Pega de teste (so existe no harness): o test.js dirige a sim.
-if (typeof __harness !== "undefined") {
-    __harness.detona = { arena: require("arena"), niveis: require("niveis"),
-                         ia: require("ia"), GRID: require("celeros.grid"),
-                         E: null };   // E entra depois do require abaixo
-}
-
 var E = require("celeros.game");       // familia CelerGame: adota so o que usa
+require("celeros.game.kit");           // E.path/E.fsm/E.events/E.stats + E.sfx
 require("celeros.game.fx");
 require("celeros.game.spr");
 require("celeros.game.tilemap");
 require("celeros.game.ui");            // menus/listas/dialogo padrao da familia
+require("celeros.game.pad");           // stick multitoque + E.pad.draw
 var arena = require("arena");
 var NV = require("niveis");
 var ia = require("ia");
-if (typeof __harness !== "undefined") __harness.detona.E = E;
 
-E.init({ dir: "Detona", fps: 30, native: true, save: "detona.", particles: 140 });
+// Pega de teste (so existe no harness): o test.js dirige a sim. O GRID do
+// teste e o flood local de niveis.js (a dep celeros.grid saiu do pacote).
+if (typeof __harness !== "undefined") {
+    __harness.detona = { arena: arena, niveis: NV, ia: ia,
+                         GRID: { flood: NV.flood }, E: E };
+}
+
+// bases: raiz do app (ai_atlas/ai_bg) + assets/ (PNGs pequenos antigos)
+E.init({ dir: "Detona", fps: 30, native: true, save: "detona.", particles: 140,
+         bases: ["/local/apps/Detona/", "/sd/apps/Detona/",
+                 "/local/apps/Detona/assets/", "/sd/apps/Detona/assets/"] });
 var W = E.W, H = E.H, u = E.u;
 
 // layout adaptativo: grade 15x13 + faixa de HUD; no 480 nativo da 32px
@@ -81,6 +91,19 @@ var C = {
 
 var hi = E.save.num("hi", 0);
 var prog = { mundo: E.save.num("mundo", 1), nivel: E.save.num("nivel", 1) };
+
+// FLUXO: estado macro (menu/campanha/sobrevivencia/duelo/round/fim) numa
+// E.fsm do kit. Os enters so trocam E.data.modo; NADA aqui para ou reinicia
+// a trilha — o beat das bombas segue o musicPos de sempre (pausa/round nao
+// mexem no relogio da musica).
+var FLUXO = E.fsm(null, {
+    menu:          { enter: function () { E.data.modo = "menu"; } },
+    campanha:      { enter: function () { E.data.modo = "campanha"; } },
+    sobrevivencia: { enter: function () { E.data.modo = "sobre"; } },
+    duelo:         { enter: function () { E.data.modo = "duelo"; } },
+    round:         {},   // placar entre rounds: o modo continua duelo
+    fim:           {}    // tela de fim: guarda o resultado em E.data.fimInfo
+}, "menu");
 
 // ------------------------------------------------------------------ rede --
 var mesh = require("celeros.mesh");
@@ -178,7 +201,7 @@ function netInicioRound() {
     NET.seq = 1; NET.lastSeq = -1;
     netSend(NET.envioMsg);
     logDuelo("round " + NET.round + " (seed " + NET.seed + ")");
-    E.data.modo = "duelo";
+    FLUXO.go("duelo");
     E.data.retomar = false;
     E.goto("jogando");
 }
@@ -190,6 +213,7 @@ function netEncerra(res) {
     NET.envioMsg = "";
     NET.fase = "round";
     arena.parar();
+    FLUXO.go("round");
     if (E.sceneName !== "round") E.goto("round");
 }
 
@@ -288,7 +312,7 @@ function netMsg(m) {
             NET.fase = "jogando";
             netSend("dy" + round);
             logDuelo("round " + round + " (seed " + NET.seed + ")");
-            E.data.modo = "duelo";
+            FLUXO.go("duelo");
             E.data.retomar = false;
             E.goto("jogando");
         } else {
@@ -430,6 +454,34 @@ function painterRival(w, h, x, y) {
     System.fillCircle(x + w / 2, y + h * 0.4, r * 0.34, 0x001F);
     System.fillRect(x + w / 2 - r * 0.5, y + h * 0.62, w * 0.5, 2, C.vermelho);
 }
+// powerup do atlas (ai3): orbe dourado com pavio — o glifo da letra entra
+// por cima na celula para o tipo continuar legivel
+function painterOrbe(w, h, x, y) {
+    var r = w * 0.38;
+    System.fillCircle(x + w / 2, y + h / 2, r, 0xFE80);
+    System.fillCircle(x + w / 2 - r * 0.3, y + h / 2 - r * 0.3, r * 0.34, C.branco);
+    System.drawCircle(x + w / 2, y + h / 2, r, 0xC600);
+    System.fillRect(x + w / 2 - 2, y + 1, 4, Math.max(2, Math.round(h * 0.1)), C.ouro);
+}
+// fallback procedural das regioes do atlas/piso (sem PNG ou sem slot)
+function pintarAtlas(nome, x, y, k) {
+    var s = Math.max(2, Math.round(64 * (k || 1)));
+    if (nome === "ai0") painterJogador(s, s, x, y);
+    else if (nome === "ai1") painterBalao(s, s, x, y);
+    else if (nome === "ai2") painterBomba(s, s, x, y);
+    else painterOrbe(s, s, x, y);
+}
+function pintarPiso(nome, x, y, k) {
+    var s = Math.max(2, Math.round(64 * (k || 1)));
+    System.fillRect(x, y, s, s, 0x7BEF);
+    System.fillRect(x + 1, y + 1, s - 2, s - 2, 0x8410);
+    System.fillRect(x + 2, y + 2, Math.max(1, Math.round(s * 0.3)),
+                    Math.max(1, Math.round(s * 0.14)), 0xA514);
+    System.drawLine(x + 2, y + s - 3, x + Math.round(s * 0.4),
+                    y + Math.round(s * 0.55), 0x6204);
+    System.drawLine(x + Math.round(s * 0.45), y + 3, x + s - 3,
+                    y + Math.round(s * 0.42), 0x6204);
+}
 // PNGs por TRAS dos slots: o pool de hardware tem 8 vagas e o CONTEUDO
 // delas e recarregado por fase (armarSprites): os blocos vestem o tema do
 // mundo e as vagas de bicho vao pros kinds mais frequentes da arena. O
@@ -437,15 +489,36 @@ function painterRival(w, h, x, y) {
 var corMacio = 0x8410, corMacioHi = 0xA514, corMacioLo = 0x4208;
 var corDuro = 0x7BEF, corDuroMid = 0x528A, corDuroLo = 0x39E7;
 
+// ATLAS DE IA (2 slots): ai_atlas 4x4 de 64 com fundo magenta (ai0 =
+// jogador, ai1 = slime, ai2 = bomba, ai3 = powerup) e ai_bg 256x256 com
+// 4 regioes de 64 para o piso por fase. Carregados ANTES do resto para
+// nao depender da sobra do pool.
+E.spr.grid("ai", { file: "ai_atlas", cols: 4, rows: 4, tw: 64, th: 64,
+                   prefix: "ai", paint: pintarAtlas });
+E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256, tw: 64, th: 64,
+                      regions: { aibg0: [0, 0], aibg1: [1, 0],
+                                 aibg2: [0, 1], aibg3: [1, 1] },
+                      paint: pintarPiso });
+var USA_ATLAS = E.spr.backed("ai0");    // PNG do atlas num slot real
+var USA_AIBG = E.spr.backed("aibg0");   // PNG do piso num slot real
+
 E.spr.load([
-    { name: "jogador", file: USA_PNG ? "jogador" : null,
-      w: SZ.jogador, h: SZ.jogador, paint: painterJogador },
-    { name: "bomba", file: USA_PNG ? "bomba" : null,
-      w: SZ.bomba, h: SZ.bomba, paint: painterBomba },
+    // blocos do tema (2 slots recarregados por fase)
     { name: "macio", file: USA_PNG ? "bloco_macio_1" : null,
       w: SZ.bloco, h: SZ.bloco, paint: painterMacio },
     { name: "duro", file: USA_PNG ? "bloco_duro_1" : null,
       w: SZ.bloco, h: SZ.bloco, paint: painterDuro },
+    // 4 vagas de bicho (bs3 e o slot GRANDE do chefe 2x2; os outros 3 sao
+    // celula normal). O conteudo entra em armarSprites, 1x por fase.
+    { name: "bs0", w: SZ.jogador, h: SZ.jogador, paint: painterBalao },
+    { name: "bs1", w: SZ.jogador, h: SZ.jogador, paint: painterFantasma },
+    { name: "bs2", w: SZ.jogador, h: SZ.jogador, paint: painterCacador },
+    { name: "bs3", w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe },
+    // fallback dos 4 do atlas + bichos raros (painter quando o pool aperta)
+    { name: "jogador", file: USA_PNG ? "jogador" : null,
+      w: SZ.jogador, h: SZ.jogador, paint: painterJogador },
+    { name: "bomba", file: USA_PNG ? "bomba" : null,
+      w: SZ.bomba, h: SZ.bomba, paint: painterBomba },
     { name: "balao", file: USA_PNG ? "balao" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterBalao },
     { name: "fantasma", file: USA_PNG ? "fantasma" : null,
@@ -454,8 +527,6 @@ E.spr.load([
       w: SZ.jogador, h: SZ.jogador, paint: painterCacador },
     { name: "chefe", file: USA_PNG ? "chefe" : null,
       w: CELL * 2 - 4, h: CELL * 2 - 4, paint: painterChefe },
-    // mini/rival: mini e painter (0,7x de tamanho); o rival ganha slot no
-    // duelo (as vagas de bicho ficam livres sem spawns)
     { name: "blindado", file: USA_PNG ? "blindado" : null,
       w: SZ.jogador, h: SZ.jogador, paint: painterBlindado },
     { name: "divisor", file: USA_PNG ? "divisor" : null,
@@ -476,9 +547,14 @@ var PAINTERS = { balao: painterBalao, fantasma: painterFantasma,
                  cacador: painterCacador, chefe: painterChefe,
                  cuspidor: painterCuspidor, ladrao: painterLadrao,
                  blindado: painterBlindado, divisor: painterDivisor,
-                 rival: painterRival };
-var SLOTS_BICHO = ["balao", "fantasma", "cacador", "chefe"];
+                 rival: painterRival, mini: painterMini };
+var SLOTS_BICHO = ["bs0", "bs1", "bs2", "bs3"];
 var BICHO_SLOT = {};   // kind -> slot que o desenha nesta fase
+
+// kinds que o atlas desenha (nao gastam vaga do pool)
+function noAtlas(k) {
+    return USA_ATLAS && (k === "balao" || k === "mini" || k === "rival");
+}
 
 // redesenha o CONTEUDO de um slot (o id permanece): PNG se existir, senao
 // o painter — 1-2 drawPNG por TROCA DE FASE, blit rapido igual
@@ -513,17 +589,24 @@ function armarSprites(s) {
     BICHO_SLOT = {};
     if (!USA_PNG) return;
     var cont = {}, ordem = [];
-    if (s.duelo) { cont.rival = 1; ordem.push("rival"); }   // sem spawns: vaga livre
+    if (s.duelo && !noAtlas("rival")) { cont.rival = 1; ordem.push("rival"); }   // sem spawns: vaga livre
     for (var i = 0; i < s.spawns.length; i++) {
         var k = s.spawns[i].kind;
+        if (noAtlas(k)) continue;   // atlas cobre (balao/mini/rival)
         if (!cont[k]) { cont[k] = 0; ordem.push(k); }
         cont[k]++;
     }
     ordem.sort(function (a, b) { return cont[b] - cont[a]; });
+    // o chefe 2x2 fica no slot GRANDE (bs3); sem chefe, bs3 vira a 4a vaga
+    if (cont.chefe) {
+        BICHO_SLOT.chefe = "bs3";
+        reloadSlot("bs3", BICHOS_PNG.chefe, painterChefe);
+    }
+    var maxVagas = cont.chefe ? 3 : SLOTS_BICHO.length;
     var si = 0;
-    for (var j = 0; j < ordem.length && si < SLOTS_BICHO.length; j++) {
+    for (var j = 0; j < ordem.length && si < maxVagas; j++) {
         var kk = ordem[j];
-        if (!BICHOS_PNG[kk]) continue;
+        if (kk === "chefe" || !BICHOS_PNG[kk]) continue;
         BICHO_SLOT[kk] = SLOTS_BICHO[si];
         reloadSlot(SLOTS_BICHO[si], BICHOS_PNG[kk], PAINTERS[kk]);
         si++;
@@ -536,7 +619,9 @@ function armaVivos(s) {
     var falta = null;
     for (var i = 0; i < s.enemies.length; i++) {
         var e = s.enemies[i];
-        if (!e.morto && BICHOS_PNG[e.kind] && !BICHO_SLOT[e.kind]) { falta = e.kind; break; }
+        if (!e.morto && !noAtlas(e.kind) && BICHOS_PNG[e.kind] && !BICHO_SLOT[e.kind]) {
+            falta = e.kind; break;
+        }
     }
     if (!falta) return;
     var usados = {};
@@ -555,9 +640,10 @@ function armaVivos(s) {
 }
 
 // ---------------------------------------------------------------- sons ---
-// efeitos pela dep celeros.sfx: no firmware API 32 sao misturados por cima
-// da trilha (o duck vira no-op e a musica nao para a cada explosao)
-var SFX = require("celeros.sfx");
+// efeitos pela biblioteca de sons do KIT (E.sfx): no firmware API 32 sao
+// misturados por cima da trilha (o duck vira no-op e a musica nao para a
+// cada explosao)
+var SFX = E.sfx;
 
 // ------------------------------------------------------------- cenario ---
 
@@ -609,7 +695,14 @@ function paintCell(c, r, x, y, w, h) {
     var t = s.tema;
     var v = s.variacao[r * NV.COLS + c];
     var base = (c + r) % 2 === 0 ? t.a : t.b;
-    System.fillRect(x, y, w, h, v > 0.85 ? System.mixColor(base, t.detalhe, 8) : base);
+    if (USA_AIBG) {
+        // piso de pedra do ai_bg: 4 recortes de 64 giram pela celula e pelo
+        // mundo (o tema continua na junta e nos respingos da seed)
+        var q = (c + r * 2 + s.mundo) & 3;
+        E.spr.stamp("aibg" + q, x, y, { scale: w / 64, key: null });
+    } else {
+        System.fillRect(x, y, w, h, v > 0.85 ? System.mixColor(base, t.detalhe, 8) : base);
+    }
     // pedrinha/mancha pela seed da fase: ~15% das lajotas ganham vida
     // (arquivo por celula custa ~9 ms no 4848 — o chao segue procedural)
     if (v < 0.10) {
@@ -666,8 +759,22 @@ function paintCell(c, r, x, y, w, h) {
     var k = s.powerups[c + ',' + r];
     if (k && ch === '.') {
         var kor = corPower(k);
-        // PNG quando ha (com cache por arquivo); quadrado com letra senao
-        if (!(USA_ITEM && POWPNG[k] && drawArquivo(POWPNG[k], x, y))) {
+        if (USA_ATLAS) {
+            // orbe do atlas + selo pequeno com o glifo do tipo (a cor diz o
+            // powerup de longe; o selo mantem a leitura na mesma celula)
+            E.spr.stamp("ai3", x + w / 2, y + h / 2,
+                        { scale: (w * 0.9) / 64, key: 0xF81F, ax: 0.5, ay: 0.5 });
+            if (w >= 26) {
+                var bw = Math.max(8, Math.round(w * 0.34));
+                System.fillRect(x + w - bw - 1, y + h - bw - 1, bw, bw, C.preto);
+                E.gfx.text(glifoPower(k), x + w - bw / 2 - 1, y + h - bw / 2 - 1,
+                           { color: kor, ts: "tiny", align: "center", valign: "middle",
+                             screen: true });
+            } else {
+                System.fillRect(x + w / 2 - 1, y + h / 2 - 1, 3, 3, kor);
+            }
+        } else if (!(USA_ITEM && POWPNG[k] && drawArquivo(POWPNG[k], x, y))) {
+            // PNG quando ha (com cache por arquivo); quadrado com letra senao
             var kw = w - 4;
             System.fillRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 35));
             System.drawRect(x + 2, y + 2, kw, kw, System.mixColor(C.preto, kor, 70));
@@ -876,19 +983,29 @@ function drawEntidades(s, beat, pulso) {
     // bombas: blit + faisca do pavio piscando na batida
     for (i = 0; i < s.bombs.length; i++) {
         var bo = s.bombs[i];
-        var bx = Math.round(OX + bo.fx * CELL + (CELL - SZ.bomba) / 2);
-        var by = Math.round(OY + bo.fy * CELL + (CELL - SZ.bomba) / 2 - Math.floor(2 * pulso));
-        E.spr.blit("bomba", bx, by);
+        var bcx = Math.round(OX + (bo.fx + 0.5) * CELL);
+        var bcy = Math.round(OY + (bo.fy + 0.5) * CELL - Math.floor(2 * pulso));
+        if (USA_ATLAS) {
+            E.spr.stamp("ai2", bcx, bcy, { scale: SZ.bomba / 64, key: 0xF81F,
+                                           ax: 0.5, ay: 0.5 });
+        } else {
+            var bx = Math.round(OX + bo.fx * CELL + (CELL - SZ.bomba) / 2);
+            var by = Math.round(OY + bo.fy * CELL + (CELL - SZ.bomba) / 2 - Math.floor(2 * pulso));
+            E.spr.blit("bomba", bx, by);
+            bcx = bx + Math.round(SZ.bomba / 2);
+            bcy = by + Math.round(SZ.bomba / 2);
+        }
         // pavio: o fim se le de longe — avermelha e pisca no dobro do ritmo
         var resta = Math.max(0, bo.vai - beat), tot = Math.max(0.1, bo.vai - bo.de);
         var quente = 1 - resta / tot;
         var pisca = resta < 1 ? Math.floor(beat * 8) % 2 === 0 : pulso < 0.5;
         if (quente > 0.45) {
-            System.fillCircle(bx + SZ.bomba / 2, by + SZ.bomba / 2 + 2, SZ.bomba * 0.16,
+            System.fillCircle(bcx, bcy + 2, SZ.bomba * 0.16,
                               System.mixColor(0x4208, C.vermelho, Math.round(quente * 100)));
         }
-        if (pisca) System.fillCircle(bx + SZ.bomba / 2, by + 1, 2, resta < 1 ? C.vermelho : C.ouro);
-        if (bo.dono === 'x') System.drawCircle(bx + SZ.bomba / 2, by + SZ.bomba / 2 + 2, SZ.bomba * 0.42, C.magenta);
+        if (pisca) System.fillCircle(bcx, bcy - Math.round(SZ.bomba / 2) + 1, 2,
+                                     resta < 1 ? C.vermelho : C.ouro);
+        if (bo.dono === 'x') System.drawCircle(bcx, bcy + 2, SZ.bomba * 0.42, C.magenta);
     }
     for (i = 0; i < s.flames.length; i++) drawChama(s.flames[i], pulso);
     // inimigos: bob no compasso; chefe pisca ao levar acerto
@@ -904,9 +1021,16 @@ function drawEntidades(s, beat, pulso) {
         if (eflash && Math.floor(beat * 16) % 2 === 0) {
             E.gfx.circle(cx, cy, ew * 0.5, C.branco, { screen: true });
         } else {
+            var ebob = Math.floor(2 * Math.sin(beat * Math.PI * 2 + i));
             var ex0 = Math.round(cx - ew / 2);
-            var ey0 = Math.round(cy - ew / 2 + Math.floor(2 * Math.sin(beat * Math.PI * 2 + i)));
-            E.spr.blit(BICHO_SLOT[nome] || nome, ex0, ey0);
+            var ey0 = Math.round(cy - ew / 2 + ebob);
+            if (USA_ATLAS && (nome === "balao" || nome === "mini")) {
+                // slime do atlas (balao vira slime; mini usa o mesmo corpo)
+                E.spr.stamp("ai1", cx, cy + ebob, { scale: ew / 64, key: 0xF81F,
+                                                    ax: 0.5, ay: 0.5 });
+            } else {
+                E.spr.blit(BICHO_SLOT[nome] || nome, ex0, ey0);
+            }
             if (e.kind === 'blindado' && e.hp < e.hpMax) {   // blindagem rachada
                 System.drawLine(ex0 + ew * 0.3, ey0 + ew * 0.15, ex0 + ew * 0.5, ey0 + ew * 0.55, C.branco);
                 System.drawLine(ex0 + ew * 0.5, ey0 + ew * 0.55, ex0 + ew * 0.42, ey0 + ew * 0.85, C.branco);
@@ -929,15 +1053,31 @@ function drawEntidades(s, beat, pulso) {
     if (s.duelo && s.rival && !s.rival.morto && !s.fim) {
         var rx = OX + s.rival.x, ry = OY + s.rival.y;
         var rbob = Math.floor(2 * Math.sin(beat * Math.PI * 2 + 1.7));
-        E.spr.blit(BICHO_SLOT["rival"] || "rival", Math.round(rx - SZ.jogador / 2),
-                   Math.round(ry - SZ.jogador / 2 + rbob));
+        if (USA_ATLAS) {
+            E.spr.stamp("ai0", rx, ry + SZ.jogador / 2 + rbob,
+                        { scale: SZ.jogador / 64, key: 0xF81F, ax: 0.5, ay: 1 });
+            // faixa laranja no pe: o rival usa o MESMO astronauta do atlas
+            System.fillRect(Math.round(rx - SZ.jogador * 0.28),
+                            Math.round(ry + SZ.jogador * 0.34 + rbob),
+                            Math.round(SZ.jogador * 0.56),
+                            Math.max(2, Math.round(SZ.jogador * 0.1)), C.laranja);
+        } else {
+            E.spr.blit(BICHO_SLOT["rival"] || "rival", Math.round(rx - SZ.jogador / 2),
+                       Math.round(ry - SZ.jogador / 2 + rbob));
+        }
     }
     // jogador (pisca invulneravel; bob no compasso)
     var inv = s.stats.inv > 0 && Math.floor(beat * 8) % 2 === 0;
     if (!inv && !s.fim) {
         var px = OX + s.player.x, py = OY + s.player.y;
         var bob = Math.floor(2 * Math.sin(beat * Math.PI * 2));
-        E.spr.blit("jogador", Math.round(px - SZ.jogador / 2), Math.round(py - SZ.jogador / 2 + bob));
+        if (USA_ATLAS) {
+            E.spr.stamp("ai0", px, py + SZ.jogador / 2 + bob,
+                        { scale: SZ.jogador / 64, key: 0xF81F, ax: 0.5, ay: 1 });
+        } else {
+            E.spr.blit("jogador", Math.round(px - SZ.jogador / 2),
+                       Math.round(py - SZ.jogador / 2 + bob));
+        }
         if (s.stats.shield) E.gfx.circle(px, py, SZ.jogador * 0.62, C.ciano, { fill: false, screen: true });
     }
     // chefe na arena: barra de vida no topo
@@ -1093,6 +1233,7 @@ function drawMundo(force) {
     syncEfeitos(s);
     drawEntidades(s, beat, pulso);
     E.fx.draw();
+    E.pad.draw();          // stick visivel enquanto o dedo esta na arena
     if (s.intro > 0) drawIntro(s);
     E.dirty.unclip();
     drawHUD(s, pulso, force);
@@ -1116,21 +1257,15 @@ function botoes(y, rotulos, fundo) {
     return out;
 }
 
-// joystick flutuante: a ancora nasce no toque e segue o dedo quando ele se
-// afasta demais (virar e instantaneo); toque seco planta bomba
-var JOY = { ax: 0, ay: 0, dead: u(7), raio: u(22) };
-function joystick() {
-    var i = E.input;
-    if (i.justDown) { JOY.ax = i.x; JOY.ay = i.y; }
-    if (!i.down || !i.moved) return [0, 0];
-    var dx = i.x - JOY.ax, dy = i.y - JOY.ay;
-    var d = Math.sqrt(dx * dx + dy * dy);
-    if (d > JOY.raio) {
-        JOY.ax = i.x - dx / d * JOY.raio;
-        JOY.ay = i.y - dy / d * JOY.raio;
-    }
-    if (d < JOY.dead) return [0, 0];
-    return Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? 1 : -1, 0] : [0, dy > 0 ? 1 : -1];
+// direcao do E.pad.stick -> eixo dominante do arena.mover. O stick nasce no
+// dedo (float) e segue a area toda da arena; toque seco (stick.tap) planta
+function direcaoStick(s) {
+    if (!s || !s.dir) return null;
+    if (s.dir === "left") return [-1, 0];
+    if (s.dir === "right") return [1, 0];
+    if (s.dir === "up") return [0, -1];
+    if (s.dir === "down") return [0, 1];
+    return null;
 }
 
 // dica do duelo (E.ui.dialog no lobby) — texto de UI pode ter acentos.
@@ -1140,6 +1275,28 @@ var TEXTO_DUELO = "Melhor de 3 rounds na mesma arena (seed do host). " +
     "Explosão no tempo forte da trilha vale combo. " +
     "Toque num nome para convidar ou aceitar.";
 
+// assinaturas do jogo: TEM de ser antes do E.run (o loop so retorna quando
+// o app sai). Ouvinte global (sem scene) — nao morre na troca de cena. A
+// arena publica pelos ganchos instalados em wireArena.
+E.on("jogo:sfx", sfxDoJogo);
+E.on("jogo:fx", fxDoJogo);
+E.on("jogo:powerup", function (kind, cel) {
+    var s = arena.state();
+    if (s && s.duelo) netSend("dg" + netSeq() + "," + cel.c + "," + cel.r);
+});
+E.on("jogo:chute", function (c, r, dx, dy) {
+    var s = arena.state();
+    if (s && s.duelo) netSend("dk" + netSeq() + "," + c + "," + r + "," + dx + "," + dy);
+});
+E.on("jogo:bomba", function (bo) {
+    var s = arena.state();
+    if (s && s.duelo)
+        netSend("db" + netSeq() + "," + bo.fx + "," + bo.fy + "," +
+                Math.round((bo.de % 10) * 10) + "," + bo.range +
+                (bo.pierce ? ",1" : ""));
+});
+E.on("jogo:fim", fimDoJogo);
+
 var tituloArte = false;
 E.run({
     titulo: {
@@ -1147,6 +1304,7 @@ E.run({
         enter: function () {
             this.first = true;
             hi = E.save.num("hi", 0);
+            FLUXO.go("menu");
             E.audio.music(NV.SONG_MENU);
         },
         update: function () {
@@ -1154,17 +1312,18 @@ E.run({
             if (E.hit(this.btn[0])) {
                 E.audio.sfx("ok");
                 E.data.retomar = false;
-                E.data.modo = "campanha";
+                FLUXO.go("campanha");
                 prog.mundo = E.save.num("mundo", 1);
                 prog.nivel = E.save.num("nivel", 1);
                 E.goto("jogando", { transition: "wipe", ms: 300 });
             } else if (E.hit(this.btn[1])) {
                 E.audio.sfx("ok");
+                FLUXO.go("duelo");
                 E.goto("duelo", { transition: "fade", ms: 350 });
             } else if (E.hit(this.btn[2])) {
                 E.audio.sfx("ok");
                 E.data.retomar = false;
-                E.data.modo = "sobre";
+                FLUXO.go("sobrevivencia");
                 E.goto("jogando", { transition: "fade", ms: 350 });
             }
         },
@@ -1235,6 +1394,7 @@ E.run({
             netReset();
             NET.fase = "lobby";
             NET.hbAte = 0;
+            FLUXO.go("duelo");
             if (mesh.available()) {
                 try { NET.me = mesh.me(); } catch (e) { NET.me = null; }
             } else NET.me = null;
@@ -1263,7 +1423,11 @@ E.run({
                     E.audio.sfx("ok");
                 } else {
                     E.audio.sfx(a === "voltar" ? "back" : "ui");
-                    if (a === "voltar") { netReset(); E.goto("titulo", { transition: "fade", ms: 300 }); }
+                    if (a === "voltar") {
+                        netReset();
+                        FLUXO.go("menu");
+                        E.goto("titulo", { transition: "fade", ms: 300 });
+                    }
                     else if (a === "ligar" && now >= this.ligaAte) {
                         this.ligaAte = now + 1200;
                         CelerNet.start({});
@@ -1392,8 +1556,10 @@ E.run({
         // ele disparava E.goto("fim") em cima da proxima cena
         exit: function () { E.clearTimers(); pararEfeitos(); },
         enter: function () {
-            var sobre = E.data.modo === "sobre";
-            var duelo = E.data.modo === "duelo";
+            // a E.fsm e quem manda no modo (campanha/sobrevivencia/duelo);
+            // E.data.modo fica como espelho para leitura externa
+            var sobre = FLUXO.state === "sobrevivencia";
+            var duelo = FLUXO.state === "duelo";
             var mu = duelo ? 2 : prog.mundo, ni = duelo ? 4 : prog.nivel;
             if (!E.data.retomar) {
                 var plano;
@@ -1430,6 +1596,12 @@ E.run({
             E.dirty.enable(function (x, y, w, h) { mapa.markRect(x, y, w, h); });
             E.dirty.clip(OX, OY, GW, GH);
             this.force = true;
+            // E.pad.stick: zona = arena inteira (o dedo nasce onde tocar e
+            // o centro segue). So aparece com o dedo na tela; soltar seco
+            // (stick.tap) planta a bomba.
+            this.stick = E.pad.stick({ zone: { x: 0, y: 0, w: W, h: HUD_Y },
+                                       r: u(22), float: true, follow: true,
+                                       dead: 0.25, dirs: 4, visible: false });
             hudKey = "";
             if (E.data.musicPos !== undefined) {
                 E.audio.music(NV.musica(mu, ni, sobre), { startMs: E.data.musicPos });
@@ -1442,6 +1614,8 @@ E.run({
             var s = arena.state();
             var tap = E.input.tap;
             var duelo = s && s.duelo;
+            var stk = this.stick;
+            if (stk) stk.visible = stk.active;
             // canto superior direito: PAUSA na campanha; no duelo o mundo
             // nao para (o rival segue) — o botao vira desistencia
             if (tap && tap.x >= OX + (NV.COLS - 2) * CELL && tap.y < OY + CELL) {
@@ -1460,16 +1634,12 @@ E.run({
             // toque longo parado = detonador (quando tem)
             if (s && s.stats.remote && E.input.longpress && arena.detonar() && duelo)
                 netSend("dd" + netSeq());
-            var dir = joystick();
-            arena.mover(dir[0], dir[1], dt);
-            if (tap && tap.y < HUD_Y && arena.plantar()) {
-                if (duelo) {
-                    var bo = s.bombs[s.bombs.length - 1];
-                    netSend("db" + netSeq() + "," + bo.fx + "," + bo.fy + "," +
-                            Math.round((bo.de % 10) * 10) + "," + bo.range +
-                            (bo.pierce ? ",1" : ""));
-                }
-            }
+            var dir = direcaoStick(stk);
+            arena.mover(dir ? dir[0] : 0, dir ? dir[1] : 0, dt);
+            // toque seco: o tap do E.input (primario) ou o stick.tap (dedo
+            // do stick solto sem arrastar) — planta UMA vez
+            var tapBomba = (tap && tap.y < HUD_Y) || !!(stk && stk.tap);
+            if (tapBomba) arena.plantar();   // a arena publica jogo:bomba
             // rede: drena a fila da malha, publica a minha celula, vigia o
             // rival (presenca) — ~3,4 msgs/s andando + keepalive de 2 s
             if (duelo && NET.fase === "jogando") {
@@ -1514,6 +1684,7 @@ E.run({
         static: true,
         enter: function () {
             E.audio.stop();
+            FLUXO.go("round");     // o modo (duelo) e o beat seguem intactos
             this.first = true;
             this.t = 0;
             this.ok = false;
@@ -1546,6 +1717,7 @@ E.run({
                     this.act = null;
                     E.audio.sfx("ok");
                     netReset();
+                    FLUXO.go("menu");
                     E.goto("titulo", { transition: "fade", ms: 300 });
                 }
                 return;
@@ -1619,6 +1791,7 @@ E.run({
             } else if (act === 'quit') {
                 E.audio.sfx("ui");
                 arena.parar();
+                FLUXO.go("menu");
                 E.goto("titulo", { transition: "fade", ms: 300 });
             }
         },
@@ -1636,6 +1809,7 @@ E.run({
         static: true,
         enter: function () {
             E.audio.stop();
+            FLUXO.go("fim");
             this.first = true;
             this.t = 0;
             this.act = null;       // acao vinda do E.ui.menu (desenhado no draw)
@@ -1657,10 +1831,11 @@ E.run({
                     prog.mundo = E.save.num("mundo", 1);
                     prog.nivel = E.save.num("nivel", 1);
                 }
-                E.data.modo = info.sobre ? "sobre" : "campanha";
+                FLUXO.go(info.sobre ? "sobrevivencia" : "campanha");
                 E.goto("jogando", { transition: "wipe", ms: 300 });
             } else if (act === 'quit') {
                 E.audio.sfx("ui");
+                FLUXO.go("menu");
                 E.goto("titulo", { transition: "fade", ms: 300 });
             }
         },
@@ -1711,131 +1886,133 @@ E.run({
 
 // ---------------------------------------------------------------- ganchos --
 
+// ouvintes do barramento E.events: a arena so EMITE (ganchos do wireArena);
+// som, efeito e rede moram aqui, fora do laco de update.
+function sfxDoJogo(nome, tam) {
+    if (nome === 'bum') {
+        SFX.via(E.audio, tam >= 7 ? 'boomGra' : 'boomPeq', { duck: 650 });
+    } else if (nome === 'bicho') {
+        SFX.via(E.audio, 'bicho', { oitava: -1 });
+    } else if (nome === 'vento') {
+        E.audio.sfx([[90, 60], [70, 120]]);
+    } else if (nome === 'tele') {
+        E.audio.sfx([[600, 30], [900, 30], [1300, 60]]);
+    } else {
+        SFX.via(E.audio, nome);
+    }
+}
+function fxDoJogo(tipo, a, b) {
+    if (tipo === 'bum') {
+        // explosao comum: anel + faiscas (sem flash/tremor a cada bomba:
+        // era o vidro "vibrando com flashes" o tempo todo)
+        var cx = OX + (a.c + 0.5) * CELL, cy = OY + (a.r + 0.5) * CELL;
+        E.fx.ring(cx, cy, { speed: CELL * 9, color: C.laranja, life: 0.4 });
+        E.fx.burst(cx, cy, { n: 14, colors: [C.ouro, C.laranja, C.vermelho],
+                             speed: CELL * 5, life: 0.45 });
+        if (b && b.length >= 7) E.fx.flash(C.ouro, 120);   // so a explosao grande brilha
+    } else if (tipo === 'macio') {
+        var mx = OX + (a.c + 0.5) * CELL, my = OY + (a.r + 0.5) * CELL;
+        E.fx.burst(mx, my, { n: 8, colors: [0x8410, 0x6204, C.cinza],
+                             speed: CELL * 3, life: 0.45, grav: CELL * 6 });
+    } else if (tipo === 'power') {
+        var cel = arena.celulaPlayer();
+        var px = OX + (cel.c + 0.5) * CELL, py = OY + (cel.r + 0.5) * CELL;
+        E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano, ts: 'label' });
+    } else if (tipo === 'combo') {
+        var cbx = OX + (a.c + 0.5) * CELL, cby = OY + (a.r + 0.5) * CELL;
+        E.fx.popText(cbx, cby - CELL, "COMBO x" + a.mult, { color: C.magenta, ts: 'big' });
+        E.fx.ring(cbx, cby, { speed: CELL * 12, color: C.magenta, life: 0.3 });
+    } else if (tipo === 'saida') {
+        var sx = OX + (a.c + 0.5) * CELL, sy = OY + (a.r + 0.5) * CELL;
+        E.fx.popText(sx, sy - CELL, "SAIDA!", { color: C.verde, ts: 'label' });
+        E.fx.ring(sx, sy, { speed: CELL * 8, color: C.verde, life: 0.5 });
+    } else if (tipo === 'bicho') {
+        // a veio em pixels do centro do bicho (coordenadas da grade)
+        E.fx.burst(OX + a.x, OY + a.y, { n: 12, colors: [C.branco, C.laranja],
+                                         speed: CELL * 4, life: 0.5 });
+        E.fx.popText(OX + a.x, OY + a.y - CELL / 2, "+" + a.pontos, { color: C.ouro, ts: 'small' });
+    } else if (tipo === 'golpe') {
+        var gx = OX + a.fx * CELL, gy = OY + a.fy * CELL;
+        E.fx.burst(gx, gy, { n: 10, colors: [C.branco, 0xBDF7], speed: CELL * 4, life: 0.35 });
+        E.fx.popText(gx, gy - CELL * 0.6, a.kind === 'chefe' ? "-1" : "BLINDAGEM!", { color: C.ciano, ts: 'small' });
+    } else if (tipo === 'vento') {
+        var vx = OX + (a.c + 0.5) * CELL, vy = OY + (a.r + 0.5) * CELL;
+        // erupcao: anel de choque + respiro de fogo continuo por ~0,65 s
+        E.fx.ring(vx, vy, { speed: CELL * 5, color: C.ouro, life: 0.45 });
+        E.fx.burst(vx, vy, { n: 8, colors: [C.laranja, C.ouro], speed: CELL * 3,
+                             life: 0.4, grav: -CELL * 4 });
+        fogoEm(a.c, a.r, 650);
+    } else if (tipo === 'cuspe') {
+        // bola de fogo do cuspidor: anel curto no ponto de saida
+        E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL,
+                  { speed: CELL * 4, color: C.laranja, life: 0.3 });
+    } else if (tipo === 'tele') {
+        E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL, { speed: CELL * 6, color: C.magenta, life: 0.35 });
+        E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 6, color: C.ciano, life: 0.45 });
+    } else if (tipo === 'escudo') {
+        E.fx.ring(OX + a.x, OY + a.y, { speed: CELL * 7, color: C.ciano, life: 0.4 });
+        E.fx.popText(OX + a.x, OY + a.y - CELL, "ESCUDO!", { color: C.ciano, ts: 'label' });
+    } else if (tipo === 'respawn') {
+        E.fx.ring(OX + a.x, OY + a.y, { speed: CELL * 5, color: C.branco, life: 0.5 });
+    } else if (tipo === 'joga') {
+        E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 4, color: C.magenta, life: 0.3 });
+    } else if (tipo === 'onda') {
+        E.fx.popText(OX + GW / 2, OY + GH * 0.4, "ONDA " + a, { color: C.laranja, ts: 'big', life: 1.4 });
+    } else if (tipo === 'morte') {
+        E.fx.burst(OX + a.x, OY + a.y, { n: 22, colors: [C.branco, C.ciano],
+                                         speed: CELL * 4, life: 0.6 });
+        E.fx.flash(C.vermelho, 320);
+        E.cam.shake(CELL * 0.25, 0.4);
+    }
+}
+function fimDoJogo() {
+    var st = arena.state();
+    if (st.duelo) {
+        // a morte e autoridade de cada um: 'dead' avisa o rival; 'rwin'
+        // veio do 'dm' dele. Os dois avisarem = empate (handler 'm')
+        if (st.fim === 'dead') {
+            netSend("dm" + netSeq());
+            if (!NET.res) NET.res = "perdi";
+        } else if (st.fim === 'rwin' && !NET.res) {
+            NET.res = "venci";
+        }
+        logDuelo("fim do round: " + st.fim);
+        E.after(900, function () {
+            arena.parar();
+            NET.fase = "round";
+            E.goto("round");
+        });
+        return;
+    }
+    var sobre = !!st.sobrevivencia;
+    E.data.fimInfo = { fim: st.fim, score: st.score, sobre: sobre,
+                       onda: st.onda, mundo: st.mundo, nivel: st.nivel,
+                       bonus: st.bonusTempo || 0, zerou: false };
+    if (st.fim === 'win') {
+        var nv = st.nivel + 1, mu = st.mundo;
+        if (nv > NV.NIVEIS_POR_MUNDO) { nv = 1; mu++; }
+        if (mu > NV.MUNDOS) {
+            // fechou o chefe do ultimo mundo: campanha completa
+            E.data.fimInfo.zerou = true;
+            E.save.set("zerou", String(E.save.num("zerou", 0) + 1));
+            mu = 1; nv = 1;
+        }
+        E.save.set("mundo", String(mu));
+        E.save.set("nivel", String(nv));
+    } else if (sobre) {
+        E.save.best("sobre.hi", st.score);
+    }
+    E.after(900, function () { arena.parar(); E.goto("fim"); });
+}
+
 function wireArena() {
     var s = arena.state();
-    s.onSfx = function (nome, tam) {
-        if (nome === 'bum') {
-            SFX.via(E.audio, tam >= 7 ? 'boomGra' : 'boomPeq', { duck: 650 });
-        } else if (nome === 'bicho') {
-            SFX.via(E.audio, 'bicho', { oitava: -1 });
-        } else if (nome === 'vento') {
-            E.audio.sfx([[90, 60], [70, 120]]);
-        } else if (nome === 'tele') {
-            E.audio.sfx([[600, 30], [900, 30], [1300, 60]]);
-        } else {
-            SFX.via(E.audio, nome);
-        }
-    };
-    s.onFx = function (tipo, a, b) {
-        if (tipo === 'bum') {
-            // explosao comum: anel + faiscas (sem flash/tremor a cada bomba:
-            // era o vidro "vibrando com flashes" o tempo todo)
-            var cx = OX + (a.c + 0.5) * CELL, cy = OY + (a.r + 0.5) * CELL;
-            E.fx.ring(cx, cy, { speed: CELL * 9, color: C.laranja, life: 0.4 });
-            E.fx.burst(cx, cy, { n: 14, colors: [C.ouro, C.laranja, C.vermelho],
-                                 speed: CELL * 5, life: 0.45 });
-            if (b && b.length >= 7) E.fx.flash(C.ouro, 120);   // so a explosao grande brilha
-        } else if (tipo === 'macio') {
-            var mx = OX + (a.c + 0.5) * CELL, my = OY + (a.r + 0.5) * CELL;
-            E.fx.burst(mx, my, { n: 8, colors: [0x8410, 0x6204, C.cinza],
-                                 speed: CELL * 3, life: 0.45, grav: CELL * 6 });
-        } else if (tipo === 'power') {
-            var cel = arena.celulaPlayer();
-            var px = OX + (cel.c + 0.5) * CELL, py = OY + (cel.r + 0.5) * CELL;
-            E.fx.popText(px, py - CELL, nomePower(b), { color: C.ciano, ts: 'label' });
-        } else if (tipo === 'combo') {
-            var cbx = OX + (a.c + 0.5) * CELL, cby = OY + (a.r + 0.5) * CELL;
-            E.fx.popText(cbx, cby - CELL, "COMBO x" + a.mult, { color: C.magenta, ts: 'big' });
-            E.fx.ring(cbx, cby, { speed: CELL * 12, color: C.magenta, life: 0.3 });
-        } else if (tipo === 'saida') {
-            var sx = OX + (a.c + 0.5) * CELL, sy = OY + (a.r + 0.5) * CELL;
-            E.fx.popText(sx, sy - CELL, "SAIDA!", { color: C.verde, ts: 'label' });
-            E.fx.ring(sx, sy, { speed: CELL * 8, color: C.verde, life: 0.5 });
-        } else if (tipo === 'bicho') {
-            // a veio em pixels do centro do bicho (coordenadas da grade)
-            E.fx.burst(OX + a.x, OY + a.y, { n: 12, colors: [C.branco, C.laranja],
-                                             speed: CELL * 4, life: 0.5 });
-            E.fx.popText(OX + a.x, OY + a.y - CELL / 2, "+" + a.pontos, { color: C.ouro, ts: 'small' });
-        } else if (tipo === 'golpe') {
-            var gx = OX + a.fx * CELL, gy = OY + a.fy * CELL;
-            E.fx.burst(gx, gy, { n: 10, colors: [C.branco, 0xBDF7], speed: CELL * 4, life: 0.35 });
-            E.fx.popText(gx, gy - CELL * 0.6, a.kind === 'chefe' ? "-1" : "BLINDAGEM!", { color: C.ciano, ts: 'small' });
-        } else if (tipo === 'vento') {
-            var vx = OX + (a.c + 0.5) * CELL, vy = OY + (a.r + 0.5) * CELL;
-            // erupcao: anel de choque + respiro de fogo continuo por ~0,65 s
-            E.fx.ring(vx, vy, { speed: CELL * 5, color: C.ouro, life: 0.45 });
-            E.fx.burst(vx, vy, { n: 8, colors: [C.laranja, C.ouro], speed: CELL * 3,
-                                 life: 0.4, grav: -CELL * 4 });
-            fogoEm(a.c, a.r, 650);
-        } else if (tipo === 'cuspe') {
-            // bola de fogo do cuspidor: anel curto no ponto de saida
-            E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL,
-                      { speed: CELL * 4, color: C.laranja, life: 0.3 });
-        } else if (tipo === 'tele') {
-            E.fx.ring(OX + (a.c + 0.5) * CELL, OY + (a.r + 0.5) * CELL, { speed: CELL * 6, color: C.magenta, life: 0.35 });
-            E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 6, color: C.ciano, life: 0.45 });
-        } else if (tipo === 'escudo') {
-            E.fx.ring(OX + a.x, OY + a.y, { speed: CELL * 7, color: C.ciano, life: 0.4 });
-            E.fx.popText(OX + a.x, OY + a.y - CELL, "ESCUDO!", { color: C.ciano, ts: 'label' });
-        } else if (tipo === 'respawn') {
-            E.fx.ring(OX + a.x, OY + a.y, { speed: CELL * 5, color: C.branco, life: 0.5 });
-        } else if (tipo === 'joga') {
-            E.fx.ring(OX + (b.c + 0.5) * CELL, OY + (b.r + 0.5) * CELL, { speed: CELL * 4, color: C.magenta, life: 0.3 });
-        } else if (tipo === 'onda') {
-            E.fx.popText(OX + GW / 2, OY + GH * 0.4, "ONDA " + a, { color: C.laranja, ts: 'big', life: 1.4 });
-        } else if (tipo === 'morte') {
-            E.fx.burst(OX + a.x, OY + a.y, { n: 22, colors: [C.branco, C.ciano],
-                                             speed: CELL * 4, life: 0.6 });
-            E.fx.flash(C.vermelho, 320);
-            E.cam.shake(CELL * 0.25, 0.4);
-        }
-    };
-    // eventos que viram mensagem na malha (so em duelo)
-    s.onPegar = function (kind, cel) {
-        if (s.duelo) netSend("dg" + netSeq() + "," + cel.c + "," + cel.r);
-    };
-    s.onChutar = function (c, r, dx, dy) {
-        if (s.duelo) netSend("dk" + netSeq() + "," + c + "," + r + "," + dx + "," + dy);
-    };
-    s.onFim = function () {
-        var st = arena.state();
-        if (st.duelo) {
-            // a morte e autoridade de cada um: 'dead' avisa o rival; 'rwin'
-            // veio do 'dm' dele. Os dois avisarem = empate (handler 'm')
-            if (st.fim === 'dead') {
-                netSend("dm" + netSeq());
-                if (!NET.res) NET.res = "perdi";
-            } else if (st.fim === 'rwin' && !NET.res) {
-                NET.res = "venci";
-            }
-            logDuelo("fim do round: " + st.fim);
-            E.after(900, function () {
-                arena.parar();
-                NET.fase = "round";
-                E.goto("round");
-            });
-            return;
-        }
-        var sobre = !!st.sobrevivencia;
-        E.data.fimInfo = { fim: st.fim, score: st.score, sobre: sobre,
-                           onda: st.onda, mundo: st.mundo, nivel: st.nivel,
-                           bonus: st.bonusTempo || 0, zerou: false };
-        if (st.fim === 'win') {
-            var nv = st.nivel + 1, mu = st.mundo;
-            if (nv > NV.NIVEIS_POR_MUNDO) { nv = 1; mu++; }
-            if (mu > NV.MUNDOS) {
-                // fechou o chefe do ultimo mundo: campanha completa
-                E.data.fimInfo.zerou = true;
-                E.save.set("zerou", String(E.save.num("zerou", 0) + 1));
-                mu = 1; nv = 1;
-            }
-            E.save.set("mundo", String(mu));
-            E.save.set("nivel", String(nv));
-        } else if (sobre) {
-            E.save.best("sobre.hi", st.score);
-        }
-        E.after(900, function () { arena.parar(); E.goto("fim"); });
-    };
+    s.onSfx = function (nome, tam) { E.emit("jogo:sfx", nome, tam); };
+    s.onFx = function (tipo, a, b) { E.emit("jogo:fx", tipo, a, b); };
+    s.onPegar = function (kind, cel) { E.emit("jogo:powerup", kind, cel); };
+    s.onChutar = function (c, r, dx, dy) { E.emit("jogo:chute", c, r, dx, dy); };
+    s.onBomba = function (bo) { E.emit("jogo:bomba", bo); };
+    s.onFim = function () { E.emit("jogo:fim"); };
 }
 
 function nomePower(k) {

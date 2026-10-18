@@ -4,23 +4,32 @@
 // pecas desenhadas giradas (drawSprite com angulo/zoom) + contorno e
 // rachaduras procedurais; estilingue com elastico de verdade.
 //
+// 1.3.0: a arte de IA entra pela E.spr — ai_atlas (grade 4x4 de 64 px,
+// fundo magenta 0xF81F: ai0 goblin, ai1 rei, ai2 catapulta, ai3 pedra) e
+// ai_bg (campo de flores, estampado no cenario composto do painter). Os
+// quadros antigos de goblin/rei/pedra/pedrao saem do pacote; sem atlas
+// (E.spr.backed false) cada peca cai no desenho procedural.
+//
 // Orcamento do pool (16 slots com PSRAM desde a API 33; eram 8 ate a 32 —
-// foi por este jogo que o pool dobrou): fundo (tela inteira), pedra,
-// goblin, rei, 6 tiros com arte e 3 texturas = 13; +1 do rei grande do
-// titulo = pico 14 (o temporario do carregamento nao passa de 11). Sem
-// slot ou sem PNG, cada peca cai num desenho procedural (nunca tela
-// vazia).
+// foi por este jogo que o pool dobrou): fundo (tela inteira) + atlas de IA
+// + ai_bg + 5 tiros com arte + 3 texturas = 11; sem o atlas, entram os 4
+// PNGs antigos (15). Sem slot ou sem PNG, cada peca cai num desenho
+// procedural (nunca tela vazia).
 
 var S = System;
+var E = require("celeros.game");
 var M = require("mundo");
 
 var DEG = 57.29578;
 var KEY = 0x0000;
+var MAGENTA = 0xF81F;          // cor-chave do atlas de IA
 
 var A = {
     W: 0, H: 0, ESC: 1, OY: 0,
     spr: {},                 // nome -> { id, w, h }
-    base: ""
+    base: "",
+    temAtlas: false,         // ai0..ai3 em slot real
+    temBg: false             // ai_bg em slot real
 };
 
 var C = {};
@@ -88,6 +97,22 @@ function achaBase(dir, pkg) {
     return achou;
 }
 
+// atlas de IA: 1 slot para os 4 personagens/objetos (ai0..ai3) e 1 para o
+// campo de flores. Sem slot (ou PNG ausente) o sheet e liberado na hora e
+// o jogo cai no procedural/PNG antigo.
+function carregaIA() {
+    if (!E.spr || typeof E.spr.grid !== "function") return;
+    E.spr.grid("ai", { file: "ai_atlas", cols: 4, rows: 4, tw: 64, th: 64, prefix: "ai" });
+    A.temAtlas = E.spr.backed("ai0");
+    if (!A.temAtlas) E.spr.freeSheet("ai");
+    // o PNG fornecido tem 192x192 (o nome sugere 256): o sheet usa o
+    // tamanho real do arquivo para nao esticar area vazia
+    E.spr.sheet("aibg", { file: "ai_bg", w: 192, h: 192,
+                          regions: { bg: [0, 0, 192, 192] } });
+    A.temBg = E.spr.backed("bg");
+    if (!A.temBg) E.spr.freeSheet("aibg");
+}
+
 // PNG (tamanho do arquivo) -> sprite no tamanho da tela (reduz com AA)
 function carregaRedim(nome, file, fw, fh, w, h) {
     w = Math.max(4, Math.round(w));
@@ -148,8 +173,36 @@ function carregaFundo() {
         S.drawWideLine(bx, my, sx(g[1].x), sy(g[1].y), e, C.madeiraEsc);
         S.useSprite(0);
     }
+    // arte de IA por cima do cenario: campo de flores na faixa do chao
+    // (tile, sem clip extra: o tile comeca na linha do chao) e a catapulta
+    // no lugar do estilingue. O fundo composto continua sendo o sprite
+    // unico do painter (camada suja intacta).
+    if (A.temBg || A.temAtlas) {
+        S.useSprite(id);
+        if (A.temBg) campoIA();
+        if (A.temAtlas) catapultaIA();
+        S.useSprite(0);
+    }
     A.spr.fundo = { id: id, w: W, h: H };
     return true;
+}
+
+// campo de flores ai_bg em tiles na faixa do chao; escala 1.25 em 480 px
+// (a imagem fornecida tem 192 px, entao 2 tiles cobrem a largura)
+function campoIA() {
+    var sc = Math.max(1, A.W / 384);
+    var tile = 192 * sc;
+    var y = Math.round(sy(M.GROUND));
+    for (var x = 0; x < A.W; x += tile) {
+        E.spr.stamp("bg", x, y, { scale: sc, key: null });
+    }
+}
+
+// catapulta ai2: a forquilha do estilingue (desenhada no fundo e usada pelo
+// elastico) fica dentro do sprite; a ancora e o pe, no chao
+function catapultaIA() {
+    var sc = 70 * A.ESC / 64;
+    E.spr.stamp("ai2", sx(51.3), sy(M.GROUND), { scale: sc, key: MAGENTA, ax: 0.5, ay: 1 });
 }
 
 // lado do sprite / diametro do corpo (medido pelo tools/arrasa_sprites.py)
@@ -165,17 +218,23 @@ A.init = function (W, H, dir, pkg) {
     A.OY = H - 320 * A.ESC;
     if (typeof S.drawSprite !== "function") return false;
     A.base = achaBase(dir, pkg);
-    carregaFundo();
-    // personagens: o circulo do corpo ocupa ~78% do sprite (orelhas/coroa)
-    var dp = 2 * M.TIRO.pedra.r * A.ESC * 1.08;
-    carregaRedim("pedra", "pedra.png", 64, 64, dp, dp);
-    var dg = 2 * 7 * A.ESC * 1.42;
-    carregaRedim("goblin", "goblin.png", 64, 64, dg, dg);
-    var dr = 2 * 10 * A.ESC * 1.42;
-    carregaRedim("rei", "rei.png", 64, 64, dr, dr);
+    carregaIA();                 // atlas + campo de flores (2 slots)
+    carregaFundo();              // cenario composto (usa o campo/catapulta)
+    // personagens: o circulo do corpo ocupa ~78% do sprite (orelhas/coroa).
+    // Com o atlas de IA os PNGs antigos nem entram no pool (nem no pacote).
+    if (!A.temAtlas) {
+        var dp = 2 * M.TIRO.pedra.r * A.ESC * 1.08;
+        carregaRedim("pedra", "pedra.png", 64, 64, dp, dp);
+        var dg = 2 * 7 * A.ESC * 1.42;
+        carregaRedim("goblin", "goblin.png", 64, 64, dg, dg);
+        var dr = 2 * 10 * A.ESC * 1.42;
+        carregaRedim("rei", "rei.png", 64, 64, dr, dr);
+    }
     // um sprite por tipo de tiro (o circulo ocupa uma fracao do sprite:
-    // estopim, bico, crista e ponta passam do corpo)
+    // estopim, bico, crista e ponta passam do corpo). O pedrao vem do
+    // atlas (ai3) quando ele esta carregado.
     for (var tp in TIRO_ARTE) {
+        if (tp === "pedrao" && A.temAtlas) continue;
         var d = 2 * M.TIRO[tp].r * A.ESC * TIRO_ARTE[tp];
         carregaRedim("t_" + tp, tp + ".png", 64, 64, d, d);
     }
@@ -346,16 +405,28 @@ A.caixa = function (c, x, y, a) {
 };
 
 A.goblin = function (c, x, y, a) {
-    var sp = A.spr[c.tipo === "rei" ? "rei" : "goblin"];
     var X = sx(x), Y = sy(y);
-    if (sp) {
-        S.drawSprite(sp.id, X, Y, a * DEG, 1, 1, KEY);
+    var desenhou = false;
+    if (A.temAtlas) {
+        // ai0 goblin / ai1 rei: 64 px de celula, corpo do circulo ocupa
+        // ~69% dela (mesma proporcao dos PNGs antigos: r * 1.45)
+        var k = (c.r * 2 * 1.45 * A.ESC) / 64;
+        desenhou = E.spr.stamp(c.tipo === "rei" ? "ai1" : "ai0", X, Y,
+                               { scale: k, key: MAGENTA, ax: 0.5, ay: 0.5 });
+    }
+    if (desenhou) {
+        // atlas ja desenhou
     } else {
-        var r = c.r * A.ESC;
-        S.fillSmoothCircle(X, Y, r, C.goblin);
-        S.fillCircle(Math.round(X - r * 0.35), Math.round(Y - r * 0.2), Math.max(1, Math.round(r * 0.22)), C.branco);
-        S.fillCircle(Math.round(X + r * 0.35), Math.round(Y - r * 0.2), Math.max(1, Math.round(r * 0.22)), C.branco);
-        if (c.tipo === "rei") S.fillTriangle(X - r * 0.6, Y - r * 0.8, X + r * 0.6, Y - r * 0.8, X, Y - r * 1.5, C.ouro);
+        var sp = A.spr[c.tipo === "rei" ? "rei" : "goblin"];
+        if (sp) {
+            S.drawSprite(sp.id, X, Y, a * DEG, 1, 1, KEY);
+        } else {
+            var r = c.r * A.ESC;
+            S.fillSmoothCircle(X, Y, r, C.goblin);
+            S.fillCircle(Math.round(X - r * 0.35), Math.round(Y - r * 0.2), Math.max(1, Math.round(r * 0.22)), C.branco);
+            S.fillCircle(Math.round(X + r * 0.35), Math.round(Y - r * 0.2), Math.max(1, Math.round(r * 0.22)), C.branco);
+            if (c.tipo === "rei") S.fillTriangle(X - r * 0.6, Y - r * 0.8, X + r * 0.6, Y - r * 0.8, X, Y - r * 1.5, C.ouro);
+        }
     }
     // machucado: curativo em X na testa
     if (c.hp < c.hp0 * 0.6) {
@@ -371,7 +442,17 @@ A.goblin = function (c, x, y, a) {
 A.tiro = function (tipo, x, y, a, t) {
     var X = sx(x), Y = sy(y), r = M.TIRO[tipo].r;
     var arte = A.spr["t_" + tipo];
-    if (arte) {
+    var pedra = tipo === "pedra" || tipo === "pedrao";
+    var desenhou = false;
+    if (pedra && A.temAtlas) {
+        // ai3: a pedra do atlas; a celula tem ~87% de pedra, entao 1.2 de
+        // folga deixa o diametro visual igual ao corpo fisico
+        var kp = (r * 2 * 1.2 * A.ESC) / 64;
+        desenhou = E.spr.stamp("ai3", X, Y, { scale: kp, key: MAGENTA, ax: 0.5, ay: 0.5 });
+    }
+    if (desenhou) {
+        // atlas ja desenhou a pedra
+    } else if (arte) {
         S.drawSprite(arte.id, X, Y, a * DEG, 1, 1, KEY);
     } else if (tipo === "ovo") {
         // ovo-bomba da chocadeira: oval branco pintado + estopim aceso

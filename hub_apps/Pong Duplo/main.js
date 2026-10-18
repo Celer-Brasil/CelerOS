@@ -4,8 +4,14 @@
 // sua base; 5 pontos vencem. Um aparelho hospeda (mostra o codigo de 6
 // digitos), o outro entra e digita o codigo.
 //
-// Porte para a familia CelerGame (core + fx + ui): cenas menu/host/scan/
-// play/end com transicoes, pause, fim de jogo, particulas e sons de tabela.
+// 2.1.0: vitrine do CelerGame 1.4 — o fluxo menu/host/scan/play/end e uma
+// maquina de estados (E.fsm) com a pausa EMPILHADA (push/pop); a raquete e
+// os botoes de menu usam o pad multitoque (E.pad.stick/button), com o
+// toque/arrasto antigo como fallback; ponto/saque/rebote passam pelo
+// E.events (som e particulas ouvem sem a fisica conhecer o desenho); e a
+// quadra ganha o fundo gerado por IA (ai_bg.png) via E.spr.sheet/stamp,
+// mantendo o fundo liso quando o firmware nao tem slot de sprite.
+//
 // O protocolo do link continua o mesmo (par-a-par, mensagens pequenas):
 //   {t:"b", x, vx, vy}   a bola cruzou para o seu lado (x em milesimos)
 //   {t:"p"}              errei: ponto seu
@@ -13,15 +19,27 @@
 // O "Piloto automatico" defende sozinho (bom para demonstracao e treino)
 // e fica salvo no NVS do aparelho.
 
-var E = require("celeros.game");       // familia CelerGame: core + fx + ui
+var E = require("celeros.game");       // familia CelerGame: core + modulos
 require("celeros.game.fx");
 require("celeros.game.ui");
+require("celeros.game.pad");
+require("celeros.game.fsm");
+require("celeros.game.events");
+require("celeros.game.spr");
 
-E.init({ dir: "Pong Duplo", fps: 60, save: "pong." });
+E.init({ dir: "Pong Duplo", fps: 60, save: "pong.",
+         bases: ["/local/apps/Pong Duplo/", "/sd/apps/Pong Duplo/"] });
 
 var T = E.theme, W = E.W, H = E.H, U = E.U;
 var hasLink = typeof CelerLink !== "undefined";
 var SMOOTH = E.caps.smooth;   // anti-alias de circulo quando o firmware tem
+
+// fundo da quadra gerado por IA (pacote flat: o PNG fica na raiz do app).
+// Sem slot real (firmware velho) o stamp falha e a camada suja segue com o
+// fundo liso de sempre.
+E.spr.sheet("aibg", { file: "ai_bg", w: 256, h: 256,
+                      regions: { bg: [0, 0, 256, 256] } });
+var aiBg = E.spr.backed("bg");
 
 // campo na mesma proporcao do Pong original (240x320 de projeto)
 var TOP = E.u(44), BOT = E.u(316);
@@ -56,6 +74,23 @@ var scanning = false;
 var sel = null;
 var backBtn = null, rescanBtn = null;
 var help = null;
+
+// controles do pad (os botoes nascem presos a cena; o stick e global)
+var F = { host: null, join: null, quit: null, again: null, exit: null };
+var stick = null;
+
+// retangulos do layout (o toque/arrasto puro continua valendo como fallback)
+var MENU_W = E.u(170), MENU_H = E.u(40);
+var MENU_X = Math.round((W - MENU_W) / 2);
+var R_HOST = { x: MENU_X, y: E.u(116), w: MENU_W, h: MENU_H };
+var R_JOIN = { x: MENU_X, y: E.u(160), w: MENU_W, h: MENU_H };
+var R_QUIT = { x: Math.round(W / 2 - E.u(35)), y: H - E.u(30), w: E.u(70), h: E.u(22) };
+var END_BW = E.u(180), END_BH = E.u(36);
+var END_BX = Math.round((W - END_BW) / 2);
+var END_BY = Math.round(H * 0.60);
+var END_GAP = E.u(40);
+var R_AGAIN = { x: END_BX, y: END_BY, w: END_BW, h: END_BH };
+var R_EXIT = { x: END_BX, y: END_BY + END_GAP, w: END_BW, h: END_BH };
 
 var HELP = "Coloque dois CelerOS lado a lado. Um hospeda e mostra um código de 6 dígitos; " +
            "o outro entra e digita esse código. A bola sai pelo topo de uma tela e entra " +
@@ -106,8 +141,7 @@ function serve() {
     };
     aimErr = 0;
     waitT = 0;
-    if (hasLink) CelerLink.send({ t: "s" });
-    E.fx.ring(ball.x, ball.y, { r0: R, speed: E.u(90), color: T.accent, life: 0.35 });
+    E.emit("saque", { x: ball.x, y: ball.y });
 }
 
 function pointFx(byMe, x) {
@@ -147,28 +181,19 @@ function onLinkPlay(raw) {
         waitT = 0;
         E.fx.ring(ball.x, TOP, { r0: R, speed: E.u(70), color: T.textDim, life: 0.3 });
     } else if (o.t === "p") {
-        mine++;
-        waitT = 0;
-        pointFx(true, W / 2);
-        if (mine >= WIN) finish(true);
+        E.emit("ponto", { byMe: true, x: W / 2 });
     }
 }
 
 // ------------------------------------------------------------ fisica ------
 
-function wallFx() {
-    E.fx.burst(ball.x, ball.y, { n: 4, color: T.stroke, speed: E.u(50),
-                                 life: 0.25, size: 1 });
-}
-
 function missBall() {
     var bx = ball ? ball.x : padX;
     ball = null;
-    theirs++;
     waitT = 0;
     if (hasLink) CelerLink.send({ t: "p" });
-    pointFx(false, bx);
-    if (theirs >= WIN) { finish(false); return; }
+    E.emit("ponto", { byMe: false, x: bx });
+    if (over) return;
     scheduleServe(1200);   // quem perdeu o ponto saca
 }
 
@@ -190,11 +215,11 @@ function physics(dt) {
     if (ball.x < R) {
         ball.x = R;
         ball.vx = Math.abs(ball.vx);
-        wallFx();
+        E.emit("rebote", { x: ball.x, y: ball.y, wall: true });
     } else if (ball.x > W - R) {
         ball.x = W - R;
         ball.vx = -Math.abs(ball.vx);
-        wallFx();
+        E.emit("rebote", { x: ball.x, y: ball.y, wall: true });
     }
 
     // rebote na raquete (a bola desce e encosta na face de cima)
@@ -202,10 +227,7 @@ function physics(dt) {
         Math.abs(ball.x - padX) <= PAD_W / 2 + R) {
         ball.vy = -Math.min(MAX_VY * U, Math.abs(ball.vy) * 1.07);
         ball.vx += (ball.x - padX) * 3;
-        E.fx.burst(ball.x, PAD_Y, { n: 9, color: T.accent, speed: E.u(70),
-                                    speed2: E.u(30), life: 0.35,
-                                    size: Math.max(1, E.u(2)) });
-        E.audio.sfx("hit");
+        E.emit("rebote", { x: ball.x, y: PAD_Y, wall: false });
     }
 
     if (ball.y < TOP) {
@@ -224,9 +246,35 @@ function physics(dt) {
     }
 }
 
+// ----------------------------------------------------------- eventos ------
+// A fisica so avisa; som e particulas ficam nos ouvintes (E.events).
+E.on("rebote", function (o) {
+    if (o.wall) {
+        E.fx.burst(o.x, o.y, { n: 4, color: T.stroke, speed: E.u(50),
+                               life: 0.25, size: 1 });
+    } else {
+        E.fx.burst(o.x, o.y, { n: 9, color: T.accent, speed: E.u(70),
+                               speed2: E.u(30), life: 0.35,
+                               size: Math.max(1, E.u(2)) });
+        E.audio.sfx("hit");
+    }
+});
+
+E.on("saque", function (o) {
+    if (hasLink) CelerLink.send({ t: "s" });
+    E.fx.ring(o.x, o.y, { r0: R, speed: E.u(90), color: T.accent, life: 0.35 });
+});
+
+E.on("ponto", function (o) {
+    if (o.byMe) mine++; else theirs++;
+    waitT = 0;
+    pointFx(o.byMe, o.x);
+    if ((o.byMe ? mine : theirs) >= WIN) finish(o.byMe);
+});
+
 // ------------------------------------------------------------ desenho -----
 
-function drawMatchHud(scene) {
+function drawMatchHud(m) {
     E.gfx.rect(0, 0, W, TOP, T.card, { screen: true });
     E.gfx.text(String(mine), W / 2 - E.u(34), E.u(5),
                { ts: "big", align: "center", color: T.accent, screen: true });
@@ -238,11 +286,18 @@ function drawMatchHud(scene) {
                { ts: "tiny", align: "center", color: T.textDim, screen: true });
     E.gfx.text("OPONENTE", W / 2 + E.u(34), E.u(28),
                { ts: "tiny", align: "center", color: T.textDim, screen: true });
-    scene.btnPause = E.gfx.button("II", W - E.u(40), E.u(8), E.u(30), E.u(28),
-                                  { primary: false, screen: true });
+    m.data.btnPause = E.gfx.button("II", W - E.u(40), E.u(8), E.u(30), E.u(28),
+                                   { primary: false, screen: true });
+}
+
+function drawCourtBg() {
+    if (!aiBg) return;   // sem slot: fica o fundo liso da camada suja
+    E.spr.stamp("bg", 0, 0, { scale: E.W / 256, key: null });
+    E.spr.stamp("bg", 0, E.W, { scale: E.W / 256, key: null });
 }
 
 function drawField() {
+    drawCourtBg();
     var dash = E.u(8), gap = E.u(16), dh = Math.max(1, E.u(2));
     for (var x = E.u(4); x < W; x += gap) {
         E.gfx.rect(x, TOP, Math.min(dash, W - x), dh, T.stroke);
@@ -276,6 +331,12 @@ function drawScan() {
                              E.u(100), E.u(36), { primary: false });
     backBtn = E.gfx.button("Voltar", W - E.u(112), H - E.u(50),
                            E.u(100), E.u(36), { primary: false });
+}
+
+// tap do pad OU o toque seco no mesmo rect (fallback de firmware/tela
+// sem o pad multitoque)
+function padHit(b, r) {
+    return !!(b && b.tap) || E.hit(r);
 }
 
 // ------------------------------------------------------------- acoes ------
@@ -351,18 +412,32 @@ function tryConnect(id) {
     }
 }
 
-// ------------------------------------------------------------- cenas ------
+// ------------------------------------------------------------- fsm --------
+// menu -> host -> scan -> play -> end; a pausa e empilhada por cima do play
+// (push/pop) e o estado de baixo volta com resume, sem reiniciar o jogo.
 
-var scenes = {
+var states = {
     menu: {
         enter: function () {
             E.dirty.enable(T.bg);
             E.clearTimers();
             help = null;
+            F.host = E.pad.button({ x: R_HOST.x, y: R_HOST.y, w: R_HOST.w, h: R_HOST.h,
+                                    label: "Hospedar" });
+            F.join = E.pad.button({ x: R_JOIN.x, y: R_JOIN.y, w: R_JOIN.w, h: R_JOIN.h,
+                                    label: "Entrar" });
+            F.quit = E.pad.button({ x: R_QUIT.x, y: R_QUIT.y, w: R_QUIT.w, h: R_QUIT.h,
+                                    label: "Sair" });
         },
         exit: function () {
             E.dirty.off();
             help = null;
+        },
+        update: function () {
+            if (help) return;   // o dialogo trata os proprios toques no draw
+            if (padHit(F.host, R_HOST)) { startHost(); return; }
+            if (padHit(F.join, R_JOIN)) { startScan(); return; }
+            if (padHit(F.quit, R_QUIT)) { System.exitApp(); return; }
         },
         draw: function () {
             // dialogo "Como jogar": texto datilografado (cena nao-static)
@@ -371,17 +446,14 @@ var scenes = {
                 return;
             }
 
-            var act = E.ui.title({
-                game: "PONG DUPLO",
-                subtitle: "duas telas, um jogo",
-                start: "Hospedar",
-                extra: "Como jogar"
-            });
-            // o titulo sempre desenha o botao "start": aqui o menu ocupa o
-            // lugar dele (primeira opcao em cima, "Entrar" logo abaixo)
-            E.gfx.rect(E.u(30), E.u(156), E.u(180), E.u(50), T.bg);
-            var pick = E.ui.menu(["Hospedar", "Entrar"],
-                                 { y: E.u(116), row: E.u(44), w: E.u(170) });
+            E.ui.title({ game: "PONG DUPLO", subtitle: "duas telas, um jogo", start: null });
+
+            // "Como jogar" no lugar de sempre (o titulo nao desenha botoes)
+            var eb = E.gfx.button("Como jogar", E.u(45), E.u(214), E.u(150), E.u(36),
+                                  { primary: false, screen: true });
+
+            // Hospedar/Entrar/Sair vem do pad (multitoque, desenhados aqui)
+            E.pad.draw();
 
             var ab = E.gfx.button(auto ? "AUTO: ON" : "AUTO: OFF",
                                   E.u(30), E.u(258), E.u(90), E.u(24),
@@ -403,31 +475,20 @@ var scenes = {
                            { ts: "small", align: "right", color: T.textDim });
             }
 
-            var sb = E.gfx.button("Sair", W / 2 - E.u(35), H - E.u(30),
-                                  E.u(70), E.u(22), { primary: false });
-            if (E.hit(sb)) System.exitApp();
-
-            // prioridade do menu: o start do titulo fica por baixo dos itens
-            if (pick === "Hospedar") { startHost(); return; }
-            if (pick === "Entrar") { startScan(); return; }
-            if (act === "start") { startHost(); return; }   // faixa de 4 px
-            if (act === "extra") {
-                help = E.ui.dialog(HELP, { name: "Como jogar", speed: 45 });
-            }
+            if (E.hit(eb)) help = E.ui.dialog(HELP, { name: "Como jogar", speed: 45 });
         }
     },
 
     host: {
-        static: true,
-        enter: function () {
+        enter: function (m) {
             role = ROLE_HOST;
             resetMatch();
             E.clearTimers();
-            this._key = "";
-            this.btnCancel = null;
+            m.data.key = "";
+            m.data.btnCancel = null;
             if (hasLink) CelerLink.start(null, { pairing: true });
         },
-        update: function () {
+        update: function (m) {
             if (!hasLink) {
                 E.goto("menu", { transition: "fade", ms: 300 });
                 return;
@@ -436,22 +497,22 @@ var scenes = {
             var key = (st.name || "") + "|" +
                       (st.pairing ? (st.code || "?") : "") + "|" +
                       (st.connected ? "1" : "0");
-            if (key !== this._key) {
-                this._key = key;
+            if (key !== m.data.key) {
+                m.data.key = key;
                 E.redraw();
             }
             if (st.connected) {
                 E.goto("play", { transition: "fade", ms: 300 });
                 return;
             }
-            if (this.btnCancel && E.hit(this.btnCancel)) {
+            if (m.data.btnCancel && E.hit(m.data.btnCancel)) {
                 leaveLink();
                 note = "";
                 E.audio.sfx("back");
                 E.goto("menu", { transition: "fade", ms: 300 });
             }
         },
-        draw: function () {
+        draw: function (m) {
             var st = hasLink ? CelerLink.status() :
                      { name: "", pairing: false, code: "", connected: false };
             System.fillScreen(T.bg);
@@ -471,8 +532,8 @@ var scenes = {
                 E.gfx.text("Aguardando o outro lado...", W / 2, E.u(160),
                            { ts: "body", align: "center", color: T.textDim });
             }
-            this.btnCancel = E.gfx.button("Cancelar", W / 2 - E.u(85), H - E.u(64),
-                                          E.u(170), E.u(40), { primary: false });
+            m.data.btnCancel = E.gfx.button("Cancelar", W / 2 - E.u(85), H - E.u(64),
+                                            E.u(170), E.u(40), { primary: false });
         }
     },
 
@@ -527,24 +588,28 @@ var scenes = {
     },
 
     play: {
-        enter: function () {
+        enter: function (m) {
             E.dirty.enable(T.bg);
-            this.static = false;
-            this.btnPause = null;
+            m.data.btnPause = null;
             paused = false;
             waitT = 0;
             E.clearTimers();
             serveTimer = null;
             if (role === ROLE_HOST) scheduleServe(1500);
         },
-        exit: function () {
+        exit: function (m, next) {
+            // empilhado pela pausa: o jogo congela (E.pause) e volta com
+            // resume; so uma saida de verdade desliga a camada suja
+            if (next === "pausa") return;
             E.clearTimers();
             serveTimer = null;
             E.dirty.off();
             paused = false;
-            this.static = false;
         },
-        update: function (dt) {
+        resume: function () {
+            // volta da pausa: o estado (bola, placar, timers) continua igual
+        },
+        update: function (m, dt) {
             if (hasLink) {
                 var raw, guard = 0;
                 while ((raw = CelerLink.poll()) !== null && guard++ < 8) {
@@ -558,111 +623,161 @@ var scenes = {
                 }
             }
 
-            if (paused) {
-                if (!this.static) {
-                    this.static = true;
-                    E.redraw();
-                }
+            if (m.data.btnPause && E.hit(m.data.btnPause)) {
+                flow.push("pausa");
                 return;
             }
-            this.static = false;
 
-            if (this.btnPause && E.hit(this.btnPause)) {
-                paused = true;
-                this.static = true;
-                E.redraw();
-                return;
-            }
-            if (E.input.down && E.input.y > TOP) padX = E.input.x;
+            // raquete: o dedo dono do stick manda (multitoque); arrastar em
+            // qualquer ponto da quadra continua valendo como fallback
+            var f = stick && stick.finger !== null ? E.input.finger(stick.finger) : null;
+            if (f && f.down) padX = f.x;
+            else if (E.input.down && E.input.y > TOP) padX = E.input.x;
+
             physics(dt);
         },
-        draw: function () {
-            drawMatchHud(this);
+        draw: function (m) {
             drawField();
+            drawMatchHud(m);
             E.fx.draw();
+            E.pad.draw();
+        }
+    },
 
-            if (paused) {
-                var act = E.ui.pause({ labels: ["Continuar", "Recomecar", "Sair"] });
-                if (act === "resume") {
-                    paused = false;
-                    this.static = false;
-                    E.dirty.full();
-                    E.redraw();
-                } else if (act === "restart") {
-                    resetMatch();
-                    E.dirty.full();
-                    E.redraw();
-                    if (role === ROLE_HOST) scheduleServe(1200);
-                } else if (act === "quit") {
-                    leaveLink();
-                    E.audio.sfx("back");
-                    E.goto("menu", { transition: "fade", ms: 300 });
-                }
+    pausa: {
+        enter: function () {
+            paused = true;
+            E.pause(true);
+            E.dirty.full();
+            E.redraw();
+        },
+        exit: function () {
+            E.pause(false);
+            paused = false;
+            E.dirty.full();
+            E.redraw();
+        },
+        draw: function (m) {
+            // o play continua congelado embaixo (fx e timers parados)
+            drawField();
+            drawMatchHud(m);
+            E.fx.draw();
+            E.pad.draw();
+
+            var act = E.ui.pause({ labels: ["Continuar", "Recomecar", "Sair"] });
+            if (act === "resume") {
+                flow.pop();
+            } else if (act === "restart") {
+                resetMatch();
+                if (role === ROLE_HOST) scheduleServe(1200);
+                flow.pop();
+            } else if (act === "quit") {
+                leaveLink();
+                E.audio.sfx("back");
+                flow.pop();
+                E.goto("menu", { transition: "fade", ms: 300 });
             }
         }
     },
 
     end: {
-        static: true,
         enter: function () {
             E.clearTimers();
             serveTimer = null;
+            F.again = E.pad.button({ x: R_AGAIN.x, y: R_AGAIN.y,
+                                     w: R_AGAIN.w, h: R_AGAIN.h, label: "Revanche" });
+            F.exit = E.pad.button({ x: R_EXIT.x, y: R_EXIT.y,
+                                    w: R_EXIT.w, h: R_EXIT.h, label: "Sair" });
         },
         update: function () {
-            if (!hasLink) return;
-            var raw, guard = 0;
-            while ((raw = CelerLink.poll()) !== null && guard++ < 8) {
-                var o;
-                try { o = JSON.parse(raw); } catch (e) { continue; }
-                // o anfitriao apertou "Revanche" e sacou: o convidado entra
-                // na partida na hora em que a bola aparece
-                if (o && o.t === "b" && role === ROLE_GUEST) {
-                    resetMatch();
-                    ball = {
-                        x: W - o.x * W / 1000,
-                        y: TOP + R,
-                        vx: -o.vx * U,
-                        vy: Math.abs(o.vy) * U
-                    };
-                    aimErr = (Math.random() - 0.5) * E.u(100);
-                    E.goto("play", { transition: "fade", ms: 350 });
+            if (hasLink) {
+                var raw, guard = 0;
+                while ((raw = CelerLink.poll()) !== null && guard++ < 8) {
+                    var o;
+                    try { o = JSON.parse(raw); } catch (e) { continue; }
+                    // o anfitriao apertou "Revanche" e sacou: o convidado entra
+                    // na partida na hora em que a bola aparece
+                    if (o && o.t === "b" && role === ROLE_GUEST) {
+                        resetMatch();
+                        ball = {
+                            x: W - o.x * W / 1000,
+                            y: TOP + R,
+                            vx: -o.vx * U,
+                            vy: Math.abs(o.vy) * U
+                        };
+                        aimErr = (Math.random() - 0.5) * E.u(100);
+                        E.goto("play", { transition: "fade", ms: 350 });
+                        return;
+                    }
+                }
+                if (!CelerLink.status().connected) {
+                    note = "Conexão perdida";
+                    leaveLink();
+                    E.goto("menu", { transition: "fade", ms: 300 });
                     return;
                 }
             }
-            if (!CelerLink.status().connected) {
-                note = "Conexão perdida";
-                leaveLink();
-                E.goto("menu", { transition: "fade", ms: 300 });
-            }
-        },
-        draw: function () {
-            var act = E.ui.gameOver({
-                title: won ? "Você venceu!" : "Você perdeu",
-                score: mine,
-                labels: ["Revanche", "Sair"]
-            });
-            E.gfx.text("Adversário: " + theirs, W / 2, E.u(150),
-                       { ts: "small", align: "center", color: T.textDim, screen: true });
-            if (act === "again") {
+            if (padHit(F.again, R_AGAIN)) {
                 resetMatch();
                 E.audio.sfx("ok");
                 E.goto("play", { transition: "fade", ms: 350 });
-            } else if (act === "quit") {
+            } else if (padHit(F.exit, R_EXIT)) {
                 leaveLink();
                 E.audio.sfx("back");
                 E.goto("menu", { transition: "fade", ms: 300 });
             }
+        },
+        draw: function () {
+            E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
+            E.gfx.text(won ? "Você venceu!" : "Você perdeu", W / 2, Math.round(H * 0.16),
+                       { ts: "big", align: "center", color: T.err, screen: true });
+            E.gfx.text("Pontos: " + mine, W / 2, Math.round(H * 0.26),
+                       { ts: "title", align: "center", color: T.text, screen: true });
+            E.gfx.text("Adversário: " + theirs, W / 2, E.u(150),
+                       { ts: "small", align: "center", color: T.textDim, screen: true });
+            E.pad.draw();
         }
     }
 };
+
+var flow = E.fsm({}, states);
+
+// ------------------------------------------------------------- cenas ------
+// Uma cena CelerGame por estado do fsm: mantem as transicoes (fade/wipe) e
+// a cena static do host (o fsm avisa com E.redraw quando o codigo muda).
+
+function makeScene(name, isStatic) {
+    return {
+        static: !!isStatic,
+        enter: function (arg) { flow.go(name, arg); },
+        update: function (dt) { flow.update(dt); },
+        draw: function () { flow.draw(); }
+    };
+}
+
+var scenes = {
+    menu: makeScene("menu", false),
+    host: makeScene("host", true),
+    scan: makeScene("scan", false),
+    play: makeScene("play", false),
+    end: makeScene("end", false)
+};
+
+// stick global: a zona cobre a quadra e cada dedo que desce nela vira dono
+// da raquete ate levantar (o mesmo dedo pode segurar o botao de pausa)
+stick = E.pad.stick({ zone: { x: 0, y: TOP, w: W, h: H - TOP },
+                      r: E.u(36), float: true, follow: true,
+                      visible: false, global: true });
 
 // expoe o estado para testes/CI; no aparelho __harness nao existe
 if (typeof __harness !== "undefined") {
     __harness.pong = {
         E: E,
+        flow: flow,
         state: function () {
-            return { scene: E.sceneName, role: role, mine: mine, theirs: theirs,
-                     auto: auto, paused: paused, over: over, hasLink: hasLink,
+            return { scene: E.sceneName, state: flow.state, role: role,
+                     mine: mine, theirs: theirs, auto: auto, paused: paused,
+                     over: over, hasLink: hasLink, padX: padX,
                      ball: ball ? { x: ball.x, y: ball.y } : null };
         }
     };

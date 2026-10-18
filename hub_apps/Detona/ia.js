@@ -2,7 +2,7 @@
 //
 //   balao     2.1 cel/s, vagueia (segue reto, dobra no bloqueio)
 //   fantasma  1.5 cel/s, ATRAVESSA bloco macio (flow com passable proprio)
-//   cacador   3.0 cel/s, desce o campo de fluxo GRID.flow ate o jogador e
+//   cacador   3.0 cel/s, desce o campo de fluxo E.path.flow ate o jogador e
 //             FOGE das celulas que vao pegar fogo (le o pavio das bombas)
 //   blindado  1.3 cel/s, 2 acertos (o 1o arranca a blindagem), esperto
 //             como o cacador para fugir de bomba
@@ -21,10 +21,16 @@
 // partida: bicho no meio do passo escapava), com janela de invencivel
 // apos o golpe (a labareda dura ~8 quadros: o chefe perdia 8 hp numa
 // bomba so). O campo e recomputado ~2x/s: O(celulas), deterministico.
+//
+// 0.10.0: o BFS proprio (celeros.grid) sai; quem manda no caminho e o
+// E.path.flow do kit, com o CUSTO lido do mundo (arena.em). Com peso 1 a
+// ordem de vizinhos do path e a mesma do BFS antigo (direita/esquerda/
+// baixo/cima), entao a seed do duelo e as ondas continuam identicas.
 
 var arena = require("arena");
 var NV = require("niveis");
-var GRID = require("celeros.grid");
+var E = require("celeros.game");
+require("celeros.game.path");   // E.path self-sufficient: o teste do SDK carrega este modulo sem o main/kit
 var S = System;
 
 var PERFIS = {
@@ -42,6 +48,21 @@ var INV_BEATS = 1.2;   // invencivel apos levar golpe (chefe/blindado)
 
 var flow = null, flowGhost = null, flowAte = 0;
 var perigoCache = null, perigoAte = 0;
+
+// custo de ENTRAR na celula para o E.path (< 0 = bloqueado). O mundo manda:
+// '.' livre; o fantasma so nao atravessa duro.
+function custo(c, r) { return arena.em(c, r) === '.' ? 1 : -1; }
+function custoFantasma(c, r) { return arena.em(c, r) !== '#' ? 1 : -1; }
+
+// sorteia uma celula que passa no filtro (mesma sequencia de rng do
+// celulaLivre da grade antiga: 2 chamadas por tentativa)
+function celulaLivre(filtro) {
+    for (var t = 0; t < 80; t++) {
+        var c = Math.floor(R() * NV.COLS), r = Math.floor(R() * NV.ROWS);
+        if (filtro(c, r, arena.em(c, r))) return { c: c, r: r };
+    }
+    return null;
+}
 var ultimoBeat = -1;
 var R = NV.rng(1);   // rng da fase: decisoes deterministicas (testes/versus)
 
@@ -86,9 +107,9 @@ function recompute(forca) {
     if (!forca && agora < flowAte) return;
     flowAte = agora + 500;
     var cel = arena.celulaPlayer();
-    flow = GRID.flow(st.grid, cel.c, cel.r, function (ch) { return ch === '.'; });
+    flow = E.path.flow(NV.COLS, NV.ROWS, cel.c, cel.r, custo);
     // o fantasma ignora macio e bomba: so o duro bloqueia
-    flowGhost = GRID.flow(st.grid, cel.c, cel.r, function (ch) { return ch !== '#'; });
+    flowGhost = E.path.flow(NV.COLS, NV.ROWS, cel.c, cel.r, custoFantasma);
 }
 
 function perigo() {
@@ -187,7 +208,7 @@ function alvoLadrao(e, st, dz) {
         if (dd < melhorD) { melhorD = dd; melhor = { c: kc, r: kr }; }
     }
     if (melhor) {
-        var fp = GRID.flow(st.grid, melhor.c, melhor.r, function (ch) { return ch === '.'; });
+        var fp = E.path.flow(NV.COLS, NV.ROWS, melhor.c, melhor.r, custo);
         var np = fp.next(e.c, e.r);
         if (np && !(dz && dz[np.c + ',' + np.r])) return np;
         return null;   // caminho cortado (bomba no meio): espera
@@ -427,7 +448,7 @@ function onda() {
             : ['fantasma', 'cacador', 'divisor', 'blindado', 'cuspidor'];
     var cel = arena.celulaPlayer();
     for (var i = 0; i < n; i++) {
-        var celula = GRID.celulaLivre(st.grid, R, function (c, r, ch) {
+        var celula = celulaLivre(function (c, r, ch) {
             return ch === '.' && Math.abs(c - cel.c) + Math.abs(r - cel.r) >= 6;
         });
         if (celula) colocar(mix[Math.floor(R() * mix.length)], celula.c, celula.r);

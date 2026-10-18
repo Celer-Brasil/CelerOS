@@ -137,6 +137,11 @@ static bool s_barShown = false;      // retratil: faixa visivel agora
 static uint32_t s_barShownAt = 0;
 static bool s_tbSwipe = false;       // gesto de revelar em andamento
 static int s_tbSwipeY0 = 0;
+// Faixa FANTASMA: o estado ja escondeu (RETRACT_MS) mas os pixels dela ainda
+// estao no vidro — cena estatica nunca redesenha a faixa. Enquanto valer, o
+// X visivel continua ativo (o toque cai no chrome comum); o app redesenhando
+// a area da faixa encerra o fantasma (os pixels dele cobrem o X).
+static bool s_barGhost = false;
 static const uint32_t RETRACT_MS = 3000;  // "aparece por alguns segundos"
 
 // Conteudo custom da faixa (System.topbarText/topbarButtons — API 6):
@@ -163,11 +168,13 @@ static const uint32_t BANNER_MS = 8000;
 #if CONFIG_CELEROS_UI
 static bool bannerActive() { return !s_bannerText.empty(); }
 
-// expira a faixa retratil; true se ela acabou de sair
+// expira a faixa retratil; true se ela acabou de sair. Um press armado no X
+// SOBREVIVE ao expiry: o dedo pousou quando a faixa estava visivel — cortar
+// o armamento no auto-hide engolia o tap na fronteira dos 3 s (o release
+// chegava depois do hide e o X nao fazia nada).
 static bool retractTick() {
     if (!s_topbarFixed && s_barShown && millis() - s_barShownAt > RETRACT_MS) {
         s_barShown = false;
-        s_exitArmed = false;
         celer_log_println("[TB] auto-hide");
         return true;
     }
@@ -376,18 +383,25 @@ bool pollAppChrome(bool& touched, uint16_t& x, uint16_t& y) {
             return false;
         }
         // revelar so pelo terco direito: esquerda/centro sao os paineis de
-        // borda (pollWatchEdges) e nao podem piscar a faixa no caminho
-        if (touched && !s_barShown && UI::inTopbar(x, y) && WatchPanels::topThirdAt(x) == 2) {
+        // borda (pollWatchEdges) e nao podem piscar a faixa no caminho.
+        // Com faixa fantasma no vidro NAO comeca gesto: o toque e chrome
+        // (o X visivel continua funcionando apos o auto-hide)
+        if (touched && !s_barShown && !s_barGhost && UI::inTopbar(x, y) &&
+            WatchPanels::topThirdAt(x) == 2) {
             s_tbSwipe = true;                  // pode virar o gesto de revelar
             s_tbSwipeY0 = y;
             touched = false;
             return false;
         }
-        if (!s_barShown) return false;         // faixa oculta: tudo e do app
-        // visivel: cai no chrome comum abaixo (X/chips armaveis, faixa mascarada)
+        if (!s_barShown && !s_barGhost) return false;  // faixa oculta: tudo e do app
+        // visivel (no estado ou fantasma no vidro): cai no chrome comum abaixo
+        // (X/chips armaveis, faixa mascarada)
     }
 
     if (touched && UI::inTopbar(x, y)) {
+        // dedo na faixa mantem a janela de revelacao aberta: ler o titulo e
+        // mirar o X custa mais que RETRACT_MS (o auto-hide comia o tap)
+        if (!s_topbarFixed && s_barShown) s_barShownAt = millis();
         int jx = s_jsTft ? ((int)x * 240 / s_jsTft->width()) : 0;
         int btn = tbButtonAt(jx);
         if (btn >= 0) {
@@ -574,12 +588,23 @@ void JSBindings::present() {
         // app desenhou nela.
         const bool barChanged = s_tbDirty || wantBar != s_barOnGlass ||
                                 (wantBar && (s_exitArmed != s_barHotOnGlass || s_tbHotBtn != s_tbHotOnGlass));
+        // a faixa saiu do estado (auto-hide) e estava composta: se o app nao
+        // redesenhar a faixa dela, os pixels continuam no vidro = fantasma
+        if (!wantBar && s_barOnGlass) s_barGhost = true;
         if (s_frameDirty) s_frame->markAllDirty();
         if (wantBar && (barChanged || s_frame->dirtyAbove(UI::topbarH()))) {
             drawAppTopbar(*s_frame, s_exitArmed);  // entra nas caixas sujas
+            s_barGhost = false;                    // faixa composta: nao e fantasma
         }
         celer::DirtyRect rs[FrameSprite::kMaxDirty];
         const int nr = s_frame->takeDirty(rs);
+        if (!wantBar && s_barGhost) {
+            // o app repintou a area da faixa: os pixels dele cobrem o X e o
+            // fantasma encerra (tap no topo volta a ser do app/gesto)
+            for (int i = 0; i < nr && s_barGhost; i++) {
+                if (rs[i].t < UI::topbarH()) s_barGhost = false;
+            }
+        }
         if (nr > 0) {
             // Recorte no destino, caixa a caixa: o pushImage do LovyanGFX so
             // transfere a area recortada (no watch, o framebuffer do painel
@@ -1004,6 +1029,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_barHotOnGlass = false;
     s_barShown = false;
     s_tbSwipe = false;
+    s_barGhost = false;
     s_tbButtons.clear();
     s_tbTaps.clear();
     s_tbText.clear();

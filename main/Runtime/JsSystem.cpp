@@ -101,10 +101,15 @@ size_t JSBindings::readAppTouches(duk_context *ctx, kui::TouchPoint *out, size_t
     if (out == nullptr || max == 0 || !tftInstance) return 0;
     kui::TouchPoint pts[kui::kTouchMax];
     size_t n = kui::readTouches(pts, kui::kTouchMax);
+    // chrome TAMBEM nos polls sem dedo (n = 0): o release do X/arquivo e um
+    // poll vazio — sem isso o pollAppChrome nunca ve o release, o X nao
+    // disparava NUNCA no caminho multi (getTouches do motor) e o gesto de
+    // revelar virava zumbi (s_tbSwipe so terminava vendo !touched)
+    bool prim = (n > 0);
+    uint16_t px = prim ? pts[0].x : 0;
+    uint16_t py = prim ? pts[0].y : 0;
+    if (pollAppChrome(prim, px, py)) throwAppExit(ctx);  // nao retorna
     if (n > 0) {
-        bool prim = true;
-        uint16_t px = pts[0].x, py = pts[0].y;
-        if (pollAppChrome(prim, px, py)) throwAppExit(ctx);  // nao retorna
         if (!prim) {  // primario consumido pelo chrome: sai do array
             for (size_t i = 1; i < n; i++) pts[i - 1] = pts[i];
             n--;
@@ -191,8 +196,13 @@ void JSBindings::appWait(duk_context *ctx, int ms) {
     // Mark-and-sweep completo (so ciclos; o resto e refcount) custa ms em
     // heaps grandes: antes rodava a CADA delay (loops de 20 ms gastavam boa
     // parte do tempo aqui). Agora no maximo 1x/s, ou ja se o heap aperta.
+    // Com PSRAM, 1x a cada 10 s: o custo e o heap VIVO, nao o lixo — num jogo
+    // grande (Detona, 4848) cada varredura levava ~40 ms e virava um quadro
+    // perdido por segundo; o GC voluntario do Duktape (DUK_USE_VOLUNTARY_GC)
+    // segue rodando pelas alocacoes e o piso de heap continua forcando
     static uint32_t lastGcMs = 0;
-    if (t0 - lastGcMs > 1000 || ESP.getMaxAllocHeap() < 24 * 1024) {
+    static const uint32_t kGcEveryMs = Board::profile().hasPsram ? 10000 : 1000;
+    if (t0 - lastGcMs > kGcEveryMs || ESP.getMaxAllocHeap() < 24 * 1024) {
         duk_gc(ctx, 0);
         lastGcMs = t0;
     }

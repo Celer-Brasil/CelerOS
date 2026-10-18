@@ -582,6 +582,9 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
     s_appExitPending = false;
     s_appExitForApp = false;
     portEXIT_CRITICAL(&s_appExitMux);
-    // (o "X" que era desenhado aqui aparecia DEPOIS do app sair e era
-    // coberto na hora pelo launcher — removido)
+    // Lancamento SEM toque (shell run, autostart, launch remoto/CelerNet): o
+    // launchEntry volta direto ao onTick do launcher e NINGUEM marca repaint —
+    // o vidro ficava no ultimo quadro do app ("congelou") ate o proximo toque.
+    // O caminho por toque (icone) repinta no proprio dispatchTouch.
+    kui::Navigator::repaint();
 }

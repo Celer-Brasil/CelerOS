@@ -330,6 +330,27 @@ function check(name, ok, detail) {
     try { parseInputScript('0 foo 1,2'); } catch (e) { threwIn = /acao desconhecida/.test(e.message); }
     check('input: acao invalida aponta o erro', threwIn);
 
+    // multi-dedo (API 43): dedo explicito no fim vira o script multi e o
+    // quadro sai como o estado COMPLETO do vidro; sem dedo, legado de 1 ponto
+    var mt = parseInputScript('0 down 60,100 0\n0 down 180,100 1\n200 move 40,100 0\n300 up 0\n300 up 1\n');
+    var mt2 = mt.filter(function (e) { return e.frame.touches.length === 2; })[0];
+    check('input multi: dois dedos no mesmo quadro (snapshot por id)',
+          mt2 && mt2.frame.touches[0].id === 0 && mt2.frame.touches[0].x === 60 &&
+          mt2.frame.touches[1].id === 1 && mt2.frame.touches[1].x === 180);
+    var mMove = mt.filter(function (e) { return e.t === 200; })[0];
+    check('input multi: move mexe so no dedo dele',
+          mMove && mMove.frame.touches.length === 2 &&
+          mMove.frame.touches[0].x === 40 && mMove.frame.touches[1].x === 180);
+    var mUp = mt[mt.length - 1];
+    check('input multi: ups no mesmo t esvaziam o vidro',
+          mUp.t === 300 && mUp.frame.touches.length === 0);
+    var swMs1 = parseInputScript('0 swipe 0,0 10,0 2 1\n');
+    check('input legado: swipe com MS de 1 digito nao vira dedo',
+          swMs1[0].frame.touched === 1 && swMs1[0].frame.touches === undefined);
+    var mTap = parseInputScript('0 tap 120,160 1\n')[0];
+    check('input multi: tap com dedo sai como snapshot',
+          mTap.frame.touches.length === 1 && mTap.frame.touches[0].id === 1);
+
     // GIF: assinatura, dimensoes e quadro repetido fundido
     var red = Buffer.alloc(4 * 3, 0); red.fill(255, 0, 3);
     var blue = Buffer.alloc(4 * 3, 0); blue.fill(255, 2, 3);
@@ -383,6 +404,21 @@ function check(name, ok, detail) {
     var voltouAzul = rt.frames[rt.frames.length - 1].fb[(160 * 240) + 120] === 0x001F;
     check('input no emulador: tap pinta e solta', rt.err === null && viuVermelho && voltouAzul);
 
+    // --input multi no wire: DOIS dedos pintam onde pousam (app le getTouches)
+    var mtApp = writeApp(path.join(tmp, 'Multitoque'),
+        'while (true) { var ts = System.getTouches();' +
+        ' for (var i = 0; i < ts.length; i++) System.fillRect(ts[i].x, ts[i].y, 8, 8, 0xF800);' +
+        ' System.delay(33); }');
+    var rm = runAppFolder(mtApp, {
+        render: true, frames: [0, 250],
+        events: function (env) { wireInput(env, parseInputScript(
+            '30 down 60,100 0\n30 down 180,260 1\n400 up 0\n400 up 1\n')); },
+    });
+    var dedo0 = rm.frames.some(function (f) { return f.fb[(100 * 240) + 60] === 0xF800; });
+    var dedo1 = rm.frames.some(function (f) { return f.fb[(260 * 240) + 180] === 0xF800; });
+    check('input multi no emulador: dois dedos pintam onde pousam',
+          rm.err === null && dedo0 && dedo1);
+
     // erro: --out salva a tela do erro e o processo sai 1
     var errApp = writeApp(path.join(tmp, 'Quebra'),
         'System.fillScreen(0xF800); throw new Error("boom de proposito");');
@@ -406,8 +442,9 @@ function check(name, ok, detail) {
 
     // live: servidor sobe, serve a pagina, /frame.png e o toque muda a tela
     var liveApp = writeApp(path.join(tmp, 'Live'),
-        'while (true) { var t = System.getTouch();' +
-        ' System.fillScreen(t.touched ? 0xF800 : 0x001F); System.delay(33); }', 'LiveTeste');
+        'while (true) { var ts = System.getTouches(); System.fillScreen(0x001F);' +
+        ' for (var i = 0; i < ts.length; i++) System.fillRect(ts[i].x, ts[i].y, 6, 6, 0xF800);' +
+        ' System.delay(33); }', 'LiveTeste');
     var client = path.join(tmp, 'cliente.js');
     fs.writeFileSync(client, [
         "const http = require('http');",
@@ -474,8 +511,24 @@ function check(name, ok, detail) {
         "    await req('POST', '/control', { record:false });",
         "    const recTxt = (await req('GET', '/record')).body.toString();",
         "    res.gravou = /down\\s+40,50/.test(recTxt) && /up\\s+40,50/.test(recTxt);",
+        "    // multitoque no ring: dedo 0 e dedo 1 ao mesmo tempo (f no /input)",
+        "    await req('POST', '/control', { paused:false });   // o teste de pausa deixou o app parado",
+        "    await req('POST', '/input', { down:1, x:40, y:120, f:0 });",
+        "    await req('POST', '/input', { down:1, x:200, y:120, f:1 });",
+        "    let dois = false;",
+        "    for (let i = 0; i < 30 && !dois; i++) {",
+        "      await sleep(120);",
+        "      const f = await req('GET', '/frame.png');",
+        "      if (f.status !== 200) continue;",
+        "      const p = require(ROOT + '/tools/sdk/lib/png.js').decodePng(f.body);",
+        "      const a = ((120 * p.w) + 40) * 4, b = ((120 * p.w) + 200) * 4;",
+        "      if (p.rgba[a] === 255 && p.rgba[b] === 255) dois = true;",
+        "    }",
+        "    res.doisDedos = !!dois;",
+        "    await req('POST', '/input', { down:0, x:40, y:120, f:0 });",
+        "    await req('POST', '/input', { down:0, x:200, y:120, f:1 });",
         "    res.ok = res.html && res.state && res.frame && res.azul && res.vermelho &&",
-        "             res.soltou && res.pause && res.pausaParou && res.gravou;",
+        "             res.soltou && res.pause && res.pausaParou && res.gravou && res.doisDedos;",
         "  } catch (e) { res.err = String(e && e.stack || e); }",
         "  console.log(JSON.stringify(res));",
         "  srv.kill('SIGTERM');",

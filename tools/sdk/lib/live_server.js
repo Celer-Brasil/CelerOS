@@ -115,32 +115,37 @@ function startLive(opts) {
         broadcast({ type: 'reload', ms: 0 });
     }
 
-    // entrada do navegador -> ring no SAB: [down, x, y] por evento
-    let wasDown = false;
+    // entrada do navegador -> ring no SAB: [down, x, y, finger] por evento
+    const wasDown = {};
     function pushInput(ev) {
         const x = Math.max(-4096, Math.min(8192, Math.round(Number(ev.x) || 0)));
         const y = Math.max(-4096, Math.min(8192, Math.round(Number(ev.y) || 0)));
         const down = ev.down ? 1 : 0;
+        const f = Math.max(0, Math.min(4, Math.round(Number(ev.f) || 0)));
         if (recording && rec.length < 5000) {
             rec.push({ t: Math.max(0, Atomics.load(ctl, 7) - 1000),
-                       kind: down ? (wasDown ? 'move' : 'down') : 'up', x: x, y: y });
+                       kind: down ? (wasDown[f] ? 'move' : 'down') : 'up', x: x, y: y, f: f });
         }
-        wasDown = !!down;
+        wasDown[f] = !!down;
         const head = Atomics.load(ptr, 0);
-        const i = PTR_BASE + (head % RING) * 3;
+        const i = PTR_BASE + (head % RING) * 4;
         Atomics.store(ptr, i, down);
         Atomics.store(ptr, i + 1, x);
         Atomics.store(ptr, i + 2, y);
+        Atomics.store(ptr, i + 3, f);
         Atomics.store(ptr, 0, head + 1);
         Atomics.add(ctl, 0, 1);
         Atomics.notify(ctl, 0);
     }
 
-    // script no formato do --input, na ordem gravada
+    // script no formato do --input, na ordem gravada (dedo != 0 ganha o
+    // sufixo de dedo: o replay sai multi-dedo)
     function recScript() {
         const out = ['# gravado no emulador: tempo em ms do app, depois o gesto'];
         for (const e of rec) {
-            out.push(String(e.t).padEnd(6, ' ') + e.kind.padEnd(5, ' ') + ' ' + e.x + ',' + e.y);
+            let line = String(e.t).padEnd(6, ' ') + e.kind.padEnd(5, ' ') + ' ' + e.x + ',' + e.y;
+            if (e.f) line += ' ' + e.f;
+            out.push(line);
         }
         return out.join('\n') + '\n';
     }
@@ -418,21 +423,35 @@ const PAGE = `<!doctype html>
     return { x: Math.max(0, Math.min(W - 1, Math.round((ev.clientX - r.left) * W / r.width))),
              y: Math.max(0, Math.min(H - 1, Math.round((ev.clientY - r.top) * H / r.height))) };
   }
+  // multitoque (API 43): cada pointerId ganha um dedo sintetico (slot 0..4)
+  // enquanto estiver na tela — dois dedos no touchscreen/trackpad chegam ao
+  // emulador como dois dedos de verdade
+  var fingers = {};
+  function slotOf(pointerId) {
+    if (fingers[pointerId] !== undefined) return fingers[pointerId];
+    for (var s = 0; s <= 4; s++) {
+      var livre = true;
+      for (var k in fingers) if (fingers[k] === s) livre = false;
+      if (livre) { fingers[pointerId] = s; return s; }
+    }
+    return 0;  // 5 dedos ja ativos: reimprime no 0 (caso patologico)
+  }
   img.addEventListener('pointerdown', function(ev){
     ev.preventDefault();
     img.setPointerCapture(ev.pointerId);
     var p = coords(ev); lastX = p.x; lastY = p.y;
-    post('/input', { down:1, x:p.x, y:p.y });
+    post('/input', { down:1, x:p.x, y:p.y, f:slotOf(ev.pointerId) });
   });
   img.addEventListener('pointermove', function(ev){
     var p = coords(ev);
     posEl.textContent = p.x + ',' + p.y;
     lastX = p.x; lastY = p.y;
-    if (ev.buttons) post('/input', { down:1, x:p.x, y:p.y });
+    if (ev.buttons) post('/input', { down:1, x:p.x, y:p.y, f:slotOf(ev.pointerId) });
   });
   function release(ev) {
     var p = coords(ev); lastX = p.x; lastY = p.y;
-    post('/input', { down:0, x:p.x, y:p.y });
+    post('/input', { down:0, x:p.x, y:p.y, f:slotOf(ev.pointerId) });
+    delete fingers[ev.pointerId];
   }
   img.addEventListener('pointerup', release);
   img.addEventListener('pointercancel', release);

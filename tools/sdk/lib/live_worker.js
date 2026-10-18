@@ -6,7 +6,8 @@
 //   - o pacing segura o app no tempo de parede (velocidade ajustavel) com
 //     Atomics.wait — o worker dorme de verdade e acorda no input;
 //   - o toque do navegador entra por um ring buffer no SAB e e amostrado no
-//     getTouch, como um painel tocado de verdade (down/move/up).
+//     getTouch/getTouches, como um painel MULTITOUCH de verdade (estado por
+//     dedo; down/move/up).
 // O app roda ate o processo principal encerrar o worker (restart/hot reload)
 // ou ate o proprio app sair/estourar.
 
@@ -18,7 +19,7 @@ const appDir = workerData.appDir;
 const frameMs = Math.max(1, workerData.frameMs || 33);
 const seed = workerData.seed;
 const ctl = new Int32Array(workerData.ctl);   // [wake, paused, step, speed, clients, quit, pubMs, clock]
-const ptr = new Int32Array(workerData.ptr);   // [head, ...] eventos [down,x,y] no ring
+const ptr = new Int32Array(workerData.ptr);   // [head, ...] eventos [down,x,y,finger] no ring
 const RING = 256, PTR_BASE = 8;
 
 const renderer = new Renderer();
@@ -55,46 +56,59 @@ function publish(env, ms, force) {
 }
 
 // ------------------------------------------------------------ entrada -----
-let tail = 0, sawDown = false, needRelease = false;
-let last = { x: 0, y: 0 };
+// Estado POR dedo: o ring traz [down,x,y,finger]; cada dedo reporta a
+// posicao MAIS NOVA da fila e, no up, o ponto final uma vez antes de sumir
+// (mesma semantica de release do single-pointer de antes). O PRIMARIO
+// (getTouch) e o menor slot ativo — a pagina atribui slots em ordem de
+// pouso, entao "menor slot" aproxima "mais antigo".
+let tail = 0;
+const fingers = [];
+for (let i = 0; i < 5; i++) fingers.push({ active: false, release: false, x: 0, y: 0 });
 
 function readPtr() {
     const head = Atomics.load(ptr, 0);
     if (tail >= head) return null;
     if (head - tail > RING) tail = head - RING;   // cliente mandou rapido demais: descarta velhos
-    const i = PTR_BASE + (tail % RING) * 3;
-    const down = Atomics.load(ptr, i);
-    const x = Atomics.load(ptr, i + 1);
-    const y = Atomics.load(ptr, i + 2);
+    const i = PTR_BASE + (tail % RING) * 4;
+    const ev = { down: Atomics.load(ptr, i) ? 1 : 0,
+                 x: Atomics.load(ptr, i + 1), y: Atomics.load(ptr, i + 2),
+                 f: Atomics.load(ptr, i + 3) };
     tail++;
-    return { x: x, y: y, down: down ? 1 : 0 };
+    return ev;
 }
 
-// Amostra o toque como o painel: um evento por getTouch; arrasto usa a
-// posicao MAIS NOVA da fila (move intermediario nao engasga o app).
-function nextTouch() {
-    if (needRelease) {
-        needRelease = false;
-        sawDown = false;
-        return { x: last.x, y: last.y, touched: 0 };
-    }
-    let ev = readPtr();
-    if (!ev) return sawDown ? { x: last.x, y: last.y, touched: 1 } : null;
-    let latest = ev;
+function drainPtr() {
     for (;;) {
-        const n = readPtr();
-        if (!n) break;
-        latest = n;
+        const ev = readPtr();
+        if (!ev) return;
+        const f = fingers[(ev.f >= 0 && ev.f < 5) ? ev.f : 0];
+        if (ev.down) {
+            f.active = true;
+            f.release = false;
+            f.x = ev.x;
+            f.y = ev.y;
+        } else if (f.active) {
+            f.x = ev.x;   // posicao final: o app precisa ver onde o swipe parou
+            f.y = ev.y;
+            f.release = true;
+        }
     }
-    last = { x: latest.x, y: latest.y };
-    if (latest.down) {
-        sawDown = true;
-        return { x: last.x, y: last.y, touched: 1 };
+}
+
+// Estado inteiro do vidro por getTouches (primario primeiro); um up sai do
+// estado no quadro seguinte ao ponto final.
+function nextTouches() {
+    drainPtr();
+    const out = [];
+    for (let i = 0; i < 5; i++) {
+        if (!fingers[i].active) continue;
+        out.push({ id: i, x: fingers[i].x, y: fingers[i].y, size: 0 });
+        if (fingers[i].release) {
+            fingers[i].active = false;
+            fingers[i].release = false;
+        }
     }
-    // ultimo evento e o release: entrega a posicao final como "tocada" e
-    // solta no proximo getTouch (o app precisa ver o ponto final do swipe)
-    needRelease = true;
-    return { x: last.x, y: last.y, touched: 1 };
+    return out;
 }
 
 // ------------------------------------------------------------- pacing -----
@@ -134,10 +148,18 @@ function liveWire(env) {
     envRef = env;
     const S = env.System;
     const origGetTouch = S.getTouch;
+    const origGetTouches = S.getTouches;
+    // multitoque (API 43): o vidro inteiro por getTouches; getTouch segue o
+    // primario (menor slot ativo). UM dos dois por loop — mesma regra do
+    // device (cada chamada consome o quadro).
+    S.getTouches = function () {
+        origGetTouches();   // dispara timers (o live nao usa a fila do harness)
+        return nextTouches();
+    };
     S.getTouch = function () {
-        origGetTouch();   // dispara timers (o live nao usa a fila do harness)
-        const t = nextTouch();
-        return t || { x: last.x, y: last.y, touched: 0 };
+        origGetTouch();
+        const ts = nextTouches();
+        return ts.length ? { x: ts[0].x, y: ts[0].y, touched: 1 } : { x: 0, y: 0, touched: 0 };
     };
     const origDelay = S.delay;
     S.delay = function (ms) {

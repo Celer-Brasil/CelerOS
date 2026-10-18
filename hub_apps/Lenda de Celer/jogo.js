@@ -517,8 +517,11 @@ function linhaDebug() {
     var s = 'sl' + (W.sliding ? 1 : 0) + ' p' + W.slideP.toFixed(2) + ' dlg' + (J.dlg ? 1 : 0) +
             ' ' + h.fsm.state + ' fz' + (E.frozen() ? 1 : 0) + ' ps' + (E.paused ? 1 : 0) +
             ' m' + J.monstros() + ' t' + E.input.touches.length + ' dt' + E.dt.toFixed(3) + ' ' + E.fps + 'fps';
-    var c0 = W.toCell(h.x + h.w + 1, h.y + 1), c1 = W.toCell(h.x + h.w + 1, h.y + h.h - 1);
-    s += ' x' + Math.round(h.x) + ',' + Math.round(h.y) + ' fr ' + (c0 ? c0.c + ',' + c0.r + '=' + W.get(c0.c, c0.r) : '-') +
+    // toCell devolve objeto reaproveitado: a 2a chamada sobrescreve c0
+    var c0 = W.toCell(h.x + h.w + 1, h.y + 1);
+    var c0v = c0 ? c0.c + ',' + c0.r + '=' + W.get(c0.c, c0.r) : '-';
+    var c1 = W.toCell(h.x + h.w + 1, h.y + h.h - 1);
+    s += ' x' + Math.round(h.x) + ',' + Math.round(h.y) + ' fr ' + c0v +
          ' ' + (c1 ? c1.c + ',' + c1.r + '=' + W.get(c1.c, c1.r) : '-');
     // fora da camada suja (nao repinta o HUD por quadro) e com fundo opaco
     E.dirty._mute++;

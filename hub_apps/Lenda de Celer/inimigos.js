@@ -55,9 +55,12 @@ I.polvo = function (sp, J) {
             update: function (m) {
                 if (m.time > 0.45 && !m.data.foi) {
                     m.data.foi = true;
-                    var v = DV[e.dir], c = centro(e);
-                    E.combat.shot(e, { x: c.x + v[0] * C * 0.4, y: c.y + v[1] * C * 0.4,
-                                       vx: v[0] * C * 5, vy: v[1] * C * 5, r: Math.round(C * 0.16),
+                    // cospe NA DIRECAO DO HEROI (angulo real, lido na hora do
+                    // tiro — tiro de cardinal passava reto fora do eixo)
+                    var hc = J.heroiCentro(), c = centro(e);
+                    var a = Math.atan2(hc.y - c.y, hc.x - c.x);
+                    E.combat.shot(e, { x: c.x + Math.cos(a) * C * 0.4, y: c.y + Math.sin(a) * C * 0.4,
+                                       vx: Math.cos(a) * C * 5, vy: Math.sin(a) * C * 5, r: Math.round(C * 0.16),
                                        dmg: 1, knock: C * 5, map: J.W.fechado, team: 'monstro',
                                        onWall: function (s) { E.fx.play('pedrinha', s.x, s.y); } });
                 }
@@ -126,9 +129,14 @@ I.esqueleto = function (sp, J) {
         e.t += dt;
         if (E.combat.stunned(e)) { e.vx = 0; e.vy = 0; }
         else {
+            // toCell devolve objeto REAPROVEITADO: o fluxo() consulta toCell
+            // de novo (celula do heroi) e sobrescreveria a leitura — sem a
+            // copia o esqueleto perguntava o caminho partindo do proprio
+            // heroi (dist 0, next null) e ficava parado para sempre
             var c = centro(e), cel = J.W.toCell(c.x, c.y);
+            var cc = cel ? cel.c : -1, cr = cel ? cel.r : -1;
             var fl = J.fluxo();
-            var nx = cel && fl ? fl.next(cel.c, cel.r) : null;
+            var nx = fl ? fl.next(cc, cr) : null;
             if (nx) {
                 var rc = J.W.cellRect(nx.c, nx.r);
                 var tx = rc.x + rc.w / 2, ty = rc.y + rc.h / 2;
@@ -136,7 +144,17 @@ I.esqueleto = function (sp, J) {
                 e.vx = dx / d * C * 1.9;
                 e.vy = dy / d * C * 1.9;
                 e.dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
-            } else { e.vx = 0; e.vy = 0; }
+            } else {
+                // na celula do heroi (next null: dist 0) ou sem caminho: cola
+                // nele em linha reta — sem isso congela a meio cell de alcada
+                var hc = J.heroiCentro();
+                var dx2 = hc.x - c.x, dy2 = hc.y - c.y, d2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+                if (d2 > 2) {
+                    e.vx = dx2 / d2 * C * 1.9;
+                    e.vy = dy2 / d2 * C * 1.9;
+                    e.dir = Math.abs(dx2) > Math.abs(dy2) ? (dx2 > 0 ? 'right' : 'left') : (dy2 > 0 ? 'down' : 'up');
+                } else { e.vx = 0; e.vy = 0; }
+            }
         }
         E.combat.move(e, dt, J.W.fechado);
     };

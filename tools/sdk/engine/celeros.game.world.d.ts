@@ -90,6 +90,9 @@ declare namespace E {
             areas: Record<string, WorldArea>;
             /** desenha UMA celula (tambem no sprite gravado: use E.spr.stamp) */
             paint: (v: any, x: number, y: number, w: number, h: number, c: number, r: number) => void;
+            /** 1.1: valor da celula -> nome de sprite/regiao do E.spr do tamanho da
+             *  celula; a sala grava por System.copySprite (API 45) sem o paint */
+            tile?: (v: any) => string;
             solid?: (v: any, c: number, r: number) => boolean;
             anim?: { ms?: number; frames: Record<string, any[]> };
             /** cor de fora da sala no sprite gravado */

@@ -36,11 +36,16 @@
 // 30 ia pelo drawSprite afim a cada chamada (~1,25 ms no 4848; o Detona
 // fazia 20 por quadro); o nome novo cai no pushSprite. Sem slot/drawSprite
 // o nome novo vira apelido do original em escala (mesmo desenho, so mais lento).
+// 1.5.1: com System.copySprite (API 45) stamp em escala 1 e blit sao 1
+// chamada, inclusive gravando DENTRO de um sprite (a sala do world).
 
 var E = require('celeros.game');
 var S = System;
 var EMPTY = {};
 var _stO = { key: 0 };
+// API 45: regiao de sprite -> alvo corrente numa chamada, sem escala (inclusive
+// DENTRO de um sprite: a sala do world gravada sem o drawSprite afim)
+var HAS_COPY = typeof S.copySprite === 'function';
 var _alO = { scale: 1, key: 0, ax: 0, ay: 0 };   // stamp/blit de apelido
 var _psO = { scale: 1, key: null };              // gravacao do prescale
 
@@ -56,7 +61,7 @@ function alias(s, x, y, o, k) {
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.5.0',
+    version: '1.5.1',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
@@ -227,6 +232,11 @@ E.spr = {
         var dy = Math.round(y - s.h * ay);
         if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);
         var key = opts && opts.key !== undefined ? opts.key : 0x0000;
+        if (HAS_COPY && (s.sheet ? s.sheet.id : s.id)) {
+            S.copySprite(s.sheet ? s.sheet.id : s.id, s.sheet ? s.rx : 0, s.sheet ? s.ry : 0,
+                         s.w, s.h, dx, dy, key === null ? undefined : key);
+            return;
+        }
         if (s.sheet) {
             // regiao: clipa o destino no tamanho da regiao e empurra o
             // sheet INTEIRO deslocado — so o rect recortado aterrissa
@@ -269,6 +279,15 @@ E.spr = {
         var dx = Math.round(x - w * ax), dy = Math.round(y - h * ay);
         var key = o.key === undefined ? 0x0000 : o.key;
         var id = s.sheet ? s.sheet.id : s.id;
+        // escala 1 com copySprite (API 45): 1 chamada, no quadro OU dentro de
+        // um sprite (E.spr.alvo) — dentro de sprite so havia o drawSprite
+        // afim com recorte (~240 us por tile 32x32 no 4848; copySprite ~150-200)
+        if (k === 1 && id && HAS_COPY) {
+            if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);
+            S.copySprite(id, s.sheet ? s.rx : 0, s.sheet ? s.ry : 0, s.w, s.h, dx, dy,
+                         key === null ? undefined : key);
+            return true;
+        }
         // escala 1 no QUADRO: pushSprite recortado (copia de linhas) — o
         // drawSprite e afim por pixel e custava ~4x por entidade no 4848.
         // Gravando DENTRO de um sprite (E.spr.alvo, ex. o fundo da sala do

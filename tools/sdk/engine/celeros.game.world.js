@@ -38,6 +38,9 @@
 // 1.0.2: a gravacao da sala marca E.spr.alvo (o stamp nao pega o atalho
 // do pushSprite, que so desenha no quadro); W.fechado = a colisao com a
 // borda da sala solida (monstros/tiros nao saem pelas aberturas).
+// 1.1.0: opcao tile(v) -> nome de regiao do E.spr: a sala grava num laco
+// inline com System.copySprite (API 45), sem o paint por celula (troca de
+// sala da Lenda no 4848: gravacao ~180 -> ~80 ms, troca ~250 -> ~120 ms).
 
 var E = require('celeros.game');
 require('celeros.game.level');
@@ -53,6 +56,29 @@ E.world = function (o) {
     var cell = o.cell || 32, ox = o.ox || 0, oy = o.oy || 0;
     var areas = o.areas || {};
     var paint = o.paint || function () {};
+    // 1.1.0: tile(v) -> nome de sprite/regiao do E.spr (no lugar do paint
+    // por celula): a regiao e resolvida 1x por valor e a sala e gravada com
+    // System.copySprite direto (API 45). Pelo paint, cada tile passava por
+    // paintCell -> frameOf -> paint -> (app) -> stamp -> nativa: ~0,65 ms de
+    // JS por tile, ~130 ms dos ~180 da troca de sala da Lenda no 4848
+    var tileOf = o.tile || null;
+    var HAS_COPY = typeof S.copySprite === 'function';
+    var _tc = {};           // valor -> {id, rx, ry, nm} (id 0 = vai pelo stamp)
+    var _opaco = { key: null };
+    function regOf(v) {
+        var nm = tileOf(v), sl = E.spr && E.spr._slots[nm];
+        var id = sl && !sl.alias ? (sl.sheet ? sl.sheet.id : sl.id) : 0;
+        var rg = { id: id && sl.w === cell && sl.h === cell ? id : 0,
+                   rx: sl && sl.sheet ? sl.rx : 0, ry: sl && sl.sheet ? sl.ry : 0, nm: nm };
+        _tc[v] = rg;
+        return rg;
+    }
+    // uma celula pelo tile (copia direta) ou pelo stamp do nome
+    function tileCell(v, x, y) {
+        var rg = _tc[v] || regOf(v);
+        if (rg.id && HAS_COPY) S.copySprite(rg.id, rg.rx, rg.ry, cell, cell, x, y);
+        else if (E.spr) E.spr.stamp(rg.nm, x, y, _opaco);
+    }
     var solid = o.solid || function (v) { return !!v; };
     var anim = o.anim || null;
     var saveKey = o.save || null;
@@ -233,6 +259,7 @@ E.world = function (o) {
     }
     function paintCell(rec, k, x0, y0) {
         var c = k % cols, r = (k - c) / cols;
+        if (tileOf) { tileCell(frameOf(rec.data[k]), x0 + c * cell, y0 + r * cell); return; }
         paint(frameOf(rec.data[k]), x0 + c * cell, y0 + r * cell, cell, cell, c, r);
     }
     function alloc() {
@@ -250,7 +277,22 @@ E.world = function (o) {
         S.useSprite(slot);
         if (E.spr) E.spr.alvo = slot;
         S.fillScreen(o.bg === undefined ? 0x0000 : o.bg);
-        for (var k = 0; k < rec.data.length; k++) paintCell(rec, k, ox, oy);
+        if (tileOf) {
+            // laco INLINE (sem paintCell/frameOf por celula); regioes
+            // resolvidas de novo a cada gravacao (folha recarregada muda o id)
+            _tc = {};
+            var fr = anim && anim.frames, d = rec.data, n = d.length;
+            for (var q = 0; q < n; q++) {
+                var v = d[q];
+                if (fr && fr[v]) v = fr[v][W._anim % fr[v].length];
+                var rg = _tc[v] || regOf(v);
+                var cc = q % cols, x = ox + cc * cell, y = oy + (q - cc) / cols * cell;
+                if (rg.id && HAS_COPY) S.copySprite(rg.id, rg.rx, rg.ry, cell, cell, x, y);
+                else if (E.spr) E.spr.stamp(rg.nm, x, y, _opaco);
+            }
+        } else {
+            for (var k = 0; k < rec.data.length; k++) paintCell(rec, k, ox, oy);
+        }
         if (o.decor) o.decor(rec, W);    // por cima dos tiles, dentro do bake
         if (E.spr) E.spr.alvo = 0;
         S.useSprite(0);
@@ -507,7 +549,7 @@ E.world = function (o) {
     return W;
 };
 var _live = [];
-E.world.version = '1.0.2';
+E.world.version = '1.1.0';
 
 E._modTicks.push(function (dt) {
     for (var i = 0; i < _live.length; i++) _live[i]._tick(dt);

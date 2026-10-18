@@ -2080,7 +2080,8 @@ function depsSize(nomes) {
         '__harness.grab("free1", [E.spr.has("chao"), E.spr._used]);' +
         'E.spr.freeSheet("tiles");' +
         '__harness.grab("free2", [E.spr.has("bola"), E.spr.has("logo"), E.spr._used]);' +
-        'var an = E.spr.anim ? null : null; __harness.grab("animOk", 1);');
+        'var an = E.spr.anim ? null : null; __harness.grab("animOk", 1);',
+        function (env) { delete env.System.copySprite; });   // caminho pre-API 45
     check('sheet: 1 slot para o PNG inteiro, regioes compartilham o id',
           r.sheet[0] === 1 && r.sheet[1] === true && r.sheet[4] === true &&
           r.sheet[5] === true,
@@ -2120,9 +2121,49 @@ function depsSize(nomes) {
         'var a = E.anim(["p1", "p2"], 2);' +
         'a.tick(0.6);' +
         'a.draw(40, 50);' +
-        '__harness.grab("anim", [a.i, pushes[0]]);');
+        '__harness.grab("anim", [a.i, pushes[0]]);',
+        function (env) { delete env.System.copySprite; });   // caminho pre-API 45
     check('anim: flipbook por nomes de regiao (i avanca, blit da regiao)',
           r.anim[0] === 1 && typeof r.anim[1] === 'number', JSON.stringify(r.anim));
+
+    // API 45: com System.copySprite o blit de regiao e o stamp em escala 1
+    // (no quadro E dentro de um sprite) viram 1 chamada com a regiao certa
+    r = runSnippet(
+        'var E = require("celeros.game.spr");' +
+        'E.init({ dir: "Teste" });' +
+        'var cs = [], ds = 0;' +
+        'System.copySprite = function () { cs.push(Array.prototype.slice.call(arguments)); };' +
+        'var dsp = System.drawSprite; System.drawSprite = function () { ds++; if (dsp) dsp.apply(null, arguments); };' +
+        'E.spr.sheet("t", { file: "t", w: 64, h: 32, tw: 16, th: 16, regions: { a: [2, 1] } });' +
+        'var id = E.spr._slots.a.id;' +
+        'E.spr.blit("a", 10, 20);' +
+        'E.spr.stamp("a", 30, 40, { key: null });' +
+        'var alvo = System.createSprite(64, 64); System.useSprite(alvo); E.spr.alvo = alvo;' +
+        'E.spr.stamp("a", 5, 6, { key: 0xF81F });' +
+        'E.spr.alvo = 0; System.useSprite(0);' +
+        '__harness.grab("cp", [id, cs, ds]);');
+    check('spr 1.5.1 + API 45: blit/stamp de regiao em 1 copySprite (quadro e dentro de sprite), sem drawSprite',
+          r.cp && r.cp[1].length === 3 && r.cp[2] === 0 &&
+          r.cp[1][0].join() === [r.cp[0], 32, 16, 16, 16, 10, 20, 0].join() &&
+          r.cp[1][1].slice(0, 7).join() === [r.cp[0], 32, 16, 16, 16, 30, 40].join() && r.cp[1][1][7] === undefined &&
+          r.cp[1][2].join() === [r.cp[0], 32, 16, 16, 16, 5, 6, 0xF81F].join(),
+          JSON.stringify(r.cp));
+    // emulador: copySprite desenha a regiao no alvo com a cor-chave
+    (function () {
+        var Rn = require('../../tools/sdk/lib/renderer.js').Renderer;
+        var rr = new Rn();
+        var S0 = {};
+        rr.wire({ System: S0 });
+        S0.setNativeCanvas && S0.setNativeCanvas(false);
+        var id = S0.createSprite(8, 8);
+        S0.useSprite(id); S0.fillScreen(0x07E0); S0.fillRect(2, 2, 2, 2, 0xF81F); S0.useSprite(0);
+        S0.fillScreen(0x0000);
+        S0.copySprite(id, 1, 1, 4, 4, 100, 100, 0xF81F);
+        var fb = rr.fb, w = rr.w;
+        var verde = fb[100 * w + 100] === 0x07E0, chave = fb[101 * w + 101] === 0x0000, fora = fb[104 * w + 104] === 0x0000;
+        check('emulador: copySprite copia a regiao e respeita a cor-chave', verde && chave && fora,
+              [fb[100 * w + 100], fb[101 * w + 101], fb[104 * w + 104]].join());
+    })();
 
     fs.rmSync(tmp, { recursive: true, force: true });
 })();

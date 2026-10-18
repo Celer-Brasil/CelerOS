@@ -397,6 +397,24 @@ public:
     uint32_t color = THEME_ACCENT;
 };
 
+// Teto de dedos que a pilha rastreia (GT911/FT5x06 tem 5; XPT2046 devolve 1).
+constexpr size_t kTouchMax = 5;
+
+// Ponto de toque bruto (coords fisicas). id = track id do controlador
+// (identifica o dedo entre quadros; injetado usa o indice do dedo). size =
+// area de contato (0 quando o controlador nao informa).
+struct TouchPoint {
+    uint16_t x = 0, y = 0;
+    uint8_t id = 0;
+    uint16_t size = 0;
+};
+
+// Leitura multi-dedo (fisico ou injetado): escreve ate max pontos em out e
+// devolve quantos escreveu. O PRIMARIO (dedo mais antigo ainda na tela) vem
+// na posicao 0 — levantar um segundo dedo nao "solta" o toque da UI.
+// readTouch e o caso de 1 pontinho. Chamar por quadro.
+size_t readTouches(TouchPoint* out, size_t max);
+
 // Leitura unica do touch (fisico ou injetado pelo celerctl). Todo consumidor
 // (TouchPump, apps JS) passa por aqui. Sem toque, x/y nao sao escritos.
 bool readTouch(uint16_t* x, uint16_t* y);
@@ -441,6 +459,7 @@ public:
         bool down;
         uint16_t x = 0, y = 0;
         uint16_t delayMs = 0;  // espera ANTES de virar estado do dedo
+        uint8_t finger = 0;    // dedo sintetico (0 = primario; multi: mtap)
     };
 
     static bool push(const Sample* samples, size_t n);  // false: fila cheia

@@ -1204,12 +1204,18 @@ class HostLink:
         return bytes(data[:size])
 
     def touch(self, samples):
-        """Enfileira amostras de touch sinteticas: [(down, x, y, delay_ms)]."""
+        """Enfileira amostras de touch sinteticas: (down, x, y, delay_ms) ou
+        (down, x, y, delay_ms, finger). O payload de 8 bytes (com dedo) so
+        sai quando ha finger != 0 — firmware velho entende o de 7."""
         if not 1 <= len(samples) <= 16:
             raise CelerError("gesto deve ter 1..16 amostras")
+        multi = any(len(s) > 4 and s[4] for s in samples)
         payload = bytes([len(samples)])
-        for down, x, y, delay in samples:
+        for s in samples:
+            down, x, y, delay = s[0], s[1], s[2], s[3]
             payload += bytes([1 if down else 0]) + struct.pack("<HHH", x, y, delay)
+            if multi:
+                payload += bytes([s[4] if len(s) > 4 else 0])
         self.xfer(KL["TOUCH"], payload)
 
 
@@ -3086,7 +3092,7 @@ def cmd_tap(args):
                 w, h, _ = link.screenshot()
             x, y = _v2phys(args.x, args.y, w, h)
             print(f"tap virtual ({args.x},{args.y}) -> vidro ({x},{y}) [{w}x{h}]")
-        link.touch([(True, x, y, 0), (False, 0, 0, args.hold)])
+        link.touch([(True, x, y, 0, args.finger), (False, 0, 0, args.hold, args.finger)])
     finally:
         link.close()
     # deixa o gesto completar no dispositivo antes de um screencap seguinte
@@ -3106,19 +3112,48 @@ def cmd_tap(args):
 def cmd_swipe(args):
     steps = 8
     step_ms = max(1, args.duration // (steps + 1))
-    samples = [(True, args.x0, args.y0, 0)]
+    samples = [(True, args.x0, args.y0, 0, args.finger)]
     for i in range(1, steps + 1):
         t = i / (steps + 1)
         x = round(args.x0 + (args.x1 - args.x0) * t)
         y = round(args.y0 + (args.y1 - args.y0) * t)
-        samples.append((True, x, y, step_ms))
-    samples.append((False, 0, 0, 20))
+        samples.append((True, x, y, step_ms, args.finger))
+    samples.append((False, 0, 0, 20, args.finger))
     link = open_link(args)
     try:
         link.touch(samples)
     finally:
         link.close()
     time.sleep((args.duration + 200) / 1000.0)
+
+
+def cmd_mtap(args):
+    """Dois dedos simultaneos (bench multitouch): pousam no mesmo ciclo,
+    seguram MS e levantam juntos. --v/--glass valem como no tap."""
+    link = open_link(args)
+    try:
+        p0, p1 = (args.x0, args.y0), (args.x1, args.y1)
+        if args.v:
+            if args.glass:
+                try:
+                    w, h = (int(v) for v in args.glass.lower().split("x", 1))
+                except ValueError:
+                    die("--glass espera LARGURAxALTURA (ex: 480x480)")
+            else:
+                w, h, _ = link.screenshot()
+            p0 = _v2phys(args.x0, args.y0, w, h)
+            p1 = _v2phys(args.x1, args.y1, w, h)
+            print(f"mtap virtual {p0} {p1} -> vidro [{w}x{h}]")
+        samples = [
+            (True, p0[0], p0[1], 0, 0),
+            (True, p1[0], p1[1], 0, 1),
+            (False, 0, 0, args.hold, 0),
+            (False, 0, 0, 0, 1),
+        ]
+        link.touch(samples)
+    finally:
+        link.close()
+    time.sleep((args.hold + 150) / 1000.0)
 
 
 # ------------------------------------------------------------------- apps ---
@@ -4467,6 +4502,8 @@ def build_parser():
                         " 320x240 CYD, ~240x240 watch) — ou VIRTUAL 0..240 com --v")
     p.add_argument("y", type=int, help="Y FISICO do vidro (ou VIRTUAL 0..320 com --v)")
     p.add_argument("hold", nargs="?", type=int, default=80, help="ms pressionado (default 80)")
+    p.add_argument("--finger", type=int, default=0,
+                   help="dedo sintetico (0 = primario; 1..4 p/ multi, exige firmware novo)")
     p.add_argument("-v", "--virtual", dest="v", action="store_true",
                    help="coordenadas VIRTUAIS do app (240x320): escala pelo vidro"
                         " (descobre sozinho via screenshot; override com --glass)")
@@ -4486,7 +4523,21 @@ def build_parser():
     p.add_argument("x1", type=int)
     p.add_argument("y1", type=int)
     p.add_argument("duration", nargs="?", type=int, default=250, help="duracao em ms (default 250)")
+    p.add_argument("--finger", type=int, default=0,
+                   help="dedo sintetico (0 = primario; 1..4 p/ multi, exige firmware novo)")
     p.set_defaults(func=cmd_swipe)
+
+    p = sub.add_parser("mtap", help="dois dedos simultaneos (bench multitouch)")
+    p.add_argument("x0", type=int, help="X do dedo 0 (FISICO, ou VIRTUAL com --v)")
+    p.add_argument("y0", type=int, help="Y do dedo 0")
+    p.add_argument("x1", type=int, help="X do dedo 1")
+    p.add_argument("y1", type=int, help="Y do dedo 1")
+    p.add_argument("hold", nargs="?", type=int, default=150, help="ms pressionado (default 150)")
+    p.add_argument("-v", "--virtual", dest="v", action="store_true",
+                   help="coordenadas VIRTUAIS do app (240x320), como no tap")
+    p.add_argument("--glass", default=None, metavar="WxH",
+                   help="vidro na mao (ex: 480x480) — pula a sonda do screenshot")
+    p.set_defaults(func=cmd_mtap)
 
     p = sub.add_parser("dev", help="loop de desenvolvimento: watch + reload + logs")
     p.add_argument("folder", help="pasta do app (com app.json)")

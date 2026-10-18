@@ -814,6 +814,7 @@ bool Dialog::onTouch(const TouchEvent& ev, Rect myRect) {
 
 namespace {
 constexpr size_t INJ_CAP = 64;
+constexpr size_t INJ_FINGERS = 5;
 // RAM INTERNA (sem EXT_RAM_BSS_ATTR): push/take/active rodam dentro de
 // portENTER_CRITICAL e um miss de cache na PSRAM ali no meio (erase de
 // flash no outro nucleo segura o barramento) estoura o WDT. Sao ~1,5 KB
@@ -822,8 +823,10 @@ TouchInjector::Sample s_injQ[INJ_CAP];
 size_t s_injHead = 0, s_injCount = 0;
 portMUX_TYPE s_injMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t s_injLastMs = 0;        // quando a ultima amostra virou estado
-bool s_injDown = false;          // estado do dedo sintetico
-uint16_t s_injX = 0, s_injY = 0;
+// Estado POR dedo sintetico (escrito so pela task da UI, no take; a fila
+// em si e que cruza task com o HostLink e fica atras do mux).
+struct InjFinger { bool down = false; uint16_t x = 0, y = 0; };
+InjFinger s_injF[INJ_FINGERS];
 }  // namespace
 
 bool TouchInjector::push(const Sample* samples, size_t n) {
@@ -841,7 +844,8 @@ bool TouchInjector::push(const Sample* samples, size_t n) {
 
 bool TouchInjector::active() {
     portENTER_CRITICAL(&s_injMux);
-    bool a = s_injCount > 0 || s_injDown;
+    bool a = s_injCount > 0;
+    for (size_t i = 0; i < INJ_FINGERS && !a; i++) a = s_injF[i].down;
     portEXIT_CRITICAL(&s_injMux);
     return a;
 }
@@ -878,30 +882,107 @@ void TouchPump::reset() {
     m_releaseSinceMs = 0;
 }
 
-bool readTouch(uint16_t* x, uint16_t* y) {
-    bool down;
+// ========================================================== readTouches ====
+
+namespace {
+// Idade por track id: o controlador nao diz QUANDO um dedo pousou, e o
+// PRIMARIO (posicao 0 do readTouches) e o mais antigo ainda na tela — o
+// ponto 0 do chip e arbitrario e muda de dedo quando alguem levanta. 0xFF
+// = slot livre (track id real nunca chega la).
+struct FingerSlot { uint8_t id = 0xFF; uint32_t sinceMs = 0; };
+FingerSlot s_slots[kTouchMax];
+}  // namespace
+
+size_t readTouches(TouchPoint* out, size_t max) {
+    if (out == nullptr || max == 0) return 0;
+    TouchPoint pts[kTouchMax];
+    size_t n = 0;
     if (TouchInjector::active()) {
-        // gesto sintetico (celerctl) e dono do touch ate a fila esvaziar e soltar
+        // gesto sintetico (celerctl) e dono do touch ate a fila esvaziar e
+        // soltar; drena TODAS as amostras vencidas (um lote multi-dedo chega
+        // de uma vez e os delays seguem valendo entre amostras)
         TouchInjector::Sample smp;
-        if (TouchInjector::take(smp)) {
-            s_injDown = smp.down;
+        while (TouchInjector::take(smp)) {
+            size_t f = smp.finger < INJ_FINGERS ? smp.finger : 0;
+            s_injF[f].down = smp.down;
             if (smp.down) {
-                s_injX = smp.x;
-                s_injY = smp.y;
+                s_injF[f].x = smp.x;
+                s_injF[f].y = smp.y;
             }
         }
-        if (s_injDown) {
-            *x = s_injX;
-            *y = s_injY;
+        for (size_t i = 0; i < INJ_FINGERS; i++) {
+            if (!s_injF[i].down) continue;
+            pts[n].x = s_injF[i].x;
+            pts[n].y = s_injF[i].y;
+            pts[n].id = (uint8_t)i;
+            pts[n].size = 0;
+            n++;
         }
-        down = s_injDown;
     } else {
-        down = Board::display().getTouch(x, y) != 0;
+        // caminho multi do LovyanGFX: o painel le todos os pontos numa
+        // leitura so e aplica a matriz afim/rotacao POR ponto (o getTouch(x,y)
+        // de 1 ponto pediria count=1 ao chip e descartaria o resto)
+        lgfx::touch_point_t raw[kTouchMax];
+        n = Board::display().getTouch(raw, kTouchMax);
+        if (n > kTouchMax) n = kTouchMax;
+        uint32_t now = millis();
+        // ids ausentes no quadro saem da tabela (track id reciclado entra fresco)
+        for (size_t s = 0; s < kTouchMax; s++) {
+            bool vivo = false;
+            for (size_t i = 0; i < n && !vivo; i++) vivo = (raw[i].id == s_slots[s].id);
+            if (!vivo) s_slots[s].id = 0xFF;
+        }
+        // ids presentes ganham/mantem entrada de idade
+        for (size_t i = 0; i < n; i++) {
+            bool tem = false;
+            for (size_t s = 0; s < kTouchMax && !tem; s++) tem = (s_slots[s].id == raw[i].id);
+            if (!tem) {
+                for (size_t s = 0; s < kTouchMax; s++) {
+                    if (s_slots[s].id == 0xFF) {
+                        s_slots[s].id = raw[i].id;
+                        s_slots[s].sinceMs = now;
+                        break;
+                    }
+                }
+            }
+        }
+        for (size_t i = 0; i < n; i++) {
+            pts[i].x = (uint16_t)raw[i].x;
+            pts[i].y = (uint16_t)raw[i].y;
+            pts[i].id = raw[i].id;
+            pts[i].size = raw[i].size;
+        }
+        // primario primeiro: ordena por idade de pousada (n <= 5)
+        auto since = [](uint8_t id) -> uint32_t {
+            for (size_t s = 0; s < kTouchMax; s++)
+                if (s_slots[s].id == id) return s_slots[s].sinceMs;
+            return 0;
+        };
+        for (size_t i = 1; i < n; i++) {
+            TouchPoint key = pts[i];
+            uint32_t keyMs = since(key.id);
+            size_t j = i;
+            while (j > 0 && since(pts[j - 1].id) > keyMs) {
+                pts[j] = pts[j - 1];
+                j--;
+            }
+            pts[j] = key;
+        }
     }
     // Timeout de tela: toque valido conta como atividade; se ele SO acordou
     // a tela, engole (o primeiro toque nao clica em nada as cegas)
-    if (down && Backlight::noteActivity()) return false;
-    return down;
+    if (n > 0 && Backlight::noteActivity()) return 0;
+    size_t outN = n < max ? n : max;
+    for (size_t i = 0; i < outN; i++) out[i] = pts[i];
+    return outN;
+}
+
+bool readTouch(uint16_t* x, uint16_t* y) {
+    TouchPoint pts[kTouchMax];
+    if (readTouches(pts, kTouchMax) == 0) return false;
+    *x = pts[0].x;
+    *y = pts[0].y;
+    return true;
 }
 
 void TouchPump::poll(const Handler& onEvent) {

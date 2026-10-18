@@ -922,24 +922,35 @@ void handleScreenshot(const uint8_t*, uint16_t) {
 
 void handleTouch(const uint8_t* payload, uint16_t len) {
 #if CONFIG_CELEROS_UI
-    // u8 n + n entradas {u8 down, u16 x, u16 y, u16 delayMs}
+    // u8 n + n entradas {u8 down, u16 x, u16 y, u16 delayMs} (7 bytes) ou
+    // {u8 down, u16 x, u16 y, u16 delayMs, u8 finger} (8 bytes, multitouch:
+    // o cliente so usa 8 quando ha dedo != 0, entao firmware velho nunca
+    // ve payload novo)
     if (len < 1) {
         respondError(KL_TOUCH, "payload vazio");
         return;
     }
     uint8_t n = payload[0];
-    if (n == 0 || (size_t)len < 1 + (size_t)n * 7) {
+    if (n == 0) {
+        respondError(KL_TOUCH, "payload malformado");
+        return;
+    }
+    uint8_t stride;
+    if ((size_t)len >= 1 + (size_t)n * 8) stride = 8;
+    else if ((size_t)len >= 1 + (size_t)n * 7) stride = 7;
+    else {
         respondError(KL_TOUCH, "payload malformado");
         return;
     }
     if (n > 16) n = 16;
     kui::TouchInjector::Sample s[16];
     for (int i = 0; i < n; i++) {
-        const uint8_t* p = payload + 1 + i * 7;
+        const uint8_t* p = payload + 1 + i * stride;
         s[i].down = p[0] != 0;
         s[i].x = (uint16_t)(p[1] | (p[2] << 8));
         s[i].y = (uint16_t)(p[3] | (p[4] << 8));
         s[i].delayMs = (uint16_t)(p[5] | (p[6] << 8));
+        s[i].finger = stride == 8 ? p[7] : 0;
     }
     if (!kui::TouchInjector::push(s, n)) {
         respondError(KL_TOUCH, "fila de touch cheia");

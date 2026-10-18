@@ -3514,8 +3514,16 @@ _JUNK_SUFFIX = (".swp", ".swo", ".bak", ".tmp", "~")
 _DEV_ONLY = {"test.js"}
 
 
+# pastas que nunca sobem: .dev (telas do `celerctl dev`, fora do git) e
+# _dev (fonte dev-only VERSIONADA ao lado do app: pipeline de arte, renders
+# brutos — ex. hub_apps/Lenda de Celer/_dev). O hub ja e flat (so a raiz)
+_DEV_DIRS = (".dev", "_dev")
+
+
 def _is_junk(p):
     name = p.name
+    if any(d in p.parts for d in _DEV_DIRS):
+        return True
     if name in _JUNK_NAMES or name in _DEV_ONLY or name.startswith(".#") or ".git" in p.parts:
         return True
     return name.endswith(_JUNK_SUFFIX)

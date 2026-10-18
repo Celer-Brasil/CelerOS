@@ -693,6 +693,20 @@ def cmd_publish_dep(args):
         if not DEP_NAME_RE.match(d) or not DEP_RANGE_RE.match(r):
             die(f"--dep invalida: {pair}")
         sub[d] = r
+    # sem --dep, modulo da engine herda as arestas do tools/sdk/engine/
+    # index.json (a fonte que o harness e o celerctl --deps-local usam):
+    # a world 1.0.1 subiu sem --dep, o hub serviu deps {} e o install da
+    # Lenda de Celer perdeu o celeros.game.level do fecho (require quebrado)
+    if not args.dep:
+        idx_p = Path(__file__).resolve().parent / "sdk" / "engine" / "index.json"
+        if src.parent == idx_p.parent and idx_p.is_file():
+            try:
+                arestas = (json.loads(idx_p.read_text()).get(name) or {}).get("deps") or {}
+            except ValueError:
+                arestas = {}
+            if arestas:
+                sub = dict(arestas)
+                print(f"{name}: arestas do index.json -> {json.dumps(sub)}")
     # guarda de arvore suja: o upload tem que ser de conteudo COMMITADO —
     # a engine 1.2.3 foi ao hub uma vez com 2 linhas do WIP do autor (o
     # git status do operador era de minutos antes; a arvore andou)
@@ -770,8 +784,11 @@ def cmd_publish_dep(args):
         "Content-Disposition: form-data; name=\"force\"\r\n\r\n"
         f"{'1' if args.force else '0'}\r\n"
     ).encode()
+    # CRLF entre o corpo do arquivo e a proxima fronteira (sem ele o campo
+    # force chegava fundido ao zip e o --force nunca valia: o 409 da
+    # republicacao — mesmo bug do publish de app, corrigido la em 0981e32)
     _, out = http("POST", f"{hub_url(args)}/admin/deps", token=tok,
-                  data=part + blob + force_part + f"--{boundary}--\r\n".encode(),
+                  data=part + blob + b"\r\n" + force_part + f"--{boundary}--\r\n".encode(),
                   headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
     print(f"ok: dep {out.get('dep')} v{out.get('version')} publicada "
           f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}...)")

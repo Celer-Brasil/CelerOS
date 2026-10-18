@@ -14,7 +14,9 @@ declare namespace E {
         lastHit: number;
         level: number;
         xp: number;
-        onHit: ((s: Stats, dano: number, fonte?: any) => void) | null;
+        onHit: ((s: Stats, dano: number, fonte?: any, dir?: { x: number; y: number } | null) => void) | null;
+        /** direcao do ultimo golpe (damage {dir}) */
+        lastDir: { x: number; y: number } | null;
         onDeath: ((s: Stats, fonte?: any) => void) | null;
         onLevel: ((s: Stats, nivel: number) => void) | null;
         /** (base + soma add) x produto mul */
@@ -24,9 +26,13 @@ declare namespace E {
         unmod(id: any): void;
         hasMod(id: any): boolean;
         maxHp(): number;
+        hpMax(): number;
+        full(): boolean;
+        /** true = NAO desenhe neste quadro (pisca nos iframes; periodo ms, 80) */
+        blink(ms?: number): boolean;
         invuln(): boolean;
         /** - def (pierce ignora), minimo 1; 0 nos iframes (force fura). Devolve o aplicado */
-        damage(n: number, o?: { pierce?: boolean; force?: boolean; source?: any }): number;
+        damage(n: number, o?: { pierce?: boolean; force?: boolean; source?: any; dir?: { x: number; y: number } | null }): number;
         heal(n: number): number;
         revive(hp?: number): void;
         /** vida 0..1 */
@@ -49,7 +55,7 @@ declare namespace E {
         version: string;
         (base: Record<string, number>, o?: {
             iframes?: number;
-            onHit?: (s: Stats, dano: number, fonte?: any) => void;
+            onHit?: (s: Stats, dano: number, fonte?: any, dir?: { x: number; y: number } | null) => void;
             onDeath?: (s: Stats, fonte?: any) => void;
             onLevel?: (s: Stats, nivel: number) => void;
             /** custo do nivel: base * grow^(nivel-1) */

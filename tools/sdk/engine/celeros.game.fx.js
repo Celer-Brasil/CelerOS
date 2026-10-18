@@ -17,6 +17,9 @@
 // fumaca, confete, poeira, sangue/gosma e cura prontos (o app so ajusta).
 // 1.3.0: E.fx.beam (laser/raio que some: linha grossa com nucleo claro) e
 // E.fx.count() (particulas vivas + textos — orcamento por quadro).
+// 1.4.0: presets de aventura — corte (faisca do golpe de espada), poof
+// (monstro que some), brilho (item/coracao), pedrinha (pedra que quebra);
+// play(..., {dir: rad}) aponta a receita (o corte sai para onde o golpe foi).
 
 var E = require('celeros.game');
 var S = System;
@@ -30,7 +33,7 @@ var _bmO = { w: 1 };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.3.0',
+    version: '1.4.0',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
@@ -296,7 +299,15 @@ E.fx = {
         gosma: { n: 10, colors: [0x07E0, 0x0400], speed: 40, speed2: 100, life: 0.5,
                  size: 3, grav: 240 },
         cura: { n: 10, colors: [0x07E0, 0xAFE5], speed: 15, speed2: 35, angle: -Math.PI / 2,
-                spread: 1.2, life: 0.8, size: 2, grav: -40 }
+                spread: 1.2, life: 0.8, size: 2, grav: -40 },
+        corte: { n: 7, colors: [0xFFFF, 0xC7FF, 0xFFE0], speed: 80, speed2: 170, spread: 1.1,
+                 life: 0.22, shape: 'spark', drag: 3 },
+        poof: { n: 12, colors: [0xFFFF, 0xC618, 0x8410], speed: 25, speed2: 70, life: 0.45,
+                size: 4, drag: 2.5, ring: { speed: 120, life: 0.25, color: 0xFFFF } },
+        brilho: { n: 6, colors: [0xFFE0, 0xFFFF], speed: 20, speed2: 45, angle: -Math.PI / 2,
+                  spread: 2.4, life: 0.5, size: 2, shape: 'spark', grav: -30 },
+        pedrinha: { n: 6, colors: [0x8410, 0xC618], speed: 40, speed2: 90, life: 0.35, size: 2,
+                    grav: 300 }
     },
     // toca uma receita em (x, y) de mundo: opts sobrepoem os campos (cor,
     // n...). Devolve false se o nome nao existe
@@ -309,6 +320,11 @@ E.fx = {
             var k;
             for (k in pr) o[k] = pr[k];
             for (k in opts) o[k] = opts[k];
+        }
+        // dir: a receita aponta para o angulo dado (o corte segue o golpe)
+        if (opts && opts.dir !== undefined) {
+            if (o === pr) { o = {}; for (var k2 in pr) o[k2] = pr[k2]; }
+            o.angle = opts.dir;
         }
         this.burst(x, y, o);
         if (o.ring) this.ring(x, y, { speed: o.ring.speed, life: o.ring.life,

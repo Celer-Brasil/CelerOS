@@ -16,12 +16,29 @@
   "celeros.game.events": { "deps": { "celeros.game": "^1.2.0" } },
   "celeros.game.path": { "deps": { "celeros.game": "^1.0.0" } },
   "celeros.game.collide": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.pad": { "deps": { "celeros.game": "^1.3.0" } },
+  "celeros.game.pad": { "deps": { "celeros.game": "^1.4.0" } },
   "celeros.game.level": { "deps": { "celeros.game": "^1.0.0" } },
   "celeros.game.script": { "deps": { "celeros.game": "^1.2.0" } },
   "celeros.game.inv": { "deps": { "celeros.game": "^1.1.0" } },
   "celeros.game.steer": { "deps": { "celeros.game": "^1.0.0" } },
   "celeros.game.gen": { "deps": { "celeros.game": "^1.1.0" } },
   "celeros.game.stats": { "deps": { "celeros.game": "^1.0.0" } },
-  "celeros.game.waves": { "deps": { "celeros.game": "^1.2.0" } }
+  "celeros.game.waves": { "deps": { "celeros.game": "^1.2.0" } },
+  "celeros.game.combat": { "deps": { "celeros.game": "^1.4.0", "celeros.game.collide": "^1.1.0" } },
+  "celeros.game.world": { "deps": { "celeros.game": "^1.2.0", "celeros.game.level": "^1.1.0" } },
+  "celeros.game.kit": {
+    "deps": {
+      "celeros.game": "^1.4.0",
+      "celeros.game.collide": "^1.1.0",
+      "celeros.game.level": "^1.1.0",
+      "celeros.game.fsm": "^1.1.0",
+      "celeros.game.events": "^1.1.0",
+      "celeros.game.path": "^1.1.0",
+      "celeros.game.steer": "^1.0.0",
+      "celeros.game.stats": "^1.1.0",
+      "celeros.game.inv": "^1.0.0",
+      "celeros.game.script": "^1.0.0",
+      "celeros.sfx": "^1.4.0"
+    }
+  }
 }

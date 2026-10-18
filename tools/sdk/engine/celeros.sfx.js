@@ -16,8 +16,10 @@
 // 1.3.0: transpor/tempo/varia com nota UNICA [f, ms] (a forma curta que a
 // tabela e o playTone aceitam) davam [[NaN...]] — normalizam antes.
 // SFX.combo(mel, k, teto): sobe k semitons (moeda 1, 2, 3 do combo).
+// 1.4.0: sons de aventura (espada, porta, segredo, item, chave, bumerangue,
+// queda, escada, cristal) — composicoes originais.
 
-var SFX = { version: '1.3.0' };
+var SFX = { version: '1.4.0' };
 
 // [f, ms] -> [[f, ms]] (melodia sempre lista de notas)
 function notas(mel) { return typeof mel[0] === 'number' ? [mel] : mel; }
@@ -52,6 +54,17 @@ var T = {
     tick: [1500, 20],
     alerta: [[880, 90], [880, 90]],
     planta: [700, 35],
+
+    // aventura (originais)
+    espada: [[1568, 25], [1175, 35], [784, 45]],
+    porta: [[196, 60], [247, 60], [294, 120]],
+    segredo: [[659, 90], [622, 90], [554, 90], [880, 90], [831, 90], [1109, 90], [1319, 260]],
+    item: [[523, 80], [659, 80], [784, 80], [1047, 80], [784, 80], [1047, 240]],
+    chave: [[1319, 50], [1760, 90]],
+    bumerangue: [[880, 30], [988, 30], [880, 30], [988, 30]],
+    queda: [[600, 70], [450, 70], [300, 70], [150, 160]],
+    escada: [[392, 60], [349, 60], [311, 60], [262, 120]],
+    cristal: [[1760, 40], [2349, 70]],
 
     // jingles de fim
     morte: [[300, 90], [220, 90], [140, 220]],

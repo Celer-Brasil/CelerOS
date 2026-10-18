@@ -1,6 +1,6 @@
 // game.pad.d.ts — tipos do modulo CelerGame PAD (celeros.game.pad), que
 // decora o core (celeros.game.d.ts) com E.pad. Inclua os dois.
-// TOQUE UNICO: segurar o stick e apertar um botao juntos nao existe.
+// Multitoque (API 43): cada controle segue o seu dedo; toque unico (CYD): stick.tap e a acao.
 
 declare namespace E {
     interface PadStick {
@@ -15,6 +15,10 @@ declare namespace E {
         zone: Rect; float: boolean; dead: number; dirs: 4 | 8; visible: boolean;
         /** geracao da cena dona (null = global) */
         gen: number | null;
+        /** id do dedo dono (multitoque) ou null */
+        finger: number | null;
+        /** centro persegue o dedo alem da borda */
+        follow: boolean;
     }
     interface PadButton {
         x: number; y: number; r?: number; w?: number; h?: number;
@@ -24,6 +28,8 @@ declare namespace E {
         heldMs: number;
         /** soltou em < 250 ms neste quadro */
         tap: boolean;
+        /** id do dedo dono (multitoque) ou null */
+        finger: number | null;
         /** geracao da cena dona (null = global) */
         gen: number | null;
     }
@@ -32,7 +38,9 @@ declare namespace E {
         stick(o?: { zone?: Rect; x?: number; y?: number; r?: number; float?: boolean;
                     dead?: number; dirs?: 4 | 8; visible?: boolean;
                     /** sobrevive a troca de cena (criado fora de cena ja e global) */
-                    global?: boolean }): PadStick;
+                    global?: boolean;
+                    /** centro persegue o dedo alem da borda */
+                    follow?: boolean }): PadStick;
         button(o: { x: number; y: number; r?: number; w?: number; h?: number;
                     label?: string; color?: number; visible?: boolean; global?: boolean }): PadButton;
         /** remove sticks e botoes (troca de cena) */

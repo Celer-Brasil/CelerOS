@@ -531,6 +531,96 @@ alive(), onWave, onClear, onDone, endless: {grow}})`: nasce no ritmo, espera o
 `alive()` zerar, descansa e começa a próxima; `endless` repete a última onda
 crescendo `grow`. Estados: `wait`, `spawn`, `clear`, `done`.
 
+## 14e. Ação e aventura: combate e salas do tamanho da tela (rodada 4)
+
+Mais duas deps, feitas para a aventura de cima *Lenda de Celer* (em
+`hub_apps/`, o jogo de referência), testadas em `test/sdk/celergame_r4.js`:
+
+| Dep | Dá | Uso típico |
+|---|---|---|
+| `celeros.game.combat` | `E.combat.body/hit/sword/blast/shot/move/knock` | times, golpe de espada, explosão, projéteis e bumerangue, knockback, hitstop |
+| `celeros.game.world` | `E.world({areas, paint, solid, ...})` | overworld/masmorra em salas do tamanho da tela, troca deslizando, estado persistente por sala, minimapa |
+| `celeros.game.kit` | collide, level, fsm, events, path, steer, stats, inv, script + `E.sfx` numa dep SÓ | jogos complexos dentro do teto de 8 deps do `app.json` |
+
+**Combat.** `E.combat.body(ent, {team, stats})` registra um alvo. A caixa de
+dano é o retângulo de canto da entidade `{x, y, w, h}`, o mesmo do
+`collide.move`. Formas de acertar:
+- `hit(dono, forma | fn, {dmg, knock, ms, once, stun})` mantém uma hitbox viva
+  por ms. Forma em função segue o dono.
+- `sword(dono, dir, {reach, width})` é o golpe à frente do dono.
+- `blast(x, y, r)` é a bomba e fere todos os times.
+- `shot(dono, {x, y, vx, vy, map, boomerang: {range, speed}})` dispara um
+  projétil. Ele some na parede do `map`; o bumerangue vai, atravessa, atordoa e
+  volta ao dono.
+
+O dano passa pelo `stats.damage`, então os iframes valem. O golpe que acerta:
+- empurra o alvo com `knock` px/s, decaindo em `knockMs`;
+- chama `E.freeze(E.combat.hitstop)`;
+- emite `hit`/`kill` quando o módulo events está carregado.
+
+Mova quem leva empurrão com `E.combat.move(ent, dt, map)`, que também desliza
+na parede.
+
+```js
+E.combat.body(heroi, { team: "heroi", stats: heroi.st });
+E.combat.body(polvo, { team: "monstro", stats: polvo.st,
+                       onKill: function (p) { p.dead = true; E.fx.play("poof", p.x, p.y); } });
+if (botaoA.pressed) E.combat.sword(heroi, heroi.dir, { dmg: 1, knock: 240 });
+E.combat.move(heroi, dt, W);   // W = o mundo: mapa de colisão
+```
+
+**World.** Uma área é uma grade de salas; cada sala é um mapa ASCII parseado
+pelo `E.level` (`areas: {campo: {w: 4, h: 3, rooms: {"0,0": [...]}}}`).
+- `W.go(area, c, r)` entra na sala. A sala é desenhada uma vez (`paint` por
+  célula, com `E.spr.stamp`) num sprite do tamanho da tela.
+- `E.dirty.enable(W.painter)` repinta desse sprite com um `blitSprite` por
+  caixa suja, sem redesenhar tiles.
+- `W.edge(ent)` + `W.move(dir)` deslizam para a vizinha. Enquanto
+  `W.sliding` for true o jogo espera, os dois sprites de sala são empurrados
+  deslocados e `W.slideShift()` posiciona o herói.
+- Sem slot de sprite livre ou sem `drawSprite` (API 33), o mundo pinta célula
+  a célula e a troca de sala vira corte.
+- `W.set(c, r, v, true)` (baú aberto, porta destrancada) e `W.take(spawn)`
+  (chave pega) persistem por sala no `E.save` (`save: chave`). `W.flag/gflag`
+  guardam qualquer outro estado, e `W.restore()` os carrega de volta.
+- `anim: {ms, frames: {agua: ["agua", "agua2"]}}` anima células.
+- `W.minimap(x, y)` desenha as salas visitadas.
+- `W` também é um mapa de colisão (`solidAt/rectSolid/cw/ch`) para
+  `collide.move`, `combat.shot` e `path` (`W.cost`).
+
+**Multitoque (core 1.4 + pad 1.2, API 43).**
+- `E.input.touches` lista os dedos no vidro por `id`, cada um com `x/y`,
+  `sx/sy` (onde pousou), `down`, `justDown`, `justUp`, `heldMs` e `moved`. O
+  dedo que levanta fica um quadro com `justUp`. `E.input.finger(id)` acha um
+  dedo; `E.caps.multi` diz que o vidro é multitoque.
+- O core lê `System.getTouches()` uma vez por quadro. O dedo primário segue
+  alimentando `E.input.x/y/tap/swipe`. Quando ele levanta com outro dedo na
+  tela, isso vira soltura seguida de toque novo, nunca um pulo lido como
+  swipe.
+- Com o `celeros.game.pad` 1.2 cada controle pega o dedo que pousa nele e o
+  segue até levantar. Andar com o stick e apertar A e B ao mesmo tempo
+  funciona na 4848 (5 dedos) e no relógio.
+- Vidro de toque único (CYD) e firmware antigo funcionam como antes
+  (`stick.tap` é a ação). `stick({follow: true})` arrasta o centro junto com
+  o dedo.
+
+**Core 1.4 e o resto da rodada 4.**
+- Core: `E.freeze(ms)` (hitstop: dt 0 no update, nos módulos e no fx) e
+  `E.save.slot(n)` (arquivos de jogo 1..3 no mesmo prefixo).
+- spr 1.4:
+  - `E.spr.stamp(nome, x, y, {scale, key})` desenha sprite ou região de folha
+    no alvo CORRENTE — o quadro ou um sprite selecionado com `useSprite`, que é
+    como as salas são gravadas — com escala via `drawSprite`.
+  - `E.anim.dir({down, up, left, right}, fps)` acrescenta `face(dir)` /
+    `walk(on)`.
+- ui 1.2: `E.ui.dialog([...páginas], {realtime, tap: false})` + `d.next()`
+  (avança pelo botão A do pad).
+- fx 1.4: presets `corte`, `poof`, `brilho`, `pedrinha` e `play(..., {dir})`.
+- stats 1.1: `damage(n, {dir})`, `blink()` para o pisca dos iframes,
+  `hpMax()`, `full()`.
+- sfx 1.4: sons de aventura originais (`espada`, `porta`, `segredo`, `item`,
+  `chave`, `bumerangue`, `queda`, `escada`, `cristal`).
+
 ## 15. Física (`celeros.physics`, opcional)
 
 **A maioria dos jogos não precisa de módulo de física.** Num device
@@ -858,6 +948,7 @@ no JS quando os mundos nativos acabam).
 | `E.push/pop/depth`, `cleanup` da cena | pilha de cenas (inventário sobre o jogo), timers da cena mortos sozinhos |
 | `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | módulos para jogos complexos (§14c) |
 | `E.script`, `E.inv`, `E.steer`, `E.gen`, `E.stats`, `E.waves` | cutscene, inventário, steering, fase procedural, atributos de combate, diretor de ondas (§14d) |
+| `E.combat`, `E.world`, `E.freeze`, `E.save.slot`, `E.spr.stamp`, `E.anim.dir` | ação e aventura: hitbox/knockback/hitstop, salas do tamanho da tela com slide, arquivos de jogo, sala gravada, animação em 4 direções (§14e) |
 | `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | parâmetro de cena, recarga na tela, passeio de câmera, corações de vida (core 1.3) |
 | `P.verletFast`, `P.rigid`, `P.hit` | a escada de física: verlet nativo, corpo rígido nativo, sobreposição estática (módulo opcional — §15) |
 

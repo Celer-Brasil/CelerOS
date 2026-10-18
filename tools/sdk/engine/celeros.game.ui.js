@@ -14,6 +14,9 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme).
 //
+// 1.2.0: dialog com paginas (texto = array), d.next() (avanca pelo botao
+// do pad, sem tocar a caixa), {realtime} (anda com o jogo pausado) e
+// {tap: false}.
 // 1.1.0: E.ui.confirm (sim/nao modal), E.ui.toast (aviso que some sozinho,
 // desenhado pela engine por cima da cena), lista com inercia (fling) e
 // scrollTo, e title/pause/gameOver/dialog sem alocar opts por quadro.
@@ -74,7 +77,7 @@ function wrap(str, maxW, st) {
 }
 
 E.ui = {
-    version: '1.1.0',
+    version: '1.2.0',
 
     // menu vertical immediate-mode: items = ["Jogar", ...] ou
     // [{label, value, danger, disabled}]. Devolve o value (ou label) do
@@ -190,15 +193,35 @@ E.ui = {
 
     // dialogo com texto datilografado (retido): d.draw(x, y, w) desenha o
     // panel e revela `speed` chars/s; tap na caixa completa o texto, tap
-    // de novo fecha (draw devolve false). o = {speed (30), name, px}.
+    // de novo fecha (draw devolve false). o = {speed (30), name, px,
+    // pages (texto = array: uma pagina por vez), realtime (anda no
+    // relogio real: o dialogo funciona com E.paused), tap (false: so
+    // d.next() avanca — o botao A do pad)}. d.next() completa/avanca/fecha
+    // como o tap; d.page e o indice da pagina.
     // A quebra de linhas e feita UMA vez (1a draw — a revelacao nao
     // requebra por quadro) e a altura do panel cresce com o texto: antes
     // era fixa em 58*E.U e a fala longa transbordava por baixo da borda
     dialog: function (text, o) {
         o = o || EMPTY;
-        var d = { t: 0, done: false, closed: false,
-                  speed: o.speed === undefined ? 30 : o.speed, text: String(text),
-                  _w: 0, _lines: null };
+        var pages = text && typeof text === 'object' && text.length !== undefined ? text : [text];
+        var d = { t: 0, done: false, closed: false, page: 0, pages: pages,
+                  speed: o.speed === undefined ? 30 : o.speed, text: String(pages[0]),
+                  _w: 0, _lines: null, _rt: 0 };
+        // completa a pagina; completa -> proxima pagina; ultima -> fecha
+        d.next = function () {
+            if (d.closed) return false;
+            if (!d.done) { d.t = d.text.length / d.speed; d.done = true; return true; }
+            if (d.page < pages.length - 1) {
+                d.page++;
+                d.text = String(pages[d.page]);
+                d.t = 0;
+                d.done = false;
+                d._lines = null;
+                return true;
+            }
+            d.closed = true;
+            return false;
+        };
         d.draw = function (x, y, w) {
             var T = E.theme || EMPTY;
             w = w || Math.round(200 * E.U);
@@ -233,12 +256,13 @@ E.ui = {
                 E.gfx.text('>', x + w - Math.round(14 * E.U), y + h - Math.round(12 * E.U),
                            _arrow);
             }
-            var tap = E.input.tap;
-            if (tap && tap.x >= x && tap.x <= x + w && tap.y >= y && tap.y <= y + h) {
-                if (!completo) d.t = d.text.length / d.speed;   // completa
-                else d.closed = true;                            // fecha
-            }
-            d.t += E.dt;
+            var tap = o.tap === false ? null : E.input.tap;
+            if (tap && tap.x >= x && tap.x <= x + w && tap.y >= y && tap.y <= y + h) d.next();
+            if (o.realtime) {
+                var agora = S.millis();
+                d.t += d._rt ? (agora - d._rt) / 1000 : 0;
+                d._rt = agora;
+            } else d.t += E.dt;
             return !d.closed;
         };
         d.skip = function () { d.t = d.text.length / d.speed + 1; };

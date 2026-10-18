@@ -25,6 +25,7 @@ declare namespace E {
         mix: boolean;        // System.sfx: efeito misturado sem bloquear (API 32)
         clip: boolean;       // setClip/clearClip
         button: boolean;     // System.button (botao fisico)
+        multi: boolean;      // System.getTouches: varios dedos (API 43)
         big: boolean;        // tela fisica >= 400 px (firmware promove as fontes)
         native: boolean;     // canvas nativo ativo (API 28)
         w: number;
@@ -69,6 +70,9 @@ declare namespace E {
     /** Pausa do jogo (sem arg alterna): update recebe dt 0, fx/camera/timers/tweens
      *  congelam e o draw segue (desenhe o E.ui.pause por cima). Devolve o estado. */
     function pause(on?: boolean): boolean;
+    /** hitstop: congela o jogo por ms (dt 0 no update, modulos e fx) */
+    function freeze(ms: number): void;
+    function frozen(): boolean;
     let fpsTarget: number;
     const data: Record<string, any>;
     let sceneName: string;
@@ -104,6 +108,23 @@ declare namespace E {
         dblMs: number;
         /** ms com o dedo pousado (0 solto) */
         heldMs: number;
+        /** dedos no vidro (core 1.4; API 43 multitoque, 1 dedo em firmware antigo).
+         *  O dedo que levantou fica 1 quadro com down false / justUp true. */
+        touches: Finger[];
+        finger(id: number): Finger | null;
+    }
+    interface Finger {
+        id: number; x: number; y: number;
+        /** onde pousou */
+        sx: number; sy: number;
+        /** delta desde o quadro anterior */
+        dx: number; dy: number;
+        t0: number; heldMs: number;
+        down: boolean; justDown: boolean; justUp: boolean;
+        /** passou do limiar de arrasto */
+        moved: boolean;
+        /** e o dedo primario (o que alimenta x/y/tap) */
+        primary: boolean;
     }
     const input: Input;
     interface Rect { x: number; y: number; w: number; h: number }
@@ -435,6 +456,8 @@ declare namespace E {
         inc(key: string, n?: number): number;
         /** liga/desliga persistente */
         bool(key: string, def?: boolean): boolean;
+        /** arquivo de jogo n (1..; 0 = base): as chaves passam a viver sob prefixo + "sN." */
+        slot(n?: number): number;
         /** inverte o bool e devolve o novo */
         toggle(key: string, def?: boolean): boolean;
     };

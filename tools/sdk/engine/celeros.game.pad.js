@@ -9,21 +9,29 @@
 //   // update: heroi.vx = st.x * 90; if (pulo.pressed) pular();
 //   // draw:   E.pad.draw();         (desenha tudo o que foi criado)
 //
-// TOQUE UNICO: o firmware entrega UM ponto (System.getTouch) — segurar o
-// stick E apertar um botao ao mesmo tempo nao existe nessas telas. Por
-// isso o modo `tapAction` do stick: o tap seco (sem arrastar) dentro da
-// zona do stick vira o "A" (stick.tap), e o botao fisico (E.input.btn)
-// pode servir de 2a acao. Desenhe jogos que caibam nisso: arrasta = move,
-// solta e toca = age.
+// MULTITOQUE (API 43, core 1.4): na 4848 e no relogio o vidro entrega
+// varios dedos e cada controle segue o seu — anda e golpeia junto. No
+// vidro de TOQUE UNICO (CYD) segurar o stick E apertar um botao nao
+// existe: o tap seco (sem arrastar) dentro da zona do stick vira o "A"
+// (stick.tap) e o botao fisico (E.input.btn) pode ser a 2a acao — jogos
+// que rodam nas duas desenham para isso (arrasta = move, solta e toca =
+// age) e ganham o combo no multitoque de graca.
 //
 // 1.1.0: o tick roda tambem com E.paused (o botao "continuar" do pad nao
 // via o toque na pausa); dedo que DESCE num botao nao pega o stick por
 // baixo (zona padrao e botao sobrepostos andavam e pulavam juntos);
 // controles nascem presos a CENA (somem quando ela sai e dormem sob um
 // E.push — {global: true} mantem) e o botao ganha heldMs + tap.
+// 1.2.0: MULTITOQUE (core 1.4 / API 43): cada controle pega o dedo que
+// desce nele e o segue ate levantar — andar com o stick e apertar A/B ao
+// mesmo tempo no vidro da 4848 e do relogio. stick.finger/button.finger
+// dizem o dono; stick {follow} arrasta o centro com o dedo. No vidro de
+// toque unico (CYD) o comportamento e o de sempre.
 
 var E = require('celeros.game');
 var EMPTY = {};
+var EMPTY_L = [];
+var _own = {};      // id do dedo -> ja tem dono neste quadro
 
 // controle vivo na cena corrente? (global = sempre); morto = saiu de vez
 function stacked(g) {
@@ -47,7 +55,7 @@ var _knob = { screen: true, smooth: true };
 var _lbl = { align: 'center', valign: 'middle', screen: true, color: 0, px: 12 };
 
 E.pad = {
-    version: '1.1.0',
+    version: '1.2.0',
 
     // stick analogico. o = {zone {x,y,w,h} (onde o dedo PRESSIONA para
     // pegar o stick; default metade esquerda), r (raio em px, default
@@ -69,6 +77,8 @@ E.pad = {
             dead: o.dead === undefined ? 0.15 : o.dead,
             dirs: o.dirs || 4,
             visible: o.visible !== false,
+            follow: !!o.follow,  // centro persegue o dedo alem da borda
+            finger: null,        // id do dedo dono (multitoque)
             gen: genOf(o),
             _home: { x: o.x || 0, y: o.y || 0 }
         };
@@ -84,7 +94,7 @@ E.pad = {
     button: function (o) {
         var b = { x: o.x, y: o.y, r: o.r, w: o.w, h: o.h, label: o.label || '',
                   color: o.color, down: false, pressed: false, released: false,
-                  heldMs: 0, tap: false, _t0: 0,
+                  heldMs: 0, tap: false, _t0: 0, finger: null,
                   gen: genOf(o),
                   visible: o.visible !== false };
         _buttons.push(b);
@@ -94,65 +104,101 @@ E.pad = {
     // remove tudo (troca de cena)
     clear: function () { _sticks.length = 0; _buttons.length = 0; },
 
-    _in: function (b, x, y) {
+    // dentro do botao (slack > 1 alarga: dedo que escorrega da borda segue)
+    _in: function (b, x, y, slack) {
+        var k = slack || 1;
         if (b.r !== undefined) {
-            var dx = x - b.x, dy = y - b.y;
-            return dx * dx + dy * dy <= b.r * b.r;
+            var dx = x - b.x, dy = y - b.y, rr = b.r * k;
+            return dx * dx + dy * dy <= rr * rr;
         }
-        return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+        var mx = b.w * (k - 1) / 2, my = b.h * (k - 1) / 2;
+        return x >= b.x - mx && x <= b.x + b.w + mx && y >= b.y - my && y <= b.y + b.h + my;
     },
 
+    // um dedo por controle (core 1.4, E.input.touches): o controle pega o
+    // dedo que DESCE nele e o segue ate levantar — stick + A + B juntos no
+    // vidro multitoque. No toque unico e o mesmo codigo com 1 dedo
     _tick: function (dt, now) {
-        var i = E.input;
+        var i = E.input, L = i.touches || EMPTY_L, q, k, f, g;
         purge(_sticks);
         purge(_buttons);
-        // o toque que desce num botao e do botao (nao arma o stick embaixo)
-        var onBtn = false;
-        if (i.justDown) {
-            for (var q = 0; q < _buttons.length; q++) {
-                if (live(_buttons[q]) && E.pad._in(_buttons[q], i.x, i.y)) { onBtn = true; break; }
-            }
-        }
-        for (var k = 0; k < _sticks.length; k++) {
-            var s = _sticks[k], z = s.zone;
-            s.tap = false;
-            if (!live(s)) { s.active = false; s.x = s.y = s.mag = 0; s.dir = null; continue; }
-            var inZone = i.x >= z.x && i.x <= z.x + z.w && i.y >= z.y && i.y <= z.y + z.h;
-            if (i.justDown && inZone && !onBtn) {
-                s.active = true;
-                if (s.float) { s.cx = i.x; s.cy = i.y; }
-            }
-            if (i.tap && !onBtn && i.tap.x >= z.x && i.tap.x <= z.x + z.w &&
-                i.tap.y >= z.y && i.tap.y <= z.y + z.h) s.tap = true;
-            if (!i.down) {
-                s.active = false;
-                s.cx = s._home.x; s.cy = s._home.y;
-            }
-            if (s.active && i.down) {
-                var dx = (i.x - s.cx) / s.r, dy = (i.y - s.cy) / s.r;
-                var m = Math.sqrt(dx * dx + dy * dy);
-                if (m > 1) { dx /= m; dy /= m; m = 1; }
-                if (m < s.dead) { s.x = 0; s.y = 0; s.mag = 0; s.dir = null; continue; }
-                // reescala para 0..1 depois da zona morta
-                var k2 = (m - s.dead) / (1 - s.dead) / m;
-                s.x = dx * k2; s.y = dy * k2;
-                s.mag = m === 0 ? 0 : (m - s.dead) / (1 - s.dead);
-                s.angle = Math.atan2(dy, dx);
-                s.dir = E.pad._dir(s.angle, s.dirs);
-            } else {
-                s.x = 0; s.y = 0; s.mag = 0; s.dir = null;
-            }
-        }
         var t = now === undefined ? 0 : now;
+        // dedos ja donos de um controle (vivos) — nao trocam de dono
+        for (k in _own) delete _own[k];
+        for (q = 0; q < _buttons.length; q++) if (_buttons[q].finger !== null) _own[_buttons[q].finger] = 1;
+        for (q = 0; q < _sticks.length; q++) if (_sticks[q].finger !== null) _own[_sticks[q].finger] = 1;
+        // botoes primeiro: dedo que desce num botao e do botao, nao do stick
         for (var b = 0; b < _buttons.length; b++) {
             var bt = _buttons[b];
-            var on = live(bt) && i.down && E.pad._in(bt, i.x, i.y);
+            f = bt.finger !== null ? i.finger(bt.finger) : null;
+            if (!live(bt) || (f && !f.down) || (bt.finger !== null && !f)) {
+                if (bt.finger !== null) delete _own[bt.finger];
+                bt.finger = null;
+                f = null;
+            }
+            if (!f && live(bt)) {
+                for (k = 0; k < L.length; k++) {
+                    g = L[k];
+                    // dedo novo no botao, ou dedo sem dono que ENTROU nele
+                    if (g.down && !_own[g.id] && E.pad._in(bt, g.x, g.y)) {
+                        f = g; bt.finger = g.id; _own[g.id] = 1;
+                        break;
+                    }
+                }
+            }
+            var on = !!f && E.pad._in(bt, f.x, f.y, 1.3);
             bt.pressed = on && !bt.down;
             bt.released = !on && bt.down;
             bt.tap = bt.released && t - bt._t0 < 250;
             if (bt.pressed) bt._t0 = t;
             bt.heldMs = on ? t - bt._t0 : 0;
             bt.down = on;
+        }
+        for (var n = 0; n < _sticks.length; n++) {
+            var s = _sticks[n], z = s.zone;
+            s.tap = false;
+            f = s.finger !== null ? i.finger(s.finger) : null;
+            if (!live(s) || (f && !f.down) || (s.finger !== null && !f)) {
+                // levantou: toque seco (sem arrastar, rapido) e o "A" do stick
+                if (f && !f.down && !f.moved && f.heldMs < i.tapMs) s.tap = true;
+                if (s.finger !== null) delete _own[s.finger];
+                s.finger = null;
+                s.active = false;
+                s.cx = s._home.x; s.cy = s._home.y;
+                f = null;
+            }
+            if (!f && live(s)) {
+                for (k = 0; k < L.length; k++) {
+                    g = L[k];
+                    if (g.justDown && g.down && !_own[g.id] &&
+                        g.x >= z.x && g.x <= z.x + z.w && g.y >= z.y && g.y <= z.y + z.h) {
+                        f = g; s.finger = g.id; _own[g.id] = 1;
+                        s.active = true;
+                        if (s.float) { s.cx = g.x; s.cy = g.y; }
+                        break;
+                    }
+                }
+            }
+            if (f) {
+                var dx = (f.x - s.cx) / s.r, dy = (f.y - s.cy) / s.r;
+                var m = Math.sqrt(dx * dx + dy * dy);
+                if (m > 1) {
+                    dx /= m; dy /= m; m = 1;
+                    // follow: o centro persegue o dedo que passou da borda
+                    if (s.follow) {
+                        s.cx = f.x - dx * s.r;
+                        s.cy = f.y - dy * s.r;
+                    }
+                }
+                if (m < s.dead) { s.x = 0; s.y = 0; s.mag = 0; s.dir = null; continue; }
+                var k2 = (m - s.dead) / (1 - s.dead) / m;
+                s.x = dx * k2; s.y = dy * k2;
+                s.mag = (m - s.dead) / (1 - s.dead);
+                s.angle = Math.atan2(dy, dx);
+                s.dir = E.pad._dir(s.angle, s.dirs);
+            } else {
+                s.x = 0; s.y = 0; s.mag = 0; s.dir = null;
+            }
         }
     },
 

@@ -22,14 +22,22 @@
 // loop novos (correr mais rapido nao acelerava). Novos: anim.speed
 // (multiplicador) e anim.onFrame(anim, i) ao trocar de quadro; a volta
 // do loop guardava so fi/fps e perdia a sobra do quadro (o ciclo atrasava).
+// 1.4.0: E.spr.stamp(nome, x, y, {scale}) desenha sprite/REGIAO de folha
+// no alvo CORRENTE — o quadro ou um sprite selecionado com useSprite (o
+// blit so empurra para o quadro) — e escala com drawSprite (API 33): o
+// fundo de uma sala e montado uma vez num sprite e a arte de 32 px serve
+// em celula de 27 no relogio. E.anim.dir({down, up, left, right}) junta os
+// clipes direcionais com face(dir)/walk(on).
 
 var E = require('celeros.game');
 var S = System;
+var EMPTY = {};
+var _stO = { key: 0 };
 
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.3.0',
+    version: '1.4.0',
     bases: [],
     _slots: {},
     _sheets: {},        // spritesheets: 1 PNG inteiro + regioes nomeadas
@@ -219,6 +227,52 @@ E.spr = {
         }
     },
 
+    // desenha no alvo corrente (quadro OU sprite selecionado por
+    // useSprite), com escala: o {scale (1), key (cor-chave; null = opaco;
+    // default preto), cx/cy/ax/ay como no blit}. Regiao de folha recorta
+    // com setClip no alvo e desenha a folha inteira deslocada pelo
+    // drawSprite. Sem drawSprite (firmware sem API 33/placa sem PSRAM) cai
+    // no blit (escala 1, so quadro) ou no painter. Devolve false se nada
+    // pode ser desenhado
+    stamp: function (name, x, y, o) {
+        var s = E.spr._slots[name];
+        if (!s) return false;
+        o = o || EMPTY;
+        var k = o.scale || 1;
+        var w = s.w * k, h = s.h * k;
+        var ax = o.ax !== undefined ? o.ax : (o.cx ? 0.5 : 0);
+        var ay = o.ay !== undefined ? o.ay : (o.cy ? 0.5 : 0);
+        var dx = Math.round(x - w * ax), dy = Math.round(y - h * ay);
+        var key = o.key === undefined ? 0x0000 : o.key;
+        var id = s.sheet ? s.sheet.id : s.id;
+        if (id && typeof S.drawSprite === 'function') {
+            var W2 = Math.round(w), H2 = Math.round(h);
+            var kk = key === null ? undefined : key;
+            if (s.sheet) {
+                var sh = s.sheet;
+                S.setClip(dx, dy, W2, H2);
+                S.drawSprite(id, dx + (sh.w / 2 - s.rx) * k, dy + (sh.h / 2 - s.ry) * k, 0, k, k, kk);
+                S.clearClip();
+            } else {
+                S.drawSprite(id, dx + w / 2, dy + h / 2, 0, k, k, kk);
+            }
+            if (E.dirty.on) E.dirty.add(dx, dy, W2, H2);
+            return true;
+        }
+        if (k === 1 && id) {
+            _stO.key = key === null ? undefined : key;
+            E.spr.blit(name, dx, dy, _stO);
+            return true;
+        }
+        if (s.paint) {
+            if (s.sheet) s.paint(name, dx, dy, k);
+            else s.paint(w, h, dx, dy);
+            if (E.dirty.on) E.dirty.add(dx, dy, w, h);
+            return true;
+        }
+        return false;
+    },
+
     free: function (name) {
         var s = E.spr._slots[name];
         if (!s) return;
@@ -305,9 +359,40 @@ E.anim = function (frames, fps, loop) {
             var f = this.frames[this.i];
             if (f === undefined) return;
             if (typeof f === 'function') f(x, y);
+            else if (opts && opts.scale) E.spr.stamp(f, x, y, opts);   // 1.4: escala
             else E.spr.blit(f, x, y, opts);
         }
     };
+};
+
+// clipes por direcao: clips = {down, up, left, right} (listas de quadros;
+// direcao ausente usa a 'down'). face(dir) troca o clipe sem recomecar o
+// passo; walk(false) para no quadro 0 (parado); draw/tick como o anim
+E.anim.dir = function (clips, fps, loop) {
+    var a = E.anim(clips.down || clips.right || [], fps, loop);
+    a.clips = clips;
+    a.facing = 'down';
+    a.walking = true;
+    a.face = function (dir) {
+        if (!dir || dir === a.facing) return a;
+        var fr = clips[dir] || clips.down;
+        if (!fr) return a;
+        a.facing = dir;
+        var t = a.t;
+        a.play(fr);
+        a.t = t;
+        a.i = fr.length ? Math.floor(t * a.fps) % fr.length : 0;
+        return a;
+    };
+    a.walk = function (on) {
+        if (!!on === a.walking) return a;
+        a.walking = !!on;
+        if (!on) { a.t = 0; a.i = 0; }
+        return a;
+    };
+    var tk = a.tick;
+    a.tick = function (dt) { if (a.walking) tk.call(a, dt); };
+    return a;
 };
 
 E._mods.push('spr');

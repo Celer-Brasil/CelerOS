@@ -1121,7 +1121,7 @@ function depsSize(nomes) {
         E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
         check('familia enxuta (jsstrip) preserva as linhas e roda o loop',
               linhasIguais && marks.length === 3 &&
-              E2.version === '1.5.0' && E2._mods.length === 3,
+              E2.version === '1.6.0' && E2._mods.length === 3,
               'linhas=' + linhasIguais);
     })();
 
@@ -1558,7 +1558,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.3.0' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.4.0' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1582,7 +1582,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.3.0',
+          out.fx[2] === '1.4.0',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro
@@ -1611,7 +1611,7 @@ function depsSize(nomes) {
         fn4(env.System, env.Storage, env.__harness, req);
     } catch (e) { out.shim = 'erro: ' + e; }
     check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.4.0',
-          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.5.0' &&
+          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.6.0' &&
           out.shim[2] === 'fx,spr,tilemap' && out.shim[3] === 'function' &&
           out.shim[4] === 'function' && out.shim[5] === 'function',
           JSON.stringify(out.shim));
@@ -2908,6 +2908,7 @@ require('./celergame_next.js')(check);
 // modulos p/ jogos complexos (fsm/events/path/collide/pad/level) + core 1.2
 require('./celergame_mods.js')(check);
 require('./celergame_r3.js')(check);
+require('./celergame_r4.js')(check);
 
 // resumo
 console.log('');

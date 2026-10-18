@@ -17,6 +17,11 @@
 // Relogio: o do JOGO (anda no tick da engine — congela no E.pause, segue o
 // E.timeScale), igual para buffs, recargas e iframes. st.hp e a vida
 // corrente; o teto e get("hp") (buff de hp maximo vale na hora).
+//
+// 1.1.0: damage(n, {dir}) repassa a direcao do golpe ao onHit (o combat
+// usa no knockback) e guarda s.lastDir; s.blink(ms) diz se o sprite deve
+// SUMIR neste quadro durante os iframes (pisca sem alocar); s.hpMax
+// (atalho do get('hp')) e s.full().
 
 var E = require('celeros.game');
 
@@ -35,7 +40,8 @@ E.stats = function (base, o) {
         lastHit: -1e9,
         level: 1,
         xp: 0,
-        onHit: o.onHit || null,         // (s, dano, fonte)
+        onHit: o.onHit || null,         // (s, dano, fonte, dir)
+        lastDir: null,
         onDeath: o.onDeath || null,     // (s, fonte)
         onLevel: o.onLevel || null,     // (s, nivel)
         _cool: {},
@@ -84,6 +90,14 @@ E.stats = function (base, o) {
         return false;
     };
     s.maxHp = function () { return s.get('hp'); };
+    s.hpMax = s.maxHp;
+    s.full = function () { return s.hp >= s.get('hp'); };
+    // pisca nos iframes: true = NAO desenhe neste quadro (periodo ms, 80)
+    s.blink = function (ms) {
+        if (!s.invuln()) return false;
+        var p = ms || 80;
+        return Math.floor((_clock - s.lastHit) / p) % 2 === 1;
+    };
     s.invuln = function () { return _clock - s.lastHit < s.iframes; };
     // dano n: menos def (o.pierce ignora), minimo 1 se n > 0; durante os
     // iframes devolve 0 sem tocar a vida. Devolve o dano aplicado
@@ -95,7 +109,8 @@ E.stats = function (base, o) {
         if (real > s.hp) real = s.hp;
         s.hp -= real;
         s.lastHit = _clock;
-        if (s.onHit) s.onHit(s, real, d.source);
+        s.lastDir = d.dir || null;
+        if (s.onHit) s.onHit(s, real, d.source, d.dir);
         if (s.hp <= 0) {
             s.hp = 0;
             s.dead = true;
@@ -173,7 +188,7 @@ E.stats = function (base, o) {
     };
     return s;
 };
-E.stats.version = '1.0.0';
+E.stats.version = '1.1.0';
 // relogio de jogo em ms (o mesmo dos buffs/recargas)
 E.stats.now = function () { return _clock; };
 

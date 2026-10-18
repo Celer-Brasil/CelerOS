@@ -27,6 +27,7 @@ declare namespace E {
         mix: boolean;        // System.sfx: efeito misturado sem bloquear (API 32)
         clip: boolean;       // setClip/clearClip
         button: boolean;     // System.button (botao fisico)
+        multi: boolean;      // System.getTouches: varios dedos (API 43)
         big: boolean;        // tela fisica >= 400 px (firmware promove as fontes)
         native: boolean;     // canvas nativo ativo (API 28)
         w: number;
@@ -71,6 +72,9 @@ declare namespace E {
     /** Pausa do jogo (sem arg alterna): update recebe dt 0, fx/camera/timers/tweens
      *  congelam e o draw segue (desenhe o E.ui.pause por cima). Devolve o estado. */
     function pause(on?: boolean): boolean;
+    /** hitstop: congela o jogo por ms (dt 0 no update, modulos e fx) */
+    function freeze(ms: number): void;
+    function frozen(): boolean;
     let fpsTarget: number;
     const data: Record<string, any>;
     let sceneName: string;
@@ -106,6 +110,23 @@ declare namespace E {
         dblMs: number;
         /** ms com o dedo pousado (0 solto) */
         heldMs: number;
+        /** dedos no vidro (core 1.4; API 43 multitoque, 1 dedo em firmware antigo).
+         *  O dedo que levantou fica 1 quadro com down false / justUp true. */
+        touches: Finger[];
+        finger(id: number): Finger | null;
+    }
+    interface Finger {
+        id: number; x: number; y: number;
+        /** onde pousou */
+        sx: number; sy: number;
+        /** delta desde o quadro anterior */
+        dx: number; dy: number;
+        t0: number; heldMs: number;
+        down: boolean; justDown: boolean; justUp: boolean;
+        /** passou do limiar de arrasto */
+        moved: boolean;
+        /** e o dedo primario (o que alimenta x/y/tap) */
+        primary: boolean;
     }
     const input: Input;
     interface Rect { x: number; y: number; w: number; h: number }
@@ -437,6 +458,8 @@ declare namespace E {
         inc(key: string, n?: number): number;
         /** liga/desliga persistente */
         bool(key: string, def?: boolean): boolean;
+        /** arquivo de jogo n (1..; 0 = base): as chaves passam a viver sob prefixo + "sN." */
+        slot(n?: number): number;
         /** inverte o bool e devolve o novo */
         toggle(key: string, def?: boolean): boolean;
     };
@@ -511,9 +534,10 @@ declare namespace E {
         }[]): Parallax;
         /** Desenha particulas/floaters/flash — chame na ultima linha do draw da cena. */
         draw(): void;
-        /** Receitas: explosao, faisca, fumaca, confete, poeira, gosma, cura (+ as suas). */
+        /** Receitas: explosao, faisca, fumaca, confete, poeira, gosma, cura, corte, poof, brilho, pedrinha (+ as suas). */
         presets: Record<string, Record<string, any>>;
         /** Toca uma receita (opts sobrepoem); ring/flash/shake da receita inclusos. */
+        /** opts.dir (rad) aponta a receita (o corte segue o golpe) */
         play(name: string, x: number, y: number, opts?: Record<string, any>): boolean;
         /** Zera particulas, textos, emissores e flash (exit de cena). */
         clear(): void;
@@ -563,6 +587,11 @@ declare namespace E {
              opts?: { key?: number; cx?: boolean; cy?: boolean;
                       /** ancora 0..1 (ax 0.5 + ay 1 = x,y e o pe) */
                       ax?: number; ay?: number }): void;
+        /** desenha no alvo CORRENTE (quadro ou sprite do useSprite), com escala
+         *  (drawSprite, API 33); key null = opaco. false se nada desenhavel */
+        stamp(name: string, x: number, y: number,
+              o?: { scale?: number; key?: number | null; cx?: boolean; cy?: boolean;
+                    ax?: number; ay?: number }): boolean;
         /** {w, h} do sprite/regiao, ou null */
         size(name: string): { w: number; h: number } | null;
         free(name: string): void;
@@ -588,10 +617,25 @@ declare namespace E {
         reset(): Anim;
         /** troca o clipe; o MESMO frames nao recomeca (so ajusta fps/loop — seguro por quadro) */
         play(frames: AnimFrame[], fps?: number, loop?: AnimLoop): Anim;
+        /** opts.scale (1.4) desenha pelo stamp (escala e alvo corrente) */
         draw(x: number, y: number, opts?: { key?: number; cx?: boolean; cy?: boolean;
-                                             ax?: number; ay?: number }): void;
+                                             ax?: number; ay?: number; scale?: number }): void;
     }
     function anim(frames: AnimFrame[], fps?: number, loop?: AnimLoop): Anim;
+    interface DirAnim extends Anim {
+        clips: Record<string, AnimFrame[]>;
+        facing: string;
+        walking: boolean;
+        /** troca o clipe da direcao sem zerar o passo */
+        face(dir: string): DirAnim;
+        /** false para no quadro 0 (parado) */
+        walk(on: boolean): DirAnim;
+    }
+    namespace anim {
+        /** clipes por direcao {down, up, left, right} */
+        function dir(clips: { down?: AnimFrame[]; up?: AnimFrame[]; left?: AnimFrame[]; right?: AnimFrame[] },
+                     fps?: number, loop?: AnimLoop): DirAnim;
+    }
 }
 
 // ---- celeros.game.tilemap.d.ts -----------------------------------------

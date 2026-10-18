@@ -21,6 +21,12 @@ declare namespace E {
     interface Dialog {
         done: boolean;
         closed: boolean;
+        /** pagina corrente (texto em array) */
+        page: number;
+        pages: string[];
+        text: string;
+        /** completa / proxima pagina / fecha (o botao A do pad); false = fechou */
+        next(): boolean;
         /** desenha a caixa e avanca o texto; tap completa / fecha (false = fechou) */
         draw(x: number, y: number, w?: number): boolean;
         skip(): void;
@@ -43,8 +49,12 @@ declare namespace E {
         /** Texto datilografado (speed chars/s): reveal avanca no draw — cena
          *  comum, nao static. A quebra de linhas e calculada 1x e a ALTURA do
          *  painel cresce com o texto. */
-        dialog(text: string, o?: {
+        dialog(text: string | string[], o?: {
             speed?: number; name?: string; px?: number;
+            /** anda no relogio real (funciona com E.paused) */
+            realtime?: boolean;
+            /** false: so d.next() avanca */
+            tap?: boolean;
         }): Dialog;
         /** Tela de titulo: 'start' | 'extra' | null no tap. start: null/false esconde o botao. */
         title(o?: {

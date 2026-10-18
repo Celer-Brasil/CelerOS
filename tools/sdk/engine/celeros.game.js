@@ -67,8 +67,16 @@
 // {wait}/{call}, E.m.weighted/lerpColor/fmt/clock/moveToward,
 // group.closest, pool.find, cam.panTo, gfx.hearts, save.bool/toggle e o
 // overlay do debug com a cena e a pilha.
+// 1.4.0: E.freeze(ms) (hitstop: o golpe que acerta congela o jogo uns
+// quadros — dt 0 no update, nos modulos e no fx), E.save.slot(n) (arquivos
+// de jogo 1..3 sob o mesmo prefixo), multitoque: E.input.touches (dedos
+// por id com down/justDown/justUp/heldMs/moved, via System.getTouches da
+// API 43; 1 dedo sintetico em firmware antigo) e E.input.finger(id) — o
+// primario segue alimentando x/y/tap/swipe como sempre; quando ele levanta
+// com outro dedo na tela, o primario vira soltura + toque novo (sem pulo
+// de posicao que viraria swipe falso).
 
-var E = { version: '1.3.0' };
+var E = { version: '1.4.0' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -105,6 +113,9 @@ E.caps = (function () {
         mix: typeof S.sfx === 'function',          // API 32: sfx sem bloquear
         clip: typeof S.setClip === 'function',
         button: typeof S.button === 'function',
+        // API 43: varios dedos (System.getTouches) — 4848 e relogio; a CYD
+        // (resistivo) entrega 1 ponto pelo mesmo caminho
+        multi: typeof S.getTouches === 'function',
         // tela fisica grande (>= 400): o firmware promove as fontes 1/2/4
         big: !!(info && info.screenW >= 400),
         native: false, w: 240, h: 320
@@ -129,6 +140,8 @@ E.init = function (opts) {
         S.setNativeCanvas(false);
         E.caps.native = false;
     }
+    // o pool de sprites pode mudar com o canvas (caps foi lido no require)
+    if (typeof S.spriteSlots === 'function') E.caps.slots = S.spriteSlots();
     E.W = E.caps.w = S.screenWidth();
     E.H = E.caps.h = S.screenHeight();
     E.U = Math.min(E.W, E.H) / 240;
@@ -138,7 +151,8 @@ E.init = function (opts) {
     if (opts.keepAwake !== false && typeof S.keepAwake === 'function') {
         S.keepAwake(true);
     }
-    E.save.prefix = opts.save || '';
+    E.save.prefix = E.save._base = opts.save || '';
+    E.save._slot = 0;
     if (opts.debug !== undefined) E.debug = !!opts.debug;
     // bases de assets e pool de particulas sao dos MODULOS adotados —
     // o core roda sozinho (um jogo core-only nao paga spr/fx)
@@ -435,8 +449,55 @@ E.input = {
     longMs: 600,
     dblMs: 300,
     heldMs: 0,             // ms com o dedo pousado (0 solto) — carga de tiro
+    // dedos (core 1.4): [{id, x, y, sx, sy, dx, dy, t0, heldMs, down,
+    // justDown, justUp, moved, primary}] — o dedo que levantou fica 1 quadro
+    // com down false / justUp true
+    touches: [],
+    finger: function (id) {
+        var L = E.input.touches;
+        for (var k = 0; k < L.length; k++) if (L[k].id === id) return L[k];
+        return null;
+    },
     _raw: { down: false, sx: 0, sy: 0, t0: 0, moved: false, longDone: false,
-            lastTapT: -1e9, lastTapX: 0, lastTapY: 0 }
+            lastTapT: -1e9, lastTapX: 0, lastTapY: 0, pid: -1, swap: false }
+};
+
+// dedos por id: objetos reaproveitados (cada dedo vive do toque ao quadro
+// seguinte ao que levantou — justUp fica visivel 1 quadro)
+var _pt = { touched: false, x: 0, y: 0 };
+var _pt1 = { id: 0, x: 0, y: 0 };
+var _one = [];
+E._fingers = function (arr, now) {
+    var L = E.input.touches, k, f, j;
+    // quem levantou no quadro passado sai agora
+    for (k = L.length - 1; k >= 0; k--) if (!L[k].down) L.splice(k, 1);
+    for (k = 0; k < L.length; k++) { L[k].justDown = false; L[k]._seen = false; }
+    for (j = 0; j < arr.length; j++) {
+        var p = arr[j];
+        f = null;
+        for (k = 0; k < L.length; k++) if (L[k].id === p.id) { f = L[k]; break; }
+        if (!f) {
+            f = { id: p.id, x: p.x, y: p.y, sx: p.x, sy: p.y, dx: 0, dy: 0, t0: now,
+                  heldMs: 0, down: true, justDown: true, justUp: false, moved: false,
+                  primary: false, _seen: false };
+            L.push(f);
+        } else {
+            f.dx = p.x - f.x;
+            f.dy = p.y - f.y;
+            f.x = p.x;
+            f.y = p.y;
+            f.heldMs = now - f.t0;
+        }
+        f.justUp = false;
+        f._seen = true;
+        f.primary = j === 0;
+        if (!f.moved && (Math.abs(f.x - f.sx) > E.input.dragThresh ||
+                         Math.abs(f.y - f.sy) > E.input.dragThresh)) f.moved = true;
+    }
+    for (k = 0; k < L.length; k++) {
+        f = L[k];
+        if (!f._seen && f.down) { f.down = false; f.justUp = true; f.dx = 0; f.dy = 0; f.primary = false; }
+    }
 };
 
 E._pollInput = function (now) {
@@ -449,7 +510,26 @@ E._pollInput = function (now) {
     i.doubleTap = null;
     i.swipe = null;
     i.longpress = false;
-    var t = S.getTouch();
+    var t;
+    if (E.caps.multi) {
+        // UMA leitura por quadro (getTouch e getTouches cedem o quadro)
+        var arr = S.getTouches();
+        E._fingers(arr, now);
+        _pt.touched = arr.length > 0;
+        if (_pt.touched) { _pt.x = arr[0].x; _pt.y = arr[0].y; }
+        // primario trocou de dedo sem soltar o vidro: solta este quadro e
+        // o novo primario entra como toque fresco no proximo
+        if (_pt.touched && r.down && r.pid !== arr[0].id) {
+            _pt.touched = false;
+            r.swap = true;
+        } else if (_pt.touched) r.pid = arr[0].id;
+        t = _pt;
+    } else {
+        t = S.getTouch();
+        _one.length = 0;
+        if (t.touched) { _pt1.x = t.x; _pt1.y = t.y; _one.push(_pt1); }
+        E._fingers(_one, now);
+    }
     if (t.touched) {
         if (!r.down) {
             r.down = true;
@@ -615,6 +695,16 @@ E.pause = function (on) {
     E._redraw = true;
     return on;
 };
+
+// hitstop: congela o jogo por ms (dt 0 no update, nos modulos e no fx; o
+// veu, os timers e os tweens seguem o relogio). Pedidos sobrepostos ficam
+// com o prazo mais longo
+E._frozenUntil = 0;
+E.freeze = function (ms) {
+    var ate = S.millis() + (ms > 0 ? ms : 0);
+    if (ate > E._frozenUntil) E._frozenUntil = ate;
+};
+E.frozen = function () { return S.millis() < E._frozenUntil; };
 
 // camera lenta/rapida: escala o dt do update, do fx e da camera (0.3 =
 // camera lenta no golpe final). Timers e tweens seguem o relogio
@@ -834,7 +924,7 @@ E.run = function (scenes, first, firstArg) {
         if (dt < 0) dt = 0;
         // o veu de transicao anda no tempo REAL (a pausa nao trava um fade)
         var rdt = dt;
-        if (E.paused) dt = 0;
+        if (E.paused || now < E._frozenUntil) dt = 0;
         else if (E.timeScale !== 1) dt *= E.timeScale > 0 ? E.timeScale : 0;
         E.dt = dt;
         if (E._trans) {
@@ -1977,6 +2067,8 @@ E.audio = {
 
 E.save = {
     prefix: '',
+    _base: '',
+    _slot: 0,
     get: function (key, def) {
         try {
             var v = Storage.get(E.save.prefix + key, null);
@@ -2012,6 +2104,14 @@ E.save = {
             if (typeof Storage.remove === 'function') Storage.remove(E.save.prefix + key);
             else Storage.set(E.save.prefix + key, '');
         } catch (e) {}
+    },
+    // arquivo de jogo n (1..): as chaves passam a viver sob "<prefixo>sN.";
+    // slot(0) volta ao prefixo base (opcoes globais). Devolve o slot
+    slot: function (n) {
+        if (n === undefined) return E.save._slot;
+        E.save._slot = n > 0 ? n : 0;
+        E.save.prefix = (E.save._base || '') + (n > 0 ? 's' + n + '.' : '');
+        return E.save._slot;
     },
     // liga/desliga persistente (som, vibracao, tutorial visto)
     bool: function (key, def) {

@@ -69,9 +69,10 @@ declare namespace E {
         }[]): Parallax;
         /** Desenha particulas/floaters/flash — chame na ultima linha do draw da cena. */
         draw(): void;
-        /** Receitas: explosao, faisca, fumaca, confete, poeira, gosma, cura (+ as suas). */
+        /** Receitas: explosao, faisca, fumaca, confete, poeira, gosma, cura, corte, poof, brilho, pedrinha (+ as suas). */
         presets: Record<string, Record<string, any>>;
         /** Toca uma receita (opts sobrepoem); ring/flash/shake da receita inclusos. */
+        /** opts.dir (rad) aponta a receita (o corte segue o golpe) */
         play(name: string, x: number, y: number, opts?: Record<string, any>): boolean;
         /** Zera particulas, textos, emissores e flash (exit de cena). */
         clear(): void;

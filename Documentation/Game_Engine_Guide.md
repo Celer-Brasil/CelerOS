@@ -530,6 +530,95 @@ alive(), onWave, onClear, onDone, endless: {grow}})`: spawns on schedule, waits
 for `alive()` to reach 0, rests, starts the next; `endless` repeats the last
 wave growing by `grow`. States: `wait`, `spawn`, `clear`, `done`.
 
+## 14e. Action-adventure: combat and screen-sized rooms (round 4)
+
+Two more deps, made for the top-down adventure *Lenda de Celer* (in
+`hub_apps/`, its reference game), tested in `test/sdk/celergame_r4.js`:
+
+| Dep | Gives | Typical use |
+|---|---|---|
+| `celeros.game.combat` | `E.combat.body/hit/sword/blast/shot/move/knock` | teams, sword swings, explosions, projectiles and boomerangs, knockback, hitstop |
+| `celeros.game.world` | `E.world({areas, paint, solid, ...})` | overworld/dungeon made of screen-sized rooms, sliding transitions, per-room persistent state, minimap |
+| `celeros.game.kit` | collide, level, fsm, events, path, steer, stats, inv, script + `E.sfx` in ONE dep | complex games under the 8-deps ceiling of `app.json` |
+
+**Combat.** `E.combat.body(ent, {team, stats})` registers a target. Its hurtbox
+is the entity's corner rect `{x, y, w, h}`, the same as `collide.move`. Ways to
+hit:
+- `hit(owner, shape | fn, {dmg, knock, ms, once, stun})` keeps a hitbox alive
+  for ms. A function shape follows its owner.
+- `sword(owner, dir, {reach, width})` is the swing in front of the owner.
+- `blast(x, y, r)` is a bomb and hits every team.
+- `shot(owner, {x, y, vx, vy, map, boomerang: {range, speed}})` fires a
+  projectile. It dies on a wall of `map`; a boomerang flies out, pierces, stuns
+  and comes back to its owner.
+
+Damage goes through `stats.damage`, so invulnerability frames apply. A hit that
+lands:
+- pushes the target with `knock` px/s, decaying over `knockMs`;
+- calls `E.freeze(E.combat.hitstop)`;
+- emits `hit`/`kill` when the events module is loaded.
+
+Move knocked-back entities with `E.combat.move(ent, dt, map)`, which also slides
+along walls.
+
+```js
+E.combat.body(heroi, { team: "heroi", stats: heroi.st });
+E.combat.body(polvo, { team: "monstro", stats: polvo.st,
+                       onKill: function (p) { p.dead = true; E.fx.play("poof", p.x, p.y); } });
+if (botaoA.pressed) E.combat.sword(heroi, heroi.dir, { dmg: 1, knock: 240 });
+E.combat.move(heroi, dt, W);   // W = the world: a collision map
+```
+
+**World.** An area is a grid of rooms; each room is an ASCII map parsed by
+`E.level` (`areas: {campo: {w: 4, h: 3, rooms: {"0,0": [...]}}}`).
+- `W.go(area, c, r)` enters a room. The room is drawn once (`paint` per cell,
+  with `E.spr.stamp`) into a screen-sized sprite.
+- `E.dirty.enable(W.painter)` repaints from that sprite with one `blitSprite`
+  per dirty box, no per-tile redraw.
+- `W.edge(ent)` + `W.move(dir)` slide to the neighbour room. While `W.sliding`
+  is true the game waits, the two room sprites are pushed shifted, and
+  `W.slideShift()` places the hero.
+- Without a free sprite slot or `drawSprite` (API 33), the world paints cell by
+  cell and room changes become cuts.
+- `W.set(c, r, v, true)` (opened chest, unlocked door) and `W.take(spawn)`
+  (key picked up) persist per room in `E.save` (`save: key`). `W.flag/gflag`
+  hold any other state, and `W.restore()` loads it back.
+- `anim: {ms, frames: {agua: ["agua", "agua2"]}}` animates cells.
+- `W.minimap(x, y)` draws the visited rooms.
+- `W` is also a collision map (`solidAt/rectSolid/cw/ch`) for `collide.move`,
+  `combat.shot` and `path` (`W.cost`).
+
+**Multitouch (core 1.4 + pad 1.2, API 43).**
+- `E.input.touches` lists the fingers on the glass by `id`, each with `x/y`,
+  `sx/sy` (where it landed), `down`, `justDown`, `justUp`, `heldMs` and `moved`.
+  A finger that lifts stays one frame with `justUp`. `E.input.finger(id)`
+  looks one up; `E.caps.multi` says the glass is multitouch.
+- The core reads `System.getTouches()` once per frame. The primary finger keeps
+  feeding `E.input.x/y/tap/swipe`. When it lifts while another finger stays,
+  that is a release followed by a fresh press, never a jump that reads as a
+  swipe.
+- With `celeros.game.pad` 1.2 each control takes the finger that lands on it
+  and follows it until it lifts. Walking with the stick while pressing A and B
+  works on the 4848 (5 fingers) and on the watch.
+- Single-touch glass (CYD) and older firmware behave as before (`stick.tap` is
+  the action). `stick({follow: true})` drags the centre along with the finger.
+
+**Core 1.4 and the rest of round 4.**
+- Core: `E.freeze(ms)` (hitstop: dt 0 for the update, the modules and fx) and
+  `E.save.slot(n)` (game files 1..3 under the same prefix).
+- spr 1.4:
+  - `E.spr.stamp(name, x, y, {scale, key})` draws a sprite or sheet region onto
+    the CURRENT target — the frame or a sprite selected with `useSprite`, which
+    is how rooms are baked — scaled via `drawSprite`.
+  - `E.anim.dir({down, up, left, right}, fps)` adds `face(dir)` / `walk(on)`.
+- ui 1.2: `E.ui.dialog([...pages], {realtime, tap: false})` + `d.next()`
+  (advance with the pad's A button).
+- fx 1.4: presets `corte`, `poof`, `brilho`, `pedrinha` and `play(..., {dir})`.
+- stats 1.1: `damage(n, {dir})`, `blink()` for the invulnerability flicker,
+  `hpMax()`, `full()`.
+- sfx 1.4: original adventure sounds (`espada`, `porta`, `segredo`, `item`,
+  `chave`, `bumerangue`, `queda`, `escada`, `cristal`).
+
 ## 15. Physics (`celeros.physics`, optional)
 
 **Most games need no physics module at all.** On a Duktape device an
@@ -862,6 +951,7 @@ run out).
 | `E.push/pop/depth`, scene `cleanup` | scene stack (inventory over the game), auto-kill of scene timers |
 | `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | modules for complex games (§14c) |
 | `E.script`, `E.inv`, `E.steer`, `E.gen`, `E.stats`, `E.waves` | cutscenes, inventory, steering, procedural levels, combat stats, wave director (§14d) |
+| `E.combat`, `E.world`, `E.freeze`, `E.save.slot`, `E.spr.stamp`, `E.anim.dir` | action-adventure: hitboxes/knockback/hitstop, screen-sized rooms with slide, game files, baked rooms, 4-way animation (§14e) |
 | `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | scene parameters, cooldown display, camera pans, hp hearts (core 1.3) |
 | `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 

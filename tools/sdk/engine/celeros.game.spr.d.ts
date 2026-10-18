@@ -38,6 +38,11 @@ declare namespace E {
              opts?: { key?: number; cx?: boolean; cy?: boolean;
                       /** ancora 0..1 (ax 0.5 + ay 1 = x,y e o pe) */
                       ax?: number; ay?: number }): void;
+        /** desenha no alvo CORRENTE (quadro ou sprite do useSprite), com escala
+         *  (drawSprite, API 33); key null = opaco. false se nada desenhavel */
+        stamp(name: string, x: number, y: number,
+              o?: { scale?: number; key?: number | null; cx?: boolean; cy?: boolean;
+                    ax?: number; ay?: number }): boolean;
         /** {w, h} do sprite/regiao, ou null */
         size(name: string): { w: number; h: number } | null;
         free(name: string): void;
@@ -63,8 +68,23 @@ declare namespace E {
         reset(): Anim;
         /** troca o clipe; o MESMO frames nao recomeca (so ajusta fps/loop — seguro por quadro) */
         play(frames: AnimFrame[], fps?: number, loop?: AnimLoop): Anim;
+        /** opts.scale (1.4) desenha pelo stamp (escala e alvo corrente) */
         draw(x: number, y: number, opts?: { key?: number; cx?: boolean; cy?: boolean;
-                                             ax?: number; ay?: number }): void;
+                                             ax?: number; ay?: number; scale?: number }): void;
     }
     function anim(frames: AnimFrame[], fps?: number, loop?: AnimLoop): Anim;
+    interface DirAnim extends Anim {
+        clips: Record<string, AnimFrame[]>;
+        facing: string;
+        walking: boolean;
+        /** troca o clipe da direcao sem zerar o passo */
+        face(dir: string): DirAnim;
+        /** false para no quadro 0 (parado) */
+        walk(on: boolean): DirAnim;
+    }
+    namespace anim {
+        /** clipes por direcao {down, up, left, right} */
+        function dir(clips: { down?: AnimFrame[]; up?: AnimFrame[]; left?: AnimFrame[]; right?: AnimFrame[] },
+                     fps?: number, loop?: AnimLoop): DirAnim;
+    }
 }

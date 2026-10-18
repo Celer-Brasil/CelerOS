@@ -402,10 +402,10 @@ declare const UI: {
 };
 
 declare const Net: {
-    /** executa um HTTP GET. Segue redirects. Lança erro se o WiFi não estiver conectado. */
+    /** executa um HTTP GET. Segue redirects. Lança erro se o WiFi não estiver conectado. O corpo tem **teto de 32 KB** (`NET_MAX_BODY`): */
     /** @permission "net" */
     get(url?: string): any;
-    /** como Net.get(), mas parseia o corpo como JSON. Um corpo JSON malformado lança um erro visível no script. */
+    /** como Net.get(), mas parseia o corpo como JSON. Mesmo **teto de 32 KB** do `Net.get()`: um JSON maior que o teto chega truncado e */
     /** @permission "net" */
     getJSON(url?: string): any;
     /** executa um HTTP POST. Lança erro se o WiFi não estiver conectado. */

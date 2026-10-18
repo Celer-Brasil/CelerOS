@@ -1,12 +1,15 @@
 {
   "name": "Calculator",
   "packageName": "celeros.calculator",
-  "version": "1.3.0",
-  "api": 22,
+  "version": "1.4.0",
+  "api": 30,
   "permissions": ["fs"],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
   "description": "Calculadora de toque no tema do CelerOS: previa ao vivo, historico das ultimas contas e ANS que encadeia no resultado anterior (salvo no aparelho).",
-  "changelog": "1.3.0 - teclado e visor com o toolkit UI (API 22): botoes com estado pressionado, fontes do sistema\n1.2.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.1 - layout cabe na tela: grade sobe/compacta e a linha do \"=\" nao e mais cortada embaixo\n1.2.0 - tema CelerOS, previa ao vivo, historico, ANS encadeado (começar por operador repete o ultimo resultado) e persistencia\n1.0.0 - original"
+  "deps": {
+    "celeros.app": "^1.0.0"
+  },
+  "changelog": "1.4.0 - migrada para o CelerKit (dep celeros.app): o core fica com o laco e o tema; conserto de encadear apos o igual (digito/operador agora começam a conta nova em vez de colar na expressao antiga) e previa avaliada so quando a conta muda\n1.3.0 - teclado e visor com o toolkit UI (API 22): botoes com estado pressionado, fontes do sistema\n1.2.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.1 - layout cabe na tela: grade sobe/compacta e a linha do \"=\" nao e mais cortada embaixo\n1.2.0 - tema CelerOS, previa ao vivo, historico, ANS encadeado (começar por operador repete o ultimo resultado) e persistencia\n1.0.0 - original"
 }

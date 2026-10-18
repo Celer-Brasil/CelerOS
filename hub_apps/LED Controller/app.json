@@ -1,12 +1,16 @@
 {
   "name": "LED Controller",
   "packageName": "celeros.led",
-  "version": "1.3.0",
-  "api": 22,
+  "version": "1.4.0",
+  "api": 30,
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
   "description": "Controla LED/fita por GPIO: pino escolhivel, liga/desliga, brilho PWM e modo piscar. Requer permissao GPIO.",
-  "changelog": "1.3.0 - visual novo com o toolkit UI (API 22): seletor de pino, botao grande, slider de brilho e abas de modo\n1.2.1 - permissoes declaradas (gpio): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, pino escolhivel, brilho PWM e tres modos (fixo/pisca/rapido)",
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.form": "^1.0.0"
+  },
+  "changelog": "1.4.0 - migrado para o CelerKit (deps celeros.app.*): o core fica com o laco e o tema, o form com o pedido validado do pino; tocar no GPIO digita o numero (sem caminhar de 2 a 48) e trocar de pino desliga o anterior\n1.3.0 - visual novo com o toolkit UI (API 22): seletor de pino, botao grande, slider de brilho e abas de modo\n1.2.1 - permissoes declaradas (gpio): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, pino escolhivel, brilho PWM e tres modos (fixo/pisca/rapido)",
   "permissions": ["gpio"]
 }

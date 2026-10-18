@@ -586,5 +586,7 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
     // launchEntry volta direto ao onTick do launcher e NINGUEM marca repaint —
     // o vidro ficava no ultimo quadro do app ("congelou") ate o proximo toque.
     // O caminho por toque (icone) repinta no proprio dispatchTouch.
+#if CONFIG_CELEROS_UI
     kui::Navigator::repaint();
+#endif
 }

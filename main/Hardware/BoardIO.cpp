@@ -822,8 +822,15 @@ bool micInitUnlocked() {
     i2s_std_config_t cfg = {};
     cfg.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000);
     s_mic32 = Board::profile().i2s.mclk < 0;  // sem MCLK = MEMS direto (32-bit)
+    // O macro do IDF compara `bits <= 16BIT` por dentro; em placa cujo perfil
+    // dobra s_mic32 para constante (CYD: i2s todo -1) a comparacao vira ?: de
+    // constantes e o -Wint-in-bool-context derruba o -Werror. Semantica de
+    // runtime intacta (a largura segue mudando em placa com codec).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wint-in-bool-context"
     cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(
         s_mic32 ? I2S_DATA_BIT_WIDTH_32BIT : I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+#pragma GCC diagnostic pop
     cfg.gpio_cfg.mclk = Board::profile().i2s.mclk >= 0
                             ? (gpio_num_t)Board::profile().i2s.mclk
                             : I2S_GPIO_UNUSED;  // codec (ES8311): MCLK do I2S1

@@ -2,23 +2,35 @@
 // Escreva um recado e ele chega a todo aparelho com o Mural aberto — inclusive
 // os que estavam DESLIGADOS ou longe na hora: cada mural guarda os recados
 // (Storage) e conversa com os vizinhos de tempos em tempos, comparando um
-// resumo. Resumo diferente = alguém está desatualizado = os dois empurram o
-// que têm. É o algoritmo Trickle (RFC 6206, o mesmo das redes de sensores):
-// em silêncio quando todos concordam, rápido quando alguém chega atrasado.
+// resumo. Resumo diferente = alguem esta desatualizado = os dois empurram o
+// que tem. E o algoritmo Trickle (RFC 6206, o mesmo das redes de sensores):
+// em silencio quando todos concordam, rapido quando alguem chega atrasado.
 //
-// Protocolo (prefixo "m"):
+// Migrado para o CelerKit: o casco do loop e o tema vieram do celeros.app
+// (A.run/A.T/A.header), o protocolo de malha do celeros.app.mesh (A.mesh,
+// familia "m", each parsing op/resto) e o cache de linhas do celeros.app.list.
+// O protocolo no ar NAO mudou (compativel com Mural 1.0..1.2.1 e com o
+// service.js do proprio pacote, que vendoriza celeros.mesh — servicos nao
+// carregam a tabela de deps do hub):
 //   m+<id>|<autor>|<texto>   recado (novo: ttl 4; refofocado: ttl 1)
-//   m#<qtd>.<hash>           resumo do mural (ttl 1, só vizinhos diretos)
+//   m#<qtd>.<hash>           resumo do mural (ttl 1, so vizinhos diretos)
 
-var mesh = require("celeros.mesh");
-var T = System.theme();
+var A = require("celeros.app");
+require("celeros.app.mesh");
+require("celeros.app.list");
+
+A.init();
+A.mesh.family("m");
+
 var MAX_POSTS = 24, MAX_TXT = 48, MAX_ID = 24, MAX_BY = 16;
 var IMIN = 4000, IMAX = 32000;
 
 var posts = [];            // [{id, by, txt, at}] mais novo primeiro
 var known = {};            // id -> true
+var postsRev = 0;          // muda quando o mural muda (carimbo dos caches)
 var me = null;
 var mySeq = parseInt(Storage.get("seq", "0"), 10) || 0;
+var frameNow = 0;          // relogio do quadro corrente (os handlers usam)
 
 function load() {
     try {
@@ -38,27 +50,34 @@ function addPost(id, by, txt, now) {
     if (known[id]) return false;
     known[id] = true;
     posts.unshift({ id: id, by: by, txt: txt, at: now });
-    // o que sai pelo fundo fica em known: a fofoca dos vizinhos não o ressuscita
+    // o que sai pelo fundo fica em known: a fofoca dos vizinhos nao o ressuscita
     while (posts.length > MAX_POSTS) posts.pop();
+    postsRev++;
     save();
     UI.invalidate();
     return true;
 }
 
-// resumo: quantidade + hash dos ids (ordem não importa)
+// resumo: quantidade + hash dos ids (ordem nao importa). Cacheado por
+// postsRev: ele era recalculado (e alocado) a cada quadro para a linha de
+// sincronia e de novo a cada resumo m# recebido.
+var digestCache = null;
 function digest() {
+    if (digestCache && digestCache.rev === postsRev) return digestCache.d;
     var ids = [];
     for (var i = 0; i < posts.length; i++) ids.push(posts[i].id);
     ids.sort();
     var h = 5381;
     var s = ids.join(",");
     for (var k = 0; k < s.length; k++) h = ((h * 33) ^ s.charCodeAt(k)) & 0xFFFF;
-    return posts.length + "." + h.toString(16);
+    var d = posts.length + "." + h.toString(16);
+    digestCache = { rev: postsRev, d: d };
+    return d;
 }
 
 // ---- Trickle -------------------------------------------------------------
 var I = IMIN, iStart = 0, tFire = 0, fired = false, consistent = 0;
-var neigh = {};            // vizinho -> {d: resumo, at}
+var neigh = {};            // vizinho -> {d: resumo, at, name}
 var pushQ = [];            // ids a refofocar
 var pushAt = 0;
 var lastSent = {};         // id -> quando EU refofoquei (supressão)
@@ -83,11 +102,11 @@ function inconsistent(now) {
 function trickle(now) {
     if (!fired && now >= tFire) {
         fired = true;
-        if (consistent < 1) CelerNet.broadcast("m#" + digest(), 1);
+        if (consistent < 1) A.mesh.send(null, "#", digest(), { ttl: 1 });
     }
     if (confirmAt && now >= confirmAt) {
         confirmAt = 0;
-        CelerNet.broadcast("m#" + digest(), 1);
+        A.mesh.send(null, "#", digest(), { ttl: 1 });
     }
     if (now - iStart >= I) newInterval(now, Math.min(IMAX, I * 2));
     if (pushQ.length && now >= pushAt) {
@@ -95,37 +114,35 @@ function trickle(now) {
         for (var i = 0; i < posts.length; i++) {
             if (posts[i].id !== id) continue;
             if (now - (lastHeard[id] || -99999) > 8000 &&
-                CelerNet.broadcast("m+" + id + "|" + posts[i].by + "|" + posts[i].txt, 1)) lastSent[id] = now;
+                A.mesh.send(null, "+", id + "|" + posts[i].by + "|" + posts[i].txt, { ttl: 1 })) lastSent[id] = now;
         }
         pushAt = now + 1500;
     }
 }
 
-function onMsg(m, now) {
-    var s = "" + m.msg;
-    if (s.length < 3 || s.charAt(0) !== "m") return;
-    var op = s.charAt(1), a = s.substring(2);
+// handler do A.mesh.each: (de, op, resto, quadro). op "" = familia alheia.
+function onMesh(from, op, rest, m) {
     if (op === "+") {
-        var p1 = a.indexOf("|"), p2 = a.indexOf("|", p1 + 1);
+        var p1 = rest.indexOf("|"), p2 = rest.indexOf("|", p1 + 1);
         if (p1 < 1 || p2 < 0) return;
         // id/autor vem da rede: corta no teto (o Storage do mural e finito)
-        var id = a.substring(0, p1).substring(0, MAX_ID);
-        lastHeard[id] = now;
-        if (addPost(id, a.substring(p1 + 1, p2).substring(0, MAX_BY),
-                    a.substring(p2 + 1).substring(0, MAX_TXT), now)) {
+        var id = rest.substring(0, p1).substring(0, MAX_ID);
+        lastHeard[id] = frameNow;
+        if (addPost(id, rest.substring(p1 + 1, p2).substring(0, MAX_BY),
+                    rest.substring(p2 + 1).substring(0, MAX_TXT), frameNow)) {
             System.beep(1500, 30);
-            inconsistent(now);     // novidade: acelera o Trickle (outros podem não ter)
+            inconsistent(frameNow);     // novidade: acelera o Trickle (outros podem não ter)
         }
     } else if (op === "#") {
-        var prev = neigh[m.from];
-        neigh[m.from] = { d: a, at: now, name: m.fromName || m.from };
-        if (a === digest()) {
+        var prev = neigh[from];
+        neigh[from] = { d: rest, at: frameNow, name: m.fromName || from };
+        if (rest === digest()) {
             consistent++;
-            // o vizinho acabou de alcançar o nosso resumo: confirma uma vez
-            // (a supressão do Trickle o deixaria sem saber que está em dia)
-            if (!prev || prev.d !== a) confirmAt = now + 300 + Math.floor(Math.random() * 1200);
+            // o vizinho acabou de alcancar o nosso resumo: confirma uma vez
+            // (a supressao do Trickle o deixaria sem saber que esta em dia)
+            if (!prev || prev.d !== rest) confirmAt = frameNow + 300 + Math.floor(Math.random() * 1200);
         } else {
-            inconsistent(now);
+            inconsistent(frameNow);
         }
     }
 }
@@ -139,7 +156,7 @@ function write() {
     var id = me.id + mySeq.toString(36);
     var now = System.millis();
     addPost(id, me.name, txt, now);
-    if (!CelerNet.broadcast("m+" + id + "|" + me.name + "|" + txt, 4)) {
+    if (!A.mesh.send(null, "+", id + "|" + me.name + "|" + txt, { ttl: 4 })) {
         UI.toast("Fila cheia: o recado sai na próxima conversa");
     }
     lastSent[id] = now;
@@ -152,38 +169,47 @@ function ago(at, now) {
     return s < 60 ? "agora" : "há " + Math.floor(s / 60) + " min";
 }
 
-load();
-newInterval(System.millis(), IMIN);
-
-while (true) {
-    var full = UI.begin();
-    if (UI.header("Mural", { back: true })) System.exitApp();
-    if (!mesh.gate("Ligue a malha (app Matilha) para trocar recados com os aparelhos ao redor.")) {
-        UI.end();
-        continue;
-    }
-    me = mesh.me();
-    var now = System.millis();
-    mesh.each(onMsg, now);
-    trickle(now);
-
-    // quantos vizinhos (ouvidos nos últimos 70 s) concordam com o nosso resumo
-    var d = digest(), agree = 0, nn = 0;
-    for (var k in neigh) {
-        if (!neigh.hasOwnProperty(k) || now - neigh[k].at > 70000) continue;
-        nn++;
-        if (neigh[k].d === d) agree++;
-    }
-    UI.text(posts.length + " recados · " + (nn ? (agree === nn ? "em dia com " + nn + " vizinho" + (nn > 1 ? "s" : "")
-                                                              : "sincronizando " + (nn - agree) + " de " + nn)
-                                               : "sem vizinhos ainda"),
-            10, 50, { role: "caption", color: agree === nn && nn ? T.ok : T.textDim, w: 220, id: "sync" });
+// linhas do mural: rebuild so quando o mural muda ou o minuto vira (o "ha N
+// min" das linhas envelhece)
+var postList = A.list.make(function () {
+    return postsRev + ":" + Math.floor(A.now() / 60000);
+}, function () {
+    var now = A.now();
     var items = [];
     for (var i = 0; i < posts.length; i++) {
         items.push({ label: posts[i].txt, sub: posts[i].by + " · " + ago(posts[i].at, now) });
     }
     if (!items.length) items.push({ label: "Mural vazio: escreva o primeiro recado", enabled: false });
-    UI.list("posts", 10, 68, 220, 196, items, { rowH: 48 });
-    if (UI.button("Escrever recado", 10, 274, 220, 36)) write();
-    UI.end();
-}
+    return items;
+});
+
+load();
+newInterval(System.millis(), IMIN);
+
+// ---- app -----------------------------------------------------------------
+A.run({
+    main: function (c) {
+        if (A.header("Mural")) return A.BACK;
+        if (!A.mesh.gate("Ligue a malha (app Matilha) para trocar recados com os aparelhos ao redor.")) return;
+
+        me = A.mesh.me();
+        var now = c.now;
+        frameNow = now;
+        A.mesh.each(onMesh);
+        trickle(now);
+
+        // quantos vizinhos (ouvidos nos ultimos 70 s) concordam com o nosso resumo
+        var d = digest(), agree = 0, nn = 0;
+        for (var k in neigh) {
+            if (!neigh.hasOwnProperty(k) || now - neigh[k].at > 70000) continue;
+            nn++;
+            if (neigh[k].d === d) agree++;
+        }
+        UI.text(posts.length + " recados · " + (nn ? (agree === nn ? "em dia com " + nn + " vizinho" + (nn > 1 ? "s" : "")
+                                                              : "sincronizando " + (nn - agree) + " de " + nn)
+                                               : "sem vizinhos ainda"),
+                10, 50, { role: "caption", color: agree === nn && nn ? A.T.ok : A.T.textDim, w: 220, id: "sync" });
+        UI.list("posts", 10, 68, 220, 196, postList.rows(), { rowH: 48 });
+        if (UI.button("Escrever recado", 10, 274, 220, 36)) write();
+    }
+}, "main");

@@ -1,15 +1,17 @@
 {
   "name": "Sentinela",
   "packageName": "celeros.sentinela",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "author": "CelerOS",
   "description": "Alarme da casa feito dos seus aparelhos CelerOS pela malha CelerNet: arme um como vigia (dispara com movimento, barulho ou pânico) e todo aparelho com a Sentinela aberta toca o alarme com o nome da zona. Antissabotagem: vigia armada que some do ar também dispara. Desarmar pede o PIN.",
   "type": "App",
   "category": "Utility",
   "api": 30,
   "permissions": [],
-  "changelog": "1.2.1 - sem a permissao system: o app e o servico usam Storage/CelerNet/Pack/Sensors/notify, nenhuma chamada gated (era um chip de consentimento a mais); o servico recarrega o contador de alarmes do Storage ao acordar (o app aberto podia te-lo incrementado e o numero repetido era descartado como duplicata pelas outras centrais) e da um ciclo de graca as vigias quando a malha e religada (sem rajada de 'sumiu' fantasma)\n1.2.0 - a CENTRAL vigia com o app fechado: servico em segundo plano (API 42) ouve as vigias, notifica alarme e denuncia vigia sumida; dorme com app aberto\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: vigia por IMU (Sensors.accel) e microfone (micLevel), botao de panico, sinal de vigia a cada 5 s (a^), alarme com ttl 8 em duas vias (a!), vigia sumida apos 16 s, desarme por PIN (a-)",
+  "changelog": "1.3.0 - migrado para o CelerKit (deps celeros.app.*): loop/tema no celeros.app (A.run; o fundo vermelho do alarme virou fillRect do quadro) e protocolo de malha no celeros.app.mesh (familia \"a\"); hash errado num quadro de desarme nao cala mais o alarme nem desarma as vigias (so hash conferido contra o PIN, quem nunca armou confia); celeros.mesh vendorizado na pasta porque o service.js roda fora do carregador de apps e o require dele falhava no boot (a central ficava morta ate o primeiro app aberto) — protocolo no ar inalterado\n1.2.1 - sem a permissao system: o app e o servico usam Storage/CelerNet/Pack/Sensors/notify, nenhuma chamada gated (era um chip de consentimento a mais); o servico recarrega o contador de alarmes do Storage ao acordar (o app aberto podia te-lo incrementado e o numero repetido era descartado como duplicata pelas outras centrais) e da um ciclo de graca as vigias quando a malha e religada (sem rajada de 'sumiu' fantasma)\n1.2.0 - a CENTRAL vigia com o app fechado: servico em segundo plano (API 42) ouve as vigias, notifica alarme e denuncia vigia sumida; dorme com app aberto\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: vigia por IMU (Sensors.accel) e microfone (micLevel), botao de panico, sinal de vigia a cada 5 s (a^), alarme com ttl 8 em duas vias (a!), vigia sumida apos 16 s, desarme por PIN (a-)",
   "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.mesh": "^1.0.0",
     "celeros.mesh": "^1.0.0"
   },
   "service": "service.js"

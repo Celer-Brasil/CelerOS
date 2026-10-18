@@ -1,15 +1,16 @@
 {
   "name": "Coral",
   "packageName": "celeros.coral",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "CelerOS",
   "description": "Orquestra de aparelhos pela malha CelerNet: quem rege divide a música em vozes (melodia, harmonia, baixo, bateria) entre os CelerOS com alto-falante e todos entram juntos, descontando a latência dos saltos. Cada aparelho toca só a sua parte — a música inteira só existe na sala.",
   "type": "App",
   "category": "Utility",
   "api": 30,
   "permissions": [],
-  "changelog": "1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: 2 arranjos de 4 vozes, presenca de musicos (ch), partes por unicast (ca), entrada sincronizada com contagem e compensacao por salto (cg), parar para todos (cx)",
+  "changelog": "1.2.0 - migrado para o CelerKit (deps celeros.app.*): loop/tema no celeros.app (A.run, saída para a música) e protocolo de malha no celeros.app.mesh (familia \"c\", each parsing op/resto) — protocolo no ar inalterado\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: 2 arranjos de 4 vozes, presenca de musicos (ch), partes por unicast (ca), entrada sincronizada com contagem e compensacao por salto (cg), parar para todos (cx)",
   "deps": {
-    "celeros.mesh": "^1.0.0"
+    "celeros.app": "^1.0.0",
+    "celeros.app.mesh": "^1.0.0"
   }
 }

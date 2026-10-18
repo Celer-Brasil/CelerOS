@@ -1,23 +1,34 @@
-// Sonar — o instrumento da malha (CelerNet, API 27). Três abas:
-//   Radar: a vizinhança em anéis de SALTOS (1..4), cada nó com o papel
-//          (cor) e o sinal do último salto (mais perto do anel = mais forte).
-//   Ping:  RTT e perda de verdade para um nó escolhido — 10 pings de 1 quadro
-//          (unicast sem cópias: perda medida, não mascarada).
+// Sonar — o instrumento da malha (CelerNet, API 27). Tres abas:
+//   Radar: a vizinhanca em aneis de SALTOS (1..4), cada no com o papel
+//          (cor) e o sinal do ultimo salto (mais perto do anel = mais forte).
+//   Ping:  RTT e perda de verdade para um no escolhido — 10 pings de 1 quadro
+//          (unicast sem copias: perda medida, nao mascarada).
 //   Censo: chama todo mundo com o Sonar aberto e monta a tabela de quem
 //          respondeu (saltos, RTT, bateria, tempo ligado).
 // Enquanto aberto, o Sonar RESPONDE pings e censos dos outros.
 //
-// Protocolo (tudo cabe num quadro de 16 B; prefixo "s", nunca "P" — o
-// serviço Pack engole mensagem crua que começa com P):
+// Migrado para o CelerKit: o casco do loop e o tema vieram do celeros.app
+// (A.run/A.T/A.header), as barras de sinal e o cache de linhas do
+// celeros.app.list e o porteiro/presenca/envio do celeros.app.mesh (A.mesh,
+// familia "s" — a letra do Sonar na malha). O protocolo no ar NAO mudou
+// (compativel com Sonar 1.0/1.1):
 //   s?<seq>               ping (unicast)        -> s!<seq> (unicast)
 //   s*<nonce>             censo (broadcast)     -> s=<nonce>|<bat%>|<min ligado>
+// A recepcao continua no CelerNet.poll cru, fora do A.mesh.each: o dedup
+// de replay do kit (_fresh) aceita UM quadro "=" por nonce, e o censo e uma
+// pergunta em broadcast com N respostas para o MESMO nonce — cada no
+// responde com o nonce da pergunta, so a primeira passaria.
 
-var mesh = require("celeros.mesh");
-var T = System.theme();
+var A = require("celeros.app");
+require("celeros.app.mesh");
+require("celeros.app.list");
+
+A.init();
+A.mesh.family("s");
 
 var tab = 0;
 var nodes = [];
-var nodesAt = -10000;
+var nodesRev = 0;          // muda quando a presenca muda (carimbo do cache)
 
 // ---- ping ----------------------------------------------------------------
 var PING_N = 10, PING_GAP = 1500, PING_TIMEOUT = 6000;
@@ -32,7 +43,7 @@ function pingTick(now) {
     if (!ping || !ping.running) return;
     if (ping.sent < PING_N && now >= ping.nextAt) {
         var seq = ping.seqBase + ping.sent;
-        if (CelerNet.send(ping.target.id, "s?" + seq, { copies: 1, urgent: true })) {
+        if (A.mesh.send(ping.target.id, "?", "" + seq, { copies: 1, urgent: true })) {
             ping.out[seq] = now;
         } else {
             ping.fail++;          // destino sumiu da presença ou fila cheia
@@ -73,12 +84,12 @@ function pingStats() {
 }
 
 // ---- censo ---------------------------------------------------------------
-var census = null;         // {nonce, at, rows: {id: {...}}}
+var census = null;         // {nonce, at, rows: {id: {...}}, order: []}
 var replyQ = [];           // respostas de censo agendadas (espalhadas no tempo)
 function censusStart() {
     var nonce = "" + (10 + Math.floor(Math.random() * 89));
     census = { nonce: nonce, at: System.millis(), rows: {}, order: [] };
-    if (!CelerNet.broadcast("s*" + nonce, 4)) UI.toast("Malha desligada ou fila cheia");
+    if (!A.mesh.send(null, "*", nonce, { ttl: 4 })) UI.toast("Malha desligada ou fila cheia");
 }
 function myBat() {
     if (typeof System.batteryInfo === "function") {
@@ -88,7 +99,8 @@ function myBat() {
     return -1;
 }
 
-// ---- recepção (sempre: o Sonar aberto responde aos outros) ---------------
+// ---- recepcao (sempre: o Sonar aberto responde aos outros) ---------------
+// CelerNet.poll cru (ver cabecalho: o A.mesh.each engole "=" alheio a req()).
 function drain(now) {
     var m, got = false;
     while ((m = CelerNet.poll()) !== null) {
@@ -96,7 +108,7 @@ function drain(now) {
         if (s.length < 3 || s.charAt(0) !== "s") continue;
         var op = s.charAt(1), arg = s.substring(2);
         if (op === "?") {
-            CelerNet.send(m.from, "s!" + arg, { copies: 1, urgent: true });
+            A.mesh.send(m.from, "!", arg, { copies: 1, urgent: true });
         } else if (op === "!") {
             pingReply(parseInt(arg, 10), now);
             got = true;
@@ -117,7 +129,8 @@ function drain(now) {
     for (var i = 0; i < replyQ.length; i++) {
         if (now >= replyQ[i].at) {
             var r = replyQ.splice(i--, 1)[0];
-            CelerNet.send(r.to, "s=" + r.nonce + "|" + myBat() + "|" + Math.floor(now / 60000), { copies: 1 });
+            A.mesh.send(r.to, "=", r.nonce + "|" + myBat() + "|" + Math.floor(now / 60000),
+                        { copies: 1 });
         }
     }
     if (got) UI.invalidate();
@@ -125,10 +138,10 @@ function drain(now) {
 
 // ---- desenho -------------------------------------------------------------
 function roleColor(c) {
-    if (c & 8) return T.warn;      // patas
-    if (c & 1) return T.accent;    // alto-falante
-    if (c & 4) return T.ok;        // tela
-    return T.textDim;
+    if (c & 8) return A.T.warn;      // patas
+    if (c & 1) return A.T.accent;    // alto-falante
+    if (c & 4) return A.T.ok;        // tela
+    return A.T.textDim;
 }
 function hash(id) {
     var h = 7;
@@ -139,10 +152,10 @@ function drawRadar(y0) {
     var cx = 120, cy = y0 + 104;
     var R = [0, 28, 52, 76, 100];
     for (var h = 4; h >= 1; h--) {
-        System.fillSmoothCircle(cx, cy, R[h], h % 2 ? T.card : T.raised);
+        System.fillSmoothCircle(cx, cy, R[h], h % 2 ? A.T.card : A.T.raised);
     }
-    for (var k = 1; k <= 4; k++) System.drawCircle(cx, cy, R[k], T.stroke);
-    System.fillSmoothCircle(cx, cy, 7, T.accent);
+    for (var k = 1; k <= 4; k++) System.drawCircle(cx, cy, R[k], A.T.stroke);
+    System.fillSmoothCircle(cx, cy, 7, A.T.accent);
     for (var i = 0; i < nodes.length; i++) {
         var n = nodes[i];
         var hops = Math.max(1, Math.min(4, n.hops));
@@ -155,91 +168,91 @@ function drawRadar(y0) {
         UI.text(n.name || n.id, x, y + 8, { role: "caption", align: "center", w: 70 });
     }
     UI.text(nodes.length ? nodes.length + " nós · anel = saltos" : "Ouvindo o ar...",
-            120, y0 + 214, { role: "caption", align: "center", color: T.textDim, id: "radarcap" });
+            120, y0 + 214, { role: "caption", align: "center", color: A.T.textDim, id: "radarcap" });
 }
 
+// barras de sinal e cache de linhas vieram do celeros.app.list: o build so
+// roda quando a presenca muda (carimbo nodesRev)
 function nodeItems() {
     var items = [];
     for (var i = 0; i < nodes.length; i++) {
         var n = nodes[i];
-        var bars = n.rssi > -55 ? 4 : n.rssi > -67 ? 3 : n.rssi > -78 ? 2 : 1;
         items.push({ label: n.name || n.id, sub: n.hops + (n.hops === 1 ? " salto" : " saltos") +
-                     " · " + n.rssi + " dBm", bars: bars });
+                     " · " + n.rssi + " dBm", bars: A.list.bars(n.rssi) });
     }
     if (!items.length) items.push({ label: "Ninguém ouvido ainda", enabled: false });
     return items;
 }
+var nodeList = A.list.make(function () { return nodesRev; }, nodeItems);
 
-function gateScreen() {
-    // portao padrao da dep celeros.mesh: card + "Ligar a malha"
-    return mesh.gate("O Sonar mede a malha CelerNet: ligue para ouvir os vizinhos.");
-}
-
-while (true) {
-    var full = UI.begin();
-    if (UI.header("Sonar", { back: true, sub: mesh.available() ? CelerNet.status().name : "" })) System.exitApp();
-    if (!gateScreen()) {
-        UI.end();
-        continue;
-    }
-    var now = System.millis();
-    if (now - nodesAt > 1000) {
-        nodesAt = now;
-        var fresh = CelerNet.nodes();
-        if (JSON.stringify(fresh) !== JSON.stringify(nodes)) UI.invalidate();
-        nodes = fresh;
-    }
-    var nt = UI.tabs(10, 48, 220, 30, ["Radar", "Ping", "Censo"], tab);
-    if (nt !== tab) { tab = nt; UI.invalidate(); }
-
-    if (tab === 0) {
-        if (full) drawRadar(84);
-    } else if (tab === 1) {
-        var hit = UI.list("pingNodes", 10, 86, 220, 104, nodeItems(), { rowH: 34, selected: pingSel });
-        if (hit >= 0 && nodes[hit]) {
-            pingSel = hit;
-            pingTarget = { id: nodes[hit].id, name: nodes[hit].name || nodes[hit].id };
-            UI.invalidate();
+function censusItems() {
+    var items = [];
+    if (census) {
+        for (var c = 0; c < census.order.length; c++) {
+            var r = census.rows[census.order[c]];
+            items.push({ label: r.name, sub: r.hops + (r.hops === 1 ? " salto · " : " saltos · ") + r.rtt +
+                         " ms · " + r.up + " min",
+                         right: r.bat >= 0 ? r.bat + "%" : "USB" });
         }
-        UI.card(10, 198, 220, 80);
-        if (ping) {
-            var st = pingStats();
-            UI.text(ping.target.name + ": " + ping.got + "/" + ping.sent +
-                    (ping.running ? " ..." : " · perda " + st.loss + "%"), 20, 206, { w: 200, id: "p1" });
-            UI.text(ping.rtts.length ? "RTT " + st.min + " / " + st.avg + " / " + st.max + " ms" : "RTT -",
-                    20, 228, { role: "caption", w: 200, id: "p2" });
-            UI.progress(20, 252, 200, 8, Math.round(100 * ping.sent / PING_N));
-            if (ping.dup) UI.text(ping.dup + " dup", 200, 228, { role: "caption", align: "right", id: "p3" });
-        } else {
-            UI.text(pingTarget ? "Alvo: " + pingTarget.name : "Escolha um nó acima", 20, 206, { w: 200, id: "p1" });
-            UI.text("10 pings de 1 quadro, sem cópias", 20, 228,
-                    { role: "caption", color: T.textDim, w: 200, id: "p2" });
-        }
-        UI.cardEnd();
-        var busy = ping && ping.running;
-        if (UI.button(busy ? "Parar" : "Pingar 10x", 10, 284, 220, 30,
-                      { disabled: !pingTarget && !busy, style: busy ? "danger" : "primary" })) {
-            if (busy) ping.running = false;
-            else pingStart(pingTarget);
-        }
+        if (!items.length) items.push({ label: "Esperando respostas...", enabled: false });
     } else {
-        if (UI.button("Chamar todos", 10, 86, 220, 32)) censusStart();
-        var rows = [];
-        if (census) {
-            for (var c = 0; c < census.order.length; c++) {
-                var r = census.rows[census.order[c]];
-                rows.push({ label: r.name, sub: r.hops + (r.hops === 1 ? " salto · " : " saltos · ") + r.rtt +
-                            " ms · " + r.up + " min",
-                            right: r.bat >= 0 ? r.bat + "%" : "USB" });
-            }
-            if (!rows.length) rows.push({ label: "Esperando respostas...", enabled: false });
-        } else {
-            rows.push({ label: "Toque para chamar quem tem o Sonar aberto", enabled: false });
-        }
-        UI.list("census", 10, 126, 220, 188, rows, { rowH: 46 });
+        items.push({ label: "Toque para chamar quem tem o Sonar aberto", enabled: false });
     }
-
-    drain(now);
-    pingTick(now);
-    UI.end();
+    return items;
 }
+var censusList = A.list.make(function () { return census ? census.order.length : -1; }, censusItems);
+
+// ---- app -----------------------------------------------------------------
+A.run({
+    main: function (c) {
+        if (A.header("Sonar", { sub: A.mesh.available() ? CelerNet.status().name : "" })) return A.BACK;
+        if (!A.mesh.gate("O Sonar mede a malha CelerNet: ligue para ouvir os vizinhos.")) return;
+
+        var now = c.now;
+        if (A.every(1000, "nos")) {
+            var fresh = CelerNet.nodes();
+            if (JSON.stringify(fresh) !== JSON.stringify(nodes)) { nodesRev++; UI.invalidate(); }
+            nodes = fresh;
+        }
+        var nt = UI.tabs(10, 48, 220, 30, ["Radar", "Ping", "Censo"], tab);
+        if (nt !== tab) { tab = nt; UI.invalidate(); }
+
+        if (tab === 0) {
+            if (c.full) drawRadar(84);
+        } else if (tab === 1) {
+            var hit = UI.list("pingNodes", 10, 86, 220, 104, nodeList.rows(), { rowH: 34, selected: pingSel });
+            if (hit >= 0 && nodes[hit]) {
+                pingSel = hit;
+                pingTarget = { id: nodes[hit].id, name: nodes[hit].name || nodes[hit].id };
+                UI.invalidate();
+            }
+            UI.card(10, 198, 220, 80);
+            if (ping) {
+                var st = pingStats();
+                UI.text(ping.target.name + ": " + ping.got + "/" + ping.sent +
+                        (ping.running ? " ..." : " · perda " + st.loss + "%"), 20, 206, { w: 200, id: "p1" });
+                UI.text(ping.rtts.length ? "RTT " + st.min + " / " + st.avg + " / " + st.max + " ms" : "RTT -",
+                        20, 228, { role: "caption", w: 200, id: "p2" });
+                UI.progress(20, 252, 200, 8, Math.round(100 * ping.sent / PING_N));
+                if (ping.dup) UI.text(ping.dup + " dup", 200, 228, { role: "caption", align: "right", id: "p3" });
+            } else {
+                UI.text(pingTarget ? "Alvo: " + pingTarget.name : "Escolha um nó acima", 20, 206, { w: 200, id: "p1" });
+                UI.text("10 pings de 1 quadro, sem cópias", 20, 228,
+                        { role: "caption", color: A.T.textDim, w: 200, id: "p2" });
+            }
+            UI.cardEnd();
+            var busy = ping && ping.running;
+            if (UI.button(busy ? "Parar" : "Pingar 10x", 10, 284, 220, 30,
+                          { disabled: !pingTarget && !busy, style: busy ? "danger" : "primary" })) {
+                if (busy) ping.running = false;
+                else pingStart(pingTarget);
+            }
+        } else {
+            if (UI.button("Chamar todos", 10, 86, 220, 32)) censusStart();
+            UI.list("census", 10, 126, 220, 188, censusList.rows(), { rowH: 46 });
+        }
+
+        drain(now);
+        pingTick(now);
+    }
+}, "main");

@@ -612,7 +612,8 @@ function makeEnv() {
     deleteSprite: function() {},
     pushSprite: function() {},
     bindSprite: function() { return true; },
-    spriteSlots: function() { return 4; },
+    // canvas nativo = placa S3 com PSRAM (pool de 16 desde a API 33)
+    spriteSlots: function() { return env.__nativeCanvas ? 16 : 4; },
     // Verlet nativo (API 31): espelho JS do binding C++ (verletStub
     // abaixo, mesmo contrato/aritmetica)
     verletNew: verletStub.verletNew,
@@ -1699,6 +1700,53 @@ function runInline(src, env) {
     check('nada gravado sem espaco',
           !env.FS.exists('/local/apps/celeros.grande/main.js'));
     env.FS.getFreeSpace = freeReal;
+
+    // atualizacao de ENGINE (2.9.0): deps.json congelado x indice novo do hub.
+    // Bloco isolado no fim: semeia o proprio catalogo/dispositivo.
+    env.FS.mkdir('/local/apps/celeros.eng');
+    env.FS.writeTextFile('/local/apps/celeros.eng/app.json',
+        JSON.stringify({ packageName: 'celeros.eng', name: 'Eng', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.eng/main.js', 'EEE');
+    env.FS.writeTextFile('/local/apps/celeros.eng/deps.json',
+        '{"celeros.game":"1.0.1"}');
+    env.FS.mkdir('/local/apps/celeros.semd');
+    env.FS.writeTextFile('/local/apps/celeros.semd/app.json',
+        JSON.stringify({ packageName: 'celeros.semd', name: 'Semd', version: '1.0.0' }));
+    env.FS.writeTextFile('/local/apps/celeros.semd/main.js', 'SSS');
+    api.setCatalog([
+        { pkg: 'celeros.eng', metaUrl: 'h/eng/app.json', appUrl: 'h/eng/main.js',
+          name: 'Eng', ver: '1.0.0', api: 3, deps: { 'celeros.game': '^1.0.0' } },
+        { pkg: 'celeros.semd', metaUrl: 'h/sd/app.json', appUrl: 'h/sd/main.js',
+          name: 'Semd', ver: '1.0.0', api: 3 }  // sem deps: nunca vira "dep"
+    ]);
+    api.refresh();
+    check('engine sem indice de deps fica inst', st('celeros.eng') === 'inst');
+    api.setDepIndex({ 'celeros.game': {
+        '1.0.1': { url: 'h/mod/1.0.1', md5: MD5, size: 100 },
+        '1.0.2': { url: 'h/mod/1.0.2', md5: MD5, size: 100 } } });
+    api.refresh();
+    check('engine nova vira estado dep', st('celeros.eng') === 'dep');
+    check('app sem deps segue inst', st('celeros.semd') === 'inst');
+    check('contador soma a engine', api.updCount() === 1);
+    var du = api.depUpdates()['celeros.eng'];
+    check('scanDepUpdates aponta a dep certa',
+          !!du && du.names.join(',') === 'celeros.game' &&
+          du.resolved['celeros.game'] === '1.0.2');
+    // o fluxo resolve FRESCA contra o hub (Net.get serve o deps.json)
+    env.Net.get = function(url) {
+        if (String(url).indexOf('deps.json') >= 0) {
+            return JSON.stringify({ deps: { 'celeros.game': {
+                '1.0.2': { url: 'h/mod/1.0.2', md5: MD5, size: 100 } } } });
+        }
+        return null;
+    };
+    check('select da engine', !!api.select('celeros.eng'));
+    check('updateDeps instala e regrava', api.updateDepsFlow() === 'done');
+    check('deps.json atualizado p/ 1.0.2',
+          env.FS.readTextFile('/local/apps/celeros.eng/deps.json').indexOf('1.0.2') >= 0);
+    check('modulo novo no cache',
+          env.FS.exists('/local/modules/celeros.game/1.0.2/celeros.game.js'));
+    check('estado volta a inst', st('celeros.eng') === 'inst');
 })();
 
 // --- App Store v3: pasta por packageName, desinstalar, atualizar tudo -------

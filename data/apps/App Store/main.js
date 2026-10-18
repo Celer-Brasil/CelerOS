@@ -207,6 +207,8 @@ var updCount = 0;
 var errMsg = "", errHint = "", retryMode = "";
 var wasUpdate = false, selfUpdated = false;
 var batchOk = 0, batchFails = [];
+var depIndex = null;   // indice /store/deps.json do load (deteccao de engine)
+var depUpd = {};       // pkg -> {names, resolved, have}: deps do hub mais novas
 
 // Versao dos dados que alimentam as listas (apps/localMap/cats): sobe a cada
 // refresh(). curList()/curRows() cacheiam por essa chave — a lista e lida a
@@ -294,7 +296,7 @@ function catalogByPkg(pkg) {
     return null;
 }
 
-// estado do app vs instalado: "new" | "upd" | "inst" | "api"
+// estado do app vs instalado: "new" | "upd" | "inst" | "api" | "dep" | "hw"
 function stateInfo(it) {
     var loc = localMap[it.pkg];
     if ((it.api || 1) > API) return { code: "api", txt: "API " + it.api, col: T.warn };
@@ -303,6 +305,9 @@ function stateInfo(it) {
     // so oferece update se o hub for MAIS NOVO: versao local mais nova (dev,
     // imagem da flash a frente do hub) nao pode virar "Atualizar" (downgrade)
     if (cmpV(it.ver, loc.ver) <= 0) {
+        // engine desatualizada (2.9.0): versao do app em dia, mas o range das
+        // deps resolve mais novo no hub do que o deps.json congelou no install
+        if (depUpd[it.pkg]) return { code: "dep", txt: "Engine", col: T.warn };
         return { code: "inst", txt: "Instalado", col: T.textDim };
     }
     return { code: "upd", txt: "Atualizar", col: T.warn };
@@ -311,7 +316,8 @@ function stateInfo(it) {
 function countUpdates() {
     updCount = 0;
     for (var i = 0; i < apps.length; i++) {
-        if (stateInfo(apps[i]).code === "upd") updCount++;
+        var c = stateInfo(apps[i]).code;
+        if (c === "upd" || c === "dep") updCount++;
     }
 }
 
@@ -325,7 +331,8 @@ function sortByUpdate() {
     // JSON.stringify pula undefined
     System.delay(1);
     for (var i = 0; i < apps.length; i++) {
-        apps[i]._u = stateInfo(apps[i]).code === "upd" ? 0 : 1;
+        apps[i]._u = (stateInfo(apps[i]).code === "upd" ||
+                      stateInfo(apps[i]).code === "dep") ? 0 : 1;
         apps[i]._n = (apps[i].name || "?").toLowerCase();
     }
     apps.sort(function (a, b) {
@@ -337,10 +344,22 @@ function sortByUpdate() {
 
 function refresh() {
     scanLocalApps();
+    scanDepUpdates();
     countUpdates();
     sortByUpdate();
     buildCats();
     dataStamp++;  // invalida os caches de lista/chips (curList/chipsGeom)
+}
+
+// indice de deps do hub (deteccao de update de engine, 2.9.0): best-effort —
+// sem ele a loja funciona, so nao promove "Engine" na aba Atualizar.
+function fetchDepIndex() {
+    depIndex = null;
+    if (!Net.isConnected()) return;
+    try {
+        var dj = fetchJSON(HUB_BASE + "/store/deps.json");
+        if (dj && dj.deps) depIndex = dj.deps;
+    } catch (eD) { depIndex = null; }
 }
 
 // itens da aba Meus apps: todo pkg instalado (do catalogo quando existir,
@@ -431,7 +450,8 @@ function filteredApps() {
 function updApps() {
     var out = [];
     for (var i = 0; i < apps.length; i++) {
-        if (stateInfo(apps[i]).code === "upd") out.push(apps[i]);
+        var c = stateInfo(apps[i]).code;
+        if (c === "upd" || c === "dep") out.push(apps[i]);
     }
     return out;
 }
@@ -450,6 +470,7 @@ function loadCatalog() {
         errHint = "Verifique a internet.";
         return "err";
     }
+    fetchDepIndex();
 
     // atalho "Todos" (all.json): todos os apps em 1 request. O hub de hoje
     // publica ~58 KB e o Net.getJSON CORTA em 32 KB (JSON.parse quebrado ->
@@ -547,6 +568,7 @@ function loadCache() {
     try { arr = JSON.parse(body); } catch (e) { arr = null; }
     if (!arr || !arr.length) return false;
     apps = arr;
+    fetchDepIndex();     // engine: o cache do catalogo nao traz o indice
     System.delay(1);   // parse de ~50 KB + refresh sem yield derrubam a janela
     refresh();
     selIt = null;
@@ -616,7 +638,7 @@ function drawLoading(msg, sub) {
 // ---- lista (3 abas) -------------------------------------------------------------
 function stateColor(code) {
     if (code === "new") return T.ok;
-    if (code === "upd" || code === "api" || code === "hw") return T.warn;
+    if (code === "upd" || code === "dep" || code === "api" || code === "hw") return T.warn;
     return T.textDim;
 }
 function rowOf(it) {
@@ -624,7 +646,14 @@ function rowOf(it) {
     var lm = localMap[it.pkg];
     var sub;
     if (curTab === 1) {
-        sub = (lm ? "v" + lm.ver : "v?") + " > v" + it.ver + (it.changelog ? "  " + it.changelog.split("\n")[0] : "");
+        var du = depUpd[it.pkg];
+        if (du) {
+            sub = "engine " + du.names[0] + " " + (du.have[du.names[0]] || "?") +
+                  " > " + du.resolved[du.names[0]] +
+                  (du.names.length > 1 ? "  (+" + (du.names.length - 1) + ")" : "");
+        } else {
+            sub = (lm ? "v" + lm.ver : "v?") + " > v" + it.ver + (it.changelog ? "  " + it.changelog.split("\n")[0] : "");
+        }
     } else if (curTab === 2) {
         sub = "v" + (lm ? lm.ver : it.ver) + (lm && lm.sd ? " · SD" : "") + (lm && lm.system ? " · sistema" : "");
     } else {
@@ -793,8 +822,12 @@ function screenDetail() {
             UI.text("Incompatível: requer hardware com PSRAM", 120, by + 4, { role: "caption", align: "center", color: T.warn });
             UI.text("(a RAM interna não basta para este app)", 120, by + 22, { role: "caption", align: "center", color: T.textDim });
         } else if (it.appUrl) {
-            var lbl = st.code === "upd" ? "Atualizar" : (st.code === "inst" ? "Reinstalar" : "Instalar");
-            if (UI.button(lbl, LX, by, lm ? 108 : LW, 40)) return "install";
+            var lbl = st.code === "upd" ? "Atualizar"
+                    : (st.code === "dep" ? "Atualizar engine"
+                    : (st.code === "inst" ? "Reinstalar" : "Instalar"));
+            if (UI.button(lbl, LX, by, lm ? 108 : LW, 40)) {
+                return st.code === "dep" ? "deps" : "install";
+            }
             if (lm && UI.button("Desinstalar", LX + 116, by, 108, 40, { style: "danger" })) {
                 doUninstallFlow(it);
                 if (!selIt) return "list";
@@ -973,6 +1006,76 @@ function writeDepsFile(dir, resolved) {
         dj.push('"' + dn + '":"' + resolved[dn] + '"');
     }
     return FS.writeTextFile(dir + "/deps.json", "{" + dj.join(",") + "}");
+}
+
+// ---- atualizacao de engine (2.9.0) -----------------------------------------
+// O deps.json gravado no install CONGELA as versoes resolvidas: quando o hub
+// publica minor/patch novo dentro do range, o app instalado nao ficava
+// sabendo. scanDepUpdates compara o congelado contra o indice do load e o
+// stateInfo expoe "dep" (a versao do app em si esta em dia). O update baixa
+// so as versoes novas pro cache /local/modules (o GC do launcher recolhe as
+// orfas) e regrava o deps.json — o app nem e reinstalado.
+function installedDeps(dir) {
+    var body = "";
+    try { body = FS.readTextFile(dir + "/deps.json"); } catch (e1) { return null; }
+    if (!body) return null;
+    try { return JSON.parse(body); } catch (e2) { return null; }
+}
+function scanDepUpdates() {
+    depUpd = {};
+    if (!depIndex) return;
+    System.delay(1);  // leituras de FS + resolve: cede a janela do exec-timeout
+    for (var pkg in localMap) {
+        if (!localMap.hasOwnProperty(pkg)) continue;
+        var it = catalogByPkg(pkg);
+        if (!it || !it.deps) continue;  // sem deps declaradas = nada a promover
+        var have = installedDeps(localMap[pkg].dir);
+        if (!have) continue;  // vendoring/install pre-deps: o update do app resolve
+        var fresh = resolveDeps(it.deps, depIndex);
+        if (!fresh) continue;  // hub sem versao que satisfaca: estado "inst"
+        var names = [], nm;
+        for (nm in fresh) if (fresh.hasOwnProperty(nm)) {
+            if (String(have[nm] || "") !== fresh[nm]) names.push(nm);
+        }
+        if (names.length) {
+            names.sort();
+            depUpd[pkg] = { names: names, resolved: fresh, have: have };
+        }
+    }
+}
+function updateDepsFlow() {
+    var it = selIt;
+    errMsg = ""; errHint = "";
+    retryMode = "install";
+    wasUpdate = true;   // tela de resultado: "Atualizado!"
+    selfUpdated = false;
+    if (!Net.isConnected()) { errMsg = "Sem conexão WiFi"; return "err"; }
+    drawDownload(it.name, "dependências", false);
+    System.delay(30);
+    // resolucao FRESCA contra o indice do hub: o snapshot do scanDepUpdates
+    // pode ter ficado para tras enquanto a loja ficou aberta
+    var idxTxt = fetchText(HUB_BASE + "/store/deps.json");
+    var index = null;
+    if (idxTxt) { try { index = JSON.parse(idxTxt).deps; } catch (e1) { index = null; } }
+    if (!index) { errMsg = "Erro ao baixar dependências"; errHint = it.name; return "err"; }
+    var resolved = resolveDeps(it.deps || {}, index);
+    if (!resolved) { errMsg = "Dependência indisponível no hub"; errHint = it.name; return "err"; }
+    var depBytes = 0, nm;
+    for (nm in resolved) if (resolved.hasOwnProperty(nm)) {
+        depBytes += (index[nm][resolved[nm]].size) || 0;
+    }
+    var freeLocal = 0;
+    try { freeLocal = FS.getFreeSpace("/local"); } catch (e2) { freeLocal = 0; }
+    if (freeLocal > 0 && freeLocal < depBytes + 8192) { errMsg = "Sem espaço p/ dependências"; return "err"; }
+    var fail = installDeps(it, resolved, index);  // pula o que ja esta no cache
+    if (fail) { errMsg = fail; errHint = it.name; return "err"; }
+    var dir = localMap[it.pkg] ? localMap[it.pkg].dir : resolveInstalledDir(it.pkg);
+    if (!dir || !writeDepsFile(dir, resolved)) {
+        errMsg = "Erro ao gravar deps.json"; errHint = it.name; return "err";
+    }
+    System.rescanApps();
+    refresh();
+    return "done";
 }
 function installApp() {
     var it = selIt;
@@ -1202,7 +1305,8 @@ function installApp() {
 function updateAll() {
     var order = [];
     for (var i = 0; i < apps.length; i++) {
-        if (stateInfo(apps[i]).code === "upd") order.push(apps[i]);
+        var c = stateInfo(apps[i]).code;
+        if (c === "upd" || c === "dep") order.push(apps[i]);
     }
     order.sort(function (a, b) {
         return (a.pkg === STORE_PKG ? 1 : 0) - (b.pkg === STORE_PKG ? 1 : 0);
@@ -1215,7 +1319,8 @@ function updateAll() {
         drawBatch(k + 1, order.length, selIt.name);
         System.delay(30);
         errMsg = "";  // installApp so grava no fail: a linha do lote mostra o
-        if (installApp() === "done") batchOk++;   // motivo de QUEM falhou
+        var r = stateInfo(selIt).code === "dep" ? updateDepsFlow() : installApp();
+        if (r === "done") batchOk++;   // motivo de QUEM falhou
         else batchFails.push(selIt.name +
                              (errMsg ? " (" + errMsg + ")" : ""));
     }
@@ -1240,6 +1345,9 @@ if (typeof __harness !== "undefined" && __harness.storeTest) {
         resolveInstalledDir: resolveInstalledDir,
         uninstallApp: uninstallApp,
         updateAll: updateAll,
+        setDepIndex: function (idx) { depIndex = idx; },
+        depUpdates: function () { return depUpd; },
+        updateDepsFlow: updateDepsFlow,
         updCount: function () { return updCount; },
         refresh: refresh,
         setCatalog: function (arr) {
@@ -1272,6 +1380,7 @@ if (typeof __harness !== "undefined" && __harness.storeTest) {
         else if (mode === "cats") mode = screenCats();
         else if (mode === "detail") mode = screenDetail();
         else if (mode === "install") mode = installApp();
+        else if (mode === "deps") mode = updateDepsFlow();
         else if (mode === "done") mode = screenDone();
         else if (mode === "batch") mode = screenBatch();
         else if (mode === "batchDone") mode = screenBatchDone();

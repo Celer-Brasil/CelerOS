@@ -28,6 +28,9 @@
 // fundo de uma sala e montado uma vez num sprite e a arte de 32 px serve
 // em celula de 27 no relogio. E.anim.dir({down, up, left, right}) junta os
 // clipes direcionais com face(dir)/walk(on).
+// 1.4.1: stamp em escala 1 no QUADRO vai pelo pushSprite recortado (o
+// drawSprite afim custava ~4x por entidade: o 4848 caia a ~14 fps com 3
+// monstros); E.spr.alvo marca quando o desenho vai para dentro de um sprite.
 
 var E = require('celeros.game');
 var S = System;
@@ -37,8 +40,11 @@ var _stO = { key: 0 };
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.4.0',
+    version: '1.4.1',
     bases: [],
+    // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
+    // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
+    alvo: 0,
     _slots: {},
     _sheets: {},        // spritesheets: 1 PNG inteiro + regioes nomeadas
     _used: 0,
@@ -245,6 +251,29 @@ E.spr = {
         var dx = Math.round(x - w * ax), dy = Math.round(y - h * ay);
         var key = o.key === undefined ? 0x0000 : o.key;
         var id = s.sheet ? s.sheet.id : s.id;
+        // escala 1 no QUADRO: pushSprite recortado (copia de linhas) — o
+        // drawSprite e afim por pixel e custava ~4x por entidade no 4848.
+        // Gravando DENTRO de um sprite (E.spr.alvo, ex. o fundo da sala do
+        // world) o pushSprite nao serve: ele so empurra para o quadro
+        if (k === 1 && id && !E.spr.alvo) {
+            // inline (sem o blit por cima): no Duktape cada camada de
+            // funcao/opts pesava mais que o push em si (~0,45 ms vs 0,2)
+            var kk1 = key === null ? undefined : key;
+            if (E.dirty.on) E.dirty.add(dx, dy, s.w, s.h);
+            if (s.sheet) {
+                if (!E.caps.clip) { _stO.key = kk1; E.spr.blit(name, dx, dy, _stO); return true; }
+                S.setClip(dx, dy, s.w, s.h);
+                S.useSprite(id);
+                S.pushSprite(dx - s.rx, dy - s.ry, kk1);
+                S.useSprite(0);
+                S.clearClip();
+            } else {
+                S.useSprite(id);
+                S.pushSprite(dx, dy, kk1);
+                S.useSprite(0);
+            }
+            return true;
+        }
         if (id && typeof S.drawSprite === 'function') {
             var W2 = Math.round(w), H2 = Math.round(h);
             var kk = key === null ? undefined : key;
@@ -257,11 +286,6 @@ E.spr = {
                 S.drawSprite(id, dx + w / 2, dy + h / 2, 0, k, k, kk);
             }
             if (E.dirty.on) E.dirty.add(dx, dy, W2, H2);
-            return true;
-        }
-        if (k === 1 && id) {
-            _stO.key = key === null ? undefined : key;
-            E.spr.blit(name, dx, dy, _stO);
             return true;
         }
         if (s.paint) {

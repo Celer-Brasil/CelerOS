@@ -587,6 +587,9 @@ declare namespace E {
              opts?: { key?: number; cx?: boolean; cy?: boolean;
                       /** ancora 0..1 (ax 0.5 + ay 1 = x,y e o pe) */
                       ax?: number; ay?: number }): void;
+        /** id do sprite recebendo desenho (quem grava num sprite marca: o stamp
+         *  em escala 1 so usa o atalho do pushSprite no quadro) */
+        alvo: number;
         /** desenha no alvo CORRENTE (quadro ou sprite do useSprite), com escala
          *  (drawSprite, API 33); key null = opaco. false se nada desenhavel */
         stamp(name: string, x: number, y: number,

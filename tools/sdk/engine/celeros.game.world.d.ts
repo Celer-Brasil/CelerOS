@@ -50,6 +50,10 @@ declare namespace E {
         find(v: any): { c: number; r: number }[];
         solidAt(x: number, y: number): boolean;
         rectSolid(x: number, y: number, w: number, h: number): boolean;
+        /** a mesma colisao com a borda da sala solida (monstros e tiros nao saem pelas aberturas) */
+        fechado: { cw: number; ch: number; ox: number; oy: number;
+                   solidAt(x: number, y: number): boolean;
+                   rectSolid(x: number, y: number, w: number, h: number): boolean };
         /** custo para o E.path (parede -1) */
         cost(c: number, r: number): number;
         /** painter da camada suja (E.dirty.enable(W.painter)) */

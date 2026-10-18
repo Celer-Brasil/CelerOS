@@ -27,9 +27,29 @@
 // mesmo tempo no vidro da 4848 e do relogio. stick.finger/button.finger
 // dizem o dono; stick {follow} arrasta o centro com o dedo. No vidro de
 // toque unico (CYD) o comportamento e o de sempre.
+// 1.2.1: com a camada suja, cada controle so redesenha quando muda ou
+// quando algo apaga a area dele (parado nao custa nada por quadro).
 
 var E = require('celeros.game');
 var EMPTY = {};
+
+// redesenho sob demanda (camada suja): estado igual e area intacta = nada
+// a fazer. Mudou: apaga a caixa velha (fundo) e redesenha mudo (o desenho
+// fica no quadro ate algo apagar a area — touches avisa)
+function precisa(c, key, x, y, w, h) {
+    if (!E.dirty.on) { c._mudo = false; return true; }
+    var mudou = c._k !== key;
+    var bb = c._bb;
+    if (!mudou && bb && !E.dirty.touches(bb[0], bb[1], bb[2], bb[3])) return false;
+    if (mudou && bb) E.dirty.erase(bb[0], bb[1], bb[2], bb[3]);
+    if (!bb) bb = c._bb = [0, 0, 0, 0];
+    bb[0] = Math.floor(x); bb[1] = Math.floor(y); bb[2] = Math.ceil(w); bb[3] = Math.ceil(h);
+    c._k = key;
+    c._mudo = true;
+    E.dirty._mute++;
+    return true;
+}
+function feito(c) { if (c._mudo) { E.dirty._mute--; c._mudo = false; } }
 var EMPTY_L = [];
 var _own = {};      // id do dedo -> ja tem dono neste quadro
 
@@ -55,7 +75,7 @@ var _knob = { screen: true, smooth: true };
 var _lbl = { align: 'center', valign: 'middle', screen: true, color: 0, px: 12 };
 
 E.pad = {
-    version: '1.2.0',
+    version: '1.2.1',
 
     // stick analogico. o = {zone {x,y,w,h} (onde o dedo PRESSIONA para
     // pegar o stick; default metade esquerda), r (raio em px, default
@@ -214,6 +234,11 @@ E.pad = {
     },
 
     // desenha sticks/botoes (screen; camada suja registra sozinha)
+    // desenha tudo (screen). Com a camada suja ligada cada controle so
+    // redesenha quando o estado muda ou quando algo apagou a area dele
+    // (E.dirty.touches) — desenhado fora da camada (mudo): parado, o pad
+    // nao custa nada por quadro (os circulos com AA eram ~5 ms/quadro no
+    // 4848). Sem camada suja desenha sempre, como antes
     draw: function () {
         var T = E.theme || EMPTY;
         var ac = T.accent === undefined ? 0x07FF : T.accent;
@@ -221,26 +246,35 @@ E.pad = {
         for (var k = 0; k < _sticks.length; k++) {
             var s = _sticks[k];
             if (!s.visible || !live(s)) continue;
+            var R = Math.ceil(s.r * 1.1) + 3;
+            var ks = Math.round(s.cx) + ',' + Math.round(s.cy) + ',' + Math.round(s.x * 20) + ',' +
+                     Math.round(s.y * 20) + (s.active ? 'a' : '');
+            if (!precisa(s, ks, s.cx - R, s.cy - R, R * 2, R * 2)) continue;
             E.gfx.circle(s.cx, s.cy, s.r, s.active ? ac : dim, _ring);
             E.gfx.circle(s.cx + s.x * s.r * 0.7, s.cy + s.y * s.r * 0.7,
                          Math.round(s.r * 0.38), s.active ? ac : dim, _knob);
+            feito(s);
         }
         for (var b = 0; b < _buttons.length; b++) {
             var bt = _buttons[b];
             if (!bt.visible || !live(bt)) continue;
             var c = bt.color === undefined ? ac : bt.color;
             if (bt.r !== undefined) {
+                var rr = bt.r + 3;
+                if (!precisa(bt, bt.down ? 'd' : 'u', bt.x - rr, bt.y - rr, rr * 2, rr * 2)) continue;
                 if (bt.down) E.gfx.circle(bt.x, bt.y, bt.r, c, _knob);
                 else E.gfx.circle(bt.x, bt.y, bt.r, c, _ring);
                 _lbl.color = bt.down ? (T.onAccent === undefined ? 0x0000 : T.onAccent) : c;
                 _lbl.px = Math.round(bt.r * 0.8);
                 if (bt.label) E.gfx.text(bt.label, bt.x, bt.y, _lbl);
             } else {
+                if (!precisa(bt, bt.down ? 'd' : 'u', bt.x - 2, bt.y - 2, bt.w + 4, bt.h + 4)) continue;
                 E.gfx.rect(bt.x, bt.y, bt.w, bt.h, c, bt.down ? _knob : _ring);
                 _lbl.color = bt.down ? (T.onAccent === undefined ? 0x0000 : T.onAccent) : c;
                 _lbl.px = Math.round(bt.h * 0.5);
                 if (bt.label) E.gfx.text(bt.label, bt.x + bt.w / 2, bt.y + bt.h / 2, _lbl);
             }
+            feito(bt);
         }
     }
 };

@@ -35,6 +35,9 @@
 // 1.0.1: solidAt/rectSolid sem sala corrente (mundo criado, ainda sem
 // go/restore — o app recria o mundo no meio da cena) devolvem o outside em
 // vez de ler data de null e derrubar o app no primeiro update.
+// 1.0.2: a gravacao da sala marca E.spr.alvo (o stamp nao pega o atalho
+// do pushSprite, que so desenha no quadro); W.fechado = a colisao com a
+// borda da sala solida (monstros/tiros nao saem pelas aberturas).
 
 var E = require('celeros.game');
 require('celeros.game.level');
@@ -202,6 +205,20 @@ E.world = function (o) {
         }
         return false;
     };
+    // a MESMA colisao com a borda da sala sempre solida (monstros e tiros:
+    // com outside false o heroi atravessa a borda para a vizinha, mas o
+    // monstro saia pela abertura e andava por cima do HUD)
+    W.fechado = {
+        cw: cell, ch: cell, ox: ox, oy: oy,
+        solidAt: function (x, y) {
+            if (x < ox || y < oy || x >= ox + W.pw || y >= oy + W.ph) return true;
+            return W.solidAt(x, y);
+        },
+        rectSolid: function (x, y, w, h) {
+            if (x < ox || y < oy || x + w > ox + W.pw || y + h > oy + W.ph) return true;
+            return W.rectSolid(x, y, w, h);
+        }
+    };
     // custo por celula para o E.path (parede = -1)
     W.cost = function (c, r) {
         var v = W.get(c, r);
@@ -231,9 +248,11 @@ E.world = function (o) {
         if (!slot) return false;
         E.dirty._mute++;
         S.useSprite(slot);
+        if (E.spr) E.spr.alvo = slot;
         S.fillScreen(o.bg === undefined ? 0x0000 : o.bg);
         for (var k = 0; k < rec.data.length; k++) paintCell(rec, k, ox, oy);
         if (o.decor) o.decor(rec, W);    // por cima dos tiles, dentro do bake
+        if (E.spr) E.spr.alvo = 0;
         S.useSprite(0);
         E.dirty._mute--;
         return true;
@@ -242,10 +261,12 @@ E.world = function (o) {
         if (!W.baked || !W._slotA) return;
         E.dirty._mute++;
         S.useSprite(W._slotA);
+        if (E.spr) E.spr.alvo = W._slotA;
         var c = k % cols, r = (k - c) / cols;
         S.setClip(ox + c * cell, oy + r * cell, cell, cell);
         paintCell(W.room, k, ox, oy);
         S.clearClip();
+        if (E.spr) E.spr.alvo = 0;
         S.useSprite(0);
         E.dirty._mute--;
     }
@@ -486,7 +507,7 @@ E.world = function (o) {
     return W;
 };
 var _live = [];
-E.world.version = '1.0.1';
+E.world.version = '1.0.2';
 
 E._modTicks.push(function (dt) {
     for (var i = 0; i < _live.length; i++) _live[i]._tick(dt);

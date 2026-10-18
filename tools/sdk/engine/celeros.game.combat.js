@@ -22,6 +22,10 @@
 // fere o proprio time nem o dono. Sem stats o corpo usa ent.hp. Tudo
 // resolvido no tick da engine (congela no E.pause). Com celeros.game.events
 // carregado emite "hit" (alvo, dano, fonte) e "kill" (alvo, fonte).
+//
+// 1.0.1: ate 24 corpos o teste e direto, sem hash nem closure por quadro
+// (o hash custava ~9 ms/quadro no 4848 com 4 corpos); golpe sem dano
+// (bumerangue) so atordoa.
 
 var E = require('celeros.game');
 require('celeros.game.collide');
@@ -84,8 +88,43 @@ function strike(b, dmg, src, kx, ky, knock, o) {
     return real;
 }
 
+// alvos que a forma toca: direto (poucos corpos) ou pelo hash; fn(caixa)
+// chamada por corpo tocado. Handlers sem closure por quadro (estado em
+// _cH/_cSh/_cS)
+var HASH_MIN = 24;
+var _cH = null, _cSh = null, _cS = null;
+function alvos(shape, fn, usaHash) {
+    if (usaHash) { _hash.query(shape, fn); return; }
+    for (var k = 0; k < _bodies.length; k++) {
+        var bx = _bodies[k]._bx;
+        if (bx && E.collide.test(shape, bx)) fn(bx);
+    }
+}
+function acertoHit(q) {
+    var h = _cH, sh = _cSh, tb = q.b;
+    if (tb.dead || tb.ent === h.owner) return;
+    if (h.team !== '*' && tb.team === h.team) return;
+    if (h.once && h.got.indexOf(tb) >= 0) return;
+    var dirFixa = h.fx !== undefined && (h.fx || h.fy);
+    var kx = dirFixa ? h.fx : cx(tb) - (sh.r !== undefined ? sh.x : sh.x + sh.w / 2);
+    var ky = dirFixa ? h.fy : cy(tb) - (sh.r !== undefined ? sh.y : sh.y + sh.h / 2);
+    var real = strike(tb, h.dmg, h.owner, kx, ky, h.knock, h);
+    if (h.once) h.got.push(tb);
+    if (real > 0 && h.onHit) h.onHit(tb.ent, h);
+}
+function acertoShot(q) {
+    var s = _cS, tb = q.b;
+    if (s.dead || tb.dead || tb.ent === s.owner) return;
+    if (s.team !== '*' && tb.team === s.team) return;
+    if (s._got.indexOf(tb) >= 0) return;
+    var real = strike(tb, s.dmg, s.owner, s.vx, s.vy, s.knock, s);
+    s._got.push(tb);
+    if (s.onHit) s.onHit(tb.ent, s, real);
+    if (!s.pierce) s.dead = true;
+}
+
 E.combat = {
-    version: '1.0.0',
+    version: '1.0.1',
     hitstop: 45,        // ms de congelamento por golpe que acerta (0 desliga)
 
     // registra a entidade como alvo: o {team, stats, ox, oy, w, h,
@@ -245,32 +284,26 @@ E.combat = {
         var w = 0;
         for (i = 0; i < _bodies.length; i++) if (!_bodies[i].dead) _bodies[w++] = _bodies[i];
         _bodies.length = w;
-        // indexa as caixas dos corpos (cada caixa e uma copia: o scratch
-        // nao pode ir para o hash)
-        _hash.clear();
+        // caixas dos corpos (copia: o scratch boxOf nao pode ir para o hash).
+        // Ate HASH_MIN corpos o teste e DIRETO (sem hash, sem closure por
+        // quadro): no Duktape o hash com chave string + array por consulta
+        // custava ~9 ms/quadro no 4848 com 4 corpos — o jogo caia a 14 fps
+        var usaHash = _bodies.length > HASH_MIN;
+        if (usaHash) _hash.clear();
         for (i = 0; i < _bodies.length; i++) {
             b = _bodies[i];
             var bx = boxOf(b);
             if (!b._bx) b._bx = { x: 0, y: 0, w: 0, h: 0, b: null };
             b._bx.x = bx.x; b._bx.y = bx.y; b._bx.w = bx.w; b._bx.h = bx.h; b._bx.b = b;
-            _hash.add(b._bx);
+            if (usaHash) _hash.add(b._bx);
         }
         // hitboxes
         for (i = 0; i < _hits.length; i++) {
             var h = _hits[i];
             if (h.dead) continue;
-            var sh = typeof h.shape === 'function' ? h.shape() : h.shape;
-            _hash.query(sh, function (q) {
-                var tb = q.b;
-                if (tb.dead || tb.ent === h.owner) return;
-                if (h.team !== '*' && tb.team === h.team) return;
-                if (h.once && h.got.indexOf(tb) >= 0) return;
-                var kx = h.fx !== undefined && (h.fx || h.fy) ? h.fx : cx(tb) - (sh.r !== undefined ? sh.x : sh.x + sh.w / 2);
-                var ky = h.fx !== undefined && (h.fx || h.fy) ? h.fy : cy(tb) - (sh.r !== undefined ? sh.y : sh.y + sh.h / 2);
-                var real = strike(tb, h.dmg, h.owner, kx, ky, h.knock, h);
-                if (h.once) h.got.push(tb);
-                if (real > 0 && h.onHit) h.onHit(tb.ent, h);
-            });
+            _cH = h;
+            _cSh = typeof h.shape === 'function' ? h.shape() : h.shape;
+            alvos(_cSh, acertoHit, usaHash);
             h.t += ms;
             if (h.t >= h.ms) h.dead = true;
         }
@@ -306,16 +339,8 @@ E.combat = {
                 if (s._boom) { s.back = true; s.x -= mvx; s.y -= mvy; }
                 else { s.dead = true; continue; }
             }
-            _hash.query(s, function (q) {
-                var tb = q.b;
-                if (s.dead || tb.dead || tb.ent === s.owner) return;
-                if (s.team !== '*' && tb.team === s.team) return;
-                if (s._got.indexOf(tb) >= 0) return;
-                var real = strike(tb, s.dmg, s.owner, s.vx, s.vy, s.knock, s);
-                s._got.push(tb);
-                if (s.onHit) s.onHit(tb.ent, s, real);
-                if (!s.pierce) s.dead = true;
-            });
+            _cS = s;
+            alvos(s, acertoShot, usaHash);
             if (s.t >= s.life) s.dead = true;
         }
         w = 0;

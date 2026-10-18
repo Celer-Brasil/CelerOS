@@ -267,6 +267,13 @@ module.exports = function (check) {
     runScenes(c, { s: { draw: function () { W.draw(); }, update: function () { if (c.S.millis() > 0) vistos.push(pintadas); } } },
               's', 350);
     check('world: celula animada (agua) repinta sozinha no draw', pintadas > antes);
+    // W.fechado: a borda da sala e parede (monstro nao sai pela abertura)
+    W.outside = false;   // como a Lenda: o heroi atravessa a borda
+    var livreW = !W.rectSolid(-4, 32 + 16 * 2 + 2, 8, 8);
+    W.outside = true;
+    check('world.fechado: a abertura da borda e livre no W (outside false) e solida no fechado',
+          livreW && W.fechado.rectSolid(-4, 32 + 16 * 2 + 2, 8, 8) &&
+          W.fechado.solidAt(-1, 40) && !W.fechado.solidAt(16 * 3 + 2, 32 + 16 * 2 + 2));
     var mm = W.minimap(0, 0, { size: 6 });
     check('world.minimap mede a area (2 salas) e W.find acha valores', mm.w === 13 && mm.h === 6 &&
           W.find('agua').length === 1);

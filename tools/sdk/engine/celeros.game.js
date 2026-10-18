@@ -84,8 +84,10 @@
 // o tap mede o toque ate o ULTIMO quadro com o dedo (um quadro pesado entre
 // o press e a leitura da soltura nao engole mais o toque) e o duplo-toque
 // conta do fim do 1o ao inicio do 2o.
+// 1.4.3: System.button (mais um present por quadro) so e lido nas placas sem
+// vidro, as unicas que entregam o botao ao app.
 
-var E = { version: '1.4.2' };
+var E = { version: '1.4.3' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -128,7 +130,10 @@ E.caps = (function () {
         slots: typeof S.spriteSlots === 'function' ? S.spriteSlots() : 4,
         mix: typeof S.sfx === 'function',          // API 32: sfx sem bloquear
         clip: typeof S.setClip === 'function',
-        button: typeof S.button === 'function',
+        // botao fisico do app (System.button, API 17) so existe nas placas
+        // SEM vidro (devkit: buttonToApp); nas outras cada leitura era mais um
+        // present por quadro (~1,8 ms no 4848) devolvendo sempre 0
+        button: typeof S.button === 'function' && !!(info && info.hasDisplay === false),
         // API 43: varios dedos (System.getTouches) — 4848 e relogio; a CYD
         // (resistivo) entrega 1 ponto pelo mesmo caminho
         multi: typeof S.getTouches === 'function',

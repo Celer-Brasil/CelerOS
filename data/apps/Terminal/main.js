@@ -1,9 +1,20 @@
-// CelerOS Terminal — shell simulado sobre o FS real (API 5: System.keypad*)
-// ES5 puro (Duktape). Teclado do OS ancorado no rodape; o app ecoa a linha
-// corrente acima dele e executa o comando no OK. 'help' lista os comandos.
+// CelerOS Terminal — shell simulado sobre o FS real, sobre o CelerKit (deps
+// celeros.app.*): o laco de frames e do A.run (celeros.app), o teclado
+// dockado e a linha de digitacao com caret sao do celeros.app.input, o
+// historico persistente de comandos (anel com dedup consecutivo) e do
+// celeros.app.history e a saida passa pelo saneamento Latin-1 do
+// celeros.app.text (as fontes so cobrem U+0020..U+00FF). Teclado do OS
+// ancorado no rodape; o app ecoa o comando executado e 'help' lista tudo.
+// ES5 puro (Duktape).
 
-var T = System.theme();
-var W = 240, H = 320;
+var A = require("celeros.app");
+require("celeros.app.input");
+require("celeros.app.history");
+require("celeros.app.text");
+
+A.init();
+var T = A.T;
+var W = 240;
 var CHW = 6;                    // fonte 1 (GLCD): 6 px por coluna
 var COLS = Math.floor(W / CHW); // 40 colunas
 var LINE_H = 10;
@@ -12,43 +23,37 @@ var VER = System.getOSVersion();
 var cwd = "/local";
 var lines = [];                 // historico de saida: {s, c}
 var MAXLINES = 120;
-var histCmds = [];              // comandos ja digitados (cmd 'history')
-var HIST_FILE = "/local/config_term_hist.txt";
-(function () {                  // historico persistido: ultimos 20 comandos
-    var raw = FS.readTextFile(HIST_FILE);
+var outDirty = true;
+
+// ---- historico de comandos (celeros.app.history) ---------------------------
+// Anel de 20 com dedup consecutivo, persistido em JSON na pasta privada do
+// app (FS.appData). Na primeira execucao apos a migracao importa o arquivo
+// antigo em texto puro (o 1.4.x gravava /local/config_term_hist.txt).
+var hist = A.history.new({ file: "cmd.json", max: 20 });
+(function () {
+    if (hist.all().length) return;
+    var raw = null;
+    try { raw = FS.readTextFile("/local/config_term_hist.txt"); } catch (e) {}
     if (!raw) return;
     var hs = raw.split("\n");
-    var start = Math.max(0, hs.length - 20);
-    for (var i = start; i < hs.length; i++) {
-        if (hs[i]) histCmds.push(hs[i]);
-    }
+    for (var i = 0; i < hs.length; i++) if (hs[i]) hist.push(hs[i]);
 })();
-function saveHist() {
-    var last = histCmds.slice(-20);
-    FS.writeTextFile(HIST_FILE, last.join("\n") + "\n");
-}
-var kbTop = H;
-var useKeypad = false;
-var redrawAll = true;
-var inputDirty = true;
-var lastBlink = 0;
-var cursorOn = true;
-var hasTopbar = (typeof System.topbarText === "function");
 
 function syncBar() {
     // faixa mostra usuario@host + diretorio corrente
-    if (hasTopbar) System.topbarText("root@celeros " + cwd);
+    if (typeof System.topbarText === "function") System.topbarText("root@celeros " + cwd);
 }
 
 // ---------------------------------------------------------------- saida ----
 function pushLine(s, col) {
     lines.push({ s: s, c: col || T.text });
     if (lines.length > MAXLINES) lines.shift();
+    outDirty = true;
 }
 
 function out(s, col) {
     if (s === undefined || s === null) s = "";
-    s = String(s);
+    s = A.text.fit(String(s));         // fora do Latin-1 some (a fonte nao tem)
     while (s.length > COLS) {          // quebra em linhas de COLS colunas
         pushLine(s.substring(0, COLS), col);
         s = s.substring(COLS);
@@ -197,8 +202,9 @@ var cmds = {
         var txt = FS.readTextFile(p);
         if (txt === null) { out("cat: " + p + ": não encontrado", T.err); return; }
         if (txt.length > 600) {
-            out(txt.substring(0, 600));
-            out("... (truncado, " + txt.length + " bytes)", T.textDim);
+            // arquivo grande abre no leitor rolante do kit (celeros.app.text):
+            // rolagem por inercia em vez de cortar em 600 bytes
+            A.text.viewer("cat " + baseName(p), function () { return txt; });
         } else {
             var ls = txt.split("\n");
             for (var i = 0; i < ls.length; i++) out(ls[i]);
@@ -350,9 +356,10 @@ var cmds = {
         if (Sensors.temp) out("temp " + Sensors.temp().toFixed(1) + "C");
     },
     history: function() {
-        for (var i = 0; i < histCmds.length; i++) out("  " + (i + 1) + "  " + histCmds[i]);
+        var all = hist.all();
+        for (var i = 0; i < all.length; i++) out("  " + (i + 1) + "  " + all[i]);
     },
-    clear: function() { lines = []; },
+    clear: function() { lines.length = 0; outDirty = true; },
     neofetch: function() {
         var info = infoLines();
         var i = 0;
@@ -407,126 +414,81 @@ function execute(line) {
     }
 }
 
-// -------------------------------------------------------------- desenho ----
-// A barra de titulo (nome + X) agora e a topbar padrao do sistema, desenhada
-// pelo core acima do canvas — o app comeca a desenhar direto na area de saida.
+// ---------------------------------------------------------------- desenho ----
+// A barra de titulo (nome + X) e a topbar padrao do sistema e o frame e do
+// A.run: a tela so pinta a saida (fonte GLCD) — a linha de digitacao com
+// caret e o teclado acoplado sao do celeros.app.input.
 function drawOut() {
-    var top = 0, bottom = kbTop - 16;
-    if (bottom <= top) return;
-    System.fillRect(0, top, W, bottom - top, T.bg);
-    var n = Math.floor((bottom - top) / LINE_H);
+    var bottom = A.input.ativo() ? A.input.top() - 40 : 312;
+    if (bottom <= 0) return;
+    System.fillRect(0, 0, W, bottom, T.bg);
+    var n = Math.floor(bottom / LINE_H);
     var start = lines.length - n;
     if (start < 0) start = 0;
-    var y = top;
+    var y = 0;
     for (var i = start; i < lines.length; i++) {
         System.setTextColor(lines[i].c, T.bg);
         System.drawString(lines[i].s, 4, y, 1);
         y += LINE_H;
     }
-}
-
-function drawInput() {
-    var y = kbTop - 14;
-    System.fillRect(0, y, W, 14, T.bg);
-    var s = promptStr() + System.keypadText();
-    if (s.length > COLS - 1) s = s.substring(s.length - (COLS - 1)); // mostra a cauda
-    System.setTextColor(T.accent, T.bg);
-    System.drawString(s, 4, y + 3, 1);
-    if (cursorOn) {
-        var cx = 4 + System.textWidth(s, 1);
-        System.fillRect(cx + 1, y + 2, 5, 9, T.text);
-    }
-}
-
-function drawAll() {
-    drawOut();
-    drawInput();
+    outDirty = false;
 }
 
 // ------------------------------------------------------------------ main ---
-useKeypad = System.keypadOpen({ field: false, maxLen: 96 });
-if (useKeypad) kbTop = System.keypadRect().y;
+var kb = A.input.open({ maxLen: 96, chips: ["Limpar"] });
 
 out("CelerOS " + VER + " terminal", T.accent);
-if (useKeypad) {
+if (kb) {
     out("digite 'help' para listar comandos", T.textDim);
 } else {
     out("requer firmware com API >= 5", T.err);
 }
 out("");
-
-// chips da faixa (API 6): Limpar zera a tela sem apagar o historico de cmds
-var hasChips = (typeof System.topbarButtons === "function");
-if (useKeypad && hasChips) System.topbarButtons(["Limpar"]);
 syncBar();
 
-while (true) {
-    if (useKeypad) {
-        var ev = System.keypadPoll();
-        if (ev) {
-            if (ev.type === "enter") {
-                var line = ev.text;
-                var echo = true;
-                if (line === "!!" && histCmds.length) {          // repete o ultimo
-                    line = histCmds[histCmds.length - 1];
-                    out(promptStr() + ev.text + "  -> " + line, T.accent);
+// Um comando por frame: o enter chega pelo poll do celeros.app.input; o
+// chip "Limpar" da faixa zera a saida (o historico de comandos fica); o
+// !! / !n resolvem do anel do celeros.app.history.
+A.run({
+    sh: function (c) {
+        var ev = A.input.poll();
+        if (ev && ev.type === "enter") {
+            var typed = ev.text || "";
+            var line = typed, echo = true;
+            if (line === "!!" && hist.all().length) {          // repete o ultimo
+                line = hist.last();
+                out(promptStr() + typed + "  -> " + line, T.accent);
+                echo = false;
+            } else if (line.length > 1 && line.charAt(0) === "!" &&
+                       /^!\d+$/.test(line)) {                  // roda o n-esimo
+                var hn = parseInt(line.substring(1), 10);
+                var all = hist.all();
+                if (hn >= 1 && hn <= all.length) {
+                    line = all[hn - 1];
+                    out(promptStr() + typed + "  -> " + line, T.accent);
                     echo = false;
-                } else if (line.length > 1 && line.charAt(0) === "!" &&
-                           /^!\d+$/.test(line)) {                // roda o n-esimo
-                    var hn = parseInt(line.substring(1), 10);
-                    if (hn >= 1 && hn <= histCmds.length) {
-                        line = histCmds[hn - 1];
-                        out(promptStr() + ev.text + "  -> " + line, T.accent);
-                        echo = false;
-                    } else {
-                        out("historico vazio na posicao " + hn, T.err);
-                        line = "";
-                    }
+                } else {
+                    out("historico vazio na posicao " + hn, T.err);
+                    line = "";
                 }
-                if (echo) out(promptStr() + ev.text, T.accent);
-                if (line && line !== histCmds[histCmds.length - 1]) {
-                    histCmds.push(line);
-                    if (histCmds.length > 20) histCmds.shift();
-                    saveHist();
-                }
-                cursorOn = true;
-                if (line) execute(line);
-                redrawAll = true;
-            } else if (ev.type === "change") {
-                inputDirty = true;
-                cursorOn = true;
-            } else if (ev.type === "cancel") {
-                // X nao existe com field:false, mas por seguranca: redesenha
-                redrawAll = true;
-                System.keypadOpen({ field: false, maxLen: 96 });
-                kbTop = System.keypadRect().y;
             }
+            if (echo) out(promptStr() + typed, T.accent);
+            hist.push(line);            // dedup consecutivo e persistencia no modulo
+            if (line) execute(line);
+            UI.invalidate();            // frame cheio: console e card redesenham
         }
 
-        // chip "Limpar" da faixa do sistema (API 6)
-        var chip = System.topbarPop ? System.topbarPop() : null;
+        var chip = A.input.chip();
         if (chip === "Limpar") {
-            lines = [];
-            redrawAll = true;
-        } else if (chip !== null) {
-            redrawAll = true;
+            lines.length = 0;
+            outDirty = true;
+            UI.invalidate();
+        } else if (chip) {
+            UI.invalidate();
         }
-    }
 
-    if (redrawAll) {
-        drawAll();
-        redrawAll = false;
-        inputDirty = false;
-        lastBlink = System.millis();
-    } else if (inputDirty) {
-        drawInput();
-        inputDirty = false;
-        lastBlink = System.millis();
-    } else if (System.millis() - lastBlink > 500) {
-        cursorOn = !cursorOn;
-        drawInput();
-        lastBlink = System.millis();
+        A.input.redraw(c.full);         // frame total apaga o teclado por cima
+        if (c.full || outDirty) drawOut();
+        if (A.input.ativo()) A.input.line(cwd);   // placeholder = diretorio corrente
     }
-
-    System.delay(20);
-}
+}, "sh");

@@ -109,20 +109,21 @@ function cmpV(v1, v2) {
 }
 
 // ---- deps compartilhadas (API 30) -------------------------------------------
-// "^1.2.0" = mesma major >= base; sem "^" = exata. Mesmo contrato do
-// celerhub.py e do servidor (range resolve no install, versao escolhida
-// grava em <pasta>/deps.json).
+// Gramatica normativa (a MESMA do celerhub.py/servidor/harness; vetor de
+// conformidade em test/semver/run.js): "^X.Y.Z" = mesma major e >= base
+// (major = breaking; minor/patch sobem sozinhos) ou "X.Y.Z" exata.
+// Malformada ("1.2", "v1.0.0", "") NAO satisfaz — o parseInt(||0) antigo
+// aceitava "1.2" como "1.2.0" e divergia do PC (familia do bug 2.7.2).
+var RE_VER_DEP = /^(\d+)\.(\d+)\.(\d+)$/;
 function depRangeOk(rng, ver) {
     rng = String(rng);
-    if (rng.charAt(0) !== "^") return rng === ver;
-    function parts(s) {
-        if (s.charAt(0) === "^") s = s.substring(1);  // so o range traz "^";
-        var seg = s.split("."), o = [];               // corta-lo da versao
-        for (var i = 0; i < 3; i++) o.push(parseInt(seg[i], 10) || 0); // virava [0,y,z]
-        return o;
-    }
-    var R = parts(rng), V = parts(ver);
-    return V[0] === R[0] && (V[1] > R[1] || (V[1] === R[1] && V[2] >= R[2]));
+    var caret = rng.charAt(0) === "^";
+    var R = RE_VER_DEP.exec(caret ? rng.substring(1) : rng);
+    var V = RE_VER_DEP.exec(String(ver));
+    if (!R || !V) return false;
+    if (!caret) return rng === String(ver);
+    return +V[1] === +R[1] &&
+           (+V[2] > +R[2] || (+V[2] === +R[2] && +V[3] >= +R[3]));
 }
 // maior versao do nome que satisfaca TODOS os ranges coletados
 function depPick(nm, ranges, index) {
@@ -137,10 +138,13 @@ function depPick(nm, ranges, index) {
     }
     return best;
 }
-// grafo diretas + transitivas -> {nome: versao}; null se algo nao resolve
-function resolveDeps(want, index) {
-    var wanted = {}, seen = {}, queue = [], k;
-    for (k in want) if (want.hasOwnProperty(k)) queue.push([k, want[k]]);
+// uma passada do fecho: BFS semeando {nome: [ranges]}, re-pick a cada
+// visita e arestas do pick corrente na fila; {wanted, picks} ou null
+function _passadaDeps(sementes, index) {
+    var wanted = {}, seen = {}, queue = [], k, i;
+    for (k in sementes) if (sementes.hasOwnProperty(k)) {
+        for (i = 0; i < sementes[k].length; i++) queue.push([k, sementes[k][i]]);
+    }
     while (queue.length) {
         var pair = queue.shift(), nm = pair[0], rng = String(pair[1]);
         var key = nm + "|" + rng;
@@ -148,18 +152,62 @@ function resolveDeps(want, index) {
         seen[key] = 1;
         if (!wanted[nm]) wanted[nm] = [];
         wanted[nm].push(rng);
-        var pick = depPick(nm, wanted[nm], index);
-        if (!pick) return null;
-        var sub = index[nm][pick].deps || {};
-        for (k in sub) if (sub.hasOwnProperty(k)) queue.push([k, sub[k]]);
+        var escolhida = depPick(nm, wanted[nm], index);
+        if (!escolhida) return null;
+        var sub = (index[nm][escolhida] && index[nm][escolhida].deps) || {};
+        for (k in sub) if (sub.hasOwnProperty(k)) queue.push([k, String(sub[k])]);
     }
-    var out = {};
+    var picks = {};
     for (k in wanted) if (wanted.hasOwnProperty(k)) {
         var p = depPick(k, wanted[k], index);
         if (!p) return null;
-        out[k] = p;
+        picks[k] = p;
     }
-    return out;
+    return { wanted: wanted, picks: picks };
+}
+// fecho de ponto fixo (mesma receita do celerhub.resolve_dep_ranges): uma
+// passada pode SUBIR o pick de um nome no meio do caminho e as arestas do
+// pick velho vazavam — sobrava pino de versao que o pick final nem usa e
+// FALTAVA modulo que so o pick novo traz (require quebrava em runtime).
+// Converge com diretas + arestas dos picks finais ate os ranges que cada
+// pick exige serem exatamente os que o limitaram; null se nao converge.
+function resolveDeps(want, index) {
+    var diretas = {}, k, n2;
+    for (k in want) if (want.hasOwnProperty(k)) diretas[k] = String(want[k]);
+    var sementes = {};
+    for (k in diretas) if (diretas.hasOwnProperty(k)) sementes[k] = [diretas[k]];
+    for (var passada = 0; passada < 32; passada++) {
+        var r = _passadaDeps(sementes, index);
+        if (!r) return null;
+        var exigidos = {}, prox = {}, exato = true;
+        for (k in r.picks) if (r.picks.hasOwnProperty(k)) {
+            var v = r.picks[k];
+            var sub = (index[k] && index[k][v] && index[k][v].deps) || {};
+            for (var d in sub) if (sub.hasOwnProperty(d)) {
+                d = String(d);
+                if (!exigidos[d]) exigidos[d] = [];
+                if (!prox[d]) prox[d] = [];
+                if (exigidos[d].indexOf(String(sub[d])) < 0) exigidos[d].push(String(sub[d]));
+                if (prox[d].indexOf(String(sub[d])) < 0) prox[d].push(String(sub[d]));
+            }
+        }
+        var nomes = {};
+        for (n2 in r.wanted) if (r.wanted.hasOwnProperty(n2)) nomes[n2] = 1;
+        for (n2 in exigidos) if (exigidos.hasOwnProperty(n2)) nomes[n2] = 1;
+        for (n2 in nomes) if (nomes.hasOwnProperty(n2)) {
+            var base = (exigidos[n2] || []).slice();
+            if (diretas[n2] && base.indexOf(diretas[n2]) < 0) base.push(diretas[n2]);
+            var tem = (r.wanted[n2] || []).slice();
+            if (base.sort().join("|") !== tem.sort().join("|")) { exato = false; break; }
+        }
+        if (exato) return r.picks;
+        sementes = prox;
+        for (k in diretas) if (diretas.hasOwnProperty(k)) {
+            if (!sementes[k]) sementes[k] = [];
+            if (sementes[k].indexOf(diretas[k]) < 0) sementes[k].push(diretas[k]);
+        }
+    }
+    return null;
 }
 // alimenta o cache /local/modules/<nome>/<versao>/ com o que falta — mesmo
 // contrato dos arquivos do app: download streaming, MD5, .new + rename

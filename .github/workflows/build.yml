@@ -29,6 +29,8 @@ jobs:
         run: node test/sdk/run.js
       - name: Debugger tests (protocolo dmsg + cliente contra alvo Duktape falso)
         run: node test/debug/run.js
+      - name: Conformidade semver (vetor unico para celerhub.py, Loja e harness)
+        run: node test/semver/run.js
       - name: Mesh E2E (apps reais em varios nos simulados da CelerNet/Celer Link)
         run: node test/meshsim/run.js
       - name: Lint dos apps do repo (data/apps + hub_apps + boards/*/data/apps)

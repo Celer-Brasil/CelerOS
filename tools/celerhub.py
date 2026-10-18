@@ -180,25 +180,75 @@ def range_satisfies(rng, version):
     return v[0] == b[0] and v >= b
 
 
+def _passada_fecho(sementes, hub_deps):
+    """Uma passada do fecho: BFS semeando {nome: [ranges]}, re-escolhendo o
+    pick a cada visita e enfileirando as arestas do pick corrente. Devolve
+    (wanted, picks); die() se algo nao satisfaz. O re-pick por visita e o
+    que garante "maior satisfazendo todos os caminhos" dentro da passada."""
+    wanted, seen, queue = {}, set(), list(sementes.items())
+    while queue:
+        n, rs = queue.pop(0)
+        novo = [r for r in rs if (n, r) not in seen]
+        if not novo:
+            continue
+        for r in novo:
+            seen.add((n, r))
+        wanted.setdefault(n, []).extend(novo)
+        versions = hub_deps.get(n) or {}
+        ok = [v for v in versions
+              if all(range_satisfies(r, v) for r in wanted[n])]
+        if not ok:
+            die(f"dep '{n}' sem versao que satisfaca {' / '.join(wanted[n])} no hub")
+        for d, rr in (versions[max(ok, key=vtuple)].get("deps") or {}).items():
+            queue.append((str(d), [str(rr)]))
+    picks = {}
+    for n, rs in wanted.items():
+        versions = hub_deps.get(n) or {}
+        ok = [v for v in versions if all(range_satisfies(r, v) for r in rs)]
+        if not ok:
+            die(f"dep '{n}' sem versao que satisfaca {' / '.join(rs)} no hub")
+        picks[n] = max(ok, key=vtuple)
+    return wanted, picks
+
+
 def resolve_dep_ranges(app_deps, hub_deps):
     """nome -> versao resolvida (maior satisfazendo TODOS os ranges que
-    chegam ao nome, diretos ou transitivos). die() se algo nao resolve."""
-    wanted, seen, queue = {}, set(), list(app_deps.items())
-    while queue:
-        name, rng = queue.pop(0)
-        if (name, rng) in seen:
-            continue
-        seen.add((name, rng))
-        wanted.setdefault(name, []).append(rng)
-        versions = hub_deps.get(name) or {}
-        ok = [v for v in versions
-              if all(range_satisfies(r, v) for r in wanted[name])]
-        if not ok:
-            die(f"dep '{name}' sem versao que satisfaca {' / '.join(wanted[name])} no hub")
-        for d, r in (versions[max(ok, key=vtuple)].get("deps") or {}).items():
-            queue.append((str(d), str(r)))
-    return {n: max((v for v in hub_deps.get(n, {}) if all(range_satisfies(r, v) for r in rs)),
-                   key=vtuple) for n, rs in wanted.items()}
+    chegam ao nome, diretos ou transitivos). die() se algo nao resolve ou
+    o fecho nao converge.
+
+    E um ponto fixo, nao um BFS unico: no meio do caminho um range que
+    chega depois pode SUBIR o pick de um nome, e as arestas coletadas do
+    pick velho vazavam no grafo — sobrava pino de versao que o pick final
+    nem usa e FALTAVA aresta que so o pick novo traz (modulo nunca baixado,
+    require quebra em runtime). Converge repetindo a passada com diretas +
+    arestas dos picks finais, ate os ranges que cada pick exige serem
+    EXATAMENTE os que o limitaram (pino de pick vencido nao fica para
+    tras). 32 passadas e teto de seguranca; grafos reais convergem em 2."""
+    direct = {str(n): str(r) for n, r in app_deps.items()}
+    sementes = {n: [r] for n, r in direct.items()}
+    for _ in range(32):
+        wanted, picks = _passada_fecho(sementes, hub_deps)
+        exigidas, prox = {}, {}
+        for n, v in picks.items():
+            for d, rr in (hub_deps.get(n, {}).get(v, {}).get("deps") or {}).items():
+                exigidas.setdefault(str(d), set()).add(str(rr))
+                prox.setdefault(str(d), []).append(str(rr))
+        exato = True
+        for n in set(wanted) | set(exigidas):
+            base = set(exigidas.get(n, set()))
+            if n in direct:
+                base.add(direct[n])
+            if sorted(wanted.get(n, [])) != sorted(base):
+                exato = False
+                break
+        if exato:
+            return picks
+        sementes = {n: list(rs) for n, rs in prox.items()}
+        for n, r in direct.items():
+            sementes.setdefault(n, [])
+            if r not in sementes[n]:
+                sementes[n].append(r)
+    die("fecho de deps nao convergiu (ranges em briga entre versoes do grafo)")
 
 
 def die(msg, code=1):
@@ -734,14 +784,21 @@ def cmd_publish_dep(args):
                      if " erro[" in l]
             die(f"{src.name}: sintaxe invalida no lint ES5 (app_lint): "
                 f"{erros[0] if erros else 'sem detalhe'}")
-        # pre-flight contra o indice: mesma versao ja publicada so passa com
-        # --force explicito (antes morria no 409 do servidor, com rede, e a
-        # mensagem nao dizia o que fazer)
+        # pre-flight contra o indice, MESMA regra do servidor (409): versao
+        # ja existente so passa com --force; versao <= topo do hub tambem
+        # exige --force (anti-rebaixamento) — antes o cliente so via a
+        # "ja existente" e um publish mais antigo que o topo passava aqui e
+        # morria la com mensagem vazia
         if not args.dry and not args.force:
             _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
-            if ((idx.get("deps", {}).get(name) or {}).get(version)):
+            vers = (idx.get("deps", {}).get(name) or {})
+            if vers.get(version):
                 die(f"dep {name} v{version} ja esta no hub — suba a version no "
                     f"modulo ou use --force para substituir")
+            topo = max(vers, key=vtuple) if vers else None
+            if topo is not None and vtuple(version) <= vtuple(topo):
+                die(f"dep {name} v{version} nao passa do topo do hub (v{topo}) "
+                    f"— suba a version ou use --force (rebaixamento)")
         # enxuta o SNAPSHOT: o que sobe e o que foi lintado
         if not args.no_strip:
             strip = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"

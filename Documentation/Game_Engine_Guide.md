@@ -850,6 +850,13 @@ The rules below are what made the difference.
 - **Few scattered pixels.** The firmware keeps up to 32 dirty boxes (it was 8). Hundreds of
   scattered 1 px draws (stars, dust) still turn into large unions, and the present copies them to
   the panel.
+- **Count function calls, not just draw calls.** Measured on the 4848: an empty JS function call costs
+  ~15 µs, `Math.round` or `System.millis` ~20 µs, `drawPixel` ~35 µs, a 3x3 `fillRect` ~40 µs, a 32x32
+  `blitSprite` ~100 µs, `fillSmoothCircle` r4 ~140 µs, `drawString` ~180 µs. Helper layers, per-cell
+  callbacks and per-pair test functions inside a frame loop cost more than the pixels they draw.
+  Since core 1.4.4 the `E.gfx` wrappers round inline (no `px`/`cam.wx`/`Math.round` per coordinate),
+  `fx.stars` draws only the stars whose pixel changed, and `combat` 1.0.2 filters by team and owner
+  before an inline shape test.
 - Engine fixes that come for free:
   - The tap lasts until the LAST frame with the finger down. A slow frame between press and release
     no longer eats the tap; `pad` buttons follow the same rule.

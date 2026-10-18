@@ -26,6 +26,8 @@
 // 1.0.1: ate 24 corpos o teste e direto, sem hash nem closure por quadro
 // (o hash custava ~9 ms/quadro no 4848 com 4 corpos); golpe sem dano
 // (bumerangue) so atordoa.
+// 1.0.2: filtro de time/dono antes da geometria e teste inline no caminho
+// direto (sem collide.test por par tiro x corpo: ~6 -> ~4,5 ms no Supernova).
 
 var E = require('celeros.game');
 require('celeros.game.collide');
@@ -93,11 +95,28 @@ function strike(b, dmg, src, kx, ky, knock, o) {
 // _cH/_cSh/_cS)
 var HASH_MIN = 24;
 var _cH = null, _cSh = null, _cS = null;
-function alvos(shape, fn, usaHash) {
+// team/owner: o filtro de time e dono vem ANTES da geometria (1.0.2: o tiro
+// do jogador testava a forma contra a propria nave antes de descarta-la) e o
+// teste circulo x retangulo / retangulo x retangulo e inline — antes eram
+// alvos -> collide.test -> circleRect, 2-3 chamadas de funcao (~15 us cada
+// no Duktape) por par tiro x corpo (Supernova: tick 6 -> 4,5 ms). Mesma regra
+// do collide.test (borda encostando nao conta)
+function alvos(shape, fn, usaHash, team, owner) {
     if (usaHash) { _hash.query(shape, fn); return; }
+    var circ = shape.r !== undefined, sx = shape.x, sy = shape.y;
+    var sr = circ ? shape.r : 0, sw = circ ? 0 : shape.w, sh = circ ? 0 : shape.h;
     for (var k = 0; k < _bodies.length; k++) {
-        var bx = _bodies[k]._bx;
-        if (bx && E.collide.test(shape, bx)) fn(bx);
+        var tb = _bodies[k], bx = tb._bx;
+        if (!bx || tb.dead || tb.ent === owner) continue;
+        if (team !== '*' && tb.team === team) continue;
+        if (circ) {
+            var nx = sx < bx.x ? bx.x : (sx > bx.x + bx.w ? bx.x + bx.w : sx);
+            var ny = sy < bx.y ? bx.y : (sy > bx.y + bx.h ? bx.y + bx.h : sy);
+            var ddx = sx - nx, ddy = sy - ny;
+            if (ddx * ddx + ddy * ddy < sr * sr) fn(bx);
+        } else if (sx < bx.x + bx.w && sx + sw > bx.x && sy < bx.y + bx.h && sy + sh > bx.y) {
+            fn(bx);
+        }
     }
 }
 function acertoHit(q) {
@@ -124,7 +143,7 @@ function acertoShot(q) {
 }
 
 E.combat = {
-    version: '1.0.1',
+    version: '1.0.2',
     hitstop: 45,        // ms de congelamento por golpe que acerta (0 desliga)
 
     // registra a entidade como alvo: o {team, stats, ox, oy, w, h,
@@ -303,7 +322,7 @@ E.combat = {
             if (h.dead) continue;
             _cH = h;
             _cSh = typeof h.shape === 'function' ? h.shape() : h.shape;
-            alvos(_cSh, acertoHit, usaHash);
+            alvos(_cSh, acertoHit, usaHash, h.team, h.owner);
             h.t += ms;
             if (h.t >= h.ms) h.dead = true;
         }
@@ -340,7 +359,7 @@ E.combat = {
                 else { s.dead = true; continue; }
             }
             _cS = s;
-            alvos(s, acertoShot, usaHash);
+            alvos(s, acertoShot, usaHash, s.team, s.owner);
             if (s.t >= s.life) s.dead = true;
         }
         w = 0;

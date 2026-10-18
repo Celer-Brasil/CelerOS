@@ -848,6 +848,13 @@ regras abaixo foram o que fez a diferença.
 - **Poucos pixels espalhados.** O firmware guarda até 32 caixas sujas (eram 8). Centenas de
   desenhos de 1 px espalhados (estrelas, poeira) ainda viram uniões grandes, e o present copia
   essas uniões para o painel.
+- **Conte chamadas de função, não só de desenho.** Medido no 4848: uma chamada de função JS vazia
+  custa ~15 µs, `Math.round` ou `System.millis` ~20 µs, `drawPixel` ~35 µs, `fillRect` 3x3 ~40 µs,
+  `blitSprite` 32x32 ~100 µs, `fillSmoothCircle` r4 ~140 µs, `drawString` ~180 µs. Camadas de helper,
+  callbacks por célula e funções de teste por par dentro do laço do quadro custam mais que os pixels
+  que desenham. Desde o core 1.4.4 os wrappers do `E.gfx` arredondam inline (sem `px`/`cam.wx`/
+  `Math.round` por coordenada), o `fx.stars` desenha só as estrelas cujo pixel mudou e o `combat`
+  1.0.2 filtra time e dono antes de um teste de forma inline.
 - Correções da engine que vêm de graça:
   - O tap dura até o ÚLTIMO quadro com o dedo no vidro. Um quadro lento entre o aperto e a
     soltura não engole mais o toque; os botões do `pad` seguem a mesma regra.

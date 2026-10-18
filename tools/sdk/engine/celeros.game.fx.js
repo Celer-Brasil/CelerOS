@@ -21,6 +21,7 @@
 // (monstro que some), brilho (item/coracao), pedrinha (pedra que quebra);
 // play(..., {dir: rad}) aponta a receita (o corte sai para onde o golpe foi).
 // 1.4.1: particula fora do vidro nao desenha nem registra caixa suja.
+// 1.4.2: stars desenha so as estrelas cujo pixel mudou (lista de movidas).
 
 var E = require('celeros.game');
 var S = System;
@@ -34,7 +35,7 @@ var _bmO = { w: 1 };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.4.1',
+    version: '1.4.2',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
@@ -159,9 +160,17 @@ E.fx = {
                 x: Math.random() * w, y: Math.random() * h,
                 layer: i % 2 ? 1 : 0.45,
                 color: o.colors ? o.colors[i % 2] :
-                       (o.color === undefined ? 0x7BEF : o.color)
+                       (o.color === undefined ? 0x7BEF : o.color),
+                // pixel desenhado (dx, dy; -1 = nunca) e o atual (ix, iy)
+                dx: -1, dy: -1, ix: 0, iy: 0
             });
         }
+        // 1.4.2: o update marca SO as estrelas cujo pixel mudou (lista mov) e o
+        // draw percorre so elas — antes o draw visitava todas com 2 Math.round
+        // cada por quadro (~15 us por chamada no Duktape: 100 estrelas ~6 ms)
+        var mov = [], marc = [];
+        for (var q = 0; q < n; q++) marc.push(0);
+        function arred(v) { return (v + 0.5) | 0; }   // coords >= 0
         return {
             update: function (dt) {
                 var c = (this._c = (this._c || 0) + 1);
@@ -174,6 +183,9 @@ E.fx = {
                         p.y -= h;
                         p.x = Math.random() * w;
                     }
+                    var nx = (p.x + 0.5) | 0, ny = (p.y + 0.5) | 0;
+                    if ((nx !== p.ix || ny !== p.iy) && !marc[i]) { marc[i] = 1; mov.push(i); }
+                    p.ix = nx; p.iy = ny;
                 }
             },
             // com E.dirty ligado cada estrela apaga o proprio pixel antigo
@@ -189,18 +201,32 @@ E.fx = {
                 var full = !d.on || d._wasFull;
                 var erase = d.on && !d._paint && !full;
                 var heal = d.on && d._paint && !full;
-                var bg = d._bg;
-                for (var i = 0; i < pts.length; i++) {
-                    var p = pts[i];
-                    var x = Math.round(p.x), y = Math.round(p.y);
-                    var moved = p.dx !== x || p.dy !== y;
-                    if (!moved && !full) continue;
-                    if (erase && p.dx !== undefined) S.drawPixel(p.dx, p.dy, bg);
-                    else if (heal && p.dx !== undefined) d.add(p.dx, p.dy, 1, 1);
-                    S.drawPixel(x, y, p.color);
-                    p.dx = x;
-                    p.dy = y;
+                var bg = d._bg, i, p, k;
+                if (full) {
+                    // fundo inteiro repintado (ou sem camada): todas, e a
+                    // lista de movidas zera
+                    for (i = 0; i < pts.length; i++) {
+                        p = pts[i];
+                        if (p.dx < 0) { p.ix = arred(p.x); p.iy = arred(p.y); }
+                        S.drawPixel(p.ix, p.iy, p.color);
+                        p.dx = p.ix; p.dy = p.iy;
+                    }
+                    for (k = 0; k < mov.length; k++) marc[mov[k]] = 0;
+                    mov.length = 0;
+                    return;
                 }
+                for (k = 0; k < mov.length; k++) {
+                    i = mov[k];
+                    marc[i] = 0;
+                    p = pts[i];
+                    if (p.dx >= 0) {
+                        if (erase) S.drawPixel(p.dx, p.dy, bg);
+                        else if (heal) d.add(p.dx, p.dy, 1, 1);
+                    }
+                    S.drawPixel(p.ix, p.iy, p.color);
+                    p.dx = p.ix; p.dy = p.iy;
+                }
+                mov.length = 0;
             }
         };
     },

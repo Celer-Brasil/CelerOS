@@ -86,8 +86,10 @@
 // conta do fim do 1o ao inicio do 2o.
 // 1.4.3: System.button (mais um present por quadro) so e lido nas placas sem
 // vidro, as unicas que entregam o botao ao app.
+// 1.4.4: rect/circle/line/text arredondam inline (sem px/py/cam.wx/Math.round
+// por coordenada: 4-6 chamadas de funcao a menos por primitiva).
 
-var E = { version: '1.4.3' };
+var E = { version: '1.4.4' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -1639,6 +1641,16 @@ E.gfx = (function () {
     var D = E.dirty;
     function px(x, screen) { return Math.round(screen ? x : E.cam.wx(x)); }
     function py(y, screen) { return Math.round(screen ? y : E.cam.wy(y)); }
+    // 1.4.3: as primitivas arredondam INLINE (px/py -> cam.wx -> Math.round
+    // eram 3 chamadas de funcao por coordenada, ~15 us cada no Duktape — mais
+    // que a primitiva nativa). (v + 0.5) | 0 = Math.round para v >= 0; o
+    // negativo (fora do vidro) segue no Math.round. _cx/_cy: deslocamento
+    // da camera do quadro (0 com opts.screen)
+    var CAM = E.cam, _cx = 0, _cy = 0;
+    function camOf(o) {
+        if (o.screen) { _cx = 0; _cy = 0; }
+        else { _cx = CAM.ox - CAM.x; _cy = CAM.oy - CAM.y; }
+    }
 
     // resolve {font, size} do texto: px (pixels), ts (papel em E.ts,
     // escalado por E.U) ou o par cru font/size de antes. Estilos vindos de
@@ -1701,8 +1713,11 @@ E.gfx = (function () {
         // rect(x,y,w,h,cor,{fill=true, r (cantos), screen})
         rect: function (x, y, w, h, color, o) {
             o = o || EMPTY;
-            var X = px(x, o.screen), Y = py(y, o.screen);
-            var W2 = Math.round(w), H2 = Math.round(h);
+            if (o.screen) { _cx = 0; _cy = 0; } else { _cx = CAM.ox - CAM.x; _cy = CAM.oy - CAM.y; }
+            var X = x + _cx, Y = y + _cy;
+            X = X >= 0 ? (X + 0.5) | 0 : Math.round(X);
+            Y = Y >= 0 ? (Y + 0.5) | 0 : Math.round(Y);
+            var W2 = w >= 0 ? (w + 0.5) | 0 : Math.round(w), H2 = h >= 0 ? (h + 0.5) | 0 : Math.round(h);
             if (o.r && E.caps.round) {
                 if (o.fill === false && typeof S.drawRoundRect === 'function') {
                     S.drawRoundRect(X, Y, W2, H2, Math.round(o.r), color);
@@ -1719,7 +1734,10 @@ E.gfx = (function () {
         // circle(x,y,r,cor,{fill=true, smooth, screen})
         circle: function (x, y, r, color, o) {
             o = o || EMPTY;
-            var X = px(x, o.screen), Y = py(y, o.screen), R = Math.round(r);
+            if (o.screen) { _cx = 0; _cy = 0; } else { _cx = CAM.ox - CAM.x; _cy = CAM.oy - CAM.y; }
+            var X = x + _cx, Y = y + _cy, R = r >= 0 ? (r + 0.5) | 0 : 1;
+            X = X >= 0 ? (X + 0.5) | 0 : Math.round(X);
+            Y = Y >= 0 ? (Y + 0.5) | 0 : Math.round(Y);
             if (R < 1) R = 1;
             if (o.fill === false) S.drawCircle(X, Y, R, color);
             else if (o.smooth && E.caps.smooth) S.fillSmoothCircle(X, Y, R, color);
@@ -1729,8 +1747,12 @@ E.gfx = (function () {
         // line(x0,y0,x1,y1,cor,{w (espessura), screen})
         line: function (x0, y0, x1, y1, color, o) {
             o = o || EMPTY;
-            var ax = px(x0, o.screen), ay = py(y0, o.screen);
-            var bx = px(x1, o.screen), by = py(y1, o.screen);
+            camOf(o);
+            var ax = x0 + _cx, ay = y0 + _cy, bx = x1 + _cx, by = y1 + _cy;
+            ax = ax >= 0 ? (ax + 0.5) | 0 : Math.round(ax);
+            ay = ay >= 0 ? (ay + 0.5) | 0 : Math.round(ay);
+            bx = bx >= 0 ? (bx + 0.5) | 0 : Math.round(bx);
+            by = by >= 0 ? (by + 0.5) | 0 : Math.round(by);
             var lw = o.w > 1 ? Math.round(o.w) : 1;
             if (lw > 1 && E.caps.wide) S.drawWideLine(ax, ay, bx, by, lw, color);
             else S.drawLine(ax, ay, bx, by, color);
@@ -1787,7 +1809,10 @@ E.gfx = (function () {
                     st = smaller;
                 }
             }
-            var X = px(x, o.screen), Y = py(y, o.screen);
+            if (o.screen) { _cx = 0; _cy = 0; } else { _cx = CAM.ox - CAM.x; _cy = CAM.oy - CAM.y; }
+            var X = x + _cx, Y = y + _cy;
+            X = X >= 0 ? (X + 0.5) | 0 : Math.round(X);
+            Y = Y >= 0 ? (Y + 0.5) | 0 : Math.round(Y);
             // bg ausente = chamada de 1 arg = fundo transparente (firmware)
             if (o.bg === undefined) {
                 S.setTextColor(o.color === undefined ? 0xFFFF : o.color);

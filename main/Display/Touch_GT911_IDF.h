@@ -152,11 +152,14 @@ namespace lgfx
       uint32_t points = std::min<uint_fast8_t>(count, rd[0] & 0x0F);
       for (size_t idx = 0; idx < points; ++idx)
       {
-        auto data = reinterpret_cast<const uint16_t*>(&rd[idx * 8]);
-        tp[idx].id   = data[0] >> 8;
-        tp[idx].x    = data[1];
-        tp[idx].y    = data[2];
-        tp[idx].size = data[3];
+        // bytes little-endian lidos um a um: rd pode ser a copia da pilha
+        // (snap, uint8_t sem alinhamento garantido) e uma leitura uint16_t
+        // desalinhada e LoadStoreAlignment no Xtensa (so com dedo na tela)
+        const uint8_t* b = &rd[idx * 8];
+        tp[idx].id   = b[1];
+        tp[idx].x    = (uint16_t)(b[2] | (b[3] << 8));
+        tp[idx].y    = (uint16_t)(b[4] | (b[5] << 8));
+        tp[idx].size = (uint16_t)(b[6] | (b[7] << 8));
 
         if (tp[idx].x < _cfg.x_min) tp[idx].x = _cfg.x_min;
         if (tp[idx].x > _cfg.x_max) tp[idx].x = _cfg.x_max;

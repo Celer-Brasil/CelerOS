@@ -80,7 +80,7 @@ bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
 #endif
 }
 
-// Returns an object { x, y, touched } 
+// Returns an object { x, y, touched }
 duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     int jx = 0, jy = 0;
     bool touched = readAppTouch(ctx, &jx, &jy);
@@ -88,6 +88,62 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
     putInt(ctx, "x", jx);
     putInt(ctx, "y", jy);
     putBool(ctx, "touched", touched);
+    return 1;
+}
+
+// (API 43) Multi-dedo: mesmo caminho do readAppTouch — present, chrome SO no
+// primario (o app nunca ve toque da topbar/X/bordas), espaco virtual 240x320
+// — mas devolve todos os dedos, primario em out[0].
+size_t JSBindings::readAppTouches(duk_context *ctx, kui::TouchPoint *out, size_t max) {
+    checkRemoteAppExit(ctx);  // shell "exit": encerra antes de tocar no hardware
+    present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
+#if CONFIG_CELEROS_UI
+    if (out == nullptr || max == 0 || !tftInstance) return 0;
+    kui::TouchPoint pts[kui::kTouchMax];
+    size_t n = kui::readTouches(pts, kui::kTouchMax);
+    if (n > 0) {
+        bool prim = true;
+        uint16_t px = pts[0].x, py = pts[0].y;
+        if (pollAppChrome(prim, px, py)) throwAppExit(ctx);  // nao retorna
+        if (!prim) {  // primario consumido pelo chrome: sai do array
+            for (size_t i = 1; i < n; i++) pts[i - 1] = pts[i];
+            n--;
+        }
+    }
+    int offY = s_topbarFixed ? UI::topbarH() : 0;
+    for (size_t i = 0; i < n && i < max; i++) {
+        if (s_nativeCanvas) {  // Canvas nativo (API 28): toque em pixels fisicos
+            out[i].x = pts[i].x;
+            out[i].y = pts[i].y;
+        } else {
+            out[i].x = (uint16_t)((int)pts[i].x * 240 / tftInstance->width());
+            out[i].y = (uint16_t)(((int)pts[i].y - offY) * 320 /
+                                  ((int)tftInstance->height() - offY));
+        }
+        out[i].id = pts[i].id;
+        out[i].size = pts[i].size;
+    }
+    return n < max ? n : max;
+#else
+    (void)out; (void)max;
+    return 0;
+#endif
+}
+
+// (API 43) Returns an array of { id, x, y, size } — primario primeiro, []
+// sem dedo. Mesma cedida de quadro do getTouch: use UM dos dois por loop.
+duk_ret_t JSBindings::js_getTouches(duk_context *ctx) {
+    kui::TouchPoint pts[kui::kTouchMax];
+    size_t n = readAppTouches(ctx, pts, kui::kTouchMax);
+    duk_idx_t arr = duk_push_array(ctx);
+    for (size_t i = 0; i < n; i++) {
+        duk_push_object(ctx);
+        putInt(ctx, "id", pts[i].id);
+        putInt(ctx, "x", pts[i].x);
+        putInt(ctx, "y", pts[i].y);
+        putInt(ctx, "size", pts[i].size);
+        duk_put_prop_index(ctx, arr, (duk_uarridx_t)i);
+    }
     return 1;
 }
 

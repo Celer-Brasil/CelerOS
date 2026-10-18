@@ -14,6 +14,10 @@ namespace SvcApi {
 void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* appDir);
 }  // namespace SvcApi
 
+namespace kui {
+struct TouchPoint;  // multi-dedo (readAppTouches)
+}  // namespace kui
+
 class JSBindings {
 public:
     // Fim do app (CelerKernel::runFile, depois do pcall): solta o keepAwake
@@ -45,6 +49,10 @@ public:
     static int mapY(int v);
     // Toque do app no espaco virtual (present + topbar + exit); false = sem dedo
     static bool readAppTouch(duk_context *ctx, int *jx, int *jy);
+    // Multi-dedo (API 43): mesmo caminho do readAppTouch (present, chrome SO
+    // no primario, espaco virtual), mas devolve todos os dedos em out — o
+    // primario primeiro — e o total escrito
+    static size_t readAppTouches(duk_context *ctx, kui::TouchPoint *out, size_t max);
     // Espera de app (System.delay / UI.end): present, GC, WDT, exit remoto
     static void appWait(duk_context *ctx, int ms);
 
@@ -210,6 +218,7 @@ public:
 
     // Touch Input
     static duk_ret_t js_getTouch(duk_context *ctx);
+    static duk_ret_t js_getTouches(duk_context *ctx);  // API 43: multi-dedo
     static duk_ret_t js_button(duk_context *ctx);  // API 17: botao fisico (buttonToApp)
 
     // Primitivas extras (API 22)

@@ -14,6 +14,7 @@ const GUIDE_PT = path.resolve(__dirname, '../../../Documentation/JS_API_Guide.pt
 const RETURNS = {
     'System.theme': 'CelerTheme',
     'System.getTouch': 'TouchPoint',
+    'System.getTouches': 'TouchState[]',
     'System.millis': 'number',
     'System.micros': 'number',
     'System.textWidth': 'number',
@@ -238,6 +239,9 @@ function generate() {
     out.push('}');
     out.push('');
     out.push('interface TouchPoint { x: number; y: number; touched: boolean; }');
+    out.push('');
+    // API 43: multi-dedo (System.getTouches) — primario primeiro
+    out.push('interface TouchState { id: number; x: number; y: number; size: number; }');
     out.push('');
     out.push('type UITextRole = "caption" | "body" | "title" | "display";');
     out.push('interface UITextOpts {');

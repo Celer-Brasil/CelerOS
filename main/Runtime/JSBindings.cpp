@@ -1181,6 +1181,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // --- Touch Input ---
     static const JsFn kFns7[] = {
         {"getTouch", js_getTouch, 0},
+        {"getTouches", js_getTouches, 0},  // API 43: multi-dedo (array)
         {"button", js_button, 0},  // API 17: botao fisico como input (placas buttonToApp)
         {"millis", js_millis, 0},
         {"micros", js_micros, 0},

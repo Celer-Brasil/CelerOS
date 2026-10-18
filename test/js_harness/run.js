@@ -259,8 +259,20 @@ function makeEnv() {
         unmountSD: function() {}
     };
 
-    // fila de toques: cada item = {x,y,touched} consumido por getTouch
+    // fila de toques: cada item = {x,y,touched} (1 dedo, legado) ou
+    // {touches:[{id,x,y,size}...]} (API 43, multi) — getTouch/getTouches
+    // consomem UM quadro por chamada (o da cabeca); fila vazia = sem toque
     var touchQ = [];
+    function normFrame(f) {
+        if (f && f.touches) {
+            var ts = f.touches, out = [];
+            for (var i = 0; i < ts.length; i++) {
+                out.push({ id: ts[i].id || 0, x: ts[i].x || 0, y: ts[i].y || 0, size: ts[i].size || 0 });
+            }
+            return out;
+        }
+        return (f && f.touched) ? [{ id: 0, x: f.x || 0, y: f.y || 0, size: 0 }] : [];
+    }
     // fila de eventos do botao fisico (API 17): 1 curto, 2 longo — consumido
     // por System.button (no host so entra quem injetar aqui)
     var buttonQ = [];
@@ -488,8 +500,18 @@ function makeEnv() {
     delayMicroseconds: function() {},
     getTouch: function() {
         fireTimers();
-        if (touchQ.length) return touchQ.shift();
-        return { x: 0, y: 0, touched: 0 };
+        if (!touchQ.length) return { x: 0, y: 0, touched: 0 };
+        var f = touchQ.shift();
+        if (!f.touches) return f;  // quadro legado: volta cru (como sempre)
+        var ts = normFrame(f);
+        return ts.length ? { x: ts[0].x, y: ts[0].y, touched: 1 } : { x: 0, y: 0, touched: 0 };
+    },
+    // API 43 (multitoque): TODOS os dedos do quadro, primario primeiro; []
+    // sem toque. Mesma cedida de quadro do getTouch — um quadro por chamada.
+    getTouches: function() {
+        fireTimers();
+        if (!touchQ.length) return [];
+        return normFrame(touchQ.shift());
     },
     // API 17: botao fisico como input (placas buttonToApp). O host nao
     // tem botao: fila injetavel por testes (buttonQ) ou sempre 0.
@@ -1186,6 +1208,13 @@ function makeEnv() {
     },
     tap: function(x, y) {
         touchQ = touchQ.concat([{ x: x, y: y, touched: 1 }, { x: x, y: y, touched: 0 }]);
+    },
+    // multitoque: tap com DOIS dedos (pousam juntos no mesmo quadro)
+    tap2: function(x0, y0, x1, y1) {
+        touchQ = touchQ.concat([
+            { touches: [{ id: 0, x: x0, y: y0 }, { id: 1, x: x1, y: y1 }] },
+            { touches: [] }
+        ]);
     },
     swipe: function(x0, y0, x1, y1) {
         touchQ = touchQ.concat([

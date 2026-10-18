@@ -1,14 +1,18 @@
 {
   "name": "Alarmes",
   "packageName": "celeros.alarmes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
   "description": "Ate 8 alarmes com dias da semana e rotulo, guardados no sistema: tocam com a tela apagada, sobrevivem a reboot e acordam o relogio do deep sleep. Sem teclado: hora e minuto por +/-.",
   "type": "Utility",
   "category": "Utility",
-  "api": 15,
+  "api": 30,
   "permissions": [],
   "icon": "clockapp",
   "order": 1,
-  "changelog": "1.0.0 - primeira versao (agendador do sistema, API 15)"
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.fmt": "^1.0.0"
+  },
+  "changelog": "1.1.0 - migrado para o CelerKit (deps celeros.app.*): pilha de telas/header no core (A.run), scroll nativo (UI.scrollBegin), chave on/off nativa (UI.toggle), botoes nativos (UI.button) e pad2 do celeros.app.fmt; salvar uma edicao NAO religa mais um alarme desligado (enabled passava sempre true) e o aviso de salvo/apagado aparece dentro do app (A.toast); a lista re-poll de leve (2 s) pega alarme criado pelo sistema\n1.0.0 - primeira versao (agendador do sistema, API 15)"
 }

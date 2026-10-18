@@ -1,66 +1,71 @@
-// Musica — controle do player do celular (API 15, Phone Link/Gadgetbridge)
+// Musica — controle do player do celular (Phone Link/Gadgetbridge) no CelerKit.
 // ES5 puro (Duktape). Phone.musicInfo() traz faixa/estado; Phone.music(cmd)
-// manda play/pause/next/previous/volume.
+// manda play/pause/next/previous/volume. O loop e o header vem do core
+// (A.run); os botoes sao os nativos do toolkit (UI.button, eles mesmos
+// hit-testam todo frame e so desenham quando precisa) e o texto que chega
+// do celular passa pelo celeros.app.text (fora do Latin-1 some).
 
-var T = System.theme();
-var INFO = {};
-try { INFO = System.getInfo() || {}; } catch (e) { INFO = {}; }
-var M = 12 + Math.round((INFO.inset || 0) / 2);
+var A = require("celeros.app");
+require("celeros.app.text");
+A.init();
+
+var M = 12;
 var HAS = typeof Phone !== "undefined" && Phone && typeof Phone.music === "function";
 
 function ctext(s, y, f, col) {
-    if (System.textWidth(s, f) > 240 - 2 * M) {
-        while (s.length > 3 && System.textWidth(s + "...", f) > 240 - 2 * M) s = s.substring(0, s.length - 1);
-        s += "...";
-    }
     System.setTextColor(col);
     System.drawString(s, Math.round((240 - System.textWidth(s, f)) / 2), y, f);
 }
-function hit(t, r) { return t.x >= r[0] && t.x < r[0] + r[2] && t.y >= r[1] && t.y < r[1] + r[3]; }
-function btn(r, label, bg, fg) {
-    System.fillRoundRect(r[0], r[1], r[2], r[3], Math.round(r[3] / 2), bg);
-    System.setTextColor(fg);
-    System.drawString(label, r[0] + Math.round((r[2] - System.textWidth(label, 2)) / 2), r[1] + Math.round(r[3] / 2) - 7, 2);
+
+// faixa/artista/album: UI.text corta com ".." na largura dada (fim do
+// truncate caseiro); os botoes ficam numa grade 3 + 2
+var PREV = [M, 192, 64, 52], PLAY = [88, 192, 64, 52], NEXT = [228 - M - 64, 192, 64, 52];
+var VDN = [M, 258, 104, 40], VUP = [228 - M - 104, 258, 104, 40];
+
+var last = "";
+var st = { connected: false }, mi = null;
+
+// os botoes hit-testam E desenham (so quando precisa); o toque devolve o cmd
+function botoes(playing) {
+    var r = "";
+    if (UI.button("<<", PREV[0], PREV[1], PREV[2], PREV[3], { style: "ghost" })) r = "previous";
+    else if (UI.button(playing ? "||" : ">", PLAY[0], PLAY[1], PLAY[2], PLAY[3], {})) r = "playpause";
+    else if (UI.button(">>", NEXT[0], NEXT[1], NEXT[2], NEXT[3], { style: "ghost" })) r = "next";
+    else if (UI.button("Vol -", VDN[0], VDN[1], VDN[2], VDN[3], { style: "ghost" })) r = "volumedown";
+    else if (UI.button("Vol +", VUP[0], VUP[1], VUP[2], VUP[3], { style: "ghost" })) r = "volumeup";
+    return r;
 }
 
-var PREV = [M, 150, 60, 56], PLAY = [90, 144, 60, 68], NEXT = [240 - M - 60, 150, 60, 56];
-var VDN = [M + 10, 236, 80, 40], VUP = [240 - M - 90, 236, 80, 40];
-
-function draw(st, mi) {
-    System.fillRect(0, 0, 240, 320, T.bg);
-    if (!HAS) { ctext("Sem Phone Link nesta placa", 150, 2, T.warn); return; }
-    if (!st.connected) {
-        ctext("Celular desconectado", 120, 2, T.textDim);
-        ctext("Pareie no Gadgetbridge", 146, 1, T.textDim);
-        ctext("(adicionar como Bangle.js)", 162, 1, T.textDim);
-        return;
-    }
-    ctext(mi && mi.track ? mi.track : "Nada tocando", 46, 2, T.text);
-    ctext(mi && mi.artist ? mi.artist : "", 74, 1, T.textDim);
-    ctext(mi && mi.album ? mi.album : "", 92, 1, T.stroke);
-    var playing = mi && mi.state === "play";
-    btn(PREV, "<<", T.card, T.text);
-    btn(PLAY, playing ? "||" : ">", T.accent, T.onAccent);
-    btn(NEXT, ">>", T.card, T.text);
-    btn(VDN, "Vol -", T.card, T.text);
-    btn(VUP, "Vol +", T.card, T.text);
-}
-
-var last = "", wasDown = false;
-while (true) {
-    var st = HAS ? Phone.status() : { connected: false };
-    var mi = HAS ? Phone.musicInfo() : null;
-    var sig = JSON.stringify(st) + JSON.stringify(mi);
-    if (sig !== last) { draw(st, mi); last = sig; }
-    var t = System.getTouch();
-    if (t.touched && !wasDown && HAS && st.connected) {
-        var cmd = hit(t, PREV) ? "previous" : hit(t, PLAY) ? "playpause" : hit(t, NEXT) ? "next" :
-            hit(t, VDN) ? "volumedown" : hit(t, VUP) ? "volumeup" : "";
-        if (cmd) {
-            Phone.music(cmd);
-            if (System.beep) System.beep(1500, 20);
+A.run({
+    main: function (c) {
+        if (A.header("Música")) return A.BACK;
+        if (A.every(200, "mi")) {
+            st = HAS ? Phone.status() : { connected: false };
+            mi = HAS ? Phone.musicInfo() : null;
+            var sig = JSON.stringify(st) + JSON.stringify(mi);
+            if (sig !== last) { last = sig; UI.invalidate(); }
+        }
+        if (!HAS) {
+            if (c.full) ctext("Sem Phone Link nesta placa", 150, 2, A.T.warn);
+        } else if (!st.connected) {
+            if (c.full) {
+                ctext("Celular desconectado", 120, 2, A.T.textDim);
+                ctext("Pareie no Gadgetbridge", 148, 1, A.T.textDim);
+                ctext("(adicionar como Bangle.js)", 166, 1, A.T.textDim);
+            }
+        } else {
+            // texto que veio do celular: saneia antes de desenhar
+            UI.text(A.text.fit(mi && mi.track ? mi.track : "Nada tocando"), 120, 88,
+                { align: "center", w: 224, role: "title" });
+            UI.text(A.text.fit(mi && mi.artist ? mi.artist : ""), 120, 122,
+                { align: "center", w: 224, color: A.T.textDim });
+            UI.text(A.text.fit(mi && mi.album ? mi.album : ""), 120, 148,
+                { align: "center", w: 224, role: "caption", color: A.T.stroke });
+            var cmdr = botoes(mi && mi.state === "play");
+            if (cmdr) {
+                Phone.music(cmdr);
+                if (System.beep) System.beep(1500, 20);
+            }
         }
     }
-    wasDown = t.touched;
-    System.delay(80);
-}
+}, "main", { fps: 5 });

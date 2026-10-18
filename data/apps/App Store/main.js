@@ -85,6 +85,30 @@ function fetchText(url) {
     try { return Net.get(url); } catch (e) { return null; }
 }
 
+// texto SEM o teto de 32 KB do Net.get (o deps.json ja passou de 16 KB e
+// cresce com a familia; o all.json caiu nesse corte na 2.8.0): baixa em
+// arquivo (Net.download streaming, sem teto) e le. null se falhar.
+function fetchTextBig(url) {
+    if (typeof Net.download !== "function") return fetchText(url);  // API velha
+    var tmp = "/local/appstore_fetch.json";
+    var ok = false;
+    try { ok = Net.download(url, tmp); } catch (e0) { ok = false; }
+    if (!ok) { try { FS.deleteFile(tmp); } catch (e1) {} return null; }
+    var body = FS.readTextFile(tmp);
+    try { FS.deleteFile(tmp); } catch (e2) {}
+    return body || null;
+}
+
+// {nome: {versao: {url,size,md5,minApi,deps}}} do indice de deps do hub;
+// null se falhar (sem rede, corpo truncado, JSON quebrado)
+function fetchDepsMap() {
+    var body = fetchTextBig(HUB_BASE + "/store/deps.json");
+    if (!body) return null;
+    var dj = null;
+    try { dj = JSON.parse(body); } catch (e) { dj = null; }
+    return (dj && dj.deps) ? dj.deps : null;
+}
+
 // semver numerico parte a parte (herdado do AppStoreUI.cpp)
 function cmpV(v1, v2) {
     v1 = v1 || "";
@@ -217,7 +241,15 @@ function installDeps(it, resolved, index) {
         var d = index[nm][ver];
         var dir = "/local/modules/" + nm + "/" + ver;
         var dst = dir + "/" + nm + ".js";
-        if (FS.exists(dst)) continue;  // ja no cache; o GC recolhe orfas
+        if (FS.exists(dst)) {
+            // ja no cache — mas confere o TAMANHO contra o indice antes de
+            // pular: um modulo trunco/lixo no cache (push antigo, disco cheio
+            // no meio da escrita) persistia calado e quebrava todo app que o
+            // require. Tamanho divergente = baixa de novo.
+            var cacheSz = -1;
+            try { cacheSz = FS.getFileSize(dst); } catch (eSz) { cacheSz = -1; }
+            if (!d.size || cacheSz === d.size) continue;
+        }
         if (d.minApi && d.minApi > API) return nm + " exige API " + d.minApi;
         if (!FS.isDirectory("/local/modules") && !FS.mkdir("/local/modules")) return "Erro no disco";
         if (!FS.isDirectory("/local/modules/" + nm) && !FS.mkdir("/local/modules/" + nm)) return "Erro no disco";
@@ -414,10 +446,9 @@ function refresh() {
 function fetchDepIndex() {
     depIndex = null;
     if (!Net.isConnected()) return;
-    try {
-        var dj = fetchJSON(HUB_BASE + "/store/deps.json");
-        if (dj && dj.deps) depIndex = dj.deps;
-    } catch (eD) { depIndex = null; }
+    var d = null;
+    try { d = fetchDepsMap(); } catch (eD) { d = null; }
+    if (d) depIndex = d;
 }
 
 // itens da aba Meus apps: todo pkg instalado (do catalogo quando existir,
@@ -1146,9 +1177,7 @@ function updateDepsFlow() {
     System.delay(30);
     // resolucao FRESCA contra o indice do hub: o snapshot do scanDepUpdates
     // pode ter ficado para tras enquanto a loja ficou aberta
-    var idxTxt = fetchText(HUB_BASE + "/store/deps.json");
-    var index = null;
-    if (idxTxt) { try { index = JSON.parse(idxTxt).deps; } catch (e1) { index = null; } }
+    var index = fetchDepsMap();
     if (!index) { errMsg = "Erro ao baixar dependências"; errHint = it.name; return "err"; }
     var resolved = resolveDeps(it.deps || {}, index);
     if (!resolved) { errMsg = "Dependência indisponível no hub"; errHint = it.name; return "err"; }
@@ -1219,8 +1248,7 @@ function installApp() {
         if (wantDeps) {
             drawDownload(it.name, "dependências", false);
             System.delay(30);
-            var idxTxt = fetchText(HUB_BASE + "/store/deps.json");
-            if (idxTxt) { try { depIndex = JSON.parse(idxTxt).deps; } catch (e6) { depIndex = null; } }
+            depIndex = fetchDepsMap();
             if (!depIndex) fail = "Erro ao baixar dependências";
             if (!fail) {
                 depResolved = resolveDeps(wantDeps, depIndex);

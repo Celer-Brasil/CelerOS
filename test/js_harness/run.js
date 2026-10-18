@@ -1732,13 +1732,17 @@ function runInline(src, env) {
     check('scanDepUpdates aponta a dep certa',
           !!du && du.names.join(',') === 'celeros.game' &&
           du.resolved['celeros.game'] === '1.0.2');
-    // o fluxo resolve FRESCA contra o hub (Net.get serve o deps.json)
-    env.Net.get = function(url) {
+    // o fluxo resolve FRESCA contra o hub — pela 2.9.2 o deps.json vem por
+    // Net.download (sem o teto de 32 KB do Net.get); os DEMAIS downloads
+    // (modulo 1.0.2) seguem servindo NOVO-CODIGO com o md5 do stub
+    env.Net.download = function(url, p, cb) {
         if (String(url).indexOf('deps.json') >= 0) {
-            return JSON.stringify({ deps: { 'celeros.game': {
-                '1.0.2': { url: 'h/mod/1.0.2', md5: MD5, size: 100 } } } });
+            return env.FS.writeTextFile(p, JSON.stringify({ deps: { 'celeros.game': {
+                '1.0.2': { url: 'h/mod/1.0.2', md5: MD5, size: 100 } } } }));
         }
-        return null;
+        if (!env.FS.writeTextFile(p, 'NOVO-CODIGO')) return false;
+        if (cb) { cb(1024, 4000); cb(4096, 4000); }
+        return true;
     };
     check('select da engine', !!api.select('celeros.eng'));
     check('updateDeps instala e regrava', api.updateDepsFlow() === 'done');

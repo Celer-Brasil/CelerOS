@@ -156,19 +156,16 @@ bool FileSystem::mountSD() {
     spi_host_device_t sdHost = (sd.spiHost >= 0)
         ? (spi_host_device_t)sd.spiHost : (spi_host_device_t)CELEROS_SD_SPI_HOST;
 
-    // RESET + PULL-UP nas 4 linhas ANTES de tocar no bus. O boot log da
+    // RESET + PULL-UP so no CS ANTES de tocar no bus. O boot log da
     // 4848 (2026-10-18) mostrou "failed to mount card" com o CS (GPIO42)
     // preso na funcao de IOMUX de UART1 ("gpio conflict found") — um pino
     // em funcao de periferico nao responde como CS e o CMD0 nunca volta.
-    // gpio_reset_pin devolve o pino para GPIO com pull-up; o bus que ja e
-    // do display reconfigura os dele logo abaixo (mesmo contrato).
-    {
-        const int sdPins[4] = { sd.cs, sd.sck, sd.miso, sd.mosi };
-        for (int i = 0; i < 4; i++) {
-            if (sdPins[i] < 0) continue;
-            gpio_reset_pin((gpio_num_t)sdPins[i]);       // IOMUX -> GPIO, pull-up
-            gpio_set_pull_mode((gpio_num_t)sdPins[i], GPIO_PULLUP_ONLY);
-        }
+    // As outras 3 linhas ficam: SCK/MOSI/MISO podem pertencer a um bus SPI
+    // ja em pe (compartilhado com o display no CYD/4848) e gpio_reset_pin
+    // as despluga do controlador sem ninguem as reconfigurar depois.
+    if (sd.cs >= 0) {
+        gpio_reset_pin((gpio_num_t)sd.cs);               // IOMUX -> GPIO, pull-up
+        gpio_set_pull_mode((gpio_num_t)sd.cs, GPIO_PULLUP_ONLY);
     }
 
     if (!s_spi_bus_ready) {
@@ -240,13 +237,19 @@ bool FileSystem::mountSD() {
                  esp_err_to_name(err));
         s_sd_card = nullptr;
         if (i == 0) {
-            // linhas de volta ao GPIO com pull-up antes da 2a tentativa (o
-            // mount falho pode ter deixado o CS na funcao de IOMUX)
-            const int sdPins[4] = { sd.cs, sd.sck, sd.miso, sd.mosi };
-            for (int p = 0; p < 4; p++) {
-                if (sdPins[p] < 0) continue;
-                gpio_reset_pin((gpio_num_t)sdPins[p]);
-                gpio_set_pull_mode((gpio_num_t)sdPins[p], GPIO_PULLUP_ONLY);
+            // CS de volta ao GPIO com pull-up e DESELECIONADO antes da 2a
+            // tentativa (o mount falho pode ter deixado o CS em IOMUX).
+            // SCK/MISO/MOSI ficam intocados: resetar as linhas do bus aqui
+            // as despluga do controlador SPI (o spi_bus_initialize nao roda
+            // de novo) e a 2a tentativa jamais veria o cartao — era o 0x108
+            // em TODO retry, inclusive no FS.mountSD() de runtime, que
+            // sustentou a conclusao errada de que "o cartao so responde no
+            // boot" (4848, 2026-10-18).
+            if (sd.cs >= 0) {
+                gpio_reset_pin((gpio_num_t)sd.cs);
+                gpio_set_pull_mode((gpio_num_t)sd.cs, GPIO_PULLUP_ONLY);
+                gpio_set_direction((gpio_num_t)sd.cs, GPIO_MODE_OUTPUT);
+                gpio_set_level((gpio_num_t)sd.cs, 1);    // desseleciona
             }
             vTaskDelay(pdMS_TO_TICKS(20));
         }

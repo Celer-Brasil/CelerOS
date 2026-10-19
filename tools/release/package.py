@@ -103,11 +103,26 @@ def build_data_image(board: str, out: Path) -> None:
         if not mklfs.is_file():
             die(f"mklittlefs nao encontrado: {mklfs}")
         mklfs.chmod(0o755)
+        arquivos = [p for p in stage.rglob("*") if p.is_file()]
+        total = sum(p.stat().st_size for p in arquivos)
+        print(f"  stage: {len(arquivos)} arquivos, {total} bytes (particao {size})")
         res = subprocess.run(
             [str(mklfs), "-c", str(stage), "-s", size, str(out)],
             capture_output=True, text=True)
         if res.returncode != 0:
             die(f"mklittlefs falhou: {res.stderr.strip() or res.stdout.strip()}")
+        # o mklittlefs devolve 0 mesmo quando arquivo nao cabe ("No more free
+        # space"): confere a imagem listando e exigir TODOS os arquivos do
+        # stage — imagem truncada em silencio nao sai daqui
+        ver = subprocess.run(
+            [str(mklfs), "-l", "-s", size, str(out)],
+            capture_output=True, text=True)
+        na_imagem = sum(1 for l in ver.stdout.splitlines()
+                        if l.strip() and not l.lstrip().startswith(("<dir", "free")))
+        if na_imagem < len(arquivos):
+            die(f"imagem littlefs incompleta: {na_imagem} de {len(arquivos)} "
+                f"arquivos — particao {size} pequena demais para o stage\n"
+                f"{ver.stdout.strip()[-400:]}")
         print(f"  data.img: {out.stat().st_size} bytes ({size} de particao)")
     finally:
         shutil.rmtree(stage, ignore_errors=True)

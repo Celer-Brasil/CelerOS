@@ -1,10 +1,12 @@
-# CYD (ESP32, 4 MB): a particao littlefs tem 768 KB e a fabrica inteira
-# nao cabe mais desde a migracao ao CelerKit (as copias de data/modules
-# somaram ~200 KB na imagem). Saem da fabrica os apps sem uso nesta placa
-# (sem Bluetooth: malha; sem mic: IA) e os que a Loja instala do catalogo;
-# ficam o nucleo do sistema (Store, Watchface, Settings, Nucleo,
-# Installer, Terminal, Touch Test, Barebone) com os modulos e icones de
-# que eles precisam.
+# CYD (ESP32, 4 MB): a particao littlefs tem 768 KB e o custo por arquivo
+# (~6-8 KB somando bloco de cauda e metadados) estoura com a fabrica
+# inteira desde a migracao ao CelerKit (data/modules passou a viajar na
+# imagem). Ficam o nucleo do sistema (Store, Settings, Nucleo, Installer,
+# Terminal, Barebone), os modulos das deps.json deles e os icones de que
+# precisam; todo o resto instala pela Loja — apps do hub embutem a propria
+# arte (icon.png no pacote) e o catalogo desenha o icone do pacote
+# instalado ou letra inicial. Apps sem uso na placa: malha (sem
+# Bluetooth) e IA (sem mic).
 apps/Chat IA
 apps/Help
 apps/HTTP Demo
@@ -13,10 +15,34 @@ apps/Qwen
 apps/Regras
 apps/Snake
 apps/Web Server
+apps/Watchface
+apps/Touch Test
+apps/Nucleo/.dev
+AGENTS.md
+icons/2048.png
+icons/about.png
+icons/app.png
+icons/breakout.png
+icons/calculator.png
+icons/celernet.png
+icons/clockapp.png
+icons/cronometro.png
+icons/cube.png
+icons/help.png
 icons/httpdemo.png
+icons/led.png
+icons/physics.png
 icons/qwen.png
+icons/remote.png
+icons/runner.png
 icons/snake.png
+icons/sysinfo.png
+icons/tictactoe.png
+icons/time.png
+icons/touchtest.png
+icons/web.png
 modules/celeros.app.ai
 modules/celeros.app.chat
 modules/celeros.app.mesh
 modules/celeros.app.net
+modules/celeros.mesh

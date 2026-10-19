@@ -109,6 +109,7 @@ bool hasSpeaker() {
     return Board::profile().speakerPin >= 0 || Board::profile().i2s.dout >= 0;
 }
 
+#if CONFIG_CELEROS_AUDIO
 namespace {
 // Tom I2S: senoide de 256 amostras de 16 bits (amplitude ~0.6, alto e nitido
 // sem estourar) + bloco de 512 quadros estereo. Os dois vivem no heap so
@@ -259,6 +260,7 @@ static bool toneI2sOut(int freqHz, int ms) {
     return ok;
 }
 }  // namespace
+#endif  // CONFIG_CELEROS_AUDIO
 
 bool tone(int freqHz, int ms) {
     const int pin = Board::profile().speakerPin;
@@ -271,7 +273,11 @@ bool tone(int freqHz, int ms) {
     if (xSemaphoreTake(sToneMu, pdMS_TO_TICKS(10000)) != pdTRUE) return false;
     bool ok;
     if (pin < 0) {
+#if CONFIG_CELEROS_AUDIO
         ok = toneI2s(freqHz, ms);
+#else
+        ok = false;  // build sem I2S: so o tom analogico (LEDC) existe aqui
+#endif
     } else {
         ledc_timer_config_t tim = {};
         tim.speed_mode = kMode;
@@ -742,7 +748,7 @@ void stripsOff() {
 // aberto: DMA descarta o que nao e lido entre chamadas.
 // ATENCAO: o pino do clock (ws) jamais pode virar canal ADC — a reconfiguracao
 // desconecta a matriz GPIO e mata o microfone ate reiniciar o canal.
-
+#if CONFIG_CELEROS_MIC
 // O tom/playWav (I2S0) EMPRESTA os pinos compartilhados bclk/ws/mclk do
 // canal do mic (I2S1) e os devolve soltos no GPIO matrix — quem roteou por
 // ultimo domina o pino, e o I2S1 so re-roteia ao (re)nascer. Sem isto, todo
@@ -1016,6 +1022,7 @@ void micPinsDirty() {
     // garantia). So a primeira leitura seguinte paga os ~50 ms.
     s_micCodecOn = false;
 }
+#endif  // CONFIG_CELEROS_MIC
 
 // ---- alto-falante: canal TX persistente das placas sem codec ---------------
 //
@@ -1033,6 +1040,7 @@ void micPinsDirty() {
 // unico repouso comprovadamente frio. Placas com codec (watch) nao passam
 // por aqui: os clocks sao emprestados do I2S1 do mic e o canal segue
 // nascendo/morrendo por som, com o PA descido e o codec dormindo no meio.
+#if CONFIG_CELEROS_AUDIO
 namespace {
 i2s_chan_handle_t s_spk = nullptr;  // canal TX persistente (sem codec)
 int s_spkRate = 0;                  // taxa atual do canal (0 = ainda nao usado)
@@ -1136,7 +1144,9 @@ void speakerPinsPark() {
         gpio_set_level((gpio_num_t)pin, 0);
     }
 }
+#endif  // CONFIG_CELEROS_AUDIO
 
+#if CONFIG_CELEROS_MIC
 bool micEnsureChannel() { return micInit(); }
 
 bool micChanLock(int timeoutMs) {
@@ -1384,6 +1394,7 @@ void micRecCancel() {
     micRecFree();
     micRecCodecDown();
 }
+#endif  // CONFIG_CELEROS_MIC
 
 // ---- volume (System.setVolume, API 13) --------------------------------------
 

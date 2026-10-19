@@ -5,6 +5,9 @@
 // de posse exclusiva do playWav/tom/TTS (AudioPlayer::acquireOutput). O
 // motor puro (compilacao e renderizacao) vive em MusicEngine.h — este
 // header so existe para o runtime JS.
+#include "sdkconfig.h"  // CONFIG_CELEROS_AUDIO: o #if abaixo nao pode depender
+                        // da ordem de includes do chamador
+#if CONFIG_CELEROS_AUDIO
 #include "MusicEngine.h"
 
 namespace MusicSynth {
@@ -35,3 +38,24 @@ int32_t posMs();
 bool currentSong(MusicEngine::Song* out);
 
 }  // namespace MusicSynth
+
+#else  // !CONFIG_CELEROS_AUDIO: perfil sem audio digital (CYD/cyd-vspi/
+// devkit/esp32-cam). Stubs inline com o MESMO contrato documentado acima:
+// play/sfx devolvem false/0 ("sem audio na placa"), posMs -1, playing false.
+// MusicEngine.h segue incluido porque os TIPOS Song/SfxTone aparecem nas
+// assinaturas (Pack da matilha compila com BT em placa sem audio —
+// esp32-cam); as funcoes do motor so sao emitidas por quem as chama, e a
+// implementacao (MusicSynth.cpp) sai do binario.
+#include "MusicEngine.h"
+
+namespace MusicSynth {
+
+inline bool play(const MusicEngine::Song&, uint32_t = 0) { return false; }
+inline int sfx(const MusicEngine::SfxTone*, int) { return 0; }
+inline void stop() {}
+inline bool playing() { return false; }
+inline int32_t posMs() { return -1; }
+inline bool currentSong(MusicEngine::Song*) { return false; }
+
+}  // namespace MusicSynth
+#endif

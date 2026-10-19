@@ -69,3 +69,11 @@ CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y
 # PSRAM o heap do svchost so nasce com >=44 KB livres (AppServices).
 CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_APP_TASK is not set
+
+# ---- Perfil LITE (mesmo orcamento da cyd; ver boards/cyd/sdkconfig.defaults)
+# Placa sem alto-falante, sem mic e sem PSRAM; servidor web fora (o
+# compartilhado com o esp32 canal OTA agradece). Contratos JS preservados.
+# CONFIG_CELEROS_AUDIO is not set
+# CONFIG_CELEROS_MIC is not set
+# CONFIG_CELEROS_JS_PHYSICS is not set
+# CONFIG_CELEROS_WEB_SERVER is not set

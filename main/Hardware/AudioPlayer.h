@@ -8,6 +8,12 @@
 // microfone), codec ES8311/PA do perfil acordados em volta da reproducao,
 // volume pela escala digital (System.setVolume). Bloqueante: o watchdog e
 // alimentado por chunk. Placa sem I2S de audio (CYD): NoAudio de imediato.
+#include "sdkconfig.h"  // CONFIG_CELEROS_AUDIO: o #if abaixo nao pode depender
+                        // da ordem de includes do chamador
+#include <stddef.h>
+#include <stdint.h>
+
+#if CONFIG_CELEROS_AUDIO
 #include "driver/i2s_std.h"
 
 namespace AudioPlayer {
@@ -102,3 +108,46 @@ private:
 };
 
 }  // namespace AudioPlayer
+
+#else  // !CONFIG_CELEROS_AUDIO: perfil sem audio digital (CYD/cyd-vspi/
+// devkit/esp32-cam — boards/<b>/sdkconfig.defaults). Stubs inline com o
+// MESMO contrato documentado acima: playWav devolve NoAudio ("placa sem
+// alto-falante I2S" — o chamador JS ve false), active() false, e o PcmFeed
+// nasce/recusa (begin false: "quem chama cai no arquivo"). A implementacao
+// (AudioPlayer.cpp + qoa.c) sai do binario junto com o driver I2S.
+namespace AudioPlayer {
+
+enum class WavError {
+    None = 0,
+    NoAudio,      // placa sem alto-falante I2S
+    OpenFailed,   // arquivo nao abriu
+    BadHeader,    // nao e WAV/QOA ou fmt inesperado (codec, bits, canais, rate)
+    Busy,         // outra reproducao em curso (fala do AI.speak na worker)
+};
+
+inline WavError playWav(const char*) { return WavError::NoAudio; }
+inline void requestStop() {}
+inline bool acquireOutput() { return true; }
+inline void releaseOutput() {}
+inline bool active() { return false; }
+inline void feedWatchdog() {}
+
+class PcmFeed {
+public:
+    ~PcmFeed() {}
+    inline bool begin(uint32_t, size_t) { return false; }
+    inline bool write(const void*, size_t) { return false; }
+    inline void start() {}
+    bool started() const { return _go; }
+    inline bool finish() { return false; }
+    inline void end() {}
+    inline uint32_t bufferedMs() const { return 0; }
+    inline uint32_t starves() const { return 0; }
+    inline uint32_t starveMs() const { return 0; }
+
+private:
+    bool _go = false;
+};
+
+}  // namespace AudioPlayer
+#endif

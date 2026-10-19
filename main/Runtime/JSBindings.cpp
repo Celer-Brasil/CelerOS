@@ -89,7 +89,9 @@ void JSBindings::appExitCleanup() {
     // net/AI seguravam dezenas de KB durante o intervalo no launcher — e
     // durante um OTA push/web comecado logo apos a saida. Mesmos resets
     // idempotentes do init; nada deles toca o heap Duktape (ainda vivo).
+#if CONFIG_CELEROS_JS_PHYSICS
     jsPhysicsReset();
+#endif
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();
 #endif
@@ -975,7 +977,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     deleteAllSprites();
 #endif
     timersResetAll();
+#if CONFIG_CELEROS_JS_PHYSICS
     jsPhysicsReset();  // mundos verlet nativos (malloc incluso)
+#endif
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();    // mundos rigidos nativos (API 33)
 #endif
@@ -1115,7 +1119,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // Verlet nativo (API 31): a dep celeros.physics feature-detecta e expoe
     // P.verletFast; em firmware velho o P.verlet JS segue valendo. Nao e
-    // desenho: fica no build sem vidro (CELEROS_UI=n).
+    // desenho: fica no build sem vidro (CELEROS_UI=n). Perfil lite
+    // (CELEROS_JS_PHYSICS=n, placas sem PSRAM): o bloco nem compila —
+    // typeof System.verletNew === "undefined" e a dep cai no P.verlet JS.
+#if CONFIG_CELEROS_JS_PHYSICS
     static const JsFn kFnsVerlet[] = {
         {"verletNew", js_verletNew, 2},
         {"verletFree", js_verletFree, 1},
@@ -1132,6 +1139,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"verletPins", js_verletPins, 1},
     };
     putFns(ctx, kFnsVerlet);
+#endif  // CONFIG_CELEROS_JS_PHYSICS
 
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     // Aceleradores de jogo (API 33, placas S3): corpo rigido nativo (a dep
@@ -1526,7 +1534,10 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // --- Mic Object (API 19): gravacao de microfone — capability "mic".
     // O audio do dono e dado sensivel: o objeto so nasce para app
-    // autorizado, em placa com microfone no perfil (cao e watch hoje). ---
+    // autorizado, em placa com microfone no perfil (cao e watch hoje).
+    // Build sem o canal (CELEROS_MIC=n, perfil lite): o objeto nem chega ao
+    // app — typeof Mic === "undefined", como no perfil sem hardware. ---
+#if CONFIG_CELEROS_MIC
     if (perm(celer::PERM_MIC) && Board::profile().mic.ws >= 0) {
     duk_push_object(ctx); // Mic
     static const JsFn kFnsMic[] = {
@@ -1538,6 +1549,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFnsMic);
     duk_put_prop_string(ctx, -2, "Mic");
     }
+#endif  // CONFIG_CELEROS_MIC
 #if CONFIG_CELEROS_JS_CAMERA
     // --- Camera Object (API 35): OV2640 da esp32-cam — capability "camera".
     // Objeto so nasce em placa com sensor no perfil E build com o driver

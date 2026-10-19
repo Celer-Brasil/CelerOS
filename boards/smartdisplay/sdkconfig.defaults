@@ -75,3 +75,8 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # PSRAM o heap do svchost segue vivo enquanto um app esta em foreground.
 CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_APP_TASK is not set
+
+# Sem microfone no hardware (o alto-falante NS4168 e I2S e segue no build
+# pelo CELEROS_AUDIO): o canal de captura sai do binario e o objeto Mic
+# nao nasce (typeof Mic === "undefined", como nas placas sem o periferico).
+# CONFIG_CELEROS_MIC is not set

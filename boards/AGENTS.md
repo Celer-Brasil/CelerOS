@@ -14,6 +14,21 @@ One directory per board holding its `sdkconfig.defaults`. Board code itself live
 | `devkit` | ESP32 classic, 4MB, no PSRAM | **None** — stub panel that discards rendering (`main/Boards/devkit/BoardDisplay.h`); BOOT button (GPIO0) + single-channel LED (GPIO2) | `partitions_4MB.csv` | The barebone profile: `headless` (splash skipped, `getInfo().hasDisplay=false`/`shape:"headless"`) + `buttonToApp` (BOOT is app input via `System.button`, long = exit, launcher short relaunches homeApp). `CELEROS_UI=n` (the whole display stack leaves the binary). Same RAM budget as `cyd`; WiFi provisioned by the `wifi` shell command; factory image drops every drawing app via `data-exclude.txt` |
 | `esp32-cam` | ESP32-S (classic) AI-Thinker, 4MB DIO, PSRAM quad 4MB | **None** — the "glass" is the OV2640 sensor | `partitions_4MB_cam.csv` | Camera node: `headless`, `CELEROS_UI=n`, **dual-core** (unicore reset-looped in INT_WDT with WiFi+NimBLE), NimBLE (CelerNet mesh), TLS buffers in PSRAM, microSD by SDSPI (CLK14/CMD15/D0-2/CS13 — apps live on the SD, hence the small littlefs/1.81MB slots). Bench: brownout is failure #1 (sturdy 5V supply); flash mode = GPIO0 to GND at reset; GPIO12 is the MTD strap (never an output); GPIO16/17 belong to the PSRAM |
 
+## FEATURE MENU (what each board compiles in)
+Hardware-coupled subsystems are Kconfig flags in `main/Kconfig.projbuild`; a board picks its set in `boards/<b>/sdkconfig.defaults`. Defaults: `y` for `CELEROS_AUDIO` (digital I2S audio: `playWav`/QOA, `playMusic` chiptune, `sfx`, the TTS `PcmFeed`), `CELEROS_JS_GPIO`, `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_PHYSICS` (native verlet worlds — PSRAM money); `n` opt-in for `CELEROS_MIC` (capture I2S1 + `Mic` object: dog, watch), `CELEROS_JS_CAMERA` (esp32-cam), `CELEROS_WAKE_WORD` (dog; depends on MIC).
+
+An off-flag keeps every JS contract: the implementation leaves the binary but inline stubs in `AudioPlayer.h` / `MusicSynth.h` / `BoardIO.h` answer with the documented no-hardware values (`playWav`/`playMusic` false, `sfx` 0, `musicPos` -1, `micLevel` -1, `speakerChannel` null), and whole JS objects disappear the documented way (`typeof Mic === "undefined"`; `System.verlet*` entries not registered — the physics dep feature-detects and falls back to interpreted `P.verlet`). `System.playTone` is NOT behind `CELEROS_AUDIO`: the analog LEDC tone (CYD speaker on GPIO26) and `toneAsync` beeps work on every board.
+
+| Flag | smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch | devkit | esp32-cam |
+|------|----|-----|----------|----|-----|----|-----|
+| `CELEROS_AUDIO` | y | — | — | y | y | — | — |
+| `CELEROS_MIC` | — | — | — | y | y | — | — |
+| `CELEROS_JS_PHYSICS` | y | — | — | y | y | — | — |
+| `CELEROS_WEB_SERVER` | y | — | — | y | y | y | y |
+| `CELEROS_SD_CARD` | y | y | — | y | y | — | y |
+
+(— = off in that board's defaults.) The **CYD lite profile** (audio + mic + physics + web server off) took the esp32 OTA slot from **38 KB to 90 KB free** (image 1.599.024 → 1.545.344 B; libmain -47,5 KB, esp_http_server out) and bought the uniform 64KB CI gate back — the 12 KB CYD exception in `build.yml` is gone. CYD and cyd-vspi share the `esp32` OTA channel, so both carry the same lite set. esp32-cam also drops all three even though it has PSRAM: no glass means no game, and its slot sits at 108 KB free with the camera driver (its `Pack`/mesh code compiles fine against the audio stubs — a mesh node never lends what it doesn't have). smartdisplay keeps audio but drops `CELEROS_MIC` (no mic hardware; -6,5 KB).
+
 ## PER-BOARD FACTORY IMAGE
 `tools/flash_data.sh <board>` stages `data/` and then:
 1. **overlays** `boards/<board>/data/` on top — the watch adds Timer/Clima/Musica/Alarmes/Celular/Atividade; the dog adds Dog Face (its `homeApp`), and

@@ -10,9 +10,6 @@
 set(CELEROS_SRCS
     "Assets/Fonts/CelerFonts.cpp"
     "Hardware/BoardIO.cpp"
-    "Hardware/AudioPlayer.cpp"
-    "Hardware/MusicSynth.cpp"
-    "Hardware/Audio/qoa.c"
     "Display/ScreenCapture.cpp"
     "main.cpp"
     "Compat/CelerCompat.cpp"
@@ -38,14 +35,12 @@ set(CELEROS_SRCS
     "Runtime/JsSystem.cpp"
     "Runtime/JsNet.cpp"
     "Runtime/JsAi.cpp"
-    "Runtime/JsMic.cpp"
     "Runtime/JsFs.cpp"
     "Runtime/JsKeypad.cpp"
     "Runtime/JsSystemApps.cpp"
     "Runtime/JsTimers.cpp"
     "Runtime/JsSvc.cpp"
     "Runtime/JsModules.cpp"
-    "Runtime/JsPhysics.cpp"
     "Runtime/JsStorage.cpp"
     "Runtime/JsSensors.cpp"
     "Settings/TouchCalibrator.cpp"
@@ -73,6 +68,23 @@ set(CELEROS_SRCS
 )
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
+endif()
+# Audio digital (I2S) — CELEROS_AUDIO: player WAV/QOA (PcmFeed do AI.speak
+# incluido), sintetizador chiptune e o decodificador QOA. O tom analogico
+# (LEDC) do BoardIO fica no build: e o caminho do System.playTone em toda
+# placa (a CYD tem alto-falante analogico). Sem a opcao, os stubs inline dos
+# headers (AudioPlayer.h/MusicSynth.h/BoardIO.h) mantem os contratos JS.
+if(CONFIG_CELEROS_AUDIO)
+    list(APPEND CELEROS_SRCS "Hardware/AudioPlayer.cpp" "Hardware/MusicSynth.cpp" "Hardware/Audio/qoa.c")
+endif()
+# Microfone (I2S1 de captura + objeto Mic) — CELEROS_MIC: cao e watch.
+if(CONFIG_CELEROS_MIC)
+    list(APPEND CELEROS_SRCS "Runtime/JsMic.cpp")
+endif()
+# Fisica nativa (verlet) — CELEROS_JS_PHYSICS: a dep celeros.physics
+# feature-detecta; sem o binding, P.verletFast sai e o P.verlet JS segue.
+if(CONFIG_CELEROS_JS_PHYSICS)
+    list(APPEND CELEROS_SRCS "Runtime/JsPhysics.cpp")
 endif()
 # Camera (API 35): bindings + driver esp32-camera (managed, entra pela regra
 # do idf_component.yml) + quirc vendado. O objeto JS so nasce na placa com

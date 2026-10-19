@@ -142,3 +142,13 @@ CONFIG_CAMERA_CORE1=y
 # A imagem de fabrica nao leva app com servico (ver data-exclude.txt).
 CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_APP_TASK is not set
+
+# Perfil sem os perifericos que o modulo nao tem: alto-falante I2S e
+# microfone. A fisica nativa tambem sai (sem vidro nao ha jogo; o slot de
+# 1,81MB divide espaco com o driver da camera). Os stubs guardam os
+# contratos JS (playWav/playMusic false, sfx 0, Mic/System.verlet*
+# undefined) e a matilha segue compilando: AudioRes/recursos de audio
+# devolvem false sem o canal (o no da malha nao empresta o que nao tem).
+# CONFIG_CELEROS_AUDIO is not set
+# CONFIG_CELEROS_MIC is not set
+# CONFIG_CELEROS_JS_PHYSICS is not set

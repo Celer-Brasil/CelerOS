@@ -67,6 +67,32 @@ config CELEROS_SD_CARD
       Monta o cartao em /sd e procura apps em /sd/apps. Desligado, FS.mountSD()
       retorna false e o FAT/SDSPI saem do binario.
 
+config CELEROS_AUDIO
+    bool "Audio digital (I2S: playWav/QOA, playMusic/chiptune, sfx, TTS)"
+    default y
+    help
+      Pipeline de audio PCM digital: System.playWav (WAV/QOA), System.playMusic
+      (chiptune), System.sfx, o canal TX I2S do alto-falante (BoardIO
+      speakerChannel) e o streaming ao vivo do AI.speak (PcmFeed). Desligado,
+      os contratos JS ficam de pe com stubs: playWav/playMusic devolvem false
+      ("sem audio na placa"), sfx 0, posMs -1 — e o driver I2S sai do binario.
+
+      O System.playTone NAO depende daqui: o tom por buzzer/buzzer analogico
+      (LEDC, pino speakerPin) segue em toda placa (a CYD tem alto-falante
+      analogico no GPIO26). Placas sem I2S de audio: cyd, cyd-vspi, devkit,
+      esp32-cam.
+
+config CELEROS_MIC
+    bool "Microfone (canal I2S de captura + objeto Mic para apps)"
+    default n
+    help
+      Canal RX I2S1 de captura (BoardIO micLevel/gravacao), o objeto Mic
+      (API 19, permission "mic") e o lock de canal compartilhado com o wake
+      word. So existe hardware no cao (MEMS INMP441) e no watch (ES7210),
+      que ligam esta opcao nos sdkconfig.defaults. Desligado, o objeto Mic
+      nao existe (typeof Mic === "undefined", apps testam) e System.micLevel
+      devolve -1. O CELEROS_WAKE_WORD depende deste canal.
+
 config CELEROS_APP_TASK
     bool "Apps JS em task propria (experimental, F3)"
     default n
@@ -92,6 +118,7 @@ config CELEROS_APP_SERVICES
 config CELEROS_WAKE_WORD
     bool "Wake word on-device (WakeNet do esp-sr)"
     default n
+    depends on CELEROS_MIC
     help
       Deteccao sempre-on do "Hi Celer" (microWakeWord V2 proprio, modelo
       int8 embutido no firmware via TFLite Micro) rodando no proprio chip,
@@ -122,6 +149,18 @@ config CELEROS_JS_GAME_ACCEL
       por mundo) e System.drawSprite (sprite girado/escalado no alvo
       corrente). Ligado por padrao so nas placas S3; no CYD o slot OTA e o
       limite e os jogos que usam isto exigem PSRAM de qualquer jeito.
+
+config CELEROS_JS_PHYSICS
+    bool "Fisica nativa para apps (System.verlet*, API 31)"
+    default y
+    help
+      Mundos verlet nativos em C++ float (Utils/Verlet2D.h + bindings
+      System.verlet*): integracao, vinculos e colisao fora do heap Duktape,
+      malloc em PSRAM. Mundo de jogo nao vive no heap interno das placas sem
+      PSRAM — desligado na CYD/cyd-vspi/devkit/esp32-cam. Desligado, as
+      entradas nao sao registradas (typeof System.verletNew === "undefined")
+      e a dep celeros.physics feature-detecta: P.verletFast sai do ar e o
+      P.verlet interpretado da propria dep segue valendo.
 
 config CELEROS_JS_GPIO
     bool "API System.gpio para apps"

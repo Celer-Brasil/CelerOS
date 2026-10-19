@@ -79,3 +79,11 @@ CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y
 # A imagem de fabrica nao leva app com servico (ver data-exclude.txt).
 CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_APP_TASK is not set
+
+# Perfil barebone: sem alto-falante I2S, sem microfone e sem PSRAM para a
+# fisica nativa — os tres saem do build (contratos JS preservados: playWav/
+# playMusic false, sfx 0, Mic/System.verlet* undefined). O servidor web
+# segue: e a interface de desenvolvimento da placa.
+# CONFIG_CELEROS_AUDIO is not set
+# CONFIG_CELEROS_MIC is not set
+# CONFIG_CELEROS_JS_PHYSICS is not set

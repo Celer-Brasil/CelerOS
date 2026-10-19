@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sdkconfig.h"  // CONFIG_CELEROS_AUDIO/MIC: os stubs dos #if abaixo
+                        // nao podem depender da ordem de includes do chamador
 #include "driver/i2s_std.h"  // i2s_chan_handle_t do speakerChannel abaixo
 
 // ============================================================================
@@ -163,6 +165,36 @@ void micRecCancel();
 // Encerra e devolve o WAV (header de 44 bytes + PCM) ou o base64 dele;
 // buffer malloc do chamador (free). *msOut = duracao gravada. null = nada.
 char* micRecStop(bool base64, size_t* lenOut, uint32_t* msOut);
+
+#if !CONFIG_CELEROS_AUDIO || !CONFIG_CELEROS_MIC
+// ---- perfil sem audio digital e/ou sem microfone (CYD/cyd-vspi/devkit/
+// esp32-cam; smartdisplay sem mic — boards/<b>/sdkconfig.defaults) ----
+// Stubs inline com o MESMO contrato das declaracoes acima: o tom analogico
+// (LEDC, speakerPin) e o beep assincrono (toneAsync) seguem em toda placa;
+// sem AUDIO, speakerChannel devolve nullptr e speakerWarmup/Down sao no-op;
+// sem MIC, micLevel devolve -1 e micRec* o "sem microfone". Com isto a
+// implementacao (secoes I2S do BoardIO.cpp) e o driver i2s saem do binario.
+#if !CONFIG_CELEROS_AUDIO
+inline i2s_chan_handle_t speakerChannel(int) { return nullptr; }
+inline void speakerWarmup() {}
+inline void speakerChannelDown() {}
+inline void speakerPinsPark() {}
+#endif
+#if !CONFIG_CELEROS_MIC
+inline int micLevel() { return -1; }
+inline bool micEnsureChannel() { return false; }
+inline bool micChanLock(int) { return false; }
+inline void micChanUnlock() {}
+inline int micReadMonoLocked(int16_t*, int) { return -1; }
+inline int rmsLevel100(const int16_t*, int, int, int) { return 0; }
+inline bool micRecStart(int) { return false; }
+inline bool micRecActive() { return false; }
+inline int micRecLevel() { return -1; }
+inline char* micRecStop(bool, size_t*, uint32_t*) { return nullptr; }
+inline void micRecCancel() {}
+inline void micPinsDirty() {}  // sem canal de mic, pinos emprestados nao existem
+#endif
+#endif
 
 // ---- volume (System.setVolume, API 13) ----
 // 0..100 persistido em "volume" (default 100). I2S: escala digital da

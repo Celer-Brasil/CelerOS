@@ -794,6 +794,13 @@ duk_ret_t JSBindings::js_playTone(duk_context *ctx) {
 // (fala do AI.speak/tom/playWav em curso), sem audio na placa ou musica vazia.
 duk_ret_t JSBindings::js_playMusic(duk_context *ctx) {
     present();  // o app segue livre: so acordamos a task do sintetizador
+#if !CONFIG_CELEROS_AUDIO
+    // Perfil sem audio digital (CELEROS_AUDIO=n): contrato intacto — "false =
+    // sem audio na placa". Sair ANTES do parse mantem o MusicEngine fora do
+    // binario (a compilacao da musica acontece dentro do MusicSynth::play).
+    duk_push_boolean(ctx, 0);
+    return 1;
+#endif
     if (!duk_is_object(ctx, 0)) {
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "playMusic: esperado objeto {bpm,loops,tracks}");
     }
@@ -898,6 +905,12 @@ duk_ret_t JSBindings::js_sfx(duk_context *ctx) {
     if (!duk_is_array(ctx, 0)) {
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "sfx: esperado array [freq,ms] ou [[freq,ms],...]");
     }
+#if !CONFIG_CELEROS_AUDIO
+    // Perfil sem audio digital (CELEROS_AUDIO=n): 0 = "sem audio na placa"
+    // (doc acima). Antes do parse: o MusicEngine nao entra no binario.
+    duk_push_int(ctx, 0);
+    return 1;
+#endif
     MusicEngine::SfxTone tones[MusicEngine::kMaxSfxTones];
     int n = 0;
     const duk_size_t len = duk_get_length(ctx, 0);

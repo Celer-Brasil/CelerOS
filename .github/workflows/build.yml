@@ -112,16 +112,16 @@ jobs:
                -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
                -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }} &&
              idf.py -B build-${{ matrix.board }} build)
-      - name: Orcamento do slot OTA (min 64 KB; CYD 12 KB — ver nota)
+      - name: Orcamento do slot OTA (min 64 KB por placa)
         shell: bash
         run: |
           . $IDF_PATH/export.sh
-          # CYD/cyd-vspi: o microSD (f4db0da — FAT+SDMMC ~45 KB medidos)
-          # consome a folga de 64 KB; o min da variante e 12 KB (folga REAL
-          # hoje: ~21 KB — o binario segue cabendo no slot de 1.75 MB com
-          # margem). As demais placas mantem o cushion de 64 KB.
+          # Folga de volta ao cushion unico de 64 KB: o perfil lite da CYD
+          # (audio digital/mic/fisica/web fora — Kconfig CELEROS_AUDIO,
+          # CELEROS_MIC, CELEROS_JS_PHYSICS) devolveu o que o microSD
+          # (f4db0da, ~45 KB) tinha comido; CYD media 90 KB livres na
+          # rodada do menu de recursos. esp32-cam (108 KB) tambem passa.
           MIN=64
-          case "${{ matrix.board }}" in cyd|cyd-vspi) MIN=12 ;; esac
           python3 tools/size_report.py --board ${{ matrix.board }} --min-free-kb $MIN
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4

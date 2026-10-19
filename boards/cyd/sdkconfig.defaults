@@ -96,3 +96,18 @@ CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y
 # ele espera o app de foreground sair em vez de competir com ele.
 CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_APP_TASK is not set
+
+# ---- Perfil LITE da CYD (subset do OS no slot de 1,56MB) ----
+# O hardware nao tem: I2S de audio (o alto-falante e ANALOGICO no GPIO26 —
+# o System.playTone por LEDC segue, com beep assincrono de alarme/toast),
+# microfone e PSRAM (mundo de fisica nativa nao vive no heap interno).
+# O servidor web (file manager + /update pelo navegador) tambem sai:
+# o captive portal do WiFi segue, e o celerctl por WiFi (DebugBridge)
+# cobre push/pull/logcat/ota push; firmware vem pelo OTA do hub. Contratos
+# JS preservados pelos stubs: playWav/playMusic devolvem false, sfx 0,
+# musicPos -1, micLevel -1; Mic e System.verlet* ficam undefined (apps
+# feature-detectam, como ja fazem com CelerLink/Camera).
+# CONFIG_CELEROS_AUDIO is not set
+# CONFIG_CELEROS_MIC is not set
+# CONFIG_CELEROS_JS_PHYSICS is not set
+# CONFIG_CELEROS_WEB_SERVER is not set

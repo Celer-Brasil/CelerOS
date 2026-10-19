@@ -45,7 +45,7 @@ Loop (`celerLoop`, main task, 32KB stack): `Navigator::tick()`, `WebManager::tic
 | Screen states (dim/AOD/off), raise-to-wake | `Display/ScreenPower.*`; deep sleep wakes on the next alarm event |
 | Power (DFS, light sleep, idle WiFi) | `Hardware/PowerPolicy.*`; needs `CONFIG_PM_ENABLE` (watch sdkconfig) |
 | Web file-manager / firmware-upload page | edit `WebManager/filemanager.html` / `ota_upload.html`; the build gzips and embeds them (`main/CMakeLists.txt`), served with `Content-Encoding: gzip` |
-| Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO` (all default y); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults` |
+| Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_AUDIO` (all default y), `CELEROS_MIC`, `CELEROS_JS_PHYSICS`, `CELEROS_JS_CAMERA`, `CELEROS_WAKE_WORD` (hardware opt-in); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults`. Off-flags keep the JS contracts via inline stubs in the headers (`AudioPlayer.h`/`MusicSynth.h`/`BoardIO.h`) — callers never need `#if`; the CYD lite profile turns the whole set off (see `boards/cyd/sdkconfig.defaults`) |
 
 ## TOUCH PIPELINE (API 43 MULTITOUCH — read before touching any touch code)
 One read path, one primary, additive everywhere. Designed so that single-finger behavior is byte-identical to the pre-43 firmware:

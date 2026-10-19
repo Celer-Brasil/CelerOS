@@ -17,7 +17,6 @@ apps/Snake
 apps/Web Server
 apps/Watchface
 apps/Touch Test
-apps/Nucleo/.dev
 AGENTS.md
 icons/2048.png
 icons/about.png

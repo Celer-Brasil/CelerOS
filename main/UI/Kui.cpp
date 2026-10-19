@@ -1334,7 +1334,13 @@ void Navigator::tick() {
     if (s_dialog != nullptr) {
         Dialog* d = s_dialog;
         d->onTick(dt);
-        if (d == s_dialog && d->timeoutMs > 0 && now - d->shownAtMs > d->timeoutMs) {
+        // Diferenca COM sinal: o dialogo aberto dentro do pumpEvents (toque no
+        // launcher) nasce com shownAtMs alguns ms A FRENTE do now capturado no
+        // topo do tick — em unsigned o underflow virava prazo estourado e o
+        // consentimento fechava na hora, sem nunca ser desenhado (toast
+        // "Permissao nao respondida" imediato; bancada 2026-10-18, 4848)
+        if (d == s_dialog && d->timeoutMs > 0 &&
+            (int32_t)(now - d->shownAtMs) > (int32_t)d->timeoutMs) {
             if (d->onTimeout) d->onTimeout();
             else closeDialog();
         }

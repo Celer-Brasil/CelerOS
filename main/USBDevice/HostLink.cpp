@@ -422,7 +422,9 @@ void handleLs(const uint8_t* payload, uint16_t len) {
     // resposta: [u32 next (0 = fim, so no modo paginado)] + u16 n + entradas
     std::string body;
     if (paged) {
-        uint32_t next = eof ? 0 : (cursor + count + 1);  // +1: a entrada que nao coube
+        // cursor + count = indice da entrada que NAO coube (served ja a
+        // contou antes do break). O +1 antigo pulava 1 arquivo por pagina.
+        uint32_t next = eof ? 0 : (cursor + count);
         body.resize(4 + 2 + out.size());
         le32((uint8_t*)body.data(), next);
         body[4] = (char)(uint8_t)count;

@@ -76,7 +76,12 @@ bool WifiSetupPortal::begin() {
 
     // STA primeiro (o init do WifiConnection forca modo STA); o componente
     // promove para APSTA ao subir o AP (patch do WifiAP)
-    if (NetworkManager::instance().init(true) != CommonErrorCodes::None) return false;
+    if (NetworkManager::instance().init(true) != CommonErrorCodes::None) {
+        // rollback do gate: sem isto uma falha aqui deixava o servidor web
+        // suprimido ate o reboot (o tick nunca mais subia com web_on=1).
+        WebManager::suppressServerStart(false);
+        return false;
+    }
 
     // Sufixo do AP: 4 ultimos hex do MAC (softAP)
     uint8_t mac[6] = {0};
@@ -105,6 +110,7 @@ bool WifiSetupPortal::begin() {
     s_connState = 0;
     if (!s_portal.start()) {
         celer_log_println("Falha ao iniciar captive portal");
+        WebManager::suppressServerStart(false);  // devolve a porta 80 ao web
         return false;
     }
     return true;

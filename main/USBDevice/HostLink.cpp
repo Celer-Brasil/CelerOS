@@ -163,18 +163,24 @@ const char* boardId() {
 // Em sessoes proto 2 os chunks carregam seq e o CRC e acumulado na chegada
 // (verificacao end-to-end no WRITE_END sem reler o arquivo).
 FILE* s_wrFile = nullptr;
-char s_wrPath[256] = {0};
+char s_wrPath[256] = {0};   // destino final
+char s_wrTmp[264] = {0};    // "<destino>.part" (escrita atomica)
 uint32_t s_wrTotal = 0;
 uint16_t s_wrSeq = 0;
 uint32_t s_wrCrc = 0;
 
 void closeWrite(bool keep) {
     if (s_wrFile != nullptr) {
-        fclose(s_wrFile);
+        const bool closed = fclose(s_wrFile) == 0;  // flush: disco cheio aqui
         s_wrFile = nullptr;
-        if (!keep) remove(s_wrPath);  // nao deixa arquivo parcial
+        if (!keep || !closed) {
+            if (s_wrTmp[0]) remove(s_wrTmp);  // nao deixa parcial
+        } else if (!FileSystem::renameFile(s_wrTmp, s_wrPath)) {
+            remove(s_wrTmp);
+        }
     }
     s_wrPath[0] = '\0';
+    s_wrTmp[0] = '\0';
     s_wrTotal = 0;
 }
 
@@ -492,8 +498,16 @@ void handleWriteBegin(const uint8_t* payload, uint16_t len) {
     }
     closeWrite(false);  // cancela escrita anterior por seguranca
     makeParentDirs(path);
-    s_wrFile = fopen(path, "wb");
+    // Escreve em <destino>.part e so troca no WRITE_END: um push
+    // interrompido (cabo/WiFi) nao trunca mais o main.js/app.json antigo.
+    const int tn = snprintf(s_wrTmp, sizeof(s_wrTmp), "%s.part", path);
+    if (tn < 0 || (size_t)tn >= sizeof(s_wrTmp)) {
+        respondError(KL_WRITE_BEGIN, "caminho longo demais");
+        return;
+    }
+    s_wrFile = fopen(s_wrTmp, "wb");
     if (s_wrFile == nullptr) {
+        s_wrTmp[0] = '\0';
         respondError(KL_WRITE_BEGIN, "nao abriu para escrita");
         return;
     }
@@ -1190,6 +1204,10 @@ bool HostLink::endSession() {
     if (was) {
         s_active = nullptr;
         m_parser.setV2(false);  // nova sessao comeca negociando de novo
+        // push interrompido: fecha o FILE* (flush) e descarta o .part; sem
+        // isto o fd ficava preso ate o proximo WRITE_BEGIN. O destino antigo
+        // segue intacto porque a escrita foi para <destino>.part.
+        if (s_wrFile != nullptr) closeWrite(false);
         // host sumiu sem DEBUG_CTL 0 (proxy morto a forca, cabo): um app
         // pausado no debugger ficaria esperando comando para sempre
         JsDebugger::setClient(false);

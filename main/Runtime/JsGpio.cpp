@@ -56,7 +56,7 @@ static int requirePin(duk_context *ctx, duk_idx_t idx, bool output) {
         // bancada 2026-10-02)
         char msg[64];
         snprintf(msg, sizeof(msg), "GPIO %d invalido ou reservado pelo sistema", pin);
-        duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, msg);
     }
     s_jsPins |= bit;
     return pin;

@@ -100,7 +100,7 @@ static bool aiProviderKnown(const char* name) {
 static void aiThrow(duk_context* ctx, const char* fmt, const char* a) {
     char msg[110];
     snprintf(msg, sizeof(msg), fmt, a != nullptr ? a : "?");
-    duk_error(ctx, DUK_ERR_ERROR, msg);
+    jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
 }
 
 // Teto do corpo da resposta (mesmo sink malloc/realloc do Net.get: sem

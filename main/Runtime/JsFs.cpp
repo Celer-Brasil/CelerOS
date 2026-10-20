@@ -36,22 +36,43 @@ static void fsDeny(duk_context *ctx, const char* path) {
     char msg[192];
     snprintf(msg, sizeof(msg),
              "FS: acesso negado a %s (arquivo do sistema, pasta de apps ou dados de outro app)", path);
-    duk_error(ctx, DUK_ERR_ERROR, msg);
+    jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
 }
 
 duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     if (!fsPathAllowed(path)) fsDeny(ctx, path);
-    // leitura de arquivo grande (SD) passa de 1s: o tempo NATIVO conta na
-    // janela do exec-timeout (padrao do js_copyFile: present antes,
-    // noteAppYield depois)
-    std::string content = jsBlocking([&] { return FileSystem::readTextFile(path); });
-    if (content.length() == 0 && !FileSystem::exists(path)) {
-        duk_push_null(ctx);
-    } else {
-        duk_push_string(ctx, content.c_str());
+    // Antes: FileSystem::readTextFile devolvia std::string e o
+    // duk_push_string copiava tudo DE NOVO para o heap Duktape; um app com
+    // permissao fs podia pedir /sd/video.mp4 e o resize sem excecoes
+    // abortava o aparelho. Agora malloc + jsPushOwnedString (uma copia) com
+    // teto: 256 KB cobre o all.json da Loja (~58 KB) e texto de app.
+    constexpr long kMaxText = 256 * 1024;
+    JSBindings::present();  // leitura grande (SD): quadro antes
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) { duk_push_null(ctx); return 1; }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); duk_push_null(ctx); return 1; }
+    if (sz > kMaxText) {
+        fclose(f);
+        char msg[96];
+        snprintf(msg, sizeof(msg), "FS.readTextFile: arquivo acima de %ld KB", kMaxText / 1024);
+        jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, msg);
+        return 0;
     }
-    return 1;
+    char* buf = (char*)malloc((size_t)sz + 1);
+    if (buf == nullptr) {
+        fclose(f);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, "FS.readTextFile: sem RAM para o arquivo");
+        return 0;
+    }
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[got] = '\0';
+    CelerKernel::noteAppYield();  // tempo NATIVO da leitura
+    return jsPushOwnedString(ctx, buf, got);
 }
 
 duk_ret_t JSBindings::js_writeTextFile(duk_context *ctx) {

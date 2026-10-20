@@ -683,7 +683,7 @@ duk_ret_t JSBindings::js_cameraSave(duk_context *ctx) {
         // o sensor, gravar arquivo no disco pede "fs"
         char msg[160];
         snprintf(msg, sizeof(msg), "FS: escrita negada em %s (permissao fs)", path);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     const Retained& r = s_ret[id - 1];
     // mesmo contrato do FS.writeFile: /local atomico via rename, SD direto

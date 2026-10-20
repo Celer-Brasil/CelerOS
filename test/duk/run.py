@@ -41,6 +41,7 @@ DRIVER = r'''
 #include "duktape.h"
 #include "Utils/JsStrip.h"
 #include "Utils/JsonMap.h"
+#include "Utils/JsThrow.h"
 // shim do FileSystem (o require le o deps.json desde a API 30): mesmo
 // parser do firmware (Utils/JsonMap.h), leitura por stdio
 namespace FileSystem {

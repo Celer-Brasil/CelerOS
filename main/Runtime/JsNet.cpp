@@ -141,7 +141,7 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     if (!fsWriteAllowed(path)) {
         char msg[176];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
         snprintf(msg, sizeof(msg), "Net.download: destino %s nao permitido", path);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     // "<path>.part" em buffer de pilha: path absurdo (app hostil) virava
     // std::string que aborta o aparelho no -fno-exceptions

@@ -19,6 +19,7 @@
 #include "../Launcher/Screens.h"
 #include "../Boards/Board.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
+#include <new>
 #include "JsInternal.h"
 #include "JsFsJail.h"
 
@@ -85,7 +86,13 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
         tftSprite = nullptr;
     }
 
-    CelerSprite* spr = new CelerSprite(tftInstance);
+    // nothrow: com -fno-exceptions o new normal ABORTA o aparelho quando a
+    // RAM acabou; o app deve receber 0 (createSprite ja tem esse contrato).
+    CelerSprite* spr = new (std::nothrow) CelerSprite(tftInstance);
+    if (spr == nullptr) {
+        duk_push_int(ctx, 0);
+        return 1;
+    }
     // Prefere PSRAM quando disponivel (sem PSRAM o LovyanGFX usa o heap)
     spr->setPsram(true);
 

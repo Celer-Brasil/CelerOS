@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <string>
 #include "JSBindings.h"
+#include "../Utils/JsThrow.h"
 #include "../Display/Layout.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Display/FrameSprite.h"
@@ -194,6 +195,10 @@ inline void putNodeId(duk_context* ctx, const char* k, uint16_t id) {
     duk_put_prop_string(ctx, -2, k);
 }
 
+// jsThrowMsg (mensagem pre-formatada, sem variadicos) vive em
+// Utils/JsThrow.h: o teste/duk compila o corpo de JsModules.cpp sem este
+// header e precisa do mesmo helper.
+
 // String crua (bytes UTF-8) ou objeto serializado como JSON — quem le do
 // outro lado decide o formato (mesma regra do CelerLink.send). Teto com
 // RangeError pre-formatado (duk_error com %d a partir de lightfunc corrompe
@@ -215,7 +220,7 @@ inline const char* jsMsgBytes(duk_context* ctx, duk_idx_t idx, void* buf,
     if (*len == 0 || *len > cap) {
         char msg[64];
         snprintf(msg, sizeof(msg), "%s deve ter 1 a %d bytes", what, (int)cap);
-        duk_error(ctx, DUK_ERR_RANGE_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, msg);
     }
     memcpy(buf, src, *len);
     return (const char*)buf;
@@ -278,7 +283,7 @@ inline void jsRequireWifi(duk_context* ctx, const char* who) {
     if (WebManager::isWifiConnected()) return;
     char msg[48];
     snprintf(msg, sizeof(msg), "%s: WiFi is not connected", who);
-    duk_error(ctx, DUK_ERR_ERROR, msg);
+    jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
 }
 
 // Pasta privada do app corrente (/local/data/<pkg>), criando a arvore.

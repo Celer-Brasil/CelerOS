@@ -1,6 +1,7 @@
 #include "JSBindings.h"
 #include <stdio.h>
 #include <algorithm>
+#include <new>
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Kernel/Services.h"
 #include "../Kernel/DeviceStats.h"
@@ -830,12 +831,12 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
     if (!fsPathAllowed(from)) {
         char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
         snprintf(msg, sizeof(msg), "FS: %s e arquivo do sistema", from);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     if (!fsWriteAllowed(to)) {
         char msg[160];
         snprintf(msg, sizeof(msg), "FS: escrita negada em %s", to);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     duk_push_boolean(ctx, FileSystem::copyFile(from, to) ? 1 : 0);
     CelerKernel::noteAppYield();  // arquivo grande passa de 1s
@@ -849,14 +850,14 @@ duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
     if (!fsTreeAllowed(from)) {
         char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
         snprintf(msg, sizeof(msg), "FS: copiar %s requer permissao \"system\"", from);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     // destino na raiz /local sobrescreveria os arquivos protegidos (que
     // moram la): mesma regra de arvore da origem
     if (!fsTreeWriteAllowed(to)) {
         char msg[160];
         snprintf(msg, sizeof(msg), "FS: copiar para %s requer permissao \"system\"", to);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     bool ok = FileSystem::copyDirectory(from, to);
     CelerKernel::noteAppYield();  // arvore grande (instalacao via SD): segundos
@@ -897,7 +898,7 @@ duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
     if (!fsTreeWriteAllowed(path)) {
         char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
         snprintf(msg, sizeof(msg), "FS: remover %s requer permissao \"system\"", path);
-        duk_error(ctx, DUK_ERR_ERROR, msg);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, msg);
     }
     bool ok = removeTree(path);
     CelerKernel::noteAppYield();  // desinstalacao de arvore: pode passar de 1s
@@ -1047,11 +1048,14 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
 #if CONFIG_CELEROS_UI
     if (s_frame == nullptr && Board::profile().hasPsram) {
-        s_frame = new FrameSprite(tft);
-        s_frame->setSwapBytes(true);  // mesma convencao do display (icones, readRect)
-        if (s_frame->createFrame(tft->width(), tft->height()) == nullptr) {
-            delete s_frame;
-            s_frame = nullptr;
+        // nothrow: sem excecoes um new que falha aborta o OS inteiro
+        s_frame = new (std::nothrow) FrameSprite(tft);
+        if (s_frame != nullptr) {
+            s_frame->setSwapBytes(true);  // mesma convencao do display (icones, readRect)
+            if (s_frame->createFrame(tft->width(), tft->height()) == nullptr) {
+                delete s_frame;
+                s_frame = nullptr;
+            }
         }
     }
     if (s_frame != nullptr) {

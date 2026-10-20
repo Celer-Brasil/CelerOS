@@ -209,7 +209,7 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
                          dep->name, dep->ver);
             else
                 snprintf(err, sizeof(err), "require: modulo nao encontrado: %s.js", mod);
-            duk_error(ctx, DUK_ERR_ERROR, err);
+            jsThrowMsg(ctx, DUK_ERR_ERROR, err);
         }
     }
     fseek(f, 0, SEEK_END);

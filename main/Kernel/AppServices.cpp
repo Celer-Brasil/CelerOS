@@ -12,7 +12,10 @@
 #include "../USBDevice/CelerShell.h"
 #include "../Utils/InstallMarker.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/JsStrip.h"
 #include "../Boards/Board.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "DeviceStats.h"
 #include <duktape.h>
 #include <esp_heap_caps.h>
@@ -308,7 +311,8 @@ void loadService(SvcApp& a) {
 
     // tamanho com teto antes de ler (std::string de arquivo gigante com
     // -fno-exceptions pode abortar o aparelho)
-    size_t sz = FileSystem::getFileSize((a.dir + "/" + a.file).c_str());
+    const std::string path = a.dir + "/" + a.file;
+    size_t sz = FileSystem::getFileSize(path.c_str());
     if (sz == 0 || sz > 64 * 1024) {
         celer_log_printf("[svc] %s: service.js ausente ou acima de 64 KB\n", a.name.c_str());
         a.stopped = true;
@@ -350,9 +354,39 @@ void loadService(SvcApp& a) {
     JSBindings::svcIdentity(a.thr, a.pkg.c_str(), a.perms, a.dir.c_str());
     SvcApi::install(a.thr, a.pkg.c_str(), a.perms, a.dir.c_str());
 
-    std::string src = FileSystem::readTextFile((a.dir + "/" + a.file).c_str());
-    duk_push_string(a.thr, (a.dir + "/" + a.file).c_str());
-    duk_int_t rc = duk_pcompile_lstring_filename(a.thr, 0, src.c_str(), (duk_size_t)src.length());
+    // malloc + JsStripper, igual ao main.js: o std::string do readTextFile
+    // segurava o fonte cru durante o compile e o top-level. O bloco sai
+    // antes do pcall.
+    char* src = (char*)malloc(sz + 1);
+    if (src == nullptr) {
+        noteCrash(a, "sem RAM para o service.js");
+        JSBindings::svcIdentityRestore();
+        JSBindings::timersUseSvcHost(false);
+        JSBindings::timersClearCtx(a.thr);
+        releaseThread(a);
+        return;
+    }
+    FILE* sf = fopen(path.c_str(), "rb");
+    const size_t got = sf != nullptr ? fread(src, 1, sz, sf) : 0;
+    if (sf != nullptr) fclose(sf);
+    celer::JsStripper strip(src);
+    strip.feed(src, got);
+    size_t len = strip.finish();
+    src[len] = 0;
+    if (len == 0) {
+        free(src);
+        noteCrash(a, "service.js vazio");
+        JSBindings::svcIdentityRestore();
+        JSBindings::timersUseSvcHost(false);
+        JSBindings::timersClearCtx(a.thr);
+        releaseThread(a);
+        return;
+    }
+    char* shrunk = (char*)realloc(src, len + 1);
+    if (shrunk != nullptr) src = shrunk;
+    duk_push_string(a.thr, path.c_str());
+    duk_int_t rc = duk_pcompile_lstring_filename(a.thr, 0, src, (duk_size_t)len);
+    free(src);
     if (rc == DUK_EXEC_SUCCESS) {
         CelerKernel::noteAppYield();  // janela fresca para o top-level
         CelerKernel::setExecSliceMs(kSvcSliceMs);
@@ -420,7 +454,6 @@ void tick(bool inApp) {
     if (s_suspended) return;  // resumeAfterApp reativa; o watchdog do
     // TimeManager assume (s_lastTickMs velho = servico "sem girar")
     SvcGuard g;  // estado dos servicos exclusivo do pump enquanto gira
-    s_lastTickMs = millis();
     if (LauncherUI::svcDirty) {
         LauncherUI::svcDirty = false;  // apps mudaram: redescobre (install/remocao)
         for (auto& a : s_apps) releaseThread(a);  // nada de zumbi do rescan
@@ -463,6 +496,10 @@ void tick(bool inApp) {
         }
         s_stopReq.clear();
     }
+    // Sem servico declarado: nao cria o heap Duktape do svchost (RAM interna
+    // permanente) e deixa s_lastTickMs envelhecer — o watchdog do
+    // TimeManager entao mantem as cadencias nativas de relogio.
+    if (s_apps.empty()) return;
     if (!ensureHeap()) return;
 
     uint32_t t0 = millis();
@@ -479,6 +516,10 @@ void tick(bool inApp) {
         }
     }
     drainTimers();
+    // So conta como "svchost girou" quem drenou de verdade: antes a marca
+    // era posta antes do ensureHeap/servicos e o fallback nativo de SNTP/
+    // saveEpoch/RTC nunca assumia com o servico parado ou quebrado.
+    s_lastTickMs = millis();
     // telemetria do pump (top/svc): media e overrun do orcamento por giro
     DeviceStats::noteSvcTick(millis() - t0, kTickBudgetMs);
 }

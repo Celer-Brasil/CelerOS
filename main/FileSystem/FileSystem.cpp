@@ -87,6 +87,30 @@ static bool s_localMountFailed = false;
 static const char* NVS_NS = "celer";
 static const char* NVS_FLAG = "fs_mounted";
 
+// Inicializa a NVS com o mesmo tratamento do Storage/NVS (erase + retry).
+// Sem isto, uma NVS sem paginas livres/versao nova fazia a leitura da flag
+// falhar e o mount com format_if_mount_failed podia apagar /local inteiro
+// (apps/configs do usuario). Retorno false = NVS nao confiavel: nesse caso
+// NUNCA se formata por ausencia de flag.
+static bool nvsReady() {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(FS_TAG, "NVS: %s; apagando a NVS (settings voltam ao padrao)",
+                 esp_err_to_name(err));
+        if (nvs_flash_erase() != ESP_OK) {
+            ESP_LOGE(FS_TAG, "NVS: erase falhou; /local sera preservado");
+            return false;
+        }
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(FS_TAG, "NVS: init falhou (%s); /local sera preservado",
+                 esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
 static bool littlefsEverMounted() {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
@@ -115,13 +139,15 @@ bool FileSystem::localMountFailed() {
 
 bool FileSystem::init() {
     bool success = true;
-    nvs_flash_init();  // flag do primeiro mount (idempotente: WebManager repete)
+    const bool nvs = nvsReady();  // flag do primeiro mount (idempotente: WebManager repete)
 
     // --- LittleFS em /local ---
     esp_vfs_littlefs_conf_t lfsc = {};
     lfsc.base_path = "/local";
     lfsc.partition_label = "littlefs";
-    lfsc.format_if_mount_failed = !littlefsEverMounted();  // so de fabrica
+    // Formata so quando a NVS esta confiavel E a flag diz "nunca montou":
+    // NVS ilegivel nao pode virar licenca para apagar os dados do usuario.
+    lfsc.format_if_mount_failed = nvs && !littlefsEverMounted();
     lfsc.dont_mount = false;
     esp_err_t err = esp_vfs_littlefs_register(&lfsc);
     if (err != ESP_OK) {

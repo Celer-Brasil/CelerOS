@@ -98,7 +98,12 @@ public:
             cfg.x_max = 3800;
             cfg.y_min = 200;
             cfg.y_max = 3700;
-            cfg.pin_int = -1;
+            // PENIRQ do XPT2046 (T_IRQ -> GPIO36, so entrada): ALTO = sem
+            // dedo e o LGFX nem abre a transacao. Sem ele cada volta do loop
+            // (~190/s com o vidro aceso) trocava 57 bytes a 2 MHz so para
+            // descobrir que ninguem tocou. O ultimo comando da leitura (0x80)
+            // deixa o chip em power-down com o PENIRQ armado.
+            cfg.pin_int = 36;
             cfg.bus_shared = false;
             cfg.offset_rotation = 0;
             cfg.spi_host = SPI3_HOST;  // VSPI dedicado ao touch

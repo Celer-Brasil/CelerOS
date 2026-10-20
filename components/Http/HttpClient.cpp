@@ -425,15 +425,32 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     // Perform request
     esp_err_t err = esp_http_client_perform(client);
     if (err != ESP_OK && reuse) {
-        // conexao idle caiu (servidor fechou entre pedidos): descarta o
-        // handle e REFAZ limpo — o erro chega antes de qualquer corpo
-        ESP_LOGW(TAG, "conexao keep-alive parada (0x%x): reconectando", err);
-        esp_http_client_cleanup(client);
-        client = esp_http_client_init(&config);
-        _handle = client;
-        if (client != nullptr) {
-            armRequest();
-            err = esp_http_client_perform(client);
+        // Retry SO se nada do corpo chegou. Antes o handle era refeito em
+        // qualquer erro e o corpo parcial permanecia em responseBody/sink:
+        // a segunda resposta era concatenada (JSON invalido, audio
+        // duplicado) sem erro visivel. _statusSeen tambem impede o retry
+        // quando o sink ja reagiu ao status da primeira resposta.
+        const size_t got = responseBody.size() + _sinkBytes;
+        if (got == 0 && !_statusSeen) {
+            // conexao idle caiu (servidor fechou entre pedidos): descarta o
+            // handle e REFAZ limpo
+            ESP_LOGW(TAG, "conexao keep-alive parada (0x%x): reconectando", err);
+            esp_http_client_cleanup(client);
+            client = esp_http_client_init(&config);
+            _handle = client;
+            if (client != nullptr) {
+                // estado do corpo/headers da tentativa morta nao vaza
+                responseBody.clear();
+                _contentLength = -1;
+                _bodyOom = false;
+                _sinkBytes = 0;
+                _statusSeen = false;
+                armRequest();
+                err = esp_http_client_perform(client);
+            }
+        } else {
+            ESP_LOGW(TAG, "conexao caiu com %u B de corpo: sem retry",
+                     (unsigned)got);
         }
     }
     if (client == nullptr) {  // init do retry falhou: nao ha o que ler

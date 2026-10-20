@@ -495,15 +495,9 @@ void CaptivePortal::dnsTaskFunc(void* param) {
 
     // Get AP IP for responses
     std::string ap_ip = WifiAP::instance().getIPAddress();
-    uint32_t ip_addr = 0;
-    
-    // Parse IP address
-    int ip_parts[4];
-    if (sscanf(ap_ip.c_str(), "%d.%d.%d.%d", 
-               &ip_parts[0], &ip_parts[1], &ip_parts[2], &ip_parts[3]) == 4) {
-        ip_addr = (ip_parts[0]) | (ip_parts[1] << 8) | 
-                  (ip_parts[2] << 16) | (ip_parts[3] << 24);
-    }
+    // inet_addr do lwip: ordem de rede, igual ao a|b<<8|c<<16|d<<24 de antes
+    uint32_t ip_addr = inet_addr(ap_ip.c_str());
+    if (ip_addr == IPADDR_NONE) ip_addr = 0;
 
     uint8_t buffer[512];
     struct sockaddr_in client_addr;
@@ -852,9 +846,17 @@ std::string CaptivePortal::urlDecode(const std::string& str) {
     
     for (size_t i = 0; i < str.length(); i++) {
         if (str[i] == '%' && i + 2 < str.length()) {
-            int value;
-            if (sscanf(str.substr(i + 1, 2).c_str(), "%x", &value) == 1) {
-                result += static_cast<char>(value);
+            // dois digitos hex EXIGIDOS: o sscanf "%x" aceitava "%4g" como
+            // 0x04 e engolia o 'g' (e alocava um substr por byte escapado)
+            auto hexv = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            const int hi = hexv(str[i + 1]), lo = hexv(str[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                result += static_cast<char>((hi << 4) | lo);
                 i += 2;
             } else {
                 result += str[i];

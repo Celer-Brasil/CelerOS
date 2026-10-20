@@ -137,10 +137,15 @@ ErrorCode NVS::storeValue(const std::string& namespaceName, const std::string& k
     esp_err_t esp_err;
     if constexpr (std::is_same_v<T, std::string>) {
         esp_err = nvs_set_str(handle, key.c_str(), value.c_str());
-    } else if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int>) {
+    } else if constexpr (std::is_same_v<T, int8_t>) {
         esp_err = nvs_set_i8(handle, key.c_str(), value);
-    } else if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, unsigned int>) {
+    } else if constexpr (std::is_same_v<T, int>) {
+        // int e 32 bits: i8 truncava 1000 -> 232 em silencio
+        esp_err = nvs_set_i32(handle, key.c_str(), (int32_t)value);
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
         esp_err = nvs_set_u8(handle, key.c_str(), value);
+    } else if constexpr (std::is_same_v<T, unsigned int>) {
+        esp_err = nvs_set_u32(handle, key.c_str(), (uint32_t)value);
     } else if constexpr (std::is_same_v<T, int16_t>) {
         esp_err = nvs_set_i16(handle, key.c_str(), value);
     } else if constexpr (std::is_same_v<T, uint16_t>) {
@@ -207,10 +212,18 @@ ErrorCode NVS::readValue(const std::string& namespaceName, const std::string& ke
             value.assign(valueBuffer, requiredSize - 1);
         }
         free(valueBuffer);
-    } else if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int>) {
+    } else if constexpr (std::is_same_v<T, int8_t>) {
         esp_err = nvs_get_i8(handle, key.c_str(), &value);
-    } else if constexpr (std::is_same_v<T, uint8_t> || std::is_same_v<T, unsigned int>) {
+    } else if constexpr (std::is_same_v<T, int>) {
+        int32_t v = 0;
+        esp_err = nvs_get_i32(handle, key.c_str(), &v);
+        if (esp_err == ESP_OK) value = (T)v;
+    } else if constexpr (std::is_same_v<T, uint8_t>) {
         esp_err = nvs_get_u8(handle, key.c_str(), &value);
+    } else if constexpr (std::is_same_v<T, unsigned int>) {
+        uint32_t v = 0;
+        esp_err = nvs_get_u32(handle, key.c_str(), &v);
+        if (esp_err == ESP_OK) value = (T)v;
     } else if constexpr (std::is_same_v<T, int16_t>) {
         esp_err = nvs_get_i16(handle, key.c_str(), &value);
     } else if constexpr (std::is_same_v<T, uint16_t>) {

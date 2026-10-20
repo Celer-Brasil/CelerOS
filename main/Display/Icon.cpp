@@ -345,7 +345,7 @@ void Icon::saveCached(const char* cachePath, const uint16_t* px, const uint8_t* 
     FILE* f = fopen(cachePath, "wb");
     if (f == nullptr) return;
     bool ok = fwrite(px, 1, DST_PX * 2, f) == DST_PX * 2 && (a4 == nullptr || fwrite(a4, 1, DST_PX / 2, f) == DST_PX / 2);
-    fclose(f);
+    ok = fclose(f) == 0 && ok;  // flush no fclose: cache truncado nao fica
     if (!ok) remove(cachePath);  // disco cheio: sem cache, decodifica de novo
 }
 

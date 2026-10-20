@@ -368,6 +368,16 @@ std::string FileSystem::readTextFile(const char* path) {
         fclose(f);
         return "";
     }
+    // Teto: arquivo enorme (SD) no std::string sem excecoes aborta o aparelho.
+    // 256 KB cobre historico, app.json, deps e service.js. Acima disso o
+    // chamador ve arquivo ilegivel, igual a falta de bloco.
+    constexpr size_t kMaxRead = 256 * 1024;
+    if ((uint64_t)st.st_size > kMaxRead) {
+        fclose(f);
+        celer_log_printf("readTextFile: %u B acima do teto de %u (%s)\n",
+                         (unsigned)st.st_size, (unsigned)kMaxRead, path);
+        return "";
+    }
 
     // Sem excecoes, o new do std::string ABORTA quando nao ha bloco contiguo
     // (sem PSRAM + heap fragmentado: FS.readTextFile de arquivo grande
@@ -466,7 +476,7 @@ bool FileSystem::appendTextFile(const char* path, const char* content) {
 
     size_t len = strlen(content);
     bool ok = (fwrite(content, 1, len, f) == len);
-    fclose(f);
+    ok = (fclose(f) == 0) && ok;  // flush no fclose: disco cheio aparece aqui
     return ok;
 }
 
@@ -548,13 +558,11 @@ bool FileSystem::readCalData(uint16_t* calData) {
 }
 
 bool FileSystem::writeCalData(uint16_t* calData) {
-    FILE* f = fopen("/local/touch_cal_p.bin", "wb");
-    if (f == nullptr) return false;
-    // fwrite de 10 bytes pode falhar (disco cheio): sem checar, devolvia
-    // sucesso e a calibracao antiga seguia valendo no proximo boot
-    bool ok = (fwrite(calData, 1, 10, f) == 10);
-    fclose(f);
-    return ok;
+    // Atomico (tmp + rename): o "wb" direto truncava a calibracao valida e
+    // um reset/disco cheio no meio deixava o arquivo com menos de 10 bytes
+    // — o boot seguinte caia no calibrador. Erro de fwrite/fclose (disco
+    // cheio) volta como false.
+    return writeFileAtomic("/local/touch_cal_p.bin", calData, 10);
 }
 
 bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {

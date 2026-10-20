@@ -166,6 +166,19 @@ para o SO do ESP32.
   - `shape` (API 15, String): `"rounded"` (vidro com cantos mortos, ex.
     relogio), `"rect"` ou `"headless"` (API 17, sem display).
   - `board`: id da placa (`"cyd"`, `"devkit"`, ...).
+  - `hasSpeaker` (Boolean): existe alto-falante físico (buzzer analógico ou
+    amp I2S) — `playTone`/`beep` funcionam.
+  - `hasAudio` (API 46, Boolean): o pipeline de áudio DIGITAL está no
+    firmware (`playWav`, `playMusic`, `sfx`, fala ao vivo do TTS).
+    `hasSpeaker` `true` com `hasAudio` `false` = só tons e bipes: o
+    alto-falante é o buzzer analógico e as chamadas digitais devolvem
+    `false`/`0` (perfil lite da CYD — o menu de recursos compila por placa).
+  - `hasMic` (API 13, Boolean; desde a API 46 exige também que o build
+    compile o canal de captura): `true` exatamente quando o objeto `Mic`
+    nasce — prefira a `typeof Mic` como resposta canônica.
+  - `hasPhysics` (API 46, Boolean): mundos verlet nativos (`System.verlet*`)
+    compilados; `false` e a dep `celeros.physics` cai no `P.verlet`
+    interpretado (mais lento).
 
 #### `System.button()` (API 17)
 - **Retorna:** `Integer` — `0` nada, `1` toque curto, `2` segurar ~1,2 s
@@ -814,7 +827,8 @@ com `CONFIG_CELEROS_SMARTDISPLAY_RELAYS`; são os mesmos pinos do
 alto-falante I2S da SKU padrão, então a placa tem um ou outro.
 
 `System.getInfo()` também informa `hasLed`, `hasLightSensor` e `hasSpeaker`
-para detecção de recursos.
+para detecção de recursos — e, desde a API 46, as capacidades do build
+`hasAudio` (pipeline digital) e `hasPhysics` (verlet nativo).
 
 #### `System.setting(key)` / `System.setting(key, value)`
 Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura (aberta) devolve a string ou `null`; **escrita exige `"system"`** e devolve `true` (chave 1–15 caracteres, valor até 63). Para dados do próprio app use `Storage`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).

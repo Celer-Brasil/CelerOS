@@ -1,3 +1,4 @@
+#include "sdkconfig.h"
 #include "JSBindings.h"
 #include "../USBDevice/LogSink.h"
 #include "../Kernel/Core/CelerKernel.h"
@@ -298,7 +299,27 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     putBool(ctx, "hasLed", BoardIO::hasLed());
     putBool(ctx, "hasLightSensor", BoardIO::hasLightSensor());
     putBool(ctx, "hasSpeaker", BoardIO::hasSpeaker());
+    // API 46: capacidades do menu de features (Kconfig por placa) — o
+    // PERIFERICO pode existir e o BUILD nao traze-lo. hasSpeaker true com
+    // hasAudio false = so tom analogico (playTone/beep; alto-falante da CYD
+    // no GPIO26); playWav/playMusic/sfx devolvem false/0. hasMic acompanha
+    // o nascimento do objeto Mic (hardware E build); hasPhysics, o verlet
+    // nativo (sem ele a dep celeros.physics cai no P.verlet interpretado).
+#if CONFIG_CELEROS_AUDIO
+    putBool(ctx, "hasAudio", true);
+#else
+    putBool(ctx, "hasAudio", false);
+#endif
+#if CONFIG_CELEROS_MIC
     putBool(ctx, "hasMic", Board::profile().mic.ws >= 0);  // API 13
+#else
+    putBool(ctx, "hasMic", false);  // build sem canal de captura
+#endif
+#if CONFIG_CELEROS_JS_PHYSICS
+    putBool(ctx, "hasPhysics", true);
+#else
+    putBool(ctx, "hasPhysics", false);
+#endif
     putBool(ctx, "hasImu", Board::profile().imuAccel != nullptr);  // API 13
     // API 15: bateria, placa e geometria do vidro (relogio: cantos mortos)
     putBool(ctx, "hasBattery", BoardIO::batteryMv() >= 0);

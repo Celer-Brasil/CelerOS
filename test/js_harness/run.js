@@ -555,6 +555,9 @@ function makeEnv() {
     getInfo: function() {
         return {
             totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', hasDisplay: true, screenW: 240, screenH: 320,
+            // API 46: o host modela uma placa completa (audio, mic e
+            // fisica no build) — os perfis lite (CYD) zera os tres
+            hasAudio: true, hasMic: true, hasPhysics: true,
             totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
             chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
             macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'

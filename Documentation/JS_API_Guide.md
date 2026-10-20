@@ -120,6 +120,19 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
   - `shape` (API 15, String): `"rounded"` (glass with dead corners, e.g.
     the watch), `"rect"`, or `"headless"` (API 17, no display).
   - `board`: board id (`"cyd"`, `"devkit"`, ...).
+  - `hasSpeaker` (Boolean): a physical speaker exists (analog buzzer or
+    I2S amp) — `playTone`/`beep` work.
+  - `hasAudio` (API 46, Boolean): the DIGITAL audio pipeline is in the
+    firmware (`playWav`, `playMusic`, `sfx`, live TTS). `hasSpeaker` `true`
+    with `hasAudio` `false` = tones and beeps only: the speaker is the
+    analog buzzer and the digital calls return `false`/`0` (CYD lite
+    profile — the feature menu compiles per board).
+  - `hasMic` (API 13, Boolean; since API 46 it also requires the build to
+    compile the capture channel): `true` exactly when the `Mic` object is
+    born — prefer it over `typeof Mic` for one canonical answer.
+  - `hasPhysics` (API 46, Boolean): native verlet worlds (`System.verlet*`)
+    are compiled in; `false` means the `celeros.physics` dep falls back to
+    the interpreted `P.verlet` (slower).
 
 #### `System.button()` (API 17)
 - **Returns:** `Integer` — `0` none, `1` short press, `2` held ~1.2 s
@@ -586,7 +599,7 @@ Ambient light from the board's light sensor: `0` (dark) to `100` (lit room); `-1
 #### `System.relay(n, on)` / `System.relayState(n)` / `System.relayCount()` (API 8)
 Relay lines of the board. `n` is 1-based (`1` = hardware line L1); `relay(n, true/false)` switches it and returns `false` without relays or with an out-of-range index, `relayState(n)` returns `1`/`0` (or `-1`), and `relayCount()` returns how many lines exist (`0`..`3`). Relays start **off** at boot. Available on the SmartDisplay 4848S040 "Y" wall-switch SKUs (L1=GPIO40, L2=GPIO2, L3=GPIO1) when the firmware is built with `CONFIG_CELEROS_SMARTDISPLAY_RELAYS` — the same pins drive the I2S speaker on the standard SKU, so a board has one or the other.
 
-`System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection.
+`System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection — and, since API 46, the build capabilities `hasAudio` (digital pipeline) and `hasPhysics` (native verlet).
 
 #### `System.setting(key)` / `System.setting(key, value)`
 System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read (open to all) returns the string or `null`; **write requires `"system"`** and returns `true` (key 1–15 chars, value up to 63). Use `Storage` for the app's own data. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).

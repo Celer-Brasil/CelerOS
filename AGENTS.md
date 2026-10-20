@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-18
-**Commit:** main @ API 44 (multitouch = API 43)
+**Updated:** 2026-10-19
+**Commit:** main @ API 46 (capacidades do menu de features no getInfo = API 46)
 **Branch:** main
 
 ## OVERVIEW

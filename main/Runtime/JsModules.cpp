@@ -215,6 +215,13 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     fseek(f, 0, SEEK_END);
     long fsz = ftell(f);
     fseek(f, 0, SEEK_SET);
+    // Teto: modulo enorme no compile do Duktape vira fatal (reboot). 256 KB
+    // cobre o engine; acima disso o app ve o erro em vez de derrubar o OS.
+    if (fsz > 256 * 1024) {
+        fclose(f);
+        snprintf(err, sizeof(err), "require: modulo %s acima de 256 KB", mod);
+        jsThrowMsg(ctx, DUK_ERR_ERROR, err);
+    }
     char* src = nullptr;
     if (fsz >= 0) src = (char*)malloc(pre + (size_t)fsz + 2);
     if (!src) {
@@ -230,6 +237,12 @@ duk_ret_t JSBindings::js_require(duk_context* ctx) {
     src[pre + len + 1] = '}';
     const size_t srcLen = pre + len + 2;
     memcpy(src, kWrapA, pre);
+    // O bloco nasceu do tamanho CRU. Enxugar devolve o miolo ao heap antes
+    // do compile (pico = fonte enxuto + bytecode, nao o arquivo com comentario).
+    if (srcLen < pre + (size_t)fsz + 2) {
+        char* shrunk = (char*)realloc(src, srcLen);
+        if (shrunk != nullptr) src = shrunk;
+    }
 
     // module/exports: objetos irmãos — exports e o valor inicial de
     // module.exports (alias, como no CommonJS)

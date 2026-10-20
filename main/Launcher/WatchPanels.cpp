@@ -193,28 +193,34 @@ private:
         }
     }
 
-    void drawTile(kui::Canvas& c, int i) {
+    void drawTile(kui::Canvas& c, int slot) {
+        // Geometria = slot na grade. Identidade = tileAt: sem a maquina de
+        // tela, os slots 2 e 3 SAO lanterna e ajustes (o toque ja usava
+        // tileAt; o desenho mostrava "Levantar pulso" / "Sempre ligada").
+        const int id = tileAt(slot);
         static const char* kNames[8] = {"WiFi",     "Não perturbe", "Levantar pulso", "Sempre ligada",
                                         "Lanterna", "Ajustes",      "Celular",        "Achar celular"};
-        kui::Rect r = tileRect(i);
-        const int st = tileState(i);
+        kui::Rect r = tileRect(slot);
+        const int st = tileState(id);
         uint32_t bg = st == 1 ? THEME_ACCENT : THEME_CARD;
         if (kui::isPressed(r)) bg = st == 1 ? THEME_ACCENT_D : THEME_RAISED;
         c.fillRoundRect(r, r.h / 3, bg);
         const uint32_t fg = st == 1 ? THEME_ON_ACCENT : THEME_TEXT;
-        std::string name = kNames[i];
-        if (i == 0 && st == 1) name = WebManager::isActive() ? "WiFi ligado" : "WiFi...";
+        char dyn[16];
+        const char* name = kNames[id];
+        if (id == 0 && st == 1) name = WebManager::isActive() ? "WiFi ligado" : "WiFi...";
 #if CONFIG_CELEROS_PHONE_LINK
-        if (i == 6 && st == 1) {
+        if (id == 6 && st == 1) {
             const uint32_t pk = PhoneLink::passkey();
             if (pk) {
-                char b[16];
-                snprintf(b, sizeof(b), "%06lu", (unsigned long)pk);
-                name = b;
+                snprintf(dyn, sizeof(dyn), "%06lu", (unsigned long)pk);
+                name = dyn;
             } else {
                 name = PhoneLink::connected() ? "Conectado" : "Celular...";
             }
         }
+#else
+        (void)dyn;
 #endif
         c.text(c.ellipsize(name, kui::type::body(), r.w - UI::sx(12)), r.x + r.w / 2, r.y + r.h / 2,
                kui::type::body(), fg, MC_DATUM);

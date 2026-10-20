@@ -184,20 +184,32 @@ void load() {
     if (s_raiseSens < 0 || s_raiseSens > 2) s_raiseSens = 1;
     std::string d = CelerSettings::get("steps_day", "");
     if (!d.empty()) s_dayKey = atol(d.c_str());
+    std::string s = CelerSettings::get("steps", "");
+    const int32_t savedSteps = s.empty() ? 0 : atol(s.c_str());
+    // Sem hora valida (RTC zerado/NTP ainda nao): dayKey() vira 1970 e a
+    // comparacao abaixo apagava o acumulado do dia salvo. Mantem o dia e os
+    // passos; a virada acontece quando o relogio valer (loop de 10 s).
+    if (!TimeManager::isTimeValid()) {
+        s_steps = savedSteps;
+        return;
+    }
     int32_t today = dayKey();
     if (s_dayKey != today) {
-        // dia novo (ou primeira leitura): fecha o anterior e recomeca
-        if (s_dayKey > 0 && TimeManager::isTimeValid()) {
-            std::string old = CelerSettings::get("steps", "");
-            pushHistory(s_dayKey, old.empty() ? 0 : atol(old.c_str()));
+        if (s_dayKey == 0) {
+            // primeiro dia com hora: adota o dia sem zerar o que ja andou
+            s_dayKey = today;
+            s_steps = savedSteps;
+            persist();
+            return;
         }
+        // dia novo: fecha o anterior e recomeca
+        pushHistory(s_dayKey, savedSteps);
         s_dayKey = today;
         s_steps = 0;
         persist();
         return;
     }
-    std::string s = CelerSettings::get("steps", "");
-    s_steps = s.empty() ? 0 : atol(s.c_str());
+    s_steps = savedSteps;
 }
 
 void motionTask(void*) {

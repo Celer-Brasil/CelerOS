@@ -43,6 +43,10 @@ if [ -d "$ROOT/boards/$BOARD/data" ]; then
     cp -a "$ROOT/boards/$BOARD/data/." "$STAGE/"
     echo "overlay: boards/$BOARD/data somado"
 fi
+# Pastas .dev (capturas/artefatos de desenvolvimento, gitignored) nao vao
+# para a imagem de fabrica: no smartdisplay sao 18 KB reais (~32-64 KB em
+# blocos de 4 KB no littlefs).
+find "$STAGE" -type d -name .dev -prune -exec rm -rf {} + 2>/dev/null || true
 # Exclusao opcional da placa: boards/<placa>/data-exclude.txt (um caminho
 # relativo a data/ por linha; # comenta) sai do stage — ex.: o relogio nao
 # leva Terminal/HTTP Demo.

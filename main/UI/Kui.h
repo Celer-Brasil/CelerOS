@@ -144,8 +144,10 @@ public:
     void drawIcon(const char* name, int x, int y);
     // Tile de app do usuario (gradiente + inicial)
     void drawAppTile(const char* appName, int x, int y);
-    // Escurece tudo que ja foi desenhado neste frame (fundo de modal)
-    void dim();
+    // Escurece o frame; keep (se nao-vazio) fica fora do escurecimento — o
+    // card do dialogo e desenhado opaco por cima, entao pular seus pixels
+    // economiza ~30% do loop sem mudar o resultado.
+    void dim(const Rect& keep = {0, 0, 0, 0});
     // Recorte (coordenadas fisicas); clearClip restaura a tela inteira
     void setClip(const Rect& r);
     void clearClip();

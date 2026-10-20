@@ -62,7 +62,7 @@ kui::Rect AlarmScreen::stopRect() const {
 }
 
 void AlarmScreen::draw(kui::Canvas& c) {
-    c.fill(THEME_BG);
+    if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
     c.text(m_kind, UI::cx(), UI::sy(40) + UI::inset / 2, kui::type::title(), THEME_WARN, MC_DATUM);
     c.text(TimeManager::getFormattedTime(), UI::cx(), UI::sy(100), kui::type::display(), THEME_TEXT, MC_DATUM);
     if (!m_label.empty()) {

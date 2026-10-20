@@ -35,20 +35,27 @@ public:
         Backlight::noteActivity();  // acorda: edges do tick fazem o resto
         load();
         m_ageMs = 0;
+        m_repaints = 0;
     }
 
     // Notificacao nova com o alerta ja na tela: troca o conteudo e renova.
     void refresh() {
         load();
         m_ageMs = 0;
+        m_repaints = 0;
         markDirty();
     }
 
     void draw(kui::Canvas& c) override {
-        c.fill(THEME_BG);
-        // primeiro meio segundo: repinta enquanto o painel acorda (o push
-        // inicial pode ter ido ao vidro ainda em SLPIN)
-        if (m_ageMs < 500) markDirty();
+        if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
+        // Primeiro meio segundo: repinta enquanto o painel acorda (o push
+        // inicial pode ter ido ao vidro ainda em SLPIN). Limitado a 6
+        // repaints: antes cada draw marcava outro por 500 ms inteiros e o
+        // loop a 5 ms empurrava ~100 quadros cheios por notificacao.
+        if (m_ageMs < 500 && m_repaints < 6) {
+            markDirty();
+            m_repaints++;
+        }
 
         // geometria em duas passadas: mede o conteudo e dimensiona o card
         // (card curto para notificacao curta, em vez de vidro vazio embaixo)
@@ -167,6 +174,7 @@ private:
     int m_unread = 0;
     uint32_t m_ageMs = 0;
     bool m_wasAsleep = false;
+    int m_repaints = 0;  // teto dos repaints de despertar (m_ageMs < 500)
 };
 AlertScreen s_alert;
 

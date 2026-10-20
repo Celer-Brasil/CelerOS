@@ -181,7 +181,7 @@ void LauncherScreen::draw(kui::Canvas& c) {
     // redesenha opaco sobre as mesmas coordenadas (sem blink).
     bool clearBg = m_needClear || m_dragDx != 0;
     m_needClear = false;
-    if (clearBg) c.fill(THEME_BG);
+    if (clearBg && c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
     if (c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
 
     if (listMode()) {
@@ -534,7 +534,7 @@ AppHostScreen* AppHostScreen::instance(int appIndex) {
 AppHostScreen::AppHostScreen(int appIndex) : m_appIndex(appIndex) {}
 
 void AppHostScreen::draw(kui::Canvas& c) {
-    c.fill(THEME_BG);
+    if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
     c.text("Carregando app...", c.width() / 2, c.height() / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
 }
 
@@ -819,7 +819,7 @@ void WifiSetupScreen::onExit() {
 }
 
 void WifiSetupScreen::draw(Canvas& c) {
-    c.fill(THEME_BG);
+    if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
     drawHeader(c, "WiFi");
     int hdr = headerHeight();
 

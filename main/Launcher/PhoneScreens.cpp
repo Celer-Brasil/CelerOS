@@ -33,7 +33,7 @@ public:
         s_pairPushed = false;
     }
     void draw(kui::Canvas& c) override {
-        c.fill(THEME_BG);
+        if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
         char b[12];
         snprintf(b, sizeof(b), "%06lu", (unsigned long)PhoneLink::passkey());
         c.text("Código", UI::cx(), UI::sy(70) + UI::inset / 3, kui::type::body(), THEME_TEXT_DIM, MC_DATUM);
@@ -68,7 +68,7 @@ public:
         s_callPushed = false;
     }
     void draw(kui::Canvas& c) override {
-        c.fill(THEME_BG);
+        if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
         const int top = UI::sy(56) + UI::inset / 3;
         c.text("Chamada", UI::cx(), top, kui::type::body(), THEME_TEXT_DIM, MC_DATUM);
         const std::string who = m_name.empty() ? m_number : m_name;

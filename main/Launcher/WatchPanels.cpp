@@ -81,7 +81,7 @@ public:
     }
 
     void draw(kui::Canvas& c) override {
-        c.fill(THEME_BG);
+        if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
         const int m = sideMargin();
         // cabecalho: hora + bateria
         const int hy = UI::sy(22) + UI::inset / 3;
@@ -267,7 +267,7 @@ public:
     }
 
     void draw(kui::Canvas& c) override {
-        c.fill(THEME_BG);
+        if (c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
         const int m = sideMargin();
         const int top = headerH();
         // cabecalho: titulo a esquerda + X de fechar a direita (arrastar para

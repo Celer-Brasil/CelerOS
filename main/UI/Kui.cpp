@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <cmath>
+#include <new>
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -67,10 +68,15 @@ Canvas::Mode s_bufMode = Canvas::Direct;
 bool s_bufTried = false;
 int s_bandH = 0;
 
-constexpr size_t BAND_BYTES = 16 * 1024;  // total das duas faixas (sem PSRAM)
+// Total das duas faixas (sem PSRAM). Tenta 24 KB (18 px na CYD: ~10
+// passadas em vez de 20) e cai para 16 KB se o heap interno recusar.
+constexpr size_t BAND_BYTES_TRY[] = {24 * 1024, 16 * 1024};
 
 CelerSprite* newSprite(CelerDisplay& dev, bool psram) {
-    auto* s = new CelerSprite(&dev);
+    // nothrow: sem excecoes um new que falha aborta o OS (o fallback de
+    // faixas/direto existe justamente para memoria apertada).
+    auto* s = new (std::nothrow) CelerSprite(&dev);
+    if (s == nullptr) return nullptr;
     s->setColorDepth(16);
     // Mesma convencao do display: arrays RGB565 LE (icones) e readRect
     s->setSwapBytes(true);
@@ -101,19 +107,26 @@ bool ensureBuffer(CelerDisplay& dev) {
         }
         freeBuffers();
     }
-    s_bandH = (int)(BAND_BYTES / 2 / ((size_t)w * 2));
-    if (s_bandH > h) s_bandH = h;
-    if (s_bandH >= 8) {
+    // 24 KB primeiro; se o heap interno nao der duas faixas, tenta 16 KB
+    // (o valor antigo). Cada tentativa devolve o que alocou antes de cair
+    // para a proxima — fragmentacao nao vira "desenho direto" a toa.
+    for (size_t total : BAND_BYTES_TRY) {
+        s_bandH = (int)(total / 2 / ((size_t)w * 2));
+        if (s_bandH > h) s_bandH = h;
+        if (s_bandH < 8) continue;
         s_bufs[0] = newSprite(dev, false);
         s_bufs[1] = newSprite(dev, false);
-        if (s_bufs[0]->createSprite(w, s_bandH) != nullptr && s_bufs[1]->createSprite(w, s_bandH) != nullptr) {
+        if (s_bufs[0] != nullptr && s_bufs[1] != nullptr &&
+            s_bufs[0]->createSprite(w, s_bandH) != nullptr &&
+            s_bufs[1]->createSprite(w, s_bandH) != nullptr) {
             s_bufMode = Canvas::Bands;
-            ESP_LOGI(TAG, "canvas: faixas 2x %dx%d (%d passadas)", w, s_bandH, (h + s_bandH - 1) / s_bandH);
+            ESP_LOGI(TAG, "canvas: faixas 2x %dx%d (%d passadas)", w, s_bandH,
+                     (h + s_bandH - 1) / s_bandH);
             return true;
         }
+        freeBuffers();
     }
     ESP_LOGW(TAG, "canvas: sem memoria para buffer, desenho direto");
-    freeBuffers();
     return false;
 }
 }  // namespace
@@ -222,21 +235,45 @@ void Canvas::drawAppTile(const char* appName, int x, int y) {
     Icon::drawAppTile(m_target, appName, x, Y(y));
 }
 
-void Canvas::dim() {
+void Canvas::dim(const Rect& keep) {
+    const bool hasKeep = keep.w > 0 && keep.h > 0;
     if (m_mode != Direct && m_target != &m_dev) {
         // Buffer 16-bit guarda o 565 com bytes trocados: desfaz, escurece
         // para ~37% (1/4 + 1/8 por canal) e troca de volta.
         auto* spr = static_cast<CelerSprite*>(m_target);
         uint16_t* p = (uint16_t*)spr->getBuffer();
-        size_t n = (size_t)spr->width() * spr->height();
-        for (size_t i = 0; i < n; i++) {
-            uint16_t c = (uint16_t)((p[i] >> 8) | (p[i] << 8));
-            c = (uint16_t)(((c >> 2) & 0x39E7) + ((c >> 3) & 0x18E3));
-            p[i] = (uint16_t)((c >> 8) | (c << 8));
+        const int w = spr->width(), h = spr->height();
+        int kx0 = 0, kx1 = 0, ky0 = 0, ky1 = 0;
+        if (hasKeep) {
+            // keep em coordenadas de TELA; o buffer pode ser uma faixa
+            kx0 = keep.x < 0 ? 0 : (keep.x > w ? w : keep.x);
+            kx1 = keep.x + keep.w < 0 ? 0 : (keep.x + keep.w > w ? w : keep.x + keep.w);
+            ky0 = keep.y - m_offY;
+            ky1 = keep.y + keep.h - m_offY;
+            if (ky0 < 0) ky0 = 0;
+            if (ky1 > h) ky1 = h;
+        }
+        auto dimRange = [](uint16_t* q, int n) {
+            for (int i = 0; i < n; i++) {
+                uint16_t c = (uint16_t)((q[i] >> 8) | (q[i] << 8));
+                c = (uint16_t)(((c >> 2) & 0x39E7) + ((c >> 3) & 0x18E3));
+                q[i] = (uint16_t)((c >> 8) | (c << 8));
+            }
+        };
+        for (int y = 0; y < h; y++) {
+            uint16_t* row = p + (size_t)y * w;
+            if (hasKeep && y >= ky0 && y < ky1) {
+                if (kx0 > 0) dimRange(row, kx0);
+                if (kx1 < w) dimRange(row + kx1, w - kx1);
+            } else {
+                dimRange(row, w);
+            }
         }
         return;
     }
-    m_target->fillScreen((uint32_t)0x04060C);  // direto: sem leitura do fundo, cobre
+    // Direto: sem leitura do fundo, cobre a tela. O card e desenhado opaco
+    // depois, entao o fillScreen por baixo dele nao altera o resultado.
+    m_target->fillScreen((uint32_t)0x04060C);
 }
 
 void Canvas::setClip(const Rect& r) { m_target->setClipRect(r.x, Y(r.y), r.w, r.h); }
@@ -782,9 +819,13 @@ Rect Dialog::cardRect() const {
 }
 
 void Dialog::draw(Canvas& c) {
-    // tela de baixo escurecida (buffer) + card central
-    c.dim();
+    // tela de baixo escurecida (buffer) + card central; o miolo do card fica
+    // de fora do dim (desenhado opaco por cima) — ~30% menos pixels. Encolhe
+    // pelo raio do canto: um keep retangular deixaria as cunhas dos cantos
+    // arredondados sem escurecer.
     Rect card = cardRect();
+    const int cr = UI::sx(14);
+    c.dim({card.x + cr, card.y + cr, card.w - 2 * cr, card.h - 2 * cr});
     int n = (int)buttons.size();
     const char* labels[4];
     paint::ButtonStyle styles[4];
@@ -1011,13 +1052,16 @@ void TouchPump::poll(const Handler& onEvent) {
     // So considera solto apos ~60ms de leituras vazias seguidas. Por TEMPO,
     // nao por contagem: com o loop lento (um redraw por poll) 6 leituras
     // viravam 600ms+ e todo tap disparava o toque longo do launcher.
+    // GT911 (4848) e FT3168 (watch) tem release estavel: 10 ms basta e
+    // devolve os ~50 ms que o filtro resistivo custava em TODO tap.
     if (!down && m_down) {
         uint32_t now = millis();
         if (m_releaseSinceMs == 0) {
             m_releaseSinceMs = now ? now : 1;
             return;
         }
-        if (now - m_releaseSinceMs < 60) return;
+        const uint32_t debounceMs = Board::profile().capacitiveTouch ? 10 : 60;
+        if (now - m_releaseSinceMs < debounceMs) return;
         m_releaseSinceMs = 0;
     } else if (down) {
         m_releaseSinceMs = 0;

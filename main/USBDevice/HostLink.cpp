@@ -872,15 +872,20 @@ void handleOtaEnd(const uint8_t* payload, uint16_t len) {
     }
     esp_err_t errEnd = esp_ota_end(s_ota);
     s_ota = 0;
-    OtaGuard::release();  // sessao fechada: libera o slot p/ web/hub
+    // Release SO depois de marcar a particao: entre o release e o
+    // set_boot_partition outro escritor podia abrir a mesma particao e
+    // apaga-la embaixo da imagem recem-verificada.
     if (errEnd != ESP_OK) {
+        OtaGuard::release();
         respondError(KL_OTA_END, esp_err_to_name(errEnd));
         return;
     }
     if (esp_ota_set_boot_partition(s_otaPart) != ESP_OK) {
+        OtaGuard::release();
         respondError(KL_OTA_END, "falha ao marcar boot partition");
         return;
     }
+    OtaGuard::release();  // sessao fechada: libera o slot p/ web/hub
     s_otaDone = true;
     s_otaDoneCrc = s_otaCrc;
     s_otaDoneSize = s_otaWritten;

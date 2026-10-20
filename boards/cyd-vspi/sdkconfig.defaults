@@ -50,6 +50,10 @@ CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY=y
 CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC is not set
 # CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set
+# AES por software (tf-psa-crypto aes.c segue no link mesmo com o AES de
+# hardware): so FT0/RT0 no flash, as outras 6 tabelas de 1 KB viram
+# rotacoes em tempo de execucao. Medido 2026-10-20: -5,8 KB no slot.
+CONFIG_MBEDTLS_AES_FEWER_TABLES=y
 # CONFIG_ESP_WIFI_IRAM_OPT is not set
 # CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
 

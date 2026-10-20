@@ -18,6 +18,23 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # main/idf_component.yml) + quirc vendado. Objeto Camera so para apps com
 # a permission "camera".
 CONFIG_CELEROS_JS_CAMERA=y
+# O modulo AI-Thinker so tem OV2640. Os outros 14 drivers do esp32-camera
+# (OV7670/7725/3660/3640/5640, GC*, BF*, SC030, HM*, NT99141) custam ~40 KB
+# de flash e nunca rodam aqui; desligados, o link deixa so o OV2640.
+# CONFIG_OV7670_SUPPORT is not set
+# CONFIG_OV7725_SUPPORT is not set
+# CONFIG_NT99141_SUPPORT is not set
+# CONFIG_OV3660_SUPPORT is not set
+# CONFIG_OV3640_SUPPORT is not set
+# CONFIG_OV5640_SUPPORT is not set
+# CONFIG_GC2145_SUPPORT is not set
+# CONFIG_GC032A_SUPPORT is not set
+# CONFIG_GC0308_SUPPORT is not set
+# CONFIG_BF3005_SUPPORT is not set
+# CONFIG_BF20A6_SUPPORT is not set
+# CONFIG_SC030IOT_SUPPORT is not set
+# CONFIG_HM1055_SUPPORT is not set
+# CONFIG_HM0360_SUPPORT is not set
 
 # Sem vidro, mas o logcat do celerctl segue completo (nao passa por ESP_LOG).
 CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y

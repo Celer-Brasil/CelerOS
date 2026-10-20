@@ -43,7 +43,9 @@ constexpr std::array<uint32_t, 256> makeCrcTable() {
     return t;
 }
 
-constexpr auto kCrcTable = makeCrcTable();
+// inline: uma copia so no binario (sem inline cada TU que inclui o header
+// ganhava a SUA tabela de 1 KB no flash — o CYD carregava duas)
+inline constexpr auto kCrcTable = makeCrcTable();
 
 }  // namespace detail
 

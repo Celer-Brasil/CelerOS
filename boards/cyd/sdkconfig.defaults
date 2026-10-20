@@ -69,6 +69,10 @@ CONFIG_MBEDTLS_IRAM_8BIT_MEM_ALLOC=y
 # >= 4KB — com CONFIG_MBEDTLS_DYNAMIC_BUFFER os buffers viravam pedacos
 # menores e caiam todos no heap 8-bit (handshake OOM medido).
 # CONFIG_MBEDTLS_DYNAMIC_BUFFER is not set
+# AES por software (tf-psa-crypto aes.c segue no link mesmo com o AES de
+# hardware): so FT0/RT0 no flash, as outras 6 tabelas de 1 KB viram
+# rotacoes em tempo de execucao. Medido 2026-10-20: -5,8 KB no slot.
+CONFIG_MBEDTLS_AES_FEWER_TABLES=y
 
 # IRAM livre = heap (unicore + IRAM acessivel a byte): codigo que so esta na
 # IRAM por desempenho vai para a flash. O WiFi perde throughput de pico (a

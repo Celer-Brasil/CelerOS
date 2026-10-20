@@ -77,6 +77,11 @@ private:
     Cd m_cd[kMaxEntries];
     int m_n = 0;
     int m_fd = -1;
+    // Reutilizados entre entradas (o Reader vive por uma instalacao): antes
+    // cada entrada deflate alocava/liberava ~47 KB (tinfl+dict+in) e cada
+    // stored 1 KB, fragmentando PSRAM/heap no caminho de instalacao.
+    mutable uint8_t m_buf[1024];
+    mutable void* m_scratch = nullptr;
 };
 
 /** Reader no alocador corrente: a classe carrega o central directory

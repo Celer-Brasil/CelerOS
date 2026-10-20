@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <mutex>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -123,12 +124,24 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
 #ifndef CELER_HOST_TEST
     setupDeviceAlloc();
 #endif
+    // Shell e svchost podem instalar ao mesmo tempo (NVS/servico): um staging
+    // compartilhado fazia um apagar o do outro. Serializa a instalacao.
+    static std::mutex s_installMux;
+    std::lock_guard<std::mutex> installLock(s_installMux);
     Result r;
     if (out) *out = r;
     if (zipPath == nullptr || destDir == nullptr) return false;
     const std::string dest(destDir);
-    const std::string newDir = dest + ".new";
-    const std::string oldDir = dest + ".old";
+    // Staging FORA de /apps: <dest>.new colidia com um app legitimo chamado
+    // "A.new"/"A.old" (nome com ponto e aceito) e o rmRf apagava o outro app.
+    // .install e oculto (o launcher ja pula entradas com '.').
+    const size_t slash = dest.find_last_of('/');
+    const std::string parent = slash == std::string::npos ? std::string(".") : dest.substr(0, slash);
+    const std::string base = slash == std::string::npos ? dest : dest.substr(slash + 1);
+    const std::string stage = parent + "/.install";
+    if (!mkdirP(stage)) return false;
+    const std::string newDir = stage + "/" + base + ".new";
+    const std::string oldDir = stage + "/" + base + ".old";
 
     // 1. Validacao INTEIRA antes de tocar o disco de destino. O Reader vai
     //    pro heap (~8,4 KB de central directory): na stack nao cabe nem na

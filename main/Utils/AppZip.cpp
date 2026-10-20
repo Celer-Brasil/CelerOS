@@ -23,6 +23,16 @@
 namespace celer::appzip {
 
 namespace {
+// Scratch do deflate por Reader (nao por entrada): reinit do tinfl a cada
+// arquivo, sem malloc/free de ~47 KB no meio de uma instalacao.
+struct DeflateScratch {
+    lgfx_tinfl_decompressor r;
+    uint8_t dict[TINFL_LZ_DICT_SIZE];
+    uint8_t in[4096];
+};
+}  // namespace
+
+namespace {
 
 // CRC32 do central directory (polinomio zlib; o mz_crc32 do proprio miniz
 // ja esta no binario — nenhuma copia nova).
@@ -129,6 +139,10 @@ void Reader::close() {
     if (m_fd >= 0) ::close(m_fd);
     m_fd = -1;
     m_n = 0;
+    if (m_scratch != nullptr) {
+        s_free(m_scratch);
+        m_scratch = nullptr;
+    }
 }
 
 bool Reader::preadExact(uint8_t* dst, uint32_t off, uint32_t len) const {
@@ -231,14 +245,18 @@ bool Reader::extractTo(int idx, const char* destPath) const {
     uint16_t lExtra = rd16(lh + 28);
     uint64_t dataOff = (uint64_t)c.localOff + kLocalLen + lName + lExtra;
     if (dataOff + c.compSize > 0xFFFFFFFFu) return false;
+    // Stored mentiroso (uncompSize pequeno, compSize gigante) era gravado
+    // inteiro em LittleFS antes da checagem no fim. Valida ANTES de criar o
+    // destino; o teto de tamanho por arquivo ja foi conferido no AppPackage.
+    if (c.method == 0 && c.compSize != c.uncompSize) return false;
 
     int out = ::open(destPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (out < 0) return false;
 
     uint32_t crc = 0;
     bool ok = false;
-    uint8_t* buf = (uint8_t*)s_alloc(1024);
-    if (buf != nullptr) {
+    uint8_t* buf = m_buf;  // 1 KB fixo do Reader (stored)
+    {
         if (c.method == 0) {
             ok = true;
             for (uint32_t left = c.compSize; ok && left > 0;) {
@@ -254,11 +272,24 @@ bool Reader::extractTo(int idx, const char* destPath) const {
             // dicionario LZ; quando enche, descarrega e recomeca (referencia
             // retroativa nunca passa de 32 KB). Entrada maior que a RAM
             // extrai sem nunca carregar o zip inteiro.
-            lgfx_tinfl_decompressor* r = (lgfx_tinfl_decompressor*)s_alloc(sizeof(lgfx_tinfl_decompressor));
-            uint8_t* dict = (uint8_t*)s_alloc(TINFL_LZ_DICT_SIZE);
-            uint8_t* in = (uint8_t*)s_alloc(4096);
-            ok = (r != nullptr && dict != nullptr && in != nullptr);
-            if (ok) {
+            // Scratch unico do Reader, reusado entre entradas; o tinfl e
+            // reinicializado por arquivo. Antes eram 3 malloc/free (~47 KB)
+            // por entrada deflate.
+            DeflateScratch* sc = (DeflateScratch*)m_scratch;
+            if (sc == nullptr) {
+                sc = (DeflateScratch*)s_alloc(sizeof(DeflateScratch));
+                if (sc == nullptr) {
+                    ::close(out);
+                    ::unlink(destPath);
+                    return false;
+                }
+                m_scratch = sc;
+            }
+            lgfx_tinfl_decompressor* r = &sc->r;
+            uint8_t* dict = sc->dict;
+            uint8_t* in = sc->in;
+            ok = true;
+            {
                 lgfx_tinfl_init(r);
                 uint32_t inPos = 0;    // offset no disco do proximo byte comprimido
                 uint32_t inHave = 0;   // pendencia no inicio de in[] (nao consumida)
@@ -318,11 +349,7 @@ bool Reader::extractTo(int idx, const char* destPath) const {
                 }
                 if (ok && done != c.uncompSize) ok = false;
             }
-            if (in) s_free(in);
-            if (dict) s_free(dict);
-            if (r) s_free(r);
         }
-        s_free(buf);
     }
     if (::close(out) != 0) ok = false;
     if (ok && crc != c.crc) ok = false;  // ultima validacao: conteudo integra

@@ -47,9 +47,8 @@ std::string shortDate() {
     static const char* const kDays[7] = {"dom", "seg", "ter", "qua", "qui", "sex", "sab"};
     static const char* const kMonths[12] = {"jan", "fev", "mar", "abr", "mai", "jun",
                                              "jul", "ago", "set", "out", "nov", "dez"};
-    time_t now = time(nullptr);
     struct tm t;
-    localtime_r(&now, &t);
+    TimeManager::copyLocal(t);
     if (t.tm_year + 1900 < 2020) return "";
     return kstr::fmt("%s, %d %s", kDays[t.tm_wday], t.tm_mday, kMonths[t.tm_mon]);
 }

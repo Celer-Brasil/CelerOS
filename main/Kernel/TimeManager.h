@@ -32,7 +32,10 @@ public:
     // false = desarmado; senao preenche hora/minuto/mensagem
     static bool getAlarm(int& hour, int& minute, std::string& msg);
 
-    // Getters
+    // Getters. O tm local do segundo corrente fica em cache (uma localtime_r
+    // por segundo, compartilhada): o present() e o redraw em faixas chamavam
+    // isso varias vezes por quadro.
+    static void copyLocal(struct tm& out);
     static std::string getFormattedTime();
     static std::string getFormattedDate();
     static int getYear();

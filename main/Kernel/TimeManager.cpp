@@ -11,6 +11,43 @@
 #include "esp_netif_sntp.h"
 #include "esp_log.h"
 #include <atomic>
+#include "freertos/FreeRTOS.h"
+#include "freertos/portmacro.h"
+
+namespace {
+
+// Uma localtime_r por segundo, compartilhada por UI, JS, alarmes e o
+// pedometro (cada um chamava time+localtime sozinho; o tick do relogio
+// fazia isso em todo present). O fuso/ajuste invalidam.
+portMUX_TYPE s_clkMux = portMUX_INITIALIZER_UNLOCKED;
+time_t s_clkSec = (time_t)-1;
+struct tm s_clkTm;
+
+void dropClockCache() {
+    portENTER_CRITICAL(&s_clkMux);
+    s_clkSec = (time_t)-1;
+    portEXIT_CRITICAL(&s_clkMux);
+}
+
+struct tm clockNow() {
+    time_t now;
+    time(&now);
+    portENTER_CRITICAL(&s_clkMux);
+    const bool hit = (now == s_clkSec);
+    struct tm out;
+    if (hit) out = s_clkTm;
+    portEXIT_CRITICAL(&s_clkMux);
+    if (hit) return out;
+    struct tm fresh;
+    localtime_r(&now, &fresh);
+    portENTER_CRITICAL(&s_clkMux);
+    s_clkTm = fresh;
+    s_clkSec = now;
+    portEXIT_CRITICAL(&s_clkMux);
+    return fresh;
+}
+
+}  // namespace
 
 std::string TimeManager::currentTimezone = "UTC0";
 bool TimeManager::use24hFormat = true;
@@ -151,6 +188,7 @@ void TimeManager::restoreEpoch() {
     if (e < 1577836800) return;
     struct timeval now = { .tv_sec = (time_t)e, .tv_usec = 0 };
     settimeofday(&now, NULL);
+    dropClockCache();
 }
 
 // ---- Alarme da API 12 (compat) -------------------------------------------
@@ -181,11 +219,21 @@ bool TimeManager::getAlarm(int& hour, int& minute, std::string& msg) {
 }
 
 void TimeManager::tick(bool networkUp) {
-    // Registro ALWAYS: roda nos DOIS pumps (celerLoop e present). No build
-    // padrao os pumps sao a mesma task, um atras do outro — sem corrida. Com
-    // CELEROS_APP_TASK o present() vem da task do app: os statics abaixo e o
-    // writeRtc unico do watch (I2C, nao reentrante) exigem UM corpo por vez.
-    // O giro simultaneo so e adiado; o proximo giro de qualquer pump segue.
+    // Registro ALWAYS: roda nos DOIS pumps (celerLoop e present). O corpo
+    // so decide coisas de 30 s / 10 min / gravacao unica do RTC — 1 Hz basta.
+    // Sem o portao, cada present() de um jogo pagava o giro inteiro.
+    static uint32_t s_gateMs = 0;
+    static bool s_gateOn = false;
+    const uint32_t gateNow = millis();
+    if (s_gateOn && gateNow - s_gateMs < 1000) return;
+    s_gateOn = true;
+    s_gateMs = gateNow;
+
+    // No build padrao os pumps sao a mesma task, um atras do outro — sem
+    // corrida. Com CELEROS_APP_TASK o present() vem da task do app: os
+    // statics abaixo e o writeRtc unico do watch (I2C, nao reentrante)
+    // exigem UM corpo por vez. O giro simultaneo so e adiado; o proximo
+    // giro de qualquer pump segue.
     static std::atomic_bool s_ticking{false};
     if (s_ticking.exchange(true)) return;
 
@@ -233,13 +281,8 @@ void TimeManager::tick(bool networkUp) {
         }
     }
 
-    // Alarmes/timer (Kernel/Alarms): o toque e da AlarmScreen (LauncherUI)
-    static uint32_t s_alarmAt = 0;
-    if (millis() - s_alarmAt >= 1000) {
-        s_alarmAt = millis();
-        Alarms::tick();
-    }
-
+    // Alarmes/timer ficam SO no servico "alarmscheck" (ALWAYS): aqui rodava
+    // uma segunda vez, 2x/s com app aberto (duas conversoes de calendario).
     s_ticking = false;
 }
 
@@ -261,6 +304,7 @@ bool TimeManager::setManualTime(int year, int month, int day, int hour, int minu
 
     struct timeval now = { .tv_sec = epoch, .tv_usec = 0 };
     settimeofday(&now, NULL);
+    dropClockCache();
     syncExternalRtc("ajuste manual");
     Alarms::clockChanged();  // "proxima hh:mm" relativa a hora nova
     return true;
@@ -270,6 +314,7 @@ bool TimeManager::setEpoch(time_t epoch) {
     if (epoch < 1577836800) return false;
     struct timeval now = { .tv_sec = epoch, .tv_usec = 0 };
     settimeofday(&now, NULL);
+    dropClockCache();
     syncExternalRtc("celular");
     Alarms::clockChanged();
     return true;
@@ -283,6 +328,7 @@ bool TimeManager::setTimezone(const std::string& tzOffset) {
     currentTimezone = tzOffset;
     setenv("TZ", currentTimezone.c_str(), 1);
     tzset();
+    dropClockCache();
     savePreferences();
     // A hora gravada no RTC e local: fuso novo = hora local nova.
     if (isTimeValid()) syncExternalRtc("fuso trocado");
@@ -304,12 +350,10 @@ void TimeManager::setNTPEnabled(bool enabled) {
         sntpStopIfRunning();
 }
 
+void TimeManager::copyLocal(struct tm& out) { out = clockNow(); }
+
 std::string TimeManager::getFormattedTime() {
-    time_t now;
-    time(&now);
-    struct tm timeinfo;
-    localtime_r(&now, &timeinfo);
-    
+    const struct tm timeinfo = clockNow();
     char buffer[16];
     if (use24hFormat) {
         snprintf(buffer, sizeof(buffer), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
@@ -323,43 +367,18 @@ std::string TimeManager::getFormattedTime() {
 }
 
 std::string TimeManager::getFormattedDate() {
-    time_t now;
-    time(&now);
-    struct tm timeinfo;
-    localtime_r(&now, &timeinfo);
-    
+    const struct tm timeinfo = clockNow();
     char buffer[32];
-    // DD/MM/YYYY format
     snprintf(buffer, sizeof(buffer), "%02d/%02d/%04d", timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
     return std::string(buffer);
 }
 
-int TimeManager::getYear() {
-    time_t now; time(&now);
-    struct tm timeinfo; localtime_r(&now, &timeinfo);
-    return timeinfo.tm_year + 1900;
-}
+int TimeManager::getYear() { return clockNow().tm_year + 1900; }
 
-int TimeManager::getMonth() {
-    time_t now; time(&now);
-    struct tm timeinfo; localtime_r(&now, &timeinfo);
-    return timeinfo.tm_mon + 1;
-}
+int TimeManager::getMonth() { return clockNow().tm_mon + 1; }
 
-int TimeManager::getDay() {
-    time_t now; time(&now);
-    struct tm timeinfo; localtime_r(&now, &timeinfo);
-    return timeinfo.tm_mday;
-}
+int TimeManager::getDay() { return clockNow().tm_mday; }
 
-int TimeManager::getSeconds() {
-    time_t now; time(&now);
-    struct tm timeinfo; localtime_r(&now, &timeinfo);
-    return timeinfo.tm_sec;
-}
+int TimeManager::getSeconds() { return clockNow().tm_sec; }
 
-int TimeManager::getWeekday() {
-    time_t now; time(&now);
-    struct tm timeinfo; localtime_r(&now, &timeinfo);
-    return timeinfo.tm_wday;   // 0=domingo (mesma convencao do RTC/watchface)
-}
+int TimeManager::getWeekday() { return clockNow().tm_wday; }  // 0=domingo

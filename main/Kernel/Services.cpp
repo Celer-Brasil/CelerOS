@@ -174,8 +174,9 @@ const CelerServices::Service kServices[] = {
     {"logpersist", svcLogPersist, CelerServices::ALWAYS},
     {"notifications", svcNotifications, CelerServices::ALWAYS},
     {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},
-    // fim da fila no present(): erro no callback de alarme nao pula o resto
-    {"alarmscheck", svcAlarmsCheck, CelerServices::PRESENT},
+    // ALWAYS: o TimeManager nao chama mais Alarms::tick; este e o unico
+    // caminho, 1x/s (o gate interno), com app aberto ou nao.
+    {"alarmscheck", svcAlarmsCheck, CelerServices::ALWAYS},
 };
 constexpr int kServiceCount = (int)(sizeof(kServices) / sizeof(kServices[0]));
 

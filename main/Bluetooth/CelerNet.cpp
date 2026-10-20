@@ -293,6 +293,9 @@ struct Meta {
 bool pendingPush(const uint8_t* frame, uint8_t len, bool ours, uint32_t dueMs, const Meta& m,
                  uint8_t prio = 0) {
     if (s_heap == nullptr) return false;
+    // Fila cheia: nao varre os 96 slots a toa em cada quadro (o pior caso
+    // do fluxo e uma rajada densa, justamente quando o radio esta ocupado).
+    if (s_pendingUsed >= PENDING_DEPTH) return false;
     for (int i = 0; i < PENDING_DEPTH; i++) {
         if (!s_heap->pending[i].used) {
             Pending* p = &s_heap->pending[i];

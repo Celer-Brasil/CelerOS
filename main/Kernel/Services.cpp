@@ -9,6 +9,7 @@
 #include "../../Kernel/TimeManager.h"
 #include "../../Kernel/Alarms.h"
 #include "../../Kernel/AppServices.h"
+#include "../../Kernel/Notifications.h"
 #include "../../Display/Backlight.h"
 #if CONFIG_CELEROS_UI
 #include "../../Display/ScreenCapture.h"
@@ -112,6 +113,9 @@ void svcAlarmsCheck(bool) {
     }
 }
 
+// Gravacao adiada do historico de notificacoes (push vem da task do BLE).
+void svcNotifications(bool) { Notifications::tick(); }
+
 // A lista e a arquitetura: UM lugar, OS DOIS pumps (celerLoop e present()).
 // A ordem preserva a relativa de cada contexto. Diferenca consciente vs o
 // celerLoop antigo: NotificationAlert roda DEPOIS de PowerPolicy/PhoneLink
@@ -168,6 +172,7 @@ const CelerServices::Service kServices[] = {
     // "updcheck" saiu: a politica do check automatico e o servico JS do app
     // Nucleo (data/apps/Nucleo/service.js, API 42) sobre System.otaCheck.
     {"logpersist", svcLogPersist, CelerServices::ALWAYS},
+    {"notifications", svcNotifications, CelerServices::ALWAYS},
     {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},
     // fim da fila no present(): erro no callback de alarme nao pula o resto
     {"alarmscheck", svcAlarmsCheck, CelerServices::PRESENT},

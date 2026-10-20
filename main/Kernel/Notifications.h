@@ -34,6 +34,11 @@ struct Note {
 void push(const std::string& title, const std::string& msg, const std::string& src = "",
           uint32_t extId = 0);
 
+// Consolida a gravacao adiada (service ALWAYS). push/remove so marcam dirty:
+// rajadas do celular nao regravam o arquivo inteiro por mensagem na task do
+// BLE (ate 1 escrita/s).
+void tick();
+
 std::vector<Note> list();       // mais recente primeiro
 bool removeAt(int index);       // indice de list()
 bool removeById(uint32_t extId);

@@ -7,6 +7,7 @@
 #include "../Display/Theme.h"
 #include "../UI/Kui.h"
 #include "../Utils/GbProto.h"
+#include "esp_timer.h"
 #include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,14 @@ bool s_loaded = false;
 std::vector<Notifications::Note> s_notes;  // mais antiga primeiro (ordem do arquivo)
 int s_dnd = -1;                            // -1 = ler do NVS
 void (*s_onDismiss)(uint32_t, bool) = nullptr;
+// Gravacao adiada: push/remove vem da task do BLE e cada um regravava o
+// arquivo inteiro (ate ~6 KB) no LittleFS, bloqueando o host NimBLE. O tick
+// (service ALWAYS) consolida rajadas em no maximo 1 escrita/s.
+bool s_dirty = false;
+uint32_t s_dirtyAtMs = 0;
+constexpr uint32_t kFlushMs = 1000;
+
+uint32_t nowMs() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 // So o que a fonte desenha (Latin-1), sem cortar UTF-8 ao meio; '|' e o
 // separador do arquivo
@@ -78,7 +87,7 @@ void loadLocked() {
     while ((int)s_notes.size() > Notifications::MAX) s_notes.erase(s_notes.begin());
 }
 
-void saveLocked() {
+void writeLocked() {
     std::string out;
     for (const auto& n : s_notes) {
         char head[48];
@@ -96,6 +105,14 @@ void saveLocked() {
     }
     if (!ok)
         ESP_LOGW("celer.notif", "historico nao gravou em %s (LittleFS cheio?)", NF);
+}
+
+// Marca o arquivo como sujo; o tick grava (coalesce rajadas do celular).
+void saveLocked() {
+    if (!s_dirty) {
+        s_dirty = true;
+        s_dirtyAtMs = nowMs();
+    }
 }
 
 }  // namespace
@@ -151,6 +168,16 @@ void push(const std::string& title, const std::string& msg, const std::string& s
 #endif
 }
 
+// Service ALWAYS: consolida as gravacoes adiadas. Roda nos dois pumps
+// (celerLoop e present), entao tambem descarrega com app aberto.
+void tick() {
+    std::lock_guard<std::recursive_mutex> lock(s_mux);
+    if (!s_dirty) return;
+    if ((uint32_t)(nowMs() - s_dirtyAtMs) < kFlushMs) return;
+    s_dirty = false;
+    writeLocked();
+}
+
 std::vector<Note> list() {
     std::lock_guard<std::recursive_mutex> lock(s_mux);
     loadLocked();
@@ -194,6 +221,8 @@ void clear() {
         for (const auto& n : s_notes) hadPhone = hadPhone || (n.id != 0 && n.src.rfind("phone:", 0) == 0);
         s_notes.clear();
         FileSystem::deleteFile(NF);
+        s_dirty = false;  // o arquivo ja sumiu; nada pendente
+        s_dirtyAtMs = 0;
     }
     if (hadPhone && s_onDismiss) s_onDismiss(0, true);
 }

@@ -1,4 +1,5 @@
 #include "JSBindings.h"
+#include <string.h>
 #include "../USBDevice/LogSink.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Display/Layout.h"
@@ -73,13 +74,20 @@ duk_ret_t JSBindings::js_prompt(duk_context *ctx) {
     }
 
     present();
+    // Caps ANTES de construir a std::string: o prompt nao tinha teto e um
+    // app hostil (texto de dezenas de KB) pagava a copia e o render O(n^2)
+    // do teclado na main task. initial ja era cortado no keypadOpen; aqui
+    // vale o mesmo teto do campo.
+    std::string prompt;
+    prompt.assign(promptMsg, strnlen(promptMsg, 64));
+    std::string initial(initialText, strnlen(initialText, 256));
     // O loop modal e do kui: sem este tick, enquanto o teclado estava aberto
     // o "exit" remoto era ignorado e os botoes/estados de tela do watch e a
     // captura de tela paravam. Timers JS NAO rodam aqui (um erro de callback
     // atravessaria o loop C++ do teclado) — retomam no proximo present.
     bool exitReq = false;
     bool cancelled = false;
-    std::string result = kui::getString(initialText, promptMsg, 64, mask, hint, [&exitReq]() {
+    std::string result = kui::getString(initial, prompt, 64, mask, hint, [&exitReq]() {
         Buttons::tick(true);
         ScreenPower::tick(true);
         ScreenCapture::service();
@@ -130,6 +138,7 @@ void keypadCloseSession() {
     }
     s_kbEvent = KB_EV_NONE;
     s_kbEnterText.clear();
+    s_kbPump.reset();  // dedo preso na sessao encerrada nao vira Release fantasma
     s_frameDirty = true;  // proximo present restaura o frame do app
 }
 
@@ -207,6 +216,13 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
         return 1;
     }
     present();
+    // present() roda os timers do app: um timer pode chamar
+    // System.keypadClose() e deletar s_kb. A checagem acima e anterior ao
+    // present; sem re-checar, o poll seguinte desreferenciava ponteiro nulo.
+    if (!s_kb) {
+        duk_push_null(ctx);
+        return 1;
+    }
 
     uint16_t tx = 0, ty = 0;
     // pollAppChrome SEMPRE roda: o disparo da saida e no release (readTouch

@@ -34,15 +34,19 @@ static bool validPin(const char* pin) {
     return true;
 }
 
-static void computeHash(const uint8_t salt[16], const char* pin, uint8_t out[32]) {
+static bool computeHash(const uint8_t salt[16], const char* pin, uint8_t out[32]) {
     uint8_t buf[16 + 6];
     memcpy(buf, salt, 16);
     size_t n = strlen(pin);
     if (n > 6) n = 6;
     memcpy(buf + 16, pin, n);
     size_t olen = 0;
-    psa_crypto_init();
-    psa_hash_compute(PSA_ALG_SHA_256, buf, 16 + n, out, 32, &olen);
+    // Falha do PSA (OOM no primeiro uso) deixava out[32] sem escrita e o
+    // PIN correto nunca mais autenticava (hash de lixo persistido). Sem
+    // sucesso e 32 bytes, nao ha hash valido.
+    if (psa_crypto_init() != PSA_SUCCESS) return false;
+    if (psa_hash_compute(PSA_ALG_SHA_256, buf, 16 + n, out, 32, &olen) != PSA_SUCCESS) return false;
+    return olen == 32;
 }
 
 static bool writeRecord(const PinRecord& rec) {
@@ -87,7 +91,10 @@ bool PinStore::set(const char* pin) {
     PinRecord rec;
     memcpy(rec.magic, "CP2", 3);
     for (int i = 0; i < 16; i++) rec.salt[i] = (uint8_t)(esp_random() & 0xFF);
-    computeHash(rec.salt, pin, rec.hash);
+    if (!computeHash(rec.salt, pin, rec.hash)) {
+        ESP_LOGE(PS_TAG, "falha ao calcular o hash do PIN (PSA)");
+        return false;
+    }
 
     if (!writeRecord(rec)) {
         ESP_LOGE(PS_TAG, "falha ao gravar %s", PIN_FILE);
@@ -109,7 +116,7 @@ bool PinStore::verify(const char* pin) {
         fclose(f);
         if (!ok) return false;
         uint8_t h[32];
-        computeHash(rec.salt, pin, h);
+        if (!computeHash(rec.salt, pin, h)) return false;
         return memcmp(h, rec.hash, 32) == 0;
     }
 

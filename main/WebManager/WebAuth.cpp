@@ -137,7 +137,15 @@ bool WebAuth::check(httpd_req_t* req) {
     bool empty = s_pass.empty();
     bool lockedOut = esp_timer_get_time() < s_lockUntilUs;
     unlock();
-    if (empty) return true;  // NVS falhou no boot: nao tranca o dono fora
+    if (empty) {
+        // Janela do init (s_pass ainda vazio) ou NVS sem senha: NEGAR em vez
+        // de fail-open. Antes, uma requisicao nessa janela passava sem auth;
+        // o dono recebe 503 e tenta de novo em instantes (init gera a senha).
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
+        httpd_resp_sendstr(req, "Auth not ready");
+        return false;
+    }
     if (lockedOut) {
         sendDenied(req, true);
         return false;

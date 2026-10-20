@@ -161,7 +161,9 @@ void pushHistory(int32_t day, int32_t n) {
         }
         p = c + 1;
     }
-    CelerSettings::set("steps_hist", out.c_str());  // 7 x ~15 = cabe nos 63
+    // 7 x ~15 = ~105 B: exige o teto de 160 B do CelerSettings (o antigo,
+    // 63 B, recusava a gravacao a partir do 4o dia sem avisar).
+    CelerSettings::set("steps_hist", out.c_str());
 }
 
 // Virada do dia: fecha o acumulado no historico e zera a contagem.

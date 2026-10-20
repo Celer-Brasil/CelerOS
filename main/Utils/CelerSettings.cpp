@@ -10,7 +10,10 @@ static const char* NVS_NS = "settings";
 std::string CelerSettings::get(const char* key, const char* def) {
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return def ? def : "";
-    char buf[64];
+    // 160 B: comporta valores compostos como steps_hist (7 dias x ~15 B).
+    // O teto antigo de 63 B fazia o historico parar de gravar no 4o dia
+    // (o set devolvia false e o chamador ignorava).
+    char buf[160];
     size_t len = sizeof(buf);
     std::string out = (def != nullptr) ? def : "";
     if (nvs_get_str(h, key, buf, &len) == ESP_OK && len > 1) {
@@ -21,11 +24,11 @@ std::string CelerSettings::get(const char* key, const char* def) {
 }
 
 bool CelerSettings::set(const char* key, const char* value) {
-    // Teto simetrico ao get (buf[64]): sem isto o nvs_set_str aceitava valor
+    // Teto simetrico ao get (buf[160]): sem isto o nvs_set_str aceitava valor
     // maior e a leitura seguinte devolvia o default — o chamador achava que
-    // estava gravado. (O binding JS ja corta em 63; aqui fecha para todo
-    // caller C++ futuro.)
-    if (value != nullptr && strlen(value) > 63) return false;
+    // estava gravado. (O binding JS System.setting segue em 63; aqui fecha
+    // para todo caller C++.)
+    if (value != nullptr && strlen(value) > 159) return false;
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return false;
     bool ok;

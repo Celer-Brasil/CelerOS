@@ -73,7 +73,11 @@ int readRows(uint16_t y, uint16_t n, uint16_t* dst, uint32_t timeoutMs) {
             claimed = true;
         }
         portEXIT_CRITICAL(&s_reqMux);
-        if (claimed) xSemaphoreTake(s_done, pdMS_TO_TICKS(2000));
+        // kClaimed: a UI esta escrevendo no NOSSO buffer. Esperar sem teto e
+        // obrigatorio — o timeout de 2 s devolvia o controle ao chamador,
+        // que podia liberar dst enquanto a UI ainda escrevia (write-after-free).
+        // Se a UI travar de vez, o chamador fica preso (melhor que corromper).
+        if (claimed) xSemaphoreTake(s_done, portMAX_DELAY);
     }
     xSemaphoreGive(s_reqLock);
     return got;

@@ -454,11 +454,14 @@ duk_ret_t JSBindings::js_setting(duk_context *ctx) {
     if (strlen(key) == 0 || strlen(key) > 15) {
         duk_error(ctx, DUK_ERR_RANGE_ERROR, "System.setting: chave deve ter 1 a 15 caracteres");
     }
-    if (duk_is_string(ctx, 1)) {
+    // Segundo argumento DEFINIDO = escrita; qualquer tipo vira string (o
+    // d.ts anuncia number e System.setting("x", 5) lia em silencio em vez de
+    // gravar). null/undefined continuam leitura.
+    if (!duk_is_null_or_undefined(ctx, 1)) {
         if (!perm(celer::PERM_SYSTEM)) {
             duk_error(ctx, DUK_ERR_ERROR, "System.setting(k, v) requer permissao \"system\" (use Storage)");
         }
-        const char* val = duk_get_string(ctx, 1);
+        const char* val = duk_to_string(ctx, 1);
         if (strlen(val) > 63) {  // CelerSettings::get le ate 63: maior virava "ausente"
             duk_error(ctx, DUK_ERR_RANGE_ERROR, "System.setting: valor acima de 63 caracteres");
         }

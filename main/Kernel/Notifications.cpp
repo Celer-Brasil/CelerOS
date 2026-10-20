@@ -8,6 +8,7 @@
 #include "../UI/Kui.h"
 #include "../Utils/GbProto.h"
 #include "esp_timer.h"
+#include <atomic>
 #include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,8 @@ namespace {
 
 const char* NF = "/local/notifications.txt";
 std::recursive_mutex s_mux;
+// Ordena as escritas do arquivo (tick x clear): sempre tomado ANTES do s_mux
+std::mutex s_writeMux;
 bool s_loaded = false;
 std::vector<Notifications::Note> s_notes;  // mais antiga primeiro (ordem do arquivo)
 int s_dnd = -1;                            // -1 = ler do NVS
@@ -24,8 +27,10 @@ void (*s_onDismiss)(uint32_t, bool) = nullptr;
 // Gravacao adiada: push/remove vem da task do BLE e cada um regravava o
 // arquivo inteiro (ate ~6 KB) no LittleFS, bloqueando o host NimBLE. O tick
 // (service ALWAYS) consolida rajadas em no maximo 1 escrita/s.
-bool s_dirty = false;
-uint32_t s_dirtyAtMs = 0;
+// Atomico: o tick roda em todo present(). Sem a flag, cada quadro de jogo
+// pegava os dois mutex so para descobrir que nao havia nada para gravar.
+std::atomic<bool> s_dirty{false};
+std::atomic<uint32_t> s_dirtyAtMs{0};
 constexpr uint32_t kFlushMs = 1000;
 
 uint32_t nowMs() { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -87,16 +92,32 @@ void loadLocked() {
     while ((int)s_notes.size() > Notifications::MAX) s_notes.erase(s_notes.begin());
 }
 
-void writeLocked() {
+// Serializa o historico (sob s_mux). Sem temporarios: o title + "|" + ...
+// de antes alocava 3 strings intermediarias por nota.
+std::string serializeLocked() {
     std::string out;
+    size_t need = 0;
+    for (const auto& n : s_notes) need += n.title.size() + n.msg.size() + n.src.size() + 40;
+    out.reserve(need);
     for (const auto& n : s_notes) {
         char head[48];
         snprintf(head, sizeof(head), "%lld|", (long long)n.epoch);
         out += head;
-        out += n.title + "|" + n.msg + "|" + n.src + "|";
+        out += n.title;
+        out += '|';
+        out += n.msg;
+        out += '|';
+        out += n.src;
+        out += '|';
         snprintf(head, sizeof(head), "%lu|%d\n", (unsigned long)n.id, n.read ? 1 : 0);
         out += head;
     }
+    return out;
+}
+
+// Grava FORA do s_mux (so sob s_writeMux): o push da task do BLE nao espera
+// a escrita no LittleFS (ms) para enfileirar a proxima notificacao.
+void writeOut(const std::string& out) {
     bool ok;
     if (out.empty()) {
         ok = FileSystem::deleteFile(NF);
@@ -109,9 +130,9 @@ void writeLocked() {
 
 // Marca o arquivo como sujo; o tick grava (coalesce rajadas do celular).
 void saveLocked() {
-    if (!s_dirty) {
-        s_dirty = true;
-        s_dirtyAtMs = nowMs();
+    if (!s_dirty.load(std::memory_order_relaxed)) {
+        s_dirtyAtMs.store(nowMs(), std::memory_order_relaxed);
+        s_dirty.store(true, std::memory_order_release);
     }
 }
 
@@ -171,11 +192,19 @@ void push(const std::string& title, const std::string& msg, const std::string& s
 // Service ALWAYS: consolida as gravacoes adiadas. Roda nos dois pumps
 // (celerLoop e present), entao tambem descarrega com app aberto.
 void tick() {
-    std::lock_guard<std::recursive_mutex> lock(s_mux);
-    if (!s_dirty) return;
-    if ((uint32_t)(nowMs() - s_dirtyAtMs) < kFlushMs) return;
-    s_dirty = false;
-    writeLocked();
+    if (!s_dirty.load(std::memory_order_acquire)) return;
+    const uint32_t at = s_dirtyAtMs.load(std::memory_order_relaxed);
+    if ((uint32_t)(nowMs() - at) < kFlushMs) return;
+    std::lock_guard<std::mutex> wlock(s_writeMux);
+    std::string out;
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_mux);
+        if (!s_dirty.load(std::memory_order_relaxed)) return;
+        if ((uint32_t)(nowMs() - s_dirtyAtMs.load(std::memory_order_relaxed)) < kFlushMs) return;
+        s_dirty.store(false, std::memory_order_relaxed);
+        out = serializeLocked();
+    }
+    writeOut(out);
 }
 
 std::vector<Note> list() {
@@ -216,13 +245,14 @@ bool removeById(uint32_t extId) {
 void clear() {
     bool hadPhone = false;
     {
+        std::lock_guard<std::mutex> wlock(s_writeMux);
         std::lock_guard<std::recursive_mutex> lock(s_mux);
         loadLocked();
         for (const auto& n : s_notes) hadPhone = hadPhone || (n.id != 0 && n.src.rfind("phone:", 0) == 0);
         s_notes.clear();
         FileSystem::deleteFile(NF);
-        s_dirty = false;  // o arquivo ja sumiu; nada pendente
-        s_dirtyAtMs = 0;
+        s_dirty.store(false, std::memory_order_relaxed);  // o arquivo ja sumiu; nada pendente
+        s_dirtyAtMs.store(0, std::memory_order_relaxed);
     }
     if (hadPhone && s_onDismiss) s_onDismiss(0, true);
 }

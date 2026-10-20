@@ -65,6 +65,13 @@ static std::atomic_bool s_serverStartPending{false};
 // Porta 80 de outro dono (captive portal de configuracao): bloqueia o start
 // automatico enquanto o portal vive.
 static std::atomic_bool s_serverSuppressed{false};
+// Requisicoes em voo (routeGuard). httpd_stop ESPERA o handler corrente
+// terminar: chamado da main task durante um /update de minutos, estourava o
+// TWDT de 15 s (PANIC) e reiniciava o aparelho. Com o contador, o stop e o
+// disable do WiFi sao adiados para o tick quando o httpd esta ocioso.
+static std::atomic<int> s_activeReqs{0};
+static std::atomic_bool s_stopPending{false};
+static std::atomic_bool s_disablePending{false};
 
 // ---------------------------------------------------------------------------
 // NetworkManager (componente Connection) glue
@@ -223,6 +230,14 @@ void WebManager::disablePersist() {
 bool WebManager::wifiEnabled() { return !cfgFlag("nowifi"); }
 
 void WebManager::disable() {
+    // Desconectar o radio no meio de um upload tambem quebra o handler; o
+    // adiamento e o mesmo do stop (o tick retoma quando o httpd esvaziar).
+    if (s_activeReqs.load(std::memory_order_relaxed) > 0) {
+        s_disablePending = true;
+        celer_log_println("WiFi disable adiado (requisicao web em curso)");
+        return;
+    }
+    s_disablePending = false;
     nm().setAutoReconnect(false);  // silencia a background task
     stopWebServer();
     nm().disconnect();
@@ -230,11 +245,18 @@ void WebManager::disable() {
 }
 
 void WebManager::stopWebServer() {
-    if (s_server != nullptr) {
-        httpd_stop(s_server);
-        s_server = nullptr;
-        celer_log_println("Web Server stopped");
+    if (s_server == nullptr) return;
+    // Fecha a porta para requisicoes NOVAS antes de olhar o contador: sem
+    // isso uma requisicao longa podia comecar entre o check e o httpd_stop.
+    s_stopPending = true;
+    if (s_activeReqs.load(std::memory_order_relaxed) > 0) {
+        celer_log_println("Web Server: parada adiada (requisicao em curso)");
+        return;
     }
+    httpd_stop(s_server);
+    s_server = nullptr;
+    s_stopPending = false;
+    celer_log_println("Web Server stopped");
 }
 
 void WebManager::suppressServerStart(bool on) {
@@ -263,10 +285,23 @@ void WebManager::tick() {
     // exchange garante que so um contexto reinicia (com CELEROS_APP_TASK os
     // pumps sao tasks distintas).
 
+    // Stop/disable adiados por requisicao em curso: so age com o httpd
+    // ocioso, senao o httpd_stop (e o disconnect) esperam o handler e a
+    // main task morre no TWDT.
+    if (s_disablePending.load(std::memory_order_relaxed) &&
+        s_activeReqs.load(std::memory_order_relaxed) == 0) {
+        disable();
+    }
+    if (s_stopPending.load(std::memory_order_relaxed) &&
+        s_activeReqs.load(std::memory_order_relaxed) == 0) {
+        stopWebServer();
+    }
+
     // Conectou (flag do handler do evento): sobe o servidor se habilitado e
     // a porta 80 nao for de outro dono (captive portal).
     if (s_serverStartPending.exchange(false)) {
-        if (!s_serverSuppressed && cfgFlag("web_on")) {
+        if (!s_serverSuppressed && !s_stopPending.load(std::memory_order_relaxed) &&
+            !s_disablePending.load(std::memory_order_relaxed) && cfgFlag("web_on")) {
             startWebServerIfNeeded();
         }
     }
@@ -418,7 +453,22 @@ struct RouteCtx {
     bool csrf;
 };
 
+// Conta a requisicao durante toda a vida do handler (inclusive auth/CSRF).
+struct ActiveReq {
+    ActiveReq() { s_activeReqs.fetch_add(1, std::memory_order_relaxed); }
+    ~ActiveReq() { s_activeReqs.fetch_sub(1, std::memory_order_relaxed); }
+};
+
 static esp_err_t routeGuard(httpd_req_t* req) {
+    // Servidor em parada: nao deixa um upload NOVO entrar e prolongar o
+    // httpd_stop que a main task esta esperando.
+    if (s_stopPending.load(std::memory_order_relaxed)) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, HTTPD_TYPE_TEXT);
+        httpd_resp_sendstr(req, "Server stopping");
+        return ESP_OK;
+    }
+    ActiveReq active;
     if (!WebAuth::check(req)) return ESP_OK;  // 401/429 ja enviados
 
     RouteCtx* c = (RouteCtx*)req->user_ctx;

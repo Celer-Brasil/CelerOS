@@ -174,13 +174,10 @@ static void celerSetup() {
     Alarms::init();  // alarmes/timer/soneca do NVS (API 15)
     
     ramStage("hw+tempo");
-    celer_log_printf("DEBUG: Free heap before Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     // Initialize JS Runtime
-    celer_log_println("DEBUG: Starting CelerKernel...");
     CelerKernel::init(&tft);
     celer_log_println("CelerKernel initialized successfully.");
-    celer_log_printf("DEBUG: Free heap after Kernel: %u\n", (unsigned)ESP.getFreeHeap());
 
     ramStage("kernel");
     // Init UI Components
@@ -190,13 +187,11 @@ static void celerSetup() {
 #endif
 
     // Initial App Scan (barra da splash: LauncherUI::scanLocalApps preenche)
-    celer_log_println("DEBUG: Scanning Local Apps...");
     bootSplash(i18n::TR("Carregando apps...", "Loading apps..."));
     LauncherUI::scanLocalApps();
     LauncherUI::applyAutostart();  // /local/autostart.txt (ex.: cara do cao)
     LauncherUI::needsRescan = false;
     AppServices::init();  // svchost (API 42): quem declara "service"; heap lazy
-    celer_log_println("DEBUG: Local Apps Scanned.");
 
     // WiFi 100% assincrono: prepara credenciais/eventos e a task de
     // reconexao do NetworkManager conecta sozinha (sem race de scan —
@@ -294,7 +289,6 @@ static void celerSetup() {
     // do LovyanGFX espera o usuario sem timeout e e imexivel — submodule).
     // Durante todo o boot os idle tasks ja sao vigiados (PANIC=y).
     esp_task_wdt_add(nullptr);
-    celer_log_println("DEBUG: Setup complete, entering loop!");
 }
 
 // OTA com rollback: o slot novo boota como PENDING_VERIFY; 30s de uptime sao

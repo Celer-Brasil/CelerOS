@@ -266,7 +266,16 @@ QuickSettingsScreen s_quick;
 class NotificationCenterScreen : public kui::Screen {
 public:
     void onEnter() override {
-        m_notes = Notifications::list();
+        m_rows.clear();
+        m_rows.reserve(20);
+        for (const Notifications::Note& n : Notifications::list()) {
+            Row r;
+            r.n = n;
+            formatWhen(n.epoch, r.whenBuf, sizeof(r.whenBuf));
+            if (n.src.rfind("phone:", 0) == 0) r.line = n.src.substr(6) + ": " + n.msg;
+            else r.line = n.msg;
+            m_rows.push_back(std::move(r));
+        }
         Notifications::markAllRead();
         m_scroll = 0;
         m_expanded = -1;
@@ -279,14 +288,14 @@ public:
         // cabecalho: titulo a esquerda + X de fechar a direita (arrastar para
         // baixo a partir do topo continua fechando)
         char hdr[32];
-        snprintf(hdr, sizeof(hdr), "Notificações (%d)", (int)m_notes.size());
+        snprintf(hdr, sizeof(hdr), "Notificações (%d)", (int)m_rows.size());
         c.text(c.ellipsize(hdr, kui::type::title(), UI::W - 2 * m - closeRect().w - UI::sx(8)), m,
                top / 2 + UI::inset / 4, kui::type::title(), THEME_TEXT, ML_DATUM);
         const kui::Rect xr = closeRect();
         c.fillRoundRect(xr, xr.h / 3, kui::isPressed(xr) ? THEME_RAISED : THEME_CARD);
         c.text("X", xr.x + xr.w / 2, xr.y + xr.h / 2, kui::type::body(), THEME_TEXT, MC_DATUM);
 
-        if (m_notes.empty()) {
+        if (m_rows.empty()) {
             c.text("Nada por aqui", UI::cx(), UI::cy(), kui::type::body(), THEME_TEXT_DIM, MC_DATUM);
             c.text("toque no X ou arraste para baixo", UI::cx(), UI::H - UI::sy(14) - UI::inset / 3,
                    kui::type::caption(), THEME_STROKE, MC_DATUM);
@@ -294,7 +303,7 @@ public:
         }
         c.setClip({0, top, UI::W, listBottom() - top});
         int y = top - m_scroll;
-        for (int i = 0; i < (int)m_notes.size(); i++) {
+        for (int i = 0; i < (int)m_rows.size(); i++) {
             const int h = rowH(i);
             if (y + h > top && y < listBottom()) drawRow(c, i, {m, y, UI::W - 2 * m, h - UI::sy(6)});
             y += h;
@@ -329,17 +338,17 @@ public:
             closePanel();
             return true;
         }
-        if (!m_notes.empty() && ev.isTap() && clearRect().contains(ev.x, ev.y)) {
+        if (!m_rows.empty() && ev.isTap() && clearRect().contains(ev.x, ev.y)) {
             Notifications::clear();
-            m_notes.clear();
+            m_rows.clear();
             closePanel();
             return true;
         }
         int idx = rowAt(ev.startY);
         if (idx < 0) return true;
         if (sw == kui::TouchEvent::SwipeLeft || sw == kui::TouchEvent::SwipeRight) {
-            Notifications::removeAt(idx);  // indice de list() == m_notes
-            m_notes.erase(m_notes.begin() + idx);
+            Notifications::removeAt(idx);  // indice de list() == m_rows
+            m_rows.erase(m_rows.begin() + idx);
             m_expanded = -1;
             clampScroll();
         } else if (ev.isTap()) {
@@ -352,7 +361,18 @@ public:
     bool allowsBackGesture() const override { return false; }  // fechar e do onTouch
 
 private:
-    std::vector<Notifications::Note> m_notes;
+    // Linha pronta na entrada: o redraw em faixas (CYD, ~dezena de passadas
+    // por quadro) nao remonta "origem: msg" nem reformata a hora a cada faixa.
+    struct Row {
+        Notifications::Note n;
+        char whenBuf[8];
+        std::string line;
+        std::string titleShown;
+        std::string lineShown;
+        bool titleReady = false;
+        bool lineReady = false;
+    };
+    std::vector<Row> m_rows;
     int m_scroll = 0;
     int m_expanded = -1;
 
@@ -370,7 +390,7 @@ private:
 
     int totalH() const {
         int total = 0;
-        for (int i = 0; i < (int)m_notes.size(); i++) total += rowH(i);
+        for (int i = 0; i < (int)m_rows.size(); i++) total += rowH(i);
         return total;
     }
 
@@ -387,7 +407,7 @@ private:
     int rowAt(int py) const {
         int y = headerH() - m_scroll;
         if (py < headerH() || py >= listBottom()) return -1;
-        for (int i = 0; i < (int)m_notes.size(); i++) {
+        for (int i = 0; i < (int)m_rows.size(); i++) {
             if (py >= y && py < y + rowH(i)) return i;
             y += rowH(i);
         }
@@ -401,44 +421,53 @@ private:
         if (m_scroll < 0) m_scroll = 0;
     }
 
-    static std::string when(int64_t epoch) {
-        time_t now;
-        time(&now);
-        time_t e = (time_t)epoch;
-        struct tm t, n;
-        localtime_r(&e, &t);
-        localtime_r(&now, &n);
-        char b[16];
-        if (t.tm_yday == n.tm_yday && t.tm_year == n.tm_year) {
-            snprintf(b, sizeof(b), "%02d:%02d", t.tm_hour, t.tm_min);
-        } else {
-            snprintf(b, sizeof(b), "%02d/%02d", t.tm_mday, t.tm_mon + 1);
+    static void formatWhen(int64_t epoch, char* b, size_t n) {
+        if (b == nullptr || n < 6) {  // "HH:MM"/"MM/DD" + NUL
+            if (b != nullptr && n > 0) b[0] = '\0';
+            return;
         }
-        return b;
+        time_t e = (time_t)epoch;
+        struct tm t;
+        struct tm nowTm;
+        localtime_r(&e, &t);
+        TimeManager::copyLocal(nowTm);
+        if (t.tm_yday == nowTm.tm_yday && t.tm_year == nowTm.tm_year) {
+            // tm vem do newlib: os limites abaixo deixam o compilador provar
+            // que %02d nao estoura o buffer de 8 da Row.
+            int hh = t.tm_hour < 0 ? 0 : (t.tm_hour > 23 ? 23 : t.tm_hour);
+            int mm = t.tm_min < 0 ? 0 : (t.tm_min > 59 ? 59 : t.tm_min);
+            snprintf(b, n, "%02d:%02d", hh, mm);
+        } else {
+            int day = t.tm_mday < 1 ? 1 : (t.tm_mday > 31 ? 31 : t.tm_mday);
+            int mon = t.tm_mon < 0 ? 0 : (t.tm_mon > 11 ? 11 : t.tm_mon);
+            snprintf(b, n, "%02d/%02d", day, mon + 1);
+        }
     }
 
     void drawRow(kui::Canvas& c, int i, kui::Rect r) {
-        const Notifications::Note& n = m_notes[i];
+        Row& row = m_rows[i];
         c.fillRoundRect(r, UI::sx(10), THEME_CARD);
         const int pad = UI::sx(10);
         const lgfx::IFont* fb = kui::type::body();
         const lgfx::IFont* fc = kui::type::caption();
-        std::string w = when(n.epoch);
-        int ww = c.textWidth(w.c_str(), fc);
-        std::string src = n.src.rfind("phone:", 0) == 0 ? n.src.substr(6) : std::string();
+        const int ww = c.textWidth(row.whenBuf, fc);
         int ty = r.y + UI::sy(14);
-        c.text(c.ellipsize(n.title, fb, r.w - 3 * pad - ww), r.x + pad, ty, fb, THEME_TEXT, ML_DATUM);
-        c.text(w, r.x + r.w - pad, ty, fc, THEME_TEXT_DIM, MR_DATUM);
+        if (!row.titleReady) {
+            row.titleShown = c.ellipsize(row.n.title, fb, r.w - 3 * pad - ww);
+            row.titleReady = true;
+        }
+        c.text(row.titleShown, r.x + pad, ty, fb, THEME_TEXT, ML_DATUM);
+        c.text(row.whenBuf, r.x + r.w - pad, ty, fc, THEME_TEXT_DIM, MR_DATUM);
         if (i != m_expanded) {
-            std::string line = src.empty() ? n.msg : src + ": " + n.msg;
-            c.text(c.ellipsize(line, fc, r.w - 2 * pad), r.x + pad, r.y + UI::sy(36), fc,
-                   THEME_TEXT_DIM, ML_DATUM);
+            if (!row.lineReady) {
+                row.lineShown = c.ellipsize(row.line, fc, r.w - 2 * pad);
+                row.lineReady = true;
+            }
+            c.text(row.lineShown, r.x + pad, r.y + UI::sy(36), fc, THEME_TEXT_DIM, ML_DATUM);
             return;
         }
-        // expandida: quebra por palavra, ate 5 linhas (Canvas::wrapText)
-        const std::string rest = src.empty() ? n.msg : src + ": " + n.msg;
         int ly = r.y + UI::sy(34);
-        for (const std::string& line : c.wrapText(rest, fc, r.w - 2 * pad, 5)) {
+        for (const std::string& line : c.wrapText(row.line, fc, r.w - 2 * pad, 5)) {
             c.text(line, r.x + pad, ly, fc, THEME_TEXT_DIM, ML_DATUM);
             ly += UI::sy(16);
         }

@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 45
+### API Level: 47
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2972,3 +2972,108 @@ for (var k = 0; k < tiles.length; k++) {
 }
 System.useSprite(0);
 ```
+
+## 48. API Level 47 — Pack sensors and actuators: events, pulse/PWM, reflexes and ACL
+
+API 47 closes the pack's **sensor → decision → actuator** loop: actuators get
+pulse and PWM, sensors push **events** on a threshold crossing, the firmware
+runs **reflex rules** on its own (NVS; survives a closed app and an offline
+PC), and the owner can say **who** may open each resource.
+
+### Actuators: pulse and PWM
+
+`gpio`/`releN` gained the ops that used to answer `[255]` (the catalog
+`schema` now announces `{"off":1,"ops":"1234"}`):
+
+| DATA | Effect |
+|---|---|
+| `[1][0|1]` | on/off (API 38) |
+| `[2]` | read (answers `[2][0|1]`) |
+| `[3][ms u16 LE]` | **pulse**: turns on now and the owner turns it off on its own when the time is up (1..65535 ms) |
+| `[4][0..100]` | **PWM** on the generic `gpio` pin (8-bit LEDC) — a relay refuses it with `[255]` (it switches mains, it is not a dimmer) |
+
+JS apps may send **objects** instead of bytes — the owner understands the
+textual form `{"w":1}`, `{"r":1}`, `{"p":3000}` and `{"d":50}` (a string with
+a byte >0x7F becomes two bytes on the wire, so objects are the safe path):
+
+```javascript
+var h = Pack.open(r.node, "rele1", { off: 1 });
+Pack.write(h, { p: 3000 });    // 3 s pulse; the owner turns it off
+Pack.write(h, { d: 50 });      // 50% PWM (generic "gpio" only)
+```
+
+Over celerctl: `res pulse rele1 3000`, `res pulse -n A1B2 rele1 3000` (another
+node, through the gateway) and `res pwm <pin> 50`.
+
+### Sensors: bigger catalog and threshold events
+
+The native catalog grew: `lum` and `bat` (API 38), **`temp`** (IMU die, where
+present) and **`adc`** (a free ADC pin via `{"pin":N}` in `open`; the pin goes
+through the firmware guards — never flash/PSRAM).
+
+Open a sensor with `{gt: limit}` and/or `{lt: limit}` (+ `{h: hysteresis}`) to
+get **events** instead of a stream: the owner evaluates the limit at 1 Hz (or
+at `rate`) and pushes a 10-byte message on the **transition** — `[0xE0][ts
+u32][f32 LE][dir]`, `dir` 1 = rose (`gt`), 2 = fell (`lt`). Hysteresis re-arms
+the event; a 1 s per-session cooldown holds noise back. Events also travel
+over the BLE mesh (multi-hop) when there is no ESP-NOW.
+
+```javascript
+var h = Pack.open(no, "lum", { lt: 20, h: 2 });   // "it got dark"
+// in the loop:
+var ev = Pack.onEvent(h);      // {v, dir:"lt", at} | null
+if (ev) lightOn();
+```
+
+Samples stay available through `Pack.read(h)` (the same 8-byte format as API
+38) and on-demand reads with `{"r":1}` (or `"\x02"`) still work.
+
+### Native reflexes: `Pack.ruleAdd` / `ruleDel` / `ruleList`
+
+A rule lives in the node's **NVS** and is evaluated by the firmware: "if my
+sensor X crosses Y, apply Z". It survives a closed app, app switches, JS
+crashes and an offline PC. The rule lives on the **sensor's** node (whoever
+owns the data decides); the target may be local (the node's own `releN`) or
+remote (a system session on the other node's resource, with auto-off). When
+the condition goes back, the action is **undone** (relay off); `notificar`
+only fires on entering.
+
+```javascript
+// (perm "system") on the light-sensor node:
+Pack.ruleAdd({ sensor: "lum", op: "lt", valor: 20, h: 2, alvo: "rele1", on: 1 });
+Pack.ruleAdd({ sensor: "bat", op: "lt", valor: 15, notificar: "Battery low" });
+
+Pack.ruleList();        // [{id, sensor, op, valor, h, alvo, no?, on, notificar?}]
+Pack.ruleDel(1);
+```
+
+From the shell/celerctl: `svc reflex ls`, `svc reflex add lum lt 20 2 local
+rele1 on`, `svc reflex add lum gt 35 0 local rele1 off`, `svc reflex notify
+bat lt 15 1 Battery low`, `svc reflex del 1` (`res rule ...` on celerctl). The
+`adc` sensor and remote sensors are not evaluated by a rule in this version.
+
+### ACL: who may open each resource
+
+Until API 46 any private-pack member could open whatever was shared (the
+`res_share_*` switches are per TYPE). API 47 adds the per-RESOURCE list, in
+the **owner's** NVS:
+
+```
+res acl                     # catalog with each resource's mode
+res acl rele1 list A1B2     # only node A1B2 (hex) may open rele1
+res acl lum add C3D4        # append
+res acl rele1 open          # back to open (the default)
+res acl rele1 del A1B2      # remove
+```
+
+Outside the list, OPEN is refused with `denied` (before the exclusivity
+arbitration). The PC on the cable counts as a node (`pc-XXXX`): to allow only
+it, list the id shown by `celerctl mesh status`. The list is edited locally
+(shell/app); signed distribution with the `adminKey` arrives next round,
+together with the owner-side consent dialog.
+
+### Discovery: `CAPS_RES`
+
+The BEAT gained bit `0x80` (`CAPS_RES`): "this node publishes resources".
+Members show the extra `caps` bit in `Pack.members()` — handy for UI filtering
+before `Pack.resources()` (the catalog remains the source of truth).

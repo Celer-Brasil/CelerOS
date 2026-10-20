@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 45
+### Nível de API: 47
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -3261,3 +3261,123 @@ for (var k = 0; k < tiles.length; k++) {
 }
 System.useSprite(0);
 ```
+
+## 48. Nível de API 47 — Sensores e atuadores da matilha: eventos, pulso/PWM, reflexos e ACL
+
+A API 47 fecha o ciclo **sensor → decisão → atuador** da matilha: o atuador
+ganha pulso e PWM, o sensor empurra **eventos** na transição de um limiar, o
+firmware executa **reflexos** sozinho (NVS, sobrevive a app fechado e PC
+desligado) e o dono pode dizer **quem** abre cada recurso.
+
+### Atuadores: pulso e PWM
+
+O `gpio`/`releN` ganhou as ops que antes respondiam `[255]` (o `schema` do
+catálogo agora anuncia `{"off":1,"ops":"1234"}`):
+
+| DATA | Efeito |
+|---|---|
+| `[1][0|1]` | liga/desliga (API 38) |
+| `[2]` | lê (resposta `[2][0|1]`) |
+| `[3][ms u16 LE]` | **pulso**: liga agora e o dono desliga sozinho no prazo (1..65535 ms) |
+| `[4][0..100]` | **PWM** no pino genérico (`gpio`), 8 bits no LEDC — relé recusa `[255]` (comuta rede, não é dimmer) |
+
+O app JS pode mandar **objetos** em vez de bytes — o dono entende a forma
+textual `{"w":1}`, `{"r":1}`, `{"p":3000}` e `{"d":50}` (útil porque uma
+string UTF-8 com byte >0x7F vira dois bytes no fio):
+
+```javascript
+var h = Pack.open(r.node, "rele1", { off: 1 });
+Pack.write(h, { p: 3000 });    // pulso de 3 s; o dono desliga sozinho
+Pack.write(h, { d: 50 });      // PWM 50% (so no "gpio" generico)
+```
+
+Pelo celerctl: `res pulse rele1 3000`, `res pulse -n A1B2 rele1 3000` (outro
+nó, por procuração) e `res pwm <pino> 50`.
+
+### Sensores: catálogo maior e eventos por limiar
+
+O catálogo nativo cresceu: `lum` e `bat` (API 38), **`temp`** (die do IMU,
+onde a placa tem) e **`adc`** (pino livre do ADC via `{"pin":N}` no `open`;
+o pino passa pelas guardas do firmware — flash/PSRAM nunca).
+
+Abra um sensor com `{gt: limiar}` e/ou `{lt: limiar}` (+ `{h: histerese}`)
+para receber **eventos** em vez de stream: o dono avalia o limiar a 1 Hz (ou
+no `rate`) e empurra uma mensagem de 10 bytes na **transição** — `[0xE0][ts
+u32][f32 LE][dir]`, `dir` 1 = subiu (`gt`), 2 = desceu (`lt`). A histerese
+re-arma o evento; um cooldown de 1 s por sessão segura o ruído. O evento
+viaja também pela malha BLE (multi-hop) quando não há ESP-NOW.
+
+```javascript
+var h = Pack.open(no, "lum", { lt: 20, h: 2 });   // "escureceu"
+// no loop:
+var ev = Pack.onEvent(h);      // {v, dir:"lt", at} | null
+if (ev) acende();
+```
+
+A amostra continua disponível no `Pack.read(h)` (mesmo formato de 8 bytes da
+API 38) e o pedido por `{"r":1}` (ou `"\x02"`) segue funcionando.
+
+### Reflexos nativos: `Pack.ruleAdd` / `ruleDel` / `ruleList`
+
+Uma regra fica no **NVS do nó** e é avaliada pelo firmware: "se o meu sensor
+X passar de Y, aplique Z". Sobrevive a app fechado, troca de app, crash do JS
+e PC desligado. A regra mora no nó **do sensor** (quem tem o dado decide); o
+alvo pode ser local (o `releN` do próprio nó) ou remoto (sessão do sistema no
+recurso do outro nó, com auto-off). Quando a condição volta, a ação é
+**desfeita** (relé off); `notificar` dispara só na entrada.
+
+#### `Pack.onEvent(h)` → Object|null
+Evento de threshold pendente da sessão: `{v, dir:"gt"|"lt", at:ms}`. Fila de
+1 (o mais recente); a amostra contínua continua no `read`.
+
+#### `Pack.ruleAdd(regra)` → Number
+Cria uma regra no NVS (`id` ou `-1`). `regra`: `{sensor, op:"gt"|"lt", valor,
+h, alvo, no, on}` para atuador ou `{sensor, op, valor, h, notificar}` para
+notificação. Permissão `"system"`.
+
+#### `Pack.ruleDel(id)` → Boolean
+Remove a regra pelo id.
+
+#### `Pack.ruleList()` → Array
+Regras persistidas: `[{id, sensor, op, valor, h, alvo, no?, on, notificar?}]`.
+
+```javascript
+// (perm "system") no no do sensor de luz:
+Pack.ruleAdd({ sensor: "lum", op: "lt", valor: 20, h: 2, alvo: "rele1", on: 1 });
+Pack.ruleAdd({ sensor: "bat", op: "lt", valor: 15, notificar: "Bateria baixa" });
+
+Pack.ruleList();        // [{id, sensor, op, valor, h, alvo, no?, on, notificar?}]
+Pack.ruleDel(1);
+```
+
+Pelo shell/celerctl: `svc reflex ls`, `svc reflex add lum lt 20 2 local rele1
+on`, `svc reflex add lum gt 35 0 local rele1 off`, `svc reflex notify bat lt
+15 1 Bateria baixa`, `svc reflex del 1` (`res rule ...` no celerctl). Sensor
+`adc` e sensor remoto não são avaliados por regra nesta versão.
+
+### ACL: quem pode abrir cada recurso
+
+Até a API 46, qualquer membro da matilha privada abria o que estivesse
+compartilhado (os interruptores `res_share_*` são por TIPO). A API 47
+acrescenta a lista por RECURSO, no NVS do **dono**:
+
+```
+res acl                     # catalogo com o modo de cada recurso
+res acl rele1 list A1B2     # so o no A1B2 (hexa) pode abrir rele1
+res acl lum add C3D4        # acrescenta
+res acl rele1 open          # volta a aberta (o default)
+res acl rele1 del A1B2      # remove
+```
+
+Fora da lista o OPEN é recusado com `denied` (antes da arbitragem de
+exclusividade). O PC no cabo conta como nó (`pc-XXXX`): para liberar só ele,
+liste o id que aparece no `celerctl mesh status`. A lista é editada
+localmente (shell/app); a distribuição assinada com a `adminKey` entra na
+próxima rodada, junto com o diálogo de consentimento no dono.
+
+### Descoberta: `CAPS_RES`
+
+O BEAT ganhou o bit `0x80` (`CAPS_RES`): "este nó publica recursos". Os
+membros aparecem com `caps` a mais no `Pack.members()` — útil para a UI
+filtrar quem tem o que antes mesmo do `Pack.resources()` (o catálogo segue
+sendo a fonte da verdade).

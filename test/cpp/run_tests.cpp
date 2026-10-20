@@ -16,6 +16,7 @@
 #include "../../main/Utils/JsonMap.h"
 #include "../../main/Bluetooth/NetFrame.h"
 #include "../../main/Pack/ResProto.h"
+#include "../../main/Pack/Reflex.h"
 #include "../../main/USBDevice/UsbRes.h"
 #include "../../main/Pack/PackId.h"
 #include "../../main/Pack/ProvProto.h"
@@ -1614,6 +1615,93 @@ static void testResMeta() {
     CHECK(paramInt(p4, sizeof(p4) - 1, "off", 0) == 1);     // atoi para no lixo
 }
 
+// API 47: comandos do DATA de um atuador (write/read/pulso/pwm) — o codec
+// compartilhado entre o firmware (Resources/GpioRes), o celerctl e o meshsim
+static void testResGpioOps() {
+    using namespace resproto;
+    uint8_t d[4];
+    CHECK(encodeGpioWrite(true, d) == 2 && d[0] == GPIO_WRITE && d[1] == 1);
+    CHECK(encodeGpioWrite(false, d) == 2 && d[1] == 0);
+    CHECK(encodeGpioRead(d) == 1 && d[0] == GPIO_READ);
+    // PULSO: ms u16 LE (GpioRes le com decodeGpioPulse; 0 = valor invalido)
+    CHECK(encodeGpioPulse(0x1234, d) == 3 && d[0] == GPIO_PULSE && d[1] == 0x34 && d[2] == 0x12);
+    uint16_t ms = 0;
+    CHECK(decodeGpioPulse(d, 3, &ms) && ms == 0x1234);
+    CHECK(!decodeGpioPulse(d, 2, &ms));                 // curto
+    d[0] = GPIO_WRITE;
+    CHECK(!decodeGpioPulse(d, 3, &ms));                 // outro op
+    CHECK(encodeGpioPulse(1, d) == 3 && decodeGpioPulse(d, 3, &ms) && ms == 1);
+    CHECK(encodeGpioPulse(0xFFFF, d) == 3 && decodeGpioPulse(d, 3, &ms) && ms == 0xFFFF);
+    // PWM: duty limitado a 100 no encoder (o servidor recusa > 100 com RES_ERR)
+    CHECK(encodeGpioPwm(50, d) == 2 && d[0] == GPIO_PWM && d[1] == 50);
+    CHECK(encodeGpioPwm(100, d) == 2 && d[1] == 100);
+    CHECK(encodeGpioPwm(200, d) == 2 && d[1] == 100);
+    CHECK(RES_ERR == 0xFF);
+}
+
+// Reflexos (API 47): transicao com histerese + cooldown e o blob do NVS
+static void testReflex() {
+    using namespace reflex;
+    Rule r{};
+    r.used = true;
+    r.op = OP_GT;
+    r.value = 30.0f;
+    r.hyst = 2.0f;
+    r.armed = true;
+    CHECK(evaluate(&r, 25.0f, 1000) == EV_NONE);  // abaixo do limiar
+    CHECK(evaluate(&r, 30.0f, 2000) == EV_ON);    // cruzou
+    CHECK(evaluate(&r, 31.0f, 3000) == EV_NONE);  // ja desarmado
+    CHECK(evaluate(&r, 29.0f, 4000) == EV_NONE);  // 29 > 28: nao re-arma
+    CHECK(evaluate(&r, 28.0f, 5000) == EV_OFF);   // histerese vencida: desfaz
+    CHECK(evaluate(&r, 30.0f, 6000) == EV_ON);    // cruza de novo
+    // cooldown de 1 s entre transicoes
+    r.armed = true;
+    r.lastMs = 0;
+    CHECK(evaluate(&r, 40.0f, 10000) == EV_ON);
+    CHECK(evaluate(&r, 10.0f, 10500) == EV_NONE);  // < 1 s: bloqueado
+    CHECK(evaluate(&r, 10.0f, 11000) == EV_OFF);
+    // OP_LT espelhado
+    Rule l{};
+    l.op = OP_LT;
+    l.value = 20.0f;
+    l.armed = true;
+    CHECK(evaluate(&l, 25.0f, 1000) == EV_NONE);
+    CHECK(evaluate(&l, 20.0f, 2000) == EV_ON);
+    CHECK(evaluate(&l, 21.0f, 3000) == EV_OFF);
+    // blob persistido: round-trip completo (write remoto)
+    Rule a{};
+    a.used = true;
+    a.id = 3;
+    a.enabled = true;
+    a.op = OP_LT;
+    a.value = 15.5f;
+    a.hyst = 1.0f;
+    a.action = ACT_WRITE;
+    a.targetNode = 0xA1B2;
+    a.on = true;
+    snprintf(a.sensor, sizeof(a.sensor), "lum");
+    snprintf(a.target, sizeof(a.target), "rele2");
+    Wire w;
+    ruleToWire(a, &w);
+    Rule b{};
+    wireToRule(w, &b);
+    CHECK(b.used && b.id == 3 && b.enabled && b.op == OP_LT && b.value == 15.5f &&
+          b.hyst == 1.0f && b.action == ACT_WRITE && b.targetNode == 0xA1B2 && b.on);
+    CHECK(strcmp(b.sensor, "lum") == 0 && strcmp(b.target, "rele2") == 0);
+    CHECK(b.armed && b.handle == -1);  // estado de runtime nasce limpo
+    // notify: texto viaja, alvo fica vazio
+    Rule n{};
+    n.used = true;
+    n.id = 9;
+    n.action = ACT_NOTIFY;
+    n.op = OP_GT;
+    n.value = 35.0f;
+    snprintf(n.text, sizeof(n.text), "escuro na sala");
+    ruleToWire(n, &w);
+    wireToRule(w, &b);
+    CHECK(b.action == ACT_NOTIFY && strcmp(b.text, "escuro na sala") == 0 && b.target[0] == '\0');
+}
+
 // Onda B: o tunel ResProto pelo cabo (USBDevice/UsbRes.h)
 static void testUsbRes() {
     using namespace usbres;
@@ -2676,6 +2764,8 @@ int main() {
     testNetFrame();
     testResProto();
     testResMeta();
+    testResGpioOps();
+    testReflex();
     testUsbRes();
     testHelloHunt();
     testUsbMedia();

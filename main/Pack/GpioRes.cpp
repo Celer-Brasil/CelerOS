@@ -9,6 +9,10 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_private/esp_gpio_reserve.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include <Arduino.h>  // pinMode/digitalWrite/analogWrite (Compat)
 
 #include "../Boards/Board.h"
 #include "../Hardware/BoardIO.h"
@@ -22,6 +26,9 @@ namespace {
 
 const char* TAG = "celer.gpio";
 
+// pilha dos pulsos: o tick compara o prazo (mesmo relogio do SensorRes)
+uint32_t nowMs() { return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS); }
+
 // parse de params do OPEN ({"pin":N}) e o paramInt unico do ResProto.h
 using resproto::paramInt;
 
@@ -30,6 +37,9 @@ struct Sess {
     uint16_t sid;
     bool relay;    // true = rele (idx 1-based do perfil); false = pino generico
     int idx;       // numero do rele ou pino do GPIO
+    // pulso em curso (API 47): o tick desliga no prazo. WRITE/PWM cancelam.
+    bool pulse;
+    uint32_t pulseEndMs;
 };
 constexpr int MAX = 8;  // = LEASES do Resources
 Sess s_s[MAX];
@@ -115,6 +125,7 @@ bool serveStart(uint16_t sid, const char* name, const uint8_t* params, size_t pl
 void serveStop(uint16_t sid, bool autoOff) {
     Sess* s = bySid(sid);
     if (s == nullptr) return;
+    s->pulse = false;  // sessao morta nao aciona mais tarde
     if (autoOff) {  // o fim do lease desliga o atuador (oraculo do bench)
         writeOut(*s, false);
         ESP_LOGI(TAG, "\"%s\": auto-off do fim da sessao (estado %d)", s->relay ? "rele" : "gpio",
@@ -127,29 +138,119 @@ void serveStop(uint16_t sid, bool autoOff) {
     s->used = false;
 }
 
+// Pilha dos pulsos: o tick (tickTimers) desliga o que venceu. Sem task nova:
+// o prazo e comparado no mesmo tick do Resources (50 ms de granularidade).
+void tick() {
+    const uint32_t now = nowMs();
+    for (int i = 0; i < MAX; i++) {
+        Sess& s = s_s[i];
+        if (!s.used || !s.pulse || (int32_t)(now - s.pulseEndMs) < 0) continue;
+        s.pulse = false;
+        writeOut(s, false);
+        ESP_LOGI(TAG, "\"%s\": pulso terminou (estado %d)", s.relay ? "rele" : "gpio", readBack(s));
+    }
+}
+
 bool data(uint16_t sid, const uint8_t* d, size_t n, uint8_t* reply, size_t* replyLen) {
     *replyLen = 0;
-    const Sess* s = bySid(sid);
+    Sess* s = bySid(sid);
     if (s == nullptr || d == nullptr || n < 1) {
         ESP_LOGW(TAG, "DATA sem sessao %u (n=%u)", sid, (unsigned)n);
         return false;
     }
+    // Forma TEXTUAL (API 47): {"w":0|1} / {"r":1} / {"p":ms} / {"d":%}.
+    // O app JS manda objetos porque string UTF-8 codifica byte >0x7F em dois
+    // (ms de pulso de 500 = 0xF4 nao viaja cru); o binario abaixo continua
+    // para o celerctl e firmwares <= 46.
+    if (d[0] == '{') {
+        using resproto::paramHas;
+        using resproto::paramInt;
+        if (paramHas(d, n, "r")) {
+            reply[0] = resproto::GPIO_READ;
+            reply[1] = readBack(*s) > 0 ? 1 : 0;
+            *replyLen = 2;
+            return true;
+        }
+        if (paramHas(d, n, "w")) {
+            s->pulse = false;
+            writeOut(*s, paramInt(d, n, "w", 0) != 0);
+            return true;
+        }
+        if (paramHas(d, n, "p")) {
+            const int ms = paramInt(d, n, "p", 0);
+            if (ms <= 0 || ms > 0xFFFF) {
+                reply[0] = resproto::RES_ERR;
+                *replyLen = 1;
+                return true;
+            }
+            writeOut(*s, true);
+            s->pulse = true;
+            s->pulseEndMs = nowMs() + (uint32_t)ms;
+            ESP_LOGI(TAG, "\"%s\": PULSO de %dms", s->relay ? "rele" : "gpio", ms);
+            return true;
+        }
+        if (paramHas(d, n, "d")) {
+            const int duty = paramInt(d, n, "d", -1);
+            if (s->relay || duty < 0 || duty > 100) {
+                reply[0] = resproto::RES_ERR;  // rele comuta rede: nao e dimmer
+                *replyLen = 1;
+                return true;
+            }
+            s->pulse = false;
+            analogWrite(s->idx, (int)((uint32_t)duty * 255 / 100));
+            ESP_LOGI(TAG, "gpio%d: PWM %d%%", s->idx, duty);
+            return true;
+        }
+        reply[0] = resproto::RES_ERR;
+        *replyLen = 1;
+        return true;
+    }
     switch (d[0]) {
-        case 1: {  // WRITE [1][0|1]
+        case resproto::GPIO_WRITE: {  // WRITE [1][0|1]
             if (n < 2) return false;
+            s->pulse = false;  // escrita explicita manda no pulso em curso
             writeOut(*s, d[1] != 0);
             ESP_LOGI(TAG, "\"%s\": WRITE %d -> estado %d", s->relay ? "rele" : "gpio", d[1],
                      readBack(*s));
             return true;
         }
-        case 2:  // READ -> [2][0|1]
-            reply[0] = 2;
+        case resproto::GPIO_READ:  // READ -> [2][0|1]
+            reply[0] = resproto::GPIO_READ;
             reply[1] = readBack(*s) > 0 ? 1 : 0;
             *replyLen = 2;
             ESP_LOGI(TAG, "\"%s\": READ -> %d", s->relay ? "rele" : "gpio", reply[1]);
             return true;
-        default:  // ops de onda futura (pulso/PWM): erro explicito
-            reply[0] = 0xFF;
+        case resproto::GPIO_PULSE: {  // PULSO [3][ms u16 LE]
+            uint16_t ms = 0;
+            if (!resproto::decodeGpioPulse(d, n, &ms) || ms == 0) {
+                reply[0] = resproto::RES_ERR;
+                *replyLen = 1;
+                return true;
+            }
+            writeOut(*s, true);
+            s->pulse = true;
+            s->pulseEndMs = nowMs() + ms;
+            ESP_LOGI(TAG, "\"%s\": PULSO de %ums", s->relay ? "rele" : "gpio", (unsigned)ms);
+            return true;
+        }
+        case resproto::GPIO_PWM: {  // PWM [4][duty 0..100] — so pino generico
+            if (n < 2 || d[1] > 100) {
+                reply[0] = resproto::RES_ERR;
+                *replyLen = 1;
+                return true;
+            }
+            if (s->relay) {  // rele comuta rede eletrica: nao e dimmer
+                reply[0] = resproto::RES_ERR;
+                *replyLen = 1;
+                return true;
+            }
+            s->pulse = false;
+            analogWrite(s->idx, (int)((uint32_t)d[1] * 255 / 100));
+            ESP_LOGI(TAG, "gpio%d: PWM %u%%", s->idx, (unsigned)d[1]);
+            return true;
+        }
+        default:  // op desconhecida: erro explicito
+            reply[0] = resproto::RES_ERR;
             *replyLen = 1;
             return true;
     }

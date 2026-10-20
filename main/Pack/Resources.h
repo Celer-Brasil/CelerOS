@@ -86,6 +86,10 @@ void onMemberLeft(uint16_t id);
 // Recursos conhecidos dos vizinhos (cache). Dispara DESCRIBE para quem nao
 // tem cache fresco (resposta chega em ~1 s; o app consulta de novo).
 int remotes(Remote* out, int max);
+// Ha algum recurso publicado (usado, pronto e permitido pela politica)?
+// Alimenta o bit CAPS_RES do BEAT (descoberta, API 47). Le so flags que o
+// tick mantem — chamar do tick do Pack (mesma task).
+bool anyExposed();
 // Destino por id "A1B2" ou nome: malha BLE ou HELLO do ESP-NOW (no ouvido so
 // pelo plano de dados, como a esp32-cam com o BLE abafado pelo coex).
 bool resolve(const char* to, uint16_t* out);
@@ -109,6 +113,9 @@ void localClaim(uint8_t type);
 size_t dataCap();
 // Proxima mensagem DATA do handle; false = nada.
 bool read(int h, uint8_t* buf, size_t cap, size_t* len);
+// Evento de threshold pendente (sensor aberto com {"gt"/"lt"}, API 47):
+// dir = resproto::SENSOR_EV_GT/LT; false = nada. Consome o slot (fila de 1).
+bool pollEvent(int h, float* v, uint32_t* ts, uint8_t* dir);
 bool write(int h, const void* data, size_t len);
 void close(int h);
 
@@ -130,6 +137,11 @@ bool pollWrite(char* res, size_t resCap, uint16_t* from, char* fromName, size_t 
 // vizinhos, leases e handles, contadores do DataLink/audio.
 typedef void (*PrintFn)(void* ctx, const char* fmt, ...);
 void dump(PrintFn print, void* ctx);
+
+// ACL por recurso (API 47): lista/edita quem pode abrir o recurso neste no.
+// Uso (shell "res acl", celerctl "res acl"): ls | <recurso> open |
+// list <id...> | add <id...> | del <id> — ids em hexa, como no members().
+int aclCmd(int argc, char** argv, PrintFn print, void* ctx);
 
 // ---- gateway USB (Onda B, doc de design §8) ----
 // O computador fala ResProto pelo cabo (KL_RES_CTL/KL_RES_DATA do

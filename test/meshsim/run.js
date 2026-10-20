@@ -968,7 +968,9 @@ scenario('Recursos Onda A: rele com auto-off e sensor com meta', function() {
                 sim.at(10000, function(e) { sim.note('liga ' + e.Pack.write(h.rel, '{"w":1}')); });
                 sim.at(12000, function(e) { e.Pack.write(h.bat, '{"r":1}'); });
                 sim.at(14000, function(e) { e.Pack.write(h.rel, '{"r":1}'); });
-                sim.at(16000, function(e) {
+                // API 47: o schema do rele cresceu no LIST_META — 1 s de folga
+                // para o RESP do rel na malha (o comportamento e o mesmo)
+                sim.at(17000, function(e) {
                     var d, got = [];
                     while ((d = e.Pack.read(h.rel)) !== null) got.push(JSON.stringify(d));
                     sim.note('volta rele ' + got.join('|'));
@@ -1004,7 +1006,7 @@ scenario('Recursos Onda A: rele com auto-off e sensor com meta', function() {
         noErr(res);
         dump(res, 'Cli'); dump(res, 'Releiro'); dump(res, 'C2');
         var meta = last(res, 'Cli', /\[sim\] meta /) || '';
-        check('catalogo traz meta de rele e sensor', /Releiro\/rele1\/sch:\{\"off\":0\|1\}/.test(meta) &&
+        check('catalogo traz meta de rele e sensor', /Releiro\/rele1\/sch:\{\"off\":1,\"ops\":\"1234\"\}/.test(meta) &&
               /Sensor\/lum\/%:0-100/.test(meta), meta);
         check('gpio sem o sim do dono = denied', has(res, 'Cli', '[sim] st neg refused/denied'));
         check('rele abre com auto-off', has(res, 'Cli', '[sim] st rel open'));
@@ -1024,6 +1026,100 @@ scenario('Recursos Onda A: rele com auto-off e sensor com meta', function() {
         var fins = res.nodes.Releiro.log.filter(function(l) { return l.indexOf('rele1=') >= 0; });
         check('ciclo completo 0 -> 1 -> 0 -> 1',
               fins.join(' ') === '[sim] rele1=1 [sim] rele1=0 [sim] rele1=1', fins.join(' | '));
+    });
+});
+
+// Atuador API 47: PULSO (liga na hora e o tick do DONO desliga sozinho) e
+// PWM em rele recusado (RES_ERR: rede eletrica nao e dimmer). O catalogo
+// anuncia as ops no schema.
+scenario('Recursos API 47: pulso no rele e PWM recusado', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    return sim.runMesh({
+        durationMs: 26000, seed: 11,
+        nodes: [
+            { name: 'Releiro', id: 'E1E1', app: src, caps: 0x01, relays: 1,
+              pack: { name: 'fazenda2', pass: 'senhaforte' },
+              settings: { res_share_gpio: '1' },
+              wire: function(env, sim) {
+                // oraculo do fisico: antes / durante / depois do pulso
+                sim.at(9000, function(e) { sim.note('r0=' + e.Pack.relayState('rele1')); });
+                sim.at(12000, function(e) { sim.note('r1=' + e.Pack.relayState('rele1')); });
+                sim.at(17000, function(e) { sim.note('r2=' + e.Pack.relayState('rele1')); });
+              } },
+            { name: 'Cli', id: 'E2E2', app: src, caps: 0x04,
+              pack: { name: 'fazenda2', pass: 'senhaforte' },
+              wire: function(env, sim) {
+                var h = {};
+                sim.at(5000, function(e) { h.r = e.Pack.open('Releiro', 'rele1', { off: 1 }); });
+                sim.at(8000, function(e) { sim.note('st ' + e.Pack.status(h.r).state); });
+                // pulso de 5 s: liga agora; o dono desliga no tick
+                sim.at(10000, function(e) { sim.note('pulso ' + e.Pack.write(h.r, '{"p":5000}')); });
+                // PWM no rele: RES_ERR e o estado fisico nao muda
+                sim.at(18000, function(e) { e.Pack.write(h.r, '{"d":50}'); });
+                sim.at(19000, function(e) {
+                    var d, got = [];
+                    while ((d = e.Pack.read(h.r)) !== null) got.push(JSON.stringify(d));
+                    sim.note('resposta ' + got.join('|'));
+                });
+                sim.at(20000, function(e) { e.Pack.write(h.r, '{"r":1}'); });
+                sim.at(21000, function(e) {
+                    var d, got = [];
+                    while ((d = e.Pack.read(h.r)) !== null) got.push(JSON.stringify(d));
+                    sim.note('leitura ' + got.join('|'));
+                });
+              } }
+        ],
+        links: [['Releiro', 'Cli', -50]],
+        events: []
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Cli'); dump(res, 'Releiro');
+        check('rele abre', has(res, 'Cli', '[sim] st open'));
+        check('pulso liga o fisico', has(res, 'Cli', '[sim] pulso true') &&
+              has(res, 'Releiro', '[sim] r1=1'));
+        check('pulso termina sozinho no dono', has(res, 'Releiro', 'rele1 pulso terminou') &&
+              has(res, 'Releiro', '[sim] r2=0'));
+        check('PWM em rele responde RES_ERR', has(res, 'Cli', '[sim] resposta {"e":255}'));
+        check('depois do erro o rele responde leitura', has(res, 'Cli', '[sim] leitura {"r":0}'));
+    });
+});
+
+// Sensor API 47: threshold vira EVENTO empurrado (transicao + histerese +
+// cooldown), sem stream continuo — o app colhe com Pack.onEvent.
+scenario('Recursos API 47: evento de threshold no sensor', function() {
+    var src = 'test/meshsim/fixtures/ocioso.js';
+    return sim.runMesh({
+        durationMs: 20000, seed: 13,
+        nodes: [
+            { name: 'Sensor', id: 'D1D1', app: src, caps: 0x04, sensors: ['lum'],
+              pack: { name: 'fazenda3', pass: 'senhaforte' } },
+            { name: 'Cli', id: 'D2D2', app: src, caps: 0x04,
+              pack: { name: 'fazenda3', pass: 'senhaforte' },
+              wire: function(env, sim) {
+                var h = {};
+                // o sample do sim sobe 40..59; gt 44 e cruzado em ~12 s
+                sim.at(5000, function(e) { h.l = e.Pack.open('Sensor', 'lum', { gt: 44 }); });
+                sim.at(8000, function(e) { sim.note('st ' + e.Pack.status(h.l).state); });
+                sim.at(14000, function(e) {
+                    sim.note('evento ' + JSON.stringify(e.Pack.onEvent(h.l)));
+                    sim.note('de novo ' + JSON.stringify(e.Pack.onEvent(h.l)));
+                });
+                sim.at(17000, function(e) {
+                    // sem stream: o read nao recebe amostra nenhuma
+                    sim.note('read ' + JSON.stringify(e.Pack.read(h.l)));
+                });
+              } }
+        ],
+        links: [['Sensor', 'Cli', -50]],
+        events: []
+    }).then(function(res) {
+        noErr(res);
+        dump(res, 'Cli'); dump(res, 'Sensor');
+        check('sensor abre', has(res, 'Cli', '[sim] st open'));
+        check('evento de threshold chega com dir gt', has(res, 'Cli', '[sim] evento {"v":44,"dir":"gt"') &&
+              has(res, 'Cli', '"at":'));
+        check('fila de 1: o evento e consumido', has(res, 'Cli', '[sim] de novo null'));
+        check('sem stream, read fica vazio', has(res, 'Cli', '[sim] read null'));
     });
 });
 

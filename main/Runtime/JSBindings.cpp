@@ -1683,6 +1683,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"open", js_packOpen, 3},                    // no, nome, [opts] -> handle | -1
         {"status", js_packStatus, 1},                // h -> {state, reason, node, name} | null
         {"read", js_packRead, 1},                    // h -> dado | null
+        {"onEvent", js_packOnEvent, 1},              // h -> {v, dir, at} | null (threshold, API 47)
+        // reflexos nativos (API 47, perm "system"): a regra mora neste no
+        {"ruleAdd", js_packRuleAdd, 1},              // {sensor, op, valor, h, alvo, no, on, notificar} -> id | -1
+        {"ruleDel", js_packRuleDel, 1},              // id -> bool
+        {"ruleList", js_packRuleList, 0},            // regras persistidas no NVS
         {"write", js_packWrite, 2},                  // h, dado -> bool
         {"close", js_packClose, 1},                  // h
         {"expose", js_packExpose, 2},                // nome, [opts {shared}] canal de dados do app

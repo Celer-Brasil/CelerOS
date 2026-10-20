@@ -245,6 +245,7 @@ env.Pack = {
     },
     status: function(h) { return res.api.status(h); },
     read: function(h) { return res.api.read(h); },
+    onEvent: function(h) { return res.api.onEvent(h); },  // threshold (API 47)
     write: function(h, d) {
         var s = payload(d);
         if (s.length > res.api.MAX_DATA) throw new RangeError('dado do recurso deve ter 1 a 425 bytes');

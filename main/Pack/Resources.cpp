@@ -12,6 +12,7 @@
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "nvs.h"
 #include "sdkconfig.h"
 
 #include "../Bluetooth/CelerNet.h"
@@ -20,9 +21,11 @@
 #include "../Boards/Board.h"
 #include "../Hardware/BoardIO.h"
 #include "../Utils/CelerSettings.h"
+#include "../FileSystem/FileSystem.h"
 #include "AudioRes.h"
 #include "CamRes.h"
 #include "GpioRes.h"
+#include "Reflex.h"
 #include "SensorRes.h"
 #include "../Runtime/CameraCore.h"
 #include "DataLink.h"
@@ -165,6 +168,13 @@ struct Handle {
     uint8_t params[PARAMS_MAX];
     bool usb;              // aberto PELO PC no cabo (procuracao, API 41)
     uint8_t usbSeen;       // ultimo State avisado ao PC (EV_STATE)
+    // sensor com threshold (API 47): aberto com {"gt"/"lt"} reconhece o DATA
+    // marcado de evento; o app colhe com Pack.onEvent (fila de 1)
+    bool evt;
+    bool hasEvt;
+    uint32_t evtTs;
+    float evtV;
+    uint8_t evtDir;
 };
 
 // Tudo que e grande mora num bloco so, alocado no 1o uso (PSRAM primeiro):
@@ -415,6 +425,92 @@ int localFind(const char* name) {
 
 const char* policyDefault(const char* key);  // abaixo (junto da politica)
 
+// ------------------------------------------------------------- ACL (API 47)
+// Quem pode ABRIR cada recurso: aberto (default, o comportamento da API 38)
+// ou uma lista de node ids. Fica no NVS do DONO (namespace "res.acl", chave
+// = nome do recurso): v1 nao tem canal de distribuicao de ACL entre nos, so
+// edicao local (shell/app Matilha) — a assinatura com adminKey entra quando
+// a lista viajar junto com o consentimento por pedido. O PC no cabo conta
+// como no (pc-XXXX): para liberar SO o PC, liste o id dele.
+constexpr int ACL_MAX = 8;
+struct AclEntry {
+    bool used;
+    bool listed;
+    uint8_t n;
+    uint16_t ids[ACL_MAX];
+    char name[RES_NAME_MAX + 1];
+};
+AclEntry s_acl[LIST_MAX];
+
+int aclSlot(const char* name, bool create) {
+    for (int i = 0; i < LIST_MAX; i++) {
+        if (s_acl[i].used && strcasecmp(s_acl[i].name, name) == 0) return i;
+    }
+    if (!create) return -1;
+    for (int i = 0; i < LIST_MAX; i++) {
+        if (s_acl[i].used) continue;
+        s_acl[i] = AclEntry{};
+        s_acl[i].used = true;
+        snprintf(s_acl[i].name, sizeof(s_acl[i].name), "%s", name);
+        return i;
+    }
+    // sem slot livre: recicla a entrada de um nome que nao esta mais no
+    // catalogo (canal de app trocado) — 12 nomes ATIVOS cabem por definicao
+    for (int i = 0; i < LIST_MAX; i++) {
+        if (localFind(s_acl[i].name) >= 0) continue;
+        s_acl[i] = AclEntry{};
+        s_acl[i].used = true;
+        snprintf(s_acl[i].name, sizeof(s_acl[i].name), "%s", name);
+        return i;
+    }
+    return -1;
+}
+
+void aclLoad(const char* name) {
+    const int i = aclSlot(name, true);
+    if (i < 0) return;
+    s_acl[i].listed = false;
+    s_acl[i].n = 0;
+    nvs_handle_t h;
+    if (nvs_open("res.acl", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t raw[2 + ACL_MAX * 2];
+    size_t len = sizeof(raw);
+    if (nvs_get_blob(h, name, raw, &len) == ESP_OK && len >= 2) {
+        s_acl[i].listed = raw[0] == 1;
+        const uint8_t n = raw[1] > ACL_MAX ? ACL_MAX : raw[1];
+        if (len >= (size_t)(2 + n * 2)) {
+            s_acl[i].n = n;
+            memcpy(s_acl[i].ids, raw + 2, (size_t)n * 2);
+        }
+    }
+    nvs_close(h);
+}
+
+bool aclSave(const char* name) {
+    const int i = aclSlot(name, true);
+    if (i < 0) return false;
+    uint8_t raw[2 + ACL_MAX * 2] = {0};
+    raw[0] = s_acl[i].listed ? 1 : 0;
+    raw[1] = s_acl[i].n;
+    memcpy(raw + 2, s_acl[i].ids, (size_t)s_acl[i].n * 2);
+    nvs_handle_t h;
+    if (nvs_open("res.acl", NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok = nvs_set_blob(h, name, raw, 2 + (size_t)s_acl[i].n * 2) == ESP_OK;
+    ok = nvs_commit(h) == ESP_OK && ok;
+    nvs_close(h);
+    return ok;
+}
+
+// O no `from` pode abrir o recurso? (lista vazia = so o dono local usa)
+bool aclAllows(int rid, uint16_t from) {
+    const int i = aclSlot(s_local[rid].name, false);
+    if (i < 0 || !s_acl[i].listed) return true;
+    for (int k = 0; k < s_acl[i].n; k++) {
+        if (s_acl[i].ids[k] == from) return true;
+    }
+    return false;
+}
+
 int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
              const char* policyKey, const Meta* meta = nullptr) {
     if (localFind(name) >= 0) return -1;
@@ -431,6 +527,7 @@ int localAdd(const char* name, uint8_t type, bool shared, bool ready, bool app,
             l->allowed = policyKey == nullptr || CelerSettings::get(policyKey, policyDefault(policyKey)) == "1";
             if (meta != nullptr) l->m = *meta;
             snprintf(l->name, sizeof(l->name), "%s", name);
+            aclLoad(name);  // lista persistida do dono (API 47)
             return i;
         }
     }
@@ -514,7 +611,7 @@ bool providerStart(const LeaseTable<LEASES>::Lease& l, const uint8_t* params, si
             if (SensorRes::busy(l.sid)) return true;
             const int idx = SensorRes::indexOf(s_local[l.rid].name);
             const int rate = paramInt(params, plen, "rate", 0);
-            return SensorRes::serveStart(l.sid, l.mac, l.token, idx, rate);
+            return SensorRes::serveStart(l.sid, l.mac, l.token, idx, rate, params, plen);
         }
         default:
             return true;  // canal de dados: nada nativo
@@ -589,6 +686,9 @@ void handleOpen(uint16_t from, const uint8_t* body, size_t len, bool usb) {
     } else if (usb && !s_usbAllowed) {
         reason = REASON_POLICY;  // master res_share_usb (default "0")
     } else if (!policyAllows(s_local[rid])) {
+        reason = REASON_POLICY;
+    } else if (!aclAllows(rid, from)) {
+        // lista do dono (API 47): membro da matilha fora da lista nao abre
         reason = REASON_POLICY;
     } else if (!s_local[rid].ready) {
         reason = REASON_UNSUPPORTED;
@@ -723,7 +823,16 @@ void sensorSend(uint16_t sid, const uint8_t mac[6], uint32_t token, const uint8_
         if (s_usbSend != nullptr) s_usbSend(sid, s_sensorSeq, d, n);
         return;
     }
-    DataLink::send(mac, DataLink::KIND_DATA, sid, token, s_sensorSeq, d, n);
+    if (l != nullptr && l->transport == TRANSPORT_ESPNOW) {
+        DataLink::send(mac, DataLink::KIND_DATA, sid, token, s_sensorSeq, d, n);
+        return;
+    }
+    // sessao pela malha: so o EVENTO de threshold chega aqui (o stream exige
+    // ESP-NOW no OPEN) — 10 B no DATA do envelope, multi-hop de graca
+    if (l != nullptr && n <= MAX_DATA) {
+        uint8_t b[ENV_PAYLOAD];
+        sendEnv(l->client, b, encodeData(sid, s_sensorSeq, d, n, b, sizeof(b)), false);
+    }
 }
 
 // Servidor -> cliente num lease (resposta do gpio/sensor). O caminho e o
@@ -759,8 +868,12 @@ void serverDataIn(const LeaseTable<LEASES>::Lease& l, uint16_t from, const char*
         return;
     }
     if (loc.type == TYPE_SENSOR) {
-        if (n >= 1 && d[0] == 2) {  // pedido de leitura (o caso {"rate":0})
-            rlen = (size_t)SensorRes::sampleOnce(SensorRes::indexOf(loc.name), reply);
+        // pedido de leitura: binario [2] (API 38) ou textual {"r":1} (API 47:
+        // o app JS manda objeto para nao depender de bytes >0x7F)
+        const bool pedido = (n >= 1 && d[0] == 2) ||
+                            (n >= 1 && d[0] == '{' && resproto::paramHas(d, n, "r"));
+        if (pedido) {
+            rlen = (size_t)SensorRes::sampleOnceSid(l.sid, reply);
             if (rlen > 0) serverSendData(l, reply, rlen);
         }
         return;  // stream periodico so sai do servidor; escrita nao se aplica
@@ -864,6 +977,18 @@ void rxPushData(int h, const uint8_t* d, size_t n) {
         const size_t m = usbres::encodeEvData((uint8_t)h, d, n, s_heap->usbEv, sizeof(s_heap->usbEv));
         if (m > 0) usbEventLocked(s_heap->usbEv, m);
         return;
+    }
+    // evento de threshold (API 47): vai para o slot do handle (Pack.onEvent) e
+    // NAO para a fila do Pack.read — amostra e evento sao canais distintos
+    if (s_h[h].evt) {
+        resproto::SensorMsg ev;
+        if (resproto::decodeSensorMsg(d, n, &ev) && ev.event) {
+            s_h[h].hasEvt = true;
+            s_h[h].evtTs = ev.ts;
+            s_h[h].evtV = ev.v;
+            s_h[h].evtDir = ev.dir;
+            return;
+        }
     }
     if (s_heap->rxCount >= RX_DEPTH) {  // cheia: descarta a mais antiga (dado novo vale mais)
         s_heap->rxHead = (uint8_t)((s_heap->rxHead + 1) % RX_DEPTH);
@@ -1123,7 +1248,8 @@ void inboxPush(uint16_t from, const char* fromName, const uint8_t* p, size_t len
 // Metadados fixos dos nativos (vao para a flash, o Local copia)
 Meta relayMeta() {
     Meta m;
-    snprintf(m.schema, sizeof(m.schema), "{\"off\":0|1}");
+    // ops do DATA (API 47): 1 write, 2 read, 3 pulso (ms), 4 pwm (%)
+    snprintf(m.schema, sizeof(m.schema), "{\"off\":1,\"ops\":\"1234\"}");
     m.ver = 1;
     return m;
 }
@@ -1133,6 +1259,25 @@ Meta percentMeta() {
     snprintf(m.unit, sizeof(m.unit), "%%");
     m.rangeMin = 0.0f;
     m.rangeMax = 100.0f;
+    m.hasRange = true;
+    m.ver = 1;
+    return m;
+}
+
+Meta tempMeta() {
+    Meta m;
+    snprintf(m.unit, sizeof(m.unit), "C");
+    m.rangeMin = -40.0f;
+    m.rangeMax = 125.0f;
+    m.hasRange = true;
+    m.ver = 1;
+    return m;
+}
+
+Meta adcMeta() {
+    Meta m;  // bruto de 12 bits, sem unidade fisica
+    m.rangeMin = 0.0f;
+    m.rangeMax = 4095.0f;
     m.hasRange = true;
     m.ver = 1;
     return m;
@@ -1161,10 +1306,19 @@ void registerNatives() {
             localAdd(nm, TYPE_GPIO, false, true, false, "res_share_gpio", &rm);
         }
     }
-    // Sensores de placa (API 38): leitura passiva, compartilhada
+    // Sensores de placa (API 38): leitura passiva, compartilhada. API 47:
+    // "temp" (die do IMU, onde ha) e "adc" (pino livre por {"pin":N}).
     const Meta pm = percentMeta();
     if (BoardIO::hasLightSensor()) localAdd("lum", TYPE_SENSOR, true, true, false, "res_share_sens", &pm);
     if (bp.batteryPin >= 0) localAdd("bat", TYPE_SENSOR, true, true, false, "res_share_sens", &pm);
+    if (bp.imuTemp != nullptr) {
+        const Meta tm = tempMeta();
+        localAdd("temp", TYPE_SENSOR, true, true, false, "res_share_sens", &tm);
+    }
+    {
+        const Meta am = adcMeta();
+        localAdd("adc", TYPE_SENSOR, true, true, false, "res_share_sens", &am);
+    }
 }
 
 }  // namespace
@@ -1179,6 +1333,7 @@ void init() {
     s_leases.seed((uint16_t)(esp_random() & 0xFFFF));
     SensorRes::setSendHook(sensorSend);
     registerNatives();
+    reflex::init();  // regras do NVS (API 47)
     s_inited = true;
     // Ordem de boot da RAM interna (esp32-cam: depois do WiFi sobram ~74 KB e
     // o NimBLE leva ~38): 1o o ESP-NOW e a res_rx (o driver WiFi ja subiu no
@@ -1347,8 +1502,12 @@ void tickTimers() {
         sendHello(0);
     }
     const uint32_t now = nowMs();
+    // atuadores: pulsos vencidos desligam sozinhos (API 47)
+    GpioRes::tick();
     // sensores em stream (rate > 0): amostra as sessoes vencidas e empurra
     SensorRes::tick();
+    // reflexos (API 47): avalia as regras do NVS a 1 Hz
+    reflex::tick();
     // leases do PC (gateway USB): renovados enquanto a sessao do cabo vive —
     // a queda (idle 8 s na UART, desconexao CDC) derruba a sessao
     // (usbSession(false)) e dai o lease vence como o de qualquer cliente
@@ -1604,6 +1763,79 @@ void tick() {
 
 }
 
+bool anyExposed() {
+    for (int i = 0; i < LIST_MAX; i++) {
+        const Local& l = s_local[i];
+        if (l.used && l.ready && policyAllows(l)) return true;
+    }
+    return false;
+}
+
+// Shell "res acl ..." / celerctl "res acl ...": lista e edita a ACL do dono.
+// ids em HEXA (A1B2), como aparecem no Pack.members/celerctl.
+int aclCmd(int argc, char** argv, PrintFn print, void* ctx) {
+    Guard g;
+    if (argc == 0 || strcmp(argv[0], "ls") == 0) {
+        for (int i = 0; i < LIST_MAX; i++) {
+            if (!s_local[i].used) continue;
+            const int a = aclSlot(s_local[i].name, false);
+            if (a < 0 || !s_acl[a].listed) {
+                print(ctx, "  %-15s aberto\r\n", s_local[i].name);
+                continue;
+            }
+            char ids[72] = {0};
+            size_t off = 0;
+            for (int k = 0; k < s_acl[a].n && off < sizeof(ids); k++) {
+                const int w = snprintf(ids + off, sizeof(ids) - off, "%s%04X", k ? " " : "",
+                                       s_acl[a].ids[k]);
+                if (w <= 0) break;
+                off += (size_t)w;
+            }
+            print(ctx, "  %-15s lista [%s]\r\n", s_local[i].name, ids);
+        }
+        return 0;
+    }
+    const int rid = localFind(argv[0]);
+    if (rid < 0) {
+        print(ctx, "acl: recurso \"%s\" desconhecido\r\n", argv[0]);
+        return 1;
+    }
+    const int a = aclSlot(argv[0], true);
+    if (a < 0) return 1;
+    if (argc >= 2 && strcmp(argv[1], "open") == 0) {
+        s_acl[a].listed = false;
+        s_acl[a].n = 0;
+    } else if (argc >= 2 && (strcmp(argv[1], "list") == 0 || strcmp(argv[1], "add") == 0)) {
+        if (strcmp(argv[1], "list") == 0) {  // "list" reescreve a lista
+            s_acl[a].listed = true;
+            s_acl[a].n = 0;
+        } else {
+            s_acl[a].listed = true;
+        }
+        for (int i = 2; i < argc && s_acl[a].n < ACL_MAX; i++) {
+            const unsigned long id = strtoul(argv[i], nullptr, 16);
+            if (id == 0 || id > 0xFFFF) continue;
+            bool dup = false;
+            for (int k = 0; k < s_acl[a].n; k++) dup = dup || s_acl[a].ids[k] == (uint16_t)id;
+            if (!dup) s_acl[a].ids[s_acl[a].n++] = (uint16_t)id;
+        }
+    } else if (argc >= 3 && strcmp(argv[1], "del") == 0) {
+        const unsigned long id = strtoul(argv[2], nullptr, 16);
+        for (int k = 0; k < s_acl[a].n; k++) {
+            if (s_acl[a].ids[k] != (uint16_t)id) continue;
+            for (int j = k; j + 1 < s_acl[a].n; j++) s_acl[a].ids[j] = s_acl[a].ids[j + 1];
+            s_acl[a].n--;
+            break;
+        }
+    } else {
+        print(ctx, "uso: res acl [ls | <recurso> open | list <id...> | add <id...> | del <id>]\r\n");
+        return 1;
+    }
+    const bool ok = aclSave(s_acl[a].name);
+    print(ctx, "acl %s: %s\r\n", s_acl[a].name, ok ? "ok" : "falhou no NVS");
+    return ok ? 0 : 1;
+}
+
 int remotes(Remote* out, int max) {
     if (!s_inited || !linkAlive()) return 0;
     Guard g;
@@ -1685,6 +1917,8 @@ int open(uint16_t node, const char* name, const uint8_t* params, size_t plen, Mo
     if (plen > 0) memcpy(x.params, params, plen);
     x.mode = (uint8_t)mode;
     x.maxMs = maxMs;
+    // threshold (API 47): so estas sessoes interpretam o DATA de evento
+    x.evt = resproto::paramHas(params, plen, "gt") || resproto::paramHas(params, plen, "lt");
     sendOpen(h);
     return h;
 }
@@ -1791,6 +2025,18 @@ bool read(int h, uint8_t* buf, size_t cap, size_t* len) {
         return true;
     }
     return false;
+}
+
+bool pollEvent(int h, float* v, uint32_t* ts, uint8_t* dir) {
+    if (h < 0 || h >= HANDLES_MAX || !s_inited) return false;
+    Guard g;
+    Handle& x = s_h[h];
+    if (x.state != ST_OPEN || !x.hasEvt) return false;
+    x.hasEvt = false;
+    if (v != nullptr) *v = x.evtV;
+    if (ts != nullptr) *ts = x.evtTs;
+    if (dir != nullptr) *dir = x.evtDir;
+    return true;
 }
 
 bool write(int h, const void* data, size_t len) {
@@ -1979,20 +2225,11 @@ bool sendEnvelope(uint16_t from, uint16_t to, const uint8_t* env, size_t n) {
     return DataLink::send(mac, DataLink::KIND_ENV, from, to, 0, env, n);
 }
 
-// Grava no /local de forma atomica (tmp + rename), como o recordStop do JS
+// Grava no /local de forma atomica (tmp + rename), como o recordStop do JS.
+// A copia local tinha um `unlink(path)` antes do rename: no LittleFS o rename
+// ja substitui e a janela entre apagar/renomear podia perder o WAV anterior.
 bool writeFileAtomic(const char* path, const void* d, size_t n) {
-    char tmp[64];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
-    FILE* f = fopen(tmp, "wb");
-    if (f == nullptr) return false;
-    const bool ok = fwrite(d, 1, n, f) == n;
-    fclose(f);
-    if (!ok) {
-        unlink(tmp);
-        return false;
-    }
-    unlink(path);
-    return rename(tmp, path) == 0;
+    return FileSystem::writeFileAtomic(path, d, n);
 }
 
 // Fim de midia por procuracao do PC (tick, pilha interna — grava a flash):

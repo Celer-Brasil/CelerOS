@@ -1,6 +1,6 @@
 # CelerNet — Design de produto da matilha CelerOS
 
-**Português (BR)** · 2026-10-16 · Estado do código: API 41 (três pilares integrados) — CelerNet v3 na 37, recursos na 36/38, gateway USB na 39
+**Português (BR)** · 2026-10-20 · Estado do código: API 47 (três pilares integrados) — CelerNet v3 na 37, recursos na 36/38, gateway USB na 39/41, **sensores/atuadores na 47** (eventos por threshold, pulso/PWM, reflexos nativos, ACL por recurso)
 
 Este documento define o CelerOS **como produto**: uma rede privada de
 dispositivos — a **matilha** — na qual cada aparelho publica as features do
@@ -855,8 +855,8 @@ RAM interna antes (a lição de 2026-10-07: RAM interna é o recurso escasso).
 | **Pilares (API 40/41)** | ✅ PackId (identidade única), Provision (senha · convite selado CelerLink · cabo), app Matilha com Entrar, nó virtual `pc-XXXX` com BEAT proxy, `SUB_SEND`, procuração `SUB_OPEN_AT` | `test/cpp` (PackId, ProvProto, JOIN, eventos, BEAT proxy), `meshsim` (convite + 3 portas; nó virtual), `test_celerctl` (mesh, procuração); bancada pendente |
 | **B — Gateway USB** | B.1 ✅ `KL_RES_CTL/DATA` + transporte USB + auto-KEEP + `res_share_usb`; B.2 ✅ nó virtual, proxy de OPEN e mídia de outros nós pelo cabo (API 41) | `test/cpp` (frame KL_RES), celerctl `sim` (novo opcode), bench watch CDC + dog USJ, teste do cabo arrancado (§10.1-5) |
 | **C — crate `celernet`** | transport trait + framing + ResProto client + API alto nível + fake device p/ CI (+ `cnet`, mDNS, hash-HELLO se julgado) | cargo test, integração vs sim, bancada 1 h de stream |
-| **D — Confiança** | ACL adminKey + consentimento + eventos/threshold + UI de join | meshsim (ACL negando nó), bench de RAM interna |
-| **E/F — Fronteira** | re-chunking, Rust-BLE, rules engine, handoff | desenho próprio, uma onda cada |
+| **D — Confiança** | ✅ eventos/threshold (`{"gt"/"lt"/"h"}` no OPEN + DATA `[0xE0]`, multi-hop pela malha) e **ACL por recurso no NVS do dono** (API 47, `res acl`); ❌ ACL distribuída/assinada com adminKey, consentimento por pedido (diálogo no dono), UI de join | `test/cpp` (limiar/histerese, blob), `meshsim` (evento de threshold), bench de RAM interna; ACL: shell/celerctl (falta o cenário de nó negado no meshsim) |
+| **E/F — Fronteira** | ✅ rules engine nativa mínima (**reflexos** no NVS: sensor local → relé local ou remoto com auto-off, notificação; API 47) e ✅ atuadores ricos (pulso/PWM); ❌ re-chunking, Rust-BLE, handoff | `test/cpp` (avaliação/histerese, blob), bench 2 nós |
 
 Bump de API a cada onda que mexe no fio (A e B são APIs 38 e 39
 candidatas); `celer.js types` regenera junto quando superfície JS muda.

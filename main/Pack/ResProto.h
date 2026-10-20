@@ -549,6 +549,89 @@ inline int paramInt(const uint8_t* params, size_t plen, const char* key, int def
     return def;
 }
 
+// A chave existe no JSON de params? (mesma copia do paramInt: chave sem
+// valor nao conta). Usado para distinguir "ausente" de "0" nos limiares.
+inline bool paramHas(const uint8_t* params, size_t plen, const char* key) {
+    if (params == nullptr) return false;
+    char k[16];
+    snprintf(k, sizeof(k), "\"%s\":", key);
+    const size_t kl = strlen(k);
+    for (size_t i = 0; i + kl < plen; i++) {
+        if (memcmp(params + i, k, kl) == 0) return true;
+    }
+    return false;
+}
+
+// float do params ("gt":25.5 / "h":1.5); def quando a chave nao existe
+inline float paramFloat(const uint8_t* params, size_t plen, const char* key, float def) {
+    if (!paramHas(params, plen, key)) return def;
+    char k[16];
+    snprintf(k, sizeof(k), "\"%s\":", key);
+    const size_t kl = strlen(k);
+    for (size_t i = 0; i + kl < plen; i++) {
+        if (memcmp(params + i, k, kl) != 0) continue;
+        char v[16];
+        const size_t left = plen - (i + kl);
+        snprintf(v, sizeof(v), "%.*s", (int)(left < sizeof(v) - 1 ? left : sizeof(v) - 1),
+                 (const char*)params + i + kl);
+        return atof(v);
+    }
+    return def;
+}
+
+// Sensor (API 38/47): amostra = [ts u32][f32 LE] (8 B, formato da API 38);
+// EVENTO de threshold = [0xE0][ts u32][f32 LE][dir u8] (10 B). O cliente so
+// interpreta evento nas sessoes abertas com {"gt"/"lt"} — o marcador nao
+// colide com amostra (tamanho diferente) nem com canal de app.
+constexpr uint8_t SENSOR_EV = 0xE0;
+constexpr uint8_t SENSOR_EV_GT = 1;  // valor subiu acima do "gt"
+constexpr uint8_t SENSOR_EV_LT = 2;  // valor desceu abaixo do "lt"
+constexpr size_t SENSOR_SAMPLE_LEN = 8;
+constexpr size_t SENSOR_EVENT_LEN = 10;
+
+inline size_t encodeSensorSample(uint32_t ts, float v, uint8_t out[SENSOR_SAMPLE_LEN]) {
+    memcpy(out, &ts, 4);
+    memcpy(out + 4, &v, 4);
+    return SENSOR_SAMPLE_LEN;
+}
+
+inline size_t encodeSensorEvent(uint32_t ts, float v, uint8_t dir,
+                                uint8_t out[SENSOR_EVENT_LEN]) {
+    out[0] = SENSOR_EV;
+    memcpy(out + 1, &ts, 4);
+    memcpy(out + 5, &v, 4);
+    out[9] = dir;
+    return SENSOR_EVENT_LEN;
+}
+
+struct SensorMsg {
+    bool event = false;
+    uint32_t ts = 0;
+    float v = 0.0f;
+    uint8_t dir = 0;
+};
+
+// Amostra ou evento de um DATA de sensor; false = outro formato (canal de
+// app, lixo)
+inline bool decodeSensorMsg(const uint8_t* d, size_t n, SensorMsg* out) {
+    if (d == nullptr) return false;
+    if (n == SENSOR_EVENT_LEN && d[0] == SENSOR_EV) {
+        out->event = true;
+        memcpy(&out->ts, d + 1, 4);
+        memcpy(&out->v, d + 5, 4);
+        out->dir = d[9];
+        return true;
+    }
+    if (n == SENSOR_SAMPLE_LEN) {
+        out->event = false;
+        memcpy(&out->ts, d, 4);
+        memcpy(&out->v, d + 4, 4);
+        out->dir = 0;
+        return true;
+    }
+    return false;
+}
+
 // corpo depois do op
 inline bool decodeAccept(const uint8_t* body, size_t len, Accept* out) {
     Reader r(body, len);
@@ -596,6 +679,47 @@ inline size_t encodeData(uint16_t sid, uint16_t seq, const void* data, size_t le
     w.u16(seq);
     w.bytes(data, len);
     return w.size();
+}
+
+// ------------------------------------------- DATA por tipo (API 47)
+// Comandos do DATA de um TYPE_GPIO ([op][...]): WRITE/READ sao os da API 38;
+// PULSE/PWM completam a onda A (antes respondiam RES_ERR). O servidor responde
+// [2][0|1] ao READ e RES_ERR para op invalida/valor fora de faixa.
+constexpr uint8_t GPIO_WRITE = 1;  // [1][0|1]
+constexpr uint8_t GPIO_READ = 2;   // [2] -> [2][0|1]
+constexpr uint8_t GPIO_PULSE = 3;  // [3][ms u16 LE]: liga e desliga sozinho
+constexpr uint8_t GPIO_PWM = 4;    // [4][duty 0..100] (so pino generico)
+constexpr uint8_t RES_ERR = 0xFF;  // op invalida ou valor fora de faixa
+
+inline size_t encodeGpioWrite(bool on, uint8_t out[2]) {
+    out[0] = GPIO_WRITE;
+    out[1] = on ? 1 : 0;
+    return 2;
+}
+
+inline size_t encodeGpioRead(uint8_t out[1]) {
+    out[0] = GPIO_READ;
+    return 1;
+}
+
+inline size_t encodeGpioPulse(uint16_t ms, uint8_t out[3]) {
+    out[0] = GPIO_PULSE;
+    out[1] = (uint8_t)(ms & 0xFF);
+    out[2] = (uint8_t)(ms >> 8);
+    return 3;
+}
+
+inline size_t encodeGpioPwm(uint8_t dutyPct, uint8_t out[2]) {
+    out[0] = GPIO_PWM;
+    out[1] = dutyPct > 100 ? 100 : dutyPct;
+    return 2;
+}
+
+// ms de um [3][ms u16 LE]; false se o comando nao for PULSE/completo
+inline bool decodeGpioPulse(const uint8_t* d, size_t n, uint16_t* ms) {
+    if (d == nullptr || n < 3 || d[0] != GPIO_PULSE) return false;
+    *ms = (uint16_t)(d[1] | ((uint16_t)d[2] << 8));
+    return true;
 }
 
 // --------------------------------------------------------------- leases

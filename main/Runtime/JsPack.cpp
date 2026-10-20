@@ -9,6 +9,7 @@
 #include "../Pack/Pack.h"
 #include "../Pack/Resources.h"
 #include "../Pack/Provision.h"
+#include "../Pack/Reflex.h"
 #include "../Bluetooth/NetKeys.h"
 #include "../Boards/Board.h"
 #include "../Utils/AppPerms.h"
@@ -274,7 +275,7 @@ duk_ret_t JSBindings::js_packOpen(duk_context *ctx) {
     // idem: e o dominio de pinos — o analogRead local tambem pede "gpio"
     const bool gpioName = strncasecmp(name, "rele", 4) == 0 || strcasecmp(name, "gpio") == 0 ||
                           strcasecmp(name, "lum") == 0 || strcasecmp(name, "bat") == 0 ||
-                          strncasecmp(name, "adc", 3) == 0;
+                          strcasecmp(name, "temp") == 0 || strncasecmp(name, "adc", 3) == 0;
     if ((strcasecmp(name, "mic") == 0 && !perm(celer::PERM_MIC)) ||
         (strcasecmp(name, "camera") == 0 && !perm(celer::PERM_CAMERA)) ||
         (gpioName && !perm(celer::PERM_GPIO))) {
@@ -326,6 +327,119 @@ duk_ret_t JSBindings::js_packRead(duk_context *ctx) {
         return 1;
     }
     duk_push_lstring(ctx, (const char*)buf, (duk_size_t)len);
+    return 1;
+}
+
+// Evento de threshold do sensor (API 47): {v, dir:"gt"|"lt", at:ms} | null.
+// A sessao foi aberta com {gt} ou {lt}; a amostra continua vindo no read.
+duk_ret_t JSBindings::js_packOnEvent(duk_context *ctx) {
+    float v = 0.0f;
+    uint32_t ts = 0;
+    uint8_t dir = 0;
+    if (!Resources::pollEvent(duk_require_int(ctx, 0), &v, &ts, &dir)) {
+        duk_push_null(ctx);
+        return 1;
+    }
+    duk_push_object(ctx);
+    duk_push_number(ctx, (double)v);
+    duk_put_prop_string(ctx, -2, "v");
+    putStr(ctx, "dir", dir == resproto::SENSOR_EV_LT ? "lt" : "gt");
+    putUint(ctx, "at", ts);
+    return 1;
+}
+
+// ---------------------------------------------------------------- reflexos
+// Pack.ruleAdd({sensor, op:"gt"|"lt", valor, h, alvo, no, on, notificar}) ->
+// id | -1 (perm "system"). A regra mora NESTE no (o sensor e local); alvo
+// remoto vira sessao do sistema com auto-off. Detalhes em Pack/Reflex.h.
+duk_ret_t JSBindings::js_packRuleAdd(duk_context *ctx) {
+    if (!perm(celer::PERM_SYSTEM)) {
+        duk_push_int(ctx, -1);
+        return 1;
+    }
+    if (!duk_is_object(ctx, 0)) {
+        duk_push_int(ctx, -1);
+        return 1;
+    }
+    char sensor[17] = {0}, opS[4] = {0}, alvo[17] = {0}, no[17] = {0}, notificar[reflex::TEXT_MAX + 1] = {0};
+    duk_get_prop_string(ctx, 0, "sensor");
+    if (duk_is_string(ctx, -1)) snprintf(sensor, sizeof(sensor), "%s", duk_get_string(ctx, -1));
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "op");
+    if (duk_is_string(ctx, -1)) snprintf(opS, sizeof(opS), "%s", duk_get_string(ctx, -1));
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "alvo");
+    if (duk_is_string(ctx, -1)) snprintf(alvo, sizeof(alvo), "%s", duk_get_string(ctx, -1));
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "no");
+    if (duk_is_string(ctx, -1)) snprintf(no, sizeof(no), "%s", duk_get_string(ctx, -1));
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "notificar");
+    if (duk_is_string(ctx, -1)) {
+        snprintf(notificar, sizeof(notificar), "%s", duk_get_string(ctx, -1));
+    }
+    duk_pop(ctx);
+    double valor = 0.0, hyst = 0.0;
+    duk_get_prop_string(ctx, 0, "valor");
+    if (duk_is_number(ctx, -1)) valor = duk_get_number(ctx, -1);
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "h");
+    if (duk_is_number(ctx, -1)) hyst = duk_get_number(ctx, -1);
+    duk_pop(ctx);
+    bool on = true;
+    duk_get_prop_string(ctx, 0, "on");
+    if (duk_is_boolean(ctx, -1)) on = duk_get_boolean(ctx, -1) != 0;
+    else if (duk_is_number(ctx, -1)) on = duk_get_number(ctx, -1) != 0;
+    duk_pop(ctx);
+    uint16_t node = 0;
+    if (no[0] != '\0' && !Resources::resolve(no, &node)) {
+        duk_push_int(ctx, -1);
+        return 1;
+    }
+    const uint8_t op = strcasecmp(opS, "lt") == 0 ? reflex::OP_LT : reflex::OP_GT;
+    const bool notify = notificar[0] != '\0';
+    duk_push_int(ctx, reflex::add(op, (float)valor, (float)hyst, sensor, node,
+                                  notify ? nullptr : alvo, on, notify ? notificar : nullptr));
+    return 1;
+}
+
+duk_ret_t JSBindings::js_packRuleDel(duk_context *ctx) {
+    if (!perm(celer::PERM_SYSTEM)) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    duk_push_boolean(ctx, reflex::del(duk_require_int(ctx, 0)) ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_packRuleList(duk_context *ctx) {
+    if (!perm(celer::PERM_SYSTEM)) {
+        duk_push_array(ctx);
+        return 1;
+    }
+    reflex::Rule rs[reflex::MAX];
+    const int n = reflex::list(rs, reflex::MAX);
+    duk_push_array(ctx);
+    for (int i = 0; i < n; i++) {
+        const reflex::Rule& r = rs[i];
+        duk_push_object(ctx);
+        putUint(ctx, "id", r.id);
+        putStr(ctx, "sensor", r.sensor);
+        putStr(ctx, "op", r.op == reflex::OP_LT ? "lt" : "gt");
+        duk_push_number(ctx, (double)r.value);
+        duk_put_prop_string(ctx, -2, "valor");
+        duk_push_number(ctx, (double)r.hyst);
+        duk_put_prop_string(ctx, -2, "h");
+        if (r.action == reflex::ACT_NOTIFY) {
+            putStr(ctx, "notificar", r.text);
+        } else {
+            putStr(ctx, "alvo", r.target);
+            if (r.targetNode != 0) putNodeId(ctx, "no", r.targetNode);
+            duk_push_boolean(ctx, r.on ? 1 : 0);
+            duk_put_prop_string(ctx, -2, "on");
+        }
+        duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
+    }
     return 1;
 }
 

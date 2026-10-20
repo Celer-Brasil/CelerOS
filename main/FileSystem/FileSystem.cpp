@@ -421,6 +421,43 @@ bool FileSystem::writeTextFile(const char* path, const char* content) {
     return true;
 }
 
+bool FileSystem::writeFileAtomic(const char* path, const void* data, size_t len) {
+    if (!pathOk(path) || (data == nullptr && len > 0)) return false;
+    // Buffer fixo: std::string num caminho de escrita pode abortar sem
+    // excecoes quando a RAM aperta (CYD). Mesmo teto pratico do jail.
+    char tmp[300];
+    const int n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    if (n < 0 || (size_t)n >= sizeof(tmp)) return false;
+    FILE* f = fopen(tmp, "wb");
+    if (f == nullptr) return false;
+    const bool wrote = (len == 0) || (fwrite(data, 1, len, f) == len);
+    const bool closed = fclose(f) == 0;  // flush: disco cheio aparece aqui
+    if (!wrote || !closed) {
+        unlink(tmp);
+        return false;
+    }
+    // LittleFS troca por rename (atomico). FAT nao renomeia por cima: so
+    // remove o destino DEPOIS do tmp completo (a janela sem arquivo e do
+    // FAT, nao do LittleFS).
+    if (rename(tmp, path) == 0) return true;
+    if (strncmp(path, "/local", 6) == 0) {
+        unlink(tmp);
+        return false;
+    }
+    // FAT: so remove o destino se ele realmente existe (erro de permissao/
+    // caminho nao pode virar perda do arquivo antigo).
+    struct stat st;
+    if (stat(path, &st) != 0 || S_ISDIR(st.st_mode)) {
+        unlink(tmp);
+        return false;
+    }
+    if (unlink(path) != 0) {
+        unlink(tmp);
+        return false;
+    }
+    return rename(tmp, path) == 0;
+}
+
 bool FileSystem::appendTextFile(const char* path, const char* content) {
     if (!pathOk(path) || content == nullptr) return false;
 

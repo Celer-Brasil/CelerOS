@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 46 — 338 funcoes.
+// API level 47 — 342 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -600,6 +600,10 @@ declare const Pack: {
     open(no: string, nome: string, opts?: object): number;
     status(h: number): PackSession | null;
     read(h: number): string | null;
+    onEvent(h: number): { v: number; dir: "gt" | "lt"; at: number } | null;
+    ruleAdd(regra?: { sensor: string; op: "gt" | "lt"; valor: number; h?: number; alvo?: string; no?: string; on?: boolean | number; notificar?: string }): number;
+    ruleDel(id: number): boolean;
+    ruleList(): Array<{ id: number; sensor: string; op: "gt" | "lt"; valor: number; h: number; alvo?: string; no?: string; on?: boolean; notificar?: string }>;
     write(h: number, dado?: string | object): boolean;
     close(h: number): void;
     expose(nome: string, opts?: { shared?: boolean }): boolean;

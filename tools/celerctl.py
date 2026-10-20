@@ -2155,6 +2155,56 @@ def cmd_res(args):
                         print(" ".join("%02x" % b for b in d))
             finally:
                 link.res_close(sid)
+        elif sub == "pulse":
+            # API 47: o dono liga e desliga sozinho; a sessao precisa viver
+            # durante o pulso (o fim do lease cancela)
+            if not 1 <= args.ms <= 65535:
+                raise CelerError("ms fora da faixa 1..65535: %d" % args.ms)
+            cmd = struct.pack("<BH", 3, args.ms)
+            if args.no:
+                link.keep_push = True
+                h = link.res_open_at(_node_id(link, args.no), args.nome, {"off": 1})
+                try:
+                    link.res_hwrite(h, cmd)
+                    link.hold(args.ms / 1000.0 + 0.5)
+                finally:
+                    link.res_hclose(h)
+            else:
+                r = link.res_open(args.nome, {"off": 1})
+                sid = r["sid"]
+                try:
+                    link.res_write(sid, cmd)
+                    time.sleep(args.ms / 1000.0 + 0.5)
+                finally:
+                    link.res_close(sid)
+            print("pulso de %d ms em %s%s" % (args.ms, args.nome,
+                                              "@" + args.no if args.no else ""))
+        elif sub == "pwm":
+            # pino livre do gateway: [4][duty]. A sessao segura o LEDC; sem
+            # --segura o PWM fica so enquanto o comando roda (2 s)
+            if not 0 <= args.pct <= 100:
+                raise CelerError("pct fora de 0..100: %d" % args.pct)
+            r = link.res_open("gpio", {"pin": args.pino})
+            sid = r["sid"]
+            try:
+                link.res_write(sid, struct.pack("<BB", 4, args.pct))
+                seg = args.segura if args.segura > 0 else 2
+                print("pwm %d%% no pino %d (sessao %d, %ds)" % (args.pct, args.pino, sid, seg))
+                link.hold(seg)
+            finally:
+                link.res_close(sid)
+        elif sub == "rule":
+            # reflexos nativos (API 47) no NVS do no do cabo
+            code, out = link.exec("svc reflex " + " ".join(args.rule_args))
+            sys.stdout.write(out)
+            if code != 0:
+                raise CelerError("svc reflex saiu %d" % code)
+        elif sub == "acl":
+            # ACL por recurso (Fase 4): mora no NVS do dono, editada localmente
+            code, out = link.exec("res acl " + " ".join(args.acl_args))
+            sys.stdout.write(out)
+            if code != 0:
+                raise CelerError("res acl saiu %d" % code)
         elif sub == "open":
             opts = json.loads(args.opts) if args.opts else None
             r = link.res_open(args.nome, opts)
@@ -4456,6 +4506,23 @@ def build_parser():
     p.add_argument("nome", help='"lum", "bat" (o do catalogo)')
     p.add_argument("rate", type=int, nargs="?", default=0, help="ms entre amostras (0 = por pedido)")
     p.add_argument("segundos", type=int, nargs="?", default=10)
+    p = rr.add_parser("pulse", help="pulso no rele (liga e desliga sozinho, API 47)")
+    p.add_argument("nome", help='"rele1"..')
+    p.add_argument("ms", type=int, help="duracao do pulso (1..65535 ms)")
+    p.add_argument("-n", "--no", default=None, metavar="NO",
+                   help="rele de OUTRO no (procuracao do gateway)")
+    p = rr.add_parser("pwm", help="PWM num pino livre do gateway (API 47, LEDC)")
+    p.add_argument("pino", type=int)
+    p.add_argument("pct", type=int, help="0..100")
+    p.add_argument("--segura", type=int, default=0, metavar="S",
+                   help="mantem o PWM N s (default 2)")
+    p = rr.add_parser("rule", help="reflexos nativos do gateway (API 47, NVS)")
+    p.add_argument("rule_args", nargs=argparse.REMAINDER,
+                   help="ls | add <sensor> <gt|lt> <valor> <h> <no|local> <alvo> <on|off> | "
+                        "notify <sensor> <gt|lt> <valor> <h> <texto> | del <id>")
+    p = rr.add_parser("acl", help="ACL por recurso (API 47): quem pode abrir no gateway")
+    p.add_argument("acl_args", nargs=argparse.REMAINDER,
+                   help="ls | <recurso> open | <recurso> list <id>... | <recurso> del <id>")
     p = rr.add_parser("open", help="abre um recurso local (opts = JSON do schema)")
     p.add_argument("nome")
     p.add_argument("opts", nargs="?", default=None)

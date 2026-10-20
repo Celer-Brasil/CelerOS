@@ -278,7 +278,9 @@ int members(Member* out, int max) {
 }
 
 uint8_t myCaps() {
-    return (uint8_t)(s_capsBase | (s_capsHub ? netframe::CAPS_HUB : 0));
+    // CAPS_RES (API 47): dinamico — o vizinho ve no BEAT quem tem o que abrir
+    return (uint8_t)(s_capsBase | (s_capsHub ? netframe::CAPS_HUB : 0) |
+                     (Resources::anyExposed() ? netframe::CAPS_RES : 0));
 }
 
 bool send(uint16_t to, uint8_t kind, const void* payload, size_t len, bool urgent) {

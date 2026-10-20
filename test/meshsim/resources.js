@@ -22,8 +22,9 @@ function natives(caps, deps) {
     if (caps & 0x40) l.push({ name: 'camera', type: 3, shared: false, ready: false, policy: 'res_share_cam' });
     var nr = deps.relays || 0;
     for (var i = 1; i <= nr; i++) {
+        // ops do DATA (API 47): 1 write, 2 read, 3 pulso (ms), 4 pwm (%)
         l.push({ name: 'rele' + i, type: 4, shared: false, ready: true, policy: 'res_share_gpio',
-                 schema: '{"off":0|1}' });
+                 schema: '{"off":1,"ops":"1234"}' });
     }
     (deps.sensors || []).forEach(function(s) {
         l.push({ name: s, type: 5, shared: true, ready: true, policy: 'res_share_sensor',
@@ -59,6 +60,7 @@ function create(deps) {
     var S = deps.S;
     var local = natives(deps.caps, deps).map(function(n) { n.app = false; return n; });
     var hw = {};   // "fisico" simulado: estado dos reles por nome (0/1)
+    var pulses = {};  // nome -> ms do fim do pulso (API 47)
     // default do interruptor do dono (Resources.cpp/policyDefault): o atuador
     // nasce DESLIGADO; leitura nasce compartilhada. deps.setting volta null
     // quando o no nao definiu
@@ -153,6 +155,14 @@ function create(deps) {
                         try { pp = JSON.parse(o.params || '{}'); } catch (e2) { pp = {}; }
                         l.autoOff = x.type === 4 && pp.off === 1;
                         l.rate = x.type === 5 ? Math.max(0, pp.rate | 0) : 0;
+                        // threshold (API 47): evento na transicao, histerese h,
+                        // cooldown de 1 s por sessao (como SensorRes.cpp)
+                        l.gt = x.type === 5 && pp.gt !== undefined ? Number(pp.gt) : null;
+                        l.lt = x.type === 5 && pp.lt !== undefined ? Number(pp.lt) : null;
+                        l.h = pp.h !== undefined ? Math.max(0, Number(pp.h)) : 0;
+                        l.armedGt = l.gt !== null;
+                        l.armedLt = l.lt !== null;
+                        l.lastEvt = 0;
                         l.nextSample = 0;
                         send(from, { op: 'accept', req: o.req, sid: l.sid, leaseDs: LEASE_MS / 100 }, true);
                         return;
@@ -214,6 +224,12 @@ function create(deps) {
             case 'data':
                 i = bySid(from, o.sid);
                 if (i >= 0) {
+                    // evento de threshold (API 47): fila propria do handle
+                    if (h[i].evt && o.data && o.data.ev) {
+                        h[i].evts = h[i].evts || [];
+                        h[i].evts.push({ v: o.data.v, dir: o.data.dir, at: o.data.ts });
+                        return;
+                    }
                     rx.push({ h: i, data: o.data });
                     if (rx.length > RX_DEPTH) rx.shift();
                     return;
@@ -230,6 +246,12 @@ function create(deps) {
                             if (d2.w !== undefined) hw[l.name] = d2.w ? 1 : 0;
                             else if (d2.r !== undefined) {
                                 send(from, { op: 'data', sid: l.sid, data: { r: hw[l.name] || 0 } });
+                            } else if (d2.p !== undefined) {  // pulso: liga agora, o tick desliga
+                                hw[l.name] = 1;
+                                pulses[l.name] = now() + Math.max(1, d2.p | 0);
+                                deps.log('[res] ' + l.name + ' pulso de ' + (d2.p | 0) + 'ms');
+                            } else if (d2.d !== undefined) {  // PWM em rele: RES_ERR (rede eletrica)
+                                send(from, { op: 'data', sid: l.sid, data: { e: 255 } });
                             }
                         } else if (x2 && x2.type === 5) {  // sensor por pedido
                             if (d2.r !== undefined) {
@@ -255,11 +277,36 @@ function create(deps) {
             }
             return true;
         });
-        // sensor em stream (rate > 0): amostra as sessoes vencidas
+        // pulso vencido: desliga sozinho (GpioRes::tick no firmware)
+        Object.keys(pulses).forEach(function(n) {
+            if (t - pulses[n] >= 0) {
+                delete pulses[n];
+                if (hw[n]) { hw[n] = 0; deps.log('[res] ' + n + ' pulso terminou'); }
+            }
+        });
+        // sensor em stream (rate > 0) e threshold (API 47): uma passada so.
+        // O threshold avalia no rate (ou 1 s sem stream) e empurra o evento
+        // no cruzamento; a histerese re-arma e o cooldown segura o ruido.
         leases.forEach(function(l) {
-            if (l.rate > 0 && t - (l.nextSample || 0) >= 0) {
-                l.nextSample = t + l.rate;
-                send(l.client, { op: 'data', sid: l.sid, data: { v: sample(), ts: t } });
+            var thr = l.gt !== null || l.lt !== null;
+            var period = l.rate > 0 ? l.rate : (thr ? 1000 : 0);
+            if (period === 0 || t - (l.nextSample || 0) < 0) return;
+            l.nextSample = t + period;
+            var v = sample();
+            if (l.rate > 0) send(l.client, { op: 'data', sid: l.sid, data: { v: v, ts: t } });
+            if (!thr) return;
+            function fire(dir) {
+                if (l.lastEvt && t - l.lastEvt < 1000) return;
+                l.lastEvt = t;
+                send(l.client, { op: 'data', sid: l.sid, data: { ev: 1, v: v, ts: t, dir: dir } });
+            }
+            if (l.gt !== null) {
+                if (l.armedGt && v >= l.gt) { l.armedGt = false; fire('gt'); }
+                else if (!l.armedGt && v <= l.gt - l.h) l.armedGt = true;
+            }
+            if (l.lt !== null) {
+                if (l.armedLt && v <= l.lt) { l.armedLt = false; fire('lt'); }
+                else if (!l.armedLt && v >= l.lt + l.h) l.armedLt = true;
             }
         });
         for (var i = 0; i < HANDLES; i++) {
@@ -320,6 +367,11 @@ function create(deps) {
             if (slot < 0) return -1;
             h[slot] = { state: 'opening', gen: h[slot].gen + 1, tries: 0, node: node, name: name,
                         params: params || '', reason: '', sid: 0 };
+            // sessao com threshold (API 47): o DATA de evento vira fila propria
+            var pp = {};
+            try { pp = JSON.parse(params || '{}'); } catch (e) { pp = {}; }
+            h[slot].evt = pp.gt !== undefined || pp.lt !== undefined;
+            h[slot].evts = [];
             sendOpen(slot);
             return slot;
         },
@@ -334,6 +386,11 @@ function create(deps) {
                 if (rx[k].h === i) return rx.splice(k, 1)[0].data;
             }
             return null;
+        },
+        // evento de threshold pendente (API 47) ou null
+        onEvent: function(i) {
+            if (!(i >= 0 && i < HANDLES)) return null;
+            return h[i].evts && h[i].evts.length ? h[i].evts.shift() : null;
         },
         write: function(i, data) {
             if (!(i >= 0 && i < HANDLES) || h[i].state !== 'open') return false;

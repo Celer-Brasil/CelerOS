@@ -63,6 +63,10 @@ constexpr uint8_t CAPS_MOTORS = 0x08;
 constexpr uint8_t CAPS_LEDS = 0x10;
 constexpr uint8_t CAPS_HUB = 0x20;
 constexpr uint8_t CAPS_CAMERA = 0x40;
+// API 47: o no publica recursos da matilha (rele/sensor/mic/camera/canais) —
+// discovery sem esperar resposta do DESCRIBE. Bits novos sao aditivos: nos
+// velhos ignoram.
+constexpr uint8_t CAPS_RES = 0x80;
 
 // flags do BEAT (2o byte): estado de provisionamento
 constexpr uint8_t BFLAG_UNPROV = 0x01;  // na rede aberta, aceitando matilha

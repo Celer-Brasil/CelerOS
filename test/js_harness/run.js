@@ -1107,6 +1107,11 @@ function makeEnv() {
                      via: x.state === 'open' ? 'mesh' : '' } : null;
     },
     read: function(h) { var x = resHandles[h]; return x && x.rx.length ? x.rx.shift() : null; },
+    // evento de threshold (API 47): fila propria do handle, como no firmware
+    onEvent: function(h) {
+        var x = resHandles[h];
+        return x && x.state === 'open' && x.evts && x.evts.length ? x.evts.shift() : null;
+    },
     write: function(h, d) {
         var x = resHandles[h];
         if (!x || x.state !== 'open') return false;
@@ -1207,6 +1212,11 @@ function makeEnv() {
     pushPack: function(list) { packRx = packRx.concat(list); },
     setResources: function(list) { resList = list; },
     pushResData: function(h, d) { if (resHandles[h]) resHandles[h].rx.push(d); },
+    pushResEvent: function(h, ev) {
+        if (!resHandles[h]) return;
+        resHandles[h].evts = resHandles[h].evts || [];
+        resHandles[h].evts.push(ev);
+    },
     setResSessions: function(name, n) { resExposed[name] = n; },
     pushResWrite: function(list) { resWrites = resWrites.concat(list); },
     meshSent: meshSent,

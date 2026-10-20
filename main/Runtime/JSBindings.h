@@ -471,6 +471,10 @@ public:
     static duk_ret_t js_packOpen(duk_context *ctx);
     static duk_ret_t js_packStatus(duk_context *ctx);
     static duk_ret_t js_packRead(duk_context *ctx);
+    static duk_ret_t js_packOnEvent(duk_context *ctx);
+    static duk_ret_t js_packRuleAdd(duk_context *ctx);
+    static duk_ret_t js_packRuleDel(duk_context *ctx);
+    static duk_ret_t js_packRuleList(duk_context *ctx);
     static duk_ret_t js_packWrite(duk_context *ctx);
     static duk_ret_t js_packClose(duk_context *ctx);
     static duk_ret_t js_packExpose(duk_context *ctx);

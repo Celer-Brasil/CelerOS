@@ -12,8 +12,11 @@
 //     gpio generico; o rele NAO precisa). Idempotente por sid (OPEN
 //     repetido da perda do ACCEPT).
 //   data        — DATA do cliente: [1][0|1] escreve; [2] le (responde
-//     [2][0|1]; a resposta quem envia e o Resources). Ops de onda futura
-//     (pulso/PWM) respondem [0xFF].
+//     [2][0|1]; a resposta quem envia e o Resources); [3][ms u16 LE] PULSO
+//     (liga e o tick desliga sozinho); [4][duty 0..100] PWM no pino generico
+//     (responde RES_ERR em op invalida).
+//   tick        — pilha dos pulsos (tickTimers do Resources, sob o mutex):
+//     desliga os vencidos.
 //   serveStop   — fim do lease (CLOSE, vencido, revogado): com auto-off o
 //     pino/rele volta ao nivel BAIXO sozinho — a matilha inteira pode cair
 //     que o atuador desliga (o mesmo contrato que devolve a camera).
@@ -36,6 +39,9 @@ bool busy(uint16_t sid);  // esta sessao ja esta servida (OPEN repetido)
 // DATA do cliente (servidor roteia pelo tipo): escreve/le e monta a
 // resposta; *replyLen = 0 quando nao ha resposta (WRITE).
 bool data(uint16_t sid, const uint8_t* d, size_t n, uint8_t* reply, size_t* replyLen);
+
+// Pilha dos pulsos vencidos (tickTimers do Resources).
+void tick();
 
 }  // namespace GpioRes
 

@@ -64,6 +64,11 @@ const RETURNS = {
     'Pack.snap': 'number',
     'Pack.view': 'number',
     'Pack.drawFrame': 'boolean',
+    // API 47: sensores/atuadores da matilha
+    'Pack.onEvent': '{ v: number; dir: "gt" | "lt"; at: number } | null',
+    'Pack.ruleAdd': 'number',
+    'Pack.ruleDel': 'boolean',
+    'Pack.ruleList': 'Array<{ id: number; sensor: string; op: "gt" | "lt"; valor: number; h: number; alvo?: string; no?: string; on?: boolean; notificar?: string }>',
     'System.drawJPG': 'boolean',
 };
 
@@ -103,6 +108,10 @@ const PARAM_TYPES = {
     'Pack.snap.opts': '{ path?: string; quality?: number }',
     'Pack.view.no': 'string',
     'Pack.view.opts': '{ fps?: number; quality?: number }',
+    // API 47: sensores/atuadores da matilha
+    'Pack.onEvent.h': 'number',
+    'Pack.ruleAdd.regra': '{ sensor: string; op: "gt" | "lt"; valor: number; h?: number; alvo?: string; no?: string; on?: boolean | number; notificar?: string }',
+    'Pack.ruleDel.id': 'number',
 };
 
 // Nomes de argumento que indicam string (o restante e number: a API e

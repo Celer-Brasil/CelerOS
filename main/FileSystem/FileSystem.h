@@ -33,6 +33,11 @@ public:
     // Atomica em /local: grava em <path>.tmp e renomeia por cima (queda de
     // energia no meio deixa o arquivo antigo intacto, nunca um pela metade)
     static bool writeTextFile(const char* path, const char* content);
+    // Idem para bytes (WAV/foto/cache): LittleFS troca por rename; no FAT
+    // remove o destino antes (o FAT nao renomeia por cima). Checa fclose
+    // (erro de disco cheio aparece no flush) e nunca apaga o destino antes
+    // de o tmp estar completo.
+    static bool writeFileAtomic(const char* path, const void* data, size_t len);
     static bool exists(const char* path);
     static int listDir(const char* dirPath, std::string* resultFiles, int maxFiles);
     static int listDirectory(const char* dirPath, FileEntry* entries, int maxEntries);

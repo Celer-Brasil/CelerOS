@@ -5,6 +5,7 @@
 #include "../Bluetooth/NetKeys.h"
 #include "../Pack/Resources.h"
 #include "../Pack/Provision.h"
+#include "../Pack/Reflex.h"
 #endif
 #include "FileSystem/FileSystem.h"
 #include "JsDebugger.h"
@@ -922,7 +923,13 @@ int cmdSvc(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "setup: %s (roda no proximo giro)\r\n", ok ? "reagendado" : "svc ausente");
         return ok ? 0 : 1;
     }
-    print(ctx, "uso: svc list | svc info <pkg> | svc stop|start|setup <pkg>\r\n");
+#if CONFIG_CELEROS_BLUETOOTH
+    // reflexos nativos (API 47): "se sensor X > Y entao atuador Z" no NVS
+    if (argc >= 2 && strcmp(argv[1], "reflex") == 0) {
+        return reflex::cmd(argc - 2, argv + 2, print, ctx);
+    }
+#endif
+    print(ctx, "uso: svc list | svc info <pkg> | svc stop|start|setup <pkg> | svc reflex ...\r\n");
     return 1;
 }
 
@@ -2263,10 +2270,12 @@ int cmdMesh(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     return 0;
 }
 
-// res: recursos da matilha (ESP-NOW, locais, leases, handles, cache)
+// res: recursos da matilha (ESP-NOW, locais, leases, handles, cache) +
+// "res acl ..." (API 47): a lista do dono de quem pode abrir cada recurso
 int cmdRes(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
-    (void)argc;
-    (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "acl") == 0) {
+        return Resources::aclCmd(argc - 2, argv + 2, print, ctx);
+    }
     Resources::dump(print, ctx);
     return 0;
 }

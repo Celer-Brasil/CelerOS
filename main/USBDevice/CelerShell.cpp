@@ -51,6 +51,10 @@
 #if CONFIG_CELEROS_PHONE_LINK
 #include "Bluetooth/PhoneLink.h"
 #endif
+#if CONFIG_CELEROS_USB_HOST
+#include "../USBHost/UsbHost.h"
+#include <usb/usb_host.h>
+#endif
 
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
@@ -263,6 +267,9 @@ int cmdHelp(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 #endif
         "  dmesg [n]               ultimas linhas do log do kernel (default 30)\r\n"
         "  clear                   limpa o terminal\r\n"
+#if CONFIG_CELEROS_USB_HOST
+        "  usb [power|resume]      USB Host: devices/root port (power = power-cycle)\r\n"
+#endif
 #if CONFIG_IDF_TARGET_ESP32S3
         "  lcddma [ms]             saude do DMA do painel RGB (underflow = imagem embaralha)\r\n"
 #endif
@@ -2313,6 +2320,45 @@ struct ShellCmd {
     int (*fn)(int argc, char** argv, CelerShell::PrintFn print, void* ctx);
 };
 
+#if CONFIG_CELEROS_USB_HOST
+// Diagnostico do USB Host (API 48): o pendrive nao enumera? "usb" mostra o
+// root port e o registry; "usb power" faz power-cycle; "usb resume" tira o
+// root port da suspensao.
+int cmdUsb(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    const char* sub = argc > 1 ? argv[1] : "status";
+    if (strcmp(sub, "power") == 0) {
+        usb_host_lib_set_root_port_power(false);
+        vTaskDelay(pdMS_TO_TICKS(300));
+        esp_err_t e = usb_host_lib_set_root_port_power(true);
+        print(ctx, "usb: power-cycle rc=%d\r\n", (int)e);
+        return 0;
+    }
+    if (strcmp(sub, "resume") == 0) {
+        esp_err_t e = usb_host_lib_root_port_resume();
+        print(ctx, "usb: resume rc=%d\r\n", (int)e);
+        return 0;
+    }
+    usb_host_lib_info_t info = {};
+    esp_err_t e = usb_host_lib_info(&info);
+    if (e == ESP_OK) {
+        print(ctx, "usb: host=%d devices=%d clients=%d suspended=%d\r\n",
+              (int)UsbHost::available(), info.num_devices, info.num_clients,
+              (int)info.root_port_suspended);
+    } else {
+        print(ctx, "usb: lib ausente (rc=%d)\r\n", (int)e);
+    }
+    const int n = UsbHost::deviceCount();
+    print(ctx, "usb: registry %d device(s)\r\n", n);
+    for (int i = 0; i < n; i++) {
+        UsbHost::DeviceInfo d;
+        if (!UsbHost::deviceAt(i, d)) continue;
+        print(ctx, "  addr %u  vid %04x pid %04x  class %u  ifs %u  claimed %u\r\n",
+              d.addr, d.vid, d.pid, d.cls, d.desc.nIfs, d.nClaims);
+    }
+    return 0;
+}
+#endif
+
 const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
     {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
@@ -2332,6 +2378,9 @@ const ShellCmd kCommands[] = {
     {"wifi", cmdWifi},
 #if CONFIG_CELEROS_DEBUG_BRIDGE
     {"bridge", cmdBridge},
+#endif
+#if CONFIG_CELEROS_USB_HOST
+    {"usb", cmdUsb},
 #endif
 #if CONFIG_CELEROS_PHONE_LINK
     {"gb", cmdGb},

@@ -1,0 +1,13 @@
+{
+  "name": "USB HID",
+  "packageName": "celeros.usbhid",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Driver de teclado e mouse USB em JS (API 48): decodifica HID boot, injeta no barramento Input do OS e move o ponteiro. Roda como servico de fundo no devkit-s3 — conecte teclado/mouse no USB-C host e os apps leem com Input.poll()/Input.pointer().",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 48,
+  "permissions": ["usb", "input"],
+  "service": "service.js",
+  "changelog": "1.0.0 - primeira versao: teclado boot (modificadores + 6 teclas, diff entre reports) e mouse boot (botoes + dx/dy/roda) injetados via Input.key/Input.move; rescan em hotplug e a cada 2s; sem driver de dispositivo no firmware"
+}

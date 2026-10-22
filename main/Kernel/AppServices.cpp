@@ -14,6 +14,7 @@
 #include "../Utils/CelerSettings.h"
 #include "../Utils/JsStrip.h"
 #include "../Boards/Board.h"
+#include "../USBHost/UsbHost.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "DeviceStats.h"
@@ -236,6 +237,7 @@ void destroyHeap() {
         s_heap = nullptr;
     }
     for (auto& a : s_apps) {
+        UsbHost::releaseOwner(a.pkg.c_str());  // heap morre: solta USB do servico
         a.thr = nullptr;
         a.running = false;
         a.needsLoad = !a.stopped;
@@ -247,6 +249,10 @@ void destroyHeap() {
 // forte — sem isto o rescan acumulava thread/programa e o servico
 // desinstalado seguia executando como zumbi)
 void releaseThread(SvcApp& a) {
+    // Interfaces/listeners USB do servico (API 48): sem isto o device fica
+    // preso a um heap que nao existe mais (o app HID perde o teclado para
+    // sempre apos um svc stop).
+    UsbHost::releaseOwner(a.pkg.c_str());
     if (a.thr != nullptr) {
         JSBindings::timersClearCtx(a.thr);
         duk_push_heap_stash(s_heap);                 // [stash]

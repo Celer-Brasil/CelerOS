@@ -153,6 +153,46 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         duk_pop(thr);
     }
 
+    // ---- Input + USB (API 48): o driver HID/impressora roda de fundo ----
+    // Mesma superficie do app (o servico tem as permissoes declaradas no
+    // app.json; sem elas o objeto nem nasce).
+    duk_push_global_object(thr);
+    if (perms & celer::PERM_INPUT) {
+        duk_push_object(thr);
+        static const JSBindings::JsFn kSvcInput[] = {
+            {"key", JSBindings::js_inputKey, 3},
+            {"poll", JSBindings::js_inputPoll, 0},
+            {"move", JSBindings::js_inputMove, 3},
+            {"pointer", JSBindings::js_inputPointer, 0},
+            {"clear", JSBindings::js_inputClear, 0},
+        };
+        JSBindings::putFns(thr, kSvcInput, 5);
+        duk_put_prop_string(thr, -2, "Input");
+    }
+#if CONFIG_CELEROS_USB_HOST
+    if (perms & celer::PERM_USB) {
+        duk_push_object(thr);
+        static const JSBindings::JsFn kSvcUsb[] = {
+            {"devices", JSBindings::js_usbDevices, 0},
+            {"poll", JSBindings::js_usbPoll, 0},
+            {"claim", JSBindings::js_usbClaim, 3},
+            {"release", JSBindings::js_usbRelease, 2},
+            {"controlIn", JSBindings::js_usbControlIn, 7},
+            {"controlOut", JSBindings::js_usbControlOut, 7},
+            {"out", JSBindings::js_usbOut, 4},
+            {"in", JSBindings::js_usbIn, 4},
+            {"sendFile", JSBindings::js_usbSendFile, 5},
+            {"listen", JSBindings::js_usbListen, 4},
+            {"read", JSBindings::js_usbRead, 2},
+            {"unlisten", JSBindings::js_usbUnlisten, 2},
+            {"flush", JSBindings::js_usbFlush, 2},
+        };
+        JSBindings::putFns(thr, kSvcUsb, 13);
+        duk_put_prop_string(thr, -2, "USB");
+    }
+#endif
+    duk_pop(thr);
+
 #if CONFIG_CELEROS_BLUETOOTH
     // ---- CelerNet + Pack (a malha sobrevive a troca de app; o servico
     // drena com poll() como qualquer app) ----

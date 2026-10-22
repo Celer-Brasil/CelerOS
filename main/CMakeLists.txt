@@ -63,6 +63,8 @@ set(CELEROS_SRCS
     "Launcher/WatchPanels.cpp"
     "Launcher/NotificationAlert.cpp"
     "Hardware/Buttons.cpp"
+    "Hardware/InputBus.cpp"
+    "Runtime/JsInput.cpp"
     "Hardware/PowerPolicy.cpp"
     "Display/ScreenPower.cpp"
 )
@@ -93,6 +95,13 @@ set(CELEROS_CAMERA_REQUIRES)
 if(CONFIG_CELEROS_JS_CAMERA)
     list(APPEND CELEROS_SRCS "Runtime/JsCamera.cpp")
     list(APPEND CELEROS_CAMERA_REQUIRES esp32-camera quirc)
+endif()
+# USB Host (API 48): core generico em C++ (pilha do IDF + transfers crus) e o
+# objeto JS USB.*. Nenhum driver de dispositivo mora aqui — impressora/HID
+# sao JS sobre a API. CELEROS_USB_HOST nunca convive com USB device (TinyUSB)
+# nem com a USJ no mesmo OTG (Kconfig garante).
+if(CONFIG_CELEROS_USB_HOST)
+    list(APPEND CELEROS_SRCS "USBHost/UsbDesc.cpp" "USBHost/UsbHost.cpp" "Runtime/JsUsb.cpp")
 endif()
 # Perfil sem vidro (CELEROS_UI=n, placas headless): a pilha de video sai do
 # build — Kui, launcher visual, capturas, icones, fontes e as bindings de
@@ -193,10 +202,12 @@ elseif(CELEROS_BOARD STREQUAL "waveshare-watch")
     set(CELEROS_ULP_EXP "${CELEROS_BOARD_DIR}/WatchUlp.cpp")
 elseif(CELEROS_BOARD STREQUAL "devkit")
     set(CELEROS_BOARD_DIR Boards/devkit)
+elseif(CELEROS_BOARD STREQUAL "devkit-s3")
+    set(CELEROS_BOARD_DIR Boards/devkit-s3)
 elseif(CELEROS_BOARD STREQUAL "esp32-cam")
     set(CELEROS_BOARD_DIR Boards/esp32-cam)
 else()
-    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch | devkit | esp32-cam)")
+    message(FATAL_ERROR "CELEROS_BOARD='${CELEROS_BOARD}' desconhecida (opcoes: smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch | devkit | devkit-s3 | esp32-cam)")
 endif()
 list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Board.cpp")
 
@@ -325,7 +336,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.10.1"
-    CELEROS_API_LEVEL=47
+    CELEROS_API_LEVEL=48
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

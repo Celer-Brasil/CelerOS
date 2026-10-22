@@ -5,6 +5,15 @@ dependencies:
     version: "^2.0.1~1"
     rules:
       - if: "target in [esp32s2, esp32s3, esp32p4]"
+  # USB Host (API 48). No IDF 6.x a pilha saiu do tree e vive no componente
+  # gerenciado espressif/usb (include usb/usb_host.h). So entra no build das
+  # placas que ligam CELEROS_USB_HOST — as demais nao pagam os ~40-55KB.
+  espressif/usb:
+    version: "^1.6.0"
+    rules:
+      - if: "target in [esp32s2, esp32s3, esp32p4]"
+        when:
+          - if: "sdkconfig in [CELEROS_USB_HOST]"
   # TFLite Micro: runtime do wake word "Hi Celer" (microWakeWord V2, modelo
   # proprio int8 embutido no firmware). So entra no build quando a placa liga
   # CELEROS_WAKE_WORD (hoje o cao) — sem a regra de sdkconfig, todas as

@@ -1,0 +1,70 @@
+# ESP32-S3-DevKitC-1 N16R8: 16MB QIO 80MHz + PSRAM 8MB OCTAL.
+# Placa de bancada do USB HOST: o USB-C nativo (GPIO19/20) alimenta o host
+# USB (CELEROS_USB_HOST) e o USB-C "UART" (bridge) segue sendo o console/
+# celerctl e a porta de gravacao. No S3 o OTG e a USB-Serial/JTAG dividem o
+# PHY interno: CELEROS_USB_NATIVE e CELEROS_LINK_ON_USJ ficam desligados.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16MB.csv"
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Desempenho: 16MB de flash e slot OTA de ~6MB — o interpretador JS ganha com
+# -O2 (mesma escolha da SmartDisplay).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# CONFIG_COMPILER_OPTIMIZATION_SIZE is not set
+
+# Console SEMPRE na UART0 (GPIO43/44, conector "UART"). O console secundario
+# da USJ e desligado: ele tomaria o PHY interno que o USB host precisa.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_CELEROS_USB_NATIVE is not set
+# CONFIG_CELEROS_LINK_ON_USJ is not set
+
+# USB HOST (API 48): o core generico em main/USBHost + o objeto JS USB.*.
+CONFIG_CELEROS_USB_HOST=y
+# Hub externo: o devkit tem UM conector host; teclado + mouse + impressora ao
+# mesmo tempo exigem hub. Custa ~10KB de flash (ext_hub.c) e nao usa PSRAM.
+CONFIG_USB_HOST_HUBS_SUPPORTED=y
+CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
+# Buffer de controle por device: 2048 B cobre o report descriptor HID inteiro
+# (HID_MAX_REPORT_DESC_LEN=2048) para o driver JS ler via USB.controlIn.
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
+
+# Sem vidro: a pilha de video inteira sai do build (como no devkit/esp32-cam).
+# CONFIG_CELEROS_UI is not set
+
+# Sem slot SD no DevKitC-1: FAT/SDSPI fora do binario.
+# CONFIG_CELEROS_SD_CARD is not set
+
+# Placa de bancada de USB: sem alto-falante, sem microfone e sem vidro para a
+# fisica nativa — os tres saem do build (contratos JS preservados).
+# CONFIG_CELEROS_AUDIO is not set
+# CONFIG_CELEROS_MIC is not set
+# CONFIG_CELEROS_JS_PHYSICS is not set
+
+# Servicos de fundo (svchost): o driver HID de teclado/mouse roda como
+# servico do app de fabrica "USB HID" e continua com outro app aberto.
+CONFIG_CELEROS_APP_SERVICES=y
+# CONFIG_CELEROS_APP_TASK is not set
+
+# Ring de logs maior (tem PSRAM): historico do boot inteiro no logcat --dump.
+CONFIG_CELEROS_LOG_RING=8192
+
+# RAM interna: mesma receita das outras S3 com PSRAM (smartdisplay/watch).
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_RX_BA_WIN=8
+# CONFIG_ESP_WIFI_IRAM_OPT is not set
+# CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+
+# O USB host usa buffers de transferencia em RAM interna DMA (no S3 o
+# USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM nao existe) — o heap interno precisa
+# ficar com folga, por isso os pools do NimBLE (quando o BT ligar) iriam para
+# a PSRAM. O BT fica desligado por padrao nesta placa (lab de USB).

@@ -3,7 +3,7 @@
 ## OVERVIEW
 One directory per board holding its `sdkconfig.defaults`. Board code itself lives in `main/Boards/<board>/` (Board.cpp, BoardDisplay.h, BoardTraits.h — exactly one is compiled in); this tree is only configuration plus, on the watch, the factory-image overlay. The `-DCELEROS_BOARD=<b>` CMake cache variable selects the board (validated in `main/CMakeLists.txt`; anything else is FATAL_ERROR).
 
-## THE SEVEN BOARDS
+## THE EIGHT BOARDS
 | Board | Chip / flash / RAM | Display & touch | Partitions | Notes |
 |-------|--------------------|-----------------|------------|-------|
 | `smartdisplay` | ESP32-S3 N16R8, 16MB QIO, PSRAM octal | Guition 4848S040 480x480 capacitive GT911 | `partitions_16MB.csv` | Default board. **Never** `CELEROS_USB_NATIVE` here (GPIO19 = touch I2C SDA, GPIO20 = RGB G1 lane; both denied to apps). Optional relay header (`CELEROS_SMARTDISPLAY_RELAYS`, Y SKU: L1/L2/L3 = 40/2/1 replace the NS4168 I2S) |
@@ -12,6 +12,7 @@ One directory per board holding its `sdkconfig.defaults`. Board code itself live
 | `spotpear-dog` | ESP32-S3R8, 16MB DIO, PSRAM octal | OLED SH1106 128x64 on I2C0 (SDA41/SCL42) | `partitions_16MB.csv` | Derived from smartdisplay. 4 servos + optional tail, I2S mic (4/5/6) and speaker (7/15/16), 2 WS2812 strips, battery divider (GPIO2). Dual-core. Console+celerctl on the USB-Serial/JTAG (`CELEROS_LINK_ON_USJ`, the only USB connector). Home app = Dog Face |
 | `waveshare-watch` | ESP32-S3R8, 32MB DIO, PSRAM octal | Waveshare AMOLED 2.06" 410x502 round-ish, FT3168 capacitive | `partitions_32MB.csv` | The smartwatch. Native USB dual CDC (`CELEROS_USB_NATIVE`, CDC_COUNT=2, OTG on GPIO19/20), NimBLE (Celer Link + Phone Link/Gadgetbridge), PM/light-sleep (`PowerPolicy`), RTC PCF85063 + AXP2101 + QMI8658 IMU on I2C0 (14/15), `screenInset` for the rounded glass |
 | `devkit` | ESP32 classic, 4MB, no PSRAM | **None** — stub panel that discards rendering (`main/Boards/devkit/BoardDisplay.h`); BOOT button (GPIO0) + single-channel LED (GPIO2) | `partitions_4MB.csv` | The barebone profile: `headless` (splash skipped, `getInfo().hasDisplay=false`/`shape:"headless"`) + `buttonToApp` (BOOT is app input via `System.button`, long = exit, launcher short relaunches homeApp). `CELEROS_UI=n` (the whole display stack leaves the binary). Same RAM budget as `cyd`; WiFi provisioned by the `wifi` shell command; factory image drops every drawing app via `data-exclude.txt` |
+| `devkit-s3` | ESP32-S3 N16R8, 16MB QIO/80M, PSRAM octal 8MB | **None** — same stub panel; BOOT (GPIO0) + WS2812 on GPIO38 (v1.1+) | `partitions_16MB.csv` | The **USB Host** board (API 48): native USB-C (OTG, GPIO19/20) is host, console/celerctl stays on the UART0 USB-C ("UART"). `CELEROS_USB_HOST=y` + `espressif/usb` managed component; `CELEROS_USB_NATIVE`/`CELEROS_LINK_ON_USJ` OFF (the S3 OTG shares the PHY with USJ). Hub support on; `ESP_CONSOLE_SECONDARY_NONE` keeps USJ from stealing the PHY. Headless (`CELEROS_UI=n`), no SD/audio/mic/physics; factory overlay ships the `USB HID` service (keyboard/mouse → `Input.*`). VBUS must come from the board (no GPIO switch) |
 | `esp32-cam` | ESP32-S (classic) AI-Thinker, 4MB DIO, PSRAM quad 4MB | **None** — the "glass" is the OV2640 sensor | `partitions_4MB_cam.csv` | Camera node: `headless`, `CELEROS_UI=n`, **dual-core** (unicore reset-looped in INT_WDT with WiFi+NimBLE), NimBLE (CelerNet mesh), TLS buffers in PSRAM, microSD by SDSPI (CLK14/CMD15/D0-2/CS13 — apps live on the SD, hence the small littlefs/1.81MB slots). Bench: brownout is failure #1 (sturdy 5V supply); flash mode = GPIO0 to GND at reset; GPIO12 is the MTD strap (never an output); GPIO16/17 belong to the PSRAM |
 
 ## FEATURE MENU (what each board compiles in)
@@ -19,22 +20,33 @@ Hardware-coupled subsystems are Kconfig flags in `main/Kconfig.projbuild`; a boa
 
 An off-flag keeps every JS contract: the implementation leaves the binary but inline stubs in `AudioPlayer.h` / `MusicSynth.h` / `BoardIO.h` answer with the documented no-hardware values (`playWav`/`playMusic` false, `sfx` 0, `musicPos` -1, `micLevel` -1, `speakerChannel` null), and whole JS objects disappear the documented way (`typeof Mic === "undefined"`; `System.verlet*` entries not registered — the physics dep feature-detects and falls back to interpreted `P.verlet`). `System.playTone` is NOT behind `CELEROS_AUDIO`: the analog LEDC tone (CYD speaker on GPIO26) and `toneAsync` beeps work on every board.
 
-| Flag | smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch | devkit | esp32-cam |
-|------|----|-----|----------|----|-----|----|-----|
-| `CELEROS_AUDIO` | y | — | — | y | y | — | — |
-| `CELEROS_MIC` | — | — | — | y | y | — | — |
-| `CELEROS_JS_PHYSICS` | y | — | — | y | y | — | — |
-| `CELEROS_WEB_SERVER` | y | — | — | y | y | y | y |
-| `CELEROS_SD_CARD` | y | y | — | y | y | — | y |
+| Flag | smartdisplay | cyd | cyd-vspi | spotpear-dog | waveshare-watch | devkit | devkit-s3 | esp32-cam |
+|------|----|-----|----------|----|-----|----|----|-----|
+| `CELEROS_AUDIO` | y | — | — | y | y | — | — | — |
+| `CELEROS_MIC` | — | — | — | y | y | — | — | — |
+| `CELEROS_JS_PHYSICS` | y | — | — | y | y | — | — | — |
+| `CELEROS_WEB_SERVER` | y | — | — | y | y | y | y | y |
+| `CELEROS_SD_CARD` | y | y | — | y | y | — | — | y |
+| `CELEROS_USB_HOST` | — | — | — | — | — | — | y | — |
 
 (— = off in that board's defaults.) The **CYD lite profile** (audio + mic + physics + web server off) took the esp32 OTA slot from **38 KB to 90 KB free** (image 1.599.024 → 1.545.344 B; libmain -47,5 KB, esp_http_server out) and bought the uniform 64KB CI gate back — the 12 KB CYD exception in `build.yml` is gone. CYD and cyd-vspi share the `esp32` OTA channel, so both carry the same lite set. esp32-cam also drops all three even though it has PSRAM: no glass means no game, and its slot sits at 108 KB free with the camera driver (its `Pack`/mesh code compiles fine against the audio stubs — a mesh node never lends what it doesn't have). smartdisplay keeps audio but drops `CELEROS_MIC` (no mic hardware; -6,5 KB).
 
 ## PER-BOARD FACTORY IMAGE
 `tools/flash_data.sh <board>` stages `data/` and then:
 1. **overlays** `boards/<board>/data/` on top — the watch adds Timer/Clima/Musica/Alarmes/Celular/Atividade; the dog adds Dog Face (its `homeApp`), and
-2. **excludes** paths listed in `boards/<board>/data-exclude.txt` (one per line, relative to `data/`; `#` comments) — the watch drops Terminal, HTTP Demo, Touch Test and Web Server (tight littlefs, keyboard-centric apps); the headless boards (`devkit`, `esp32-cam`) drop every app that draws plus `icons/`, because `CELEROS_UI=n` removes `System.draw*`/`UI`/`Keypad`/`prompt` from the firmware — the image keeps only Barebone, the headless reference.
+2. **excludes** paths listed in `boards/<board>/data-exclude.txt` (one per line, relative to `data/`; `#` comments) — the watch drops Terminal, HTTP Demo, Touch Test and Web Server (tight littlefs, keyboard-centric apps); the headless boards (`devkit`, `devkit-s3`, `esp32-cam`) drop every app that draws plus `icons/`, because `CELEROS_UI=n` removes `System.draw*`/`UI`/`Keypad`/`prompt` from the firmware — the image keeps only Barebone, the headless reference (plus, on devkit-s3, the board overlay with the `USB HID` service app).
 
-Partition size comes from the CSV picked above (single source of truth). New board with a data overlay: add the case to `flash_data.sh` and the overlay dir; the repo-wide app lint already globs `boards/*/data/apps` automatically. `flash_data.sh` currently accepts six names (`smartdisplay cyd spotpear-dog waveshare-watch devkit esp32-cam`) — `cyd-vspi` still has no case even though it shares the `cyd` 4MB image; add the case when that variant goes to the bench.
+Partition size comes from the CSV picked above (single source of truth). New board with a data overlay: add the case to `flash_data.sh` and the overlay dir; the repo-wide app lint already globs `boards/*/data/apps` automatically. `flash_data.sh` currently accepts seven names (`smartdisplay cyd spotpear-dog waveshare-watch devkit devkit-s3 esp32-cam`) — `cyd-vspi` still has no case even though it shares the `cyd` 4MB image; add the case when that variant goes to the bench.
+
+## USB HOST (devkit-s3)
+`CELEROS_USB_HOST=y` instala a pilha **USB Host** do IDF (componente gerenciado `espressif/usb` ^1.6.0 — no IDF 6.x ela saiu do tree) e liga o core `main/USBHost/` + as bindings `USB.*`/`Input.*` (API 48). Regras que a bancada custa caro:
+
+- **Um controlador OTG, um papel.** No S3 o USB-OTG e a USB-Serial/JTAG compartilham o PHY interno (GPIO19/20). Com o host instalado a USJ deixa de existir: o console/celerctl TEM de ficar na UART0 (conector "UART") e `CELEROS_USB_NATIVE`/`CELEROS_LINK_ON_USJ` ficam desligados. O Kconfig já impede a combinação.
+- **VBUS nao e chaveado por software.** O DevKitC-1 energiza o conector, mas nao ha GPIO de load switch no perfil; dispositivos que puxam mais que a placa oferece pedem hub alimentado.
+- **Hub externo:** `CONFIG_USB_HOST_HUBS_SUPPORTED` + `USB_HOST_HUB_MULTI_LEVEL` (custa ~10 KB de flash). Sem hub so da um dispositivo por vez.
+- **Report descriptor HID inteiro:** `CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048` (o default 256 cortaria descritores > 248 B). O teto de uma transferencia JS e 4 KB; `USB.sendFile` faz streaming de arquivos.
+- **Buffers de URB sao DMA interno.** No S3 `USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM` nao existe: cada transfer aloca via `usb_host_transfer_alloc` (RAM interna). Nao passe PSRAM para o host lib.
+- **Sem driver de dispositivo no C++.** Impressora (ESC/POS), HID, MSC/FAT e qualquer protocolo proprietario sao deps JS (`celeros.usb.*`) sobre as transfers cruas. O core so enumera, abre descritores e executa control/bulk/interrupt.
 
 ## SDKCONFIG / STACK RECIPE (why each defaults file looks like it does)
 Root `sdkconfig.defaults` holds the common recipe; `boards/<b>/sdkconfig.defaults` overrides per board (`sdkconfig_check.py` merges both). Main numbers today:

@@ -22,6 +22,7 @@
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Hardware/BoardIO.h"
 #include "../Hardware/Buttons.h"
+#include "../USBHost/UsbHost.h"
 #include "../Display/ScreenCapture.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
@@ -319,6 +320,12 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
     putBool(ctx, "hasPhysics", true);
 #else
     putBool(ctx, "hasPhysics", false);
+#endif
+    // API 48: USB Host presente E instalado (objeto USB existe com a perm)
+#if CONFIG_CELEROS_USB_HOST
+    putBool(ctx, "hasUsbHost", UsbHost::available());
+#else
+    putBool(ctx, "hasUsbHost", false);
 #endif
     putBool(ctx, "hasImu", Board::profile().imuAccel != nullptr);  // API 13
     // API 15: bateria, placa e geometria do vidro (relogio: cantos mortos)

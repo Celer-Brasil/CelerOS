@@ -1210,7 +1210,8 @@ int cmdGrant(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         std::string pkg = json.substr(q1 + 1, q2 - q1 - 1);
         uint32_t mask = celer::parsePermissions(json) &
                         (celer::PERM_FS | celer::PERM_NET | celer::PERM_GPIO |
-                         celer::PERM_SYSTEM | celer::PERM_MIC | celer::PERM_CAMERA);
+                         celer::PERM_SYSTEM | celer::PERM_MIC | celer::PERM_CAMERA |
+                         celer::PERM_USB | celer::PERM_INPUT);
         AppGrants::grant(pkg, dir, mask);
         print(ctx, "permissoes concedidas a %s (%s)\r\n", pkg.c_str(), dir.c_str());
         return 0;

@@ -1,0 +1,15 @@
+{
+  "name": "USB Devices",
+  "packageName": "celeros.usbdevices",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Inspetor do USB Host (API 48): lista os dispositivos conectados com VID/PID, classe, interfaces e endpoints — o ponto de partida para escrever um driver em JS. Em placa com tela mostra na lista; em headless imprime no logcat.",
+  "type": "App",
+  "category": "Utility",
+  "api": 48,
+  "permissions": ["usb"],
+  "deps": {
+    "celeros.usb": "^1.0.0"
+  },
+  "changelog": "1.0.0 - primeira versao: enumeracao ao vivo com hotplug, classes/interfaces/endpoints e estado de claim; modo headless via System.print"
+}

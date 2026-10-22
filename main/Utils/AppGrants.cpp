@@ -101,6 +101,8 @@ std::string describe(uint32_t mask) {
     add(celer::PERM_SYSTEM, "sistema");
     add(celer::PERM_MIC, "microfone");
     add(celer::PERM_CAMERA, "camera");
+    add(celer::PERM_USB, "dispositivos USB");
+    add(celer::PERM_INPUT, "teclado e mouse");
     return out;
 }
 

@@ -61,7 +61,7 @@ const ASSET_EXTS = ['.js', '.png', '.wav', '.qoa', '.json', '.bin', '.sh'];
 const FILE_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 // Objetos JS da API (raizes validas de cadeia de membro).
-const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'CelerNet', 'Pack', 'Storage', 'Sensors', 'Phone', 'UI'];
+const NAMESPACE_ROOTS = ['System', 'Net', 'FS', 'AI', 'CelerLink', 'CelerNet', 'Pack', 'Storage', 'Sensors', 'Phone', 'UI', 'Input', 'USB'];
 // Objetos que so existem com o Kconfig da placa: uso sem typeof vira aviso
 const OPTIONAL_ROOTS = {
   CelerLink: 'CelerLink e opcional (so placas com Bluetooth): proteja com typeof CelerLink !== "undefined" antes de usar',
@@ -71,6 +71,8 @@ const OPTIONAL_ROOTS = {
   Camera: 'Camera e opcional (so a esp32-cam com a perm "camera"): proteja com typeof Camera !== "undefined" antes de usar',
   WakeWord: 'WakeWord e opcional (so builds com wake word, ex.: dog): proteja com typeof WakeWord !== "undefined" antes de usar',
   Mic: 'Mic e opcional (placas com microfone + perm "mic"): proteja com typeof Mic !== "undefined" antes de usar',
+  USB: 'USB e opcional (placas com USB Host + perm "usb", API 48): proteja com typeof USB !== "undefined" antes de usar',
+  Input: 'Input e opcional (so com a perm "input", API 48): proteja com typeof Input !== "undefined" antes de usar',
 };
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem
@@ -788,7 +790,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
 
 const REQUIRED_FIELDS = ['name', 'packageName', 'version', 'author', 'description'];
 const RESERVED_FIELDS = ['size', 'md5', 'published_at', 'publisher'];
-const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic', 'camera'];
+const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic', 'camera', 'usb', 'input'];
 const VALID_REQUIRES = ['psram'];
 
 function lintAppJson(dir, manifest) {

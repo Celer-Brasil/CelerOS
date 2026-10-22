@@ -71,6 +71,7 @@ bool s_nativeCanvas = false;
 uint32_t s_perms = celer::PERM_ALL;   // capabilities do app corrente (F4)
 std::string s_appPkg;                 // packageName do app corrente (F4)
 bool s_appExitPending = false;        // saida pedida (throwAppExit): relancada nas esperas
+static bool s_svcActive = false;      // callback do svchost (nao chamar present)
 
 // Ajustes globais (brilho/volume/auto/tempo de tela) mudados por app sem
 // "system": valem so enquanto ele roda. Valores do lancamento + flag.
@@ -107,6 +108,9 @@ void JSBindings::appExitCleanup() {
 #endif
     netAsyncReset();
     aiReset();
+#if CONFIG_CELEROS_USB_HOST
+    usbAppReset();  // solta interfaces/listeners DELE (o registry do SO fica)
+#endif
 #if CONFIG_CELEROS_JS_CAMERA
     cameraAppReset();  // sensor, framebuffers retidos e quirc voltam ao heap
 #endif
@@ -943,6 +947,7 @@ void JSBindings::svcIdentity(duk_context* thr, const char* appPkg, uint32_t perm
     s_appPkg = appPkg ? appPkg : "";
     s_perms = perms;
     s_jsCtx = thr;
+    s_svcActive = true;
     jsModulesSetAppDir(appDir);
 }
 
@@ -951,8 +956,11 @@ void JSBindings::svcIdentityRestore() {
     s_appPkg = s_savedPkg;
     s_perms = s_savedPerms;
     s_jsCtx = s_savedCtx;
+    s_svcActive = false;
     jsModulesSetAppDir(s_savedDir.c_str());
 }
+
+bool JSBindings::inService() { return s_svcActive; }
 
 void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
                       bool topbarFixed, const char* appPkg, uint32_t perms) {
@@ -1725,6 +1733,47 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     };
     putFns(ctx, kFnsPhone);
     duk_put_prop_string(ctx, -2, "Phone");
+#endif
+
+    // --- Input Object (API 48): barramento de teclado/mouse do OS ---
+    // O driver (JS) injeta; o app com a capability "input" le. Sem driver de
+    // hardware aqui — e a porta para teclado/mouse USB e para o que vier.
+    if (perm(celer::PERM_INPUT)) {
+        duk_push_object(ctx);  // Input
+        static const JsFn kFnsInput[] = {
+            {"key", js_inputKey, 3},
+            {"poll", js_inputPoll, 0},
+            {"move", js_inputMove, 3},
+            {"pointer", js_inputPointer, 0},
+            {"clear", js_inputClear, 0},
+        };
+        putFns(ctx, kFnsInput);
+        duk_put_prop_string(ctx, -2, "Input");
+    }
+
+#if CONFIG_CELEROS_USB_HOST
+    // --- USB Object (API 48): USB Host cru (placa devkit-s3) ---
+    // Drivers de dispositivo sao JS; aqui so devices/descritores/transfers.
+    if (perm(celer::PERM_USB)) {
+        duk_push_object(ctx);  // USB
+        static const JsFn kFnsUsb[] = {
+            {"devices", js_usbDevices, 0},
+            {"poll", js_usbPoll, 0},
+            {"claim", js_usbClaim, 3},
+            {"release", js_usbRelease, 2},
+            {"controlIn", js_usbControlIn, 7},
+            {"controlOut", js_usbControlOut, 7},
+            {"out", js_usbOut, 4},
+            {"in", js_usbIn, 4},
+            {"sendFile", js_usbSendFile, 5},
+            {"listen", js_usbListen, 4},
+            {"read", js_usbRead, 2},
+            {"unlisten", js_usbUnlisten, 2},
+            {"flush", js_usbFlush, 2},
+        };
+        putFns(ctx, kFnsUsb);
+        duk_put_prop_string(ctx, -2, "USB");
+    }
 #endif
 
     // --- Color Constants on global scope ---

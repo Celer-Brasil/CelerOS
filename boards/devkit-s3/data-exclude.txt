@@ -1,0 +1,23 @@
+# Apps de data/ que NAO vao para o LittleFS do devkit-s3 (tools/flash_data.sh).
+# Um caminho por linha, relativo a data/. Com o perfil CELEROS_UI=n as
+# bindings de desenho nem existem no firmware (System.draw*, UI, Keypad,
+# prompt): apps que desenham quebrariam no 1o draw — a fabrica leva so o
+# Barebone (headless de verdade, referencia de autostart/gpios/rede) e o
+# overlay da placa (boards/devkit-s3/data/apps: o servico USB HID).
+apps/App Store
+apps/Settings
+apps/Snake
+apps/Touch Test
+apps/Watchface
+apps/Web Server
+apps/Terminal
+apps/Installer
+apps/Help
+apps/Qwen
+apps/Chat IA
+apps/Matilha
+apps/HTTP Demo
+apps/Nucleo
+apps/Regras
+# Sem launcher visual nao ha grade: icones nao servem de nada.
+icons

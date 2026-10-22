@@ -23,6 +23,7 @@
 #include "../../main/Utils/Rigid2D.h"
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
+#include "../../main/USBHost/UsbDesc.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -74,15 +75,19 @@ static void testSemVer() {
 
 
 static void testPermissions() {
-    CHECK(parsePermissions("{\"name\":\"x\"}") == PERM_ALL);                       // ausente
+    CHECK(parsePermissions("{\"name\":\"x\"}") == PERM_LEGACY);                    // ausente: so as antigas
+    CHECK(parsePermissions("{\"name\":\"x\"}") != PERM_ALL);                       // usb/input nao herdam
+    CHECK((parsePermissions("{\"name\":\"x\"}") & (PERM_USB | PERM_INPUT)) == 0);
     CHECK(parsePermissions("{\"permissions\":[\"fs\",\"net\"]}") == (PERM_FS | PERM_NET));
     CHECK(parsePermissions("{\"permissions\":[\"gpio\"]}") == PERM_GPIO);
     CHECK(parsePermissions("{\"permissions\":[\"system\"]}") == PERM_SYSTEM);
     CHECK(parsePermissions("{\"permissions\":[\"mic\"]}") == PERM_MIC);             // API 19
+    CHECK(parsePermissions("{\"permissions\":[\"usb\"]}") == PERM_USB);             // API 48
+    CHECK(parsePermissions("{\"permissions\":[\"input\"]}") == PERM_INPUT);         // API 48
     CHECK(parsePermissions("{\"permissions\":[\"fs\",\"gpio\",\"system\",\"net\",\"mic\"]}") ==
           (PERM_FS | PERM_NET | PERM_GPIO | PERM_SYSTEM | PERM_MIC));
     CHECK(parsePermissions("{\"permissions\":[]}") == 0);                         // vazio = nenhuma
-    CHECK(parsePermissions("{\"permissions\":[}") == PERM_ALL);                   // invalido = nao tranca
+    CHECK(parsePermissions("{\"permissions\":[}") == PERM_LEGACY);                // invalido = nao tranca
     // campo vizinho nao confunde (ordem no JSON nao importa)
     CHECK(parsePermissions("{\"api\":6,\"permissions\":[\"fs\"],\"topbar\":true}") == PERM_FS);
     // token desconhecido nao concede nada
@@ -2735,6 +2740,79 @@ static void testAppPackage() {
     CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
 }
 
+static void testUsbDesc() {
+    using namespace usbdesc;
+
+    // Impressora ESC/POS: 1 interface (classe 7/1/2), bulk OUT 0x01 + bulk IN
+    // 0x82, com um descritor de classe no meio (deve ser pulado).
+    const uint8_t printer[] = {
+        9,  0x02, 41, 0, 1, 1, 0, 0x80, 0x32,       // config (41 bytes, 1 iface)
+        9,  0x04, 0,  0, 2, 7, 1, 2, 0,             // interface 0, 2 EPs, 7/1/2
+        9,  0x24, 0,  1, 0, 0, 0, 0, 0,             // CS_INTERFACE (ignorar)
+        7,  0x05, 0x01, 0x02, 64, 0, 0,             // EP 0x01 OUT bulk
+        7,  0x05, 0x82, 0x02, 64, 0, 0,             // EP 0x82 IN bulk
+    };
+    DevDesc d;
+    CHECK(parseConfig(printer, sizeof(printer), d));
+    CHECK(d.nIfs == 1);
+    CHECK(d.ifs[0].num == 0);
+    CHECK(d.ifs[0].cls == 7);
+    CHECK(d.ifs[0].subcls == 1);
+    CHECK(d.ifs[0].proto == 2);
+    CHECK(d.ifs[0].nEps == 2);
+    CHECK(d.ifs[0].eps[0].addr == 0x01);
+    CHECK(d.ifs[0].eps[0].type == kEpBulk);
+    CHECK(d.ifs[0].eps[0].mps == 64);
+    CHECK(d.ifs[0].eps[1].addr == 0x82);
+    CHECK(d.ifs[0].eps[1].type == kEpBulk);
+    CHECK(d.ifs[1].nEps == 0);  // fora do range: zerado
+
+    // Teclado boot: interface 3/1/1, interrupt IN 0x81 mps 8, 2 alts.
+    const uint8_t kbd[] = {
+        9, 0x02, 43, 0, 2, 1, 0, 0x80, 0x32,
+        9, 0x04, 0, 0, 0, 3, 1, 1, 0,               // alt 0, sem EP
+        9, 0x04, 0, 1, 1, 3, 1, 1, 0,               // alt 1, 1 EP
+        7, 0x05, 0x81, 0x03, 8, 0, 10,              // INT IN 0x81, mps 8, 10ms
+    };
+    DevDesc h;
+    CHECK(parseConfig(kbd, sizeof(kbd), h));
+    CHECK(h.nIfs == 2);
+    CHECK(h.ifs[1].alt == 1);
+    CHECK(h.ifs[1].nEps == 1);
+    CHECK(h.ifs[1].eps[0].type == kEpInterrupt);
+    CHECK(h.ifs[1].eps[0].addr == 0x81);
+    CHECK(h.ifs[1].eps[0].interval == 10);
+
+    // Teto de interfaces: 7 no blob -> 6 guardadas, sem estourar.
+    uint8_t many[9 + 7 * 9] = {9, 0x02, (uint8_t)(sizeof(many) & 0xFF),
+                               (uint8_t)(sizeof(many) >> 8), 7, 1, 0, 0x80, 0x32};
+    for (int i = 0; i < 7; i++) {
+        uint8_t* p = many + 9 + i * 9;
+        p[0] = 9; p[1] = 0x04; p[2] = (uint8_t)i; p[3] = 0; p[4] = 0;
+        p[5] = 0xFF; p[6] = 0; p[7] = 0; p[8] = 0;
+    }
+    DevDesc m;
+    CHECK(parseConfig(many, sizeof(many), m));
+    CHECK(m.nIfs == kMaxIfaces);
+
+    // Blobs invalidos: null, curto, tipo errado, total quebrado.
+    DevDesc bad;
+    CHECK(!parseConfig(nullptr, 0, bad));
+    CHECK(!parseConfig(printer, 4, bad));
+    const uint8_t notCfg[] = {9, 0x01, 9, 0, 0, 0, 0, 0, 0};
+    CHECK(!parseConfig(notCfg, sizeof(notCfg), bad));
+    const uint8_t noIf[] = {9, 0x02, 9, 0, 0, 0, 0, 0, 0};
+    CHECK(!parseConfig(noIf, sizeof(noIf), bad));
+
+    // Endpoint de 9 bytes (audio) e bloco truncado: para sem ler alem do total.
+    const uint8_t trunc[] = {9, 0x02, 40, 0, 1, 1, 0, 0x80, 0x32,
+                             9, 0x04, 0, 0, 2, 7, 1, 2, 0,
+                             7, 0x05, 0x01, 0x02, 64, 0, 0};  // diz 40, tem 26
+    DevDesc t;
+    CHECK(parseConfig(trunc, sizeof(trunc), t));
+    CHECK(t.ifs[0].nEps == 1);
+}
+
 static void testInstallMarker() {
     using namespace celer::setup;
     CHECK(due("1.0.0", ""));        // nunca rodou
@@ -2785,6 +2863,7 @@ int main() {
     testAppZipAdversarial();
     testAppPackage();
     testInstallMarker();
+    testUsbDesc();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

@@ -1,0 +1,9 @@
+{
+  "version": "1.10.1",
+  "api_version": 2,
+  "major_update": false,
+  "minor_update": false,
+  "security_update": false,
+  "changelog": "CelerOS: canal de updates do devkit-s3 (ESP32-S3 N16R8, USB Host, sem display). Este manifest e espelho legado; o dispositivo consulta o hub (os.celer.tec.br/updates). Publicacao via tools/publish_firmware.py no repo CelerOS-Server.",
+  "guide": "Updates install directly on the device: open Settings > System Updates and tap INSTALL. Alternatively open the web file manager and use Firmware Update."
+}

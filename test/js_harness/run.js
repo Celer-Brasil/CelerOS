@@ -1185,9 +1185,141 @@ function makeEnv() {
     }
     };
 
+    // USB Host (API 48): devices fake + transfers deterministicos.
+    // __harness.addUsb({addr,vid,pid,cls,ifs}) anexa e enfileira o hotplug;
+    // __harness.removeUsb(addr) desconecta; __harness.usbPushIn(addr, ep,
+    // bytes) alimenta IN/listen; __harness.usbTx acumula o que o app enviou.
+    var usbDevices = [];
+    var usbEvents = [];
+    var usbIn = {};
+    var usbTx = [];
+    var usbListens = {};
+    var usbCtrl = {};
+    function usbKey(addr, ep) { return addr + ':' + ep; }
+    function usbFind(addr) {
+    for (var i = 0; i < usbDevices.length; i++) if (usbDevices[i].addr === addr) return usbDevices[i];
+    return null;
+    }
+    function usbNorm(d) {
+    d = d || {};
+    return {
+        addr: d.addr || 1,
+        vid: d.vid || 0x04B8,
+        pid: d.pid || 0x0202,
+        cls: d.cls || 0,
+        subcls: d.subcls || 0,
+        proto: d.proto || 0,
+        speed: d.speed || 2,
+        claimed: [],
+        ifs: d.ifs || [{ n: 0, alt: 0, cls: 7, subcls: 1, proto: 2,
+                        eps: [{ addr: 0x01, type: 2, mps: 64, ivl: 0 },
+                              { addr: 0x82, type: 2, mps: 64, ivl: 0 }] }]
+    };
+    }
+    env.USB = {
+    devices: function() { return usbDevices.slice(); },
+    poll: function() { return usbEvents.length ? usbEvents.shift() : null; },
+    claim: function(addr, iface, alt) {
+        var d = usbFind(addr);
+        if (!d) return false;
+        for (var i = 0; i < d.claimed.length; i++) if (d.claimed[i] === iface) return false;
+        d.claimed.push(iface);
+        return true;
+    },
+    release: function(addr, iface) {
+        var d = usbFind(addr);
+        if (!d) return false;
+        for (var i = 0; i < d.claimed.length; i++) {
+            if (d.claimed[i] !== iface) continue;
+            d.claimed.splice(i, 1);
+            return true;
+        }
+        return false;
+    },
+    controlIn: function(addr, type, req, val, idx, len) {
+        if (!usbFind(addr)) return { ok: false, status: 'gone', len: 0, data: [] };
+        var key = addr + ':' + req;
+        var data = usbCtrl[key];
+        if (data) return { ok: true, status: 'ok', len: data.length, data: data.slice() };
+        var zeros = [];
+        for (var i = 0; i < len; i++) zeros.push(0);
+        return { ok: true, status: 'ok', len: zeros.length, data: zeros };
+    },
+    controlOut: function(addr, type, req, val, idx, data) {
+        if (!usbFind(addr)) return { ok: false, status: 'gone', sent: 0 };
+        usbTx.push({ addr: addr, ep: 0, data: data.slice(), control: req });
+        return { ok: true, status: 'ok', sent: data.length };
+    },
+    out: function(addr, ep, data) {
+        if (!usbFind(addr)) return { ok: false, status: 'gone', sent: 0 };
+        usbTx.push({ addr: addr, ep: ep, data: data.slice() });
+        return { ok: true, status: 'ok', sent: data.length };
+    },
+    in: function(addr, ep, len) {
+        if (!usbFind(addr)) return { ok: false, status: 'gone', len: 0, data: [] };
+        var q = usbIn[usbKey(addr, ep)];
+        if (!q || !q.length) return { ok: false, status: 'timeout', len: 0, data: [] };
+        var one = q.shift();
+        return { ok: true, status: 'ok', len: one.length, data: one.slice() };
+    },
+    sendFile: function(addr, ep, path) {
+        if (!usbFind(addr)) return { ok: false, status: 'gone', sent: 0 };
+        log.push('[usb] sendFile ' + path);
+        usbTx.push({ addr: addr, ep: ep, file: path });
+        return { ok: true, status: 'ok', sent: 1 };
+    },
+    listen: function(addr, ep, len, depth) {
+        if (!usbFind(addr)) return false;
+        usbListens[usbKey(addr, ep)] = { len: len, depth: depth || 4 };
+        return true;
+    },
+    read: function(addr, ep) {
+        var q = usbIn[usbKey(addr, ep)];
+        return (q && q.length) ? q.shift().slice() : null;
+    },
+    unlisten: function(addr, ep) { return delete usbListens[usbKey(addr, ep)]; },
+    flush: function(addr, ep) { return !!usbFind(addr); }
+    };
+
+    // Input (API 48): fila de teclas e estado do ponteiro.
+    var inputKeys = [];
+    var inputPtr = { x: 0, y: 0, buttons: 0 };
+    env.Input = {
+    key: function(usage, mods, down) {
+        inputKeys.push({ key: usage, mods: mods, down: !!down });
+        return true;
+    },
+    poll: function() { return inputKeys.length ? inputKeys.shift() : null; },
+    move: function(x, y, buttons) { inputPtr = { x: x, y: y, buttons: buttons || 0 }; },
+    pointer: function() { return { x: inputPtr.x, y: inputPtr.y, buttons: inputPtr.buttons }; },
+    clear: function() { inputKeys = []; inputPtr = { x: 0, y: 0, buttons: 0 }; }
+    };
+
     env.__harness = {
     log: log,
     timersDropped: function () { return timersDropped; },
+    addUsb: function(d) {
+        var dev = usbNorm(d);
+        usbDevices.push(dev);
+        usbEvents.push({ type: 'add', addr: dev.addr, vid: dev.vid, pid: dev.pid });
+        return dev;
+    },
+    removeUsb: function(addr) {
+        var dev = usbFind(addr);
+        if (!dev) return false;
+        usbDevices.splice(usbDevices.indexOf(dev), 1);
+        usbEvents.push({ type: 'remove', addr: addr, vid: dev.vid, pid: dev.pid });
+        return true;
+    },
+    usbPushIn: function(addr, ep, bytes) {
+        var k = usbKey(addr, ep);
+        if (!usbIn[k]) usbIn[k] = [];
+        usbIn[k].push(bytes.slice());
+    },
+    setUsbControl: function(addr, req, data) { usbCtrl[addr + ':' + req] = data.slice(); },
+    usbTx: usbTx,
+    usbListens: usbListens,
+    inputKeys: function() { return inputKeys.slice(); },
     setAiResponse: function(r) { aiResponse = r; },
     aiChats: aiChats,
     setAiSpeakResult: function(r) { aiSpeakResult = r; },
@@ -1367,7 +1499,7 @@ function resolveSharedDep(appDir, name, env) {
 
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                 'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-                'UI', 'require', 'CelerNet', 'Pack'];
+                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input'];
 // Valores na MESMA ordem de GLOBAL_NAMES; o slot 'require' e o req do app
 // (runApp) ou o proprio req do modulo (makeRequire) — nunca duplicado no
 // wrapper, senao o ultimo sombreia o primeiro.
@@ -1375,7 +1507,8 @@ function globalValues(env, req) {
     var mesh = !!env.__exposeMesh;
     return [env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
         env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
-        env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined];
+        env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined,
+        env.USB, env.Input];
 }
 function makeRequire(appDir, env) {
     var cache = {};
@@ -1448,10 +1581,11 @@ function joinLog(log) { return log.join('\n'); }
 function runInline(src, env) {
     var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                       'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
+                      'USB', 'Input',
                       (env.__prelude || '') + '\n' + src);
     fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
-       env.__require || makeRequire(null));
+       env.__require || makeRequire(null), env.USB, env.Input);
 }
 
 // --- Terminal ---------------------------------------------------------------
@@ -4307,6 +4441,27 @@ function holdFrames(x, y, n) {
     var r2 = rodar('{"regras": [quebrado');
     check('rules.json quebrado para o servico na carga (documento no comentario)',
           r2.err !== null, String(r2.err));
+})();
+
+// --- USB MSC: parser FAT32/exFAT da dep (sem hardware) ----------------------
+(function() {
+    console.log('USB MSC (FAT32/exFAT em JS):');
+    var r = runApp('test/js_harness/fixtures/usb-msc/main.js');
+    var txt = joinLog(r.log);
+    check('fixture MSC roda sem erro', r.err === null, r.err || '');
+    [
+        'fat:fat32:TESTE',
+        'fatlist:HELLO.TXT,SUB/',
+        'fatread:hello',
+        'fatnested:inner',
+        'fatstat:5',
+        'exfat:exfat:TESTE',
+        'exfatlist:README.TXT',
+        'exfatread:exfat',
+        'exfatsize:5',
+    ].forEach(function (want) {
+        check('MSC: ' + want, txt.indexOf(want) >= 0, txt);
+    });
 })();
 
 // resume

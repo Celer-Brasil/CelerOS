@@ -3,6 +3,7 @@
 
 #include "../Display/Icon.h"
 #include "../Display/Backlight.h"
+#include "../Hardware/InputBus.h"
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <cmath>
@@ -1008,6 +1009,20 @@ size_t readTouches(TouchPoint* out, size_t max) {
                 j--;
             }
             pts[j] = key;
+        }
+    }
+    // Ponteiro de mouse (driver USB em JS via Input.move): dedo sintetico
+    // extra com track id reservado 0xFE. Nao passa pelo TouchInjector — a
+    // fila de la e dona do toque fisico enquanto dura o gesto do celerctl.
+    // So existe enquanto o botao esquerdo esta pressionado (toque = clique).
+    if (n < kTouchMax) {
+        const InputBus::Pointer p = InputBus::pointer();
+        if ((p.buttons & 0x01) != 0) {
+            pts[n].x = (uint16_t)p.x;
+            pts[n].y = (uint16_t)p.y;
+            pts[n].id = 0xFE;
+            pts[n].size = 0;
+            n++;
         }
     }
     // Timeout de tela: toque valido conta como atividade; se ele SO acordou

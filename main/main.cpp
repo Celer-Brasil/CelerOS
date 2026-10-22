@@ -57,6 +57,7 @@
 #if CONFIG_CELEROS_USB_NATIVE
 #include "USBDevice/USBDevice.h"
 #endif
+#include "USBHost/UsbHost.h"
 
 // Telas de sistema (Settings, App Store, Installer, Help, Web Server) sao
 // apps JS em /local/apps (W8) — o firmware carrega so o core + launcher.
@@ -155,6 +156,9 @@ static void celerSetup() {
     // USB nativo (TinyUSB): so para placas com GPIO19/20 livres
     USBDevice::init();
 #endif
+    // USB Host (API 48): pilha + tasks do host. No-op sem CELEROS_USB_HOST;
+    // o Kconfig impede a convivencia com USB device/USJ no mesmo OTG.
+    UsbHost::init();
 
     ramStage("fs+usb");
     // Brilho do backlight (depois do FS: le /local/brightness.txt)

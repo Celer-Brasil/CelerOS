@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 47 — 342 funcoes.
+// API level 48 — 360 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -630,6 +630,48 @@ declare const Phone: {
     weather(): any;
     find(on?: boolean): any;
     forget(): void;
+};
+
+declare const Input: {
+    /** @permission "input" */
+    key(usage: number, mods: number, down: boolean): boolean;
+    /** @permission "input" */
+    poll(): { key: number; mods: number; down: boolean } | null;
+    /** @permission "input" */
+    move(x: number, y: number, buttons: number): void;
+    /** @permission "input" */
+    pointer(): { x: number; y: number; buttons: number };
+    /** @permission "input" */
+    clear(): void;
+};
+
+declare const USB: {
+    /** @permission "usb" */
+    devices(): Array<{ addr: number; vid: number; pid: number; cls: number; subcls: number; proto: number; speed: number; claimed: number[]; ifs: Array<{ n: number; alt: number; cls: number; subcls: number; proto: number; eps: Array<{ addr: number; type: number; mps: number; ivl: number }> }> }>;
+    /** @permission "usb" */
+    poll(): { type: "add" | "remove"; addr: number; vid: number; pid: number } | null;
+    /** @permission "usb" */
+    claim(addr: number, iface: number, alt?: number): boolean;
+    /** @permission "usb" */
+    release(addr: number, iface: number): boolean;
+    /** @permission "usb" */
+    controlIn(addr: number, bmRequestType: number, bRequest: number, wValue: number, wIndex: number, len: number, timeoutMs?: number): { ok: boolean; status: string; len: number; data: number[] };
+    /** @permission "usb" */
+    controlOut(addr: number, bmRequestType: number, bRequest: number, wValue: number, wIndex: number, data?: number[], timeoutMs?: number): { ok: boolean; status: string; sent: number };
+    /** @permission "usb" */
+    out(addr: number, ep: number, data?: number[], timeoutMs?: number): { ok: boolean; status: string; sent: number };
+    /** @permission "usb" */
+    in(addr: number, ep: number, len: number, timeoutMs?: number): { ok: boolean; status: string; len: number; data: number[] };
+    /** @permission "usb+fs" */
+    sendFile(addr: number, ep: number, path: string, maxBytes?: number, timeoutMs?: number): { ok: boolean; status: string; sent: number };
+    /** @permission "usb" */
+    listen(addr: number, ep: number, len: number, depth?: number): boolean;
+    /** @permission "usb" */
+    read(addr: number, ep: number): number[] | null;
+    /** @permission "usb" */
+    unlisten(addr: number, ep: number): boolean;
+    /** @permission "usb" */
+    flush(addr: number, ep: number): boolean;
 };
 
 declare const BLACK: number;

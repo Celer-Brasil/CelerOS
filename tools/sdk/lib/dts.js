@@ -70,6 +70,23 @@ const RETURNS = {
     'Pack.ruleDel': 'boolean',
     'Pack.ruleList': 'Array<{ id: number; sensor: string; op: "gt" | "lt"; valor: number; h: number; alvo?: string; no?: string; on?: boolean; notificar?: string }>',
     'System.drawJPG': 'boolean',
+    // USB Host e input do OS (API 48)
+    'USB.devices': 'Array<{ addr: number; vid: number; pid: number; cls: number; subcls: number; proto: number; speed: number; claimed: number[]; ifs: Array<{ n: number; alt: number; cls: number; subcls: number; proto: number; eps: Array<{ addr: number; type: number; mps: number; ivl: number }> }> }>',
+    'USB.poll': '{ type: "add" | "remove"; addr: number; vid: number; pid: number } | null',
+    'USB.claim': 'boolean',
+    'USB.release': 'boolean',
+    'USB.controlIn': '{ ok: boolean; status: string; len: number; data: number[] }',
+    'USB.controlOut': '{ ok: boolean; status: string; sent: number }',
+    'USB.out': '{ ok: boolean; status: string; sent: number }',
+    'USB.in': '{ ok: boolean; status: string; len: number; data: number[] }',
+    'USB.sendFile': '{ ok: boolean; status: string; sent: number }',
+    'USB.listen': 'boolean',
+    'USB.read': 'number[] | null',
+    'USB.unlisten': 'boolean',
+    'USB.flush': 'boolean',
+    'Input.key': 'boolean',
+    'Input.poll': '{ key: number; mods: number; down: boolean } | null',
+    'Input.pointer': '{ x: number; y: number; buttons: number }',
 };
 
 // Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
@@ -112,6 +129,9 @@ const PARAM_TYPES = {
     'Pack.onEvent.h': 'number',
     'Pack.ruleAdd.regra': '{ sensor: string; op: "gt" | "lt"; valor: number; h?: number; alvo?: string; no?: string; on?: boolean | number; notificar?: string }',
     'Pack.ruleDel.id': 'number',
+    // USB (API 48): payloads sao arrays de bytes, nao um numero
+    'USB.controlOut.data': 'number[]',
+    'USB.out.data': 'number[]',
 };
 
 // Nomes de argumento que indicam string (o restante e number: a API e

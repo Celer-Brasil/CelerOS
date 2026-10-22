@@ -1,0 +1,16 @@
+{
+  "name": "USB Printer",
+  "packageName": "celeros.usbprinter",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Impressora termica USB (ESC/POS) como driver em JS: acha a interface classe 7, monta o cupom com celeros.usb.escpos e imprime pelo USB Host (API 48). Referencia para escrever o driver da SUA impressora sem tocar no firmware.",
+  "type": "App",
+  "category": "Utility",
+  "api": 48,
+  "permissions": ["usb"],
+  "deps": {
+    "celeros.usb": "^1.0.0",
+    "celeros.usb.escpos": "^1.0.0"
+  },
+  "changelog": "1.0.0 - primeira versao: cupom de teste com texto, negrito, QR e corte em qualquer impressora ESC/POS de interface classe 7; botao de reimpressao e deteccao de hotplug"
+}

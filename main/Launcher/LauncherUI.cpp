@@ -455,10 +455,10 @@ bool LauncherUI::appEntryIsFolder(int i) { return apps[i].isFolder; }
 uint32_t LauncherUI::appEntryPerms(int i) { return apps[i].perms; }
 const std::string& LauncherUI::appEntryPkg(int i) { return apps[i].pkg; }
 // Bits que o consentimento conhece (PERM_ALL do app.json sem o campo vira
-// estes cinco)
+// estes cinco; usb/input exigem declaracao explicita na API 48)
 static constexpr uint32_t kKnownPerms =
     celer::PERM_FS | celer::PERM_NET | celer::PERM_GPIO | celer::PERM_SYSTEM |
-    celer::PERM_MIC | celer::PERM_CAMERA;
+    celer::PERM_MIC | celer::PERM_CAMERA | celer::PERM_USB | celer::PERM_INPUT;
 
 static const std::string& grantId(const std::string& pkg, const std::string& path) {
     return pkg.length() > 0 ? pkg : path;

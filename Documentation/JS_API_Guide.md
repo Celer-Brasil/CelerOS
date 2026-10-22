@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 47
+### API Level: 48
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -3077,3 +3077,196 @@ together with the owner-side consent dialog.
 The BEAT gained bit `0x80` (`CAPS_RES`): "this node publishes resources".
 Members show the extra `caps` bit in `Pack.members()` — handy for UI filtering
 before `Pack.resources()` (the catalog remains the source of truth).
+
+## 49. API Level 48 — USB Host and OS input: `USB.*` and `Input.*`
+
+**Where it exists.** Only on firmware built with `CELEROS_USB_HOST` (today
+the `devkit-s3` board: ESP32-S3 N16R8, with the native USB-C in **host**
+mode) and in an app with the `"usb"` permission in `app.json`. Keyboard and
+mouse also require `"input"`. Feature-detect with
+`System.getInfo().hasUsbHost` and `typeof USB !== "undefined"` — other
+boards do not have the object.
+
+**What the firmware does.** It enumerates devices, reads descriptors and
+runs transfers. **No device driver lives in C++**: ESC/POS, HID, SCSI,
+vendor protocols... are JS on top of this API. The `celeros.usb`,
+`celeros.usb.escpos` and `celeros.usb.hid` hub deps carry the first
+reference drivers.
+
+**Bytes are arrays of numbers (0..255).** The firmware Duktape is *lean*:
+there is no `Uint8Array`/`ArrayBuffer`. The cap is **4096 bytes** per
+transfer; for a bigger job, write the binary to a file and use
+`USB.sendFile` (2 KB chunks streamed on the C++ side, never through the JS
+heap).
+
+**One owner per interface.** `USB.claim` marks the interface for the current
+app/service; claims and listeners are released automatically when the app
+exits (or on `svc stop`). While it is held, another app gets `false`.
+
+**Hotplug.** `USB.poll()` returns one event per device that attached or
+detached; drain until `null` every frame (or on each service tick).
+
+**Console on UART.** On the S3 the USB-OTG shares the PHY with
+USB-Serial/JTAG: with the host installed, the console/celerctl lives on
+UART0 (the DevKitC-1 "UART" connector). The host VBUS is not
+software-switched — the board must supply 5 V (use a powered hub when the
+device draws more current).
+
+### `USB.devices()` (API 48)
+Lists the enumerated devices:
+
+```javascript
+[ { addr: 1, vid: 0x04B8, pid: 0x0202, cls: 0, subcls: 0, proto: 0,
+    speed: 2, claimed: [0],
+    ifs: [ { n: 0, alt: 0, cls: 7, subcls: 1, proto: 2,
+             eps: [ { addr: 0x01, type: 2, mps: 64, ivl: 0 },
+                    { addr: 0x82, type: 2, mps: 64, ivl: 0 } ] } ] } ]
+```
+
+`addr` is the USB address (1..127) used by every other call. Endpoint
+`type`: 0 control, 1 iso, 2 bulk, 3 interrupt; `addr` with bit 7 set means
+IN. `claimed` lists interfaces held by some app/service and `speed` is the
+negotiated speed (1 low, 2 full, 3 high). Returns `[]` without the host.
+
+### `USB.poll()` (API 48)
+Next hotplug event or `null` when the queue is empty:
+`{type:"add"|"remove", addr, vid, pid}`. A service that must react to
+plug/unplug drains it from a `setInterval`.
+
+### `USB.claim(addr, iface[, alt])` (API 48)
+Claims interface `iface` (alternate `alt`, default 0) for the current app.
+Required before any endpoint transfer. Returns `true` on success; `false`
+when the device is gone or another owner already holds the interface.
+
+### `USB.release(addr, iface)` (API 48)
+Releases the interface (only the owner can). App exit already does it.
+
+### `USB.controlIn(addr, bmRequestType, bRequest, wValue, wIndex, len[, timeoutMs])` (API 48)
+Control IN transfer (e.g. read the HID report descriptor with
+`bmRequestType=0x81, bRequest=6, wValue=0x2200`). Returns
+`{ok, status, len, data}` with up to `len` bytes (max 2040). `timeoutMs`
+defaults to 250, capped at 5000.
+
+### `USB.controlOut(addr, bmRequestType, bRequest, wValue, wIndex, data[, timeoutMs])` (API 48)
+Control OUT transfer (e.g. HID `SET_IDLE`, CDC `SET_LINE_CODING`). `data` is
+a byte array. Returns `{ok, status, sent}`.
+
+### `USB.out(addr, ep, data[, timeoutMs])` (API 48)
+Bulk/interrupt OUT. `ep` is the OUT endpoint address (bit 7 clear). Send
+printer commands, packets for your own driver, etc. Returns
+`{ok, status, sent}`. `status`: `"ok"`, `"stall"`, `"timeout"`, `"error"`,
+`"gone"`, `"busy"`, `"overflow"`, `"canceled"`.
+
+### `USB.in(addr, ep, len[, timeoutMs])` (API 48)
+One-shot bulk/interrupt IN: returns `{ok, status, len, data}`. For a
+continuous stream (keyboard/mouse/status) prefer `USB.listen` + `USB.read`:
+one `USB.in` per frame loses reports between calls.
+
+### `USB.sendFile(addr, ep, path[, maxBytes[, timeoutMs]])` (API 48)
+Sends a device file straight to the OUT endpoint in 2 KB chunks (the payload
+never enters the JS heap). Requires the `"fs"` permission and honors the FS
+jail. Cap of 512 KB per call. Returns `{ok, status, sent}` — ideal for a
+pre-rendered ESC/POS receipt or logo.
+
+### `USB.listen(addr, ep, len[, depth])` (API 48)
+Starts continuous reading of an IN endpoint (interrupt or bulk): the core
+keeps a ring of `depth` records of up to `len` bytes (1..256) and resubmits
+the URB by itself. Returns `true` when the listener was created. Each
+app/service gets up to 4 simultaneous listeners; they die with the app.
+
+### `USB.read(addr, ep)` (API 48)
+Pops the next listener record: byte array or `null` when empty. Drain it in
+a `while` every frame.
+
+### `USB.unlisten(addr, ep)` (API 48)
+Stops the listener and releases the ring/URB. Returns `true` if it existed.
+
+### `USB.flush(addr, ep)` (API 48)
+Clears a stuck endpoint (after `"stall"`/timeout): the pending URB is
+cancelled and the endpoint returns to a clean state. Returns `true` on
+success.
+
+### Writing a driver: ESC/POS printer
+
+```javascript
+var usb = require("celeros.usb");
+var esc = require("celeros.usb.escpos");
+
+if (usb.available()) {
+    var p = esc.open(usb.find({ cls: 7 }));   // class 7 interface
+    if (p) {
+        p.receipt("CELER OS", ["Hello, world!", "driver in JS"], "https://os.celer.tec.br");
+        p.close();
+    }
+}
+```
+
+The `celeros.usb.escpos` dep is just a sample driver: `p.raw([...])` sends
+raw bytes, `p.file("/local/receipt.bin")` streams a pre-rendered job, and
+`p.text/line/align/size/bold/qr/cut` cover the common receipt. For a
+specific model, change the command sequence — the firmware stays the same.
+
+### Reading a flash drive (MSC)
+
+A flash drive is class 8, subclass 6, protocol 0x50 (Bulk-Only Transport).
+The `celeros.usb.msc` dep implements BOT + SCSI + FAT32/exFAT **in JS**; the
+firmware only delivers the bulk transfers:
+
+```javascript
+var msc = require("celeros.usb.msc");
+var vol = msc.openVolume(usb.find({ cls: 8 }));
+if (vol) {
+    var i = vol.info();                 // {type,label,totalBytes,...}
+    var list = vol.list("/");           // [{name,dir,size}]
+    var bytes = vol.read("/NOTE.TXT", 4096);   // byte array (up to 64KB)
+    vol.close();
+}
+```
+
+Read-only in this version (list, `stat`, read a file); `writeBlocks` already
+exists as the primitive for a FAT-allocating driver. The hub `USB Storage`
+app is the navigation reference (headless prints the root to logcat).
+
+### `Input.key(usage, mods, down)` (API 48)
+Injects a key into the OS input bus (`"input"` permission). `usage` is the
+**HID usage ID** (0x04=A ... 0x1D=Z, 0x28=Enter, 0x29=Esc, 0x2C=Space);
+`mods` is the HID modifier byte (bit0 LCtrl, bit1 LShift, bit2 LAlt, bit3
+LGUI, bit4 RCtrl, ...). Returns `true` when the queue accepted it.
+
+### `Input.poll()` (API 48)
+Next injected key: `{key, mods, down}` or `null` when the queue is empty.
+Single queue: one consumer at a time (the foreground app, or the service
+that bridges it).
+
+### `Input.move(x, y, buttons)` (API 48)
+Moves the pointer in the 240x320 virtual space. `buttons`: bit0 left, bit1
+right, bit2 middle. On a display board the pointer joins the touch pipeline
+as a synthetic finger (reserved id), so the mouse clicks and drags in the UI
+like a touch; on a headless board the app reads it with `Input.pointer()`.
+
+### `Input.pointer()` (API 48)
+Current pointer state: `{x, y, buttons}`.
+
+### `Input.clear()` (API 48)
+Clears the key queue and the pointer (bench, or a driver that disconnected).
+
+### Example: keyboard/mouse driver as a service
+
+The factory `USB HID` app on `devkit-s3` is the full reference: it runs in
+the svchost, opens keyboards (HID boot protocol 1) and mice (protocol 2),
+diffs the reports and calls `Input.key`/`Input.move`. Any app with the
+`"input"` permission reads the result:
+
+```javascript
+var ev;
+while ((ev = Input.poll()) !== null) {
+    System.print("key " + ev.key + (ev.down ? " down" : " up"));
+}
+var p = Input.pointer();
+System.print("mouse " + p.x + "," + p.y + " buttons " + p.buttons);
+```
+
+The firmware does not interpret keys: an app decides what to do with them
+(shortcuts, games, an editor). On a display board the pointer already drives
+the launcher and apps; keyboard navigation of the system UI does not exist
+yet in this version.

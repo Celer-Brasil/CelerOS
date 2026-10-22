@@ -18,7 +18,8 @@ main/
 ├── WebManager/       # WiFi boot/reconnect (+async toggle), httpd file manager + /update OTA upload (gzip pages), captive portal host
 ├── OTA/              # OtaManager: update.json v2 check + resumable HTTP(S) download (Range) straight into the OTA slot; OtaGuard = one writer at a time
 ├── USBDevice/        # CelerShell, HostLink (celerctl protocol), SerialLink (UART/USJ), USBDevice (dual CDC), LogSink
-├── Hardware/         # BoardIO (IO + battery + tone + LEDC map), Buttons, PowerPolicy (DFS/light sleep, idle WiFi)
+├── USBHost/          # USB Host core (API 48, CELEROS_USB_HOST): UsbDesc (pure descriptor parser) + UsbHost (enum/claim/transfers/listeners); no device driver here
+├── Hardware/         # BoardIO (IO + battery + tone + LEDC map), Buttons, InputBus (key/pointer bus for the OS), PowerPolicy (DFS/light sleep, idle WiFi)
 ├── Utils/            # CelerSettings (NVS), AlarmCalc (pure, host-tested), GbProto (Bangle.js protocol, pure, host-tested), AppGrants/AppPerms
 ├── Compat/           # Arduino.h shim (millis/delay/pinMode...) over IDF - include path root
 ├── Settings/         # TouchCalibrator
@@ -26,7 +27,7 @@ main/
 ```
 
 ## BOOT FLOW (main.cpp)
-Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink (UART; log-only hook when `CELEROS_USB_NATIVE`) -> USBDevice -> Buttons -> ScreenPower -> PowerPolicy -> TimeManager -> Alarms -> WebManager::startAsync -> CelerKernel::init -> LauncherUI/TouchCalibrator -> kui::Navigator::begin + WatchPanels::init (+ PhoneLink::init on the watch) -> push launcher (or the board's homeApp / `/local/autostart.txt`).
+Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink (UART; log-only hook when `CELEROS_USB_NATIVE`) -> USBDevice -> UsbHost::init (no-op unless `CELEROS_USB_HOST`) -> Buttons -> ScreenPower -> PowerPolicy -> TimeManager -> Alarms -> WebManager::startAsync -> CelerKernel::init -> LauncherUI/TouchCalibrator -> kui::Navigator::begin + WatchPanels::init (+ PhoneLink::init on the watch) -> push launcher (or the board's homeApp / `/local/autostart.txt`).
 Loop (`celerLoop`, main task, 32KB stack): `Navigator::tick()`, `WebManager::tick()`, `TimeManager::tick()`, `Backlight::tick()`, `Buttons::tick(false)`, `ScreenPower::tick(false)`, `LauncherUI::idleHomeTick()`, `AlarmScreen::service()`, `WatchPanels::service()`, `PowerPolicy::tick()` (+ `PhoneLink::tick()`/`PhoneScreens::service()` on the watch), `confirmPendingOta()` (also called from the apps' `present()` — a home-app boot never reaches celerLoop), `delay(PowerPolicy::loopDelayMs())`. JS apps pump the same ticks inside `present()`.
 
 ## WHERE TO LOOK
@@ -38,6 +39,8 @@ Loop (`celerLoop`, main task, 32KB stack): `Navigator::tick()`, `WebManager::tic
 | Touch gestures / tap vs swipe | `UI/Kui.cpp` TouchPump; injected touches (celerctl tap) go through TouchInjector; multitouch (API 43) = "TOUCH PIPELINE" below |
 | System edge panels / watch edge gestures | `Launcher/WatchPanels.*` (native screens) + `Runtime/JSBindings.cpp` `pollWatchEdges` (JS apps) — one map, two homes; top edge in thirds (left = quick settings, center = notification center, right = retractable topbar reveal), bottom edge up = notifications, left edge = exit/back; keep both in sync |
 | celerctl device side | `USBDevice/HostLink.cpp` (opcodes + handlers; framing in `HostFrame.h`, pure C++, unit-tested in `test/cpp/run_tests.cpp`), `SerialLink.cpp` (UART/USJ transport + console mux + LogSink), `USBDevice.cpp` (dual CDC, `CELEROS_USB_NATIVE`) |
+| USB Host / drivers em JS | `USBHost/UsbHost.{h,cpp}` (client + lib tasks, transfer pool, listeners, hotplug; `UsbDesc.*` is the pure config-descriptor parser, host-tested) + `Runtime/JsUsb.cpp` (`USB.*`, API 48). Device drivers are hub deps (`celeros.usb.*`), never C++ — see `boards/AGENTS.md` "USB HOST" |
+| OS input bus (teclado/mouse) | `Hardware/InputBus.*` (key ring + pointer state), `Runtime/JsInput.cpp` (`Input.*`), `UI/Kui.cpp` `readTouches` (pointer becomes a synthetic finger with id 0xFE when the left button is down) |
 | App discovery / launch | `Launcher/LauncherUI.cpp` (appDirs, `main.js`) |
 | Alarms / timer / snooze scheduling | `Kernel/Alarms.*` + `Launcher/AlarmScreen.*` (pure date math in `Utils/AlarmCalc.h`, host-tested; API 12 `TimeManager::setAlarm` = slot 0) |
 | Notifications (history, dnd, toast, AOD dot) | `Kernel/Notifications.*` — consumed by System.notify JS, the notification center panel and PhoneLink |
@@ -45,7 +48,7 @@ Loop (`celerLoop`, main task, 32KB stack): `Navigator::tick()`, `WebManager::tic
 | Screen states (dim/AOD/off), raise-to-wake | `Display/ScreenPower.*`; deep sleep wakes on the next alarm event |
 | Power (DFS, light sleep, idle WiFi) | `Hardware/PowerPolicy.*`; needs `CONFIG_PM_ENABLE` (watch sdkconfig) |
 | Web file-manager / firmware-upload page | edit `WebManager/filemanager.html` / `ota_upload.html`; the build gzips and embeds them (`main/CMakeLists.txt`), served with `Content-Encoding: gzip` |
-| Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_AUDIO` (all default y), `CELEROS_MIC`, `CELEROS_JS_PHYSICS`, `CELEROS_JS_CAMERA`, `CELEROS_WAKE_WORD` (hardware opt-in); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults`. Off-flags keep the JS contracts via inline stubs in the headers (`AudioPlayer.h`/`MusicSynth.h`/`BoardIO.h`) — callers never need `#if`; the CYD lite profile turns the whole set off (see `boards/cyd/sdkconfig.defaults`) |
+| Turn a subsystem off for a board | `Kconfig.projbuild`: `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_AUDIO` (all default y), `CELEROS_MIC`, `CELEROS_JS_PHYSICS`, `CELEROS_JS_CAMERA`, `CELEROS_WAKE_WORD` (hardware opt-in), `CELEROS_USB_HOST` (devkit-s3; depends on S3 and excludes USB device/USJ); set `# CONFIG_... is not set` in `boards/<b>/sdkconfig.defaults`. Off-flags keep the JS contracts via inline stubs in the headers (`AudioPlayer.h`/`MusicSynth.h`/`BoardIO.h`/`UsbHost.h`) — callers never need `#if`; the CYD lite profile turns the whole set off (see `boards/cyd/sdkconfig.defaults`) |
 
 ## TOUCH PIPELINE (API 43 MULTITOUCH — read before touching any touch code)
 One read path, one primary, additive everywhere. Designed so that single-finger behavior is byte-identical to the pre-43 firmware:
@@ -69,7 +72,7 @@ One read path, one primary, additive everywhere. Designed so that single-finger 
 - SD card (smartdisplay): `FileSystem::mountSD` resets/pulls up the 4 pins (the CS wakes in the UART1 IOMUX), tries the profile clock then 400 kHz, and honors a format request persisted in NVS — `FileSystem::formatSD` only SCHEDULES it, the **boot mount** formats FAT32 (the card answers reliably only on the boot mount; exFAT is unreadable to FatFs). Shell `sd [format]` exposes both; `Board::init` deselects the CS before the panel init (the ST7701 3-wire shares SCK/MOSI with the card). Details in `boards/AGENTS.md`.
 - Comments and log strings are Portuguese without accents. Match that style.
 - Feature code behind a Kconfig flag uses `#if CONFIG_CELEROS_<X>` with a no-op `#else` stub for the public entry point, so callers never need `#if`.
-- `CONFIG_CELEROS_USB_NATIVE` (Kconfig.projbuild, S3 only, default n) swaps SerialLink for TinyUSB dual CDC. **Keep it off on SmartDisplay 4848S040**: GPIO19/20 are the GT911 touch SDA and an RGB data line. Enabling it also needs `CONFIG_TINYUSB_CDC_COUNT=2`. `CONFIG_CELEROS_LINK_ON_USJ` instead multiplexes console+link on the USB-Serial/JTAG itself (dog) — the two flags are mutually exclusive (OTG owns GPIO19/20).
+- `CONFIG_CELEROS_USB_NATIVE` (Kconfig.projbuild, S3 only, default n) swaps SerialLink for TinyUSB dual CDC. **Keep it off on SmartDisplay 4848S040**: GPIO19/20 are the GT911 touch SDA and an RGB data line. Enabling it also needs `CONFIG_TINYUSB_CDC_COUNT=2`. `CONFIG_CELEROS_LINK_ON_USJ` instead multiplexes console+link on the USB-Serial/JTAG itself (dog) — the two flags are mutually exclusive (OTG owns GPIO19/20). `CONFIG_CELEROS_USB_HOST` is the third role for the same OTG (host, devkit-s3) and also excludes both: the S3 shares one PHY between OTG and USJ.
 - HostLink protocol: each transport owns a `HostLink` instance (parser per channel); the session is unique and follows the last HELLO. Proto 2 (CRC32 + window) is negotiated per session in the HELLO — proto 1 stays byte-identical for old tools. Opcode values are the single source parsed by `tools/celerctl.py`: edit `HostLink.h`, never the tool.
 
 ## ANTI-PATTERNS

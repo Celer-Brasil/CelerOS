@@ -32,6 +32,27 @@ config CELEROS_LINK_ON_USJ
       Incompativel com CELEROS_USB_NATIVE (o OTG tomaria os pinos 19/20
       da USJ): o Kconfig do board escolhe um dos dois.
 
+config CELEROS_USB_HOST
+    bool "USB Host (OTG): dispositivos externos pela API JS USB.*"
+    depends on IDF_TARGET_ESP32S3 && !CELEROS_USB_NATIVE && !CELEROS_LINK_ON_USJ
+    default n
+    help
+      Instala a pilha USB Host do IDF (componente gerenciado espressif/usb)
+      no periferico USB-OTG e expoe o objeto JS USB.*: enumeracao de devices,
+      claim de interface, transfers control/bulk/interrupt, leitura continua
+      de endpoint IN e envio de arquivo. Drivers de dispositivo (impressora
+      ESC/POS, HID, etc.) sao escritos em JS sobre essa API.
+
+      O OTG usa o PHY interno (GPIO19/20) e, no ESP32-S3, e exclusivo com a
+      USB-Serial/JTAG: o console/celerctl TEM de ficar na UART0 (placas com
+      dois conectores USB, ex. DevKitC-1) e CELEROS_LINK_ON_USJ nao pode ser
+      ligado. Tambem nao roda junto com CELEROS_USB_NATIVE (device TinyUSB).
+
+      O VBUS do host nao e chaveado por software: a placa precisa fornecer 5V
+      ao conector. Habilite CONFIG_USB_HOST_HUBS_SUPPORTED no sdkconfig para
+      aceitar hub externo e CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
+      para ler report descriptors HID inteiros.
+
 config CELEROS_WEB_SERVER
     bool "Servidor web (file manager + /update pelo navegador)"
     default y
@@ -141,6 +162,7 @@ config CELEROS_JS_DEBUGGER
 
 config CELEROS_JS_GAME_ACCEL
     bool "Aceleradores de jogo para apps (corpo rigido nativo + drawSprite)"
+    depends on CELEROS_UI  # drawSprite/blitSprite vivem no JsGfx (sem vidro nao existem)
     default y if IDF_TARGET_ESP32S3
     default n
     help

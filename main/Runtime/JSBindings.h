@@ -55,6 +55,9 @@ public:
     static size_t readAppTouches(duk_context *ctx, kui::TouchPoint *out, size_t max);
     // Espera de app (System.delay / UI.end): present, GC, WDT, exit remoto
     static void appWait(duk_context *ctx, int ms);
+    // true = a chamada corrente roda no callback de um servico (svchost):
+    // present() reentraria o pump; bindings bloqueantes so renovam a janela
+    static bool inService();
 
 private:
     static CelerDisplay *tftInstance;
@@ -411,7 +414,33 @@ public:
     static duk_ret_t js_micRecStop(duk_context *ctx);     // Mic.stop({raw}) -> base64|wav|null
     static duk_ret_t js_micRecRecording(duk_context *ctx); // Mic.recording()
     static duk_ret_t js_micRecLevel(duk_context *ctx);    // Mic.level()
+
+    // Input (API 48): barramento de input do OS — capability "input".
+    // Um driver JS injeta; qualquer app com a permissao le (JsInput.cpp).
+    static duk_ret_t js_inputKey(duk_context *ctx);       // Input.key(usage, mods, down)
+    static duk_ret_t js_inputPoll(duk_context *ctx);      // Input.poll() -> {key,mods,down}|null
+    static duk_ret_t js_inputMove(duk_context *ctx);      // Input.move(x, y, buttons)
+    static duk_ret_t js_inputPointer(duk_context *ctx);   // Input.pointer() -> {x,y,buttons}
+    static duk_ret_t js_inputClear(duk_context *ctx);     // Input.clear()
 #include "sdkconfig.h"
+#if CONFIG_CELEROS_USB_HOST
+    // USB Host (API 48) — capability "usb" (JsUsb.cpp). Drivers de
+    // dispositivo sao JS; aqui so o hardware cru.
+    static duk_ret_t js_usbDevices(duk_context *ctx);
+    static duk_ret_t js_usbPoll(duk_context *ctx);
+    static duk_ret_t js_usbClaim(duk_context *ctx);
+    static duk_ret_t js_usbRelease(duk_context *ctx);
+    static duk_ret_t js_usbControlIn(duk_context *ctx);
+    static duk_ret_t js_usbControlOut(duk_context *ctx);
+    static duk_ret_t js_usbOut(duk_context *ctx);
+    static duk_ret_t js_usbIn(duk_context *ctx);
+    static duk_ret_t js_usbSendFile(duk_context *ctx);
+    static duk_ret_t js_usbListen(duk_context *ctx);
+    static duk_ret_t js_usbRead(duk_context *ctx);
+    static duk_ret_t js_usbUnlisten(duk_context *ctx);
+    static duk_ret_t js_usbFlush(duk_context *ctx);
+    static void usbAppReset();                            // solta claims/listeners do app
+#endif
 #if CONFIG_CELEROS_JS_CAMERA
     // Camera (API 35): OV2640 da esp32-cam — capability "camera" (JsCamera.cpp)
     static duk_ret_t js_cameraSetup(duk_context *ctx);    // Camera.setup({framesize,pixformat,fbcount,xclkMhz})

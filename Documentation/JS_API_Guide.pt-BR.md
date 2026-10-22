@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 47
+### Nível de API: 48
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -3381,3 +3381,192 @@ O BEAT ganhou o bit `0x80` (`CAPS_RES`): "este nó publica recursos". Os
 membros aparecem com `caps` a mais no `Pack.members()` — útil para a UI
 filtrar quem tem o que antes mesmo do `Pack.resources()` (o catálogo segue
 sendo a fonte da verdade).
+
+## 49. Nível de API 48 — USB Host e input do OS: `USB.*` e `Input.*`
+
+**Onde existe.** Só em firmware compilado com `CELEROS_USB_HOST` (hoje a
+placa `devkit-s3`: ESP32-S3 N16R8, com o USB-C nativo em modo **host**) e em
+app com a permissão `"usb"` no `app.json`. Teclado e mouse também pedem
+`"input"`. Detecte com `System.getInfo().hasUsbHost` e com
+`typeof USB !== "undefined"` — nas outras placas o objeto não existe.
+
+**O que o firmware faz.** Enumera os dispositivos, lê os descritores e
+executa transfers. **Nenhum driver de dispositivo mora no C++**: ESC/POS,
+HID, SCSI, protocolo proprietário... são JS sobre esta API. As deps
+`celeros.usb`, `celeros.usb.escpos` e `celeros.usb.hid` do hub trazem os
+primeiros drivers de referência.
+
+**Bytes são arrays de números (0..255).** O Duktape do firmware é *lean*:
+não há `Uint8Array`/`ArrayBuffer`. O teto é **4096 bytes** por transfer; para
+um job maior, grave o binário num arquivo e use `USB.sendFile` (streaming em
+chunks de 2 KB no lado C++, sem passar pelo heap do JS).
+
+**Um dono por interface.** `USB.claim` marca a interface para o app/serviço
+corrente; claims e listeners são liberados sozinhos quando o app sai (ou no
+`svc stop`). Enquanto estiver presa, outro app recebe `false`.
+
+**Hotplug.** `USB.poll()` devolve um evento por dispositivo que entrou ou
+saiu; drene até `null` a cada quadro (ou a cada tick de um serviço).
+
+**Console na UART.** No S3 o USB-OTG divide o PHY com a USB-Serial/JTAG: com
+o host ligado, o console/celerctl fica na UART0 (conector "UART" do
+DevKitC-1). O VBUS do host não é chaveado por software — a placa precisa
+fornecer 5 V (use hub alimentado se o dispositivo pedir mais corrente).
+
+### `USB.devices()` (API 48)
+Lista os dispositivos enumerados:
+
+```javascript
+[ { addr: 1, vid: 0x04B8, pid: 0x0202, cls: 0, subcls: 0, proto: 0,
+    speed: 2, claimed: [0],
+    ifs: [ { n: 0, alt: 0, cls: 7, subcls: 1, proto: 2,
+             eps: [ { addr: 0x01, type: 2, mps: 64, ivl: 0 },
+                    { addr: 0x82, type: 2, mps: 64, ivl: 0 } ] } ] } ]
+```
+
+`addr` é o endereço USB (1..127) usado nas outras chamadas. `type` do
+endpoint: 0 control, 1 iso, 2 bulk, 3 interrupt; `addr` com o bit 7 ligado é
+IN. `claimed` lista as interfaces já presas por algum app/serviço e `speed`
+é a velocidade negociada (1 low, 2 full, 3 high). Devolve `[]` sem host.
+
+### `USB.poll()` (API 48)
+Próximo evento de hotplug ou `null` quando a fila está vazia:
+`{type:"add"|"remove", addr, vid, pid}`. Um service que precisa reagir a
+plug/unplug drena num `setInterval`.
+
+### `USB.claim(addr, iface[, alt])` (API 48)
+Pede a interface `iface` (alternate `alt`, default 0) para o app corrente.
+Obrigatório antes de qualquer transfer de endpoint. Devolve `true` no
+sucesso; `false` se o device sumiu ou a interface já é de outro dono.
+
+### `USB.release(addr, iface)` (API 48)
+Solta a interface (só o dono consegue). A saída do app já faz isso sozinha.
+
+### `USB.controlIn(addr, bmRequestType, bRequest, wValue, wIndex, len[, timeoutMs])` (API 48)
+Control transfer IN (ex.: ler o report descriptor HID com
+`bmRequestType=0x81, bRequest=6, wValue=0x2200`). Devolve
+`{ok, status, len, data}` com até `len` bytes (máximo 2040). `timeoutMs`
+default 250, teto 5000.
+
+### `USB.controlOut(addr, bmRequestType, bRequest, wValue, wIndex, data[, timeoutMs])` (API 48)
+Control transfer OUT (ex.: `SET_IDLE` de HID, `SET_LINE_CODING` de CDC).
+`data` é um array de bytes. Devolve `{ok, status, sent}`.
+
+### `USB.out(addr, ep, data[, timeoutMs])` (API 48)
+Bulk/interrupt OUT. `ep` é o endereço do endpoint OUT (sem o bit 7). Envie
+comandos de impressora, pacotes de um driver próprio, etc. Devolve
+`{ok, status, sent}`. `status`: `"ok"`, `"stall"`, `"timeout"`, `"error"`,
+`"gone"`, `"busy"`, `"overflow"`, `"canceled"`.
+
+### `USB.in(addr, ep, len[, timeoutMs])` (API 48)
+Bulk/interrupt IN pontual: devolve `{ok, status, len, data}`. Para fluxo
+contínuo (teclado/mouse/status) prefira `USB.listen` + `USB.read`: um
+`USB.in` por quadro perde reports entre as chamadas.
+
+### `USB.sendFile(addr, ep, path[, maxBytes[, timeoutMs]])` (API 48)
+Envia um arquivo do aparelho direto para o endpoint OUT, em chunks de 2 KB
+(o conteúdo não entra no heap do JS). Exige a permissão `"fs"` e respeita o
+jail do FS. Teto de 512 KB por chamada. Devolve `{ok, status, sent}` —
+ideal para um cupom/logo ESC/POS pre-gravado.
+
+### `USB.listen(addr, ep, len[, depth])` (API 48)
+Liga a leitura contínua de um endpoint IN (interrupt ou bulk): o core mantém
+um anel de `depth` registros de até `len` bytes (1..256) e reenvia o URB
+sozinho. Devolve `true` se o listener nasceu. Cada app/serviço tem até 4
+listeners simultâneos; eles morrem com o app.
+
+### `USB.read(addr, ep)` (API 48)
+Retira o próximo registro do listener: array de bytes ou `null` se vazio.
+Drene num `while` a cada quadro.
+
+### `USB.unlisten(addr, ep)` (API 48)
+Desliga o listener e libera o anel/URB. Devolve `true` se existia.
+
+### `USB.flush(addr, ep)` (API 48)
+Limpa um endpoint preso (depois de `"stall"`/timeout): o URB pendente é
+cancelado e o endpoint volta ao estado limpo. Devolve `true` no sucesso.
+
+### Escrevendo um driver: impressora ESC/POS
+
+```javascript
+var usb = require("celeros.usb");
+var esc = require("celeros.usb.escpos");
+
+if (usb.available()) {
+    var p = esc.open(usb.find({ cls: 7 }));   // interface classe 7
+    if (p) {
+        p.receipt("CELER OS", ["Ola, mundo!", "driver em JS"], "https://os.celer.tec.br");
+        p.close();
+    }
+}
+```
+
+A dep `celeros.usb.escpos` é só um exemplo de driver: `p.raw([...])` manda
+bytes crus, `p.file("/local/cupom.bin")` manda um job pre-gravado e
+`p.text/line/align/size/bold/qr/cut` cobrem o cupom comum. Para um modelo
+específico, troque a sequência de comandos — o firmware não muda.
+
+### Lendo um pendrive (MSC)
+
+Pendrive é classe 8, subclasse 6, protocolo 0x50 (Bulk-Only Transport). A
+dep `celeros.usb.msc` implementa BOT + SCSI + FAT32/exFAT **em JS**; o
+firmware só entrega os bulk transfers:
+
+```javascript
+var msc = require("celeros.usb.msc");
+var vol = msc.openVolume(usb.find({ cls: 8 }));
+if (vol) {
+    var i = vol.info();                 // {type,label,totalBytes,...}
+    var lista = vol.list("/");          // [{name,dir,size}]
+    var bytes = vol.read("/NOTA.TXT", 4096);   // array de bytes (ate 64KB)
+    vol.close();
+}
+```
+
+Somente leitura nesta versão (listar, `stat`, ler arquivo); `writeBlocks`
+já existe como primitiva para o driver que alocar FAT. O app `USB Storage`
+do hub é a referência de navegação (headless imprime a raiz no logcat).
+
+### `Input.key(usage, mods, down)` (API 48)
+Injeta uma tecla no barramento de input do OS (permissão `"input"`).
+`usage` é o **usage ID do HID** (0x04=A ... 0x1D=Z, 0x28=Enter, 0x29=Esc,
+0x2C=Espaço); `mods` é o byte de modificadores HID (bit0 LCtrl, bit1 LShift,
+bit2 LAlt, bit3 LGUI, bit4 RCtrl, ...). Devolve `true` se a fila aceitou.
+
+### `Input.poll()` (API 48)
+Próxima tecla injetada: `{key, mods, down}` ou `null` quando a fila está
+vazia. Uma fila só: um consumidor por vez (o app em primeiro plano, ou o
+serviço que fizer a ponte).
+
+### `Input.move(x, y, buttons)` (API 48)
+Move o ponteiro no espaço virtual 240x320. `buttons`: bit0 esquerdo, bit1
+direito, bit2 meio. Em placa com tela o ponteiro entra no pipeline de toque
+como um dedo sintético (id reservado), então o mouse clica e arrasta na UI
+como um toque; em placa headless o app lê com `Input.pointer()`.
+
+### `Input.pointer()` (API 48)
+Estado atual do ponteiro: `{x, y, buttons}`.
+
+### `Input.clear()` (API 48)
+Zera a fila de teclas e o ponteiro (bench ou driver que desconectou).
+
+### Exemplo: driver de teclado/mouse como serviço
+
+O app de fábrica `USB HID` do `devkit-s3` é a referência completa: roda no
+svchost, abre teclado (HID boot protocolo 1) e mouse (protocolo 2), faz o
+diff dos reports e chama `Input.key`/`Input.move`. Qualquer app com a
+permissão `"input"` lê o resultado:
+
+```javascript
+var ev;
+while ((ev = Input.poll()) !== null) {
+    System.print("tecla " + ev.key + (ev.down ? " down" : " up"));
+}
+var p = Input.pointer();
+System.print("mouse " + p.x + "," + p.y + " botoes " + p.buttons);
+```
+
+O firmware não interpreta as teclas: um app escolhe o que fazer com elas
+(atalhos, jogos, um editor). Em placa com tela, o ponteiro já dirige o
+launcher e os apps; a navegação por teclado na UI do sistema ainda não
+existe nesta versão.

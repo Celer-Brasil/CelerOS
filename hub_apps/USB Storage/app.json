@@ -1,0 +1,16 @@
+{
+  "name": "USB Storage",
+  "packageName": "celeros.usbstorage",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Pendrive no USB Host (API 48): monta FAT32/exFAT em JS (Bulk-Only Transport + SCSI + FAT, sem driver no firmware), mostra rotulo/tamanho e navega pelas pastas lendo arquivos de texto. O driver e a dep celeros.usb.msc.",
+  "type": "App",
+  "category": "Utility",
+  "api": 48,
+  "permissions": ["usb"],
+  "deps": {
+    "celeros.usb": "^1.0.0",
+    "celeros.usb.msc": "^1.0.0"
+  },
+  "changelog": "1.0.0 - primeira versao: monta FAT32 e exFAT somente-leitura, lista pastas/arquivos com tamanho, abre arquivos de texto pequenos; modo headless imprime a raiz no logcat"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "USB MSC fixture",
+  "packageName": "celeros.test.usbmsc",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "fixture do parser FAT32/exFAT da dep celeros.usb.msc (sem hardware)",
+  "type": "Utility",
+  "api": 48,
+  "permissions": ["usb"],
+  "deps": {
+    "celeros.usb": "^1.0.0",
+    "celeros.usb.msc": "^1.0.0"
+  }
+}

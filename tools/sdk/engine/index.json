@@ -240,5 +240,23 @@
       "celeros.app.form": "^1.0.0",
       "celeros.app.list": "^1.0.0"
     }
+  },
+  "celeros.usb": {
+    "deps": {}
+  },
+  "celeros.usb.escpos": {
+    "deps": {
+      "celeros.usb": "^1.0.0"
+    }
+  },
+  "celeros.usb.hid": {
+    "deps": {
+      "celeros.usb": "^1.0.0"
+    }
+  },
+  "celeros.usb.msc": {
+    "deps": {
+      "celeros.usb": "^1.0.0"
+    }
   }
 }

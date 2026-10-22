@@ -3210,7 +3210,8 @@ specific model, change the command sequence — the firmware stays the same.
 
 A flash drive is class 8, subclass 6, protocol 0x50 (Bulk-Only Transport).
 The `celeros.usb.msc` dep implements BOT + SCSI + FAT32/exFAT **in JS**; the
-firmware only delivers the bulk transfers:
+firmware only delivers the bulk transfers. The volume may sit at LBA 0
+(superfloppy) or inside an MBR/GPT partition — the driver locates it:
 
 ```javascript
 var msc = require("celeros.usb.msc");

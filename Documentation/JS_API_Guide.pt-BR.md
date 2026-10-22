@@ -3510,7 +3510,8 @@ específico, troque a sequência de comandos — o firmware não muda.
 
 Pendrive é classe 8, subclasse 6, protocolo 0x50 (Bulk-Only Transport). A
 dep `celeros.usb.msc` implementa BOT + SCSI + FAT32/exFAT **em JS**; o
-firmware só entrega os bulk transfers:
+firmware só entrega os bulk transfers. O volume pode estar no LBA 0
+(superfloppy) ou numa partição MBR/GPT — o driver localiza a partição:
 
 ```javascript
 var msc = require("celeros.usb.msc");

@@ -22,7 +22,7 @@
 
 var usb = require("celeros.usb");
 
-var msc = { version: '1.0.0' };
+var msc = { version: '1.0.1' };
 
 var SECTOR = 512;
 var MAX_XFER = 4096;
@@ -111,9 +111,9 @@ function botCmd(t, cdb, dataLen, dirIn, data) {
     if (!sigOk) return { ok: false, status: "csw", data: got };
     t.residue = le32(d, 8);
     if (d[12] !== 0) {
-        // falha: limpa o halt dos dois endpoints e guarda o sense
-        USB.flush(t.addr, t.epIn);
-        USB.flush(t.addr, t.epOut);
+        // Sem flush daqui: a host lib enfileira o cancelamento de forma
+        // assincrona e o comando num endpoint ocioso (ou ja liberado) quebra
+        // o HCD. O driver trata a falha e o core libera no fim do app.
         msc._sense(t);
         return { ok: false, status: d[12] === 1 ? "stall" : "error", data: got };
     }
@@ -206,12 +206,57 @@ msc.open = function (dev, opts) {
 
 // Monta um volume a partir de um leitor {read(lba, count) -> bytes|null}.
 // Devolve {type, label, list, read, stat, info, close} ou null.
+//
+// O LBA 0 pode ser: (a) o BPB (superfloppy), (b) um MBR com a FAT numa
+// particao (comum em pendrive) ou (c) um protective MBR + GPT. O volume
+// guarda `partLba` e soma em todo acesso.
 msc.mount = function (reader) {
     if (!reader) return null;
     var bs = reader.read(0, 1);
     if (!bs || bs.length < SECTOR) return null;
-    if (ascii(bs, 3, 8) === "EXFAT   ") return mountExfat(reader, bs);
-    return mountFat32(reader, bs);
+
+    var partLba = 0;
+    var base = bs;
+    if (ascii(bs, 3, 8) !== "EXFAT   " && le16(bs, 11) !== SECTOR) {
+        var start = partitionStart(reader, bs);
+        if (start > 0) {
+            base = reader.read(start, 1);
+            if (!base) return null;
+            partLba = start;
+        }
+    }
+    if (ascii(base, 3, 8) === "EXFAT   ") return mountExfat(reader, base, partLba);
+    return mountFat32(reader, base, partLba);
+};
+
+// Primeiro inicio de particao de dados do MBR (ou da GPT quando o MBR e
+// protective, tipo 0xEE). 0 = nao ha particao / nao reconheceu.
+function partitionStart(reader, mbr) {
+    var gpt = false;
+    for (var i = 0; i < 4; i++) {
+        var o = 446 + i * 16;
+        var type = u8(mbr, o + 4);
+        var lba = le32(mbr, o + 8);
+        if (type === 0xEE) gpt = true;
+        if (lba > 0 && type !== 0xEE) return lba;
+    }
+    if (!gpt) return 0;
+    var hdr = reader.read(1, 1);
+    if (!hdr || ascii(hdr, 0, 8) !== "EFI PART") return 0;
+    var entLba = le32(hdr, 72);
+    var num = le32(hdr, 80);
+    var esz = le32(hdr, 84);
+    if (!entLba || !num || !esz) return 0;
+    // 1 setor cobre as primeiras entradas (128 B: 4 por setor)
+    var ents = reader.read(entLba, 1);
+    if (!ents) return 0;
+    var max = Math.min(num, Math.floor(ents.length / esz));
+    for (var k = 0; k < max; k++) {
+        var eo = k * esz;
+        var start = le32(ents, eo + 32) + le32(ents, eo + 36) * 4294967296;
+        if (start > 0 && start < 0xFFFFFFFF) return start;
+    }
+    return 0;
 };
 
 msc.openVolume = function (dev, opts) {
@@ -237,7 +282,7 @@ msc.openVolume = function (dev, opts) {
 // ===========================================================================
 // FAT32 (leitura)
 // ===========================================================================
-function mountFat32(reader, bs) {
+function mountFat32(reader, bs, partLba) {
     if (le16(bs, 11) !== SECTOR) return null;
     var spc = u8(bs, 13);
     var reserved = le16(bs, 14);
@@ -245,6 +290,7 @@ function mountFat32(reader, bs) {
     var fatSize = le32(bs, 36);
     var root = le32(bs, 44);
     if (!spc || !fatSize || root < 2) return null;
+    partLba = partLba || 0;
 
     var v = {
         type: "fat32",
@@ -253,14 +299,15 @@ function mountFat32(reader, bs) {
         sectorsPerCluster: spc,
         totalSectors: le32(bs, 32) || le16(bs, 19),
         rootCluster: root,
-        dataLba: reserved + nfats * fatSize,
-        fatLba: reserved,
+        partLba: partLba,
+        dataLba: partLba + reserved + nfats * fatSize,
+        fatLba: partLba + reserved,
         clusterCount: 0,
         reader: reader,
         _fatSec: -1,
         _fatBuf: null
     };
-    v.clusterCount = Math.floor((v.totalSectors - v.dataLba) / spc);
+    v.clusterCount = Math.floor((v.totalSectors - (reserved + nfats * fatSize)) / spc);
     return makeVolume(v, fat32Dir, fat32Chain);
 }
 
@@ -288,8 +335,9 @@ function fat32Dir(v, node) {
     var guard = 0;
     var lfn = [];
     while (cluster !== EOC && cluster >= 2 && guard++ < 8192) {
-        var data = v.reader.read(v.dataLba + (cluster - 2) * v.sectorsPerCluster,
-                                 v.sectorsPerCluster);
+        var base = v.dataLba + (cluster - 2) * v.sectorsPerCluster;
+        for (var sec = 0; sec < v.sectorsPerCluster; sec++) {
+        var data = v.reader.read(base + sec, 1);
         if (!data) return out;
         for (var off = 0; off + 32 <= data.length; off += 32) {
             var b0 = u8(data, off);
@@ -313,6 +361,7 @@ function fat32Dir(v, node) {
             var size = le32(data, off + 28);
             out.push({ name: name, dir: (attr & 0x10) !== 0, size: size, cluster: cl });
         }
+        }
         cluster = fat32Fat(v, cluster);
     }
     return out;
@@ -330,11 +379,11 @@ function shortName(b, off) {
 // ===========================================================================
 // exFAT (leitura)
 // ===========================================================================
-function mountExfat(reader, bs) {
+function mountExfat(reader, bs, partLba) {
     var bps = 1 << u8(bs, 108);
     if (bps !== SECTOR) return null;
     var spc = 1 << u8(bs, 109);
-    var part = le64(bs, 64);
+    var part = (partLba || 0) + le64(bs, 64);
     var fatOffset = le32(bs, 80);
     var fatLength = le32(bs, 84);
     var heap = le32(bs, 88);
@@ -527,9 +576,16 @@ function makeVolume(v, dirFn, chainFn) {
             var noChain = n.noFatChain === true;
             var guard = 0;
             while ((cluster !== EOC && cluster >= 2) && out.length < want && guard++ < 65536) {
-                var data = readCluster(cluster, noChain);
-                if (!data) break;
-                for (var i = 0; i < data.length && out.length < want; i++) out.push(data[i]);
+                // Setor a setor: um cluster de 32 KB vira 64 arrays de 512 em
+                // vez de um array de 32K numeros (o heap do app/svchost nao
+                // aguenta varios desses — fatal do svchost na bancada).
+                var base = v.dataLba + (cluster - 2) * v.sectorsPerCluster;
+                for (var sec = 0; sec < v.sectorsPerCluster && out.length < want; sec++) {
+                    var data = v.reader.read(base + sec, 1);
+                    if (!data) { cluster = EOC; break; }
+                    for (var i = 0; i < data.length && out.length < want; i++) out.push(data[i]);
+                }
+                if (cluster === EOC) break;
                 if (noChain) {
                     cluster++;
                 } else {

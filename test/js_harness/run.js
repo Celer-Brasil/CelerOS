@@ -4455,6 +4455,7 @@ function holdFrames(x, y, n) {
         'fatread:hello',
         'fatnested:inner',
         'fatstat:5',
+        'fatmbr:fat32:TESTE:hello',
         'exfat:exfat:TESTE',
         'exfatlist:README.TXT',
         'exfatread:exfat',

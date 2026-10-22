@@ -143,6 +143,10 @@ void JSBindings::timersTick(duk_context* ctx) {
             }
             duk_throw(tctx);  // erro do callback vira erro do app (nao retorna)
         }
+        // O retorno do callback (undefined quase sempre) ficaria no value
+        // stack a cada disparo: no svchost com setInterval de 20 ms sao ~50
+        // slots/s ate o fatal "cannot push beyond allocated stack" (~11 s).
+        duk_pop(tctx);
         now = millis();
     }
 }

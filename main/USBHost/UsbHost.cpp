@@ -53,6 +53,7 @@ struct DevSlot {
 struct XferSlot {
     bool busy = false;
     bool abandoned = false;
+    uint8_t addr = 0;
     usb_transfer_t* x = nullptr;
     SemaphoreHandle_t sem = nullptr;
     int resStatus = -1;
@@ -67,7 +68,8 @@ struct Listener {
     bool stopping = false;
     uint8_t addr = 0;
     uint8_t ep = 0;
-    uint16_t len = 0;
+    uint16_t len = 0;      // tamanho do registro devolvido ao JS
+    uint16_t xferLen = 0;  // len arredondado ao MPS (exigencia da host lib)
     uint8_t depth = 0;
     uint8_t head = 0;
     uint8_t tail = 0;
@@ -106,6 +108,66 @@ usb_device_handle_t handleFor(uint8_t addr) {
     if (d != nullptr) h = d->hdl;
     xSemaphoreGive(s_mux);
     return h;
+}
+
+// MPS do endpoint (IN bulk/interrupt). A host lib RECUSA transferencia IN
+// cujo num_bytes nao seja multiplo do MPS dos dados ("IN transfer num_bytes
+// not integer multiple of MPS") — 36 bytes de INQUIRY num bulk de 64 falham.
+uint16_t epMps(uint8_t addr, uint8_t ep) {
+    uint16_t mps = 64;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    DevSlot* d = findDevLocked(addr);
+    if (d != nullptr) {
+        bool found = false;
+        for (int i = 0; i < d->desc.nIfs && !found; i++) {
+            for (int k = 0; k < d->desc.ifs[i].nEps; k++) {
+                if (d->desc.ifs[i].eps[k].addr != ep) continue;
+                mps = d->desc.ifs[i].eps[k].mps;
+                found = true;
+                break;
+            }
+        }
+    }
+    xSemaphoreGive(s_mux);
+    if (mps == 0) mps = 64;
+    if (mps > 512) mps = 512;
+    return mps;
+}
+
+size_t roundToMps(size_t len, uint16_t mps) {
+    if (mps == 0) return len;
+    return ((len + mps - 1) / mps) * mps;
+}
+
+// URB nosso ainda em voo neste device? A host lib NAO aceita liberar a
+// interface (nem flush de endpoint sem URB) sem quebrar a invariante do HCD;
+// por isso release/flush consultam isto antes.
+bool anyInflightLocked(uint8_t addr) {
+    for (auto& s : s_slots) {
+        if (s.busy && s.addr == addr) return true;
+    }
+    for (auto& L : s_listeners) {
+        if (L.used && L.addr == addr) return true;
+    }
+    return false;
+}
+
+bool anyXferInflightLocked(uint8_t addr) {
+    for (auto& s : s_slots) {
+        if (s.busy && s.addr == addr) return true;
+    }
+    return false;
+}
+
+bool epInflightLocked(uint8_t addr, uint8_t ep) {
+    for (auto& s : s_slots) {
+        if (!s.busy || s.addr != addr || s.x == nullptr) continue;
+        if (s.x->bEndpointAddress == ep) return true;
+    }
+    for (auto& L : s_listeners) {
+        if (L.used && L.addr == addr && L.ep == ep) return true;
+    }
+    return false;
 }
 
 void pushEventLocked(uint8_t type, uint8_t addr, uint16_t vid, uint16_t pid) {
@@ -149,9 +211,15 @@ XferSlot* acquireSlot() {
         if (!s.busy) {
             s.busy = true;
             s.abandoned = false;
+            s.addr = 0;
             s.x = nullptr;
             s.resStatus = -1;
             s.resActual = 0;
+            // Um timeout anterior deixa o callback dar o semaforo DEPOIS que
+            // o slot ja foi liberado; sem drenar, o proximo waitSlot pega o
+            // token velho e libera o URB novo em voo (assert no hcd_urb_dequeue).
+            while (xSemaphoreTake(s.sem, 0) == pdTRUE) {
+            }
             out = &s;
             break;
         }
@@ -209,11 +277,15 @@ UsbHost::Result waitSlot(XferSlot* s, uint32_t timeoutMs, uint8_t* inBuf, size_t
     const int st = s->resStatus;
     const int actual = s->resActual;
     size_t copied = 0;
-    if (st == USB_TRANSFER_STATUS_COMPLETED && inBuf != nullptr && inCap > 0) {
-        copied = (actual > 0) ? (size_t)actual : 0;
-        if (copied > inCap) copied = inCap;
-        if (s->x != nullptr && copied > 0) {
-            memcpy(inBuf, s->x->data_buffer + dataOffset, copied);
+    if (st == USB_TRANSFER_STATUS_COMPLETED) {
+        const size_t actualN = (actual > 0) ? (size_t)actual : 0;
+        if (inBuf != nullptr && inCap > 0) {
+            copied = (actualN > inCap) ? inCap : actualN;
+            if (s->x != nullptr && copied > 0) {
+                memcpy(inBuf, s->x->data_buffer + dataOffset, copied);
+            }
+        } else {
+            copied = actualN;  // OUT: quantos bytes o device aceitou
         }
     }
     if (s->x != nullptr) {
@@ -347,6 +419,7 @@ void cleanupListenerLocked(Listener& L) {
     L.x = nullptr;
     L.used = false;
     L.stopping = false;
+    L.xferLen = 0;
     L.count = 0;
     L.head = L.tail = 0;
 }
@@ -372,11 +445,11 @@ void listenCb(usb_transfer_t* x) {
             }
             xSemaphoreGive(s_mux);
         }
-        x->num_bytes = L->len;
+        x->num_bytes = L->xferLen;
         if (usb_host_transfer_submit(x) != ESP_OK) stop = true;
     } else if (x->status == USB_TRANSFER_STATUS_TIMED_OUT ||
                x->status == USB_TRANSFER_STATUS_SKIPPED) {
-        x->num_bytes = L->len;
+        x->num_bytes = L->xferLen;
         if (usb_host_transfer_submit(x) != ESP_OK) stop = true;
     } else {
         stop = true;  // stall/erro/cancelado/sem device
@@ -524,6 +597,7 @@ Result controlIn(uint8_t addr, uint8_t bmRequestType, uint8_t bRequest, uint16_t
         bad.status = "busy";
         return bad;
     }
+    s->addr = addr;
     usb_transfer_t* x = nullptr;
     if (usb_host_transfer_alloc(kCtrlSetup + len, 0, &x) != ESP_OK || x == nullptr) {
         releaseSlot(s, nullptr);
@@ -564,6 +638,7 @@ Result controlOut(uint8_t addr, uint8_t bmRequestType, uint8_t bRequest, uint16_
         bad.status = "busy";
         return bad;
     }
+    s->addr = addr;
     usb_transfer_t* x = nullptr;
     if (usb_host_transfer_alloc(kCtrlSetup + len, 0, &x) != ESP_OK || x == nullptr) {
         releaseSlot(s, nullptr);
@@ -603,6 +678,7 @@ Result out(uint8_t addr, uint8_t ep, const uint8_t* data, size_t len, uint32_t t
         bad.status = "busy";
         return bad;
     }
+    s->addr = addr;
     usb_transfer_t* x = nullptr;
     const size_t bufLen = (len > 0) ? len : 1;
     if (usb_host_transfer_alloc(bufLen, 0, &x) != ESP_OK || x == nullptr) {
@@ -617,9 +693,16 @@ Result out(uint8_t addr, uint8_t ep, const uint8_t* data, size_t len, uint32_t t
     x->context = s;
     s->x = x;
 
-    if (usb_host_transfer_submit(x) != ESP_OK) {
+    esp_err_t e = usb_host_transfer_submit(x);
+    if (e != ESP_OK) {
+        ESP_LOGW(kTag, "out ep=%02x len=%u: submit falhou (%s)", ep, (unsigned)len,
+                 esp_err_to_name(e));
         releaseSlot(s, x);
-        return bad;
+        UsbHost::Result r;
+        r.ok = false;
+        r.status = "submit";
+        r.transferred = 0;
+        return r;
     }
     return waitSlot(s, timeoutMs, nullptr, 0, 0);
 }
@@ -637,21 +720,34 @@ Result in(uint8_t addr, uint8_t ep, uint8_t* buf, size_t cap, uint32_t timeoutMs
         bad.status = "busy";
         return bad;
     }
+    s->addr = addr;
+    // IN sempre multiplo do MPS (ver epMps); o payload devolvido ao JS e
+    // cortado em cap, o resto do buffer fica sem uso.
+    const uint16_t mps = epMps(addr, ep);
+    const size_t xferLen = roundToMps(cap, mps);
     usb_transfer_t* x = nullptr;
-    if (usb_host_transfer_alloc(cap, 0, &x) != ESP_OK || x == nullptr) {
+    if (usb_host_transfer_alloc(xferLen, 0, &x) != ESP_OK || x == nullptr) {
+        ESP_LOGW(kTag, "in ep=%02x: alloc %u falhou", ep, (unsigned)xferLen);
         releaseSlot(s, nullptr);
         return bad;
     }
     x->device_handle = hdl;
     x->bEndpointAddress = ep;
-    x->num_bytes = (int)cap;
+    x->num_bytes = (int)xferLen;
     x->callback = xferCb;
     x->context = s;
     s->x = x;
 
-    if (usb_host_transfer_submit(x) != ESP_OK) {
+    esp_err_t e = usb_host_transfer_submit(x);
+    if (e != ESP_OK) {
+        ESP_LOGW(kTag, "in ep=%02x len=%u: submit falhou (%s)", ep, (unsigned)xferLen,
+                 esp_err_to_name(e));
         releaseSlot(s, x);
-        return bad;
+        UsbHost::Result r;
+        r.ok = false;
+        r.status = "submit";
+        r.transferred = 0;
+        return r;
     }
     return waitSlot(s, timeoutMs, buf, cap, 0);
 }
@@ -744,6 +840,12 @@ bool release(const char* owner, uint8_t addr, uint8_t iface) {
     xSemaphoreTake(s_mux, portMAX_DELAY);
     DevSlot* d = findDevLocked(addr);
     if (d != nullptr) {
+        // Soltar a interface com URB nosso em voo libera o pipe por baixo da
+        // host lib (assert no hcd_urb_dequeue). Espera o app drenar.
+        if (anyInflightLocked(addr)) {
+            xSemaphoreGive(s_mux);
+            return false;
+        }
         hdl = d->hdl;
         for (int i = 0; i < d->nClaims; i++) {
             if (d->claims[i].iface != iface) continue;
@@ -772,6 +874,9 @@ void releaseOwner(const char* owner) {
     xSemaphoreTake(s_mux, portMAX_DELAY);
     for (auto& d : s_devs) {
         if (!d.used || d.gone) continue;
+        // claims ficam para quando o URB em voo voltar (releaseOwner roda na
+        // saida do app; um timeout longo nao pode virar crash)
+        if (anyXferInflightLocked(d.addr)) continue;
         for (int i = d.nClaims - 1; i >= 0; i--) {
             if (strncmp(d.claims[i].owner, owner, sizeof(d.claims[i].owner)) != 0) continue;
             if (n < (int)(sizeof(pend) / sizeof(pend[0]))) {
@@ -843,7 +948,10 @@ bool listen(const char* owner, uint8_t addr, uint8_t ep, uint16_t maxLen, uint8_
     xSemaphoreGive(s_mux);
 
     usb_transfer_t* x = nullptr;
-    if (usb_host_transfer_alloc(maxLen, 0, &x) != ESP_OK || x == nullptr) {
+    const uint16_t mps = epMps(addr, ep);
+    const size_t xferLen = roundToMps(maxLen, mps);
+    L->xferLen = (uint16_t)xferLen;
+    if (usb_host_transfer_alloc(xferLen, 0, &x) != ESP_OK || x == nullptr) {
         xSemaphoreTake(s_mux, portMAX_DELAY);
         cleanupListenerLocked(*L);
         xSemaphoreGive(s_mux);
@@ -851,7 +959,7 @@ bool listen(const char* owner, uint8_t addr, uint8_t ep, uint16_t maxLen, uint8_
     }
     x->device_handle = hdl;
     x->bEndpointAddress = ep;
-    x->num_bytes = maxLen;
+    x->num_bytes = (int)xferLen;
     x->callback = listenCb;
     x->context = L;
     L->x = x;
@@ -919,8 +1027,17 @@ bool unlisten(uint8_t addr, uint8_t ep) {
 
 bool flush(uint8_t addr, uint8_t ep) {
     if (!s_inited) return false;
-    usb_device_handle_t hdl = handleFor(addr);
+    usb_device_handle_t hdl = nullptr;
+    bool inflight = false;
+    xSemaphoreTake(s_mux, portMAX_DELAY);
+    DevSlot* d = findDevLocked(addr);
+    if (d != nullptr) hdl = d->hdl;
+    inflight = epInflightLocked(addr, ep);
+    xSemaphoreGive(s_mux);
     if (hdl == nullptr) return false;
+    // Sem URB nosso no endpoint nao ha o que cancelar — e enfileirar o
+    // comando num endpoint ocioso (ou ja liberado) quebra o hcd_urb_dequeue.
+    if (!inflight) return true;
     return usb_host_endpoint_flush(hdl, ep) == ESP_OK;
 }
 

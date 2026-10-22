@@ -135,6 +135,18 @@ function exfatImage() {
   return b;
 }
 
+// ---- FAT32 particionado (MBR): o LBA 0 nao e o BPB ----
+function fat32MbrImage() {
+  var base = fat32Image();
+  var b = blank(base.length / 512 + 1);
+  b[510] = 0x55; b[511] = 0xAA;
+  b[446 + 4] = 0x0B;                       // tipo FAT32 CHS/LBA
+  put32(b, 446 + 8, 1);                    // LBA inicial
+  put32(b, 446 + 12, base.length / 512);   // setores
+  for (var i = 0; i < base.length; i++) b[512 + i] = base[i];
+  return b;
+}
+
 // ---- FAT32 ----
 var v1 = msc.mount(reader(fat32Image()));
 System.print("fat:" + v1.type + ":" + v1.label);
@@ -145,6 +157,10 @@ System.print("fatlist:" + names1);
 System.print("fatread:" + usb.str(v1.read("/hello.txt", 16)));
 System.print("fatnested:" + usb.str(v1.read("/SUB/INNER.TXT", 16)));
 System.print("fatstat:" + v1.stat("/hello.txt").size);
+
+// ---- FAT32 via MBR ----
+var v3 = msc.mount(reader(fat32MbrImage()));
+System.print("fatmbr:" + v3.type + ":" + v3.label + ":" + usb.str(v3.read("/hello.txt", 16)));
 
 // ---- exFAT ----
 var v2 = msc.mount(reader(exfatImage()));

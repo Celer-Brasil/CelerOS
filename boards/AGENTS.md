@@ -46,7 +46,9 @@ flashed with the same factory image — `autostart.txt` picks which program
 runs. Both are headless (logcat is the UI), share the vendored `celerpark.js`
 core (Supabase edge function `parking-gate`, CP1-ULID tickets, JSON outbox,
 relay pulse) and vendor their `celeros.usb.*` deps in the app folder (no hub
-catalog entry; flash_data.sh ships them).
+catalog entry; flash_data.sh ships them). **Source of truth lives in the
+CelerPark repo** (`GitClones/CelerPark`, apps/ + README): the folders here
+are the factory copies — update both on every change.
 
 - **Entrada**: BOOT press → new CP1 ticket → `create_ticket` (offline → local
   outbox, flushed on reconnect) → ESC/POS ticket on the TM-T20X (exact bytes

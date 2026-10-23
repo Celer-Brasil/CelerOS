@@ -31,6 +31,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},
+    .buttonPin = 0,       // BOOT (o buttonToApp sem pin era inerte: nada lia o botao)
     .headless = true,     // sem vidro: splash pulado, getInfo().hasDisplay = false
     .buttonToApp = true,  // BOOT e input do app (System.button); longo sai, curto no launcher relanca o homeApp
     // 1/3: UART0 (console/celerctl); 6..11: SPI flash do modulo (o IDF

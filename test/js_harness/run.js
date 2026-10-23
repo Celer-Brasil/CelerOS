@@ -4551,6 +4551,24 @@ function holdFrames(x, y, n) {
     check('rele pulsou abertura (gpio 5)', opened, JSON.stringify(cloud.relay));
     check('mark_exited chamado so nos pagos (2x)', cloud.marks.length === 2,
           'marks=' + JSON.stringify(cloud.marks));
+    // LED de veredicto (0x007000 verde / 0x700000 vermelho / 0x605000 amarelo):
+    // na ordem do roteiro: verde, amarelo, amarelo, amarelo, vermelho, amarelo, verde
+    var leds = [];
+    for (var li = 0; li < r.log.length; li++) {
+        var m = r.log[li].match(/^\[neopixel\] 0 (\d+)$/);
+        if (m) {
+            var v = parseInt(m[1], 10);
+            if (v) leds.push(v);  // zeros = apagadas (boot/3 s): nao entram na ordem
+        }
+    }
+    var want = [0x007000, 0x605000, 0x605000, 0x605000, 0x700000, 0x605000, 0x007000];
+    check('LED: veredictos na ordem certa (verde/amarelo/vermelho)',
+          JSON.stringify(leds) === JSON.stringify(want), JSON.stringify(leds.map(function (v) {
+              return '0x' + v.toString(16);
+          })));
+    check('LED: apaga 3 s depois', r.log.some(function (l) {
+        return /^\[neopixel\] 0 0$/.test(l);
+    }), '');
 })();
 
 // resume

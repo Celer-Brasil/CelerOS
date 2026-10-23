@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 48 — 360 funcoes.
+// API level 49 — 362 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -151,6 +151,8 @@ declare const System: {
     getTime(): any;
     /** devolve o segundo local atual direto do RTC. */
     getSeconds(): any;
+    /** o instante absoluto em UTC. As demais chamadas de tempo devolvem a hora *local* já formatada; um app que conversa com nuvem (API 49) */
+    epoch(): any;
     /** devolve a data local atual formatada como DD/MM/AAAA. */
     getDate(): any;
     /** devolve o ano local atual com 4 dígitos. */
@@ -412,6 +414,8 @@ declare const Net: {
     /** executa um HTTP POST. Lança erro se o WiFi não estiver conectado. */
     /** @permission "net" */
     post(url?: string, body?: string, contentType?: number): any;
+    /** @permission "net" */
+    request(opts?: Record<string, any>): any;
     /** @permission "net+fs" */
     download(url: string, caminho: number, onProgress?: (...args: any[]) => any): any;
     /** @permission "net" */

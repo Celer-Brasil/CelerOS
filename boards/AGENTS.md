@@ -12,7 +12,7 @@ One directory per board holding its `sdkconfig.defaults`. Board code itself live
 | `spotpear-dog` | ESP32-S3R8, 16MB DIO, PSRAM octal | OLED SH1106 128x64 on I2C0 (SDA41/SCL42) | `partitions_16MB.csv` | Derived from smartdisplay. 4 servos + optional tail, I2S mic (4/5/6) and speaker (7/15/16), 2 WS2812 strips, battery divider (GPIO2). Dual-core. Console+celerctl on the USB-Serial/JTAG (`CELEROS_LINK_ON_USJ`, the only USB connector). Home app = Dog Face |
 | `waveshare-watch` | ESP32-S3R8, 32MB DIO, PSRAM octal | Waveshare AMOLED 2.06" 410x502 round-ish, FT3168 capacitive | `partitions_32MB.csv` | The smartwatch. Native USB dual CDC (`CELEROS_USB_NATIVE`, CDC_COUNT=2, OTG on GPIO19/20), NimBLE (Celer Link + Phone Link/Gadgetbridge), PM/light-sleep (`PowerPolicy`), RTC PCF85063 + AXP2101 + QMI8658 IMU on I2C0 (14/15), `screenInset` for the rounded glass |
 | `devkit` | ESP32 classic, 4MB, no PSRAM | **None** — stub panel that discards rendering (`main/Boards/devkit/BoardDisplay.h`); BOOT button (GPIO0) + single-channel LED (GPIO2) | `partitions_4MB.csv` | The barebone profile: `headless` (splash skipped, `getInfo().hasDisplay=false`/`shape:"headless"`) + `buttonToApp` (BOOT is app input via `System.button`, long = exit, launcher short relaunches homeApp). `CELEROS_UI=n` (the whole display stack leaves the binary). Same RAM budget as `cyd`; WiFi provisioned by the `wifi` shell command; factory image drops every drawing app via `data-exclude.txt` |
-| `devkit-s3` | ESP32-S3 N16R8, 16MB QIO/80M, PSRAM octal 8MB | **None** — same stub panel; BOOT (GPIO0) + WS2812 on GPIO38 (v1.1+) | `partitions_16MB.csv` | The **USB Host** board (API 48): native USB-C (OTG, GPIO19/20) is host, console/celerctl stays on the UART0 USB-C ("UART"). `CELEROS_USB_HOST=y` + `espressif/usb` managed component; `CELEROS_USB_NATIVE`/`CELEROS_LINK_ON_USJ` OFF (the S3 OTG shares the PHY with USJ). Hub support on; `ESP_CONSOLE_SECONDARY_NONE` keeps USJ from stealing the PHY. Headless (`CELEROS_UI=n`), no SD/audio/mic/physics; factory overlay ships the `USB HID` service (keyboard/mouse → `Input.*`) and the `Impressora` app (ESC/POS test page via the `celeros.usb.escpos` dep; Epson TM-T20X bench-validated). VBUS must come from the board (no GPIO switch) |
+| `devkit-s3` | ESP32-S3 N16R8, 16MB QIO/80M, PSRAM octal 8MB | **None** — same stub panel; BOOT (GPIO0) + WS2812 on GPIO38 (v1.1+) | `partitions_16MB.csv` | The **USB Host** board (API 48): native USB-C (OTG, GPIO19/20) is host, console/celerctl stays on the UART0 USB-C ("UART"). `CELEROS_USB_HOST=y` + `espressif/usb` managed component; `CELEROS_USB_NATIVE`/`CELEROS_LINK_ON_USJ` OFF (the S3 OTG shares the PHY with USJ). Hub support on; `ESP_CONSOLE_SECONDARY_NONE` keeps USJ from stealing the PHY. Headless (`CELEROS_UI=n`), no SD/audio/mic/physics; factory overlay ships the `USB HID` service (keyboard/mouse → `Input.*`), the `Impressora` app (ESC/POS test page via the `celeros.usb.escpos` dep; Epson TM-T20X bench-validated) and the two CelerPark totems (see "CELERPARK TOTEMS" below). VBUS must come from the board (no GPIO switch) |
 | `esp32-cam` | ESP32-S (classic) AI-Thinker, 4MB DIO, PSRAM quad 4MB | **None** — the "glass" is the OV2640 sensor | `partitions_4MB_cam.csv` | Camera node: `headless`, `CELEROS_UI=n`, **dual-core** (unicore reset-looped in INT_WDT with WiFi+NimBLE), NimBLE (CelerNet mesh), TLS buffers in PSRAM, microSD by SDSPI (CLK14/CMD15/D0-2/CS13 — apps live on the SD, hence the small littlefs/1.81MB slots). Bench: brownout is failure #1 (sturdy 5V supply); flash mode = GPIO0 to GND at reset; GPIO12 is the MTD strap (never an output); GPIO16/17 belong to the PSRAM |
 
 ## FEATURE MENU (what each board compiles in)
@@ -34,9 +34,39 @@ An off-flag keeps every JS contract: the implementation leaves the binary but in
 ## PER-BOARD FACTORY IMAGE
 `tools/flash_data.sh <board>` stages `data/` and then:
 1. **overlays** `boards/<board>/data/` on top — the watch adds Timer/Clima/Musica/Alarmes/Celular/Atividade; the dog adds Dog Face (its `homeApp`), and
-2. **excludes** paths listed in `boards/<board>/data-exclude.txt` (one per line, relative to `data/`; `#` comments) — the watch drops Terminal, HTTP Demo, Touch Test and Web Server (tight littlefs, keyboard-centric apps); the headless boards (`devkit`, `devkit-s3`, `esp32-cam`) drop every app that draws plus `icons/`, because `CELEROS_UI=n` removes `System.draw*`/`UI`/`Keypad`/`prompt` from the firmware — the image keeps only Barebone, the headless reference (plus, on devkit-s3, the board overlay with the `USB HID` service and `Impressora` apps).
+2. **excludes** paths listed in `boards/<board>/data-exclude.txt` (one per line, relative to `data/`; `#` comments) — the watch drops Terminal, HTTP Demo, Touch Test and Web Server (tight littlefs, keyboard-centric apps); the headless boards (`devkit`, `devkit-s3`, `esp32-cam`) drop every app that draws plus `icons/`, because `CELEROS_UI=n` removes `System.draw*`/`UI`/`Keypad`/`prompt` from the firmware — the image keeps only Barebone, the headless reference (plus, on devkit-s3, the board overlay with the `USB HID` service, `Impressora` and the CelerPark totems).
 
 Partition size comes from the CSV picked above (single source of truth). New board with a data overlay: add the case to `flash_data.sh` and the overlay dir; the repo-wide app lint already globs `boards/*/data/apps` automatically. `flash_data.sh` currently accepts seven names (`smartdisplay cyd spotpear-dog waveshare-watch devkit devkit-s3 esp32-cam`) — `cyd-vspi` still has no case even though it shares the `cyd` 4MB image; add the case when that variant goes to the bench.
+
+## CELERPARK TOTEMS (devkit-s3 overlay)
+`boards/devkit-s3/data/apps/CelerPark Entrada` (celeros.park.entrada) and
+`CelerPark Saida` (celeros.park.saida) are the CelerPark parking migration
+(the Rust agent lives in `GitClones/CelerPark`): one board per totem, both
+flashed with the same factory image — `autostart.txt` picks which program
+runs. Both are headless (logcat is the UI), share the vendored `celerpark.js`
+core (Supabase edge function `parking-gate`, CP1-ULID tickets, JSON outbox,
+relay pulse) and vendor their `celeros.usb.*` deps in the app folder (no hub
+catalog entry; flash_data.sh ships them).
+
+- **Entrada**: BOOT press → new CP1 ticket → `create_ticket` (offline → local
+  outbox, flushed on reconnect) → ESC/POS ticket on the TM-T20X (exact bytes
+  of the Rust `build_ticket`: WPC1252, native QR model 2/module 6/EC M, cut)
+  → relay pulse. Cloud error that is not offline, or a dead printer, keeps
+  the gate CLOSED (same order as the Rust `Session::entry`).
+- **Saida**: the QR reader is a USB HID boot keyboard (`celeros.usb.hid`,
+  claimed directly by the app — the `USB HID` service must stay OFF or they
+  fight for the claim). Enter terminates the scan; `lookup_ticket` decides:
+  paid → `mark_exited` + relay, issued/exited/void/unknown/offline → refusal
+  in the log, gate closed.
+- Config: `/local/celerpark.json` (model in `boards/devkit-s3/celerpark.example.json`,
+  never committed with secrets; keys come from ProjetoCursor `env/secrets.env`
+  + `GlobalSettings`). Relay default GPIO4 (open) — free pins on the DevKitC-1
+  are 1..18/21..23/38..42/47/48 (19/20 USB, 26..37 flash/PSRAM, 43/44 UART0).
+- Bench bring-up per totem: `wifi` shell command, `celerctl push celerpark.json
+  /local/celerpark.json`, `grant <app>` (headless consent), autostart.txt with
+  the packageName. The whole flow (ticket bytes, outbox, refusals, portal
+  commands, apikey/Bearer headers) is exercised in `test/js_harness/run.js`
+  against the fake cloud.
 
 ## USB HOST (devkit-s3)
 `CELEROS_USB_HOST=y` instala a pilha **USB Host** do IDF (componente gerenciado `espressif/usb` ^1.6.0 — no IDF 6.x ela saiu do tree) e liga o core `main/USBHost/` + as bindings `USB.*`/`Input.*` (API 48). Regras que a bancada custa caro:

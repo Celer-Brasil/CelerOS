@@ -492,6 +492,7 @@ function makeEnv() {
     },
     millis: function() { return clock; },
     micros: function() { return clock * 1000; },
+    epoch: function() { return 1762867200 + Math.floor(clock / 1000); },  // API 49
     delay: function(ms) {
         fireTimers();
         clock += ms || 0;
@@ -588,6 +589,8 @@ function makeEnv() {
     backlightSupported: function() { return true; },
     led: function(r, g, b) { log.push('[led] ' + [r, g, b].join(',')); return true; },
     gpio: {
+        // constantes iguais as do firmware (JsGpio): pinos/modos/niveis
+        INPUT: 0, OUTPUT: 1, INPUT_PULLUP: 2, HIGH: 1, LOW: 0,
         servo: function(pin, angle) { log.push('[servo] ' + pin + '@' + angle); return true; },
         servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; },
         pinMode: function() {}, digitalWrite: function() {}, digitalRead: function() { return 0; },
@@ -812,6 +815,7 @@ function makeEnv() {
     get: function() { return null; },
     getJSON: function() { return null; },
     post: function() { return null; },
+    request: function() { return null; },  // API 49: {status, body} ou null
     download: function() { return false; },  // streaming p/ arquivo (API 6)
     isConnected: function() { return false; },
     beginGet: function(url) {
@@ -4463,6 +4467,90 @@ function holdFrames(x, y, n) {
     ].forEach(function (want) {
         check('MSC: ' + want, txt.indexOf(want) >= 0, txt);
     });
+})();
+
+// --- CelerPark Entrada (overlay devkit-s3): totem inteiro no stub -----------
+// Impressora sintetica + nuvem fake + rele + botao roteirizado; confere o
+// cupom ESC/POS nos bytes, a fila offline, o flush e o comando do portal.
+(function() {
+    console.log('CelerPark Entrada:');
+    var wire = require(path.join(ROOT, 'boards/devkit-s3/data/apps/CelerPark Entrada/test.js')).wire;
+    var r = runApp('boards/devkit-s3/data/apps/CelerPark Entrada/main.js', wire);
+    var txt = joinLog(r.log);
+    check('totem roda sem erro', r.err === null, r.err || '');
+    var cloud = require(path.join(ROOT, 'boards/devkit-s3/data/apps/CelerPark Entrada/test.js')).cloud();
+    check('entrada online impressa e registrada', /impresso e registrado\. Cancela aberta/.test(txt), txt);
+    check('entrada offline foi para a fila local', /codigo na fila local\. Cancela aberta/.test(txt), txt);
+    check('flush reenviou o ticket da fila', /fila: 1 ticket\(s\) enviado\(s\) a nuvem/.test(txt), txt);
+    check('sem impressora a cancela fica fechada', /sem cupom: cancela fechada/.test(txt), txt);
+    check('comando remoto do portal aplicado', /portal: comando open aplicado/.test(txt), txt);
+    check('3 tickets criados (2 diretos + 1 do flush; o 3o falhou so na impressora)',
+          cloud.created.length === 3, 'created=' + cloud.created.length);
+    check('apikey + Bearer no gateway', cloud.lastHeaders && cloud.lastHeaders.apikey === 'sb_publishable_teste' &&
+          cloud.lastHeaders.Authorization === 'Bearer sb_publishable_teste',
+          JSON.stringify(cloud.lastHeaders));
+    check('url da edge function', /\/functions\/v1\/parking-gate$/.test(cloud.lastUrl), cloud.lastUrl);
+
+    // rele: pelo menos um pulso alto->baixo no pino 4
+    var opened = false;
+    for (var i = 0; i < cloud.relay.length - 1; i++) {
+        if (cloud.relay[i].pin === 4 && cloud.relay[i].level === 1 && cloud.relay[i + 1].pin === 4) {
+            opened = true;
+        }
+    }
+    check('rele pulsou abertura (gpio 4)', opened, JSON.stringify(cloud.relay));
+
+    // bytes ESC/POS concatenados: init, QR com o payload do template e corte
+    var stream = [];
+    for (var t = 0; t < cloud.usbTx.length; t++) {
+        if (cloud.usbTx[t].control !== undefined) continue;
+        for (var b = 0; b < cloud.usbTx[t].data.length; b++) stream.push(cloud.usbTx[t].data[b]);
+    }
+    function streamHas(str) {
+        for (var i = 0; i + str.length <= stream.length; i++) {
+            var ok = true;
+            for (var j = 0; j < str.length; j++) {
+                if (stream[i + j] !== (str.charCodeAt(j) & 0xFF)) { ok = false; break; }
+            }
+            if (ok) return true;
+        }
+        return false;
+    }
+    check('ESC/POS tem init e corte', streamHas('\x1B@') && stream.length >= 3 &&
+          stream[stream.length - 3] === 0x1D && stream[stream.length - 2] === 0x56,
+          'ultimos: ' + stream.slice(-6).join(','));
+    check('QR do cupom carrega o payload do template', streamHas('https://pay.teste/CP1-'), '');
+    check('cupom tem Faixa e aviso da saida', streamHas('Faixa: Cancela Teste') &&
+          streamHas('Pague antes de sair'), '');
+    var outbox = r.env.FS.exists('/local/celerpark_outbox.json')
+        ? r.env.FS.readTextFile('/local/celerpark_outbox.json') : '[]';
+    check('fila local vazia apos o flush', JSON.parse(outbox).length === 0, outbox);
+})();
+
+// --- CelerPark Saida (overlay devkit-s3): leitor HID + validacao ------------
+(function() {
+    console.log('CelerPark Saida:');
+    var t = require(path.join(ROOT, 'boards/devkit-s3/data/apps/CelerPark Saida/test.js'));
+    var r = runApp('boards/devkit-s3/data/apps/CelerPark Saida/main.js', t.wire);
+    var txt = joinLog(r.log);
+    check('totem roda sem erro', r.err === null, r.err || '');
+    var cloud = t.cloud();
+    check('leitor conectado', /leitor conectado \(iface 0\)/.test(txt), txt);
+    check('ticket pago abre a cancela', /saida CP1-[A-Z0-9]+ paga\. Cancela aberta/.test(txt), txt);
+    check('ja usado recusa', /ticket ja usado na saida/.test(txt), txt);
+    check('anulado recusa', /ticket anulado/.test(txt), txt);
+    check('desconhecido recusa', /ticket desconhecido/.test(txt), txt);
+    check('sem rede mantem fechada', /sem rede, cancela permanece fechada/.test(txt), txt);
+    check('codigo dentro de URL tambem abre', txt.indexOf('paga. Cancela aberta') !==
+          txt.lastIndexOf('paga. Cancela aberta'), txt);
+    check('comando remoto do portal aplicado', /portal: comando open aplicado/.test(txt), txt);
+    var opened = false;
+    for (var i = 0; i < cloud.relay.length - 1; i++) {
+        if (cloud.relay[i].pin === 5 && cloud.relay[i].level === 1) opened = true;
+    }
+    check('rele pulsou abertura (gpio 5)', opened, JSON.stringify(cloud.relay));
+    check('mark_exited chamado so nos pagos (2x)', cloud.marks.length === 2,
+          'marks=' + JSON.stringify(cloud.marks));
 })();
 
 // resume

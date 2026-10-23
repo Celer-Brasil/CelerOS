@@ -213,6 +213,17 @@ para o SO do ESP32.
 - **Retorna:** `Integer` (0-59)
 - **Descrição:** devolve o segundo local atual direto do RTC.
 
+#### `System.epoch()` (API 49)
+- **Retorna:** `Number` — segundos desde 1970-01-01T00:00:00Z (UTC).
+- **Descrição:** o instante absoluto em UTC. As demais chamadas de tempo
+  devolvem a hora *local* já formatada; um app que conversa com nuvem
+  (carimbo `entered_at` de um ticket, TTL de token) precisa do relógio
+  absoluto. Monte strings RFC 3339 a partir dele (`new Date(System.epoch() *
+  1000)` + os métodos `getUTC*` — o Duktape traz o `Date`). Sem NTP/RTC
+  sincronizado o valor vem da estimativa persistida no boot; quando o
+  carimbo importa, faça uma checagem de sanidade (valor implausível = relógio
+  nunca sincronizou).
+
 #### `System.getDate()`
 - **Retorna:** `String` (ex.: `"15/06/2026"`)
 - **Descrição:** devolve a data local atual formatada como DD/MM/AAAA.
@@ -664,6 +675,40 @@ que 32 KB são truncadas.
 - **Retorna:** String (corpo da resposta) ou `null` em falha.
 - **Descrição:** executa um HTTP POST. Lança erro se o WiFi não estiver
   conectado.
+
+#### `Net.request(opts)` (API 49)
+- **Parâmetros:** `opts` (Object):
+  - `url` (String, obrigatória)
+  - `method` (String, opcional — `"GET"` (padrão), `"POST"`, `"PUT"`,
+    `"PATCH"`, `"DELETE"`)
+  - `body` (String, opcional — até 64 KB)
+  - `contentType` (String, opcional — usado quando há `body`)
+  - `headers` (Object, opcional — até 6 cabeçalhos próprios, ex.:
+    `{apikey: "...", Authorization: "Bearer ..."}`)
+  - `timeoutMs` (Number, opcional — limitado a 1000..20000, padrão 10000)
+- **Retorna:** `{status: Number, body: String}` para QUALQUER resposta HTTP,
+  ou `null` quando o transporte em si falha (DNS/TCP/TLS/timeout, ou sem
+  WiFi).
+- **Descrição:** requisição com cabeçalhos próprios e status visível. O
+  `Net.post` não envia cabeçalhos (gateways como o Supabase exigem o
+  cabeçalho `apikey`) e colapsa toda falha em `null`, deixando o script sem
+  distinguir "sem rede" de uma recusa 4xx de negócio — o `Net.request`
+  responde as duas coisas. Nomes/valores de cabeçalho rejeitam CR/LF e
+  demais controles (injeção na linha de pedido) e têm teto de 32/256 chars.
+  O `body` da resposta segue o mesmo teto de 32 KB do `Net.get`. É o caminho
+  dos totems CelerPark com a edge function `parking-gate`.
+- **Exemplo:**
+```javascript
+var r = Net.request({
+    url: "https://supabase.exemplo.br/functions/v1/parking-gate",
+    method: "POST",
+    body: JSON.stringify({action: "heartbeat", device_id: "lane-01"}),
+    contentType: "application/json",
+    headers: {apikey: key, Authorization: "Bearer " + key}
+});
+if (r === null) System.print("offline");
+else System.print("HTTP " + r.status + ": " + r.body);
+```
 
 #### `Net.download(url, caminho, onProgress)` (API 6)
 - **Parâmetros:**

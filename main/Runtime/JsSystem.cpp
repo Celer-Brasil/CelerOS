@@ -383,6 +383,17 @@ duk_ret_t JSBindings::js_getSeconds(duk_context *ctx) {
     return 1;
 }
 
+// API 49: epoch UTC absoluto (segundos desde 1970). As bindings de tempo
+// existentes so entregam a hora LOCAL formatada; um app que fala com nuvem
+// (carimbo entered_at de ticket, TTL de token...) precisa do instante
+// absoluto. Sem hora valida (boot sem NTP/RTC) devolve o epoch persistido
+// no boot ou 0 — o app confere com System.timeValid quando o carimbo importa.
+duk_ret_t JSBindings::js_epoch(duk_context *ctx) {
+    time_t now = time(nullptr);
+    duk_push_number(ctx, (duk_double_t)now);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_getWeekday(duk_context *ctx) {
     duk_push_int(ctx, TimeManager::getWeekday());
     return 1;

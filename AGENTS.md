@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-20
-**Commit:** main @ API 47 (eventos, pulso/PWM, reflexos e ACL na matilha = API 47)
+**Updated:** 2026-10-23
+**Commit:** main @ API 49 (Net.request com headers + System.epoch; totems CelerPark no devkit-s3)
 **Branch:** main
 
 ## OVERVIEW
@@ -30,7 +30,7 @@ CelerOS/
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
 | Multitouch (fingers, injector, `System.getTouches`, `celerctl mtap`) | `main/AGENTS.md` "TOUCH PIPELINE" | primary = oldest finger; system chrome consumes ONLY the primary; call ONE of `getTouch`/`getTouches` per loop |
-| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 47) |
+| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 49) |
 | Change system edge gestures / panels | `main/Launcher/WatchPanels.*` + `main/Runtime/JSBindings.cpp` | the gesture map lives TWICE (native hook `edgeGestureHook` + in-app `pollWatchEdges`) and must stay in sync; see both AGENTS.md |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |

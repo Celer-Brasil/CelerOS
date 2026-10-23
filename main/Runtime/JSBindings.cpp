@@ -1244,6 +1244,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     static const JsFn kFns8[] = {
         {"getTime", js_getTime, 0},
         {"getSeconds", js_getSeconds, 0},
+        {"epoch", js_epoch, 0},             // UTC absoluto (API 49)
         {"getDate", js_getDate, 0},
         {"getYear", js_getYear, 0},
         {"getMonth", js_getMonth, 0},
@@ -1512,6 +1513,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"get", js_netGet, 1},
         {"getJSON", js_netGetJSON, 1},
         {"post", js_netPost, 3},
+        {"request", js_netRequest, 1},  // API 49: headers proprios + status
         {"download", js_netDownload, 3},
         {"beginGet", js_netBeginGet, 1},
         {"pollGet", js_netPollGet, 1},

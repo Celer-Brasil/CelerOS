@@ -163,8 +163,12 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 - **Description:** Returns the OS-formatted current local time, automatically respecting the user's 12-hour or 24-hour preference setting.
 
 #### `System.getSeconds()`
-- **Returns:** `Integer` (0-59)
+- **Returns:** Integer (0-59)
 - **Description:** Returns the current local second directly from the RTC.
+
+#### `System.epoch()` (API 49)
+- **Returns:** Number — seconds since 1970-01-01T00:00:00Z (UTC).
+- **Description:** The absolute UTC instant. The other time calls return the user's *local*, formatted time; an app that talks to a cloud service (a ticket's `entered_at` timestamp, a token TTL) needs the absolute clock. Build RFC 3339 strings from it (`new Date(System.epoch() * 1000)` + the `getUTC*` methods — Duktape ships `Date`). Without NTP/RTC sync the value comes from the persisted boot estimate; when the stamp matters, sanity-check it (an implausible value means the clock never synced).
 
 #### `System.getDate()`
 - **Returns:** `String` (e.g., `"15/06/2026"`)
@@ -498,6 +502,29 @@ than 32 KB are truncated.
   - `contentType` (String, optional — defaults to `"text/plain"`, e.g. `"application/json"`)
 - **Returns:** String (response body) or `null` on failure.
 - **Description:** Performs an HTTP POST. Throws an error if WiFi is not connected.
+
+#### `Net.request(opts)` (API 49)
+- **Parameters:** `opts` (Object):
+  - `url` (String, required)
+  - `method` (String, optional — `"GET"` (default), `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`)
+  - `body` (String, optional — up to 64 KB)
+  - `contentType` (String, optional — used when a `body` is given)
+  - `headers` (Object, optional — up to 6 custom headers, e.g. `{apikey: "...", Authorization: "Bearer ..."}`)
+  - `timeoutMs` (Number, optional — clamped to 1000..20000, default 10000)
+- **Returns:** `{status: Number, body: String}` on ANY HTTP response, or `null` when the transport itself fails (DNS/TCP/TLS/timeout, or no WiFi).
+- **Description:** Request with custom headers and a visible status code. `Net.post` cannot send headers (API gateways such as Supabase require an `apikey` header) and collapses every failure into `null`, leaving the script unable to tell "no network" from a 4xx business refusal — `Net.request` answers both. Header names/values reject CR/LF and other control characters (request-line injection) and are capped at 32/256 chars. The response `body` follows the same 32 KB cap as `Net.get`. This is what the CelerPark totems use to talk to the `parking-gate` edge function.
+- **Example:**
+```javascript
+var r = Net.request({
+    url: "https://supabase.example.br/functions/v1/parking-gate",
+    method: "POST",
+    body: JSON.stringify({action: "heartbeat", device_id: "lane-01"}),
+    contentType: "application/json",
+    headers: {apikey: key, Authorization: "Bearer " + key}
+});
+if (r === null) System.print("offline");
+else System.print("HTTP " + r.status + ": " + r.body);
+```
 
 #### `Net.download(url, filePath, onProgress)` (API 6)
 - **Parameters:**

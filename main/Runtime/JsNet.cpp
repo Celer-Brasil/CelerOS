@@ -121,6 +121,133 @@ duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
     return 1;
 }
 
+// API 49: Net.request(opts) — pedido com headers proprios e resposta
+// estruturada. O Net.post (API 2) nao aceita cabecalhos (gateways tipo
+// Supabase exigem "apikey") e devolve null para QUALQUER falha, sem
+// distincao entre "sem rede" e "4xx com corpo de erro". Aqui:
+//
+//   Net.request({ url, method: "POST", body, contentType,
+//                 headers: { apikey: "...", Authorization: "Bearer ..." },
+//                 timeoutMs })
+//     -> null                       (DNS/TCP/TLS/timeout: transporte caiu)
+//     -> { status: 200, body: "…" } (status SEMPRE o do servidor; corpo no
+//                                    mesmo teto de 32KB do Net.get)
+//
+// method GET (default)/POST/PUT/PATCH/DELETE; headers ate 6 entradas (o
+// HttpClient guarda 8 no total, Content-Type ocupa 1). Nome/valor com CR,
+// LF ou outro controle e RangeError — um app nao pode forjar cabecalhos
+// extras nem quebrar a linha de pedido.
+duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
+    JSBindings::present();
+    jsRequireWifi(ctx, "Net");
+    if (!duk_is_object(ctx, 0))
+        duk_error(ctx, DUK_ERR_TYPE_ERROR, "Net.request exige {url, method, body, headers}");
+    duk_get_prop_string(ctx, 0, "url");
+    const char *url = netCheckUrl(ctx, duk_require_string(ctx, -1));
+    duk_pop(ctx);
+
+    // method -> HttpMethod (default GET)
+    duk_get_prop_string(ctx, 0, "method");
+    const char *method = duk_is_string(ctx, -1) ? duk_get_string(ctx, -1) : "GET";
+    HttpMethod verb = HttpMethod::GET;
+    if (strcasecmp(method, "POST") == 0) verb = HttpMethod::POST;
+    else if (strcasecmp(method, "PUT") == 0) verb = HttpMethod::PUT;
+    else if (strcasecmp(method, "PATCH") == 0) verb = HttpMethod::PATCH;
+    else if (strcasecmp(method, "DELETE") == 0) verb = HttpMethod::DELETE_;
+    else if (strcasecmp(method, "GET") != 0)
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.request: method invalido (GET/POST/PUT/PATCH/DELETE)");
+    duk_pop(ctx);
+
+    std::string body;
+    std::string contentType = "text/plain";
+    duk_get_prop_string(ctx, 0, "body");
+    if (duk_is_string(ctx, -1)) {
+        size_t blen = 0;
+        const char *b = duk_get_lstring(ctx, -1, &blen);
+        if (blen > 64 * 1024)
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.request: corpo acima de 64KB");
+        body.assign(b, blen);
+    }
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "contentType");
+    if (duk_is_string(ctx, -1)) contentType = duk_get_string(ctx, -1);
+    duk_pop(ctx);
+
+    duk_get_prop_string(ctx, 0, "timeoutMs");
+    uint32_t timeoutMs = duk_is_number(ctx, -1) ? (uint32_t)duk_get_number(ctx, -1) : 10000;
+    duk_pop(ctx);
+    if (timeoutMs < 1000) timeoutMs = 1000;
+    if (timeoutMs > 20000) timeoutMs = 20000;
+
+    // Coleta ate 6 cabecalhos; nome/valor sem CR/LF/controle (injecao de
+    // pedido) e com teto curto — o valor real de apikey/Bearer cabe em 256.
+    // COPIA para buffer proprio: o ponteiro do Duktape morre no duk_pop_2 do
+    // loop de enumeracao, antes do HttpClient usa-lo.
+    char hNames[6][40] = {};
+    char hValues[6][260] = {};
+    int headerCount = 0;
+    duk_get_prop_string(ctx, 0, "headers");
+    if (!duk_is_null_or_undefined(ctx, -1)) {
+        if (!duk_is_object(ctx, -1))
+            duk_error(ctx, DUK_ERR_TYPE_ERROR, "Net.request: headers deve ser um objeto {nome: valor}");
+        duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);
+        while (duk_next(ctx, -1, 1 /*get_key_value*/) != 0) {
+            // stack: [headers, enum] key value
+            const char *name = duk_require_string(ctx, -2);
+            const char *value = duk_require_string(ctx, -1);
+            size_t nlen = strlen(name), vlen = strlen(value);
+            if (nlen == 0 || nlen >= sizeof(hNames[0]) || vlen >= sizeof(hValues[0]))
+                duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.request: header longo demais");
+            for (size_t i = 0; i < nlen; i++)
+                if ((unsigned char)name[i] < 0x20 || name[i] == ':')
+                    duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.request: nome de header invalido");
+            for (size_t i = 0; i < vlen; i++)
+                if ((unsigned char)value[i] < 0x20)
+                    duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.request: valor de header invalido");
+            if (headerCount < 6) {
+                memcpy(hNames[headerCount], name, nlen);
+                memcpy(hValues[headerCount], value, vlen);
+                headerCount++;
+            }
+            duk_pop_2(ctx);  // key value
+        }
+        duk_pop(ctx);  // enum
+    }
+    duk_pop(ctx);  // headers
+
+    JsBodySink<NET_MAX_BODY> got;
+    bool transportOk = false;
+    int status = 0;
+    {
+        HttpClient http;
+        http.setTimeout(timeoutMs);
+        for (int i = 0; i < headerCount; i++) http.setHeader(hNames[i], hValues[i]);
+        http.setBodySink([&got](const char *d, size_t len) { return got.append(d, len); });
+        HttpResponse resp;
+        if (verb == HttpMethod::POST) resp = http.post(url, body, contentType);
+        else if (verb == HttpMethod::PUT) resp = http.put(url, body, contentType);
+        else if (verb == HttpMethod::PATCH) resp = http.patch(url, body, contentType);
+        else resp = http.request(verb, url, body);
+        transportOk = resp.success;  // false = DNS/TCP/TLS/timeout
+        status = resp.statusCode;
+    }
+    CelerKernel::noteAppYield();  // mesma janela do exec-timeout do netFetch
+    if (!transportOk) {
+        free(got.p);
+        duk_push_null(ctx);
+        return 1;
+    }
+    // {status, body}: corpo copiado protegido (sem RAM -> erro visivel);
+    // o buffer malloc e sempre liberado dentro do helper
+    jsPushOwnedString(ctx, got.p, got.n);
+    duk_push_object(ctx);
+    duk_swap(ctx, -2, -1);  // corpo primeiro, objeto por cima
+    duk_put_prop_string(ctx, -2, "body");
+    duk_push_int(ctx, status);
+    duk_put_prop_string(ctx, -2, "status");
+    return 1;
+}
+
 // API 6: download em streaming direto para arquivo — o corpo NAO passa pela
 // heap do Duktape (chunk a chunk vai pro FILE*), entao nao sofre o teto de
 // 32KB do Net.get. Uso: Net.download(url, path[, onProgress]) -> true|false;

@@ -275,6 +275,7 @@ public:
 
     static duk_ret_t js_getTime(duk_context *ctx);
     static duk_ret_t js_getSeconds(duk_context *ctx);
+    static duk_ret_t js_epoch(duk_context *ctx);  // UTC em segundos (API 49)
     static duk_ret_t js_getDate(duk_context *ctx);
     static duk_ret_t js_getYear(duk_context *ctx);
     static duk_ret_t js_getMonth(duk_context *ctx);
@@ -292,6 +293,7 @@ public:
     static duk_ret_t js_netGet(duk_context *ctx);
     static duk_ret_t js_netGetJSON(duk_context *ctx);
     static duk_ret_t js_netPost(duk_context *ctx);
+    static duk_ret_t js_netRequest(duk_context *ctx);  // headers proprios + status (API 49)
     static duk_ret_t js_netDownload(duk_context *ctx);  // streaming p/ arquivo (API 6)
     static duk_ret_t js_netIsConnected(duk_context *ctx);
 

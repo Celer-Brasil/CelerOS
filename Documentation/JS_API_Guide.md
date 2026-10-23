@@ -3203,8 +3203,14 @@ if (usb.available()) {
 
 The `celeros.usb.escpos` dep is just a sample driver: `p.raw([...])` sends
 raw bytes, `p.file("/local/receipt.bin")` streams a pre-rendered job, and
-`p.text/line/align/size/bold/qr/cut` cover the common receipt. For a
-specific model, change the command sequence — the firmware stays the same.
+`p.text/line/align/size/bold/qr/cut` cover the common receipt; `p.status()`
+reads the real-time status (DLE EOT 1/2: `{online, erro, esperando, papel,
+acabando, raw1, raw2}` — it retries itself the ZLP that Epson printers
+answer with on the first IN after open). Accented text: call
+`p.codepage(16)` (WPC1252) before writing — text bytes go out as Latin-1.
+For a specific model, change the command sequence — the firmware stays the
+same. The Epson TM-T20X (vid 04B8, interface 7.1.2, 64-byte bulk OUT/IN) is
+bench-validated by the devkit-s3 `Impressora` app.
 
 ### Reading a flash drive (MSC)
 

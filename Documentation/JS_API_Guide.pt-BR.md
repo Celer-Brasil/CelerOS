@@ -3503,8 +3503,14 @@ if (usb.available()) {
 
 A dep `celeros.usb.escpos` é só um exemplo de driver: `p.raw([...])` manda
 bytes crus, `p.file("/local/cupom.bin")` manda um job pre-gravado e
-`p.text/line/align/size/bold/qr/cut` cobrem o cupom comum. Para um modelo
-específico, troque a sequência de comandos — o firmware não muda.
+`p.text/line/align/size/bold/qr/cut` cobrem o cupom comum; `p.status()` lê o
+status em tempo real (DLE EOT 1/2: `{online, erro, esperando, papel,
+acabando, raw1, raw2}` — ela mesma repete o ZLP que impressoras Epson
+respondem ao primeiro IN depois do abrir). Texto com acento: `p.codepage(16)`
+(WPC1252) antes de escrever — os bytes saem como Latin-1. Para um modelo
+específico, troque a sequência de comandos — o firmware não muda. A Epson
+TM-T20X (vid 04B8, interface 7.1.2, bulk OUT/IN de 64 B) está validada na
+bancada pelo app `Impressora` do devkit-s3.
 
 ### Lendo um pendrive (MSC)
 

@@ -17,7 +17,7 @@
 
 var usb = require("celeros.usb");
 
-var esc = { version: '1.0.0' };
+var esc = { version: '1.1.0' };
 
 var ESC = 0x1B;
 var GS = 0x1D;
@@ -118,6 +118,48 @@ esc.Printer.prototype.barcode = function (data) { this.raw(esc.barcodeCmd(data))
 esc.Printer.prototype.qr = function (data, size, ec) { this.raw(esc.qrCmd(data, size, ec)); return this; };
 esc.Printer.prototype.cut = function (partial) { this.raw(esc.cutCmd(partial)); return this; };
 esc.Printer.prototype.drawer = function (pin) { this.raw(esc.drawerCmd(pin)); return this; };
+
+// Status em tempo real (DLE EOT n): 1 byte por consulta no bulk IN de
+// impressoras bidirecionais (protocolo 2). A Epson as vezes responde ZLP
+// (IN completa com 0 bytes) logo depois do abrir/da escrita — tenta de
+// novo (tries, default 3). Decodifica:
+//   {online, erro, esperando, papel, acabando, raw1, raw2}
+//   online:    bit 3 de DLE EOT 1 (1 = off-line)
+//   erro:      bit 6 de DLE EOT 1
+//   esperando: bit 5 de DLE EOT 1 (aguardando recuperacao)
+//   papel:     bits 5/6 de DLE EOT 2 (papel acabou)
+//   acabando:  bits 2/3 de DLE EOT 2 (perto do fim, sem cortar ainda)
+// null = sem bulk IN (unidirecional), write falhou ou sem resposta.
+esc.Printer.prototype.status = function (tries) {
+  if (this.h.epIn < 0) return null;
+  var n = tries || 3;
+  var ask = function (self, q) {
+    for (var t = 0; t < n; t++) {
+      if (!usb.write(self.h, [0x10, 0x04, q], 1000).ok) return -1;
+      var r = usb.read(self.h, 1, 1000);
+      if (r.ok && r.len > 0) return r.data[0];
+    }
+    return -1;
+  };
+  var s1 = ask(this, 1);
+  if (s1 < 0) return null;
+  var st = {
+    online: (s1 & 0x08) === 0,
+    erro: (s1 & 0x40) !== 0,
+    esperando: (s1 & 0x20) !== 0,
+    papel: false,
+    acabando: false,
+    raw1: s1,
+    raw2: -1
+  };
+  var s2 = ask(this, 2);
+  if (s2 >= 0) {
+    st.raw2 = s2;
+    st.papel = (s2 & 0x60) !== 0;
+    st.acabando = !st.papel && (s2 & 0x0C) !== 0;
+  }
+  return st;
+};
 
 // Arquivo binario com um job ESC/POS pre-gravado (logo, cupom padrao...).
 esc.Printer.prototype.file = function (path, maxBytes) {

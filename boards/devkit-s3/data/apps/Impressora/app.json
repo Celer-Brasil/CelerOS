@@ -1,0 +1,18 @@
+{
+  "name": "Impressora",
+  "packageName": "celeros.printer",
+  "version": "1.0.1",
+  "author": "CelerOS",
+  "description": "Teste de impressora termica ESC/POS via USB Host (API 48): acha a Epson TM-T20X (vid 04B8) ou qualquer interface classe 7, le o status em tempo real e imprime uma pagina de teste com acentos, QR e corte. Headless: a saida e o logcat.",
+  "type": "Utility",
+  "category": "Utility",
+  "api": 48,
+  "permissions": [
+    "usb"
+  ],
+  "deps": {
+    "celeros.usb": "^1.0.0",
+    "celeros.usb.escpos": "^1.0.0"
+  },
+  "changelog": "1.0.1 - status em tempo real via celeros.usb.escpos 1.1.0 (DLE EOT 1/2, retry do ZLP que a Epson manda no primeiro IN)"
+}

@@ -177,30 +177,57 @@ function heartbeatExtra() {
         board: (cfg && cfg.board) ? String(cfg.board) : (info && info.board ? String(info.board) : ""),
         uptimeS: info && typeof info.uptimeMs === "number" ? Math.floor(info.uptimeMs / 1000) : 0,
         apps: list,
-        caps: { agent: true, ota: true, apps: true, reboot: true },
+        caps: {
+            agent: true,
+            ota: true,
+            apps: true,
+            reboot: true,
+            private_hub: hubToken() ? true : false
+        },
         resources: []
     };
 }
 
-function hubUrl(path) {
-    var url = hubBase() + path;
-    if (cfg && cfg.hubToken) {
-        url += (url.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(String(cfg.hubToken));
+// Token de leitura do hub privado: a loja privada grava /local/hub_token.txt
+// (uma linha, escopo private + tenant) e a App Store 2.9.4+ usa o mesmo
+// arquivo. O agente aceita hubToken no celercloud.json e cai para o arquivo
+// — assim o setup do totem nao precisa duplicar o segredo.
+function hubToken() {
+    var token = (cfg && cfg.hubToken) ? String(cfg.hubToken) : "";
+    if (!token) {
+        var raw = readText("/local/hub_token.txt");
+        if (raw) token = String(raw).replace(/[\r\n\t ]/g, "");
     }
-    return url;
+    return token;
+}
+
+// So o NOSSO hub recebe o token: prefixo "https://host.evil" ou
+// "https://host@evil" nao pode levar a credencial para terceiros.
+function withHubToken(url) {
+    var token = hubToken();
+    if (!token || !url) return url;
+    var base = hubBase();
+    if (String(url).indexOf(base + "/") !== 0) return url;
+    return url + (String(url).indexOf("?") >= 0 ? "&" : "?") +
+        "token=" + encodeURIComponent(token);
+}
+
+function hubUrl(path) {
+    return withHubToken(hubBase() + path);
 }
 
 function hubJson(path) {
     try {
+        var token = hubToken();
         var opts = {
             url: hubUrl(path),
             method: "GET",
             timeoutMs: 8000
         };
-        if (cfg && cfg.hubToken) {
+        if (token) {
             opts.headers = {
-                apikey: String(cfg.hubToken),
-                Authorization: "Bearer " + String(cfg.hubToken)
+                apikey: token,
+                Authorization: "Bearer " + token
             };
         }
         var res = Net.request(opts);
@@ -250,8 +277,8 @@ function installPackage(pkg, item, apps) {
     if (!zip || !zip.md5) return { ok: false, error: "hub sem app.zip/md5" };
 
     var url = (item && item.zip && item.zip.url)
-        ? String(item.zip.url)
-        : (hubBase() + "/store/apps/" + encodeURIComponent(pkg) + "/app.zip");
+        ? withHubToken(String(item.zip.url))
+        : hubUrl("/store/apps/" + encodeURIComponent(pkg) + "/app.zip");
     var md5 = String((item && item.zip && item.zip.md5) || zip.md5).toLowerCase();
     var folder = installed && installed.folder
         ? installed.folder

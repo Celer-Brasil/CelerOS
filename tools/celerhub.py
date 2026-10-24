@@ -612,6 +612,14 @@ def cmd_publish(args):
         if tenant and not private:
             die(f"{folder.name}: --tenant exige --private")
         if private:
+            # Hub antigo ignora "visibility" e publicaria o pacote como
+            # publico — confere a versao minima antes de subir.
+            if not args.dry:
+                _, info = http("GET", f"{hub_url(args)}/api/info")
+                hv = str(info.get("version") or "0.0.0")
+                if vtuple(hv) < (0, 14, 0):
+                    die(f"{folder.name}: hub {hv} nao suporta app privado "
+                        f"(minimo 0.14.0) — atualize o hub")
             try:
                 doc = json.loads(blobs["app.json"])
             except ValueError:
@@ -741,6 +749,11 @@ def cmd_publish_dep(args):
     tenant = getattr(args, "tenant", "") or ""
     if tenant and not private:
         die("--tenant exige --private")
+    if private and not args.dry:
+        _, info = http("GET", f"{hub_url(args)}/api/info")
+        hv = str(info.get("version") or "0.0.0")
+        if vtuple(hv) < (0, 14, 0):
+            die(f"hub {hv} nao suporta dep privada (minimo 0.14.0) — atualize o hub")
     src = Path(args.file).expanduser().resolve()
     if not src.is_file():
         die(f"{src}: arquivo nao encontrado")

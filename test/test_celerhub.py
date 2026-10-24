@@ -382,13 +382,15 @@ class TestPublishPrivate(unittest.TestCase):
         self.assertTrue(start >= 0 and eocd > start, "zip nao encontrado no multipart")
         return body[start:eocd + 22]
 
-    def _publish(self, d, **kw):
+    def _publish(self, d, hub_version="0.14.1", **kw):
         from types import SimpleNamespace
         from unittest.mock import patch
         corpos = []
 
         def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
             if method == "GET":
+                if "/api/info" in url:
+                    return 200, {"version": hub_version}
                 return 200, {"apps": {}, "deps": {}}
             corpos.append(data)
             return 200, {"package": "celeros.priv", "version": "1.0.0",
@@ -434,6 +436,24 @@ class TestPublishPrivate(unittest.TestCase):
                                private=False, tenant="vertical1")
         msg = die_saida(lambda: H.cmd_publish(args))
         self.assertIn("--tenant exige --private", msg)
+
+    def test_hub_antigo_recusa_private(self):
+        # hub < 0.14 ignora o campo e publicaria o pacote como publico
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        d = self._app_repo()
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            return 200, ({"version": "0.13.0"} if "/api/info" in url
+                         else {"apps": {}, "deps": {}})
+
+        args = SimpleNamespace(dry=False, force=False, folders=[str(d)],
+                               no_strip=False, token="t", hub=None,
+                               private=True, tenant="vertical1")
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            with patch.object(H, "http", side_effect=fake_http):
+                msg = die_saida(lambda: H.cmd_publish(args))
+        self.assertIn("nao suporta app privado", msg)
 
     def test_publish_dep_tenant_sem_private_morre(self):
         from types import SimpleNamespace

@@ -604,6 +604,23 @@ def cmd_publish(args):
             js_sum = sum(len(b) for b in enxutos.values())
         blobs = {"app.json": (folder / "app.json").read_bytes(),
                  "main.js": (folder / "main.js").read_bytes()}
+        # --private/--tenant: o app.json versionado continua publico (o repo
+        # publico nao carrega visibilidade de vertical); a CLI injeta na
+        # COPIA que sobe — o hub grava em content/private e exige token.
+        private = bool(getattr(args, "private", False))
+        tenant = getattr(args, "tenant", "") or ""
+        if tenant and not private:
+            die(f"{folder.name}: --tenant exige --private")
+        if private:
+            try:
+                doc = json.loads(blobs["app.json"])
+            except ValueError:
+                die(f"{folder.name}: app.json invalido")
+            doc["visibility"] = "private"
+            if tenant:
+                doc["tenant"] = tenant
+            blobs["app.json"] = (
+                json.dumps(doc, ensure_ascii=False, indent=2) + "\n").encode()
         if (folder / "icon.png").is_file():
             blobs["icon.png"] = (folder / "icon.png").read_bytes()
         for n, p in extras.items():
@@ -720,6 +737,10 @@ def cmd_publish_dep(args):
     cai de 54 KB crus para 32 KB). --sem-strip sobe o fonte como esta.
     --dry roda offline (valida sintaxe/versao e mostra o que subiria)."""
     tok = "" if args.dry else token_or_die(args)  # dry roda offline
+    private = bool(getattr(args, "private", False))
+    tenant = getattr(args, "tenant", "") or ""
+    if tenant and not private:
+        die("--tenant exige --private")
     src = Path(args.file).expanduser().resolve()
     if not src.is_file():
         die(f"{src}: arquivo nao encontrado")
@@ -822,11 +843,14 @@ def cmd_publish_dep(args):
 
     with tempfile.TemporaryDirectory() as td:
         zpath = Path(td) / "dep.zip"
+        dmeta = {"name": name, "version": version,
+                 "minApi": args.min_api, "deps": sub}
+        if private:
+            dmeta["visibility"] = "private"
+            if tenant:
+                dmeta["tenant"] = tenant
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("dep.json", json.dumps({
-                "name": name, "version": version,
-                "minApi": args.min_api, "deps": sub,
-            }))
+            zf.writestr("dep.json", json.dumps(dmeta))
             zf.writestr(f"{name}.js", code)
         blob = zpath.read_bytes()  # depois do with: zip fechado tem o central directory
 
@@ -938,6 +962,10 @@ def main():
                    help="republica mesmo com version <= a do hub")
     p.add_argument("--sem-strip", action="store_true", dest="no_strip",
                    help="sobe os .js com comentarios (padrao: enxutos como o aparelho compila)")
+    p.add_argument("--private", action="store_true",
+                   help="app privado: fora do catalogo publico, leitura exige token")
+    p.add_argument("--tenant", default="",
+                   help="tenant do app privado (ex.: vertical1)")
     p.set_defaults(fn=cmd_publish)
 
     p = sub.add_parser("publish-dep", help="publica dependencia JS no repo do hub")
@@ -953,6 +981,10 @@ def main():
     p.add_argument("--force", action="store_true", help="republica a versao")
     p.add_argument("--sem-strip", action="store_true", dest="no_strip",
                    help="sobe o fonte com comentarios (padrao: enxuto como o aparelho compila)")
+    p.add_argument("--private", action="store_true",
+                   help="dep privada: fora do indice publico, leitura exige token")
+    p.add_argument("--tenant", default="",
+                   help="tenant da dep privada (ex.: vertical1)")
     p.set_defaults(fn=cmd_publish_dep)
 
     p = sub.add_parser("deps-status", help="drift tools/sdk/engine x hub (exit 1 se houver)")

@@ -55,8 +55,8 @@ function usage() {
     console.log('  emu PASTA --serve [--port P] [--open]      preview AO VIVO no navegador (toque, teclado, hot reload)');
     console.log('  bench PASTA [--ms N] [--events ARQ] [--input ARQ] [--seed N] [--vs B]  ms reais por quadro (A/B com --vs)');
     console.log('  check                                        drift: codigo x docs x stubs x types x emulador');
-    console.log('  publish PASTA... [--dry]                     publica na loja (celerhub)');
-    console.log('  publish-dep ARQUIVO.js [--hub URL] [--force] publica dependencia no repo do hub');
+    console.log('  publish PASTA... [--dry] [--private --tenant T] publica na loja (celerhub)');
+    console.log('  publish-dep ARQUIVO.js [--private --tenant T] publica dependencia no repo do hub');
     console.log('  dev PASTA [--port P] [--shots]               watch + reload no device (celerctl)');
 }
 

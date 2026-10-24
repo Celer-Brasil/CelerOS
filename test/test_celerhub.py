@@ -352,5 +352,96 @@ class TestPublishSnapshot(unittest.TestCase):
         self.assertIn(b"var A = 1;", main)
 
 
+class TestPublishPrivate(unittest.TestCase):
+    """--private/--tenant injetam visibility/tenant na COPIA que sobe (o
+    app.json do repo continua publico) e --tenant sem --private morre."""
+
+    def _app_repo(self):
+        import shutil
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        for cmd in (["git", "-C", td, "init", "-q"],
+                    ["git", "-C", td, "config", "user.email", "t@t"],
+                    ["git", "-C", td, "config", "user.name", "t"]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        d = Path(td) / "Priv"
+        d.mkdir()
+        (d / "app.json").write_text(
+            '{"name":"Priv","packageName":"celeros.priv","version":"1.0.0",'
+            '"api":30,"author":"t","description":"d"}', encoding="utf-8")
+        (d / "main.js").write_text("var P = 1;\n", encoding="utf-8")
+        subprocess.run(["git", "-C", td, "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "commit", "-qm", "x"], check=True,
+                       capture_output=True)
+        return d
+
+    def _zip_in_body(self, body: bytes) -> bytes:
+        import zipfile  # noqa: F401
+        start = body.find(b"PK\x03\x04")
+        eocd = body.rfind(b"PK\x05\x06")
+        self.assertTrue(start >= 0 and eocd > start, "zip nao encontrado no multipart")
+        return body[start:eocd + 22]
+
+    def _publish(self, d, **kw):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        corpos = []
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            if method == "GET":
+                return 200, {"apps": {}, "deps": {}}
+            corpos.append(data)
+            return 200, {"package": "celeros.priv", "version": "1.0.0",
+                         "size": 1, "md5": "x", "store": {"apps": 1}}
+
+        args = SimpleNamespace(dry=False, force=False, folders=[str(d)],
+                               no_strip=False, token="t", hub=None, **kw)
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            with patch.object(H, "http", side_effect=fake_http):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        H.cmd_publish(args)
+        self.assertEqual(cm.exception.code, 0)
+        self.assertTrue(corpos, "o POST deveria levar o zip")
+        return self._zip_in_body(corpos[0])
+
+    def test_private_injeta_visibility_e_tenant(self):
+        import zipfile
+        d = self._app_repo()
+        blob = self._publish(d, private=True, tenant="vertical1")
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            doc = json.loads(zf.read("app.json"))
+        self.assertEqual(doc.get("visibility"), "private")
+        self.assertEqual(doc.get("tenant"), "vertical1")
+        # o arquivo versionado NAO muda (o repo publico nao leva visibilidade)
+        self.assertNotIn("visibility", (d / "app.json").read_text())
+        self.assertNotIn("tenant", (d / "app.json").read_text())
+
+    def test_publico_nao_injeta(self):
+        import zipfile
+        d = self._app_repo()
+        blob = self._publish(d, private=False, tenant="")
+        with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+            doc = json.loads(zf.read("app.json"))
+        self.assertNotIn("visibility", doc)
+        self.assertNotIn("tenant", doc)
+
+    def test_tenant_sem_private_morre(self):
+        from types import SimpleNamespace
+        d = self._app_repo()
+        args = SimpleNamespace(dry=False, force=False, folders=[str(d)],
+                               no_strip=False, token="t", hub=None,
+                               private=False, tenant="vertical1")
+        msg = die_saida(lambda: H.cmd_publish(args))
+        self.assertIn("--tenant exige --private", msg)
+
+    def test_publish_dep_tenant_sem_private_morre(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(file="qualquer.js", dry=True, private=False,
+                               tenant="vertical1")
+        msg = die_saida(lambda: H.cmd_publish_dep(args))
+        self.assertIn("--tenant exige --private", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

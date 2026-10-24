@@ -1,13 +1,13 @@
 {
   "name": "Bench Fisica",
   "packageName": "celeros.benchfisica",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 31,
   "permissions": [],
-  "deps": { "celeros.physics": "^2.0.0" },
+  "deps": { "celeros.physics": "^2.1.1" },
   "author": "CelerOS",
   "type": "Utility",
   "category": "Utility",
   "description": "Mede o verlet da celeros.physics nos dois caminhos: interpretado (JS no Duktape) e nativo (System.verletStep, API 31), com a mesma cena de cordas, pano e pontos. Mostra ms/step e o ganho do acelerador nesta placa.",
-  "changelog": "1.0.0 - primeira versao: verlet JS x verletFast nativo, mesma cena (~120 nos), 2000 steps"
+  "changelog": "1.0.1 - range da celeros.physics atualizado para ^2.1.1 (versao corrente; nenhum codigo mudou). 1.0.0 - primeira versao: verlet JS x verletFast nativo, mesma cena (~120 nos), 2000 steps"
 }

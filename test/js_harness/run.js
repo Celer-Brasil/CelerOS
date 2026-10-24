@@ -1740,6 +1740,35 @@ function runInline(src, env) {
     check('cmpV menor', api.cmpV('1.0.0', '1.0.1') === -1);
     check('fmtKB', api.fmtKB(4000) === '3.9 KB' && api.fmtKB(30720) === '30 KB');
 
+    // token do hub: /local/hub_token.txt anexa ?token= SO em URLs do hub
+    // (apps privados); sem o arquivo a loja fica identica a de sempre.
+    check('sem token: hubUrl devolve a URL original',
+          api.hubUrl('https://os.celer.tec.br/store/all.json') ===
+          'https://os.celer.tec.br/store/all.json');
+    check('sem token: hubToken vazio', api.hubToken() === '');
+    env.FS.writeTextFile('/local/hub_token.txt', '  tok-park \n');
+    api.resetToken();
+    check('com token: ?token= anexado',
+          api.hubUrl('https://os.celer.tec.br/store/all.json') ===
+          'https://os.celer.tec.br/store/all.json?token=tok-park');
+    check('com token: & quando ja ha query',
+          api.hubUrl('https://os.celer.tec.br/store/all.json?v=1') ===
+          'https://os.celer.tec.br/store/all.json?v=1&token=tok-park');
+    check('token nao vaza para outro host',
+          api.hubUrl('https://exemplo.com/x') === 'https://exemplo.com/x');
+    var seenUrl = '';
+    var oldGet = env.Net.get;
+    env.Net.get = function(u) { seenUrl = String(u); return 'x'; };
+    api.fetchText('https://os.celer.tec.br/store/ping.json');
+    env.Net.get = oldGet;
+    check('fetchText manda o token', seenUrl.indexOf('token=tok-park') >= 0,
+          seenUrl);
+    env.FS.deleteFile('/local/hub_token.txt');
+    api.resetToken();
+    check('token removido volta ao comportamento publico',
+          api.hubUrl('https://os.celer.tec.br/store/all.json') ===
+          'https://os.celer.tec.br/store/all.json');
+
     // ranges de deps: depRangeOk ja cortou o 1o caractere da VERSAO junto
     // com o "^" do range (1.0.0 -> [0,0,0]) e NENHUM caret casava — todo
     // app com deps falhava com "Dependencia indisponivel no hub" (2.7.0/2.7.1)

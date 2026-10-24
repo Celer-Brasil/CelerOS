@@ -77,12 +77,39 @@ function fmtKB(n) {
 
 // ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
 // ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
+// Token de leitura do hub (apps/deps privados): /local/hub_token.txt, uma
+// linha, gravado no provisionamento do device. Sem o arquivo o comportamento
+// e o de sempre (so catalogo publico). Net.download nao manda header, entao o
+// token vai em ?token= — o hub aceita header ou query. So URLs do NOSSO hub
+// recebem o token (nada de vazar credencial para terceiros).
+var TOKEN_PATH = "/local/hub_token.txt";
+var _hubTok = null;
+function hubToken() {
+    if (_hubTok === null) {
+        _hubTok = "";
+        try {
+            if (FS.exists(TOKEN_PATH)) {
+                var t = FS.readTextFile(TOKEN_PATH) || "";
+                t = t.replace(/^\s+/, "").replace(/\s+$/, "");
+                if (t) _hubTok = t;
+            }
+        } catch (e) { _hubTok = ""; }
+    }
+    return _hubTok;
+}
+function hubUrl(url) {
+    var t = hubToken();
+    if (!t || !url || String(url).indexOf(HUB_BASE) !== 0) return url;
+    return url + (String(url).indexOf("?") >= 0 ? "&" : "?") +
+        "token=" + encodeURIComponent(t);
+}
+
 function fetchJSON(url) {
-    try { return Net.getJSON(url); } catch (e) { return null; }
+    try { return Net.getJSON(hubUrl(url)); } catch (e) { return null; }
 }
 
 function fetchText(url) {
-    try { return Net.get(url); } catch (e) { return null; }
+    try { return Net.get(hubUrl(url)); } catch (e) { return null; }
 }
 
 // texto SEM o teto de 32 KB do Net.get (o deps.json ja passou de 16 KB e
@@ -92,7 +119,7 @@ function fetchTextBig(url) {
     if (typeof Net.download !== "function") return fetchText(url);  // API velha
     var tmp = "/local/appstore_fetch.json";
     var ok = false;
-    try { ok = Net.download(url, tmp); } catch (e0) { ok = false; }
+    try { ok = Net.download(hubUrl(url), tmp); } catch (e0) { ok = false; }
     if (!ok) { try { FS.deleteFile(tmp); } catch (e1) {} return null; }
     var body = FS.readTextFile(tmp);
     try { FS.deleteFile(tmp); } catch (e2) {}
@@ -259,7 +286,7 @@ function installDeps(it, resolved, index) {
         var tmp = dir + "/" + nm + ".js.new";
         var ok = false;
         try {
-            ok = Net.download(d.url, tmp, function (got, total) { drawProgress(got, total); });
+            ok = Net.download(hubUrl(d.url), tmp, function (got, total) { drawProgress(got, total); });
         } catch (e) { ok = false; }
         if (!ok) { try { FS.deleteFile(tmp); } catch (e9) {} return "Erro ao baixar " + nm; }
         var md = "";
@@ -588,7 +615,7 @@ function loadCatalog() {
         var allPath = "/local/appstore_all.json";
         var all = null;
         var allOk = false;
-        try { allOk = Net.download(catsIdx["Todos"], allPath); } catch (eA) { allOk = false; }
+        try { allOk = Net.download(hubUrl(catsIdx["Todos"]), allPath); } catch (eA) { allOk = false; }
         if (allOk) {
             var body = FS.readTextFile(allPath);
             try { FS.deleteFile(allPath); } catch (eB) {}
@@ -1311,7 +1338,7 @@ function installApp() {
             System.delay(30);
             var zok = false;
             try {
-                zok = Net.download(zip.url, zpath, function (got, total) {
+                zok = Net.download(hubUrl(zip.url), zpath, function (got, total) {
                     drawProgress(got, total);
                 });
             } catch (e1) { zok = false; }
@@ -1353,7 +1380,7 @@ function installApp() {
             System.delay(30);
             var okDL = false;
             try {
-                okDL = Net.download(fe.url, ftmp, function (got, total) {
+                okDL = Net.download(hubUrl(fe.url), ftmp, function (got, total) {
                     drawProgress(got, total);  // delta interno decide se desenha
                 });
             } catch (e) { okDL = false; }
@@ -1403,7 +1430,7 @@ function installApp() {
             drawDownload(it.name, "icon.png", false);
             System.delay(30);
             var iconOk = false;
-            try { iconOk = Net.download(it.icon, iconTmp); } catch (e5) { iconOk = false; }
+            try { iconOk = Net.download(hubUrl(it.icon), iconTmp); } catch (e5) { iconOk = false; }
             if (iconOk && FS.renameFile(iconTmp, dir + "/icon.png")) {
                 // icone novo no lugar; o rescan revalida o cache
             } else {
@@ -1482,6 +1509,10 @@ if (typeof __harness !== "undefined" && __harness.storeTest) {
         cmpV: cmpV,
         depRangeOk: depRangeOk,
         resolveDeps: resolveDeps,
+        hubUrl: hubUrl,
+        hubToken: hubToken,
+        resetToken: function () { _hubTok = null; },
+        fetchText: fetchText,
         stateInfo: stateInfo,
         scanLocalApps: scanLocalApps,
         resolveInstalledDir: resolveInstalledDir,

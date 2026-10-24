@@ -38,7 +38,7 @@ jobs:
     env:
       XDG_CACHE_HOME: /tmp/gh-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Build
@@ -61,7 +61,7 @@ jobs:
         run: |
           . $IDF_PATH/export.sh
           python3 tools/release/package.py --board ${{ matrix.board }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.board }}
           path: dist/
@@ -79,21 +79,21 @@ jobs:
           - os: windows-latest
             suffix: windows-x64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: PyInstaller
         shell: bash
         run: |
-          pip install "esptool==4.8.1" pyinstaller
+          pip install "esptool==5.6.0" pyinstaller
           VERSION=$(sed -n 's/project(CelerOS[[:space:]]*VERSION[[:space:]]*\(.*\))/\1/p' CMakeLists.txt)
           # --collect-all: embute os stub_flasher_*.json do esptool (sem eles
           # o exe conecta e morre no run_stub)
           pyinstaller --onefile --console --clean --collect-all esptool \
             --name "CelerOS_Flasher_${VERSION}_${{ matrix.suffix }}" \
             tools/release/flasher.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-flash-${{ matrix.suffix }}
           path: dist/
@@ -107,13 +107,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Guard de versao (tag x CMakeLists)
         run: |
           V_TAG="${GITHUB_REF_NAME#v}"
           V_CMAKE=$(sed -n 's/project(CelerOS[[:space:]]*VERSION[[:space:]]*\(.*\))/\1/p' CMakeLists.txt)
           [ "$V_TAG" = "$V_CMAKE" ] || { echo "tag v$V_TAG != CelerOS $V_CMAKE"; exit 1; }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           path: dist/

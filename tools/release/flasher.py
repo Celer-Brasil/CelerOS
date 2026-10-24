@@ -10,7 +10,7 @@ grava tudo com o esptool embutido (binario PyInstaller).
 Sem acentos no output (console do windows em cp1252).
 
 Build do executavel (PyInstaller; --collect-all embute os stubs do esptool):
-    pip install "esptool==4.8.1" pyinstaller
+    pip install "esptool==5.6.0" pyinstaller
     pyinstaller --onefile --console --clean --collect-all esptool \
         --name CelerOS_Flasher tools/release/flasher.py
 """

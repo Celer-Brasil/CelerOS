@@ -17,13 +17,13 @@ jobs:
     name: JS harness + C++ host tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         # o teste C++ de host inclui lgfx_miniz do submodule LovyanGFX
         with:
           submodules: recursive
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
       - name: JS apps harness
         run: node test/js_harness/run.js
       - name: app_lint tests (linter de apps JS)
@@ -94,7 +94,7 @@ jobs:
       # corrupted" sobrevivia ate ao retry (que so limpava managed_components)
       XDG_CACHE_HOME: /tmp/gh-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Build
@@ -126,7 +126,7 @@ jobs:
           MIN=64
           python3 tools/size_report.py --board ${{ matrix.board }} --min-free-kb $MIN
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CelerOS-${{ matrix.board }}
           path: |

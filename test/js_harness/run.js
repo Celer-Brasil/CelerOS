@@ -4671,7 +4671,8 @@ function holdFrames(x, y, n) {
                                     url: 'https://evil.example/app.zip', md5: 'abc123'
                                 } }
                             ] } },
-                            { id: 'cmd-os', type: 'os_update', payload: {} }
+                            { id: 'cmd-os', type: 'os_update', payload: {} },
+                            { id: 'cmd-open', type: 'open', payload: {} }
                         ]
                     }) };
                 }
@@ -4723,6 +4724,9 @@ function holdFrames(x, y, n) {
     var body = lastBeat ? JSON.parse(lastBeat.body) : { ack: [], events: [] };
     check('acks dos dois comandos vao no flush',
           body.ack.indexOf('cmd-apps') >= 0 && body.ack.indexOf('cmd-os') >= 0,
+          lastBeat ? lastBeat.body : 'sem heartbeat');
+    check('agente nao acka comando de outra vertical',
+          body.ack.indexOf('cmd-open') < 0,
           lastBeat ? lastBeat.body : 'sem heartbeat');
     check('eventos de app e de comando sao reportados',
           body.events.length >= 4, JSON.stringify(body.events));

@@ -623,6 +623,22 @@ function checkOtaResult() {
     Storage.remove(OTA_PENDING);
 }
 
+// Tipos que este agente possui. open/close (e qualquer comando de outra
+// vertical) ficam na fila para o app/servico dono: se o agente ackasse um
+// comando alheio, o consumidor certo nunca o veria. Cada dono acka so o seu.
+var AGENT_COMMANDS = {
+    os_update: true,
+    update_apps: true,
+    self_update: true,
+    reboot: true,
+    sync: true,
+    diagnostics: true
+};
+
+function ownsCommand(type) {
+    return AGENT_COMMANDS[String(type)] === true;
+}
+
 function handleCommand(cmd) {
     var type = String(cmd.type || "");
     if (type === "reboot") {
@@ -663,6 +679,7 @@ function processCommands(cmds) {
     for (var i = 0; i < cmds.length; i++) {
         var cmd = cmds[i];
         if (!cmd || !cmd.id) continue;
+        if (!ownsCommand(cmd.type)) continue;  // deixa para o dono (ex.: open/close)
         if (expired(cmd)) {
             cloud.report({
                 type: "agent.command.expired",

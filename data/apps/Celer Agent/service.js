@@ -130,6 +130,167 @@ function isNewer(a, b) {
     return false;
 }
 
+function rangeSatisfied(version, range) {
+    range = String(range || "").replace(/^[\s]+|[\s]+$/g, "");
+    if (!range) return false;
+    if (range.charAt(0) === "^") {
+        var vb = versionNum(version), vr = versionNum(range.slice(1));
+        if (vb[0] !== vr[0]) return false;
+        if (vb[1] !== vr[1]) return vb[1] > vr[1];
+        return vb[2] >= vr[2];
+    }
+    return String(version) === range;
+}
+
+function pickDepVersion(index, name, ranges) {
+    var versions = index && index[name];
+    if (!versions) return "";
+    var best = "";
+    for (var v in versions) {
+        if (!versions.hasOwnProperty(v)) continue;
+        var ok = true;
+        for (var i = 0; i < ranges.length; i++) {
+            if (!rangeSatisfied(v, ranges[i])) { ok = false; break; }
+        }
+        if (!ok) continue;
+        if (!best || isNewer(v, best)) best = v;
+    }
+    return best;
+}
+
+var depsIndexCache = null;
+var depsIndexAt = 0;
+
+// Indice de deps do hub: /store/deps.json passa do teto de 32 KB do
+// Net.request, entao vai por Net.download para o staging.
+function depsIndex(force) {
+    var now = nowMs();
+    if (!force && depsIndexCache && (now - depsIndexAt) < 600000) {
+        return depsIndexCache;
+    }
+    var path = stagingDir() + "/deps_index.json";
+    try {
+        if (FS.exists(path)) FS.deleteFile(path);
+        if (!Net.download(hubUrl("/store/deps.json"), path)) return null;
+        var doc = readJson(path);
+        if (FS.exists(path)) FS.deleteFile(path);
+        if (!doc || !doc.deps) return null;
+        depsIndexCache = doc.deps;
+        depsIndexAt = now;
+        return depsIndexCache;
+    } catch (e) {
+        try { if (FS.exists(path)) FS.deleteFile(path); } catch (e2) {}
+        return null;
+    }
+}
+
+function modulePath(name, version) {
+    return "/local/modules/" + name + "/" + version + "/" + name + ".js";
+}
+
+function ensureModule(name, version, entry) {
+    if (!entry || !entry.url) return false;
+    var path = modulePath(name, version);
+    var md5 = String(entry.md5 || "").toLowerCase();
+    try {
+        if (FS.exists(path) &&
+            (!md5 || String(FS.getFileMD5(path) || "").toLowerCase() === md5)) {
+            return true;
+        }
+    } catch (e) {}
+    var base = "/local/modules/" + name;
+    var dir = base + "/" + version;
+    try {
+        if (!FS.isDirectory("/local/modules")) FS.mkdir("/local/modules");
+        if (!FS.isDirectory(base)) FS.mkdir(base);
+        if (!FS.isDirectory(dir)) FS.mkdir(dir);
+    } catch (e2) {}
+    try {
+        if (FS.exists(path)) FS.deleteFile(path);
+        if (!Net.download(withHubToken(String(entry.url)), path)) return false;
+        if (md5 && String(FS.getFileMD5(path) || "").toLowerCase() !== md5) {
+            FS.deleteFile(path);
+            return false;
+        }
+        return true;
+    } catch (e3) {
+        try { if (FS.exists(path)) FS.deleteFile(path); } catch (e4) {}
+        return false;
+    }
+}
+
+// Fecho de deps do app.json contra /store/deps.json (mesma semantica de
+// range do hub: ^x.y.z no mesmo major ou versao exata). Devolve
+// {versions} ou {error}; os modulos sao baixados/verificados antes do
+// app.zip para um erro nao trocar o app por uma versao quebrada.
+function resolveDeps(deps) {
+    var index = depsIndex(false);
+    if (!index) return { error: "indice de deps indisponivel" };
+    var wanted = {};
+    var queue = [];
+    var name;
+    for (name in deps) {
+        if (!deps.hasOwnProperty(name)) continue;
+        wanted[name] = [String(deps[name])];
+        queue.push(name);
+    }
+    var picked = {};
+    var guard = 0;
+    while (queue.length && guard++ < 64) {
+        name = queue.shift();
+        var version = pickDepVersion(index, name, wanted[name]);
+        if (!version) return { error: "dep sem versao: " + name };
+        if (picked[name] !== version) {
+            picked[name] = version;
+            var entry = index[name][version];
+            var sub = (entry && entry.deps) ? entry.deps : {};
+            for (var sn in sub) {
+                if (!sub.hasOwnProperty(sn)) continue;
+                var r = String(sub[sn]);
+                if (!wanted[sn]) wanted[sn] = [];
+                var known = false;
+                for (var wi = 0; wi < wanted[sn].length; wi++) {
+                    if (wanted[sn][wi] === r) known = true;
+                }
+                if (!known) wanted[sn].push(r);
+                queue.push(sn);
+            }
+        }
+    }
+    if (guard >= 64) return { error: "deps: fecho nao converge" };
+    for (name in picked) {
+        if (!picked.hasOwnProperty(name)) continue;
+        for (var ri = 0; ri < wanted[name].length; ri++) {
+            if (!rangeSatisfied(picked[name], wanted[name][ri])) {
+                return { error: "dep conflita: " + name };
+            }
+        }
+    }
+    for (name in picked) {
+        if (!picked.hasOwnProperty(name)) continue;
+        if (!ensureModule(name, picked[name], index[name][picked[name]])) {
+            return { error: "dep download falhou: " + name + "@" + picked[name] };
+        }
+    }
+    return { versions: picked };
+}
+
+function writeDepsFile(folder, versions) {
+    var parts = [];
+    var name;
+    for (name in versions) {
+        if (!versions.hasOwnProperty(name)) continue;
+        parts.push(JSON.stringify(name) + ":" + JSON.stringify(versions[name]));
+    }
+    if (!parts.length) return true;
+    try {
+        return FS.writeTextFile("/local/apps/" + folder + "/deps.json",
+            "{" + parts.join(",") + "}");
+    } catch (e) {
+        return false;
+    }
+}
+
 function installedApps() {
     var out = [];
     var seen = {};
@@ -273,6 +434,18 @@ function installPackage(pkg, item, apps) {
     if (!isNaN(api) && api > (Number(System.getAPILevel()) || 0)) {
         return { ok: false, error: "app exige API " + api };
     }
+    var depVersions = null;
+    if (meta.deps && typeof meta.deps === "object") {
+        var hasDep = false;
+        for (var dn in meta.deps) if (meta.deps.hasOwnProperty(dn)) hasDep = true;
+        if (hasDep) {
+            var depResult = resolveDeps(meta.deps);
+            if (!depResult || depResult.error) {
+                return { ok: false, error: depResult ? depResult.error : "deps indisponiveis" };
+            }
+            depVersions = depResult.versions;
+        }
+    }
     var zip = meta.zip || (item && item.zip) || null;
     if (!zip || !zip.md5) return { ok: false, error: "hub sem app.zip/md5" };
 
@@ -304,6 +477,12 @@ function installPackage(pkg, item, apps) {
         var res = System.installZip(path, folder);
         if (FS.exists(path)) FS.deleteFile(path);
         if (!res || res.ok !== true) return { ok: false, error: "installZip recusou" };
+        // O app.zip nao carrega deps.json: installZip trocou a pasta e o
+        // require cairia no modulo errado/ausente. Grava o fecho resolvido
+        // (modulos ja estao em /local/modules) antes de dar o update por bom.
+        if (depVersions && !writeDepsFile(folder, depVersions)) {
+            return { ok: false, error: "deps.json nao gravou" };
+        }
         return { ok: true, version: hubVersion, folder: folder };
     } catch (e) {
         try { if (FS.exists(path)) FS.deleteFile(path); } catch (e2) {}

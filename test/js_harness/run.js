@@ -4755,8 +4755,22 @@ function holdFrames(x, y, n) {
         env.System.wifiStatus = function() { return { connected: true }; };
         env.System.restart = function() { selfRestarts++; };
         env.FS.getFileMD5 = function() { return 'def456'; };
-        env.Net.download = function(url) {
+        env.Net.download = function(url, path) {
             selfDownloads.push(url);
+            if (url.indexOf('/store/deps.json') >= 0) {
+                env.FS.writeTextFile(path, JSON.stringify({
+                    deps: {
+                        'celeros.cloud': {
+                            '1.1.0': {
+                                size: 6, md5: 'def456', minApi: 49, deps: {},
+                                url: 'https://os.celer.tec.br/store/deps/celeros.cloud/1.1.0/celeros.cloud.js'
+                            }
+                        }
+                    }
+                }));
+            } else if (url.indexOf('/store/deps/celeros.cloud/1.1.0/celeros.cloud.js') >= 0) {
+                env.FS.writeTextFile(path, 'module');
+            }
             return true;
         };
         env.System.installZip = function(zip, folder) {
@@ -4781,7 +4795,8 @@ function holdFrames(x, y, n) {
             if (opts.url.indexOf('/store/apps/celeros.agent/app.json') >= 0) {
                 return { status: 200, body: JSON.stringify({
                     packageName: 'celeros.agent', name: 'Celer Agent', version: '1.1.0',
-                    api: 50, zip: { size: 10, md5: 'def456' }
+                    api: 50, deps: { 'celeros.cloud': '^1.1.0' },
+                    zip: { size: 10, md5: 'def456' }
                 }) };
             }
             return { status: 404, body: '' };
@@ -4793,6 +4808,14 @@ function holdFrames(x, y, n) {
           JSON.stringify(selfInstalls));
     check('self_update para o servico', selfStops === 1, String(selfStops));
     check('self_update nao reinicia na hora', selfRestarts === 0, String(selfRestarts));
+    check('self_update baixa a dep do hub',
+          selfDownloads.some(function(u) {
+              return u.indexOf('/store/deps/celeros.cloud/1.1.0/celeros.cloud.js') >= 0;
+          }), JSON.stringify(selfDownloads));
+    var selfDeps = r2.env.FS.readTextFile('/local/apps/Celer Agent/deps.json');
+    check('self_update regrava o deps.json',
+          !!selfDeps && selfDeps.indexOf('celeros.cloud') >= 0 &&
+          selfDeps.indexOf('1.1.0') >= 0, selfDeps);
     var selfBeat = selfBeats[selfBeats.length - 1];
     var selfBody = selfBeat ? JSON.parse(selfBeat.body) : { ack: [] };
     check('self_update acka o comando', selfBody.ack.indexOf('cmd-self') >= 0,

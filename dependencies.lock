@@ -66,6 +66,23 @@ dependencies:
     - esp32h4
     - esp32s31
     version: 0.21.0~2
+  espressif/usb:
+    component_hash: 99eee72ea224d9117d4c342442717a1f20bf8112e2ab5d7d7038b827874f4c92
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5.3'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    - esp32h4
+    - linux
+    version: 1.6.0
   idf:
     source:
       type: idf
@@ -74,7 +91,8 @@ direct_dependencies:
 - bblanchon/arduinojson
 - espressif/esp-tflite-micro
 - espressif/esp_tinyusb
+- espressif/usb
 - idf
-manifest_hash: e0a1290ae1a0c3d04cc4b76fbcaab45c08f4fb01e058e9bd2cb57582e5485113
+manifest_hash: 282ee7bef6deeff6bf4a30aa71002e0e71c34eab7f636d36af75ca55f366c5d9
 target: esp32s3
 version: 3.0.0

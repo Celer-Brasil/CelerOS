@@ -4513,6 +4513,8 @@ function holdFrames(x, y, n) {
         heartbeatMs: 0
     };
     env.FS.writeTextFile('/local/celercloud.json', JSON.stringify(cfg));
+    env.System.getOSVersion = function() { return '9.9.9'; };
+    env.System.getAPILevel = function() { return 49; };
     var calls = [];
     env.Net.request = function(opts) {
         calls.push(opts);
@@ -4545,7 +4547,10 @@ function holdFrames(x, y, n) {
     check('report enfileira evento',
           cloud.report({ type: 'printer.paper_out', severity: 'warning' }) === true);
     check('outbox com 1 evento', cloud.pending() === 1);
-    var desired = cloud.heartbeat(null, true);
+    var desired = cloud.heartbeat({
+        caps: { mic: true, relay: true },
+        resources: [{ name: 'temp', type: 'sensor', unit: 'C', min: -40, max: 125 }]
+    }, true);
     check('heartbeat devolve desired',
           desired && desired.channel === 'devkit-s3', JSON.stringify(desired));
     check('request leva apikey/Bearer',
@@ -4556,16 +4561,33 @@ function holdFrames(x, y, n) {
     check('body leva outbox',
           sent.events.length === 1 &&
           sent.events[0].type === 'printer.paper_out', calls[0].body);
+    check('firmware/API automaticos',
+          sent.firmware === '9.9.9' && sent.api_level === 49, calls[0].body);
+    check('caps/resources vao no body',
+          sent.caps && sent.caps.mic === true &&
+          sent.resources && sent.resources[0].name === 'temp', calls[0].body);
     check('servidor aceito limpa a outbox', cloud.pending() === 0);
     var cmds = cloud.commands();
-    check('comando recebido drenado',
+    check('comando recebido na fila',
           cmds.length === 1 && cmds[0].type === 'reboot', JSON.stringify(cmds));
+    var persisted = env.FS.exists('/local/cloud_commands.json')
+        ? JSON.parse(env.FS.readTextFile('/local/cloud_commands.json')) : [];
+    check('comando persistido antes do ack',
+          persisted.length === 1 && persisted[0].id === 'cmd-1', JSON.stringify(persisted));
     cloud.ack(cmds[0].id);
+    check('ack remove o comando da fila', cloud.commands().length === 0);
     cloud.report({ type: 'test.event' });
     cloud.heartbeat(null, true);
     var second = JSON.parse(calls[1].body);
     check('ack e novo evento vao no proximo beat',
           second.ack[0] === 'cmd-1' && second.events.length === 1, calls[1].body);
+
+    env.FS.writeTextFile('/local/cloud_commands.json',
+        JSON.stringify([{ id: 'cmd-persist', type: 'sync', payload: {} }]));
+    cloud.reset();
+    check('init recarrega comandos persistidos',
+          cloud.init() === true && cloud.commands()[0].id === 'cmd-persist');
+    cloud.ack('cmd-persist');
 
     cloud.report({ type: 'offline.event' });
     env.Net.request = function() { return null; };

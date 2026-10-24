@@ -19,6 +19,30 @@ interface CelerCloudCommand {
     created_at?: string;
 }
 
+interface CelerCloudCaps {
+    mic?: boolean;
+    speaker?: boolean;
+    display?: boolean;
+    camera?: boolean;
+    motors?: boolean;
+    leds?: boolean;
+    hub?: boolean;
+    resources?: boolean;
+    [key: string]: boolean | undefined;
+}
+
+interface CelerCloudResource {
+    name: string;
+    type: string;
+    unit?: string;
+    min?: number;
+    max?: number;
+    schema?: string;
+    busy?: boolean;
+    shared?: boolean;
+    ready?: boolean;
+}
+
 interface CelerCloudHeartbeatExtra {
     kind?: 'display' | 'totem' | 'camera' | 'sensor' | 'watch' | 'generic';
     label?: string;
@@ -28,6 +52,10 @@ interface CelerCloudHeartbeatExtra {
     uptimeS?: number;
     rssi?: number;
     apps?: Array<{ pkg: string; version: string }>;
+    /** Capacidades do device (CelerNet/GPIO/sensores). */
+    caps?: CelerCloudCaps;
+    /** Recursos expostos (reles, sensores, canais) ate 32 itens. */
+    resources?: CelerCloudResource[];
 }
 
 interface CelerCloud {
@@ -39,9 +67,12 @@ interface CelerCloud {
     lastError(): string;
     /** Estado desejado do ultimo heartbeat (cache em memoria/arquivo). */
     desired(): Record<string, unknown> | null;
-    /** Drena os comandos recebidos no ultimo heartbeat. */
+    /** Comandos recebidos e ainda nao confirmados (persistidos no FS). */
     commands(): CelerCloudCommand[];
-    /** Confirma comando(s) no proximo heartbeat. Devolve o tamanho da fila. */
+    /**
+     * Confirma comando(s) no proximo heartbeat e remove da fila local.
+     * Devolve o tamanho da fila de acks.
+     */
     ack(id: string | string[]): number;
     /** Enfileira evento idempotente para o proximo heartbeat. */
     report(event: CelerCloudEvent): boolean;

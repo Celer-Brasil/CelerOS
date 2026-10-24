@@ -25,14 +25,17 @@
 //
 // Permissoes do app.json: "net" (e "fs" para a outbox/config).
 //
-// 1.0.0: primeira versao (heartbeat, desired, comandos+ack, outbox).
+// 1.1.0: caps/resources (CelerNet/sensores), firmware/API auto e fila de
+// comandos persistida (sobrevive a reboot; ack remove da fila).
 
-var cloud = { version: '1.0.0' };
+var cloud = { version: '1.1.0' };
 
 var CONFIG_PATH = '/local/celercloud.json';
 var OUTBOX_PATH = '/local/cloud_outbox.json';
 var DESIRED_PATH = '/local/cloud_desired.json';
+var COMMANDS_PATH = '/local/cloud_commands.json';
 var MAX_OUTBOX = 50;
+var MAX_COMMANDS = 50;
 
 var _cfg = null;
 var _lastBeat = 0;
@@ -74,10 +77,32 @@ function netReady() {
     return typeof Net !== 'undefined' && typeof Net.request === 'function';
 }
 
+function osVersion() {
+    try {
+        return (typeof System !== 'undefined' && typeof System.getOSVersion === 'function')
+            ? String(System.getOSVersion() || '') : '';
+    } catch (e) { return ''; }
+}
+
+function osApiLevel() {
+    try {
+        return (typeof System !== 'undefined' && typeof System.getAPILevel === 'function')
+            ? (Number(System.getAPILevel()) || 0) : 0;
+    } catch (e) { return 0; }
+}
+
+function persistCommands() {
+    if (_commands.length > MAX_COMMANDS) {
+        _commands = _commands.slice(_commands.length - MAX_COMMANDS);
+    }
+    return writeJSON(COMMANDS_PATH, _commands);
+}
+
 cloud.init = function (path) {
     _cfg = null;
     _desired = null;
-    _commands = [];
+    _commands = readJSON(COMMANDS_PATH, []);
+    if (!isArray(_commands)) _commands = [];
     _acks = [];
     _lastBeat = 0;
     _lastError = '';
@@ -109,22 +134,28 @@ cloud.desired = function () {
     return _desired;
 };
 
-// Drena a fila de comandos recebidos no ultimo heartbeat.
+// Comandos recebidos e ainda nao confirmados (persistidos no FS). O app deve
+// chamar ack(id) depois de aplicar; ack remove da fila.
 cloud.commands = function () {
-    var out = _commands;
-    _commands = [];
-    return out;
+    return _commands.slice(0);
 };
 
-// Confirma um comando (id) ou lista; vai no proximo heartbeat.
+// Confirma um comando (id) ou lista; vai no proximo heartbeat e sai da fila.
 cloud.ack = function (id) {
-    if (isArray(id)) {
-        for (var i = 0; i < id.length && _acks.length < 20; i++) {
-            if (id[i]) _acks.push(String(id[i]));
+    var ids = isArray(id) ? id : [id];
+    for (var i = 0; i < ids.length && _acks.length < 20; i++) {
+        var cid = ids[i];
+        if (!cid) continue;
+        var s = String(cid);
+        _acks.push(s);
+        for (var j = 0; j < _commands.length; j++) {
+            if (_commands[j] && _commands[j].id === s) {
+                _commands.splice(j, 1);
+                j--;
+            }
         }
-    } else if (id) {
-        if (_acks.length < 20) _acks.push(String(id));
     }
+    persistCommands();
     return _acks.length;
 };
 
@@ -174,14 +205,18 @@ cloud.heartbeat = function (extra, force) {
         kind: extra.kind || _cfg.kind || 'generic',
         label: extra.label || _cfg.label || '',
         board: extra.board || _cfg.board || '',
-        firmware: extra.firmware || _cfg.firmware || '',
-        api_level: typeof extra.apiLevel === 'number' ? extra.apiLevel : (_cfg.apiLevel || 0),
+        firmware: extra.firmware || _cfg.firmware || osVersion(),
+        api_level: typeof extra.apiLevel === 'number'
+            ? extra.apiLevel
+            : (typeof _cfg.apiLevel === 'number' ? _cfg.apiLevel : osApiLevel()),
         uptime_s: typeof extra.uptimeS === 'number' ? extra.uptimeS : 0,
         events: outbox,
         ack: _acks
     };
     if (typeof extra.rssi === 'number') body.rssi = extra.rssi;
     if (isArray(extra.apps)) body.apps = extra.apps;
+    if (extra.caps && typeof extra.caps === 'object') body.caps = extra.caps;
+    if (isArray(extra.resources)) body.resources = extra.resources.slice(0, 32);
 
     var response = null;
     try {
@@ -224,7 +259,20 @@ cloud.heartbeat = function (extra, force) {
         writeJSON(DESIRED_PATH, _desired);
     }
     if (isArray(parsed.commands) && parsed.commands.length) {
-        _commands = _commands.concat(parsed.commands);
+        var added = false;
+        for (var ci = 0; ci < parsed.commands.length; ci++) {
+            var cmd = parsed.commands[ci];
+            if (!cmd || !cmd.id) continue;
+            var known = false;
+            for (var cj = 0; cj < _commands.length; cj++) {
+                if (_commands[cj] && _commands[cj].id === cmd.id) { known = true; break; }
+            }
+            if (!known) {
+                _commands.push(cmd);
+                added = true;
+            }
+        }
+        if (added) persistCommands();
     }
     // Servidor aceitou: outbox e acks entregues.
     writeJSON(OUTBOX_PATH, []);

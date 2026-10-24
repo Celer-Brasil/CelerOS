@@ -1,6 +1,6 @@
 # System apps
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Apps-de-Sistema)
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Apps-de-Sistema)
 
 CelerOS system apps are **JavaScript** (ES5, Duktape) and live in the
 LittleFS partition, mounted at `/local` — the firmware carries only the
@@ -46,7 +46,7 @@ Optional: `author`, `description`, `type` (`System|App|Game`), `category`,
 publish time.
 
 Full packaging guide in
-[App development guide](/maikramer/CelerOS/wiki/App-Development-Guide).
+[App development guide](/Celer-Brasil/CelerOS/wiki/App-Development-Guide).
 
 ## House rules
 

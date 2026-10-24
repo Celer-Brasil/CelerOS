@@ -1,6 +1,6 @@
 # Jogos e CelerGame
 
-[English](/maikramer/CelerOS/wiki/Games-and-CelerGame) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Games-and-CelerGame) | **Português (BR)**
 
 Jogos no CelerOS são **JavaScript** (ES5, Duktape) construídos sobre a
 **CelerGame** — a família de engine entregue como **dependências
@@ -76,4 +76,4 @@ explícito; o mount nunca formata sozinho). Detalhes completos no
 
 ## Leia mais
 
-- **[Guia de Desenvolvimento de Apps](/maikramer/CelerOS/wiki/Guia-de-Apps)** — app.json, SDK, publicação (o Guia da Game Engine vive no repositório: `Documentation/Game_Engine_Guide.pt-BR.md`).
+- **[Guia de Desenvolvimento de Apps](/Celer-Brasil/CelerOS/wiki/Guia-de-Apps)** — app.json, SDK, publicação (o Guia da Game Engine vive no repositório: `Documentation/Game_Engine_Guide.pt-BR.md`).

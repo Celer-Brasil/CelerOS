@@ -1,6 +1,6 @@
 # Devkit barebone (sem display)
 
-[English](/maikramer/CelerOS/wiki/Barebone-Devkit) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Barebone-Devkit) | **Português (BR)**
 
 O CelerOS roda num devkit ESP32 comum **sem display nenhum**: a "tela" é o
 LED on-board, o "toque" é o botão BOOT, e o console/celerctl fica na UART.
@@ -63,7 +63,7 @@ wifi MinhaRede minhaSenha # salva no NVS e conecta (em segundo plano)
 info                      # mostra o IP quando subir
 ```
 
-Com o WiFi no ar, a [interface web](/maikramer/CelerOS/wiki/Interface-Web)
+Com o WiFi no ar, a [interface web](/Celer-Brasil/CelerOS/wiki/Interface-Web)
 funciona como nas outras placas (gerenciador de arquivos, upload OTA em
 `/update`, instalação de apps).
 

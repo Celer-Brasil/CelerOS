@@ -1,6 +1,6 @@
 # Contributing
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Contribuindo)
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Contribuindo)
 
 PRs go to `main` (PT-BR, descriptive commit messages are the house style).
 Before opening one, the checklist below is what CI runs — and what a
@@ -21,7 +21,7 @@ for all six boards in the official ESP-IDF container.
 ## Code conventions
 
 * **ES5 only** in JS apps (`var`, `function`, no arrow functions) — see
-  [System apps](/maikramer/CelerOS/wiki/System-Apps).
+  [System apps](/Celer-Brasil/CelerOS/wiki/System-Apps).
 * Board `#ifdef`s live **only** in `main/Boards/<board>/`; compile-time
   differences between boards go in each board's `BoardTraits.h`.
 * Comments, logs and CLI strings in Portuguese, without accents. Text
@@ -53,13 +53,13 @@ for all six boards in the official ESP-IDF container.
 ## Adding a board
 
 Board profiles are small and self-contained — the steps are in
-[Supported boards](/maikramer/CelerOS/wiki/Supported-Boards#adding-a-board).
+[Supported boards](/Celer-Brasil/CelerOS/wiki/Supported-Boards#adding-a-board).
 Bring-up help is welcome (a photo of the board running CelerOS makes the
 PR!).
 
 ## Reporting bugs
 
-Open an [issue](https://github.com/maikramer/CelerOS/issues) with the
+Open an [issue](https://github.com/Celer-Brasil/CelerOS/issues) with the
 board, firmware version and API level (Settings → Sobre, or
 `celerctl info`) plus a `celerctl logcat` excerpt — or a coredump
 (`celerctl coredump`) if it crashed.

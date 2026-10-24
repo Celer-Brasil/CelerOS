@@ -68,5 +68,5 @@ celerctl shell --run "..."   # CelerNet.start({}) once; state persists
 Pack.handoffMusic()
 ```
 
-See the [JS API guide](/maikramer/CelerOS/wiki/JS-API) sections 31–32 for
+See the [JS API guide](/Celer-Brasil/CelerOS/wiki/JS-API) sections 31–32 for
 the full `CelerNet.*` and `Pack.*` reference.

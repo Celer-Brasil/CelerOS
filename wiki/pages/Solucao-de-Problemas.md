@@ -1,6 +1,6 @@
 # Solução de problemas
 
-[English](/maikramer/CelerOS/wiki/Troubleshooting) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Troubleshooting) | **Português (BR)**
 
 Problemas comuns, em ordem aproximada de "você vai bater nisso".
 
@@ -10,7 +10,7 @@ Problemas comuns, em ordem aproximada de "você vai bater nisso".
   build existente guarda o `sdkconfig` em cache; apague
   `build*/sdkconfig` (ou o diretório inteiro) e reconfigure com a linha
   completa de `-DSDKCONFIG_DEFAULTS=...` + `-DCELEROS_BOARD=...` da página
-  [Compilando e gravando](/maikramer/CelerOS/wiki/Compilando-e-Gravando).
+  [Compilando e gravando](/Celer-Brasil/CelerOS/wiki/Compilando-e-Gravando).
 * **LovyanGFX faltando / erros esquisitos de include.** É um submodule do
   git: `git submodule update --init`.
 * **`flash_data.sh` falha.** Ele precisa do ambiente IDF exportado
@@ -35,7 +35,7 @@ Problemas comuns, em ordem aproximada de "você vai bater nisso".
   ```
 * **O toque pede pressão.** Painel resistivo funciona assim: pressione um
   pouco mais forte que num celular, ou opere o aparelho pelo navegador
-  ([tela ao vivo](/maikramer/CelerOS/wiki/Interface-Web)).
+  ([tela ao vivo](/Celer-Brasil/CelerOS/wiki/Interface-Web)).
 
 ## Tela do SmartDisplay
 

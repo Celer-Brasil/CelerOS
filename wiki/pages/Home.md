@@ -1,6 +1,6 @@
 # CelerOS
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Home-(Português))
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Home-(Português))
 
 <p align="center">
   <img src="Documentation/assets/celeros_logo.png" alt="CelerOS" width="420"/>
@@ -38,8 +38,8 @@ Firmware 1.8.2 — the games round (JS API level 36):
 
 Firmware 1.8, before that (JS API level 27) — the pack:
 
-* **The pack ("matilha")** — devices discover each other and form a **multi-hop Bluetooth mesh** (CelerNet, API 26–27): every node relays by itself, presence carries each device's role, messages travel direct or broadcast up to 434 B across up to 8 hops, and the **Pack** hands the **playing chiptune to the neighbour with a speaker** — from the exact same beat ([mesh page](/maikramer/CelerOS/wiki/Pack-Mesh)).
-* **Six apps that live on the mesh** (App Store): **Sonar** (radar by rings of hops, real RTT ping/loss, census), **Batata Quente** (hot potato by unicast), **Mural** (message board that reaches devices that were **off**, via Trickle), **Sentinela** (IMU/mic watchdog with two-way alarm), **Coral** (4-voice choir with synchronised entry) and **Pong Duplo** (mirrored pong over the Celer Link) ([mesh page](/maikramer/CelerOS/wiki/Pack-Mesh)).
+* **The pack ("matilha")** — devices discover each other and form a **multi-hop Bluetooth mesh** (CelerNet, API 26–27): every node relays by itself, presence carries each device's role, messages travel direct or broadcast up to 434 B across up to 8 hops, and the **Pack** hands the **playing chiptune to the neighbour with a speaker** — from the exact same beat ([mesh page](/Celer-Brasil/CelerOS/wiki/Pack-Mesh)).
+* **Six apps that live on the mesh** (App Store): **Sonar** (radar by rings of hops, real RTT ping/loss, census), **Batata Quente** (hot potato by unicast), **Mural** (message board that reaches devices that were **off**, via Trickle), **Sentinela** (IMU/mic watchdog with two-way alarm), **Coral** (4-voice choir with synchronised entry) and **Pong Duplo** (mirrored pong over the Celer Link) ([mesh page](/Celer-Brasil/CelerOS/wiki/Pack-Mesh)).
 * **Bench-hardened radio (3 boards)** — fragmented unicast now actually arrives (copies patch each other's lost fragments), relays step out of the burst's way and self-cancel, the radio arbitrates mesh × Celer Link × app scans, and Wi-Fi roaming only scans when the signal is weak (a connected scan deafened Bluetooth ~9 s every 39 s).
 * **RAM to live with the pack** — measured stacks, `.bss` off to PSRAM on the S3 boards, CelerLink retry leak fixed: the watch holds mesh + phone link + Wi-Fi without starving internal RAM.
 * **meshsim in CI** — the mesh apps run **for real on N simulated nodes** in the host suite: lockstep virtual clock, an air that models TTL/hops, fragments with per-link loss, the 96-packet all-or-nothing TX queue, Pack envelopes and Celer Link pairing.
@@ -54,22 +54,22 @@ Earlier in the 1.5 cycle: on-device AI (`AI.chat`, API 18–20), voice and the *
 
 | Page | What it covers |
 |---|---|
-| [Supported boards](/maikramer/CelerOS/wiki/Supported-Boards) | The SmartDisplay 4", the CYD family, the robot dog, the Waveshare watch and the barebone devkit — and how to add a new board |
-| [Building and flashing](/maikramer/CelerOS/wiki/Building-and-Flashing) | ESP-IDF 6.1, per-board builds, the LittleFS data partition and the test harness |
-| [Troubleshooting](/maikramer/CelerOS/wiki/Troubleshooting) | Common build, flash, touch, Wi-Fi and web problems — and their fixes |
-| [Architecture](/maikramer/CelerOS/wiki/Architecture) | Boot flow, firmware layers, the JS runtime and code conventions |
-| [Robot dog](/maikramer/CelerOS/wiki/Robot-Dog) | The SpotPear/ZZPET robot dog: full reverse-engineered pinout, bring-up firmware, the CelerOS board, the BLE "Celer Link" remote and voice commands ("hi celer, senta") |
-| [Waveshare watch](/maikramer/CelerOS/wiki/Waveshare-Watch) | The AMOLED 2.06 smartwatch board: pinout ported from the Rust firmware, the Watchface home app, the AOD/deep-sleep screen ladder (with the ULP sentinel) and the `Sensors` API |
-| [Barebone devkit](/maikramer/CelerOS/wiki/Barebone-Devkit) | The headless 4 MB ESP32 devkit: `System.button()` + LED, headless apps and the OTA channel |
-| [System apps](/maikramer/CelerOS/wiki/System-Apps) | What lives in `data/`, the `app.json` rules and how apps reach the device |
-| [Web interface](/maikramer/CelerOS/wiki/Web-Interface) | File manager, firmware upload and the live screen mirror in the browser |
-| [Tools](/maikramer/CelerOS/wiki/Tools) | `celerctl`, the JS debugger, `celerhub`, the local OTA server and asset generators |
-| [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) | Command reference and the HostLink wire protocol |
-| [OTA updates](/maikramer/CelerOS/wiki/OTA-Updates) | The `update.json` manifest, channels and web upload |
-| [App development guide](/maikramer/CelerOS/wiki/App-Development-Guide) | How to package a JS app: `app.json`, folders, icons |
-| [Watchface plugins](/maikramer/CelerOS/wiki/Watchface-Plugins) | How installed apps add widget lines to the watch face (`watchface.js`, API 16) |
-| [JS API](/maikramer/CelerOS/wiki/JS-API) | Full reference of the runtime (`System`, `Net`, `FS`, `AI`, `Mic`, `WakeWord` globals) |
-| [Contributing](/maikramer/CelerOS/wiki/Contributing) | Conventions, tests, CI and how to send a PR |
+| [Supported boards](/Celer-Brasil/CelerOS/wiki/Supported-Boards) | The SmartDisplay 4", the CYD family, the robot dog, the Waveshare watch and the barebone devkit — and how to add a new board |
+| [Building and flashing](/Celer-Brasil/CelerOS/wiki/Building-and-Flashing) | ESP-IDF 6.1, per-board builds, the LittleFS data partition and the test harness |
+| [Troubleshooting](/Celer-Brasil/CelerOS/wiki/Troubleshooting) | Common build, flash, touch, Wi-Fi and web problems — and their fixes |
+| [Architecture](/Celer-Brasil/CelerOS/wiki/Architecture) | Boot flow, firmware layers, the JS runtime and code conventions |
+| [Robot dog](/Celer-Brasil/CelerOS/wiki/Robot-Dog) | The SpotPear/ZZPET robot dog: full reverse-engineered pinout, bring-up firmware, the CelerOS board, the BLE "Celer Link" remote and voice commands ("hi celer, senta") |
+| [Waveshare watch](/Celer-Brasil/CelerOS/wiki/Waveshare-Watch) | The AMOLED 2.06 smartwatch board: pinout ported from the Rust firmware, the Watchface home app, the AOD/deep-sleep screen ladder (with the ULP sentinel) and the `Sensors` API |
+| [Barebone devkit](/Celer-Brasil/CelerOS/wiki/Barebone-Devkit) | The headless 4 MB ESP32 devkit: `System.button()` + LED, headless apps and the OTA channel |
+| [System apps](/Celer-Brasil/CelerOS/wiki/System-Apps) | What lives in `data/`, the `app.json` rules and how apps reach the device |
+| [Web interface](/Celer-Brasil/CelerOS/wiki/Web-Interface) | File manager, firmware upload and the live screen mirror in the browser |
+| [Tools](/Celer-Brasil/CelerOS/wiki/Tools) | `celerctl`, the JS debugger, `celerhub`, the local OTA server and asset generators |
+| [celerctl (USB)](/Celer-Brasil/CelerOS/wiki/celerctl-USB) | Command reference and the HostLink wire protocol |
+| [OTA updates](/Celer-Brasil/CelerOS/wiki/OTA-Updates) | The `update.json` manifest, channels and web upload |
+| [App development guide](/Celer-Brasil/CelerOS/wiki/App-Development-Guide) | How to package a JS app: `app.json`, folders, icons |
+| [Watchface plugins](/Celer-Brasil/CelerOS/wiki/Watchface-Plugins) | How installed apps add widget lines to the watch face (`watchface.js`, API 16) |
+| [JS API](/Celer-Brasil/CelerOS/wiki/JS-API) | Full reference of the runtime (`System`, `Net`, `FS`, `AI`, `Mic`, `WakeWord` globals) |
+| [Contributing](/Celer-Brasil/CelerOS/wiki/Contributing) | Conventions, tests, CI and how to send a PR |
 
 The pages above are the English originals; the **Português (BR)** section in
 the sidebar has the Portuguese translations.
@@ -85,10 +85,10 @@ the sidebar has the Portuguese translations.
   bundled **Chat IA** and **Qwen** apps are a chat client and a push-to-talk
   voice assistant. On the robot dog the wake word **"Hi Celer"** runs
   on-device and voice commands ("hi celer, senta") drive the legs
-  (`WakeWord.*`, API 20 — [robot dog](/maikramer/CelerOS/wiki/Robot-Dog)).
+  (`WakeWord.*`, API 20 — [robot dog](/Celer-Brasil/CelerOS/wiki/Robot-Dog)).
 * **JavaScript debugger** — `celerctl debug MyApp`: Duktape debugger over
   USB with breakpoints, stepping, eval, watches and an automatic pause on
-  uncaught errors ([tools](/maikramer/CelerOS/wiki/Tools)).
+  uncaught errors ([tools](/Celer-Brasil/CelerOS/wiki/Tools)).
 * **Immediate-mode UI** — the same apps scale from 240x320 up to 480x480.
 * **System apps in JS** — Settings, App Store, Installer, Help, Web Server,
   Terminal, Snake, Chat IA, Qwen and the demos live in the LittleFS
@@ -115,25 +115,25 @@ the sidebar has the Portuguese translations.
 * **Celer Link (BLE)** — a Bluetooth LE link between nearby CelerOS devices
   (API 9): a board on a robot runs `CelerLink.start()`, another one drives it
   with `scan()`/`connect()`/`send()` — see the
-  [robot dog](/maikramer/CelerOS/wiki/Robot-Dog) page and the Celer Remote
+  [robot dog](/Celer-Brasil/CelerOS/wiki/Robot-Dog) page and the Celer Remote
   app in the hub. Since API 11 it pairs with a 6-digit code and a
   challenge-response key per bond. Runs on the SmartDisplay, the watch and
   the robot dog.
 * **Phone Link (Gadgetbridge)** — the watch pairs with Android over BLE
   posing as a Bangle.js: notifications with a full-screen alert, music
   control, weather, incoming calls and find-my-phone (`Phone.*`, API 15 —
-  [watch page](/maikramer/CelerOS/wiki/Waveshare-Watch)).
+  [watch page](/Celer-Brasil/CelerOS/wiki/Waveshare-Watch)).
 * **Notifications & alarms** — a system notification center (`System.notify`;
   on the watch an incoming notification wakes the screen) and persistent
   alarms with their own ringing screen (API 15).
 * **Watchface plugins** — installed apps extend the watch face with widget
   lines (`watchface.js` + `System.launchApp`, API 16 —
-  [plugins page](/maikramer/CelerOS/wiki/Watchface-Plugins)).
+  [plugins page](/Celer-Brasil/CelerOS/wiki/Watchface-Plugins)).
 * **CelerOS Flasher & App SDK** — no-toolchain GUI flashing from
-  [GitHub releases](https://github.com/maikramer/CelerOS/releases), and
+  [GitHub releases](https://github.com/Celer-Brasil/CelerOS/releases), and
   `tools/sdk/celer.js` for scaffolding, linting, emulating (one PNG per
   clock milestone with pixel diffs) and publishing apps
-  ([tools](/maikramer/CelerOS/wiki/Tools)).
+  ([tools](/Celer-Brasil/CelerOS/wiki/Tools)).
 * **Wi-Fi via captive portal** — a `CelerOS-Setup-XXXX` access point to
   configure it from your phone.
 * **`celerctl`** — an adb-style USB companion: shell, push/pull, logcat
@@ -143,15 +143,15 @@ the sidebar has the Portuguese translations.
 
 ## Links
 
-* [Repository](https://github.com/maikramer/CelerOS) ·
-  [README in English](https://github.com/maikramer/CelerOS/blob/main/README.md) ·
-  [README em português](https://github.com/maikramer/CelerOS/blob/main/README.pt-BR.md)
-* [Issues](https://github.com/maikramer/CelerOS/issues) — bugs and ideas
+* [Repository](https://github.com/Celer-Brasil/CelerOS) ·
+  [README in English](https://github.com/Celer-Brasil/CelerOS/blob/main/README.md) ·
+  [README em português](https://github.com/Celer-Brasil/CelerOS/blob/main/README.pt-BR.md)
+* [Issues](https://github.com/Celer-Brasil/CelerOS/issues) — bugs and ideas
 * History: CelerOS started as a fork of
   [KryonOS](https://github.com/Haris16-code/KryonOS), by Haris.
 
 ---
 
 This wiki is generated automatically by CI from
-[`wiki/`](https://github.com/maikramer/CelerOS/tree/main/wiki) in the
+[`wiki/`](https://github.com/Celer-Brasil/CelerOS/tree/main/wiki) in the
 repository — edit there, not on the web.

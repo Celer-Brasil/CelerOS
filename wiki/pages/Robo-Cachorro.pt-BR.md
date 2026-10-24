@@ -1,6 +1,6 @@
 # Robô cachorro (SpotPear ZZPET S3)
 
-[English](/maikramer/CelerOS/wiki/Robot-Dog) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Robot-Dog) | **Português (BR)**
 
 O primeiro alvo de robótica do CelerOS: o **cachorro robô ESP32-S3 da
 SpotPear** (internamente **ZZPET `zzpet-s3`**), um quadrúpede de ~US$20 com

@@ -1,6 +1,6 @@
 # Watchface plugins
 
-[English](/maikramer/CelerOS/wiki/Watchface-Plugins) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Watchface-Plugins) | **Português (BR)**
 
 Since **API 16**, installed apps can place a widget on the CelerOS
 watchface. The first store app to do it is **Previsao** (weather forecast):
@@ -79,4 +79,4 @@ app and can see every app's appData.
 
 - `data/apps/Watchface/main.js` — loader and widget band
 - `hub_apps/Previsao/` — the first plugin, end to end
-- [JS API](/maikramer/CelerOS/wiki/JS-API) — `System.launchApp` (API 16)
+- [JS API](/Celer-Brasil/CelerOS/wiki/JS-API) — `System.launchApp` (API 16)

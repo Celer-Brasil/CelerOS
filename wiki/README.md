@@ -1,10 +1,10 @@
 # wiki/ — fonte da wiki do GitHub
 
 Esta pasta é a fonte da verdade da
-[wiki do repositório](https://github.com/maikramer/CelerOS/wiki). O
+[wiki do repositório](https://github.com/Celer-Brasil/CelerOS/wiki). O
 workflow [.github/workflows/wiki.yml](../.github/workflows/wiki.yml) roda o
 gerador a cada push no `main` (ou PR) que mexa em documentação e publica o
-resultado no repo da wiki (`maikramer/CelerOS.wiki.git`) com force-push.
+resultado no repo da wiki (`Celer-Brasil/CelerOS.wiki.git`) com force-push.
 **Edições feitas pela web são sobrescritas** — sempre edite aqui.
 
 ## Estrutura

@@ -1,6 +1,6 @@
 # Robot dog (SpotPear ZZPET S3)
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Robo-Cachorro)
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Robo-Cachorro)
 
 CelerOS's first robotics target: the **SpotPear ESP32-S3 AI Robot Dog**
 (internally **ZZPET `zzpet-s3`**), a ~US$20 ESP32-S3R8 quadruped with OLED

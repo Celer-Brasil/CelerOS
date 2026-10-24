@@ -1,6 +1,6 @@
 # Barebone devkit (no display)
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Devkit-Barebone)
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Devkit-Barebone)
 
 CelerOS runs on a plain ESP32 devkit with **no display at all**: the
 "screen" is the on-board LED, the "touch" is the BOOT button, and the
@@ -64,7 +64,7 @@ wifi MyNetwork myPass123  # save to NVS and connect (background)
 info                      # shows the IP once connected
 ```
 
-With WiFi up, the [web interface](/maikramer/CelerOS/wiki/Web-Interface)
+With WiFi up, the [web interface](/Celer-Brasil/CelerOS/wiki/Web-Interface)
 works as usual (file manager, `/update` OTA upload, app installs).
 
 ## What is intentionally different

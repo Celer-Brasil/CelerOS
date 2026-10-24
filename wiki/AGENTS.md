@@ -1,7 +1,7 @@
 # wiki/ - GitHub wiki sources (published by CI)
 
 ## OVERVIEW
-The GitHub wiki is GENERATED from this directory: `wiki.json` maps page names to sources, `pages/` holds the hand-written markdown (EN + `.pt-BR`), and `tools/wiki/generate.py` assembles everything (also reusing `Documentation/` guides and `tools/README*.md` by path). `.github/workflows/wiki.yml` pushes the result to `maikramer/CelerOS.wiki.git` on every change to `wiki/`, `Documentation/` or the workflow itself that lands on main (PRs get a preview publish).
+The GitHub wiki is GENERATED from this directory: `wiki.json` maps page names to sources, `pages/` holds the hand-written markdown (EN + `.pt-BR`), and `tools/wiki/generate.py` assembles everything (also reusing `Documentation/` guides and `tools/README*.md` by path). `.github/workflows/wiki.yml` pushes the result to `Celer-Brasil/CelerOS.wiki.git` on every change to `wiki/`, `Documentation/` or the workflow itself that lands on main (PRs get a preview publish).
 
 ## RULES
 - **Never edit the wiki through the GitHub web UI**: the next CI publish overwrites it. Edit here, commit, done.

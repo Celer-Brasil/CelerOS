@@ -1,6 +1,6 @@
 # Compilando e gravando
 
-[English](/maikramer/CelerOS/wiki/Building-and-Flashing) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Building-and-Flashing) | **Português (BR)**
 
 O CelerOS 1.2+ usa **ESP-IDF 6.1 puro** (sem camada Arduino/PlatformIO).
 
@@ -12,7 +12,7 @@ Cada tag `v*` no GitHub publica um **pacote de fábrica**: um zip por placa
 recomendado para a primeira instalação — sem ESP-IDF, sem build:
 
 1. Baixe o **CelerOS_Flasher** do seu sistema e o **zip da sua placa** em
-   [releases](https://github.com/maikramer/CelerOS/releases).
+   [releases](https://github.com/Celer-Brasil/CelerOS/releases).
 2. Extraia os dois na mesma pasta e execute o flasher.
 3. Escolha a **placa** e a **porta USB** em que ela está.
 4. Responda **"apagar tudo" = sim** (a 1ª gravação limpa uma NVS antiga),
@@ -29,7 +29,7 @@ aparelho) — releases são para o primeiro flash.
 ## Pré-requisitos
 
 ```bash
-git clone https://github.com/maikramer/CelerOS.git && cd CelerOS
+git clone https://github.com/Celer-Brasil/CelerOS.git && cd CelerOS
 git submodule update --init          # LovyanGFX
 source ~/esp/v6.1/esp-idf/export.sh  # ESP-IDF v6.1 instalado
 ```
@@ -118,7 +118,7 @@ python3 tools/ota_server.py --board smartdisplay
 
 O dispositivo o descobre pelo `/local/ota_url.txt` (ou apontando o
 `ota_url` para `http://<seu-ip>:10234`). Detalhes em
-[Atualização OTA](/maikramer/CelerOS/wiki/Atualizacao-OTA).
+[Atualização OTA](/Celer-Brasil/CelerOS/wiki/Atualizacao-OTA).
 
 ## Cuidados de sdkconfig
 
@@ -128,4 +128,4 @@ O dispositivo o descobre pelo `/local/ota_url.txt` (ou apontando o
   `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 * `CONFIG_CELEROS_USB_NATIVE` (S3, TinyUSB CDC dupla) **nunca** na
   SmartDisplay 4848S040 — conflito de GPIO. Veja
-  [Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas).
+  [Placas suportadas](/Celer-Brasil/CelerOS/wiki/Placas-Suportadas).

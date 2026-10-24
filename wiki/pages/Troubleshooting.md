@@ -1,6 +1,6 @@
 # Troubleshooting
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Solução-de-Problemas)
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Solução-de-Problemas)
 
 Common problems, in rough order of "you will hit this".
 
@@ -10,7 +10,7 @@ Common problems, in rough order of "you will hit this".
   keeps its cached `sdkconfig`; delete `build*/sdkconfig` (or the whole
   dir) and reconfigure with the full `-DSDKCONFIG_DEFAULTS=...` +
   `-DCELEROS_BOARD=...` line from
-  [Building and flashing](/maikramer/CelerOS/wiki/Building-and-Flashing).
+  [Building and flashing](/Celer-Brasil/CelerOS/wiki/Building-and-Flashing).
 * **LovyanGFX missing / weird include errors.** It is a git submodule:
   `git submodule update --init`.
 * **`flash_data.sh` fails.** It needs the IDF environment exported
@@ -35,7 +35,7 @@ Common problems, in rough order of "you will hit this".
   ```
 * **Touch needs a firm press.** Resistive panels work that way; press a
   little harder than on a phone, or operate the device from the browser
-  ([live screen](/maikramer/CelerOS/wiki/Web-Interface)).
+  ([live screen](/Celer-Brasil/CelerOS/wiki/Web-Interface)).
 
 ## SmartDisplay screen
 

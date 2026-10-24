@@ -1,6 +1,6 @@
 # Contribuindo
 
-[English](/maikramer/CelerOS/wiki/Contributing) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Contributing) | **Português (BR)**
 
 PRs vão para o `main` (commits em PT-BR descritivos são o estilo da casa).
 Antes de abrir um, o checklist abaixo é o que o CI roda — e o que um
@@ -21,7 +21,7 @@ das seis placas no container oficial do ESP-IDF.
 ## Convenções de código
 
 * **Só ES5** nos apps JS (`var`, `function`, sem arrow functions) — veja
-  [Apps de sistema](/maikramer/CelerOS/wiki/Apps-de-Sistema).
+  [Apps de sistema](/Celer-Brasil/CelerOS/wiki/Apps-de-Sistema).
 * `#ifdef` de placa mora **só** em `main/Boards/<placa>/`; diferenças de
   compilação entre placas vivem no `BoardTraits.h` de cada uma.
 * Comentários, logs e strings de CLI em português, sem acentos. Texto
@@ -53,13 +53,13 @@ das seis placas no container oficial do ESP-IDF.
 ## Adicionando uma placa
 
 Perfis de placa são pequenos e autocontidos — os passos estão em
-[Placas suportadas](/maikramer/CelerOS/wiki/Placas-Suportadas#adicionando-uma-placa).
+[Placas suportadas](/Celer-Brasil/CelerOS/wiki/Placas-Suportadas#adicionando-uma-placa).
 Ajuda com bring-up é bem-vinda (uma foto da placa rodando CelerOS faz o PR
 brilhar!).
 
 ## Reportando bugs
 
-Abra uma [issue](https://github.com/maikramer/CelerOS/issues) com a placa,
+Abra uma [issue](https://github.com/Celer-Brasil/CelerOS/issues) com a placa,
 versão de firmware e nível de API (Settings → Sobre, ou `celerctl info`) e
 um trecho de `celerctl logcat` — ou um coredump (`celerctl coredump`) se
 crashou.

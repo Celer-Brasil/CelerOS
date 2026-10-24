@@ -1,6 +1,6 @@
 # Arquitetura
 
-[English](/maikramer/CelerOS/wiki/Architecture) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Architecture) | **Português (BR)**
 
 Como o firmware está organizado, o que roda a partir de quê e onde mexer em
 cada tipo de mudança.

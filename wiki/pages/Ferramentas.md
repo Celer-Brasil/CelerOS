@@ -1,6 +1,6 @@
 # Ferramentas
 
-[English](/maikramer/CelerOS/wiki/Tools) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Tools) | **Português (BR)**
 
 Utilitários do lado do host (Python/shell) em [tools/](tools/). Instalação:
 `pip install -r tools/requirements.txt` (pyserial; `make_icons` também
@@ -8,7 +8,7 @@ precisa de Pillow, fora da lista).
 
 | Ferramenta | Papel |
 |---|---|
-| [celerctl.py](tools/celerctl.py) | Cliente HostLink: controle do dispositivo pela serial — referência completa em [celerctl (USB)](/maikramer/CelerOS/wiki/celerctl-USB) |
+| [celerctl.py](tools/celerctl.py) | Cliente HostLink: controle do dispositivo pela serial — referência completa em [celerctl (USB)](/Celer-Brasil/CelerOS/wiki/celerctl-USB) |
 | [flash_data.sh](tools/flash_data.sh) | Constrói a imagem LittleFS de `data/` e grava a partição `littlefs` |
 | [ota_server.py](tools/ota_server.py) | Servidor local de `update.json` + firmware para testes de OTA |
 | [celerhub.py](tools/celerhub.py) | Publica/lista/remove apps no hub (valida as pastas de app; token por args/env; `--hub` ou `CELER_HUB`, default `https://os.celer.tec.br`) |
@@ -159,7 +159,7 @@ vendorado e o codificador PNG usa o zlib do Node.
 ## Flash sem toolchain — CelerOS Flasher
 
 Toda tag `v*` publica, nos
-[releases do GitHub](https://github.com/maikramer/CelerOS/releases):
+[releases do GitHub](https://github.com/Celer-Brasil/CelerOS/releases):
 
 * um zip por placa — firmware + imagem LittleFS + `flash.json` (o plano de
   gravação), e um `README.txt` com a linha `esptool` equivalente para quem

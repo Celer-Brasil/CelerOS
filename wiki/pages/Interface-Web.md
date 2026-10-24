@@ -1,6 +1,6 @@
 # Interface web
 
-[English](/maikramer/CelerOS/wiki/Web-Interface) | **Português (BR)**
+[English](/Celer-Brasil/CelerOS/wiki/Web-Interface) | **Português (BR)**
 
 Todo aparelho com Wi-Fi conectado roda um servidor web pequeno. Abra o IP
 mostrado no app Web Server (ou no `celerctl info`) em qualquer navegador da
@@ -57,4 +57,4 @@ O servidor pode ser desligado pelo app Web Server no aparelho
 (`System.webState(false)`); ele volta sozinho no próximo boot com Wi-Fi.
 Sem credenciais salvas, o aparelho abre o portal cativo
 `CelerOS-Setup-XXXX` — veja
-[Solução de problemas](/maikramer/CelerOS/wiki/Solução-de-Problemas).
+[Solução de problemas](/Celer-Brasil/CelerOS/wiki/Solução-de-Problemas).

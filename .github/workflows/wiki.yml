@@ -3,7 +3,7 @@
 # Fonte de verdade: wiki/wiki.json + wiki/pages/ (paginas escritas a mao) e os
 # guias em Documentation/ + tools/README*.md reaproveitados por caminho.
 # O gerador tools/wiki/generate.py monta as paginas e este workflow empurra o
-# resultado para o repo da wiki (maikramer/CelerOS.wiki.git, branch master).
+# resultado para o repo da wiki (Celer-Brasil/CelerOS.wiki.git, branch master).
 #
 # - push no main com mudancas em docs -> publica a wiki
 # - pull_request -> publica um preview do conteudo do PR na wiki

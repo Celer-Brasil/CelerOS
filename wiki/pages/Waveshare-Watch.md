@@ -1,6 +1,6 @@
 # Waveshare AMOLED 2.06 watch
 
-**English** | [Português (BR)](/maikramer/CelerOS/wiki/Watch-Waveshare)
+**English** | [Português (BR)](/Celer-Brasil/CelerOS/wiki/Watch-Waveshare)
 
 CelerOS's first wearable: the **Waveshare ESP32-S3-Touch-AMOLED-2.06**
 (board id `waveshare-watch`), a 2.06" AMOLED smartwatch with a rectangular, rounded-corner glass, on the
@@ -8,7 +8,7 @@ ESP32-S3R8 — 32 MB of flash, 8 MB of embedded PSRAM, a hardware PMU and a
 proper sensor pack behind the glass. The pin map and the panel init sequences
 were ported from the Rust firmware **`waveshare-watch-rs`** (a standalone
 firmware for the same watch), which kept this board from needing the
-JTAG-register archaeology the [robot dog](/maikramer/CelerOS/wiki/Robot-Dog)
+JTAG-register archaeology the [robot dog](/Celer-Brasil/CelerOS/wiki/Robot-Dog)
 required.
 
 | Watchface (home screen) | Launcher |

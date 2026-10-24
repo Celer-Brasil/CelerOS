@@ -99,7 +99,10 @@ function hubToken() {
 }
 function hubUrl(url) {
     var t = hubToken();
-    if (!t || !url || String(url).indexOf(HUB_BASE) !== 0) return url;
+    // So URLs do NOSSO hub (host exato): "https://os.celer.tec.br" como
+    // PREFIXO aceitaria "os.celer.tec.br.evil.com" e "os.celer.tec.br@evil"
+    // e mandaria o token para terceiros; a barra fecha o host.
+    if (!t || !url || String(url).indexOf(HUB_BASE + "/") !== 0) return url;
     return url + (String(url).indexOf("?") >= 0 ? "&" : "?") +
         "token=" + encodeURIComponent(t);
 }

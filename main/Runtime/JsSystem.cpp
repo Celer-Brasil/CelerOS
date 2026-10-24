@@ -368,7 +368,7 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_restart(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
     ESP.restart();
     return 0;
 }

@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 49
+### API Level: 50
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -2916,8 +2916,10 @@ service, no UI), pumped by the services table with an 8 ms/tick budget.
 The surface available to a service: timers (`setTimeout`/`setInterval`),
 `require()` from the app folder, `Storage` (per-package NVS), `FS`
 (same jail), `CelerNet`/`Pack` (poll) and the lean `System` below +
-`Service`. Not available to a service: UI/touch, `Net.*` (use
-`System.otaCheck` instead), AI, mic, camera. A service inherits the
+`Service`. Not available to a service: UI/touch, AI, mic, camera. From
+API 50 a service with `"net"` also gets `Net.request`/`Net.download`, and
+a service with `"system"` gets `System.otaStart`/`System.restart`
+(section 50). A service inherits the
 app's consent (it can only do what the app may); a throwing callback
 STOPS that service (`system:true` apps get one restart after 60 s).
 Without PSRAM the service heap suspends while an app is in the
@@ -3304,3 +3306,33 @@ The firmware does not interpret keys: an app decides what to do with them
 (shortcuts, games, an editor). On a display board the pointer already drives
 the launcher and apps; keyboard navigation of the system UI does not exist
 yet in this version.
+
+## 50. API Level 50 — svchost networking and OTA (fleet agent)
+
+The background service got the missing surface for an update agent:
+
+- `Net.request(opts)` (API 49) and `Net.download(url, path[, onProgress])`
+  (API 6) with the `"net"` permission; the download also requires `"fs"`
+  and obeys the write jail. The `Net` object only exists in a service when
+  the app declares `"net"`.
+- `System.otaStart(url[, onProgress])` (API 49) and `System.restart()`
+  with the `"system"` permission; `System.installZip` is now installed
+  only with `"system"` too. `System.otaCheck()` remains available.
+- For these service calls the firmware does NOT run `present()`: there is
+  no screen or app timer to pump from inside a svchost callback. Use
+  `System.appOpen()`, `System.updateBusy()` and `System.shellActive()` as
+  gates before installing/updating and restarting.
+
+```javascript
+// service.js of an agent (app with "net", "fs" and "system")
+var r = System.otaCheck();
+if (r.available && !System.appOpen() && !System.updateBusy()) {
+    var res = System.otaStart(r.url, function (pct) { System.print(pct + '%'); });
+    if (res.ok) System.restart();
+}
+```
+
+**Security:** OTA uses HTTPS with the firmware CA bundle, but still does
+not validate the manifest's `firmware_sha256` or signature. Until CA
+pinning and/or a signed manifest ships, `os_update` is a bench-only
+feature — do not enable it on a customer fleet.

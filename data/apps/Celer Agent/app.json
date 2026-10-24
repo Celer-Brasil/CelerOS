@@ -1,0 +1,19 @@
+{
+  "name": "Celer Agent",
+  "packageName": "celeros.agent",
+  "version": "1.0.0",
+  "author": "CelerOS",
+  "description": "Agente de frota: heartbeat no plano de controle e comandos de OTA, atualizacao de apps e reboot vindos do CelerApp. O trabalho roda no service.js (API 50); a tela mostra o estado para quem abrir.",
+  "type": "System",
+  "category": "System",
+  "api": 50,
+  "system": true,
+  "order": 3,
+  "topbar": false,
+  "permissions": ["net", "fs", "system"],
+  "service": "service.js",
+  "deps": {
+    "celeros.cloud": "^1.1.0"
+  },
+  "changelog": "1.0.0 - primeiro agente de frota: heartbeat celeros.cloud com inventario de apps e caps (agent/ota/apps/reboot); comandos os_update, update_apps, self_update e reboot com ack/eventos; app.zip do hub com md5 conferido e System.installZip; marcador de OTA para reportar sucesso/falha no boot seguinte. os_update e limitado a bancada ate CA pinning/assinatura do firmware (JS_API_Guide secao 50)."
+}

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 49
+### Nível de API: 50
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -3227,8 +3227,10 @@ UI), bombeado pela tabela de serviços com orçamento de 8 ms/giro. A
 superfície disponível ao serviço: timers (`setTimeout`/`setInterval`),
 `require()` da pasta do app, `Storage` (NVS do pacote), `FS` (com a
 jail), `CelerNet`/`Pack` (poll) e o `System` enxuto abaixo + `Service`.
-Fora do serviço: UI/touch, `Net.*` (o serviço usa `System.otaCheck`), IA,
-mic, câmera. O serviço herda o consentimento do app (só faz o que o app
+Fora do serviço: UI/touch, IA, mic, câmera. A partir da API 50 o serviço
+com `"net"` também tem `Net.request`/`Net.download` e o serviço com
+`"system"` tem `System.otaStart`/`System.restart` (seção 50). O serviço
+herda o consentimento do app (só faz o que o app
 pode); erro em callback PARA o serviço (app `system:true` reinicia 1x
 após 60 s). Sem PSRAM, o heap do serviço suspende com app aberto; com
 PSRAM segue no ar. Companheiro do serviço: o `install.sh` na pasta do
@@ -3623,3 +3625,34 @@ O firmware não interpreta as teclas: um app escolhe o que fazer com elas
 (atalhos, jogos, um editor). Em placa com tela, o ponteiro já dirige o
 launcher e os apps; a navegação por teclado na UI do sistema ainda não
 existe nesta versão.
+
+## 50. Nível de API 50 — svchost com rede e OTA (agente de frota)
+
+O serviço em segundo plano ganhou a superfície que faltava para um agente
+de atualização:
+
+- `Net.request(opts)` (API 49) e `Net.download(url, path[, onProgress])`
+  (API 6) com a permissão `"net"`; o download também exige `"fs"` e
+  respeita a jaula de escrita. O objeto `Net` só existe no serviço quando
+  o app declara `"net"`.
+- `System.otaStart(url[, onProgress])` (API 49) e `System.restart()`
+  com a permissão `"system"`; `System.installZip` também passou a ser
+  instalado só com `"system"`. `System.otaCheck()` continua disponível.
+- Nessas chamadas de serviço o firmware NÃO executa `present()`: não há
+  vidro nem timers do app para bombear de dentro do callback do svchost.
+  Use `System.appOpen()`, `System.updateBusy()` e `System.shellActive()`
+  como gates antes de instalar/atualizar e reiniciar.
+
+```javascript
+// service.js de um agente (app com "net", "fs" e "system")
+var r = System.otaCheck();
+if (r.available && !System.appOpen() && !System.updateBusy()) {
+    var res = System.otaStart(r.url, function (pct) { System.print(pct + '%'); });
+    if (res.ok) System.restart();
+}
+```
+
+**Segurança:** o OTA usa HTTPS com o bundle de CAs do firmware, mas ainda
+não valida o `firmware_sha256` nem a assinatura do manifesto. Até haver
+CA pinning e/ou manifesto assinado, `os_update` é recurso de bancada —
+não habilite em frota de cliente.

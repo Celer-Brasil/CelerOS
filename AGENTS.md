@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-23
-**Commit:** main @ API 49 (Net.request com headers + System.epoch)
+**Updated:** 2026-10-24
+**Commit:** main @ API 50 (svchost com Net/OTA + agente de frota celeros.agent)
 **Branch:** main
 
 ## OVERVIEW

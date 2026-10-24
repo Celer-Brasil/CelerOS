@@ -1503,7 +1503,7 @@ function resolveSharedDep(appDir, name, env) {
 
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                 'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input'];
+                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input', 'Service'];
 // Valores na MESMA ordem de GLOBAL_NAMES; o slot 'require' e o req do app
 // (runApp) ou o proprio req do modulo (makeRequire) — nunca duplicado no
 // wrapper, senao o ultimo sombreia o primeiro.
@@ -1512,7 +1512,7 @@ function globalValues(env, req) {
     return [env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
         env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
         env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined,
-        env.USB, env.Input];
+        env.USB, env.Input, env.Service];
 }
 function makeRequire(appDir, env) {
     var cache = {};
@@ -1585,11 +1585,11 @@ function joinLog(log) { return log.join('\n'); }
 function runInline(src, env) {
     var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
                       'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
-                      'USB', 'Input',
+                      'USB', 'Input', 'Service',
                       (env.__prelude || '') + '\n' + src);
     fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
        env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
-       env.__require || makeRequire(null), env.USB, env.Input);
+       env.__require || makeRequire(null), env.USB, env.Input, env.Service);
 }
 
 // --- Terminal ---------------------------------------------------------------
@@ -4598,6 +4598,164 @@ function holdFrames(x, y, n) {
 
     cloud.reset();
     check('sem config heartbeat e null', cloud.heartbeat(null, true) === null);
+})();
+
+// --- Celer Agent (service.js): update_apps, os_update e self_update -------
+(function() {
+    console.log('Celer Agent (service.js):');
+    var heartbeats = [], hubCalls = [], downloads = [], installs = [];
+    var restarts = 0, stops = 0;
+    var r = runApp('data/apps/Celer Agent/service.js', function(env) {
+        env.Service = { stop: function() { stops++; } };
+        env.FS.writeTextFile('/local/celercloud.json', JSON.stringify({
+            url: 'https://proj.supabase.co',
+            key: 'sb_publishable_x',
+            tenantId: '9f2c1a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+            deviceId: 'a0b1c2d3e4f5',
+            secret: 'segredo-de-teste-123456',
+            kind: 'totem',
+            heartbeatMs: 0,
+            pollMs: 30000
+        }));
+        env.FS.mkdir('/local/apps/Tela');
+        env.FS.writeTextFile('/local/apps/Tela/app.json', JSON.stringify({
+            packageName: 'celeros.tela', name: 'Tela', version: '1.0.0'
+        }));
+        env.System.getOSVersion = function() { return '1.10.1'; };
+        env.System.getAPILevel = function() { return 50; };
+        env.System.appOpen = function() { return false; };
+        env.System.updateBusy = function() { return false; };
+        env.System.shellActive = function() { return false; };
+        env.System.wifiStatus = function() { return { connected: true }; };
+        env.System.otaCheck = function() {
+            return { fetchFailed: false, available: true, hasFirmware: true,
+                     version: '1.11.0', url: 'https://os.example/fw.bin' };
+        };
+        env.System.otaStart = function(url, cb) {
+            if (cb) cb(100);
+            return { ok: true };
+        };
+        env.System.restart = function() { restarts++; };
+        env.FS.getFileMD5 = function() { return 'abc123'; };
+        env.Net.download = function(url, path) {
+            downloads.push({ url: url, path: path });
+            env.FS.writeTextFile(path, 'zip');
+            return true;
+        };
+        env.System.installZip = function(zip, folder) {
+            installs.push({ zip: zip, folder: folder });
+            return { ok: true, files: 1, bytes: 10 };
+        };
+        var first = true;
+        env.Net.request = function(opts) {
+            if (opts.url.indexOf('/functions/v1/device-heartbeat') >= 0) {
+                heartbeats.push(opts);
+                if (first) {
+                    first = false;
+                    return { status: 200, body: JSON.stringify({
+                        ok: true, desired: {}, commands: [
+                            { id: 'cmd-apps', type: 'update_apps', payload: { packages: ['celeros.tela'] } },
+                            { id: 'cmd-os', type: 'os_update', payload: {} }
+                        ]
+                    }) };
+                }
+                return { status: 200, body: JSON.stringify({ ok: true, desired: {}, commands: [] }) };
+            }
+            hubCalls.push(opts.url);
+            if (opts.url.indexOf('/store/apps/celeros.tela/app.json') >= 0) {
+                return { status: 200, body: JSON.stringify({
+                    packageName: 'celeros.tela', name: 'Tela', version: '1.1.0',
+                    api: 50, zip: { size: 10, md5: 'abc123' }
+                }) };
+            }
+            return { status: 404, body: '' };
+        };
+    });
+    check('service carrega sem erro', r.err === null, r.err || '');
+    check('update_apps baixa o app.zip do hub',
+          downloads.length === 1 &&
+          downloads[0].url.indexOf('/store/apps/celeros.tela/app.zip') >= 0,
+          JSON.stringify(downloads));
+    check('update_apps instala na pasta existente',
+          installs.length === 1 && installs[0].folder === 'Tela',
+          JSON.stringify(installs));
+    check('os_update inicia o OTA e grava o marcador',
+          r.env.Storage.get('ota_pending', '') === '1.11.0',
+          r.env.Storage.get('ota_pending', ''));
+    check('os_update reinicia o aparelho', restarts === 1, String(restarts));
+    var lastBeat = heartbeats[heartbeats.length - 1];
+    var body = lastBeat ? JSON.parse(lastBeat.body) : { ack: [], events: [] };
+    check('acks dos dois comandos vao no flush',
+          body.ack.indexOf('cmd-apps') >= 0 && body.ack.indexOf('cmd-os') >= 0,
+          lastBeat ? lastBeat.body : 'sem heartbeat');
+    check('eventos de app e de comando sao reportados',
+          body.events.length >= 3, JSON.stringify(body.events));
+    check('update_apps nao para o servico', stops === 0, String(stops));
+
+    // self_update: instala o proprio agente, acka e para o servico.
+    var selfStops = 0, selfRestarts = 0, selfInstalls = [], selfBeats = [];
+    var r2 = runApp('data/apps/Celer Agent/service.js', function(env) {
+        env.Service = { stop: function() { selfStops++; } };
+        env.FS.writeTextFile('/local/celercloud.json', JSON.stringify({
+            url: 'https://proj.supabase.co',
+            key: 'sb_publishable_x',
+            tenantId: '9f2c1a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+            deviceId: 'a0b1c2d3e4f5',
+            secret: 'segredo-de-teste-123456',
+            kind: 'totem',
+            heartbeatMs: 0,
+            pollMs: 30000
+        }));
+        env.FS.mkdir('/local/apps/Celer Agent');
+        env.FS.writeTextFile('/local/apps/Celer Agent/app.json', JSON.stringify({
+            packageName: 'celeros.agent', name: 'Celer Agent', version: '1.0.0'
+        }));
+        env.System.getOSVersion = function() { return '1.11.0'; };
+        env.System.getAPILevel = function() { return 50; };
+        env.System.appOpen = function() { return false; };
+        env.System.updateBusy = function() { return false; };
+        env.System.shellActive = function() { return false; };
+        env.System.wifiStatus = function() { return { connected: true }; };
+        env.System.restart = function() { selfRestarts++; };
+        env.FS.getFileMD5 = function() { return 'def456'; };
+        env.Net.download = function() { return true; };
+        env.System.installZip = function(zip, folder) {
+            selfInstalls.push(folder);
+            return { ok: true, files: 1, bytes: 10 };
+        };
+        var first = true;
+        env.Net.request = function(opts) {
+            if (opts.url.indexOf('/functions/v1/device-heartbeat') >= 0) {
+                selfBeats.push(opts);
+                if (first) {
+                    first = false;
+                    return { status: 200, body: JSON.stringify({
+                        ok: true, desired: {}, commands: [
+                            { id: 'cmd-self', type: 'self_update', payload: {} }
+                        ]
+                    }) };
+                }
+                return { status: 200, body: JSON.stringify({ ok: true, desired: {}, commands: [] }) };
+            }
+            if (opts.url.indexOf('/store/apps/celeros.agent/app.json') >= 0) {
+                return { status: 200, body: JSON.stringify({
+                    packageName: 'celeros.agent', name: 'Celer Agent', version: '1.1.0',
+                    api: 50, zip: { size: 10, md5: 'def456' }
+                }) };
+            }
+            return { status: 404, body: '' };
+        };
+    });
+    check('self_update carrega sem erro', r2.err === null, r2.err || '');
+    check('self_update instala a propria pasta',
+          selfInstalls.length === 1 && selfInstalls[0] === 'Celer Agent',
+          JSON.stringify(selfInstalls));
+    check('self_update para o servico', selfStops === 1, String(selfStops));
+    check('self_update nao reinicia na hora', selfRestarts === 0, String(selfRestarts));
+    var selfBeat = selfBeats[selfBeats.length - 1];
+    var selfBody = selfBeat ? JSON.parse(selfBeat.body) : { ack: [] };
+    check('self_update acka o comando', selfBody.ack.indexOf('cmd-self') >= 0,
+          selfBeat ? selfBeat.body : 'sem heartbeat');
 })();
 
 // resume

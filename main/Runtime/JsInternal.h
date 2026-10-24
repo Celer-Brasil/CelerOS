@@ -299,10 +299,11 @@ inline std::string jsAppDataDir() {
 // Chamada bloqueante com a tela viva: present() antes (o quadro/progresso do
 // app aparece durante a espera) e noteAppYield() depois (renova a janela do
 // exec-timeout para o retorno — o present de entrada nao cobre o tempo DA
-// chamada bloqueante).
+// chamada bloqueante). No servico nao ha vidro: present() reentraria no pump
+// do app de dentro do callback do svchost — so renova o executor.
 template <typename F>
 static inline auto jsBlocking(F&& f) -> decltype(f()) {
-    JSBindings::present();
+    if (!JSBindings::inService()) JSBindings::present();
     auto r = f();
     CelerKernel::noteAppYield();
     return r;

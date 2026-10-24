@@ -309,7 +309,10 @@ duk_ret_t JSBindings::js_factoryReset(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    // Servico nao tem vidro: present() bombearia o app/timers de dentro de
+    // um callback do svchost. O noteAppYield abaixo cobre o executor.
+    if (!inService()) present();  // chamada bloqueante do app
+    else esp_task_wdt_reset();
     OtaManager::checkForUpdates();
     CelerKernel::noteAppYield();  // fetch HTTPS do update.json passa de 1s
     const OtaUpdateInfo& info = OtaManager::info;
@@ -334,7 +337,8 @@ duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
 // exec-timeout no fim. Erros sao literals (duk_error com %s de lightfunc
 // corrompe o heap); o motivo detalhado fica no retorno do Result.
 duk_ret_t JSBindings::js_installZip(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
+    else esp_task_wdt_reset();    // extracao longa: entrada + noteAppYield no fim
     const char* zip = duk_require_string(ctx, 0);
     const char* nome = duk_require_string(ctx, 1);
     size_t nomeLen = strlen(nome);
@@ -411,16 +415,22 @@ static void otaProgressTrampoline(int percent) {
     duk_pop_2(s_otaCtx);
     // present() roda os timers e o erro de um callback PROPAGA (longjmp):
     // aqui ele atravessaria o performUpdate no meio do flash (handle de OTA
-    // e cliente HTTP abertos). Protegido: erro de timer e descartado.
-    duk_safe_call(s_otaCtx, [](duk_context*, void*) -> duk_ret_t {
-        JSBindings::present();
-        return 0;
-    }, nullptr, 0, 1);
+    // e cliente HTTP abertos). Protegido: erro de timer e descartado. No
+    // servico nao ha quadro: pular tambem evita reentrar no svchost.
+    if (!JSBindings::inService()) {
+        duk_safe_call(s_otaCtx, [](duk_context*, void*) -> duk_ret_t {
+            JSBindings::present();
+            return 0;
+        }, nullptr, 0, 1);
+    } else {
+        esp_task_wdt_reset();  // sem present(): o progresso do flash alimenta o TWDT
+    }
     duk_pop(s_otaCtx);
 }
 
 duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
+    else esp_task_wdt_reset();    // flash longo: entrada + trampoline alimentam
     const char* url = duk_require_string(ctx, 0);
     bool hasCb = duk_is_function(ctx, 1) ? true : false;
 

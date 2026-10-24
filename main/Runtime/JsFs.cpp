@@ -134,7 +134,7 @@ static duk_ret_t listDirPush(duk_context *ctx, void *udata) {
 duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     // "/local/." etc. e pasta privada de outro app: lista vazia (como ausente)
-    present();  // chamada bloqueante (pasta grande no SD): quadro antes
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
     DIR* dir = fsPathAllowed(path) ? opendir(path) : nullptr;
     if (dir == nullptr) {
         duk_push_array(ctx);

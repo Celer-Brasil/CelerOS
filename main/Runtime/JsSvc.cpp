@@ -18,14 +18,16 @@
 //     o s_appDir global e trocado pelo dispatch — single task, sem corrida)
 //   - Storage (NVS privado do packageName) e FS com a jail de sempre
 //   - objeto System ENXUTO: leitura de hora/bateria/rede, setting,
-//     otaCheck, installZip, notify e os getters de gate da politica
+//     otaCheck, notify e os getters de gate da politica; com "system",
+//     installZip/otaStart/restart (as acoes que trocam o aparelho)
+//   - objeto Net (API 50): request/download/isConnected para o agente de
+//     frota falar com o plano de controle e baixar pacotes
 //   - objeto Service: controle do proprio servico (stop)
 //
-// FORA de proposito no svchost v1: UI/touch/desenho (o vidro e do app em
-// foreground), Net.* (async entregue no present do app; os servicos usam
-// System.otaCheck sincrono), AI/Mic/Camera/WakeWord/Phone (tasks e hardware
-// que competem com o app). Tudo isso continua existindo para o APP; um
-// servico que precisa deles deve pedir ao usuario para abrir o app.
+// FORA de proposito no svchost: UI/touch/desenho (o vidro e do app em
+// foreground), AI/Mic/Camera/WakeWord/Phone (tasks e hardware que competem
+// com o app). Tudo isso continua existindo para o APP; um servico que
+// precisa deles deve pedir ao usuario para abrir o app.
 
 namespace {
 
@@ -54,7 +56,6 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
     // em volta do compile+top-level (AppServices::loadService) e de cada
     // callback (hooks do host de timers). Aqui so instala a superficie.
     (void)appPkg;
-    (void)perms;
     (void)appDir;
 
     // ---- globais de timer (mesmas assinaturas do app) ----
@@ -79,6 +80,7 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         {"getDay", JSBindings::js_getDay, 0},
         {"getWeekday", JSBindings::js_getWeekday, 0},
         {"millis", JSBindings::js_millis, 0},
+        {"epoch", JSBindings::js_epoch, 0},                // API 49
         {"getTimezone", JSBindings::js_getTimezone, 0},
         {"syncTime", JSBindings::js_syncTime, 0},          // API 42
         {"timeValid", JSBindings::js_timeValid, 0},        // API 42
@@ -92,14 +94,23 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         {"setting", JSBindings::js_setting, 2},
         {"md5", JSBindings::js_md5, 1},
         {"otaCheck", JSBindings::js_otaCheck, 0},
-        {"installZip", JSBindings::js_installZip, 2},
         {"notify", JSBindings::js_notify, 2},
         {"print", JSBindings::js_print, 1},                // log do servico
         {"appOpen", JSBindings::js_appOpen, 0},            // API 42
         {"updateBusy", JSBindings::js_updateBusy, 0},      // API 42
         {"shellActive", JSBindings::js_shellActive, 0},    // API 42
     };
-    JSBindings::putFns(thr, kSvcSys, 27);
+    JSBindings::putFns(thr, kSvcSys);
+    // Acoes que trocam o aparelho so com "system": um servico sem a
+    // capability nao instala pacote, nao inicia OTA e nao reinicia.
+    if (perms & celer::PERM_SYSTEM) {
+        static const JSBindings::JsFn kSvcSysDanger[] = {
+            {"installZip", JSBindings::js_installZip, 2},
+            {"otaStart", JSBindings::js_otaStart, 2},      // API 50
+            {"restart", JSBindings::js_restart, 0},        // API 50
+        };
+        JSBindings::putFns(thr, kSvcSysDanger);
+    }
     duk_put_prop_string(thr, -2, "System");
 
     // ---- Service: controle do proprio servico ----
@@ -150,6 +161,24 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         };
         JSBindings::putFns(thr, kSvcFs, 19);
         duk_put_prop_string(thr, -2, "FS");
+        duk_pop(thr);
+    }
+
+    // ---- Net (API 50): o agente de frota precisa falar com o plano de
+    // controle e baixar o app.zip sem abrir o app. Mesmos bindings do app
+    // (request com headers/status da API 49, download em streaming); o
+    // download ainda exige "fs" e respeita a jail de escrita. O objeto so
+    // nasce com a capability "net" — sem ela, typeof Net === "undefined".
+    if (perms & celer::PERM_NET) {
+        duk_push_global_object(thr);
+        duk_push_object(thr);
+        static const JSBindings::JsFn kSvcNet[] = {
+            {"request", JSBindings::js_netRequest, 1},
+            {"download", JSBindings::js_netDownload, 3},
+            {"isConnected", JSBindings::js_netIsConnected, 0},
+        };
+        JSBindings::putFns(thr, kSvcNet);
+        duk_put_prop_string(thr, -2, "Net");
         duk_pop(thr);
     }
 

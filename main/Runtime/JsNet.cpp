@@ -57,7 +57,9 @@ static const char* netCheckUrl(duk_context* ctx, const char* url) {
 // empilhado). Sem WiFi conectado: duk_error (o script ve um erro legivel em
 // vez de um null silencioso).
 static bool netFetch(duk_context *ctx, bool isPost) {
-    JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
+    // Servico nao tem vidro: present() bombearia o app/timers de dentro de
+    // um callback do svchost. O noteAppYield no fim cobre o executor.
+    if (!JSBindings::inService()) JSBindings::present();  // "Carregando..." do app
     jsRequireWifi(ctx, "Net");
     const char *url = netCheckUrl(ctx, duk_require_string(ctx, 0));
 
@@ -138,7 +140,8 @@ duk_ret_t JSBindings::js_netPost(duk_context *ctx) {
 // LF ou outro controle e RangeError — um app nao pode forjar cabecalhos
 // extras nem quebrar a linha de pedido.
 duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
-    JSBindings::present();
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
+    else esp_task_wdt_reset();    // present() nao rodou: alimenta o TWDT na entrada
     jsRequireWifi(ctx, "Net");
     if (!duk_is_object(ctx, 0))
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "Net.request exige {url, method, body, headers}");
@@ -255,7 +258,8 @@ duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
 // Content-Length). O callback roda DENTRO do esp_http_client: duk_pcall para
 // um erro de script nao estourar o longjmp no meio do download.
 duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
-    JSBindings::present();  // "Carregando..." do app aparece durante a requisicao
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
+    else esp_task_wdt_reset();    // sem progresso, o callback por chunk nao cobre a espera
     jsRequireWifi(ctx, "Net");
     const char *url = netCheckUrl(ctx, duk_require_string(ctx, 0));
     const char *path = duk_require_string(ctx, 1);

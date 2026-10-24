@@ -401,7 +401,9 @@ function hubJson(path) {
 
 function updateGate() {
     try {
-        if (System.appOpen()) return "app aberto";
+        // appOpen NAO bloqueia: o totem roda o app da vertical em autostart
+        // e ficaria sem update para sempre. O comando e explicito do admin
+        // (o CelerApp avisa); o installZip troca a pasta e o OTA reinicia.
         if (System.updateBusy()) return "atualizacao em curso";
         if (System.shellActive()) return "shell ativo";
         var wifi = System.wifiStatus();

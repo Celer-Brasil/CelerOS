@@ -4634,7 +4634,9 @@ function holdFrames(x, y, n) {
         }));
         env.System.getOSVersion = function() { return '1.10.1'; };
         env.System.getAPILevel = function() { return 50; };
-        env.System.appOpen = function() { return false; };
+        // O totem roda o app da vertical em autostart: update da frota
+        // continua valendo com app aberto.
+        env.System.appOpen = function() { return true; };
         env.System.updateBusy = function() { return false; };
         env.System.shellActive = function() { return false; };
         env.System.wifiStatus = function() { return { connected: true }; };

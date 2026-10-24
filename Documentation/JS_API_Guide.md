@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 48
+### API Level: 49
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 48
+### Nível de API: 49
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript

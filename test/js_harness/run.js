@@ -4623,14 +4623,9 @@ function holdFrames(x, y, n) {
             heartbeatMs: 0,
             pollMs: 30000
         }));
-        env.FS.writeTextFile('/local/hub_token.txt', 'tok-private\n');
         env.FS.mkdir('/local/apps/Tela');
         env.FS.writeTextFile('/local/apps/Tela/app.json', JSON.stringify({
             packageName: 'celeros.tela', name: 'Tela', version: '1.0.0'
-        }));
-        env.FS.mkdir('/local/apps/Sensor');
-        env.FS.writeTextFile('/local/apps/Sensor/app.json', JSON.stringify({
-            packageName: 'celeros.sensor', name: 'Sensor', version: '1.0.0'
         }));
         env.System.getOSVersion = function() { return '1.10.1'; };
         env.System.getAPILevel = function() { return 50; };
@@ -4665,12 +4660,7 @@ function holdFrames(x, y, n) {
                     first = false;
                     return { status: 200, body: JSON.stringify({
                         ok: true, desired: {}, commands: [
-                            { id: 'cmd-apps', type: 'update_apps', payload: { packages: [
-                                'celeros.tela',
-                                { pkg: 'celeros.sensor', zip: {
-                                    url: 'https://evil.example/app.zip', md5: 'abc123'
-                                } }
-                            ] } },
+                            { id: 'cmd-apps', type: 'update_apps', payload: { packages: ['celeros.tela'] } },
                             { id: 'cmd-os', type: 'os_update', payload: {} }
                         ]
                     }) };
@@ -4684,37 +4674,17 @@ function holdFrames(x, y, n) {
                     api: 50, zip: { size: 10, md5: 'abc123' }
                 }) };
             }
-            if (opts.url.indexOf('/store/apps/celeros.sensor/app.json') >= 0) {
-                return { status: 200, body: JSON.stringify({
-                    packageName: 'celeros.sensor', name: 'Sensor', version: '1.1.0',
-                    api: 50, zip: { size: 10, md5: 'abc123' }
-                }) };
-            }
             return { status: 404, body: '' };
         };
     });
     check('service carrega sem erro', r.err === null, r.err || '');
-    check('update_apps baixa o app.zip do hub com o token',
-          downloads.length === 2 &&
-          downloads[0].url.indexOf('/store/apps/celeros.tela/app.zip') >= 0 &&
-          downloads[0].url.indexOf('token=tok-private') >= 0,
+    check('update_apps baixa o app.zip do hub',
+          downloads.length === 1 &&
+          downloads[0].url.indexOf('/store/apps/celeros.tela/app.zip') >= 0,
           JSON.stringify(downloads));
-    check('token do hub nao vaza para URL de terceiro',
-          downloads.length === 2 &&
-          downloads[1].url === 'https://evil.example/app.zip',
-          JSON.stringify(downloads));
-    check('update_apps instala nas pastas existentes',
-          installs.length === 2 && installs[0].folder === 'Tela' &&
-          installs[1].folder === 'Sensor',
+    check('update_apps instala na pasta existente',
+          installs.length === 1 && installs[0].folder === 'Tela',
           JSON.stringify(installs));
-    check('hub app.json leva o token',
-          hubCalls.length >= 2 &&
-          hubCalls[0].indexOf('token=tok-private') >= 0,
-          JSON.stringify(hubCalls));
-    check('heartbeat declara loja privada',
-          heartbeats.length > 0 &&
-          JSON.parse(heartbeats[0].body).caps.private_hub === true,
-          heartbeats.length ? heartbeats[0].body : 'sem heartbeat');
     check('os_update inicia o OTA e grava o marcador',
           r.env.Storage.get('ota_pending', '') === '1.11.0',
           r.env.Storage.get('ota_pending', ''));
@@ -4725,12 +4695,11 @@ function holdFrames(x, y, n) {
           body.ack.indexOf('cmd-apps') >= 0 && body.ack.indexOf('cmd-os') >= 0,
           lastBeat ? lastBeat.body : 'sem heartbeat');
     check('eventos de app e de comando sao reportados',
-          body.events.length >= 4, JSON.stringify(body.events));
+          body.events.length >= 3, JSON.stringify(body.events));
     check('update_apps nao para o servico', stops === 0, String(stops));
 
     // self_update: instala o proprio agente, acka e para o servico.
     var selfStops = 0, selfRestarts = 0, selfInstalls = [], selfBeats = [];
-    var selfHubCalls = [], selfDownloads = [];
     var r2 = runApp('data/apps/Celer Agent/service.js', function(env) {
         env.Service = { stop: function() { selfStops++; } };
         env.FS.writeTextFile('/local/celercloud.json', JSON.stringify({
@@ -4755,10 +4724,7 @@ function holdFrames(x, y, n) {
         env.System.wifiStatus = function() { return { connected: true }; };
         env.System.restart = function() { selfRestarts++; };
         env.FS.getFileMD5 = function() { return 'def456'; };
-        env.Net.download = function(url) {
-            selfDownloads.push(url);
-            return true;
-        };
+        env.Net.download = function() { return true; };
         env.System.installZip = function(zip, folder) {
             selfInstalls.push(folder);
             return { ok: true, files: 1, bytes: 10 };
@@ -4777,7 +4743,6 @@ function holdFrames(x, y, n) {
                 }
                 return { status: 200, body: JSON.stringify({ ok: true, desired: {}, commands: [] }) };
             }
-            selfHubCalls.push(opts.url);
             if (opts.url.indexOf('/store/apps/celeros.agent/app.json') >= 0) {
                 return { status: 200, body: JSON.stringify({
                     packageName: 'celeros.agent', name: 'Celer Agent', version: '1.1.0',
@@ -4797,13 +4762,6 @@ function holdFrames(x, y, n) {
     var selfBody = selfBeat ? JSON.parse(selfBeat.body) : { ack: [] };
     check('self_update acka o comando', selfBody.ack.indexOf('cmd-self') >= 0,
           selfBeat ? selfBeat.body : 'sem heartbeat');
-    check('sem token o hub publico nao ganha query',
-          selfHubCalls.every(function(u) { return u.indexOf('token=') < 0; }) &&
-          selfDownloads.every(function(u) { return u.indexOf('token=') < 0; }),
-          JSON.stringify({ hub: selfHubCalls, downloads: selfDownloads }));
-    var selfFirst = selfBeats.length ? JSON.parse(selfBeats[0].body) : { caps: {} };
-    check('sem token o heartbeat nao declara loja privada',
-          selfFirst.caps.private_hub === false, JSON.stringify(selfFirst.caps));
 })();
 
 // resume

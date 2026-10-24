@@ -512,13 +512,13 @@ than 32 KB are truncated.
   - `headers` (Object, optional — up to 6 custom headers, e.g. `{apikey: "...", Authorization: "Bearer ..."}`)
   - `timeoutMs` (Number, optional — clamped to 1000..20000, default 10000)
 - **Returns:** `{status: Number, body: String}` on ANY HTTP response, or `null` when the transport itself fails (DNS/TCP/TLS/timeout, or no WiFi).
-- **Description:** Request with custom headers and a visible status code. `Net.post` cannot send headers (API gateways such as Supabase require an `apikey` header) and collapses every failure into `null`, leaving the script unable to tell "no network" from a 4xx business refusal — `Net.request` answers both. Header names/values reject CR/LF and other control characters (request-line injection) and are capped at 32/256 chars. The response `body` follows the same 32 KB cap as `Net.get`. This is what the CelerPark totems use to talk to the `parking-gate` edge function.
+- **Description:** Request with custom headers and a visible status code. `Net.post` cannot send headers (API gateways such as Supabase require an `apikey` header) and collapses every failure into `null`, leaving the script unable to tell "no network" from a 4xx business refusal — `Net.request` answers both. Header names/values reject CR/LF and other control characters (request-line injection) and are capped at 32/256 chars. The response `body` follows the same 32 KB cap as `Net.get`. This is the path for apps talking to authenticated edge functions/APIs.
 - **Example:**
 ```javascript
 var r = Net.request({
-    url: "https://supabase.example.br/functions/v1/parking-gate",
+    url: "https://api.example.br/functions/v1/ping",
     method: "POST",
-    body: JSON.stringify({action: "heartbeat", device_id: "lane-01"}),
+    body: JSON.stringify({device_id: "node-01"}),
     contentType: "application/json",
     headers: {apikey: key, Authorization: "Bearer " + key}
 });

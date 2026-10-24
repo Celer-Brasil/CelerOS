@@ -4469,106 +4469,84 @@ function holdFrames(x, y, n) {
     });
 })();
 
-// --- CelerPark Entrada (overlay devkit-s3): totem inteiro no stub -----------
-// Impressora sintetica + nuvem fake + rele + botao roteirizado; confere o
-// cupom ESC/POS nos bytes, a fila offline, o flush e o comando do portal.
+// --- celeros.cloud (dep): heartbeat, desired, comandos e outbox ------------
 (function() {
-    console.log('CelerPark Entrada:');
-    var wire = require(path.join(ROOT, 'boards/devkit-s3/data/apps/CelerPark Entrada/test.js')).wire;
-    var r = runApp('boards/devkit-s3/data/apps/CelerPark Entrada/main.js', wire);
-    var txt = joinLog(r.log);
-    check('totem roda sem erro', r.err === null, r.err || '');
-    var cloud = require(path.join(ROOT, 'boards/devkit-s3/data/apps/CelerPark Entrada/test.js')).cloud();
-    check('entrada online impressa e registrada', /impresso e registrado\. Cancela aberta/.test(txt), txt);
-    check('entrada offline foi para a fila local', /codigo na fila local\. Cancela aberta/.test(txt), txt);
-    check('flush reenviou o ticket da fila', /fila: 1 ticket\(s\) enviado\(s\) a nuvem/.test(txt), txt);
-    check('sem impressora a cancela fica fechada', /sem cupom: cancela fechada/.test(txt), txt);
-    check('comando remoto do portal aplicado', /portal: comando open aplicado/.test(txt), txt);
-    check('3 tickets criados (2 diretos + 1 do flush; o 3o falhou so na impressora)',
-          cloud.created.length === 3, 'created=' + cloud.created.length);
-    check('apikey + Bearer no gateway', cloud.lastHeaders && cloud.lastHeaders.apikey === 'sb_publishable_teste' &&
-          cloud.lastHeaders.Authorization === 'Bearer sb_publishable_teste',
-          JSON.stringify(cloud.lastHeaders));
-    check('url da edge function', /\/functions\/v1\/parking-gate$/.test(cloud.lastUrl), cloud.lastUrl);
-
-    // rele: pelo menos um pulso alto->baixo no pino 4
-    var opened = false;
-    for (var i = 0; i < cloud.relay.length - 1; i++) {
-        if (cloud.relay[i].pin === 4 && cloud.relay[i].level === 1 && cloud.relay[i + 1].pin === 4) {
-            opened = true;
+    console.log('celeros.cloud:');
+    var env = makeEnv();
+    var cfg = {
+        url: 'https://proj.supabase.co',
+        key: 'sb_publishable_x',
+        tenantId: '9f2c1a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+        deviceId: 'a0b1c2d3e4f5',
+        secret: 'segredo-de-teste-123456',
+        kind: 'totem',
+        board: 'devkit-s3',
+        heartbeatMs: 0
+    };
+    env.FS.writeTextFile('/local/celercloud.json', JSON.stringify(cfg));
+    var calls = [];
+    env.Net.request = function(opts) {
+        calls.push(opts);
+        if (calls.length === 1) {
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    ok: true,
+                    server_time: 1790000000,
+                    desired: { channel: 'devkit-s3', apps: [] },
+                    commands: [{ id: 'cmd-1', type: 'reboot', payload: {} }]
+                })
+            };
         }
-    }
-    check('rele pulsou abertura (gpio 4)', opened, JSON.stringify(cloud.relay));
+        return {
+            status: 200,
+            body: JSON.stringify({ ok: true, desired: {}, commands: [] })
+        };
+    };
 
-    // bytes ESC/POS concatenados: init, QR com o payload do template e corte
-    var stream = [];
-    for (var t = 0; t < cloud.usbTx.length; t++) {
-        if (cloud.usbTx[t].control !== undefined) continue;
-        for (var b = 0; b < cloud.usbTx[t].data.length; b++) stream.push(cloud.usbTx[t].data[b]);
-    }
-    function streamHas(str) {
-        for (var i = 0; i + str.length <= stream.length; i++) {
-            var ok = true;
-            for (var j = 0; j < str.length; j++) {
-                if (stream[i + j] !== (str.charCodeAt(j) & 0xFF)) { ok = false; break; }
-            }
-            if (ok) return true;
-        }
-        return false;
-    }
-    check('ESC/POS tem init e corte', streamHas('\x1B@') && stream.length >= 3 &&
-          stream[stream.length - 3] === 0x1D && stream[stream.length - 2] === 0x56,
-          'ultimos: ' + stream.slice(-6).join(','));
-    check('QR do cupom carrega o payload do template', streamHas('https://pay.teste/CP1-'), '');
-    check('cupom tem Faixa e aviso da saida', streamHas('Faixa: Cancela Teste') &&
-          streamHas('Pague antes de sair'), '');
-    var outbox = r.env.FS.exists('/local/celerpark_outbox.json')
-        ? r.env.FS.readTextFile('/local/celerpark_outbox.json') : '[]';
-    check('fila local vazia apos o flush', JSON.parse(outbox).length === 0, outbox);
-})();
+    var src = fs.readFileSync(
+        path.join(ROOT, 'tools/sdk/engine/celeros.cloud.js'), 'utf8');
+    var mod = { exports: {} };
+    var fn = Function.apply(null,
+        ['module', 'exports', 'System', 'FS', 'Net', src]);
+    fn(mod, mod.exports, env.System, env.FS, env.Net);
+    var cloud = mod.exports;
 
-// --- CelerPark Saida (overlay devkit-s3): leitor HID + validacao ------------
-(function() {
-    console.log('CelerPark Saida:');
-    var t = require(path.join(ROOT, 'boards/devkit-s3/data/apps/CelerPark Saida/test.js'));
-    var r = runApp('boards/devkit-s3/data/apps/CelerPark Saida/main.js', t.wire);
-    var txt = joinLog(r.log);
-    check('totem roda sem erro', r.err === null, r.err || '');
-    var cloud = t.cloud();
-    check('leitor conectado', /leitor conectado \(iface 0\)/.test(txt), txt);
-    check('ticket pago abre a cancela', /saida CP1-[A-Z0-9]+ paga\. Cancela aberta/.test(txt), txt);
-    check('ja usado recusa', /ticket ja usado na saida/.test(txt), txt);
-    check('anulado recusa', /ticket anulado/.test(txt), txt);
-    check('desconhecido recusa', /ticket desconhecido/.test(txt), txt);
-    check('sem rede mantem fechada', /sem rede, cancela permanece fechada/.test(txt), txt);
-    check('codigo dentro de URL tambem abre', txt.indexOf('paga. Cancela aberta') !==
-          txt.lastIndexOf('paga. Cancela aberta'), txt);
-    check('comando remoto do portal aplicado', /portal: comando open aplicado/.test(txt), txt);
-    var opened = false;
-    for (var i = 0; i < cloud.relay.length - 1; i++) {
-        if (cloud.relay[i].pin === 5 && cloud.relay[i].level === 1) opened = true;
-    }
-    check('rele pulsou abertura (gpio 5)', opened, JSON.stringify(cloud.relay));
-    check('mark_exited chamado so nos pagos (2x)', cloud.marks.length === 2,
-          'marks=' + JSON.stringify(cloud.marks));
-    // LED de veredicto (0x007000 verde / 0x700000 vermelho / 0x605000 amarelo):
-    // na ordem do roteiro: verde, amarelo, amarelo, amarelo, vermelho, amarelo, verde
-    var leds = [];
-    for (var li = 0; li < r.log.length; li++) {
-        var m = r.log[li].match(/^\[neopixel\] 0 (\d+)$/);
-        if (m) {
-            var v = parseInt(m[1], 10);
-            if (v) leds.push(v);  // zeros = apagadas (boot/3 s): nao entram na ordem
-        }
-    }
-    var want = [0x007000, 0x605000, 0x605000, 0x605000, 0x700000, 0x605000, 0x007000];
-    check('LED: veredictos na ordem certa (verde/amarelo/vermelho)',
-          JSON.stringify(leds) === JSON.stringify(want), JSON.stringify(leds.map(function (v) {
-              return '0x' + v.toString(16);
-          })));
-    check('LED: apaga 3 s depois', r.log.some(function (l) {
-        return /^\[neopixel\] 0 0$/.test(l);
-    }), '');
+    check('init le a config', cloud.init() === true);
+    check('report enfileira evento',
+          cloud.report({ type: 'printer.paper_out', severity: 'warning' }) === true);
+    check('outbox com 1 evento', cloud.pending() === 1);
+    var desired = cloud.heartbeat(null, true);
+    check('heartbeat devolve desired',
+          desired && desired.channel === 'devkit-s3', JSON.stringify(desired));
+    check('request leva apikey/Bearer',
+          calls[0].headers.apikey === cfg.key &&
+          calls[0].headers.Authorization === 'Bearer ' + cfg.key,
+          JSON.stringify(calls[0].headers));
+    var sent = JSON.parse(calls[0].body);
+    check('body leva outbox',
+          sent.events.length === 1 &&
+          sent.events[0].type === 'printer.paper_out', calls[0].body);
+    check('servidor aceito limpa a outbox', cloud.pending() === 0);
+    var cmds = cloud.commands();
+    check('comando recebido drenado',
+          cmds.length === 1 && cmds[0].type === 'reboot', JSON.stringify(cmds));
+    cloud.ack(cmds[0].id);
+    cloud.report({ type: 'test.event' });
+    cloud.heartbeat(null, true);
+    var second = JSON.parse(calls[1].body);
+    check('ack e novo evento vao no proximo beat',
+          second.ack[0] === 'cmd-1' && second.events.length === 1, calls[1].body);
+
+    cloud.report({ type: 'offline.event' });
+    env.Net.request = function() { return null; };
+    check('sem rede devolve null', cloud.heartbeat(null, true) === null);
+    check('falha preserva a outbox', cloud.pending() === 1);
+    check('lastError reporta a falha', cloud.lastError().length > 0,
+          cloud.lastError());
+
+    cloud.reset();
+    check('sem config heartbeat e null', cloud.heartbeat(null, true) === null);
 })();
 
 // resume

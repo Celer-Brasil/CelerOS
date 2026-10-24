@@ -40,6 +40,8 @@ jobs:
         # glob por board: placa nova cai no lint automaticamente quando
         # commitada (caminho ausente virou aviso, nao erro)
         run: node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps
+      - name: Fronteira publico/privado (sem termos de verticais fechadas)
+        run: node test/public_boundary/run.js
       - name: Drift check (codigo x docs x stubs do harness + types do SDK)
         run: node tools/sdk/celer.js check
       - name: C++ host tests (lógica pura de main/Utils + framer HostLink)

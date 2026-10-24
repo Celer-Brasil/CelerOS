@@ -43,6 +43,16 @@ if [ -d "$ROOT/boards/$BOARD/data" ]; then
     cp -a "$ROOT/boards/$BOARD/data/." "$STAGE/"
     echo "overlay: boards/$BOARD/data somado"
 fi
+# Overlay privado opcional (apps de vertical que nao vivem neste repo):
+# aponte CELEROS_PRIVATE_DATA para um diretorio com apps/ e modules/.
+# O conteudo e copiado por cima e nunca e versionado aqui.
+if [ -n "${CELEROS_PRIVATE_DATA:-}" ]; then
+    if [ ! -d "$CELEROS_PRIVATE_DATA" ]; then
+        echo "CELEROS_PRIVATE_DATA nao e diretorio: $CELEROS_PRIVATE_DATA"; exit 1
+    fi
+    cp -a "$CELEROS_PRIVATE_DATA/." "$STAGE/"
+    echo "overlay privado: aplicado"
+fi
 # Pastas .dev (capturas/artefatos de desenvolvimento, gitignored) nao vao
 # para a imagem de fabrica: no smartdisplay sao 18 KB reais (~32-64 KB em
 # blocos de 4 KB no littlefs).

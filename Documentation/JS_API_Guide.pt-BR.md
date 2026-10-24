@@ -696,13 +696,14 @@ que 32 KB são truncadas.
   responde as duas coisas. Nomes/valores de cabeçalho rejeitam CR/LF e
   demais controles (injeção na linha de pedido) e têm teto de 32/256 chars.
   O `body` da resposta segue o mesmo teto de 32 KB do `Net.get`. É o caminho
-  dos totems CelerPark com a edge function `parking-gate`.
+  de apps que falam com edge functions/APIs autenticadas (o gateway exige
+  `apikey`).
 - **Exemplo:**
 ```javascript
 var r = Net.request({
-    url: "https://supabase.exemplo.br/functions/v1/parking-gate",
+    url: "https://api.exemplo.br/functions/v1/ping",
     method: "POST",
-    body: JSON.stringify({action: "heartbeat", device_id: "lane-01"}),
+    body: JSON.stringify({device_id: "node-01"}),
     contentType: "application/json",
     headers: {apikey: key, Authorization: "Bearer " + key}
 });

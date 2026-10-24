@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
 **Updated:** 2026-10-23
-**Commit:** main @ API 49 (Net.request com headers + System.epoch; totems CelerPark no devkit-s3)
+**Commit:** main @ API 49 (Net.request com headers + System.epoch)
 **Branch:** main
 
 ## OVERVIEW
@@ -70,7 +70,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 - **Selective staging only**: `git add <explicit paths>`, never `-A`/`-u`/`.`. When one file carries two features, split it by hunks (`git apply --cached` with a crafted patch is the reliable non-interactive way) — see 317c7d3 or the API 15 commits (ed70e10/4a04292).
 - **Commit style**: Portuguese without accents, subject `Area: assunto` + a detailed body (what, why, bench evidence). One story per commit; its tests, stubs and lint updates ride along. No AI attribution footers.
 - **Push discipline**: fast-forward only, never `--force` (history was filter-repo'd once; old hashes must never come back). On rejection, fetch and rebase your own unpushed commits.
-- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/semver/run.js` (deps range/fecho iguais em celerhub.py x Loja x harness), `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node tools/sdk/celer.js check`, `python3 tools/celerhub.py deps-status` (dep drift blocks the push — publish-dep resolves it), `g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp && ./celeros_tests`, `python3 test/duk/run.py`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
+- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/semver/run.js` (deps range/fecho iguais em celerhub.py x Loja x harness), `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node test/public_boundary/run.js` (sem termos de verticais fechadas), `node tools/sdk/celer.js check`, `python3 tools/celerhub.py deps-status` (dep drift blocks the push — publish-dep resolves it), `g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp && ./celeros_tests`, `python3 test/duk/run.py`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
 - **Apps and deps ship to the hub in the same task.** A fix that is committed but not published does not exist for any device. App changed (`data/apps/`, `hub_apps/`, or a board overlay whose app is in the hub catalog): bump `version` + write `changelog` in `app.json`, commit, then `node tools/sdk/celer.js publish <Pasta>` — the hub rejects the same version again (`--force` is not a workaround) and `celerhub` refuses a dirty tree. Dep changed (`tools/sdk/engine/*.js`): bump the `version: 'x.y.z'` declared inside the module, commit, then `python3 tools/celerhub.py publish-dep tools/sdk/engine/<mod>.js`, and regenerate the factory copies it vendors into apps (`data/modules/<nome>/<versao>/` + `deps.json` — see `data/AGENTS.md`). Close the loop with `python3 tools/celerhub.py list` (apps) and `python3 tools/celerhub.py deps-status` (deps; exit 1 when behind). Board-only factory apps ship via `flash_data.sh` instead — no hub catalog entry.
 - **Releases are cut by tag**: pushing `v*` triggers `release.yml` (per-board factory zips + CelerOS Flasher). Tag deliberately after bench validation, never as a side effect.
 - **Release notes are in English** (audience: first-time flashers; the repo's public artifacts — README, wiki EN pages — are English). The annotated tag body becomes the notes' preamble, so write tag bodies in English too; the flash instructions template lives inside `release.yml` and must teach the Flasher workflow (download flasher + board zip, extract together, board -> port -> erase on first flash).
@@ -124,6 +124,7 @@ node test/app_lint/run.js
 node test/sdk/run.js
 node test/debug/run.js
 node test/meshsim/run.js                 # E2E da malha: apps reais em N nos simulados
+node test/public_boundary/run.js         # fronteira publico/privado (sem verticais fechadas)
 node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps
 node tools/sdk/celer.js check            # drift; `celer.js types` regenerates celer.d.ts
 g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp && ./celeros_tests

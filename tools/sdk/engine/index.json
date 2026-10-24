@@ -258,5 +258,8 @@
     "deps": {
       "celeros.usb": "^1.0.0"
     }
+  },
+  "celeros.cloud": {
+    "deps": {}
   }
 }

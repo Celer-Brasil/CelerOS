@@ -76,6 +76,26 @@ function runAppFolder(appDir, opts = {}) {
         });
     }
     if (renderer) wires.push((env) => renderer.wire(env));
+    // microsBias: o pacing da engine compara `left` com `frameUs`; no host o
+    // relogio e virtual e a comparacao exata pode cair 1 ulp acima em todo
+    // quadro (nunca chama System.delay). Avancar 1 us por CHAMADA de micros()
+    // garante que duas leituras no mesmo quadro difiram e o delay aconteca.
+    // O Celer Studio liga isso (bias=1); o emulador normal segue sem bias.
+    const bias = opts.microsBias !== undefined
+        ? +opts.microsBias || 0
+        : (+process.env.CELER_MICROS_BIAS || 0);
+    if (bias) {
+        wires.push((env) => {
+            const orig = env.System.micros;
+            if (typeof orig === 'function') {
+                let ticks = 0;
+                env.System.micros = function () {
+                    ticks = (ticks + bias) % 1000;
+                    return orig.call(env.System) + ticks;
+                };
+            }
+        });
+    }
     if (stopAtMs != null) {
         wires.push((env) => {
             const orig = env.System.delay;

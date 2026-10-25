@@ -19,8 +19,7 @@ const { spawnSync } = require('child_process');
 const { buildManifest, runLint, runCheck } = require('../app_lint/lint.js');
 const { generate } = require('./lib/dts.js');
 const { runAppFolder } = require('./lib/runner.js');
-const { encodePng } = require('./lib/png.js');
-const { glyph } = require('./lib/font8x8.js');
+const { makeIconPng } = require('./lib/icon.js');
 const { Renderer } = require('./lib/renderer.js');
 const { parseInputScript, wireInput } = require('./lib/input.js');
 const { encodeGif } = require('./lib/gif.js');
@@ -58,48 +57,10 @@ function usage() {
     console.log('  publish PASTA... [--dry] [--private --tenant T] publica na loja (celerhub)');
     console.log('  publish-dep ARQUIVO.js [--private --tenant T] publica dependencia no repo do hub');
     console.log('  dev PASTA [--port P] [--shots]               watch + reload no device (celerctl)');
+    console.log('  studio ...                                   editor de jogos Celer Studio (init/describe/apply/build/run/serve)');
 }
 
 // ---------------------------------------------------------------- scaffold
-
-// Icone 64x64: quadrado arredondado no tom accent do tema com a inicial do
-// app em glifo 8x8 escalado — placeholder para o autor trocar depois.
-function makeIconPng(letter) {
-    const S = 64, R = 14;
-    const bg = [0x38, 0xBC, 0xF8];   // accent do tema (RGB888)
-    const fg = [0x08, 0x10, 0x20];   // onAccent
-    const px = new Uint8Array(S * S * 3);
-    const inside = (x, y) => {
-        // retangulo com cantos arredondados (anti-alias simples por distancia)
-        const cx = Math.min(Math.max(x, R), S - 1 - R), cy = Math.min(Math.max(y, R), S - 1 - R);
-        return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= R * R;
-    };
-    for (let y = 0; y < S; y++) {
-        for (let x = 0; x < S; x++) {
-            const i = (y * S + x) * 3;
-            if (!inside(x, y)) continue;  // transparente (preto; PNG RGB sem alpha)
-            px[i] = bg[0]; px[i + 1] = bg[1]; px[i + 2] = bg[2];
-        }
-    }
-    const bm = glyph(letter.toUpperCase().charCodeAt(0));
-    if (bm) {
-        const scale = 6, gw = 8 * scale, ox = (S - gw) / 2 | 0, oy = (S - gw) / 2 | 0;
-        for (let row = 0; row < 8; row++) {
-            for (let col = 0; col < 8; col++) {
-                if (!((bm[row] >> col) & 1)) continue;
-                for (let sy = 0; sy < scale; sy++) {
-                    for (let sx = 0; sx < scale; sx++) {
-                        const x = ox + col * scale + sx, y = oy + row * scale + sy;
-                        if (x < 0 || y < 0 || x >= S || y >= S) continue;
-                        const i = (y * S + x) * 3;
-                        px[i] = fg[0]; px[i + 1] = fg[1]; px[i + 2] = fg[2];
-                    }
-                }
-            }
-        }
-    }
-    return encodePng(S, S, Buffer.from(px), false);
-}
 
 function cmdNew(args) {
     const name = args[0];
@@ -769,6 +730,7 @@ function main() {
         case 'publish': return cmdPublish(rest);
         case 'publish-dep': return cmdPublishDep(rest);
         case 'dev': return cmdDev(rest);
+        case 'studio': return require('../studio/studio.js').main(rest);
         default:
             usage();
             process.exit(cmd ? 2 : 0);

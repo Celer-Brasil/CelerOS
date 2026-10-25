@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Celer Studio asset meta",
+  "description": "<arquivo>.meta — sidecar de importacao com GUID estavel. Renomear o arquivo nao muda o GUID; as referencias de cena/prefab apontam para ele.",
+  "type": "object",
+  "required": ["format", "guid", "importer", "settings"],
+  "properties": {
+    "format": { "const": 1 },
+    "guid": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "importer": {
+      "enum": ["sprite", "sprite-sheet", "tileset", "audio", "script", "scene", "prefab"]
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["single", "grid", "regions"] },
+        "cols": { "type": "integer", "minimum": 1 },
+        "rows": { "type": "integer", "minimum": 1 },
+        "tw": { "type": "integer", "minimum": 1 },
+        "th": { "type": "integer", "minimum": 1 },
+        "pivot": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        "key": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "prefix": { "type": "string" },
+        "regions": { "type": "object", "description": "nome -> [x,y,w,h] em pixels" },
+        "tiles": { "type": "array", "description": "[{name, solid}] por indice de celula" },
+        "loop": { "type": "boolean" },
+        "gain": { "type": "number" },
+        "props": { "type": "object", "description": "defaults declarados por um script de componente" }
+      }
+    }
+  }
+}

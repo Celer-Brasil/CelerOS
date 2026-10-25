@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Celer Studio scene",
+  "description": "*.scene.json — cena composta por entidades, tilemaps e configuracoes. Transform e implicito em toda entidade. Cores em #RRGGBB na fonte; o build converte para RGB565.",
+  "type": "object",
+  "required": ["format", "guid", "name", "entities"],
+  "properties": {
+    "format": { "const": 1 },
+    "rev": { "type": "integer", "minimum": 1 },
+    "guid": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "bg": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "fps": { "type": "integer", "minimum": 0, "maximum": 60 },
+        "static": { "type": "boolean" },
+        "music": { "type": "string", "description": "referencia guid do asset de audio" },
+        "camera": {
+          "type": "object",
+          "properties": {
+            "bounds": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+            "follow": { "type": "string", "description": "fid da entidade seguida" },
+            "deadzone": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+          }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fid", "name", "transform"],
+        "properties": {
+          "fid": { "type": "string", "pattern": "^[A-Za-z0-9_./-]{1,80}$" },
+          "name": { "type": "string" },
+          "active": { "type": "boolean" },
+          "z": { "type": "number" },
+          "prefab": { "type": "string", "description": "guid do prefab instanciado" },
+          "overrides": { "type": "object" },
+          "transform": {
+            "type": "object",
+            "required": ["x", "y"],
+            "properties": {
+              "x": { "type": "number" }, "y": { "type": "number" },
+              "rot": { "type": "number" }, "sx": { "type": "number" }, "sy": { "type": "number" },
+              "ax": { "type": "number" }, "ay": { "type": "number" }
+            }
+          },
+          "components": { "type": "array", "items": { "$ref": "components.json" } }
+        }
+      }
+    },
+    "tilemaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "tileset", "cols", "rows", "cell", "data"],
+        "properties": {
+          "id": { "type": "string" },
+          "tileset": { "type": "string" },
+          "cols": { "type": "integer", "minimum": 1 },
+          "rows": { "type": "integer", "minimum": 1 },
+          "cell": { "type": "number", "minimum": 1 },
+          "ox": { "type": "number" },
+          "oy": { "type": "number" },
+          "layer": { "type": "integer" },
+          "data": { "type": "array", "items": { "type": "integer" } },
+          "solids": { "type": "array", "items": { "type": "boolean" } },
+          "autotile": { "type": "object", "description": "mapa mascara 0..15 -> indice de tile" }
+        }
+      }
+    }
+  }
+}

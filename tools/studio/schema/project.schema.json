@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Celer Studio project",
+  "description": "celergame.project.json — raiz de um projeto do editor. A fonte da verdade sao os arquivos; este documento descreve configuracoes e o orcamento de dependencias.",
+  "type": "object",
+  "required": ["format", "name", "packageName", "version", "api", "canvas", "startScene", "deps"],
+  "properties": {
+    "format": { "const": 1 },
+    "rev": { "type": "integer", "minimum": 1, "description": "Revisao otimista (cresce a cada gravacao canonica)" },
+    "studio": { "type": "string", "description": "Versao do Celer Studio que gravou o arquivo por ultimo" },
+    "name": { "type": "string", "minLength": 1 },
+    "packageName": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "author": { "type": "string" },
+    "description": { "type": "string" },
+    "type": { "type": "string" },
+    "category": { "type": "string" },
+    "api": { "type": "integer", "minimum": 1, "maximum": 50 },
+    "requires": { "type": "array", "items": { "const": "psram" } },
+    "topbar": { "type": "boolean" },
+    "permissions": { "type": "array", "items": { "type": "string" } },
+    "deps": {
+      "type": "object",
+      "maxProperties": 8,
+      "additionalProperties": { "type": "string", "pattern": "^\\^?\\d+\\.\\d+\\.\\d+$" }
+    },
+    "changelog": { "type": "string" },
+    "canvas": {
+      "type": "object",
+      "required": ["w", "h"],
+      "properties": {
+        "w": { "type": "integer", "minimum": 64, "maximum": 1024 },
+        "h": { "type": "integer", "minimum": 64, "maximum": 1024 },
+        "native": { "type": "boolean", "description": "canvas nativo (pixels fisicos) em vez do espaco virtual 240x320" },
+        "fps": { "type": "integer", "minimum": 0, "maximum": 60 }
+      }
+    },
+    "startScene": { "type": "string", "description": "GUID da cena inicial (vazio antes da primeira cena)" },
+    "build": {
+      "type": "object",
+      "properties": {
+        "out": { "type": "string" },
+        "splitKB": { "type": "integer", "minimum": 32, "maximum": 255 }
+      }
+    },
+    "editor": {
+      "type": "object",
+      "properties": {
+        "grid": { "type": "integer", "minimum": 1 },
+        "snap": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "format": 1,
+  "note": "Catalogo unico de componentes: valida os arquivos, gera o inspetor da GUI e serve de descoberta para a IA (studio describe). Tipos: number, int, bool, string, color (#RRGGBB), enum, sprite (guid#regiao), script (guid), tilemap-tileset (guid), json, vec2.",
+  "components": {
+    "transform": {
+      "label": "Transform",
+      "implicit": true,
+      "fields": {
+        "x": { "type": "number", "default": 0, "label": "X" },
+        "y": { "type": "number", "default": 0, "label": "Y" },
+        "rot": { "type": "number", "default": 0, "label": "Rotacao" },
+        "sx": { "type": "number", "default": 1, "label": "Escala X" },
+        "sy": { "type": "number", "default": 1, "label": "Escala Y" },
+        "ax": { "type": "number", "default": 0.5, "min": 0, "max": 1, "label": "Ancora X" },
+        "ay": { "type": "number", "default": 0.5, "min": 0, "max": 1, "label": "Ancora Y" }
+      }
+    },
+    "sprite": {
+      "label": "Sprite",
+      "fields": {
+        "sprite": { "type": "sprite", "required": true, "label": "Sprite" },
+        "key": { "type": "color", "default": "#000000", "label": "Cor-chave" }
+      }
+    },
+    "anim": {
+      "label": "Animacao",
+      "fields": {
+        "clips": {
+          "type": "json",
+          "default": {},
+          "label": "Clipes",
+          "hint": "{ nome: { frames: [\"guid#regiao\", ...], fps: 6, loop: true } }"
+        },
+        "current": { "type": "string", "default": "", "label": "Clipe atual" },
+        "autoplay": { "type": "bool", "default": true, "label": "Tocar ao entrar" }
+      }
+    },
+    "text": {
+      "label": "Texto",
+      "fields": {
+        "text": { "type": "string", "default": "", "label": "Texto" },
+        "color": { "type": "color", "default": "#e8eefc", "label": "Cor" },
+        "px": { "type": "number", "default": 13, "label": "Altura (px)" },
+        "ts": { "type": "enum", "values": ["", "tiny", "small", "body", "label", "big", "title", "huge"], "default": "", "label": "Papel tipografico" },
+        "align": { "type": "enum", "values": ["left", "center", "right"], "default": "left", "label": "Alinhamento" },
+        "valign": { "type": "enum", "values": ["top", "middle", "bottom"], "default": "top", "label": "Vertical" },
+        "shadow": { "type": "color", "default": "", "label": "Sombra" }
+      }
+    },
+    "shape": {
+      "label": "Forma",
+      "fields": {
+        "shape": { "type": "enum", "values": ["rect", "circle", "line"], "default": "rect", "label": "Forma" },
+        "w": { "type": "number", "default": 16, "label": "Largura" },
+        "h": { "type": "number", "default": 16, "label": "Altura" },
+        "r": { "type": "number", "default": 8, "label": "Raio" },
+        "x2": { "type": "number", "default": 0, "label": "X2 (linha)" },
+        "y2": { "type": "number", "default": 0, "label": "Y2 (linha)" },
+        "color": { "type": "color", "default": "#38bcf8", "label": "Cor" },
+        "fill": { "type": "bool", "default": true, "label": "Preenchida" }
+      }
+    },
+    "collider": {
+      "label": "Colisor",
+      "fields": {
+        "shape": { "type": "enum", "values": ["rect", "circle"], "default": "rect", "label": "Forma" },
+        "w": { "type": "number", "default": 16, "label": "Largura" },
+        "h": { "type": "number", "default": 16, "label": "Altura" },
+        "r": { "type": "number", "default": 8, "label": "Raio" }
+      }
+    },
+    "script": {
+      "label": "Script",
+      "fields": {
+        "script": { "type": "script", "required": true, "label": "Script" },
+        "fields": { "type": "json", "default": {}, "label": "Campos" }
+      }
+    }
+  }
+}

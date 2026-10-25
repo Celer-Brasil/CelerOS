@@ -1,0 +1,735 @@
+'use strict';
+// Barramento de comandos do Studio. GUI, CLI e API HTTP executam as MESMAS
+// ops, com validacao estrutural e undo. Toda gravacao e canonica; um lote e
+// atomico (erro = nada muda).
+
+const fs = require('fs');
+const path = require('path');
+const F = require('./format');
+const SC = require('./schema');
+const { Project } = require('./project');
+const A = require('./assets');
+
+const MAX_UNDO = 50;
+
+// ---------------------------------------------------------------- snapshot --
+
+function textFiles(project) {
+    const out = ['celergame.project.json'];
+    const walk = (dir) => {
+        let names;
+        try { names = fs.readdirSync(dir).sort(); } catch (e) { return; }
+        for (const name of names) {
+            const abs = path.join(dir, name);
+            let st;
+            try { st = fs.statSync(abs); } catch (e) { continue; }
+            if (st.isDirectory()) { walk(abs); continue; }
+            const rel = F.relPosix(project.dir, abs);
+            if (/\.(json|meta|js)$/i.test(name)) out.push(rel);
+        }
+    };
+    if (fs.existsSync(project.assetsDir)) walk(project.assetsDir);
+    return out;
+}
+
+function takeSnapshot(project, kind, id, rels) {
+    const dir = path.join(project.studioDir, kind, id);
+    const filesDir = path.join(dir, 'files');
+    fs.mkdirSync(filesDir, { recursive: true });
+    const uniq = Array.from(new Set(rels || [])).sort();
+    const entries = [];
+    let i = 0;
+    for (const rel of uniq) {
+        const abs = project.resolveInside(rel);
+        const existed = fs.existsSync(abs);
+        let snap = null;
+        if (existed) {
+            snap = String(i++).padStart(4, '0');
+            fs.copyFileSync(abs, path.join(filesDir, snap));
+        }
+        entries.push({ rel, existed, snap });
+    }
+    const manifest = { format: 1, kind, id, ts: Date.now(), entries };
+    F.writeJson(path.join(dir, 'manifest.json'), manifest);
+    prune(project, kind);
+    return { id, dir, manifest };
+}
+
+function prune(project, kind) {
+    const root = path.join(project.studioDir, kind);
+    let names;
+    try { names = fs.readdirSync(root).sort(); } catch (e) { return; }
+    while (names.length > MAX_UNDO) {
+        const old = names.shift();
+        try { fs.rmSync(path.join(root, old), { recursive: true, force: true }); } catch (e) {}
+    }
+}
+
+function restoreSnapshot(project, snap) {
+    const filesDir = path.join(snap.dir, 'files');
+    const entriesRel = new Set(snap.manifest.entries.map((e) => e.rel));
+    for (const e of snap.manifest.entries) {
+        const abs = project.resolveInside(e.rel);
+        if (e.existed) {
+            fs.mkdirSync(path.dirname(abs), { recursive: true });
+            fs.copyFileSync(path.join(filesDir, e.snap), abs);
+        } else if (fs.existsSync(abs)) {
+            fs.rmSync(abs, { force: true });
+        }
+    }
+    // arquivos criados pela op e que nao estavam no snapshot (import/rename)
+    for (const rel of snap.manifest.created || []) {
+        if (entriesRel.has(rel)) continue;
+        const abs = project.resolveInside(rel);
+        if (fs.existsSync(abs)) fs.rmSync(abs, { force: true });
+    }
+}
+
+// arquivos tocados por um snapshot: os existentes antes + os criados pelo lote
+function snapshotRels(manifest) {
+    return manifest.entries.map((e) => e.rel).concat(manifest.created || []);
+}
+
+function undo(project) {
+    const root = path.join(project.studioDir, 'undo');
+    let names;
+    try { names = fs.readdirSync(root).sort(); } catch (e) { names = []; }
+    if (!names.length) F.fail('undo.empty', 'nada para desfazer');
+    const id = names[names.length - 1];
+    const dir = path.join(root, id);
+    const manifest = F.readJson(path.join(dir, 'manifest.json'));
+    const snap = { id, dir, manifest };
+    // snapshot do estado ATUAL vira o redo (inclui arquivos criados pelo lote)
+    const redoId = 'r' + Date.now() + '_' + F.newGuid().slice(0, 6);
+    takeSnapshot(project, 'redo', redoId, snapshotRels(manifest));
+    restoreSnapshot(project, snap);
+    fs.rmSync(dir, { recursive: true, force: true });
+    project.load();
+    return { ok: true, undo: id, redo: redoId, changed: snapshotRels(manifest) };
+}
+
+function redo(project) {
+    const root = path.join(project.studioDir, 'redo');
+    let names;
+    try { names = fs.readdirSync(root).sort(); } catch (e) { names = []; }
+    if (!names.length) F.fail('redo.empty', 'nada para refazer');
+    const id = names[names.length - 1];
+    const dir = path.join(root, id);
+    const manifest = F.readJson(path.join(dir, 'manifest.json'));
+    const undoId = 'u' + Date.now() + '_' + F.newGuid().slice(0, 6);
+    takeSnapshot(project, 'undo', undoId, snapshotRels(manifest));
+    restoreSnapshot(project, { id, dir, manifest });
+    fs.rmSync(dir, { recursive: true, force: true });
+    project.load();
+    return { ok: true, redo: id, undo: undoId, changed: snapshotRels(manifest) };
+}
+
+// ------------------------------------------------------------------ helpers --
+
+function container(project, op) {
+    if (op.prefab) {
+        const pf = project.prefab(op.prefab);
+        if (!pf) F.fail('ref.prefab', 'prefab inexistente: ' + op.prefab);
+        return { kind: 'prefab', obj: pf };
+    }
+    const sc = project.scene(op.scene);
+    if (!sc) F.fail('ref.scene', 'cena inexistente: ' + (op.scene || '(vazia)'));
+    return { kind: 'scene', obj: sc };
+}
+
+function entityOf(obj, ref) {
+    if (ref === undefined || ref === null) F.fail('ref.entity', 'informe a entidade (fid)');
+    const list = obj.entities || [];
+    for (const e of list) if (e.fid === ref) return e;
+    if (typeof ref === 'string') {
+        const byName = list.filter((e) => e.name === ref);
+        if (byName.length === 1) return byName[0];
+    }
+    F.fail('ref.entity', 'entidade inexistente: ' + ref);
+}
+
+function componentOf(entity, ref) {
+    const list = entity.components || [];
+    if (typeof ref === 'number') {
+        if (ref < 0 || ref >= list.length) F.fail('ref.component', 'indice fora da lista: ' + ref);
+        return list[ref];
+    }
+    for (const c of list) if (c.id === ref) return c;
+    const byType = list.filter((c) => c.type === ref);
+    if (byType.length === 1) return byType[0];
+    F.fail('ref.component', 'componente inexistente: ' + ref);
+}
+
+function defaultTransform(op) {
+    const t = op && op.transform ? op.transform : {};
+    return {
+        x: F.round(t.x !== undefined ? t.x : (op && op.x !== undefined ? op.x : 0)),
+        y: F.round(t.y !== undefined ? t.y : (op && op.y !== undefined ? op.y : 0)),
+        rot: F.round(t.rot || 0),
+        sx: F.round(t.sx !== undefined ? t.sx : 1),
+        sy: F.round(t.sy !== undefined ? t.sy : 1),
+        ax: F.round(t.ax !== undefined ? t.ax : 0.5),
+        ay: F.round(t.ay !== undefined ? t.ay : 0.5),
+    };
+}
+
+function mergeTransform(entity, patch) {
+    entity.transform = entity.transform || defaultTransform();
+    for (const k of ['x', 'y', 'rot', 'sx', 'sy', 'ax', 'ay']) {
+        if (patch[k] !== undefined) entity.transform[k] = F.round(patch[k]);
+    }
+}
+
+function deepMerge(dst, src) {
+    for (const k in src) {
+        if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k])) {
+            if (!dst[k] || typeof dst[k] !== 'object') dst[k] = {};
+            deepMerge(dst[k], src[k]);
+        } else dst[k] = src[k];
+    }
+    return dst;
+}
+
+function uniqueEntityName(obj, base) {
+    const used = new Set((obj.entities || []).map((e) => (e.name || '').toLowerCase()));
+    let name = base;
+    let n = 2;
+    while (used.has(name.toLowerCase())) { name = base + ' ' + n; n++; }
+    return name;
+}
+
+// -------------------------------------------------------------------- ops ----
+
+const OPS = {
+    'project.set': function (project, op) {
+        const data = project.data;
+        for (const k of ['name', 'packageName', 'version', 'author', 'description', 'type',
+                         'category', 'api', 'requires', 'topbar', 'permissions', 'changelog',
+                         'startScene']) {
+            if (op[k] !== undefined) data[k] = op[k];
+        }
+        for (const k of ['canvas', 'build', 'editor']) {
+            if (op[k] !== undefined) {
+                data[k] = data[k] || {};
+                deepMerge(data[k], op[k]);
+            }
+        }
+        if (op.deps !== undefined) data.deps = op.deps;
+        project.markDirty('celergame.project.json');
+    },
+
+    'scene.create': function (project, op) {
+        if (!op.name) F.fail('op.args', 'scene.create exige name');
+        project.createScene(op.name);
+    },
+
+    'scene.delete': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        project.deleteScene(sc);
+    },
+
+    'scene.rename': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        if (!op.name) F.fail('op.args', 'scene.rename exige name');
+        sc.name = op.name;
+        project.writeScene(sc);
+        project.markDirty('celergame.project.json');
+    },
+
+    'scene.set': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        if (op.name) sc.name = op.name;
+        if (op.settings) {
+            sc.settings = sc.settings || {};
+            deepMerge(sc.settings, op.settings);
+        }
+        project.writeScene(sc);
+    },
+
+    'scene.start': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        project.data.startScene = sc.guid;
+        project.markDirty('celergame.project.json');
+    },
+
+    'entity.create': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const fid = op.fid || F.newFid('e');
+        if ((obj.entities || []).some((e) => e.fid === fid)) F.fail('schema.duplicate', 'fid ja existe: ' + fid);
+        const e = {
+            fid,
+            name: op.name || uniqueEntityName(obj, 'Entidade'),
+            active: op.active === undefined ? true : !!op.active,
+            z: F.round(op.z || 0),
+            transform: defaultTransform(op),
+            components: [],
+        };
+        if (op.prefab) {
+            const pf = project.prefab(op.prefab);
+            if (!pf) F.fail('ref.prefab', 'prefab inexistente: ' + op.prefab);
+            e.prefab = pf.guid;
+            e.overrides = {};
+        } else if (Array.isArray(op.components)) {
+            e.components = F.deepClone(op.components);
+        }
+        obj.entities = obj.entities || [];
+        obj.entities.push(e);
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+        return { entity: e };
+    },
+
+    'entity.set': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const e = entityOf(obj, op.entity);
+        if (op.name !== undefined) e.name = op.name;
+        if (op.active !== undefined) e.active = !!op.active;
+        if (op.z !== undefined) e.z = F.round(op.z);
+        if (op.transform) mergeTransform(e, op.transform);
+        if (op.overrides !== undefined) e.overrides = F.deepClone(op.overrides);
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+        return { entity: e };
+    },
+
+    'entity.delete': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const e = entityOf(obj, op.entity);
+        obj.entities = obj.entities.filter((x) => x !== e);
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+    },
+
+    'entity.duplicate': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const src = entityOf(obj, op.entity);
+        const e = F.deepClone(src);
+        e.fid = F.newFid('e');
+        e.name = uniqueEntityName(obj, op.name || (src.name + ' copia'));
+        obj.entities.push(e);
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+        return { entity: e };
+    },
+
+    'component.add': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const e = entityOf(obj, op.entity);
+        const base = SC.defaultsFor(op.type);
+        if (!base) F.fail('op.type', 'componente desconhecido: ' + op.type,
+                         { hint: 'veja `studio describe` para o catalogo' });
+        const comp = { id: op.id || ('c_' + F.newGuid().slice(0, 8)), type: op.type, fields: base.fields };
+        if (op.fields) deepMerge(comp.fields, op.fields);
+        e.components = e.components || [];
+        e.components.push(comp);
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+        return { component: comp };
+    },
+
+    'component.set': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const e = entityOf(obj, op.entity);
+        const c = componentOf(e, op.component);
+        if (op.fields) { c.fields = c.fields || {}; deepMerge(c.fields, op.fields); }
+        if (op.field !== undefined) {
+            const field = String(op.field).replace(/^fields\./, '');
+            if (!field) F.fail('op.args', 'component.set exige field');
+            c.fields = c.fields || {};
+            if (op.value === null) delete c.fields[field];
+            else c.fields[field] = op.value;
+        }
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+        return { component: c };
+    },
+
+    'component.remove': function (project, op) {
+        const { obj, kind } = container(project, op);
+        const e = entityOf(obj, op.entity);
+        const c = componentOf(e, op.component);
+        e.components = (e.components || []).filter((x) => x !== c);
+        if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
+    },
+
+    'prefab.create': function (project, op) {
+        if (!op.name) F.fail('op.args', 'prefab.create exige name');
+        const pf = project.createPrefab(op.name);
+        if (op.scene && op.entity) {
+            const sc = project.scene(op.scene);
+            if (!sc) { project.deletePrefab(pf); F.fail('ref.scene', 'cena inexistente: ' + op.scene); }
+            const e = F.deepClone(entityOf(sc, op.entity));
+            e.fid = F.newFid('e');
+            e.name = pf.name;
+            e.z = 0;   // z local: a instancia soma o proprio z
+            if (e.transform) { e.transform.x = 0; e.transform.y = 0; }
+            delete e.prefab;
+            delete e.overrides;
+            pf.entities.push(e);
+            project.writePrefab(pf);
+        }
+        return { prefab: pf };
+    },
+
+    'prefab.instance': function (project, op) {
+        // `prefab` aqui e o prefab a instanciar (nao o container): a
+        // instancia nasce SEMPRE numa cena
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + (op.scene || '(vazia)'));
+        const pf = project.prefab(op.prefab);
+        if (!pf) F.fail('ref.prefab', 'prefab inexistente: ' + op.prefab);
+        const e = {
+            fid: op.fid || F.newFid('e'),
+            name: op.name || uniqueEntityName(sc, pf.name),
+            active: true,
+            z: F.round(op.z || 0),
+            transform: defaultTransform(op),
+            prefab: pf.guid,
+            overrides: {},
+        };
+        sc.entities = sc.entities || [];
+        sc.entities.push(e);
+        project.writeScene(sc);
+        return { entity: e };
+    },
+
+    'prefab.override': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        const inst = entityOf(sc, op.entity);
+        if (!inst.prefab) F.fail('ref.prefab', 'entidade nao e instancia de prefab: ' + inst.fid);
+        const pf = project.prefab(inst.prefab);
+        const target = op.target || (pf && pf.entities && pf.entities[0] && pf.entities[0].fid);
+        if (!target) F.fail('ref.override', 'prefab sem entidade para receber override');
+        inst.overrides = inst.overrides || {};
+        const ov = inst.overrides[target] || {};
+        if (op.transform) { ov.transform = ov.transform || {}; Object.assign(ov.transform, op.transform); }
+        if (op.active !== undefined) ov.active = !!op.active;
+        if (op.name !== undefined) ov.name = op.name;
+        if (op.component && op.fields) {
+            ov.components = ov.components || {};
+            const c = ov.components[op.component] || {};
+            Object.assign(c, op.fields);
+            ov.components[op.component] = c;
+        }
+        inst.overrides[target] = ov;
+        project.writeScene(sc);
+        return { overrides: inst.overrides };
+    },
+
+    'asset.import': function (project, op, ctx) {
+        if (!op.src) F.fail('op.args', 'asset.import exige src');
+        const r = A.importAsset(project, path.resolve(op.src), op);
+        for (const abs of r.created) ctx.created.push(abs);
+        return { asset: { guid: r.asset.guid, name: r.asset.name, path: r.asset.relPath } };
+    },
+
+    'asset.set': function (project, op) {
+        const asset = project.asset(op.asset);
+        if (!asset) F.fail('ref.asset', 'asset inexistente: ' + op.asset);
+        A.setAssetSettings(project, asset, op.settings || {});
+        return { asset: { guid: asset.guid, name: asset.name } };
+    },
+
+    'asset.delete': function (project, op, ctx) {
+        const asset = project.asset(op.asset);
+        if (!asset) F.fail('ref.asset', 'asset inexistente: ' + op.asset);
+        if (!op.force && referenced(project, asset.guid)) {
+            F.fail('asset.inuse', 'asset em uso por cena/prefab: ' + asset.name,
+                   { hint: 'remova as referencias ou use force' });
+        }
+        ctx.snapshotRels.push(asset.relPath);
+        ctx.changedFiles.push(asset.relPath);
+        fs.rmSync(asset.absPath, { force: true });
+        fs.rmSync(path.join(project.dir, asset.metaPath), { force: true });
+        project.assets = project.assets.filter((a) => a.guid !== asset.guid);
+        project.byGuid.delete(asset.guid);
+        if (project.byName.get(asset.name) === asset) project.byName.delete(asset.name);
+        if (asset.scene) project.sceneByGuid.delete(asset.guid);
+        if (asset.prefab) project.prefabByGuid.delete(asset.guid);
+        project.files.delete(asset.relPath);
+        project.files.delete(asset.metaPath);
+        project.dirty.delete(asset.relPath);
+        project.dirty.delete(asset.metaPath);
+    },
+
+    'asset.rename': function (project, op, ctx) {
+        const asset = project.asset(op.asset);
+        if (!asset) F.fail('ref.asset', 'asset inexistente: ' + op.asset);
+        if (!op.name) F.fail('op.args', 'asset.rename exige name');
+        const dirRel = path.posix.dirname(asset.relPath);
+        const ext = asset.ext;
+        const base = F.sanitizeFileName(op.name + ext);
+        let target = dirRel + '/' + base;
+        let n = 2;
+        while (project.files.has(target) || project.files.has(target + '.meta') ||
+               fs.existsSync(project.resolveInside(target))) {
+            target = dirRel + '/' + F.sanitizeFileName(op.name + '_' + n + ext);
+            n++;
+        }
+        ctx.snapshotRels.push(asset.relPath);
+        ctx.changedFiles.push(asset.relPath, target);
+        ctx.created.push(project.resolveInside(target), project.resolveInside(target + '.meta'));
+        fs.renameSync(asset.absPath, project.resolveInside(target));
+        fs.renameSync(path.join(project.dir, asset.metaPath), project.resolveInside(target + '.meta'));
+        project.files.delete(asset.relPath);
+        project.files.delete(asset.metaPath);
+        if (asset.scene || asset.prefab) project.files.set(target, asset.scene || asset.prefab);
+        project.files.set(target + '.meta', asset.meta);
+        project.dirty.delete(asset.relPath);
+        project.dirty.delete(asset.metaPath);
+        if (asset.scene) project.markDirty(target);
+        if (asset.prefab) project.markDirty(target);
+        project.markDirty(target + '.meta');
+        const oldName = asset.name;
+        asset.relPath = target;
+        asset.absPath = project.resolveInside(target);
+        asset.metaPath = target + '.meta';
+        asset.fileName = path.posix.basename(target);
+        asset.name = path.posix.basename(target, ext);
+        if (project.byName.get(oldName) === asset) project.byName.delete(oldName);
+        project.byName.set(asset.name, asset);
+        return { asset: { guid: asset.guid, name: asset.name, path: asset.relPath } };
+    },
+
+    'script.set': function (project, op, ctx) {
+        if (op.script) {
+            const asset = project.asset(op.script);
+            if (!asset || asset.kind !== 'script') F.fail('ref.script', 'script inexistente: ' + op.script);
+            if (typeof op.content !== 'string') F.fail('op.args', 'script.set exige content');
+            fs.writeFileSync(asset.absPath, op.content);
+            ctx.changedFiles.push(asset.relPath);
+            return { asset: { guid: asset.guid, name: asset.name, path: asset.relPath } };
+        }
+        if (op.name !== undefined) {
+            const r = A.createScript(project, op.name, op.content);
+            for (const abs of r.created) ctx.created.push(abs);
+            ctx.changedFiles.push(r.asset.relPath);
+            return { asset: { guid: r.asset.guid, name: r.asset.name, path: r.asset.relPath } };
+        }
+        F.fail('op.args', 'script.set exige script (guid) ou name');
+    },
+
+    'tilemap.add': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        const asset = project.asset(op.tileset);
+        if (!asset || !['tileset', 'sprite-sheet'].includes(asset.kind)) {
+            F.fail('ref.tileset', 'tileset inexistente (use um asset tileset/sprite-sheet): ' + op.tileset);
+        }
+        const cols = op.cols | 0, rows = op.rows | 0;
+        if (cols < 1 || rows < 1) F.fail('op.args', 'tilemap.add exige cols/rows >= 1');
+        const cell = op.cell !== undefined ? +op.cell : 16;
+        if (!(cell > 0)) F.fail('op.args', 'cell deve ser > 0');
+        const data = Array.isArray(op.data) ? op.data.slice() : new Array(cols * rows).fill(0);
+        if (data.length !== cols * rows) F.fail('op.args', 'data deve ter cols*rows valores');
+        const solids = Array.isArray(op.solids) ? op.solids.slice() : new Array(cols * rows).fill(false);
+        const tm = {
+            id: op.id || ('tm_' + F.newGuid().slice(0, 8)),
+            tileset: asset.guid,
+            cols: cols,
+            rows: rows,
+            cell: F.round(cell),
+            ox: F.round(op.ox || 0),
+            oy: F.round(op.oy || 0),
+            layer: op.layer | 0,
+            data: data,
+            solids: solids,
+        };
+        if (op.autotile) tm.autotile = F.deepClone(op.autotile);
+        sc.tilemaps = sc.tilemaps || [];
+        sc.tilemaps.push(tm);
+        project.writeScene(sc);
+        return { tilemap: tm };
+    },
+
+    'tilemap.set': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        const tm = (sc.tilemaps || []).find((t) => t.id === op.tilemap);
+        if (!tm) F.fail('ref.tilemap', 'tilemap inexistente: ' + op.tilemap);
+        for (const k of ['cols', 'rows', 'cell', 'ox', 'oy', 'layer', 'data', 'solids', 'autotile']) {
+            if (op[k] !== undefined) tm[k] = F.deepClone(op[k]);
+        }
+        if (op.tileset) {
+            const asset = project.asset(op.tileset);
+            if (!asset) F.fail('ref.tileset', 'tileset inexistente: ' + op.tileset);
+            tm.tileset = asset.guid;
+        }
+        if (tm.data && tm.cols && tm.rows && tm.data.length !== tm.cols * tm.rows) {
+            F.fail('schema.range', 'data tem ' + tm.data.length + ', esperava ' + (tm.cols * tm.rows));
+        }
+        project.writeScene(sc);
+        return { tilemap: tm };
+    },
+
+    'tilemap.paint': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        const tm = (sc.tilemaps || []).find((t) => t.id === op.tilemap);
+        if (!tm) F.fail('ref.tilemap', 'tilemap inexistente: ' + op.tilemap);
+        const c = op.c | 0, r = op.r | 0;
+        if (c < 0 || r < 0 || c >= tm.cols || r >= tm.rows) F.fail('schema.range', 'celula fora da grade');
+        const i = r * tm.cols + c;
+        if (op.value !== undefined) tm.data[i] = op.value | 0;
+        if (op.solid !== undefined) {
+            tm.solids = tm.solids || new Array(tm.cols * tm.rows).fill(false);
+            tm.solids[i] = !!op.solid;
+        }
+        project.writeScene(sc);
+        return { c, r, value: tm.data[i] };
+    },
+
+    'tilemap.fill': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        const tm = (sc.tilemaps || []).find((t) => t.id === op.tilemap);
+        if (!tm) F.fail('ref.tilemap', 'tilemap inexistente: ' + op.tilemap);
+        const c0 = op.c0 | 0, r0 = op.r0 | 0, c1 = op.c1 | 0, r1 = op.r1 | 0;
+        for (let r = Math.max(0, r0); r <= Math.min(tm.rows - 1, r1); r++) {
+            for (let c = Math.max(0, c0); c <= Math.min(tm.cols - 1, c1); c++) {
+                tm.data[r * tm.cols + c] = op.value | 0;
+            }
+        }
+        project.writeScene(sc);
+    },
+
+    'tilemap.remove': function (project, op) {
+        const sc = project.scene(op.scene);
+        if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
+        sc.tilemaps = (sc.tilemaps || []).filter((t) => t.id !== op.tilemap);
+        project.writeScene(sc);
+    },
+};
+
+// refs de assets em uma cena/prefab (para asset.delete)
+function collectRefs(obj, refs) {
+    for (const e of obj.entities || []) {
+        if (e.prefab) refs.add(e.prefab);
+        for (const c of e.components || []) {
+            const f = c.fields || {};
+            for (const k of ['sprite', 'script']) {
+                if (typeof f[k] === 'string' && f[k]) refs.add(f[k].split('#')[0]);
+            }
+            if (f.clips) walkRefs(f.clips, refs);
+        }
+    }
+    for (const tm of obj.tilemaps || []) if (tm.tileset) refs.add(tm.tileset.split('#')[0]);
+    return refs;
+}
+
+function walkRefs(v, refs) {
+    if (typeof v === 'string') {
+        if (/^[0-9a-f]{32}(#.*)?$/.test(v)) refs.add(v.split('#')[0]);
+        return;
+    }
+    if (Array.isArray(v)) { for (const x of v) walkRefs(x, refs); return; }
+    if (v && typeof v === 'object') { for (const k in v) walkRefs(v[k], refs); }
+}
+
+function referenced(project, guid) {
+    const refs = new Set();
+    for (const sc of project.sceneByGuid.values()) collectRefs(sc, refs);
+    for (const pf of project.prefabByGuid.values()) collectRefs(pf, refs);
+    return refs.has(guid);
+}
+
+// ------------------------------------------------------------------ apply ----
+
+function applyOps(dir, ops, opts) {
+    opts = opts || {};
+    const project = Project.open(dir);
+    if (opts.ifRev !== undefined && opts.ifRev !== null && project.data.rev !== opts.ifRev) {
+        F.fail('rev.stale', 'projeto mudou (rev ' + project.data.rev + ', esperado ' + opts.ifRev + ')',
+               { hint: 'recarregue com `studio describe`' });
+    }
+    if (!Array.isArray(ops) || !ops.length) F.fail('ops.empty', 'nenhuma op informada');
+
+    const id = Date.now() + '_' + F.newGuid().slice(0, 6);
+    const rels = textFiles(project);
+    // binarios que serao apagados/renomeados entram no snapshot
+    for (const op of ops) {
+        if (!op || !op.op) F.fail('ops.invalid', 'op sem campo "op"');
+        if ((op.op === 'asset.delete' || op.op === 'asset.rename') && op.asset) {
+            const a = project.asset(op.asset);
+            if (a) rels.push(a.relPath);
+        }
+    }
+    const snap = takeSnapshot(project, 'undo', id, rels);
+    const ctx = { created: [], snapshotRels: [], changedFiles: [] };
+    const warnings = [];
+    const results = [];
+
+    try {
+        for (const op of ops) {
+            const fn = OPS[op.op];
+            if (!fn) F.fail('op.unknown', 'op desconhecida: ' + op.op,
+                            { hint: 'veja `studio describe` para a lista' });
+            results.push(fn(project, op, ctx) || null);
+        }
+
+        const { validateProject } = require('./validate');
+        const check = validateProject(project, { structural: true });
+        for (const w of check.warnings || []) warnings.push(w);
+        if (check.errors.length) {
+            const e = new F.StudioError('validate.failed',
+                'validacao falhou: ' + check.errors.length + ' erro(s)',
+                { diagnostics: check.errors });
+            throw e;
+        }
+
+        const changed = Array.from(new Set(
+            Array.from(project.dirty).concat(ctx.changedFiles,
+                ctx.created.map((p) => path.isAbsolute(p) ? path.relative(project.dir, p) : p))
+        )).sort();
+
+        // o undo precisa remover arquivos que NAO existiam no snapshot: os
+        // criados por import/script e os modelos novos (cena/prefab/meta)
+        const entriesRel = new Set(snap.manifest.entries.map((e) => e.rel));
+        const createdRels = new Set();
+        for (const rel of project.dirty) if (!entriesRel.has(rel)) createdRels.add(rel);
+        for (const p of ctx.created) {
+            const rel = path.isAbsolute(p) ? F.relPosix(project.dir, p) : p;
+            if (!entriesRel.has(rel)) createdRels.add(rel);
+        }
+        snap.manifest.created = Array.from(createdRels).sort();
+
+        if (opts.dryRun) {
+            // devolve o preview sem tocar no disco: restaura o snapshot
+            restoreSnapshot(project, snap);
+            fs.rmSync(snap.dir, { recursive: true, force: true });
+            return { ok: true, dryRun: true, id, changed, created: ctx.created, warnings,
+                     results, rev: project.data.rev };
+        }
+
+        F.writeJson(path.join(snap.dir, 'manifest.json'), snap.manifest);
+
+        const written = project.saveDirty();
+        for (const rel of written) if (changed.indexOf(rel) < 0) changed.push(rel);
+        changed.sort();
+
+        // journal (auditoria de IA)
+        try {
+            fs.mkdirSync(project.studioDir, { recursive: true });
+            fs.appendFileSync(path.join(project.studioDir, 'journal.jsonl'),
+                JSON.stringify({ ts: Date.now(), id, ops, changed }) + '\n');
+        } catch (e) { /* journal e opcional */ }
+
+        return { ok: true, id, changed, created: ctx.created, warnings, results, rev: project.data.rev };
+    } catch (e) {
+        // rollback: nada muda se o lote falhar
+        const entriesRel = new Set(snap.manifest.entries.map((x) => x.rel));
+        const createdRels = new Set();
+        for (const rel of project.dirty) if (!entriesRel.has(rel)) createdRels.add(rel);
+        for (const p of ctx.created) {
+            const rel = path.isAbsolute(p) ? F.relPosix(project.dir, p) : p;
+            if (!entriesRel.has(rel)) createdRels.add(rel);
+        }
+        snap.manifest.created = Array.from(createdRels);
+        try { restoreSnapshot(project, snap); } catch (e2) {}
+        try { fs.rmSync(snap.dir, { recursive: true, force: true }); } catch (e2) {}
+        throw e;
+    }
+}
+
+module.exports = {
+    OPS, applyOps, undo, redo, takeSnapshot, restoreSnapshot, textFiles, referenced,
+};

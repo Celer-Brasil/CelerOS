@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Celer Studio prefab",
+  "description": "*.prefab.json — arvore de entidades reutilizavel. O build ACHATA cada instancia na cena (runtime nao resolve prefab). Transform do prefab e local (0,0 = origem da instancia).",
+  "type": "object",
+  "required": ["format", "guid", "name", "entities"],
+  "properties": {
+    "format": { "const": 1 },
+    "rev": { "type": "integer", "minimum": 1 },
+    "guid": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "name": { "type": "string", "minLength": 1 },
+    "entities": {
+      "type": "array",
+      "items": { "type": "object", "description": "mesma forma de uma entidade de cena (fid, transform, components)" }
+    }
+  }
+}

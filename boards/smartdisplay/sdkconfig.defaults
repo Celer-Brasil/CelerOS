@@ -9,6 +9,9 @@ CONFIG_SPIRAM_MODE_OCT=y
 # tabela MSPI_TIMING_FLASH_CONFIG_TABLE_CORE_CLK_240M_MODULE_CLK_80M_STR_MODE
 # nao existe. Reavaliar em IDF 6.1.x futuro.
 CONFIG_SPIRAM_SPEED_80M=y
+# Boot: o memtest de PSRAM (default y) varre os 8 MB a cada boot e nao
+# devolve nada em producao; o Tactility desliga (device.py:232).
+CONFIG_SPIRAM_MEMTEST=n
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

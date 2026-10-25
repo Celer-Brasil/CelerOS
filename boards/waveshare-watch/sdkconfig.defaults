@@ -8,6 +8,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_32MB.csv"
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+# Boot: memtest de PSRAM off (ver smartdisplay; device.py:232).
+CONFIG_SPIRAM_MEMTEST=n
 CONFIG_SPIRAM_USE_MALLOC=y
 # malloc ate 1 KB fica na interna; acima vai para a PSRAM (quem precisa de
 # DMA/interna pede por caps). Com 4096 os caches/buffers de 1-4 KB de

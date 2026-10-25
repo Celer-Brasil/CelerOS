@@ -8,6 +8,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16MB.csv"
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
+# Boot: memtest de PSRAM off (ver smartdisplay; device.py:232).
+CONFIG_SPIRAM_MEMTEST=n
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 # Stack de task na PSRAM (worker do AI no JS): sem isso o xTaskCreateWithCaps

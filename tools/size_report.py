@@ -6,9 +6,13 @@ Uso (com o ambiente ESP-IDF exportado, apos `idf.py build`):
   python3 tools/size_report.py --board cyd --top 20
   python3 tools/size_report.py --save-baseline .omo/size_baseline.json
   python3 tools/size_report.py --baseline .omo/size_baseline.json
+  python3 tools/size_report.py --check-budget tools/size_baseline.json
 
 Sai com codigo 1 se alguma placa ficar com menos de --min-free-kb livres no
-slot OTA (padrao 64 KB): toda feature nova passa a ter custo visivel.
+slot OTA (padrao 64 KB) ou, com --check-budget, se a imagem crescer mais de
+--max-growth-kb (padrao 8 KB) em relacao ao baseline. O baseline e o teto sao
+deliberados: placa nova precisa entrar no JSON num commit proprio, senao o
+check falha (crescimento nao passa despercebido).
 """
 import argparse
 import csv
@@ -104,6 +108,33 @@ def stale_source(bdir):
     return None
 
 
+def budget_problems(measured, baseline, selected, max_growth_kb):
+    """Problemas do teto de crescimento, um (placa, motivo) por falha.
+
+    Funcao pura: `measured` e `baseline` sao {placa: {image, stale?}}, e
+    `selected` e a lista de placas que ESTA execucao deveria medir (o CI
+    roda uma por job). Baseline ausente, medida ausente e bin stale contam
+    como falha: o teto so vale quando o numero e confiavel.
+    """
+    out = []
+    for b in selected:
+        m = measured.get(b)
+        if m is None:
+            if b in baseline:
+                out.append((b, "esta no baseline e nao foi medido"))
+            continue
+        prev = baseline.get(b)
+        if prev is None:
+            out.append((b, "sem entrada no baseline (grave --save-baseline de proposito)"))
+            continue
+        if m.get("stale"):
+            out.append((b, f"bin stale ({m['stale']}); remonte antes de confiar"))
+        growth = m["image"] - int(prev["image"])
+        if growth > max_growth_kb * 1024:
+            out.append((b, f"cresceu {growth:+,} B (teto {max_growth_kb} KB)"))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", choices=[*BOARDS, "all"], default="all")
@@ -111,19 +142,34 @@ def main():
     ap.add_argument("--min-free-kb", type=int, default=64)
     ap.add_argument("--baseline", help="JSON salvo antes; mostra o delta por biblioteca")
     ap.add_argument("--save-baseline", help="grava as medidas atuais neste JSON")
+    ap.add_argument("--check-budget",
+                    help="JSON de baseline; falha se a imagem crescer acima do teto")
+    ap.add_argument("--max-growth-kb", type=int, default=8,
+                    help="teto de crescimento por placa em KB (com --check-budget)")
     args = ap.parse_args()
+
+    if args.check_budget and args.save_baseline:
+        raise SystemExit("--check-budget e --save-baseline sao exclusivos: "
+                         "grave o baseline num commit e confira contra ele no CI")
 
     boards = list(BOARDS) if args.board == "all" else [args.board]
     base = {}
     if args.baseline:
         with open(args.baseline) as f:
             base = json.load(f)
+    budget = {}
+    if args.check_budget:
+        with open(args.check_budget) as f:
+            budget = json.load(f)
 
     results, failed = {}, False
     for b in boards:
         m = measure(b)
         if m is None:
             print(f"[{b}] sem build ({BOARDS[b]['build']}/CelerOS.bin)")
+            if b in budget:
+                print(f"  ORCAMENTO SEM MEDIDA: {b} esta no baseline e nao foi medido")
+                failed = True
             continue
         results[b] = m
         free = m["slot"] - m["image"]
@@ -135,6 +181,12 @@ def main():
         print(line)
         if m["stale"]:
             print(f"  (ATENCAO: bin mais velho que {m['stale']} — build interrompido? remonte antes de confiar)")
+        if args.check_budget:
+            prev = budget.get(b)
+            if prev is not None:
+                growth = m["image"] - int(prev["image"])
+                if growth > 0:
+                    print(f"  crescimento {growth:+,} B (teto {args.max_growth_kb} KB)")
         arch = m["archives"]
         names = sorted(set(arch) | set(old["archives"] if old else {}), key=lambda k: -arch.get(k, 0))
         for name in names[: args.top]:
@@ -151,6 +203,12 @@ def main():
                 print(f"    {'':>9}  {n}  ({d:+,})")
         if free < args.min_free_kb * 1024:
             print(f"  ORCAMENTO ESTOURADO: menos de {args.min_free_kb} KB livres no slot OTA")
+            failed = True
+
+    if args.check_budget:
+        problems = budget_problems(results, budget, boards, args.max_growth_kb)
+        for b, why in problems:
+            print(f"  ORCAMENTO [{b}]: {why}")
             failed = True
 
     if args.save_baseline:

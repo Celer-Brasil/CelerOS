@@ -56,6 +56,8 @@ jobs:
           python3 test/test_celerctl.py
       - name: celerhub tests (versao de dep, drift repo x hub, teto enxuto)
         run: python3 test/test_celerhub.py
+      - name: size_report tests (teto de crescimento por placa)
+        run: python3 test/test_size_report.py
       - name: require no Duktape real (host)
         run: python3 test/duk/run.py
       - name: matilha tests (netframe da malha + no CelerNet + bond do link)
@@ -128,7 +130,8 @@ jobs:
           # (f4db0da, ~45 KB) tinha comido; CYD media 90 KB livres na
           # rodada do menu de recursos. esp32-cam (108 KB) tambem passa.
           MIN=64
-          python3 tools/size_report.py --board ${{ matrix.board }} --min-free-kb $MIN
+          python3 tools/size_report.py --board ${{ matrix.board }} --min-free-kb $MIN \
+            --check-budget tools/size_baseline.json --max-growth-kb 8
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v7
         with:

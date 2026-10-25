@@ -633,6 +633,64 @@ pelo `E.level` (`areas: {campo: {w: 4, h: 3, rooms: {"0,0": [...]}}}`).
 - sfx 1.4: sons de aventura originais (`espada`, `porta`, `segredo`, `item`,
   `chave`, `bumerangue`, `queda`, `escada`, `cristal`).
 
+## 14f. Cena e prefab como dado (`celeros.game.scene`, opcional)
+
+Quando o mapa tem **entidades** (inimigos, baús, gatilhos, spawn points) e não só
+tiles, o `celeros.game.scene` deixa o layout fora do código. A lista mora num
+módulo de dados do app — não `.json`: ler arquivo exige a permissão `fs` e o
+diálogo de consentimento; um `require` não pede nada.
+
+```js
+// fase1.js — só dado
+module.exports = [
+  { tipo: 'goblin', x: 300, y: 200, hp: 5, nome: 'chefe' },
+  { tipo: 'bau',    x: 120, y: 210, abre: '#chefe' },      // referência por nome
+  { tipo: 'saida',  x: 420, y: 210, precisa: '#chefe' }
+];
+
+// jogo.js
+var E = require('celeros.game'); require('celeros.game.scene');
+E.scene.def('goblin', {
+  campos: ['hp', 'vel'], defaults: { vel: 20 },
+  create: function (p) { return criaGoblin(p); },   // objeto com update/draw
+  start: function (e) { e.anim = E.anim(CLIPES.goblin, 8); }
+});
+E.scene.def('bau', { campos: ['abre'], create: function () { return criaBau(); } });
+E.scene.def('saida', { campos: ['precisa'], create: function () { return criaSaida(); } });
+
+var grupo = E.group();
+E.scene.instantiate(require('fase1'), grupo);      // prefab posicionado: {x, y} desloca
+```
+
+As três fases do `instantiate` são o contrato: **cria todas** → **resolve as
+referências** (`"#nome"` ou `"#id"`) → **chama `start`**. Nenhum `start` vê
+referência nula, então a ordem da lista não importa. Quem nasce depois (spawn em
+runtime) resolve com `E.scene.resolve(ent, grupo)` — a referência sem alvo fica
+como string no dado, não vira `undefined` silencioso.
+
+Persistir o mundo é uma linha, e o resultado é JSON-safe (o `save` reemite a
+referência como `"#nome"`, não o objeto inteiro):
+
+```js
+var dados = E.scene.save(grupo);          // {version: 1, entidades: [...]}
+E.save.setObj('mundo', dados);            // ou FS.writeFile com permissão fs
+// depois:
+var novos = E.scene.load(E.save.obj('mundo', null), grupo);   // ids novos, refs re-resolvidas
+```
+
+Compatibilidade, que é o motivo de o formato ter `version`: dado de versão
+**maior** é recusado inteiro (`load` devolve `null` e avisa no log) em vez de
+carregar pela metade; de versão menor passa pelas migrações registradas com
+`E.scene.migra(0, function (rec) { rec.hp = rec.vida; delete rec.vida; })`.
+Campo desconhecido sobrevive ao `save` (um arquivo mais novo não perde dados ao
+passar por esta engine) e renomear campo tem caminho no `def`:
+`rename: { hp: 'vida' }` lê a chave antiga quando a nova falta e o save deixa de
+emitir a velha.
+
+Custo: é módulo, não core — quem não adota não paga. Prefabs nomeados
+(`E.scene.prefab('sala1', lista)` e `instantiate('sala1')`) reusam o mesmo dado
+em vários mapas.
+
 ## 15. Física (`celeros.physics`, opcional)
 
 **A maioria dos jogos não precisa de módulo de física.** Num device
@@ -1117,6 +1175,7 @@ no JS quando os mundos nativos acabam).
 | `E.fsm`, `E.on/emit`, `E.path`, `E.collide`, `E.pad`, `E.level` | módulos para jogos complexos (§14c) |
 | `E.script`, `E.inv`, `E.steer`, `E.gen`, `E.stats`, `E.waves` | cutscene, inventário, steering, fase procedural, atributos de combate, diretor de ondas (§14d) |
 | `E.combat`, `E.world`, `E.freeze`, `E.save.slot`, `E.spr.stamp`, `E.anim.dir` | ação e aventura: hitbox/knockback/hitstop, salas do tamanho da tela com slide, arquivos de jogo, sala gravada, animação em 4 direções (§14e) |
+| `E.scene.def/spawn/instantiate`, `E.scene.save/load/migra`, `E.scene.prefab` | cena e prefab como dado: referências por nome resolvidas antes do `start`, save/load com versão e migração (§14f) |
 | `E.spr.prescale(lista, {key})` | grava quadros na escala da tela num slot só: desenho em escala 1 no lugar do `drawSprite` afim por quadro (§18c) |
 | `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | parâmetro de cena, recarga na tela, passeio de câmera, corações de vida (core 1.3) |
 | `E.prof.on/snapshot/reset`, `E.frameMs` | perfilador por trecho: input/mods/update/draw em us (§18d) |

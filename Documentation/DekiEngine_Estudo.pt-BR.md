@@ -390,7 +390,16 @@ agora declara `"requires": ["psram"]`. Na prática nada quebrou (as 11 apps do
 catálogo que usam a engine já declaravam psram e nenhuma roda na CYD), mas o
 "jogo só-core sem PSRAM" deixou de existir; a dieta do core (mover `E.audio`/
 `E.save`/véus para módulos) fica como o caminho para reabrir esse espaço.
-B1 (`celeros.game.scene`) segue **não implementado** — precisa de desenho próprio.
+
+**B1 também implementado** (na sequência direta deste estudo):
+`celeros.game.scene` 1.0.0 — cena e prefab como dado, num módulo novo (o core
+não mudou). Traduziu o desenho do deki sem reflexão nem MessagePack: `def()`
+com campos/defaults/rename, `instantiate` em três fases (cria → resolve as
+refs → `start`), save/load JSON com `version` + migração registrada e extras
+preservados. O que **não** veio: ids determinísticos por instância (aqui a
+referência é por nome, que é o que um arquivo escrito a mão aguenta) e a
+resolução de ref *one-shot* deles (aqui `resolve()` re-resolve o que nasceu
+depois). O guia (§14f, EN e pt-BR) documenta o formato.
 
 ---
 

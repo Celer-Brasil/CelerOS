@@ -631,6 +631,64 @@ E.combat.move(heroi, dt, W);   // W = the world: a collision map
 - sfx 1.4: original adventure sounds (`espada`, `porta`, `segredo`, `item`,
   `chave`, `bumerangue`, `queda`, `escada`, `cristal`).
 
+## 14f. Scene and prefab as data (`celeros.game.scene`, optional)
+
+When the map has **entities** (enemies, chests, triggers, spawn points) and not
+just tiles, `celeros.game.scene` moves the layout out of the code. The list lives
+in an app data module — not `.json`: reading files needs the `fs` permission and
+a consent dialog; a `require` asks for nothing.
+
+```js
+// level1.js — data only
+module.exports = [
+  { tipo: 'goblin', x: 300, y: 200, hp: 5, nome: 'boss' },
+  { tipo: 'chest',  x: 120, y: 210, abre: '#boss' },      // reference by name
+  { tipo: 'exit',   x: 420, y: 210, precisa: '#boss' }
+];
+
+// game.js
+var E = require('celeros.game'); require('celeros.game.scene');
+E.scene.def('goblin', {
+  campos: ['hp', 'vel'], defaults: { vel: 20 },
+  create: function (p) { return makeGoblin(p); },      // object with update/draw
+  start: function (e) { e.anim = E.anim(CLIPS.goblin, 8); }
+});
+E.scene.def('chest', { campos: ['abre'], create: function () { return makeChest(); } });
+E.scene.def('exit', { campos: ['precisa'], create: function () { return makeExit(); } });
+
+var group = E.group();
+E.scene.instantiate(require('level1'), group);   // positioned prefab: {x, y} offsets it
+```
+
+The three phases of `instantiate` are the contract: **create all** → **resolve
+references** (`"#name"` or `"#id"`) → **call `start`**. No `start` ever sees a
+null reference, so list order does not matter. Anything born later (a runtime
+spawn) resolves with `E.scene.resolve(ent, group)` — a reference without a target
+stays a string in the data instead of silently becoming `undefined`.
+
+Persisting the world takes one line, and the result is JSON-safe (`save`
+re-emits the reference as `"#name"`, not the whole object):
+
+```js
+var data = E.scene.save(group);            // {version: 1, entidades: [...]}
+E.save.setObj('world', data);              // or FS.writeFile with the fs permission
+// later:
+var fresh = E.scene.load(E.save.obj('world', null), group);   // new ids, refs re-resolved
+```
+
+Compatibility, which is why the format carries `version`: data with a **higher**
+version is refused whole (`load` returns `null` and warns) instead of loading
+half-way; older data goes through the migrations registered with
+`E.scene.migra(0, function (rec) { rec.hp = rec.vida; delete rec.vida; })`.
+Unknown fields survive `save` (a newer file loses nothing by passing through this
+engine) and renaming a field has a path in the `def`:
+`rename: { hp: 'vida' }` reads the old key when the new one is missing, and
+`save` stops emitting the old one.
+
+Cost: it is a module, not core — nothing is paid unless adopted. Named prefabs
+(`E.scene.prefab('room1', list)` plus `instantiate('room1')`) reuse the same data
+across maps.
+
 ## 15. Physics (`celeros.physics`, optional)
 
 **Most games need no physics module at all.** On a Duktape device an
@@ -1126,6 +1184,7 @@ run out).
 | `E.slots.create/release/n/report`, `scene.dispose()` | owned sprite pool + the place to return a native resource (§18d) |
 | `E.ax/ay/anchor`, `E.inset` | 9-point HUD aware of the glass safe margin (§18d) |
 | `E.spr.meta/animOf/box` | art metadata (grid, clips, fps, anchor, hitbox) in a data module (§18d) |
+| `E.scene.def/spawn/instantiate`, `E.scene.save/load/migra`, `E.scene.prefab` | scene and prefab as data: references by name resolved before `start`, versioned save/load with migration (§14f) |
 | `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 
 Editor autocomplete ships in the scaffold: the `.d.ts` of each adopted module (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) alongside `celer.d.ts` (firmware API); `require("celeros.engine")` games keep the all-in-one `celeros.engine.d.ts`, GENERATED from the module `.d.ts` files by `node tools/sdk/lib/engine_dts.js` (edit the module's file, then rerun; `test/sdk` fails on drift and on any public engine member without a type).

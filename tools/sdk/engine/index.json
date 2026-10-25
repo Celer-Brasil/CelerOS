@@ -18,6 +18,11 @@
       "celeros.game": "^1.5.0"
     }
   },
+  "celeros.game.scene": {
+    "deps": {
+      "celeros.game": "^1.5.0"
+    }
+  },
   "celeros.game.tilemap": {
     "deps": {
       "celeros.game": "^1.0.0"

@@ -2953,6 +2953,8 @@ require('./celergame_r4.js')(check);
 // core 1.5 (A0-A6 do estudo do deki-engine): remove no update, pacing em us,
 // E.prof, dispose/E.slots, aviso de slot, E.ax/ay/anchor, E.spr.meta/animOf/box
 require('./celergame_r5.js')(check);
+// B1 (o mesmo estudo): cena e prefab como dado — celeros.game.scene
+require('./celergame_r6.js')(check);
 // CelerKit rodada 1: familia celeros.app.* (apps gerais) + gates de familia
 require('./celerosapp_r1.js')(check);
 

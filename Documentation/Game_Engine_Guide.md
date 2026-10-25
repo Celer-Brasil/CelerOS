@@ -6,16 +6,19 @@
 
 | Dep | Stripped | What it gives you |
 |---|---|---|
-| **`celeros.game`** (core) | ~25 KB | loop with scenes + transitions, touch gestures, camera-aware drawing, math/RNG, tweens/timers/`E.seq`, groups/pools, dirty-rect layer, chiptune audio with beat clock, NVS saves |
-| **`celeros.game.fx`** | ~6 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
-| **`celeros.game.spr`** | ~2 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)** |
-| **`celeros.game.tilemap`** | ~2 KB | grid of dirty cells for big procedural scenarios |
-| **`celeros.game.ui`** | ~5 KB | menus, scrollable lists, typewriter dialogs, ready title/pause/game-over screens |
+| **`celeros.game`** (core) | ~51 KB | loop with scenes + transitions, touch gestures, camera-aware drawing, math/RNG, tweens/timers/`E.seq`, groups/pools, dirty-rect layer, chiptune audio with beat clock, NVS saves, section profiler (`E.prof`), owned sprite pool (`E.slots`), anchored HUD (`E.ax/ay/anchor`) |
+| **`celeros.game.fx`** | ~13 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
+| **`celeros.game.spr`** | ~12 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
+| **`celeros.game.tilemap`** | ~4 KB | grid of dirty cells for big procedural scenarios |
+| **`celeros.game.ui`** | ~12 KB | menus, scrollable lists, typewriter dialogs, ready title/pause/game-over screens |
 | **`celeros.engine`** | shim (0.2 KB) | the **whole family assembled** — the pre-modularity API (1.2.x) in one `require`; existing games keep working unchanged |
 | **`celeros.physics`** (optional) | ~7 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | bomberman-style arenas + BFS chase flow, sfx melody tables, CelerNet boilerplate (same family, unrelated modules) |
 
-Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: a core-only game is ~25 KB stripped (fits the 48 KB no-PSRAM budget), the full family ~35 KB.
+Sizes are **stripped** (jsstrip), measured 2026-10 — check with
+`node tools/sdk/lib/jsstrip.js tools/sdk/engine/<module>.js` before planning.
+
+Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is already over the 48 KB no-PSRAM ceiling** (51 KB since 1.5.0), so every app using the engine declares `"requires": ["psram"]`; the full family is ~171 KB.
 
 Everything is ES5 (Duktape) and feature-detects the firmware at runtime, so the same game runs on every board — and unchanged in the Node test harness and emulator.
 
@@ -25,9 +28,9 @@ Everything is ES5 (Duktape) and feature-detects the firmware at runtime, so the 
 |---|---|
 | Firmware API | 23+ for modules; **30+** for the shared deps (newer features — smooth primitives, `playMusic`, native canvas — are auto-detected) |
 | Intended boards | The ESP32-S3 boards with PSRAM: SmartDisplay, Waveshare watch, SpotPear dog |
-| Size budget | Deps count toward the app ceiling EVEN shared (they compile inside each game's heap): core ~25 KB + ~23 KB for your code fits the plain 48 KB budget; bigger games declare `"requires": ["psram"]` to lift the budget to 1 MB (the store then blocks installing on non-PSRAM boards). The hub measures deps **stripped**, as the device compiles them |
+| Size budget | Deps count toward the app ceiling EVEN shared (they compile inside each game's heap): **the core alone is ~51 KB stripped**, above the plain 48 KB budget — apps using the engine declare `"requires": ["psram"]`, which lifts the budget to 1 MB (the store then blocks installing on non-PSRAM boards). The hub measures deps **stripped**, as the device compiles them |
 | App flavor | `"topbar": false` for fullscreen games (like Supernova) is recommended; the exit button lives in your title menu (`System.exitApp()`) |
-| CYD (no PSRAM) | **Core-only games now fit**: `celeros.game` (~25 KB) + ~20 KB of your code under the 48 KB ceiling, no vendoring. Adopt fx/spr/tilemap only if your budget allows; the full family + code needs `"psram"` |
+| CYD (no PSRAM) | The engine **does not run** on the CYD: without PSRAM the ceiling is 48 KB and the core alone is past it. On the CYD, apps use the JS API directly (`System`/`UI`), like the system apps; no catalog game runs there today (they all declare `psram`) |
 
 ## 2. Getting started
 
@@ -816,7 +819,7 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 
 ## 18. Size and performance
 
-- Deps count toward the app ceiling (each game compiles them in its own heap) — **adopt only what you use**: core ~25 KB stripped, fx ~6, ui ~5, spr ~2, tilemap ~2 (full family ~35 KB ≈ the old monolith). Over 48 KB total → `"requires": ["psram"]` lifts the budget to 1 MB. The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js` (1:1 port of the firmware's JsStripper — comments/indentation out, line breaks kept, so error lines still match the source), which is exactly what the device compiles.
+- Deps count toward the app ceiling (each game compiles them in its own heap) — **adopt only what you use**: core ~51 KB stripped, fx ~13, ui ~12, spr ~12, tilemap ~4 (full family ~171 KB). Since the core alone is past 48 KB, apps using the engine declare `"requires": ["psram"]` (1 MB ceiling). The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js` (1:1 port of the firmware's JsStripper — comments/indentation out, line breaks kept, so error lines still match the source), which is exactly what the device compiles.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses. Since engine 1.2.3 the wrappers themselves don't allocate: opts-less `E.gfx.*` calls share one read-only object, `E.font` lookups are memoized and each string's `textWidth` is measured once per style — repeated HUD/score/button text costs no extra firmware calls.
 - If you call `System.setTextDatum` directly, restore `0` when done: engine 1.2.3 only touches the datum when a text asks for a non-default origin, so `E.gfx.text` relies on apps leaving it at `0` (every app in this repo already does).
 - Avoid full-screen `fillScreen` + redraw everything per frame: on the SmartDisplay's RGB panel (framebuffer scanned from PSRAM) it starves the LCD DMA and the image jitters. Use `static` scenes, `E.dirty` and `E.tilemap` (§16b).
@@ -878,6 +881,107 @@ The rules below are what made the difference.
   `E.dirty._begin`, `E._pollInput` and `System.delay`. Print every 2 s with `System.print` and read
   the lines with `celerctl logcat --dump`. In the harness, count native calls per frame by wrapping
   `System.*` in an `--events` file. Pixel area per frame is the cost that matters on the RGB panel.
+
+## 18d. Core 1.5: profiler, owned pool, anchored HUD and art metadata
+
+Round born from the **deki-engine** study (see `DekiEngine_Estudo.pt-BR.md`). All additive:
+declare `^1.5.0` for the core (and `^1.6.0` for spr). **Mind the size**: with this round the
+core alone went past 48 KB stripped — apps using the engine declare `"requires": ["psram"]`.
+
+### `E.prof` — where the milliseconds go
+
+`E.frameMs` says *how much* a frame cost; `E.prof` says *where*. Enabled it costs 5
+`System.micros()` reads per frame and publishes the average of a 30-frame window, in
+microseconds.
+
+```js
+E.init({ fps: 30 });
+E.prof.on = true;                  // when on, the E.debug overlay shows "u3 d12"
+// after a few seconds (or through celerctl debug --eval):
+System.print(JSON.stringify(E.prof.snapshot()));
+// {"n":12,"fps":29,"frame":41200,"input":900,"mods":1500,"update":21000,
+//  "draw":17800,"maxFrame":61000}
+E.prof.reset();                    // clears the window (e.g. before measuring a scene)
+```
+
+`input` is the touch poll, `mods` the sum of module ticks (fx/pad/...), `update` and `draw` are
+the scene, `frame` is the whole frame (minus the pacing sleep). Disabled it costs one `if`.
+It measures **your** code; for CPU per task use `celerctl top -w`.
+
+### `E.slots` — the sprite pool with an owner
+
+The native pool (16 slots with PSRAM, **1 without**) used to be counted by hand and a forgotten
+slot only came back on app reset. Now `spr` and `world` allocate through one ledger that
+**warns in the log** when a slot is missing (with the requested size and usage):
+
+```js
+var id = E.slots.create('myHud', 120, 24);   // 0 = did not fit (warns once)
+if (id) { /* System.useSprite(id) ... */ E.slots.release(id); }
+E.slots.n();          // how many are busy now
+E.slots.report();     // { used, cap, owners: { "spr:hero": 1, "world:room": 1 } }
+```
+
+Scenes that allocate native resources get the right place to give them back: **`dispose()`**.
+
+```js
+var scene = {
+    enter: function () { this.bg = E.slots.create('bg', E.W, E.H); },
+    exit: function () { /* last use */ },
+    dispose: function () { E.slots.release(this.bg); }   // after exit, on the way OUT
+};
+```
+
+`dispose` runs on `goto`, on `quit` and on the `goto` that empties the stack — **not** on
+`push` (there the scene is just paused and returns on `pop`; releasing the slot there would
+break the resume).
+
+### `E.ax` / `E.ay` / `E.anchor` — 9-point HUD
+
+`pt` is 0..8 like a numeric keypad (0 north-west, 4 center, 8 south-east). The glass safe margin
+(`E.inset`, from the firmware — the round watch) applies to the left/right edges; no more
+`E.W - w` scattered through your code:
+
+```js
+var x = E.ax(2, 4, 100), y = E.ay(0, 4, 20);      // top-right corner
+E.gfx.text('HP', x, y, { screen: true });
+
+var r = E.anchor(8, 4, 4, 100, 30, myOut);         // south-east; myOut avoids allocating
+E.gfx.rect(r.x, r.y, r.w, r.h, color, { screen: true });
+```
+
+### `E.spr.meta` / `animOf` / `box` — art described once (spr 1.6)
+
+Art metadata as an ES5 object coming from an app **data module** (not `.json`: reading files
+needs the `fs` permission and a consent dialog; a `require` asks for nothing):
+
+```js
+// art.js
+module.exports = {
+  hero: { file: 'hero', cols: 4, rows: 2, tw: 16, th: 16, prefix: 'h',
+          anims: { idle: [0, 1], run: [4, 5, 6, 7], atk: [2] },
+          fps: { run: 12 }, loop: { atk: false },
+          ax: 0.5, ay: 1,              // feet on the ground: stop repeating it per blit
+          hitbox: [2, 4, 12, 10] }     // inside the frame
+};
+
+// game.js
+var E = require('celeros.game'); require('celeros.game.spr');
+E.spr.meta(require('art'));            // registers (and builds the grid/sheet if given)
+var running = E.spr.animOf('hero', 'run');    // ready E.anim (frames, fps, loop)
+running.draw(x, y);                            // blit already uses the metadata anchor
+var box = E.spr.box('hero', x, y, 1, myArray); // [x, y, w, h] at the blit origin
+```
+
+`meta(name)` returns the metadata; `meta({a: m1, b: m2})` registers several. `box` accepts the
+metadata name (grid frame 0) or a frame name (`'h4'`).
+
+### Pacing and `remove` during the tick (fixes)
+
+- Pacing is now in **microseconds with carry**: 60 fps asks for 16.67 ms per frame (before, the
+  integer-ms `1000/fps` floor ran ~62). On overrun the loop yields every 100 ms instead of every
+  frame (1 ms per late frame).
+- `group.remove(o)` **inside update** no longer corrupts the loop: during the tick it marks
+  `dead` and the loop itself collects it. Outside update it still removes immediately.
 
 ## 18b. CelerGame 1.1 (core 1.1.0, fx/spr/tilemap/ui/sfx 1.1.0)
 
@@ -1018,6 +1122,10 @@ run out).
 | `E.combat`, `E.world`, `E.freeze`, `E.save.slot`, `E.spr.stamp`, `E.anim.dir` | action-adventure: hitboxes/knockback/hitstop, screen-sized rooms with slide, game files, baked rooms, 4-way animation (§14e) |
 | `E.spr.prescale(list, {key})` | bake frames at the screen scale into one slot: scale-1 draws instead of the affine `drawSprite` per frame (§18c) |
 | `goto/push/pop {arg}`, `E.prevScene`, `E.timeLeft`, `E.cam.panTo`, `E.gfx.hearts` | scene parameters, cooldown display, camera pans, hp hearts (core 1.3) |
+| `E.prof.on/snapshot/reset`, `E.frameMs` | section profiler: input/mods/update/draw in us (§18d) |
+| `E.slots.create/release/n/report`, `scene.dispose()` | owned sprite pool + the place to return a native resource (§18d) |
+| `E.ax/ay/anchor`, `E.inset` | 9-point HUD aware of the glass safe margin (§18d) |
+| `E.spr.meta/animOf/box` | art metadata (grid, clips, fps, anchor, hitbox) in a data module (§18d) |
 | `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 
 Editor autocomplete ships in the scaffold: the `.d.ts` of each adopted module (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) alongside `celer.d.ts` (firmware API); `require("celeros.engine")` games keep the all-in-one `celeros.engine.d.ts`, GENERATED from the module `.d.ts` files by `node tools/sdk/lib/engine_dts.js` (edit the module's file, then rerun; `test/sdk` fails on drift and on any public engine member without a type).

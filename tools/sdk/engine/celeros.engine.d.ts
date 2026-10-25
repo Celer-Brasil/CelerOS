@@ -53,6 +53,17 @@ declare namespace E {
     let U: number;
     /** Medida do projeto (240 de largura) em pixels da tela atual. */
     function u(v: number): number;
+    /** Margem segura do vidro (inset do firmware) em px do app — 0 sem inset. */
+    let inset: number;
+    /** X de HUD ancorado em 9 pontos (pt 0..8, noroeste..sudeste). A margem
+     *  segura entra nas bordas; centralizado soma x ao centro. */
+    function ax(pt: number, x: number, w: number): number;
+    /** Y de HUD ancorado em 9 pontos (linha = pt / 3: topo, meio, base). */
+    function ay(pt: number, y: number, h: number): number;
+    /** Caixa ancorada de uma vez: {x, y, w, h}. Passe `out` (objeto da cena)
+     *  para nao alocar por quadro. */
+    function anchor(pt: number, x: number, y: number, w: number, h: number,
+                    out?: { x: number; y: number; w: number; h: number }): { x: number; y: number; w: number; h: number };
     interface FontPick { font: number; size: number; h: number }
     /** Maior fonte (1/2/4 x textSize) cuja altura cabe em px. */
     function font(px: number): FontPick;
@@ -63,6 +74,35 @@ declare namespace E {
     let fps: number;
     /** ms gastos no ultimo quadro (update + draw) */
     let frameMs: number;
+    /** Pool nativo de sprites (createSprite): UM dono por slot, contagem unica
+     *  e falha barulhenta no log. spr/world alocam por aqui. */
+    const slots: {
+        /** quantos slots estao ocupados agora */
+        n(): number;
+        /** aloca 1 slot do pool; 0 = nao coube/falhou (avisa no log 1x) */
+        create(dono: string, w: number, h: number): number;
+        /** devolve o slot ao pool (id 0 = nada a fazer) */
+        release(id: number): void;
+        /** {used, cap, owners: {dono: slots}} para diagnostico */
+        report(): { used: number; cap: number; owners: Record<string, number> };
+    };
+    /** Perfilador por trecho (desligado custa um `if`): medias em us da janela
+     *  de 30 quadros. Ligar com E.prof.on = true; o E.debug mostra update/draw. */
+    const prof: {
+        on: boolean;
+        /** amostras ja contadas na janela corrente */
+        n: number;
+        frame: number;
+        input: number;
+        mods: number;
+        update: number;
+        draw: number;
+        /** pior quadro da ultima janela (us) */
+        maxFrame: number;
+        reset(): void;
+        snapshot(): { n: number; fps: number; frame: number; input: number;
+                      mods: number; update: number; draw: number; maxFrame: number };
+    };
     /** overlay de diagnostico: fps, ms do quadro, caixas sujas, particulas */
     let debug: boolean;
     /** escala o dt do update/fx/camera (0.3 = camera lenta); timers e tweens seguem o relogio */
@@ -146,6 +186,10 @@ declare namespace E {
         update?: (dt: number) => void;
         draw?: () => void;
         exit?: () => void;
+        /** Chamado ao SAIR da cena (goto/quit), depois do exit: devolva o que
+         *  e nativo (E.slots.release, E.spr.freeSheet, W.free) para a proxima
+         *  cena nao herdar slot ocupado. Nao roda no push (a cena volta no pop). */
+        dispose?: () => void;
         /** coberta por um E.push */
         pause?: () => void;
         /** descoberta pelo E.pop */
@@ -560,7 +604,26 @@ declare namespace E {
         h: number;
         paint?: (w: number, h: number, x: number, y: number) => void;
     }
-    interface SpriteSlot { id: number; w: number; h: number; paint: SpriteDef['paint'] | null }
+    interface SpriteSlot { id: number; w: number; h: number; paint: SpriteDef['paint'] | null;
+                           ax?: number; ay?: number }
+    /** Metadados de arte (E.spr.meta): folha, clipes, ancora e hitbox num objeto. */
+    interface ArtMeta {
+        /** grade: vira E.spr.grid(nome, {...}) */
+        file?: string; cols?: number; rows?: number; tw?: number; th?: number;
+        prefix?: string; w?: number; h?: number;
+        paint?: (nome: string, x: number, y: number) => void;
+        /** clipes: indices do prefixo (numeros) ou nomes de sprite/regiao */
+        anims?: Record<string, Array<number | string>>;
+        /** fps por clipe (default 6) */
+        fps?: Record<string, number>;
+        /** loop por clipe (default true; false = para no ultimo) */
+        loop?: Record<string, boolean>;
+        /** ancora default do blit/stamp (0..1); ax .5 + ay 1 = pe no chao */
+        ax?: number;
+        ay?: number;
+        /** caixa de colisao dentro do quadro [dx, dy, w, h] (E.spr.box) */
+        hitbox?: number[];
+    }
     const spr: {
         version: string;
         bases: string[];
@@ -578,6 +641,18 @@ declare namespace E {
                                 paint?: (nome: string, x: number, y: number) => void }): Record<string, SpriteSlot>;
         /** nomes prefix+a .. prefix+b (inclusivo; a > b conta para tras) */
         frames(prefix: string, a: number, b: number): string[];
+        /** Registra metadados de arte (grade + clipes + ancora + hitbox) e, se
+         *  tiver cols/rows, monta a grade pelo sheet. Um objeto de dados do app
+         *  (require de modulo) vale mais que .json: ler arquivo pede permissao
+         *  "fs". meta(nome) devolve o metadado; meta({a: m1, b: m2}) registra varios. */
+        meta(name: string, m?: ArtMeta): any;
+        meta(map: Record<string, ArtMeta>): any;
+        /** E.anim montado do metadado (frames por indice -> prefixo+i) */
+        animOf(name: string, clip: string): any;
+        /** Hitbox do metadado na MESMA origem do blit: [x, y, w, h]. Aceita o
+         *  nome do metadado (quadro 0 da grade) ou o de um quadro; `out`
+         *  (array da cena) evita alocar por quadro. null sem hitbox. */
+        box(name: string, x: number, y: number, scale?: number, out?: number[]): number[] | null;
         /** libera o slot do sheet e todas as regioes dele */
         freeSheet(name: string): void;
         has(name: string): boolean;

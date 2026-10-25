@@ -41,6 +41,13 @@
 // 1.5.2: stamp dentro de um sprite (E.spr.alvo: prescale, fundo gravado)
 // nao registra caixa suja de TELA — a coordenada e do sprite, e a caixa
 // falsa repintava um pedaco do vidro a toa no quadro seguinte.
+// 1.6.0: os slots passam a ser alocados por E.slots (ledger do core): o
+// dono aparece no log quando falta slot ("sem slot de sprite para spr:x"),
+// e a contagem e uma so (E.spr._used segue valendo, escrita pelo ledger).
+// Novos: E.spr.meta(nome, m) — metadados de arte num objeto (grade, clipes,
+// fps, ancora, hitbox) vindo de um modulo de dados do app; E.spr.animOf
+// monta o E.anim do clipe; E.spr.box devolve a hitbox na mesma origem do
+// blit; a ancora (ax/ay) do metadado vale como default do blit/stamp.
 
 var E = require('celeros.game');
 var S = System;
@@ -64,14 +71,17 @@ function alias(s, x, y, o, k) {
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.5.2',
+    version: '1.6.0',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
     alvo: 0,
     _slots: {},
     _sheets: {},        // spritesheets: 1 PNG inteiro + regioes nomeadas
-    _used: 0,
+    _meta: {},          // metadados de arte por nome (E.spr.meta)
+    // contagem de slots viva: o ledger do core escreve aqui (compat: apps
+    // antigos ajustavam E.spr._used a mao para reservar um slot proprio)
+    _used: E.slots.n(),
 
     // defs: [{ name, file, w, h, paint }] — tenta PNG (em bases, prefixo por
     // app via init opts.dir) e cai no painter. paint(w, h, x, y) desenha em
@@ -84,30 +94,31 @@ E.spr = {
             // recarregar o mesmo nome devolve o slot velho ao pool antes
             if (E.spr._slots[d.name]) E.spr.free(d.name);
             var slot = { id: 0, w: d.w, h: d.h, paint: d.paint || null };
-            if (E.caps.sprites && E.spr._used < E.caps.slots) {
-                var id = S.createSprite(d.w, d.h);
-                if (id) {
-                    var ok = false;
-                    S.useSprite(id);
-                    S.fillScreen(0x0000);
-                    if (E.caps.png && d.file) {
-                        for (var b = 0; b < bases.length && !ok; b++) {
-                            try { ok = !!S.drawPNG(bases[b] + d.file + '.png', 0, 0); }
-                            catch (e) { ok = false; }
-                        }
-                    }
-                    if (!ok && d.paint) {
-                        d.paint(d.w, d.h, 0, 0);
-                        ok = true;
-                    }
-                    S.useSprite(0);
-                    if (ok) {
-                        slot.id = id;
-                        E.spr._used++;
-                    } else {
-                        S.deleteSprite(id);
+            var id = E.slots.create('spr:' + d.name, d.w, d.h);
+            if (id) {
+                var ok = false;
+                S.useSprite(id);
+                S.fillScreen(0x0000);
+                if (E.caps.png && d.file) {
+                    for (var b = 0; b < bases.length && !ok; b++) {
+                        try { ok = !!S.drawPNG(bases[b] + d.file + '.png', 0, 0); }
+                        catch (e) { ok = false; }
                     }
                 }
+                if (!ok && d.paint) {
+                    d.paint(d.w, d.h, 0, 0);
+                    ok = true;
+                }
+                S.useSprite(0);
+                if (ok) {
+                    slot.id = id;
+                } else {
+                    E.slots.release(id);
+                }
+            }
+            if (!slot.id && !slot.paint) {
+                // antes era silencio: o jogo desenhava nada e ninguem sabia
+                E._warn('sprite ' + d.name + ' sem slot e sem paint: nada sera desenhado');
             }
             E.spr._slots[d.name] = slot;
             out[d.name] = slot;
@@ -141,27 +152,27 @@ E.spr = {
     sheet: function (name, o) {
         if (E.spr._sheets[name]) E.spr.freeSheet(name);
         var sh = { id: 0, w: o.w, h: o.h, name: name, regs: [] };
-        if (E.caps.sprites && E.spr._used < E.caps.slots) {
-            var id = S.createSprite(o.w, o.h);
-            if (id) {
-                var ok = false;
-                S.useSprite(id);
-                S.fillScreen(0x0000);
-                if (E.caps.png && o.file) {
-                    var bases = E.spr.bases;
-                    for (var b = 0; b < bases.length && !ok; b++) {
-                        try { ok = !!S.drawPNG(bases[b] + o.file + '.png', 0, 0); }
-                        catch (e) { ok = false; }
-                    }
-                }
-                S.useSprite(0);
-                if (ok) {
-                    sh.id = id;
-                    E.spr._used++;
-                } else {
-                    S.deleteSprite(id);
+        var id = E.slots.create('spr:' + name, o.w, o.h);
+        if (id) {
+            var ok = false;
+            S.useSprite(id);
+            S.fillScreen(0x0000);
+            if (E.caps.png && o.file) {
+                var bases = E.spr.bases;
+                for (var b = 0; b < bases.length && !ok; b++) {
+                    try { ok = !!S.drawPNG(bases[b] + o.file + '.png', 0, 0); }
+                    catch (e) { ok = false; }
                 }
             }
+            S.useSprite(0);
+            if (ok) {
+                sh.id = id;
+            } else {
+                E.slots.release(id);
+            }
+        }
+        if (!sh.id && !o.paint) {
+            E._warn('sheet ' + name + ' sem slot e sem paint: as regioes nao desenham');
         }
         var tw = o.tw || 16, th = o.th || 16;
         var regs = o.regions || {};
@@ -202,14 +213,91 @@ E.spr = {
         return out;
     },
 
+    // metadados de arte num objeto ES5: um modulo de dados do app
+    // (arte.js -> module.exports = { heroi: {...} }) descreve a folha, os
+    // clipes e a ancora UMA vez e o codigo so pede nomes. Nao e .json
+    // porque ler arquivo exige a permissao "fs" (dialogo de consentimento);
+    // um require de modulo nao pede nada.
+    //   m = { file, cols, rows, tw, th, prefix, w, h, paint,  // vira grid()
+    //         anims: { run: [0,1,2] },    // indices do prefixo OU nomes
+    //         fps:   { run: 10 },         // default 6
+    //         loop:  { run: true },       // default true
+    //         ax: 0.5, ay: 1,             // ancora default do blit/stamp
+    //         hitbox: [dx, dy, w, h] }    // dentro do quadro (E.spr.box)
+    // meta(nome) devolve o metadado; meta({a: m1, b: m2}) registra varios.
+    meta: function (name, m) {
+        if (name && typeof name === 'object') {
+            for (var k in name) E.spr.meta(k, name[k]);
+            return E.spr;
+        }
+        if (!m) return E.spr._meta[name] || null;
+        E.spr._meta[name] = m;
+        // grade declarada junto: monta o sheet pelo caminho normal
+        if (m.cols || m.rows) {
+            E.spr.grid(name, { file: m.file, w: m.w, h: m.h, cols: m.cols || 1,
+                               rows: m.rows || 1, tw: m.tw, th: m.th,
+                               prefix: m.prefix, paint: m.paint });
+        }
+        // ancora default gravada no slot (blit/stamp leem sem passar opts)
+        if (m.ax !== undefined || m.ay !== undefined) {
+            var ax = m.ax || 0, ay = m.ay || 0, s, i;
+            var pre = m.prefix === undefined ? name : m.prefix;
+            var n = (m.cols || 0) * (m.rows || 0);
+            for (i = 0; i < n; i++) {
+                s = E.spr._slots[pre + i];
+                if (s) { s.ax = ax; s.ay = ay; }
+            }
+            s = E.spr._slots[name];
+            if (s) { s.ax = ax; s.ay = ay; }
+        }
+        return E.spr;
+    },
+
+    // E.anim montado do metadado: animOf('heroi', 'run') — frame por indice
+    // vira prefixo+indice; por nome fica como esta; fps/loop vem do clipe
+    animOf: function (name, clip) {
+        var m = E.spr._meta[name];
+        if (!m || !m.anims || !m.anims[clip]) return null;
+        var list = m.anims[clip], pre = m.prefix === undefined ? name : m.prefix;
+        var fr = [], i, it;
+        for (i = 0; i < list.length; i++) {
+            it = list[i];
+            fr.push(typeof it === 'number' ? pre + it : it);
+        }
+        var fp = (m.fps && m.fps[clip]) || 6;
+        var lp = m.loop && m.loop[clip] !== undefined ? m.loop[clip] : true;
+        return E.anim(fr, fp, lp);
+    },
+
+    // hitbox do metadado na MESMA origem do blit/stamp: (x, y) e o ponto da
+    // ancora do desenho. Aceita o nome do metadado (usa o quadro 0 da grade)
+    // ou o de um quadro (h0). Devolve [x, y, w, h]; `out` (array da cena)
+    // evita alocar por quadro: E.spr.box(nome, x, y, 1, meuArray)
+    box: function (name, x, y, scale, out) {
+        var s = E.spr._slots[name] || null;
+        var m = E.spr._meta[name] || null;
+        // chamada pela REGIAO (h0): o metadado esta no nome da folha
+        if (!m && s && s.sheet) m = E.spr._meta[s.sheet.name] || null;
+        // chamada pelo nome do metadado (heroi): a caixa e a do quadro 0
+        if (!s && m) s = E.spr._slots[(m.prefix === undefined ? name : m.prefix) + 0] || null;
+        if (!m || !m.hitbox || !s) return null;
+        var k = scale === undefined || scale === null ? 1 : scale;
+        var hb = m.hitbox;
+        var ox = Math.round(x - s.w * k * (s.ax || 0));
+        var oy = Math.round(y - s.h * k * (s.ay || 0));
+        var o = out || [];
+        o[0] = ox + Math.round(hb[0] * k);
+        o[1] = oy + Math.round(hb[1] * k);
+        o[2] = Math.round(hb[2] * k);
+        o[3] = Math.round(hb[3] * k);
+        return o;
+    },
+
     // libera o slot do sheet e todas as regioes dele
     freeSheet: function (name) {
         var sh = E.spr._sheets[name];
         if (!sh) return;
-        if (sh.id) {
-            S.deleteSprite(sh.id);
-            E.spr._used--;
-        }
+        if (sh.id) E.slots.release(sh.id);
         for (var i = 0; i < sh.regs.length; i++) delete E.spr._slots[sh.regs[i]];
         delete E.spr._sheets[name];
     },
@@ -226,10 +314,11 @@ E.spr = {
         // comia o que estivesse embaixo do fantasma
         var pode = s.paint || (s.sheet ? (s.sheet.id && E.caps.clip) : s.id);
         if (!pode) return;
-        var ax = 0, ay = 0;
+        // ancora: opts vence; cx/cy centraliza; senao a default do metadado
+        var ax = s.ax || 0, ay = s.ay || 0;
         if (opts) {
-            ax = opts.ax !== undefined ? opts.ax : (opts.cx ? 0.5 : 0);
-            ay = opts.ay !== undefined ? opts.ay : (opts.cy ? 0.5 : 0);
+            ax = opts.ax !== undefined ? opts.ax : (opts.cx ? 0.5 : ax);
+            ay = opts.ay !== undefined ? opts.ay : (opts.cy ? 0.5 : ay);
         }
         var dx = Math.round(x - s.w * ax);
         var dy = Math.round(y - s.h * ay);
@@ -277,8 +366,9 @@ E.spr = {
         var k = o.scale || 1;
         if (s.alias) return alias(s, x, y, o, k);
         var w = s.w * k, h = s.h * k;
-        var ax = o.ax !== undefined ? o.ax : (o.cx ? 0.5 : 0);
-        var ay = o.ay !== undefined ? o.ay : (o.cy ? 0.5 : 0);
+        var ax = s.ax || 0, ay = s.ay || 0;   // default do metadado
+        ax = o.ax !== undefined ? o.ax : (o.cx ? 0.5 : ax);
+        ay = o.ay !== undefined ? o.ay : (o.cy ? 0.5 : ay);
         var dx = Math.round(x - w * ax), dy = Math.round(y - h * ay);
         var key = o.key === undefined ? 0x0000 : o.key;
         var id = s.sheet ? s.sheet.id : s.id;
@@ -370,9 +460,8 @@ E.spr = {
             if (it.h > rowH) rowH = it.h;
         }
         var totH = cy + rowH, id = 0;
-        var pode = items.length && E.caps.sprites && E.caps.clip &&
-                   typeof S.drawSprite === 'function' && E.spr._used < E.caps.slots;
-        if (pode) id = S.createSprite(totW, totH);
+        var pode = items.length && E.caps.clip && typeof S.drawSprite === 'function';
+        if (pode) id = E.slots.create('spr:' + (o.name || 'prescale'), totW, totH);
         if (!id) {
             for (i = 0; i < items.length; i++) {
                 it = items[i];
@@ -391,7 +480,6 @@ E.spr = {
         }
         E.spr.alvo = alvo0;
         S.useSprite(0);
-        E.spr._used++;
         var shn = o.name || ('@ps' + id);
         if (E.spr._sheets[shn]) E.spr.freeSheet(shn);
         var sh = { id: id, w: totW, h: totH, name: shn, regs: [] };
@@ -409,10 +497,7 @@ E.spr = {
         if (!s) return;
         // regiao de sheet COMPARTILHA o slot (o sheet inteiro sai no
         // freeSheet); free de regiao so tira o nome
-        if (s.id && !s.sheet) {
-            S.deleteSprite(s.id);
-            E.spr._used--;
-        }
+        if (s.id && !s.sheet) E.slots.release(s.id);
         delete E.spr._slots[name];
     },
     freeAll: function () {

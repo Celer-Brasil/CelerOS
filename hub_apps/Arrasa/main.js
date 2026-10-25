@@ -53,7 +53,7 @@ var G = {
     fumaca: null            // emissor curto do estopim (unico)
 };
 
-if (typeof __harness !== "undefined") __harness.arrasa = { M: M, E: E, A: A, G: G };
+if (typeof __harness !== "undefined") __harness.arrasa = { M: M, E: E, A: A, G: G, processa: processa };
 
 // -------------------------------------------------------------- audio ----
 // Do maior, 120 bpm: I-V-vi-IV saltitante; nota = [midi, semicolcheias]

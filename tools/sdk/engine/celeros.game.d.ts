@@ -51,6 +51,17 @@ declare namespace E {
     let U: number;
     /** Medida do projeto (240 de largura) em pixels da tela atual. */
     function u(v: number): number;
+    /** Margem segura do vidro (inset do firmware) em px do app — 0 sem inset. */
+    let inset: number;
+    /** X de HUD ancorado em 9 pontos (pt 0..8, noroeste..sudeste). A margem
+     *  segura entra nas bordas; centralizado soma x ao centro. */
+    function ax(pt: number, x: number, w: number): number;
+    /** Y de HUD ancorado em 9 pontos (linha = pt / 3: topo, meio, base). */
+    function ay(pt: number, y: number, h: number): number;
+    /** Caixa ancorada de uma vez: {x, y, w, h}. Passe `out` (objeto da cena)
+     *  para nao alocar por quadro. */
+    function anchor(pt: number, x: number, y: number, w: number, h: number,
+                    out?: { x: number; y: number; w: number; h: number }): { x: number; y: number; w: number; h: number };
     interface FontPick { font: number; size: number; h: number }
     /** Maior fonte (1/2/4 x textSize) cuja altura cabe em px. */
     function font(px: number): FontPick;
@@ -61,6 +72,35 @@ declare namespace E {
     let fps: number;
     /** ms gastos no ultimo quadro (update + draw) */
     let frameMs: number;
+    /** Pool nativo de sprites (createSprite): UM dono por slot, contagem unica
+     *  e falha barulhenta no log. spr/world alocam por aqui. */
+    const slots: {
+        /** quantos slots estao ocupados agora */
+        n(): number;
+        /** aloca 1 slot do pool; 0 = nao coube/falhou (avisa no log 1x) */
+        create(dono: string, w: number, h: number): number;
+        /** devolve o slot ao pool (id 0 = nada a fazer) */
+        release(id: number): void;
+        /** {used, cap, owners: {dono: slots}} para diagnostico */
+        report(): { used: number; cap: number; owners: Record<string, number> };
+    };
+    /** Perfilador por trecho (desligado custa um `if`): medias em us da janela
+     *  de 30 quadros. Ligar com E.prof.on = true; o E.debug mostra update/draw. */
+    const prof: {
+        on: boolean;
+        /** amostras ja contadas na janela corrente */
+        n: number;
+        frame: number;
+        input: number;
+        mods: number;
+        update: number;
+        draw: number;
+        /** pior quadro da ultima janela (us) */
+        maxFrame: number;
+        reset(): void;
+        snapshot(): { n: number; fps: number; frame: number; input: number;
+                      mods: number; update: number; draw: number; maxFrame: number };
+    };
     /** overlay de diagnostico: fps, ms do quadro, caixas sujas, particulas */
     let debug: boolean;
     /** escala o dt do update/fx/camera (0.3 = camera lenta); timers e tweens seguem o relogio */
@@ -144,6 +184,10 @@ declare namespace E {
         update?: (dt: number) => void;
         draw?: () => void;
         exit?: () => void;
+        /** Chamado ao SAIR da cena (goto/quit), depois do exit: devolva o que
+         *  e nativo (E.slots.release, E.spr.freeSheet, W.free) para a proxima
+         *  cena nao herdar slot ocupado. Nao roda no push (a cena volta no pop). */
+        dispose?: () => void;
         /** coberta por um E.push */
         pause?: () => void;
         /** descoberta pelo E.pop */

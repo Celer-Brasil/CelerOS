@@ -157,8 +157,9 @@ placas S3 com PSRAM compilam sem limite runtime; subido de 128KB em
 A loja passou a privilegiar a declaracao (badge "Requer PSRAM" + bloqueio)
 e mantem a formula acima so como fallback para entradas antigas do
 catalogo sem o campo. Cartao SD nao entra na conta: o gargalo e RAM de
-compilacao, nao armazenamento. Com a familia CelerGame modular (core ~25KB
-enxuto), um jogo so-core cabe nos 48KB da CYD sem vendorizar.
+compilacao, nao armazenamento. Com a familia CelerGame modular o core sozinho ja
+passa dos 48KB da CYD (51KB enxutos na 1.5.0): jogo com a engine declara
+`requires: ["psram"]`, e nenhum jogo do catalogo roda na CYD.
 
 Descartado por render pouco: opcoes de objeto do Duktape (`FUNC_NAME_PROPERTY`
 off: -2% e perde nomes nos erros; `HSTRING_CLEN`/`HASH_PART`: ~0) e `-O2` no

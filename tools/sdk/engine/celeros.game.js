@@ -15,7 +15,10 @@
 // require faz o core ser singleton) e pendura o tick em E._modTicks, que
 // o loop chama antes do update da cena. Quem adota pouco paga pouco: as
 // deps contam no teto do app MESMO compartilhadas (cada app compila o
-// modulo no proprio heap) — core enxuto ~20KB, a familia inteira ~33KB.
+// modulo no proprio heap) — o core sozinho ja ocupa ~47KB enxutos, medidos
+// com tools/sdk/lib/jsstrip.js: jogo so-core NAO cabe no teto de 48KB sem
+// psram. Feature nova entra em modulo, nao no core; confira o tamanho antes
+// de planejar (Documentation/Game_Engine_Guide).
 // O pacote "celeros.engine" e a familia montada (compatibilidade 1.2.x).
 // Fisica (P.hit/verlet/rigid) e a dep "celeros.physics"; grades de IA a
 // "celeros.grid"; sons de tabela a "celeros.sfx". Recursos do firmware
@@ -91,8 +94,19 @@
 // 1.4.5: E.save.set/setObj devolvem false (e avisam no log) quando o
 // Storage.set do firmware devolve false — NVS cheia nao lanca, so recusa,
 // e o save "dava certo" calado.
+// 1.5.0: group.remove() DENTRO do update corrompia o laco (o swap-pop movia
+// um item ja visitado para o indice corrente: com 3 itens, C removendo o
+// primeiro, C rodava 3x e B nunca) — durante o update o remove agora marca
+// dead e o proprio laco recolhe. Pacing em MICROSSEGUNDOS com sobra (o piso
+// de 1000/fps em ms inteiros fazia 60 fps rodar a ~62) e o yield do estouro
+// passou a acontecer a cada 100 ms, nao em todo quadro (1 ms por quadro
+// atrasado). E.prof: perfilador por trecho (input/mods/update/draw em us,
+// janela de 30 quadros) — E.frameMs continua, em ms. E.slots: pool nativo
+// de sprites com dono, contagem unica e falha barulhenta; spr/world deixam
+// de mexer em E.spr._used a mao. Cena {dispose} chamado ao sair (devolve
+// slot/pool). E.ax/E.ay/E.anchor: HUD em 9 pontos, ciente do inset do vidro.
 
-var E = { version: '1.4.5' };
+var E = { version: '1.5.0' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -115,6 +129,118 @@ E._warn = function (msg) {
     try { S.print('[celergame] ' + msg); } catch (e) {}
 };
 E._inited = false;  // modulo carregado DEPOIS do init se auto-inicializa
+
+// ------------------------------------- pool nativo de sprites (E.slots) --
+
+// UM dono por slot: spr, world e apps alocam por aqui em vez de chamar
+// System.createSprite direto. O pool e de 16 slots com PSRAM e 1 sem: slot
+// esquecido so voltava no reset do app (deleteAllSprites) e a falha do
+// createSprite virava "a arte sumiu" calada. O ledger conta, nomeia o dono
+// e avisa no log (1x por mensagem).
+E.slots = (function () {
+    var own = {};    // dono -> slots vivos
+    var who = {};    // id do slot -> dono
+    var n = 0;       // contagem com o spr fora (legado: E.spr._used)
+    // a contagem e UMA so: quando o spr esta carregado ela mora em
+    // E.spr._used (campo antigo, que apps como a Lenda ainda ajustam a mao);
+    // o ledger le e escreve nele para nao haver dois numeros
+    function get() {
+        var sp = E.spr;
+        return sp && sp._used !== undefined ? sp._used : n;
+    }
+    function set(v) {
+        if (v < 0) v = 0;
+        n = v;
+        if (E.spr && E.spr._used !== undefined) E.spr._used = v;
+    }
+    function fail(dono, w, h) {
+        E._warn('sem slot de sprite para ' + dono + ' (' + w + 'x' + h + ', ' +
+                get() + '/' + E.caps.slots + ' usados' +
+                (E.caps.psram ? ', psram' : ', sem psram') + ')');
+    }
+    return {
+        // quantos slots estao ocupados AGORA (le o campo vivo)
+        n: get,
+        // aloca 1 slot do pool; 0 = nao coube/falhou (avisa no log)
+        create: function (dono, w, h) {
+            if (!E.caps.sprites || get() >= E.caps.slots) { fail(dono, w, h); return 0; }
+            var id = 0;
+            try { id = S.createSprite(w, h) || 0; } catch (e) { id = 0; }
+            if (!id) { fail(dono, w, h); return 0; }
+            set(get() + 1);
+            own[dono] = (own[dono] || 0) + 1;
+            who[id] = dono;
+            return id;
+        },
+        // devolve o slot ao pool (id 0 = nada a fazer). O dono vem do
+        // registro de quem alocou — o chamador nao precisa lembrar do nome
+        release: function (id) {
+            if (!id) return;
+            var dono = who[id];
+            try { S.deleteSprite(id); } catch (e) {}
+            set(get() - 1);
+            if (dono !== undefined) {
+                delete who[id];
+                if (own[dono] && --own[dono] <= 0) delete own[dono];
+            }
+        },
+        // snapshot para diagnostico (o E.debug mostra o n/cap)
+        report: function () {
+            var r = { used: get(), cap: E.caps.slots, owners: {} };
+            for (var k in own) r.owners[k] = own[k];
+            return r;
+        }
+    };
+})();
+
+// ------------------------------------------- perfilador por trecho -------
+
+// E.prof.on = true coleta 5 marcas de System.micros por quadro e publica a
+// MEDIA da janela de 30 quadros, em us: input (poll de toque), mods
+// (E._modTicks), update (cena), draw (cena + overlays) e frame. Desligado
+// custa um `if` por trecho; o overlay do E.debug mostra update/draw quando
+// ligado. E.frameMs segue existindo (em ms) para quem ja lia.
+E.prof = {
+    on: false,
+    n: 0,               // amostras ja contadas na janela corrente
+    frame: 0, input: 0, mods: 0, update: 0, draw: 0,
+    maxFrame: 0,        // pior quadro da ultima janela (us)
+    _si: 0, _sm: 0, _su: 0, _sd: 0, _sf: 0, _mx: 0,
+    reset: function () {
+        var p = E.prof;
+        p.n = 0; p.frame = 0; p.input = 0; p.mods = 0; p.update = 0; p.draw = 0;
+        p.maxFrame = 0; p._si = 0; p._sm = 0; p._su = 0; p._sd = 0; p._sf = 0; p._mx = 0;
+        return p;
+    },
+    // leitura para logcat/depurador (objeto novo; so quando pede)
+    snapshot: function () {
+        var p = E.prof;
+        return { n: p.n, fps: E.fps, frame: p.frame, input: p.input, mods: p.mods,
+                 update: p.update, draw: p.draw, maxFrame: p.maxFrame };
+    },
+    // chamado pelo loop com as marcas do quadro (us; 0 = trecho ausente)
+    _acc: function (t0, ti, tm, tu, tf) {
+        var p = E.prof;
+        if (ti) p._si += ti - t0;
+        if (tm) p._sm += tm - (ti || t0);
+        if (tu) p._su += tu - (tm || ti || t0);
+        if (tf) {
+            p._sd += tf - (tu || tm || ti || t0);
+            p._sf += tf - t0;
+            if (tf - t0 > p._mx) p._mx = tf - t0;
+        }
+        p.n++;
+        if (p.n >= 30) {
+            p.input = (p._si / p.n) | 0;
+            p.mods = (p._sm / p.n) | 0;
+            p.update = (p._su / p.n) | 0;
+            p.draw = (p._sd / p.n) | 0;
+            p.frame = (p._sf / p.n) | 0;
+            p.maxFrame = p._mx;
+            p.n = 0; p._si = 0; p._sm = 0; p._su = 0; p._sd = 0; p._sf = 0; p._mx = 0;
+        }
+    }
+};
 
 // ------------------------------------------------------- caps / init ------
 
@@ -171,6 +297,10 @@ E.init = function (opts) {
     E.W = E.caps.w = S.screenWidth();
     E.H = E.caps.h = S.screenHeight();
     E.U = Math.min(E.W, E.H) / 240;
+    // margem segura do vidro (relogio redondo): o firmware informa o inset
+    // em coords de 240; E.u leva para as coords do app (E.ax/E.ay usam)
+    E.inset = 0;
+    try { E.inset = E.u((S.getInfo() || {}).inset || 0); } catch (e) { E.inset = 0; }
     E._fonts = null;    // tabela de fontes medida sob demanda (E.font)
     E._fontMemo = null; // idem: px -> entrada da tabela (busca e O(1))
     try { E.theme = S.theme(); } catch (e) { E.theme = null; }
@@ -195,6 +325,39 @@ E.init = function (opts) {
 // u(v): medida do projeto (240 de largura) em pixels da tela atual —
 // layout que vale igual no 240x320 virtual, no 480 nativo e no relogio
 E.u = function (v) { return Math.round(v * E.U); };
+
+// margem segura do vidro em coords do app (inset do firmware, que vem em
+// 240; o relogio redondo e o 480 nativo mudam a conta) — E.init preenche
+E.inset = 0;
+
+// HUD ancorado em 9 pontos, sem alocar: pt 0..8 = noroeste..sudeste
+// (0,1,2 / 3,4,5 / 6,7,8 — linha = vertical, coluna = horizontal).
+// E.ax(pt, x, w) devolve o X do canto/centro e E.ay(pt, y, h) o Y; a
+// margem segura (E.inset) entra nas bordas esquerda/direita. Uso:
+//   E.gfx.text('HP', E.ax(6, 4, 120), E.ay(6, 4, 20), {screen: true});
+//   E.gfx.rect(E.ax(6, 4, 100), E.ay(6, 4, 30), 100, 30, cor, {screen: true});
+// E.anchor(pt, x, y, w, h[, out]) devolve {x, y, w, h} de uma vez; passe
+// `out` (objeto reaproveitado pela cena) para nao alocar por quadro.
+E.ax = function (pt, x, w) {
+    var col = pt % 3, m = E.inset;
+    if (col === 1) return Math.round((E.W - w) / 2) + x;
+    if (col === 2) return E.W - m - w - x;
+    return m + x;
+};
+E.ay = function (pt, y, h) {
+    var row = (pt / 3) | 0;
+    if (row === 1) return Math.round((E.H - h) / 2) + y;
+    if (row === 2) return E.H - h - y;
+    return y;
+};
+E.anchor = function (pt, x, y, w, h, out) {
+    var o = out || {};
+    o.x = E.ax(pt, x, w);
+    o.y = E.ay(pt, y, h);
+    o.w = w;
+    o.h = h;
+    return o;
+};
 
 // Tipografia por PIXEL: as fontes do firmware (1/2/4) medidas no alvo
 // (fontHeight ja inclui a promocao de tela grande) x textSize 1..4. font(px)
@@ -830,7 +993,12 @@ function veilClean() {
     if (dr < E.W) E.dirty._fill(dr, dc.y, E.W - dr, dc.h);
 }
 
-// roda cenas {enter, update(dt), draw, exit, fps, static} ate E.quit();
+// pacing do loop: prazo ABSOLUTO do proximo quadro em microssegundos, o fps
+// do prazo (troca de fps reancora) e o instante do ultimo yield (o estouro
+// cede a cada 100 ms, nao em todo quadro)
+var _paceUs = 0, _yieldUs = 0, _paceFps = -1;
+
+// roda cenas {enter, update(dt), draw, exit, dispose, fps, static} ate E.quit();
 // ticka input, audio, camera, MODULOS (E._modTicks), timers e tweens
 // antes do update da cena. static: true = a cena so desenha na entrada,
 // no E.redraw() e quando o dedo entra/sai de um E.gfx.button — menu
@@ -841,6 +1009,8 @@ E.run = function (scenes, first, firstArg) {
     E.prevScene = '';
     E._quit = false;
     E._next = null;
+    _paceUs = 0;
+    _yieldUs = 0;
     var cur = null;
 
     // arg (goto/push {arg}) chega no enter(arg): a fase escolhida no menu
@@ -860,10 +1030,14 @@ E.run = function (scenes, first, firstArg) {
         E.dirty.off();
         if (cur && cur.enter) cur.enter(arg);
     }
-    // sai de uma cena: exit() + cleanup dos timers/tweens nascidos nela
+    // sai de uma cena: exit() + dispose() (devolve slot/pool nativo) +
+    // cleanup dos timers/tweens nascidos nela. dispose roda DEPOIS do exit
+    // (o exit ainda pode desenhar/consultar) e nao roda no push (a cena
+    // fica pausada e volta no pop)
     function leave(sc) {
         if (!sc) return;
         if (sc.exit) sc.exit();
+        if (sc.dispose) sc.dispose();
         if (sc.cleanup) E._killGen(sc._gen);
     }
     function dirtySave() {
@@ -981,7 +1155,10 @@ E.run = function (scenes, first, firstArg) {
             E._fpsN = 0;
             E._fpsT = now;
         }
+        // marcas do E.prof (0 quando desligado): input -> mods -> update -> draw
+        var P = E.prof, pt0 = P.on ? S.micros() : 0;
         E._pollInput(now);
+        var pti = P.on ? S.micros() : 0;
         E.audio._tick();
         var mt = E._modTicks;
         if (!E.paused) {
@@ -994,7 +1171,9 @@ E.run = function (scenes, first, firstArg) {
             // sem isto o botao "continuar" do pad nunca via o toque
             for (var mj = 0; mj < mt.length; mj++) if (mt[mj].always) mt[mj](0, now);
         }
+        var ptm = P.on ? S.micros() : 0;
         if (cur && cur.update) cur.update(dt);
+        var ptu = P.on ? S.micros() : 0;
         if (E._quit) break;
         if (cur && cur.draw) {
             var draw = true;
@@ -1023,11 +1202,39 @@ E.run = function (scenes, first, firstArg) {
             }
         }
         E.frameMs = S.millis() - now;
-        // pacing: fps global, ou o da cena (cur.fps; 0 = sem teto)
+        if (P.on) P._acc(pt0, pti, ptm, ptu, S.micros());
+        // pacing: fps global, ou o da cena (cur.fps; 0 = sem teto). O prazo e
+        // ABSOLUTO em MICROSSEGUNDOS: 1000/fps em ms inteiros dava 16 ms para
+        // 60 fps (~62 reais), e o atraso de mais de um quadro reancora em vez
+        // de correr atras. O yield do estouro e a cada 100 ms: 1 ms em TODO
+        // quadro atrasado custava ~1 ms por quadro em cena lenta (o watchdog
+        // espera segundos, nao milissegundos).
         var fps = cur && cur.fps !== undefined ? cur.fps : E.fpsTarget;
-        var frameMin = fps > 0 ? Math.floor(1000 / fps) : 0;
-        var spent = S.millis() - now;
-        S.delay(spent < frameMin ? frameMin - spent : 1);
+        if (fps > 0) {
+            var frameUs = 1000000 / fps;
+            var t = S.micros();
+            // fps novo (init, cena com fps proprio, volta de "sem teto"):
+            // o prazo velho nao vale mais; o 1o prazo ja e t + 1 quadro
+            if (_paceFps !== fps) { _paceFps = fps; _paceUs = t; _yieldUs = t; }
+            _paceUs += frameUs;
+            var left = _paceUs - t;
+            if (left < -frameUs) {
+                // mais de um quadro atras (load, GC): reancora em vez de
+                // correr atras de varios quadros seguidos
+                _paceUs = t + frameUs;
+                left = frameUs;
+            }
+            if (left > 0) {
+                var ms = Math.floor(left / 1000);
+                if (ms > 0) { S.delay(ms); _yieldUs = S.micros(); }
+            } else if (t - _yieldUs > 100000) {
+                S.delay(1);
+                _yieldUs = S.micros();
+            }
+        } else {
+            _paceFps = 0;   // sem teto: o proximo fps > 0 reancora o prazo
+            S.delay(1);     // cede assim mesmo (watchdog/RTOS)
+        }
     }
     leave(cur);
     while (E._stack.length) leave(E._stack.pop().scene);
@@ -1043,6 +1250,9 @@ E._drawDebug = function () {
     if (E._stack.length) s += '+' + E._stack.length;
     if (E.dirty.on) s += ' d' + (E.dirty._cur.length / 4);
     if (E.fx) s += ' p' + E.fx._live;
+    // perfilador ligado: update/draw em ms da ultima janela (E.prof)
+    if (E.prof.on) s += ' u' + ((E.prof.update / 1000) | 0) + ' d' + ((E.prof.draw / 1000) | 0);
+    if (E.caps.sprites) s += ' s' + E.slots.n();
     if (E.paused) s += ' II';
     _dbgO.px = Math.round(9 * E.U);
     E.gfx.text(s, 2, 2, _dbgO);
@@ -1387,10 +1597,14 @@ E.seq = function (obj, steps, opts) {
 
 // lista de entidades com update/draw em lote; dead = swap-pop
 E.group = function () {
-    var g = { items: [], count: 0 };
+    var g = { items: [], count: 0, _busy: false };
     g.add = function (o) { g.items.push(o); g.count = g.items.length; return o; };
     g.update = function (dt) {
         var a = g.items;
+        // _busy: remove() DENTRO do update vira dead (deferido). Sem isto o
+        // splice tirava um item ja visitado e o indice seguinte relia o
+        // mesmo objeto — 3 itens, C removendo o 1o: C rodava 3x, B nunca
+        g._busy = true;
         for (var i = a.length - 1; i >= 0; i--) {
             var o = a[i];
             if (!o.dead && o.update) o.update(dt);
@@ -1399,6 +1613,7 @@ E.group = function () {
                 a.pop();
             }
         }
+        g._busy = false;
         g.count = a.length;
     };
     g.draw = function () {
@@ -1436,8 +1651,14 @@ E.group = function () {
         }
         return best;
     };
-    // tira o objeto ja (fora do update — o dead e o caminho do meio do tick)
+    // tira o objeto ja (fora do update — o dead e o caminho do meio do tick;
+    // DURANTE o update vira dead tambem, para o laco nao pular/relar itens)
     g.remove = function (o) {
+        if (g._busy) {
+            if (!o || o.dead) return false;
+            o.dead = true;
+            return true;
+        }
         var a = g.items, i = a.indexOf(o);
         if (i < 0) return false;
         a.splice(i, 1);

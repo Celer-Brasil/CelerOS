@@ -3,7 +3,7 @@
 // fx + spr + tilemap no MESMO objeto E — para os apps que fazem
 // require("celeros.engine"). Apps novos adotam os modulos um a um:
 //
-//   var E = require("celeros.game");        // so o core (~20KB enxuto)
+//   var E = require("celeros.game");        // so o core (~47KB enxuto)
 //   require("celeros.game.fx");             // + particulas/flash/estrelas
 //   require("celeros.game.spr");            // + sprites/flipbook
 //   require("celeros.game.tilemap");        // + grade de celulas sujas
@@ -18,7 +18,7 @@ require('celeros.game.tilemap');
 
 // versao da COMPATIBILIDADE (o core carrega '1.1.0' em E.version; apps
 // que leem E.version veem a linha 1.x da engine; 1.3.0 = core 1.1.0, 1.4.0 =
-// core 1.2.0, 1.5.0 = core 1.3.0, 1.6.0 = core 1.4.0)
-E.version = '1.6.0';
+// core 1.2.0, 1.5.0 = core 1.3.0, 1.6.0 = core 1.4.0, 1.7.0 = core 1.5.0)
+E.version = '1.7.0';
 
 module.exports = E;

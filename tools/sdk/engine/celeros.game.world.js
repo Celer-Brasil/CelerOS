@@ -41,6 +41,9 @@
 // 1.1.0: opcao tile(v) -> nome de regiao do E.spr: a sala grava num laco
 // inline com System.copySprite (API 45), sem o paint por celula (troca de
 // sala da Lenda no 4848: gravacao ~180 -> ~80 ms, troca ~250 -> ~120 ms).
+// 1.1.1: os sprites da sala sao alocados/liberados por E.slots (ledger do
+// core, dono "world:sala") — falta de slot agora aparece no log com o
+// tamanho pedido, e o contador deixa de ser ajustado a mao aqui.
 
 var E = require('celeros.game');
 require('celeros.game.level');
@@ -264,11 +267,7 @@ E.world = function (o) {
     }
     function alloc() {
         if (!hasDraw) return 0;
-        if (E.spr && E.spr._used >= E.caps.slots) return 0;
-        var id = 0;
-        try { id = S.createSprite(E.W, E.H); } catch (e) { id = 0; }
-        if (id && E.spr) E.spr._used++;
-        return id || 0;
+        return E.slots.create('world:sala', E.W, E.H);
     }
     // grava a sala rec inteira no sprite slot (fundo o.bg fora da sala)
     function bake(rec, slot) {
@@ -532,14 +531,10 @@ E.world = function (o) {
         return true;
     };
     W.reset = function () { W.flags = {}; W.global = {}; W.visited = {}; W.save(); };
-    // libera os sprites (saida do jogo)
+    // libera os sprites (saida do jogo / cena {dispose})
     W.free = function () {
         var ids = [W._slotA, W._slotB === W._slotA ? 0 : W._slotB];
-        for (var i = 0; i < ids.length; i++) {
-            if (!ids[i]) continue;
-            try { S.deleteSprite(ids[i]); } catch (e) {}
-            if (E.spr && E.spr._used > 0) E.spr._used--;
-        }
+        for (var i = 0; i < ids.length; i++) E.slots.release(ids[i]);
         W._slotA = W._slotB = 0;
         W.baked = false;
         var k = _live.indexOf(W);
@@ -549,7 +544,7 @@ E.world = function (o) {
     return W;
 };
 var _live = [];
-E.world.version = '1.1.0';
+E.world.version = '1.1.1';
 
 E._modTicks.push(function (dt) {
     for (var i = 0; i < _live.length; i++) _live[i]._tick(dt);

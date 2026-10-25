@@ -94,6 +94,15 @@ module.exports.wire = function (env) {
         M.pull.x = Math.cos(a) * 42 * 0.85;
         M.pull.y = Math.sin(a) * 42 * 0.85;
         assert(M.soltar() !== null, 'soltar lanca');
+        // resolve o voo no passo de PROJETO (1/30), como o resto da bateria:
+        // o pacing do core 1.5 anda em quadros de 33/34 ms (o alvo de 30 fps
+        // e' 33,33 ms) e a trajetoria da pedra depende do dt — o que se
+        // garante aqui e' a fisica no passo de 1/30, nao o relogio do harness.
+        // Os eventos do passo vao pelo processa do jogo (rastro, sfx, placar)
+        for (var k = 0; k < 180 && !M.acabou; k++) {
+            var ev = M.step(1 / 30);
+            if (ev && ev.length) X().processa(ev);
+        }
     }, 14000);
     at(function () {
         var M = X().M;

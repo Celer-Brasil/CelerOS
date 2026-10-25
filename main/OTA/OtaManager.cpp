@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "OtaGuard.h"
 #include "esp_crt_bundle.h"
+#include <psa/crypto.h>
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "HttpClient.h"
@@ -126,6 +127,10 @@ bool OtaManager::runCheck() {
     info.changelog = FileSystem::parseJsonValue(payload, "changelog");
     info.guide = FileSystem::parseJsonValue(payload, "guide");
     info.firmwareUrl = FileSystem::parseJsonValue(payload, "firmware_url");
+    info.firmwareSha256 = FileSystem::parseJsonValue(payload, "firmware_sha256");
+    for (char& c : info.firmwareSha256) {
+        if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+    }
 
     info.changelog = kstr::replaceAll(info.changelog, "\\n", "\n");
     info.guide = kstr::replaceAll(info.guide, "\\n", "\n");
@@ -146,6 +151,37 @@ bool OtaManager::runCheck() {
         if (slash >= 0) info.firmwareUrl = url.substr(0, slash + 1) + info.firmwareUrl;
     }
     info.hasFirmware = info.firmwareUrl.length() > 0;
+
+    // Integridade do firmware: o hub grava firmware_sha256 no manifesto.
+    // Hash ilegivel e recusado; HTTPS sem hash tambem (manifesto suspeito).
+    // HTTP local (ota_allow_http) pode omitir para bancada antiga.
+    if (info.hasFirmware) {
+        bool shaOk = info.firmwareSha256.size() == 64;
+        for (size_t i = 0; shaOk && i < info.firmwareSha256.size(); i++) {
+            char c = info.firmwareSha256[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) shaOk = false;
+        }
+        if (!info.firmwareSha256.empty() && !shaOk) {
+            info.available = false;
+            info.hasFirmware = false;
+            info.type = "Manifest com firmware_sha256 invalido";
+            info.changelog = "O update.json trouxe firmware_sha256 ilegivel; "
+                             "a atualizacao foi recusada.";
+            info.guide = "";
+            ESP_LOGW("celer.ota", "firmware_sha256 invalido no manifest");
+            return false;
+        }
+        if (info.firmwareSha256.empty() && kstr::startsWith(url, "https://")) {
+            info.available = false;
+            info.hasFirmware = false;
+            info.type = "Manifest sem firmware_sha256";
+            info.changelog = "O update.json HTTPS nao declara firmware_sha256; "
+                             "a atualizacao foi recusada.";
+            info.guide = "";
+            ESP_LOGW("celer.ota", "manifest HTTPS sem firmware_sha256: recusado");
+            return false;
+        }
+    }
 
     // Variante (API da SKU): update.json pode declarar "variant" e o
     // dispositivo recusa firmware de outra variante — o caso real e a
@@ -276,6 +312,16 @@ bool OtaManager::performUpdate(const std::string& firmwareUrl, void (*onProgress
 bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(int percent)) {
     lastError = "";
 
+    // Hash do manifesto so vale para a URL que o check ofertou; um
+    // performUpdate direto (sem check) nao herda hash de outro firmware.
+    const std::string expectedSha =
+        (firmwareUrl == info.firmwareUrl) ? info.firmwareSha256 : std::string();
+    if (expectedSha.empty() && kstr::startsWith(firmwareUrl, "https://")) {
+        lastError = "OTA failed: firmware_sha256 ausente no manifesto";
+        ESP_LOGE("celer.ota", "%s", lastError.c_str());
+        return false;
+    }
+
     if (!urlSchemeAllowed(firmwareUrl)) {
         lastError = HTTP_BLOCKED_MSG;
         ESP_LOGE("celer.ota", "%s (url: %s)", HTTP_BLOCKED_MSG, firmwareUrl.c_str());
@@ -302,6 +348,22 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
         esp_ota_abort(ota);
         OtaGuard::release();
         setOtaError("buffer", ESP_ERR_NO_MEM);
+        return false;
+    }
+
+    // SHA-256 do stream gravado. O contexto atravessa as reconexoes Range:
+    // bytes ja gravados/hasheados nao entram de novo (skip). IDF 6.1 usa
+    // mbedTLS 4/TF-PSA (nao ha mbedtls/sha256.h).
+    psa_hash_operation_t sha = PSA_HASH_OPERATION_INIT;
+    const bool shaOn = !expectedSha.empty();
+    if (shaOn &&
+        (psa_crypto_init() != PSA_SUCCESS ||
+         psa_hash_setup(&sha, PSA_ALG_SHA_256) != PSA_SUCCESS)) {
+        free(buf);
+        esp_ota_abort(ota);
+        OtaGuard::release();
+        lastError = "OTA failed: SHA-256 indisponivel";
+        ESP_LOGE("celer.ota", "%s", lastError.c_str());
         return false;
     }
 
@@ -380,6 +442,12 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
                 n -= (int)k;
                 if (n == 0) continue;
             }
+            if (shaOn &&
+                psa_hash_update(&sha, (const uint8_t*)data, (size_t)n) != PSA_SUCCESS) {
+                fatal = true;
+                err = ESP_FAIL;
+                break;
+            }
             err = esp_ota_write(ota, data, (size_t)n);
             if (err != ESP_OK) { fatal = true; break; }
             written += (size_t)n;
@@ -398,6 +466,7 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
     }
     free(buf);
     if (!done) {
+        if (shaOn) psa_hash_abort(&sha);
         esp_ota_abort(ota);
         OtaGuard::release();
         if (conns >= kMaxConns)
@@ -406,6 +475,37 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
         setOtaError("download", err);
         return false;
     }
+
+    if (shaOn) {
+        unsigned char digest[32];
+        size_t digestLen = 0;
+        if (psa_hash_finish(&sha, digest, sizeof(digest), &digestLen) != PSA_SUCCESS ||
+            digestLen != 32) {
+            psa_hash_abort(&sha);
+            esp_ota_abort(ota);
+            OtaGuard::release();
+            lastError = "OTA failed: SHA-256 do firmware";
+            ESP_LOGE("celer.ota", "%s", lastError.c_str());
+            return false;
+        }
+        static const char* kHex = "0123456789abcdef";
+        char got[65];
+        for (int i = 0; i < 32; i++) {
+            got[i * 2] = kHex[(digest[i] >> 4) & 0x0F];
+            got[i * 2 + 1] = kHex[digest[i] & 0x0F];
+        }
+        got[64] = '\0';
+        if (expectedSha != got) {
+            esp_ota_abort(ota);
+            OtaGuard::release();
+            lastError = "OTA failed: firmware_sha256 nao confere";
+            ESP_LOGE("celer.ota", "%s (esperado %s, recebido %s)",
+                     lastError.c_str(), expectedSha.c_str(), got);
+            return false;
+        }
+        ESP_LOGI("celer.ota", "firmware_sha256 confere (%s)", got);
+    }
+
     err = esp_ota_end(ota);  // valida a imagem inteira
     if (err == ESP_OK) err = esp_ota_set_boot_partition(part);
     OtaGuard::release();

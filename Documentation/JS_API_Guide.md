@@ -3332,7 +3332,8 @@ if (r.available && !System.appOpen() && !System.updateBusy()) {
 }
 ```
 
-**Security:** OTA uses HTTPS with the firmware CA bundle, but still does
-not validate the manifest's `firmware_sha256` or signature. Until CA
-pinning and/or a signed manifest ships, `os_update` is a bench-only
-feature — do not enable it on a customer fleet.
+**Security:** OTA uses HTTPS with the firmware CA bundle and verifies the
+manifest's `firmware_sha256` while streaming, before marking the boot
+partition. Manifest signatures and CA pinning do not exist yet; until
+they do, `os_update` is a bench-only feature — do not enable it on a
+customer fleet.

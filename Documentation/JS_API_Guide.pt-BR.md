@@ -3652,7 +3652,7 @@ if (r.available && !System.appOpen() && !System.updateBusy()) {
 }
 ```
 
-**Segurança:** o OTA usa HTTPS com o bundle de CAs do firmware, mas ainda
-não valida o `firmware_sha256` nem a assinatura do manifesto. Até haver
-CA pinning e/ou manifesto assinado, `os_update` é recurso de bancada —
-não habilite em frota de cliente.
+**Segurança:** o OTA usa HTTPS com o bundle de CAs do firmware e confere o
+`firmware_sha256` do manifesto durante o streaming, antes de marcar o
+boot. A assinatura do manifesto e o CA pinning ainda não existem; até lá,
+`os_update` é recurso de bancada — não habilite em frota de cliente.

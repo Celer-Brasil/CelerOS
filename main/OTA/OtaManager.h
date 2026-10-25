@@ -16,6 +16,10 @@ struct OtaUpdateInfo {
     int apiVersion = 0;
     std::string version;
     std::string firmwareUrl;
+    // SHA-256 do firmware ofertado (update.json v2). O runUpdate confere o
+    // hash do stream antes de marcar o boot; hash ausente/curto e recusado
+    // quando o manifesto vem por HTTPS (hub).
+    std::string firmwareSha256;
     std::string changelog;
     std::string guide;
     std::string type;

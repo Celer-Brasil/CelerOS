@@ -4632,7 +4632,7 @@ function holdFrames(x, y, n) {
         env.FS.writeTextFile('/local/apps/Sensor/app.json', JSON.stringify({
             packageName: 'celeros.sensor', name: 'Sensor', version: '1.0.0'
         }));
-        env.System.getOSVersion = function() { return '1.10.1'; };
+        env.System.getOSVersion = function() { return '1.11.6'; };
         env.System.getAPILevel = function() { return 50; };
         // O totem roda o app da vertical em autostart: update da frota
         // continua valendo com app aberto.
@@ -4717,6 +4717,10 @@ function holdFrames(x, y, n) {
     check('heartbeat declara loja privada',
           heartbeats.length > 0 &&
           JSON.parse(heartbeats[0].body).caps.private_hub === true,
+          heartbeats.length ? heartbeats[0].body : 'sem heartbeat');
+    check('heartbeat declara OTA assinado no 1.11.6+',
+          heartbeats.length > 0 &&
+          JSON.parse(heartbeats[0].body).caps.ota_signed === true,
           heartbeats.length ? heartbeats[0].body : 'sem heartbeat');
     check('os_update inicia o OTA e grava o marcador',
           r.env.Storage.get('ota_pending', '') === '1.11.0',

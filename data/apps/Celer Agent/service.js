@@ -7,8 +7,9 @@
 //   reboot       -> confirma no plano de controle e reinicia
 //   sync         -> forca o proximo heartbeat
 //   diagnostics  -> devolve um retrato do aparelho no evento
-//   os_update    -> System.otaCheck + System.otaStart (bancada; ver secao 50
-//                   do JS_API_Guide: o OTA ainda nao valida assinatura)
+//   os_update    -> System.otaCheck + System.otaStart (manifesto assinado:
+//                   o firmware 1.11.6+ valida ECDSA P-256 e SHA-256; versoes
+//                   anteriores validavam so o SHA-256)
 //   update_apps  -> {packages:[pkg|{pkg,name,zip}]}; sem lista, todos os apps
 //   self_update  -> baixa e instala o proprio celeros.agent; Service.stop()
 //
@@ -128,6 +129,23 @@ function isNewer(a, b) {
         if (va[i] !== vb[i]) return va[i] > vb[i];
     }
     return false;
+}
+
+function atLeastVersion(value, base) {
+    var va = versionNum(value), vb = versionNum(base);
+    for (var i = 0; i < 3; i++) {
+        if (va[i] !== vb[i]) return va[i] > vb[i];
+    }
+    return true;
+}
+
+// O firmware 1.11.6+ verifica a assinatura ECDSA do manifesto. O CelerApp
+// usa caps.ota_signed para avisar (nao bloquear) quando o aparelho ainda
+// aceita manifest so com SHA-256; o primeiro OTA o leva para a versao nova.
+function signedOta() {
+    try { return atLeastVersion(System.getOSVersion(), "1.11.6"); } catch (e) {
+        return false;
+    }
 }
 
 function rangeSatisfied(version, range) {
@@ -341,6 +359,7 @@ function heartbeatExtra() {
         caps: {
             agent: true,
             ota: true,
+            ota_signed: signedOta(),
             apps: true,
             reboot: true,
             private_hub: hubToken() ? true : false
@@ -603,6 +622,7 @@ function diagnostics() {
         uptimeMs: info && typeof info.uptimeMs === "number" ? info.uptimeMs : 0,
         wifi: !!(wifi && wifi.connected),
         apps: installedApps().length,
+        otaSigned: signedOta(),
         otaPending: String(Storage.get(OTA_PENDING, ""))
     };
 }

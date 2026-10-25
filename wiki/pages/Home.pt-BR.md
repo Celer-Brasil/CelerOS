@@ -26,7 +26,15 @@ desenvolvimento.
 
 ## Novidades
 
-Firmware 1.8.2 — a rodada dos jogos (API JS nível 36):
+Firmware 1.11.6 — a rodada da frota (API JS nível 50):
+
+* **OTA assinado** — o `update.json` carrega uma assinatura ECDSA P-256 sobre `version`, `api_version`, `firmware_sha256` e `variant`; o firmware confere contra a chave pública embutida e o SHA-256 do stream antes de trocar de slot. Manifesto HTTPS sem assinatura válida é recusado. A chave privada fica fora do repositório.
+* **Agente de frota** — o app de sistema `celeros.agent` roda um serviço em background com heartbeat e comandos de OTA assinado, atualização de apps, self-update, reboot, sync e diagnostics; `caps.ota_signed` informa ao plano de controle se o aparelho valida assinatura ([agente de frota](/Celer-Brasil/CelerOS/wiki/Agente-de-Frota)).
+* **Rede + OTA no background** — serviços usam `Net.request`/`Net.download` (`net`) e `System.otaStart`/`restart`/`installZip` (`system`) sem bombear o app em foreground ([API JS](/Celer-Brasil/CelerOS/wiki/API-JS)).
+* **Oito placas** — o devkit ESP32-S3 headless (`devkit-s3`, USB Host) entra ao lado de SmartDisplay, CYD/CYD-VSPI, cão robô, watch, devkit e ESP32-CAM; cada uma tem seu canal OTA assinado ([placas suportadas](/Celer-Brasil/CelerOS/wiki/Placas-Suportadas)).
+* 1.11.0–1.11.5 trouxeram o SHA-256 do stream, `System.epoch()`, o instalador app.zip, a saída do app antes do OTA e o gate duro de `firmware_sha256` em HTTPS.
+
+Firmware 1.8.2, antes disso — a rodada dos jogos (API JS nível 36):
 
 * **Supernova 2.4, Detona! 0.8 e Arrasa! 1.1** — três jogos completos agora sobre o **CelerGame, a engine de jogos entregue como família de dependências compartilhadas** (núcleo `celeros.game` + módulos `.fx`/`.spr`/`.tilemap`/`.ui`): um shooter de sprites 480×480 em **canvas nativo** (API 28), um bomberman de grade cujo **duelo 1×1 joga pela malha Bluetooth** — lobby, convite e melhor de 3 rounds na **mesma arena construída de uma seed compartilhada**, com só eventos discretos de um quadro cruzando o rádio — e um jogo de física de estilingue contra fortalezas de goblins. A `celeros.engine` monolítica segue no hub como shim de compatibilidade 1.2.5 que monta a família.
 * **Dependências compartilhadas no hub** (API 30) — a família da engine de jogos, física, malha, SFX e grid instalam uma vez e todo app reusa (`deps.json`): pacotes de app menores e o teto de tamanho do app subiu de 128 KB para **1 MB**.
@@ -65,6 +73,7 @@ Antes disso, no ciclo da 1.5: IA no aparelho (`AI.chat`, API 18–20), voz e a *
 | [Ferramentas](/Celer-Brasil/CelerOS/wiki/Ferramentas) | `celerctl`, o debugger JS, `celerhub`, servidor OTA local e geradores de assets |
 | [celerctl (USB)](/Celer-Brasil/CelerOS/wiki/celerctl-USB-(Português)) | Referência de comandos e protocolo HostLink |
 | [Atualização OTA](/Celer-Brasil/CelerOS/wiki/Atualizacao-OTA) | Manifest `update.json`, canais e upload web |
+| [Agente de frota](/Celer-Brasil/CelerOS/wiki/Agente-de-Frota) | `celeros.agent`: heartbeat, comandos, OTA assinado, update de apps e contrato do svchost |
 | [Guia de apps](/Celer-Brasil/CelerOS/wiki/Guia-de-Apps) | Como empacotar um app JS: `app.json`, pastas, ícones |
 | [Plugins de watchface](/Celer-Brasil/CelerOS/wiki/Plugins-de-Watchface) | Como apps instalados acrescentam widgets ao mostrador do relógio (`watchface.js`, API 16) |
 | [API JS](/Celer-Brasil/CelerOS/wiki/API-JS) | Referência completa do runtime (globals `System`, `Net`, `FS`, `AI`, `Mic`, `WakeWord`) |
@@ -76,7 +85,7 @@ traduções ficam na seção **Português (BR)**.
 ## Funcionalidades em resumo
 
 * **Runtime de apps JavaScript** — apps interativos em ES5 rodam nativamente
-  via Duktape (API nível 36): desenho estilo canvas, toque e teclado na tela
+  via Duktape (API nível 50): desenho estilo canvas, toque e teclado na tela
   acoplado, sistema de arquivos e rede HTTP/JSON.
 * **IA e voz no aparelho** — `AI.chat()` conversa com a DeepSeek ou a
   OpenRouter de qualquer app (assíncrono, TLS, function calling; as chaves

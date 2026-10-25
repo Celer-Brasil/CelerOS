@@ -149,6 +149,14 @@
   {
    "page": "Devkit-Barebone",
    "src": "wiki/pages/Devkit-Barebone.pt-BR.md"
+  },
+  {
+   "page": "Fleet-Agent",
+   "src": "wiki/pages/Fleet-Agent.md"
+  },
+  {
+   "page": "Agente-de-Frota",
+   "src": "wiki/pages/Agente-de-Frota.pt-BR.md"
   }
  ],
  "sidebar": [
@@ -179,7 +187,8 @@
    "pages": [
     "Tools",
     "celerctl-USB",
-    "OTA-Updates"
+    "OTA-Updates",
+    "Fleet-Agent"
    ]
   },
   {
@@ -233,7 +242,8 @@
     "Robo-Cachorro",
     "Watch-Waveshare",
     "Devkit-Barebone",
-    "Contribuindo"
+    "Contribuindo",
+    "Agente-de-Frota"
    ]
   }
  ]

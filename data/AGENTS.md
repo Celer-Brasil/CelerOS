@@ -48,6 +48,6 @@ The store reads the catalog two ways; which one runs depends on PSRAM and /local
 
 ## ANTI-PATTERNS
 - Assuming an OTA firmware update refreshes these apps. It doesn't: LittleFS is untouched by OTA. Update devices with `tools/flash_data.sh`, `celerctl apps install`, or the App Store.
-- The fleet agent (`Celer Agent`, `celeros.agent`) owns os_update/update_apps/self_update/reboot/sync/diagnostics; other verticals only ack their own types. A manifest the firmware rejects (signature/hash/api/variant) comes back as `System.otaCheck().rejected` and must become a failed ack, never "skipped".
+- The fleet agent (`Celer Agent`, `celeros.agent`) owns os_update/update_apps/self_update/reboot/sync/diagnostics; other verticals only ack their own types. A manifest the firmware rejects (signature/hash/api/variant) comes back as `System.otaCheck().rejected` and must become a failed ack, never "skipped". Agent 1.0.4+ also reports `caps.ota_signed` (firmware >= 1.11.6 verifies the ECDSA manifest); a control plane should warn, not block the first upgrade, on older firmware.
 - Editing `icons/*.png` by hand instead of going through `tools/icons.json` + `make_icons.py`.
 - Growing `data/` past the littlefs partition size (384KB on CYD 4MB). `flash_data.sh` reads the size from the partition CSV and mklittlefs fails when the tree doesn't fit.

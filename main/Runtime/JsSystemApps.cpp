@@ -320,6 +320,8 @@ duk_ret_t JSBindings::js_otaCheck(duk_context *ctx) {
     putBool(ctx, "fetchFailed", info.fetchFailed);
     putBool(ctx, "available", info.available);
     putBool(ctx, "hasFirmware", info.hasFirmware);
+    putBool(ctx, "rejected", info.rejected);
+    putBool(ctx, "signed", info.manifestVerified);
     putInt(ctx, "apiVersion", info.apiVersion);
     putStr(ctx, "version", info.version.c_str());
     putStr(ctx, "url", info.firmwareUrl.c_str());

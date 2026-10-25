@@ -638,7 +638,7 @@ Settings PIN, handled natively since 1.3: salted SHA-256 (`settings_pin2.bin`), 
 Web server credentials (Basic Auth since 1.3 — every route requires the password). `webAuthInfo()` → `{user, pass}` for display to the device owner; `webAuthSetPass` accepts 6–31 characters.
 
 #### `System.otaCheck()`
-- **Returns:** `{fetchFailed, available, hasFirmware, version, url, changelog, guide, type}` — result of the device's update channel manifest.
+- **Returns:** `{fetchFailed, available, hasFirmware, rejected, signed, version, url, changelog, guide, type}` — result of the device's update channel manifest. `rejected` means the manifest was refused (signature/hash/api/variant): it is an error, not "no update"; `signed` means the ECDSA signature was verified.
 
 #### `System.otaStart(url, progressCallback)`
 - **Parameters:** `url` from `otaCheck()`, callback receiving `percent` (0–100) during the flash
@@ -3332,8 +3332,12 @@ if (r.available && !System.appOpen() && !System.updateBusy()) {
 }
 ```
 
-**Security:** OTA uses HTTPS with the firmware CA bundle and verifies the
-manifest's `firmware_sha256` while streaming, before marking the boot
-partition. Manifest signatures and CA pinning do not exist yet; until
-they do, `os_update` is a bench-only feature — do not enable it on a
-customer fleet.
+**Security (API 50 / CelerOS 1.11.6+):** OTA uses HTTPS with the CA bundle
+and requires `firmware_signature` in the manifest (ECDSA P-256 over
+`version`, `api_version`, `firmware_sha256` and `variant`). The firmware
+verifies the signature against the embedded public key
+(`main/OTA/OtaPublicKey.h`) and the stream SHA-256 before marking the boot
+partition; a missing/invalid signature, a hash mismatch or a
+variant/API mismatch becomes `rejected`, and the agent reports a failed
+ack. CA pinning does not exist yet; the signature authenticates the
+publisher and is the gate for `os_update` on a customer fleet.

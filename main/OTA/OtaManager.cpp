@@ -1,4 +1,5 @@
 #include "OtaManager.h"
+#include "OtaPublicKey.h"
 #include <string>
 #include <cstdio>
 #include <atomic>
@@ -88,6 +89,65 @@ static bool urlSchemeAllowed(const std::string& url) {
 static const char* HTTP_BLOCKED_MSG =
     "OTA bloqueado: http:// requer /local/ota_allow_http.txt no aparelho";
 
+// Formato canonico assinado pelo publicador (tools/ota_sign.py do
+// CelerOS-Server). Cada campo em uma linha, com o prefixo de versao do
+// esquema; mudar isto exige republicar tudo e bumpar o prefixo.
+static std::string manifestCanonical(const OtaUpdateInfo& info,
+                                     const std::string& variant) {
+    return std::string("CelerOS-OTA-v1\n") + info.version + "\n" +
+           std::to_string(info.apiVersion) + "\n" + info.firmwareSha256 + "\n" +
+           variant + "\n";
+}
+
+static bool hexToBytes(const std::string& hex, uint8_t* out, size_t outLen) {
+    if (hex.size() != outLen * 2) return false;
+    auto nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i < outLen; i++) {
+        int hi = nibble(hex[i * 2]);
+        int lo = nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return true;
+}
+
+// Verifica ECDSA P-256 (SECP256R1) do manifesto contra a chave publica
+// embutida. A assinatura e raw r||s (64 bytes), nao DER — o publicador
+// converte. O texto assinado e o SHA-256 do formato canonico acima.
+static bool verifyManifestSignature(const std::string& canonical,
+                                    const std::string& sigHex) {
+    uint8_t sig[64];
+    if (!hexToBytes(sigHex, sig, sizeof(sig))) return false;
+    if (psa_crypto_init() != PSA_SUCCESS) return false;
+    uint8_t digest[32];
+    size_t digestLen = 0;
+    if (psa_hash_compute(PSA_ALG_SHA_256, (const uint8_t*)canonical.data(),
+                         canonical.size(), digest, sizeof(digest),
+                         &digestLen) != PSA_SUCCESS ||
+        digestLen != sizeof(digest)) {
+        return false;
+    }
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_algorithm(&attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_VERIFY_HASH);
+    psa_key_id_t key = 0;
+    if (psa_import_key(&attr, kOtaPublicKey, sizeof(kOtaPublicKey), &key) !=
+        PSA_SUCCESS) {
+        return false;
+    }
+    const bool ok = psa_verify_hash(key, PSA_ALG_ECDSA(PSA_ALG_SHA_256), digest,
+                                    sizeof(digest), sig, sizeof(sig)) ==
+                    PSA_SUCCESS;
+    psa_destroy_key(key);
+    return ok;
+}
+
 bool OtaManager::checkForUpdates() {
     // Guarda compartilhada: outro check/instalacao em curso devolve o
     // resultado corrente (fresco: so pode ter sido escrito ha poucos s)
@@ -131,6 +191,10 @@ bool OtaManager::runCheck() {
     for (char& c : info.firmwareSha256) {
         if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
     }
+    info.signature = FileSystem::parseJsonValue(payload, "firmware_signature");
+    for (char& c : info.signature) {
+        if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+    }
 
     info.changelog = kstr::replaceAll(info.changelog, "\\n", "\n");
     info.guide = kstr::replaceAll(info.guide, "\\n", "\n");
@@ -164,6 +228,7 @@ bool OtaManager::runCheck() {
         if (!info.firmwareSha256.empty() && !shaOk) {
             info.available = false;
             info.hasFirmware = false;
+            info.rejected = true;
             info.type = "Manifest com firmware_sha256 invalido";
             info.changelog = "O update.json trouxe firmware_sha256 ilegivel; "
                              "a atualizacao foi recusada.";
@@ -174,6 +239,7 @@ bool OtaManager::runCheck() {
         if (info.firmwareSha256.empty() && kstr::startsWith(url, "https://")) {
             info.available = false;
             info.hasFirmware = false;
+            info.rejected = true;
             info.type = "Manifest sem firmware_sha256";
             info.changelog = "O update.json HTTPS nao declara firmware_sha256; "
                              "a atualizacao foi recusada.";
@@ -197,6 +263,7 @@ bool OtaManager::runCheck() {
     if (!mine.empty() && manifestVariant != mine) {
         info.available = false;
         info.hasFirmware = false;
+        info.rejected = true;
         info.type = "Atualizacao para outra variante";
         info.changelog = "Este aparelho e a variante " + mine +
                          " e a atualizacao publicada e para outra variante (" +
@@ -224,6 +291,7 @@ bool OtaManager::runCheck() {
         if (!apiOk || api <= 0) {
             info.available = false;
             info.hasFirmware = false;
+            info.rejected = true;
             info.type = "Manifest sem api_version valido";
             info.changelog = "O update.json oferecido nao declara api_version "
                              "(ou veio com valor ilegivel) e foi recusado.";
@@ -234,6 +302,7 @@ bool OtaManager::runCheck() {
         if (api < CELEROS_API_LEVEL) {
             info.available = false;
             info.hasFirmware = false;
+            info.rejected = true;
             info.type = "Atualizacao com API menor que a atual";
             info.changelog = "O firmware oferecido tem API " + std::to_string(api) +
                              " e este aparelho roda API " + std::to_string(CELEROS_API_LEVEL) +
@@ -244,6 +313,43 @@ bool OtaManager::runCheck() {
             return false;
         }
         info.apiVersion = api;
+    }
+
+    // Autenticidade do manifesto: ECDSA P-256 sobre version/api_version/
+    // firmware_sha256/variant, com a chave publica embutida. HTTPS com
+    // firmware SEM assinatura e recusado; assinatura invalida tambem. HTTP
+    // local (ota_allow_http, bancada) continua aceitando manifesto antigo
+    // sem assinatura para nao travar aparelho de desenvolvimento.
+    {
+        const bool httpsManifest = kstr::startsWith(url, "https://");
+        if (info.signature.empty()) {
+            if (httpsManifest && info.hasFirmware) {
+                info.available = false;
+                info.hasFirmware = false;
+                info.rejected = true;
+                info.type = "Manifest sem assinatura";
+                info.changelog = "O update.json HTTPS nao declara firmware_signature; "
+                                 "a atualizacao foi recusada.";
+                info.guide = "";
+                ESP_LOGW("celer.ota", "manifest HTTPS sem firmware_signature: recusado");
+                return false;
+            }
+        } else {
+            const std::string canonical = manifestCanonical(info, manifestVariant);
+            if (!verifyManifestSignature(canonical, info.signature)) {
+                info.available = false;
+                info.hasFirmware = false;
+                info.rejected = true;
+                info.type = "Assinatura do manifesto invalida";
+                info.changelog = "A assinatura ECDSA do update.json nao confere "
+                                 "com a chave do CelerOS; a atualizacao foi recusada.";
+                info.guide = "";
+                ESP_LOGW("celer.ota", "firmware_signature nao confere: recusado");
+                return false;
+            }
+            info.manifestVerified = true;
+            ESP_LOGI("celer.ota", "manifesto assinado: assinatura confere");
+        }
     }
 
     if (celer::versionGreater(info.version, CELEROS_VERSION)) {
@@ -318,6 +424,16 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
         (firmwareUrl == info.firmwareUrl) ? info.firmwareSha256 : std::string();
     if (expectedSha.empty() && kstr::startsWith(firmwareUrl, "https://")) {
         lastError = "OTA failed: firmware_sha256 ausente no manifesto";
+        ESP_LOGE("celer.ota", "%s", lastError.c_str());
+        return false;
+    }
+    // A assinatura so vale para a URL que o check verificou; HTTPS direto
+    // (sem check) ja cai no hash ausente acima. Rejeitar aqui fecha o
+    // caminho de um manifesto com hash valido e assinatura ruim.
+    if (firmwareUrl == info.firmwareUrl &&
+        (info.rejected ||
+         (kstr::startsWith(firmwareUrl, "https://") && !info.manifestVerified))) {
+        lastError = "OTA failed: manifesto sem assinatura valida";
         ESP_LOGE("celer.ota", "%s", lastError.c_str());
         return false;
     }

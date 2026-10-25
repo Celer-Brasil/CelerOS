@@ -23,6 +23,16 @@ struct OtaUpdateInfo {
     std::string changelog;
     std::string guide;
     std::string type;
+    // Assinatura ECDSA P-256 (hex r||s, 64 bytes) do manifesto. Cobre
+    // version/api_version/firmware_sha256/variant. HTTPS exige assinatura
+    // valida; HTTP local (bancada) pode omitir.
+    std::string signature;
+    // Assinatura conferida contra a chave publica embutida no firmware.
+    // performUpdate so instala HTTPS com este flag ligado.
+    bool manifestVerified = false;
+    // Manifesto RECUSADO (assinatura/hash/api/variante) — diferente de
+    // "sem update": o agente reporta erro, nao sucesso.
+    bool rejected = false;
 };
 
 class OtaManager {

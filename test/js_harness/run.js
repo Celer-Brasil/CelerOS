@@ -4734,6 +4734,51 @@ function holdFrames(x, y, n) {
           body.events.length >= 4, JSON.stringify(body.events));
     check('update_apps nao para o servico', stops === 0, String(stops));
 
+    // Manifesto recusado (assinatura/hash/api/variante) e erro no ack, nao
+    // "sem update": o agente nao pode reportar sucesso de um OTA negado.
+    var badStarts = 0, badRestarts = 0, badBeats = [];
+    var rBad = runApp('data/apps/Celer Agent/service.js', function(env) {
+        env.Service = { stop: function() {} };
+        env.FS.writeTextFile('/local/celercloud.json', JSON.stringify({
+            url: 'https://proj.supabase.co', key: 'sb_publishable_x',
+            tenantId: '9f2c1a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b',
+            deviceId: 'a0b1c2d3e4f5', secret: 'segredo-de-teste-123456',
+            heartbeatMs: 0, pollMs: 30000
+        }));
+        env.FS.writeTextFile('/local/cloud_commands.json', JSON.stringify([
+            { id: 'cmd-bad', type: 'os_update', payload: {} }
+        ]));
+        env.System.appOpen = function() { return false; };
+        env.System.updateBusy = function() { return false; };
+        env.System.shellActive = function() { return false; };
+        env.System.wifiStatus = function() { return { connected: true }; };
+        env.System.otaCheck = function() {
+            return { fetchFailed: false, available: false, hasFirmware: false,
+                     rejected: true, signed: false, version: '1.11.7',
+                     type: 'Assinatura do manifesto invalida' };
+        };
+        env.System.otaStart = function() { badStarts++; return { ok: true }; };
+        env.System.restart = function() { badRestarts++; };
+        env.Net.request = function(opts) {
+            if (opts.url.indexOf('/functions/v1/device-heartbeat') >= 0) {
+                badBeats.push(opts);
+                return { status: 200, body: JSON.stringify({ ok: true, desired: {}, commands: [] }) };
+            }
+            return { status: 404, body: '' };
+        };
+    });
+    check('manifesto recusado carrega sem erro', rBad.err === null, rBad.err || '');
+    check('manifesto recusado nao inicia OTA', badStarts === 0, String(badStarts));
+    check('manifesto recusado nao reinicia', badRestarts === 0, String(badRestarts));
+    var badQueue = rBad.env.FS.readTextFile('/local/cloud_commands.json') || '';
+    var badOutbox = JSON.parse(rBad.env.FS.readTextFile('/local/cloud_outbox.json') || '[]');
+    check('manifesto recusado acka como falha',
+          badQueue.replace(/\s/g, '') === '[]' &&
+          badOutbox.some(function(e) {
+              return e.type === 'agent.command.failed' && e.payload && e.payload.id === 'cmd-bad' &&
+                     String(e.payload.error).indexOf('Assinatura') >= 0;
+          }), badQueue + ' / ' + JSON.stringify(badOutbox));
+
     // self_update: instala o proprio agente, acka e para o servico.
     var selfStops = 0, selfRestarts = 0, selfInstalls = [], selfBeats = [];
     var selfHubCalls = [], selfDownloads = [];

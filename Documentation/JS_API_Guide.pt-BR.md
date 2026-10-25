@@ -894,7 +894,7 @@ senha). `webAuthInfo()` → `{user, pass}` para exibição ao dono do aparelho;
 `webAuthSetPass` aceita 6–31 caracteres.
 
 #### `System.otaCheck()`
-- **Retorna:** `{fetchFailed, available, hasFirmware, version, url, changelog, guide, type}` — resultado do manifest do canal de updates do aparelho.
+- **Retorna:** `{fetchFailed, available, hasFirmware, rejected, signed, version, url, changelog, guide, type}` — resultado do manifest do canal de updates do aparelho. `rejected` significa manifesto recusado (assinatura/hash/api/variante): e erro, nao "sem update"; `signed` indica assinatura ECDSA conferida.
 
 #### `System.otaStart(url, progressCallback)`
 - **Parâmetros:** `url` vinda de `otaCheck()`, callback que recebe `percent`
@@ -3652,7 +3652,11 @@ if (r.available && !System.appOpen() && !System.updateBusy()) {
 }
 ```
 
-**Segurança:** o OTA usa HTTPS com o bundle de CAs do firmware e confere o
-`firmware_sha256` do manifesto durante o streaming, antes de marcar o
-boot. A assinatura do manifesto e o CA pinning ainda não existem; até lá,
-`os_update` é recurso de bancada — não habilite em frota de cliente.
+**Segurança (API 50 / CelerOS 1.11.6+):** o OTA usa HTTPS com o bundle de
+CAs e exige `firmware_signature` no manifesto (ECDSA P-256 sobre
+`version`, `api_version`, `firmware_sha256` e `variant`). O firmware confere
+a assinatura contra a chave pública embutida (`main/OTA/OtaPublicKey.h`) e
+o SHA-256 do stream antes de marcar o boot; assinatura ausente/inválida,
+hash divergente ou variante/API incompatível viram `rejected` e o agente
+reporta falha no ack. O CA pinning ainda não existe; a assinatura autentica
+o publicador e é o gate para usar `os_update` em frota de cliente.

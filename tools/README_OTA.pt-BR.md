@@ -33,12 +33,20 @@ mesmo slot. Credenciais WiFi não se perdem com update: vivem no NVS
   "security_update": false,
   "changelog": "- Feature A\n- Feature B",
   "guide": "Tap INSTALL to update directly.",
-  "firmware_url": "https://.../firmware.bin"
+  "firmware_url": "https://.../firmware.bin",
+  "firmware_sha256": "64 hex chars",
+  "firmware_signature": "128 hex chars (ECDSA P-256 r||s)"
 }
 ```
 
 - Sem `firmware_url`, a tela de update cai no fluxo legado (mostra só o
   changelog + guia manual). Com o campo, aparece o botão **INSTALL**.
+- **HTTPS exige `firmware_signature`** (CelerOS 1.11.6+): ECDSA P-256 sobre
+  `version`, `api_version`, `firmware_sha256` e `variant`. O aparelho confere
+  contra a chave pública embutida em `main/OTA/OtaPublicKey.h` e recusa
+  assinatura ausente/inválida antes de baixar. HTTP local (com
+  `/local/ota_allow_http.txt`) ainda aceita manifest sem assinatura na
+  bancada.
 - `firmware_url` relativa (ex.: `"firmware.bin"`) resolve contra o diretório
   do próprio `update.json` — útil para servidores locais.
 - Canal por placa: `updates/esp32/update.json` (placa clássica) e
@@ -58,6 +66,13 @@ python3 ~/GitClones/CelerOS-Server/tools/publish_firmware.py esp32 \
   --token $CELER_HUB_TOKEN
 # SmartDisplay 4": canal smartdisplay_4848S040
 ```
+
+O publish assina o manifesto automaticamente com a chave privada em
+`~/GitClones/CelerOS-Server/env/ota_signing_private.pem` (gitignored; faça
+backup — perder a chave exige embutir uma nova pública num release de
+firmware). `--signing-key` aponta para outra chave. `tools/ota_sign.py`
+assina um `update.json` local (usado no teste de LAN) com o mesmo formato
+canônico.
 
 O `update.json` de cada canal (`esp32`, `smartdisplay_4848S040`) é gerado pelo
 publish; publicar sem o caminho do `.bin` atualiza só o manifest (o aparelho

@@ -557,6 +557,9 @@ function osUpdate() {
     if (!info) return { ok: false, error: "otaCheck sem resposta" };
     if (info.fetchFailed) return { ok: false, error: "falha ao consultar o hub" };
     var version = String(info.version || "");
+    if (info.rejected) {
+        return { ok: false, error: String(info.type || "manifesto recusado") };
+    }
     if (!info.available || info.hasFirmware === false) {
         return { ok: true, skipped: true, version: version };
     }

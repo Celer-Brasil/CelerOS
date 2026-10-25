@@ -564,11 +564,10 @@ function osUpdate() {
     if (!version) return { ok: false, error: "update.json sem version" };
     var res = null;
     try {
-        res = System.otaStart(info.url, function (pct) {
-            if (pct === 10 || pct === 50 || pct === 90 || pct === 100) {
-                log("ota " + pct + "%");
-            }
-        });
+        // Sem callback: o callback de progresso do svchost reentra no Duktape
+        // durante o flash e firmware antigo (1.11.0) quebrava no trampoline.
+        // O OtaManager alimenta o TWDT sozinho; o agente nao precisa de %.
+        res = System.otaStart(info.url);
     } catch (e) {
         return { ok: false, error: "otaStart: " + String(e) };
     }

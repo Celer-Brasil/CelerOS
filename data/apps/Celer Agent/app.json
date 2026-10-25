@@ -1,7 +1,7 @@
 {
   "name": "Celer Agent",
   "packageName": "celeros.agent",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "CelerOS",
   "description": "Agente de frota: heartbeat no plano de controle e comandos de OTA, atualizacao de apps e reboot vindos do CelerApp. O trabalho roda no service.js (API 50); a tela mostra o estado para quem abrir.",
   "type": "System",
@@ -19,5 +19,5 @@
   "deps": {
     "celeros.cloud": "^1.1.0"
   },
-  "changelog": "1.0.1 - comandos da frota so do agente (open/close ficam para o app da vertical), update com app aberto (totem autostart) e deps resolvidas/regravadas no update (inclui o proprio agente); token da loja privada e ack/eventos\n1.0.0 - primeiro agente de frota: heartbeat celeros.cloud com inventario de apps e caps (agent/ota/apps/reboot/private_hub); comandos os_update, update_apps, self_update e reboot com ack/eventos; app.zip do hub com md5 conferido e System.installZip; token da loja privada em hubToken ou /local/hub_token.txt (o mesmo da App Store), sempre limitado as URLs do proprio hub; marcador de OTA para reportar sucesso/falha no boot seguinte. os_update e limitado a bancada ate CA pinning/assinatura do firmware (JS_API_Guide secao 50)."
+  "changelog": "1.0.2 - os_update chama System.otaStart sem callback: o trampoline de progresso do svchost reentrava no Duktape durante o flash e o firmware 1.11.0 falhava com RangeError; o OtaManager alimenta o TWDT sozinho\n1.0.1 - comandos da frota so do agente (open/close ficam para o app da vertical), update com app aberto (totem autostart) e deps resolvidas/regravadas no update (inclui o proprio agente); token da loja privada e ack/eventos\n1.0.0 - primeiro agente de frota: heartbeat celeros.cloud com inventario de apps e caps (agent/ota/apps/reboot/private_hub); comandos os_update, update_apps, self_update e reboot com ack/eventos; app.zip do hub com md5 conferido e System.installZip; token da loja privada em hubToken ou /local/hub_token.txt (o mesmo da App Store), sempre limitado as URLs do proprio hub; marcador de OTA para reportar sucesso/falha no boot seguinte. os_update e limitado a bancada ate CA pinning/assinatura do firmware (JS_API_Guide secao 50)."
 }

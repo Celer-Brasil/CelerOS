@@ -80,6 +80,19 @@ CONFIG_MBEDTLS_AES_FEWER_TABLES=y
 # para o transbordo do heap JS, o fonte do compile e o TLS.
 # CONFIG_ESP_WIFI_IRAM_OPT is not set
 # CONFIG_ESP_WIFI_RX_IRAM_OPT is not set
+# IRAM livre = heap: das 12 opcoes do conjunto do Tactility (device.py:189-196),
+# so TRES sao visiveis no IDF 6.1 sem SPI_FLASH_AUTO_SUSPEND. As outras 7
+# (ESP_TIMER/SYSTEM/INTR/HW_SUPPORT_IN_IRAM, SPI_FLASH_PLACE_FUNCTIONS,
+# LOG_IN_IRAM, LIBC_MISC_IN_IRAM) tem "bool ... if SPI_FLASH_AUTO_SUSPEND" e
+# ficam forcadas no default: a linha em sdkconfig.defaults e no-op. Ligar
+# auto-suspend muda o comportamento de escrita de flash (e o painel RGB
+# depende dele) - nao nesta rodada.
+# CONFIG_ESP_PHY_IRAM_OPT is not set
+# CONFIG_WIFI_RMT_IRAM_OPT is not set
+# CONFIG_WIFI_RMT_RX_IRAM_OPT is not set
+# Ficam de fora: RINGBUF_PLACE_ISR_FUNCTIONS_INTO_FLASH (ISR em flash; medir
+# com soak) e HEAP_PLACE_FUNCTION_INTO_FLASH (heap na flash dobra o compile
+# do Duktape: 1,6s -> 3,1s).
 # malloc/free ficam na IRAM: com o heap em flash o compile do Duktape
 # (milhares de alocacoes) ficou 2x mais lento (Settings 1,6s -> 3,1s)
 

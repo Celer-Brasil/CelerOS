@@ -1,7 +1,7 @@
 # Tactility → CelerOS: plano de execução
 
 **Português (BR)** · 2026-10-25 · Derivado de `Tactility_Analise.pt-BR.md`
-Estado: **Fase 0 concluída · Fase 1 em execução**
+Estado: **Fase 0 concluída · Fase 1: código e builds concluídos, bench pendente**
 
 Este documento transforma o estudo em trabalho executável. A ordem, o porquê e
 as referências de código estão no estudo; aqui ficam os passos, os arquivos, os
@@ -135,6 +135,20 @@ Gate antes de propagar para dog/watch: `lcddma` limpo, fps estável, boot e soak
 de 30 min com Loja baixando + jogo. Se o painel RGB perder estabilidade,
 **reverter este commit** (o Tactility também desabilita em placas específicas,
 `device.py:262-268`).
+
+### Resultado do build (2026-10-25)
+
+- [x] 8 placas compiladas com os novos defaults; `sdkconfig_check` ok nas 8.
+- [x] `--check-budget` contra o baseline: rc=0; maior delta +1.872 B
+      (smartdisplay); as outras placas encolheram ou ficaram iguais.
+- [x] Imagens (bytes): smartdisplay 2.661.136; cyd 1.556.816; cyd-vspi
+      1.508.192; dog 2.504.688; watch 2.770.000; devkit 1.323.072;
+      devkit-s3 1.849.008; cam 1.762.592. CYD segue com **81.584 B livres**.
+- [x] `sdkconfig` gerado confirma as 3 opções IRAM no CYD/cyd-vspi/devkit,
+      `SPIRAM_MEMTEST` off nas 5 placas com PSRAM e XIP on no smartdisplay.
+- [ ] Bench (heap/IRAM, boot, `lcddma`, soak) — pendente; roteiro abaixo.
+- [ ] Atualizar o baseline depois do bench aceito (commit próprio), para a
+      Fase 2 começar com o teto zerado.
 
 ### 1.5 Fechamento
 

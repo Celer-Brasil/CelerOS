@@ -422,10 +422,10 @@ static void otaProgressTrampoline(int percent) {
             JSBindings::present();
             return 0;
         }, nullptr, 0, 1);
+        duk_pop(s_otaCtx);  // resultado do safe_call (o servico nao empilhou nada)
     } else {
         esp_task_wdt_reset();  // sem present(): o progresso do flash alimenta o TWDT
     }
-    duk_pop(s_otaCtx);
 }
 
 duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {

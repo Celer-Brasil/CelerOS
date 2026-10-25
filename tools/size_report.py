@@ -23,16 +23,21 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-BOARDS = {
-    "smartdisplay": {"build": "build", "csv": "partitions_16MB.csv"},
-    "cyd": {"build": "build-cyd", "csv": "partitions_4MB.csv"},
-    "cyd-vspi": {"build": "build-cyd-vspi", "csv": "partitions_4MB.csv"},
-    "spotpear-dog": {"build": "build-dog", "csv": "partitions_16MB.csv"},
-    "waveshare-watch": {"build": "build-watch", "csv": "partitions_32MB.csv"},
-    "devkit": {"build": "build-devkit", "csv": "partitions_4MB.csv"},
-    "devkit-s3": {"build": "build-devkit-s3", "csv": "partitions_16MB.csv"},
-    "esp32-cam": {"build": "build-esp32-cam", "csv": "partitions_4MB_cam.csv"},
-}
+# Fonte unica do build por placa (validada por tools/gen_boards.py --check):
+# o manifest evita a lista duplicada que deixou o cyd-vspi fora do flash_data.
+BOARDS_JSON = os.path.join(ROOT, "boards", "boards.json")
+
+
+def load_boards():
+    with open(BOARDS_JSON, encoding="utf-8") as f:
+        data = json.load(f)
+    return {
+        board: {"build": cfg["build_dir"], "csv": cfg["partitions"]}
+        for board, cfg in data["boards"].items()
+    }
+
+
+BOARDS = load_boards()
 
 
 def slot_size(csv_name):

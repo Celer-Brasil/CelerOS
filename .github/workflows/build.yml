@@ -58,6 +58,8 @@ jobs:
         run: python3 test/test_celerhub.py
       - name: size_report tests (teto de crescimento por placa)
         run: python3 test/test_size_report.py
+      - name: boards tests (manifest x CI, flash_data, CMake e sdkconfig)
+        run: python3 test/test_boards.py
       - name: require no Duktape real (host)
         run: python3 test/duk/run.py
       - name: matilha tests (netframe da malha + no CelerNet + bond do link)

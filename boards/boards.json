@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "comment": "Fonte unica do build por placa. Validado por tools/gen_boards.py --check e test/test_boards.py; sdkconfig.defaults continua manual (tuning medido) e CMake/flash_data/CI sao estaticos de proposito. Placa nova: entrada aqui + defaults + Board.cpp + CSV + canal; o check aponta o que faltar.",
+  "boards": {
+    "smartdisplay": {
+      "target": "esp32s3",
+      "flash_mb": 16,
+      "psram": "octal",
+      "partitions": "partitions_16MB.csv",
+      "ota_channel": "smartdisplay_4848S040",
+      "build_dir": "build",
+      "data_overlay": false,
+      "data_exclude": false
+    },
+    "cyd": {
+      "target": "esp32",
+      "flash_mb": 4,
+      "psram": "none",
+      "partitions": "partitions_4MB.csv",
+      "ota_channel": "esp32",
+      "build_dir": "build-cyd",
+      "data_overlay": false,
+      "data_exclude": true
+    },
+    "cyd-vspi": {
+      "target": "esp32",
+      "flash_mb": 4,
+      "psram": "none",
+      "partitions": "partitions_4MB.csv",
+      "ota_channel": "esp32",
+      "build_dir": "build-cyd-vspi",
+      "data_overlay": false,
+      "data_exclude": false
+    },
+    "spotpear-dog": {
+      "target": "esp32s3",
+      "flash_mb": 16,
+      "psram": "octal",
+      "partitions": "partitions_16MB.csv",
+      "ota_channel": "spotpear_zzpet",
+      "build_dir": "build-dog",
+      "data_overlay": true,
+      "data_exclude": false
+    },
+    "waveshare-watch": {
+      "target": "esp32s3",
+      "flash_mb": 32,
+      "psram": "octal",
+      "partitions": "partitions_32MB.csv",
+      "ota_channel": "waveshare_amoled206",
+      "build_dir": "build-watch",
+      "data_overlay": true,
+      "data_exclude": true
+    },
+    "devkit": {
+      "target": "esp32",
+      "flash_mb": 4,
+      "psram": "none",
+      "partitions": "partitions_4MB.csv",
+      "ota_channel": "devkit",
+      "build_dir": "build-devkit",
+      "data_overlay": false,
+      "data_exclude": true
+    },
+    "devkit-s3": {
+      "target": "esp32s3",
+      "flash_mb": 16,
+      "psram": "octal",
+      "partitions": "partitions_16MB.csv",
+      "ota_channel": "devkit-s3",
+      "build_dir": "build-devkit-s3",
+      "data_overlay": true,
+      "data_exclude": true
+    },
+    "esp32-cam": {
+      "target": "esp32",
+      "flash_mb": 4,
+      "psram": "quad",
+      "partitions": "partitions_4MB_cam.csv",
+      "ota_channel": "esp32-cam",
+      "build_dir": "build-esp32-cam",
+      "data_overlay": false,
+      "data_exclude": true
+    }
+  }
+}

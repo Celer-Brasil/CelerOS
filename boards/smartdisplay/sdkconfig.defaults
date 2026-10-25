@@ -15,6 +15,11 @@ CONFIG_SPIRAM_MEMTEST=n
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# Experimento: instrucoes/rodata na PSRAM (device.py:262-268). Gate de bench:
+# lcddma limpo, fps, boot e soak; reverter se o painel RGB embaralhar.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 
 # GPIO19/20 desta placa NAO estao livres para o USB-OTG nativo (19 = SDA do

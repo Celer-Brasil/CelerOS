@@ -12,6 +12,7 @@ Host utilities: device control over serial (`celerctl`), the JS app linter (`app
 | `ota_server.py` | local update.json + firmware server | `--board smartdisplay\|cyd`, `--bin`, `--port` (default 10234), `--version`; the device picks it up through `/local/ota_url.txt` |
 | `celerhub.py` | publish/list/delete apps on the hub | validates app folders (runs `app_lint`; errors block publish); `MAX_API_LEVEL` is read from `main/CMakeLists.txt`; token via args/env; hub via `--hub` or `CELER_HUB` (default `https://os.celer.tec.br`). Deps: `publish-dep <file.js> [--dry]` (version from the module, ES5-gated by app_lint, pre-flight mirrors the hub: same-version OR version <= top needs `--force`) and `deps-status` (drift `tools/sdk/engine` x hub index, exit 1 when behind — pre-push GATE; `celer.js check` surfaces it as a warning, and its range check FAILS when a hub_apps app.json range has no satisfying version on the hub). `--private [--tenant T]` (publish and publish-dep) injects `visibility: private` into the uploaded copy: the hub stores it outside the public catalog and only serves it with a device token (`/local/hub_token.txt`). The js ceiling counts STRIPPED sizes everywhere (validate + app_lint), matching what ships. Own tests: `python3 test/test_celerhub.py` (runs in CI) |
 | `sdk/` | app-dev SDK, single entry `node tools/sdk/celer.js` (`new/lint/types/test/emu/check/publish/dev` + `bench`) : scaffold, generated editor types, emulator (headless PNG/GIF/frame diffs + `--input` scripts, or `--serve` live browser preview with pointer/keyboard/hot reload/pause-step) and drift checks. `dev`/`publish` delegate to `celerctl`/`celerhub`; `lint`/`check` delegate to `app_lint`. Types `sdk/types/celer.d.ts` are GENERATED (commit alongside API changes, like CelerFonts); font8x8 is vendored public-domain data. Own tests: `node test/sdk/run.js` | `celer.js new MyApp` → `celer.js emu MyApp --serve` → `celerctl.py dev MyApp` → `celer.js publish MyApp` |
+| `studio/` | **Celer Studio**: Unity-style game editor. File-first project (`celergame.project.json` + `Assets/**` with `.meta` GUIDs + `*.scene.json`/`*.prefab.json`), one op bus shared by the web GUI, CLI and `POST /api/command`, atomic batches with undo/redo, deterministic flat ES5 build (runtime inlined, no new hub dep). Own tests: `node test/studio/run.js`; docs `Documentation/Studio_Guide*.md`; agent contract in `tools/studio/AGENTS.md` | `celer.js studio init ~/Jogo` → `celer.js studio ~/Jogo serve --open` → `build` → `run`/`export`; headless: `describe/apply/validate/build/run` |
 | `matilha/` | the PC's CelerLink (trust pillar) client over bleak: scan, 6-digit code pairing, bond v2 (`~/.config/matilha/bonds.json`, 0600), chat/send with the open app. The old `mesh` (raw-HCI BLE node speaking NetFrame v2 in clear) left in API 41: the PC joins the mesh through the GATEWAY instead (`celerctl mesh ...`, virtual member `pc-XXXX`). Own tests: `python3 test/test_matilha.py` (no radio/bleak; runs in CI) | `link scan/pair/chat/send/bonds` |
 | `make_icons.py` | `icons.json` prompts -> `icons_src/*.png` (512px, local FLUX via text2d) -> `data/icons/*.png` 64px RGB565-dithered | `--regen` forces art regeneration; also writes `docs/assets/icons_preview.png` |
 | `make_splash.py` | PNG -> `main/Assets/SplashLogo.h` (64-color PNG composed over THEME_BG, drawn with `drawPng`) | default source is `Documentation/assets/celeros_logo.png`; `--colors N` |
@@ -46,6 +47,11 @@ node tools/sdk/celer.js emu hub_apps/Snake --serve --open     # preview ao vivo 
 node tools/sdk/celer.js emu hub_apps/Snake --gif jogo.gif --ms 3000 --seed 7  # GIF animado determinista
 node tools/sdk/celer.js types                                # regenera celer.d.ts (apos mudar a API do firmware)
 node tools/sdk/celer.js check                                # drift: docs x stubs x types x renderer
+node tools/sdk/celer.js studio init ~/Jogo --name "Meu Jogo"   # projeto do Celer Studio + cena inicial
+node tools/sdk/celer.js studio ~/Jogo serve --open            # GUI (127.0.0.1:8421) com viewport/play
+node tools/sdk/celer.js studio ~/Jogo apply ops.json --json   # lote atomico (mesmo bus da GUI)
+node tools/sdk/celer.js studio ~/Jogo build                   # app flat ES5 em .studio/build
+node tools/sdk/celer.js studio ~/Jogo run --frames 0,600      # harness + PNGs (preview headless)
 node tools/app_lint/lint.js "data/apps/Settings"             # linta um app (parse ES5 + API do firmware)
 ```
 
@@ -58,6 +64,7 @@ node tools/app_lint/lint.js "data/apps/Settings"             # linta um app (par
 
 ## ANTI-PATTERNS
 - Replacing icon art by editing `data/icons/` directly. Delete `icons_src/<id>.png` and/or edit `icons.json`, then rerun `make_icons.py`. A hand-made 512px PNG in `icons_src/` is respected.
+- Editing `tools/studio` build outputs (`.studio/build/**`, generated `main.js`/`game.data.js`) by hand: they are regenerated from `celergame.project.json` + `Assets/**`; change the source project and rebuild (or use an op).
 - Committing `__pycache__/`.
 - Running `celerctl` while `idf.py monitor` holds the same port.
 

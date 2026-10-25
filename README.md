@@ -204,6 +204,7 @@ in by the ESP-IDF component manager; LovyanGFX is a git submodule — clone with
 
 * [Wiki](https://github.com/Celer-Brasil/CelerOS/wiki) — architecture, build, boards, tools and guides (CI-generated from [`wiki/`](wiki/) in the repo).
 * [App Development Guide](Documentation/App_Development_Guide.md) ([em português](Documentation/App_Development_Guide.pt-BR.md)) — how to package a JS app (`app.json`, folder layout, icons).
+* [Celer Studio Guide](Documentation/Studio_Guide.md) ([em português](Documentation/Studio_Guide.pt-BR.md)) — Unity-style game editor: project/scene/prefab/asset metadata formats, web GUI, headless CLI/API and the flat ES5 build.
 * [JavaScript API Guide](Documentation/JS_API_Guide.md) ([em português](Documentation/JS_API_Guide.pt-BR.md)) — full reference of the JS runtime and native bindings (AI, Mic, WakeWord included).
 * [tools/README_USBTOOL.md](tools/README_USBTOOL.md) ([em português](tools/README_USBTOOL.pt-BR.md)) — `celerctl` command reference and the wire protocol.
 * [tools/README_OTA.md](tools/README_OTA.md) ([em português](tools/README_OTA.pt-BR.md)) — OTA manifest scheme (`update.json`) and update channels.

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Celer Studio</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">CELER <b>STUDIO</b></div>
+  <div id="projName" class="proj">carregando...</div>
+  <select id="sceneSel" title="cena aberta"></select>
+  <div class="spacer"></div>
+  <button id="btnValidate" title="schema, refs, limites e ES5">Validar</button>
+  <button id="btnBuild" title="gera o app flat em .studio/build">Build</button>
+  <button id="btnRun" title="roda no harness e tira um PNG">Rodar</button>
+  <button id="btnPlay" class="primary" title="F5: preview ao vivo">Play</button>
+  <button id="btnStop" hidden>Stop</button>
+  <button id="btnUndo" title="Ctrl+Z">Undo</button>
+  <button id="btnRedo" title="Ctrl+Shift+Z">Redo</button>
+  <span id="status" class="status"></span>
+</header>
+
+<div id="main">
+  <aside id="left">
+    <section class="panel" id="hierPanel">
+      <div class="panel-head"><span>HIERARQUIA</span><button id="btnAddEntity" class="mini" title="nova entidade">+</button></div>
+      <div id="hierarchy" class="scroll"></div>
+    </section>
+    <section class="panel" id="assetPanel">
+      <div class="panel-head">
+        <span>ASSETS</span>
+        <label class="mini filebtn" title="importar PNG/QOA/WAV/JS">Importar
+          <input id="fileInput" type="file" multiple hidden>
+        </label>
+      </div>
+      <div id="assets" class="scroll"></div>
+    </section>
+  </aside>
+
+  <main id="center">
+    <div id="tabs">
+      <button data-tab="scene" class="active">Cena</button>
+      <button data-tab="game">Jogo</button>
+      <button data-tab="build">Build</button>
+      <div class="spacer"></div>
+      <button id="btnFit" class="mini" title="enquadrar a cena">Fit</button>
+      <label class="chk"><input id="chkGrid" type="checkbox" checked> grade</label>
+      <label class="chk"><input id="chkSnap" type="checkbox" checked> snap</label>
+      <span id="zoomLabel" class="pill">2x</span>
+    </div>
+    <div id="sceneWrap">
+      <canvas id="view"></canvas>
+      <div id="viewHint" class="hint"></div>
+    </div>
+    <div id="gameWrap" hidden>
+      <iframe id="gameFrame" title="preview do jogo"></iframe>
+    </div>
+    <div id="buildWrap" hidden>
+      <pre id="buildInfo">sem build</pre>
+      <div id="shotWrap"><img id="runShot" alt="screenshot do jogo" hidden></div>
+    </div>
+  </main>
+
+  <aside id="right">
+    <section class="panel" id="inspectorPanel">
+      <div class="panel-head"><span>INSPETOR</span><span id="inspKind" class="pill"></span></div>
+      <div id="inspector" class="scroll"></div>
+    </section>
+  </aside>
+</div>
+
+<footer id="consoleWrap">
+  <div class="panel-head"><span>CONSOLE</span><button id="btnClear" class="mini">limpar</button></div>
+  <pre id="console"></pre>
+  <div id="cmdline"><span class="prompt">&gt;</span><input id="cmd" autocomplete="off"
+    placeholder='{"op":"entity.create","scene":"...","name":"Heroi","x":80,"y":120}  |  build | play | stop | undo'></div>
+</footer>
+
+<div id="modal" hidden>
+  <div class="modal-body">
+    <div class="modal-head"><h3 id="modalTitle">Script</h3><button id="modalClose" class="mini">x</button></div>
+    <textarea id="modalText" spellcheck="false"></textarea>
+    <div class="modal-foot"><span id="modalHint" class="hint"></span><button id="modalSave" class="primary">Salvar</button></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

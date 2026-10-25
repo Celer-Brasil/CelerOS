@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-24
-**Commit:** main @ API 50 (svchost com Net/OTA + agente de frota celeros.agent)
+**Updated:** 2026-10-25
+**Commit:** main @ API 50 (Celer Studio + svchost com Net/OTA + agente de frota celeros.agent)
 **Branch:** main
 
 ## OVERVIEW
@@ -16,11 +16,12 @@ CelerOS/
 ├── data/            # LittleFS image contents: system JS apps + icons (flashed separately)
 ├── hub_apps/        # App Store apps, same layout as data/apps (covered by data/AGENTS.md)
 ├── boards/<b>/      # per-board sdkconfig.defaults (+ data/ overlay & data-exclude.txt on the watch)
-├── tools/           # celerctl, app_lint, sdk, flash_data.sh, ota_server, celerhub, generators
-├── test/            # js_harness + meshsim (multi-node mesh) + app_lint fixtures + sdk tests + host C++ + celerctl sim (own AGENTS.md)
+├── tools/           # celerctl, app_lint, sdk, studio (editor), flash_data.sh, ota_server, celerhub, generators
+│   └── studio/      # Celer Studio: projeto/cena/prefab/meta + GUI + build ES5 (own AGENTS.md)
+├── test/            # js_harness + meshsim (multi-node mesh) + app_lint fixtures + sdk/studio tests + host C++ + celerctl sim (own AGENTS.md)
 ├── wiki/            # GitHub wiki sources, published by CI (own AGENTS.md)
 ├── updates/         # OTA channel dirs: esp32/, smartdisplay_4848S040/, spotpear_zzpet/, waveshare_amoled206/
-├── Documentation/   # JS_API_Guide + App_Development_Guide (EN + .pt-BR)
+├── Documentation/   # JS_API_Guide + App_Development_Guide + Studio_Guide (EN + .pt-BR)
 ├── include/, lib/   # stale PlatformIO placeholders, unused
 └── partitions_{16MB,4MB,32MB}.csv
 ```
@@ -40,6 +41,7 @@ CelerOS/
 | Firmware size / what costs flash | `python3 tools/size_report.py` | CYD OTA slot is the binding constraint |
 | System apps, app.json rules | `data/AGENTS.md` | ES5 only |
 | Device CLI, data flashing, local OTA server | `tools/AGENTS.md` | |
+| Game editor (Celer Studio): project/scene/prefab formats, GUI, headless build | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` | file-first; GUI/CLI/HTTP share one op bus; build emits a flat ES5 app with the runtime inlined |
 | JS API docs for app authors | `Documentation/JS_API_Guide*.md` | keep EN and pt-BR in sync |
 
 ## CODE MAP
@@ -56,6 +58,7 @@ CelerOS/
 | `PackId`, `Provision`, `Resources` | namespaces | `main/Pack/` | the pack's three pillars glue: one identity, one key with three doors (password / CelerLink sealed invite / cable), resources + the PC as virtual member `pc-XXXX` (design: `Documentation/CelerNet_Design.pt-BR.md`) |
 | `WatchPanels`, `AlarmScreen` | classes | `main/Launcher/` | edge-gesture panels — top edge in thirds: left = quick settings, center = notification center (header X), right belongs to the app (reveals the retractable topbar); full-screen alarm ring |
 | `JSBindings::init` | fn | `main/Runtime/JSBindings.cpp` | registers the JS API from `kFnsN[]` tables |
+| `Project`, `applyOps`, `buildProject` | classes/fns | `tools/studio/lib/` | Celer Studio: project/scene/prefab model, single op bus (GUI/CLI/HTTP) and deterministic flat build |
 | `Kui` | class | `main/UI/` | immediate-mode UI: Canvas/Screen/Widget/TouchPump/Navigator |
 | `kui::readTouches` | fn | `main/UI/Kui.cpp` | multi-touch read (API 43): up to `kTouchMax`=5 points, index 0 = PRIMARY (oldest finger, ordered by GT911/FT3168 track id); `readTouch(x,y)` is the primary wrapper — TouchPump/chrome/keyboard/launcher only ever see that one |
 | `NetworkManager::instance()` | singleton | `components/Network` | sole WiFi radio owner |
@@ -70,7 +73,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 - **Selective staging only**: `git add <explicit paths>`, never `-A`/`-u`/`.`. When one file carries two features, split it by hunks (`git apply --cached` with a crafted patch is the reliable non-interactive way) — see 317c7d3 or the API 15 commits (ed70e10/4a04292).
 - **Commit style**: Portuguese without accents, subject `Area: assunto` + a detailed body (what, why, bench evidence). One story per commit; its tests, stubs and lint updates ride along. No AI attribution footers.
 - **Push discipline**: fast-forward only, never `--force` (history was filter-repo'd once; old hashes must never come back). On rejection, fetch and rebase your own unpushed commits.
-- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/debug/run.js`, `node test/semver/run.js` (deps range/fecho iguais em celerhub.py x Loja x harness), `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node test/public_boundary/run.js` (sem termos de verticais fechadas), `node tools/sdk/celer.js check`, `python3 tools/celerhub.py deps-status` (dep drift blocks the push — publish-dep resolves it), `g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp && ./celeros_tests`, `python3 test/duk/run.py`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
+- **Gates before any push** (CI repeats them in `.github/workflows/build.yml`): `node test/js_harness/run.js`, `node test/app_lint/run.js`, `node test/sdk/run.js`, `node test/studio/run.js`, `node test/debug/run.js`, `node test/semver/run.js` (deps range/fecho iguais em celerhub.py x Loja x harness), `node test/meshsim/run.js`, `node tools/app_lint/lint.js data/apps hub_apps boards/*/data/apps`, `node test/public_boundary/run.js` (sem termos de verticais fechadas), `node tools/sdk/celer.js check`, `python3 tools/celerhub.py deps-status` (dep drift blocks the push — publish-dep resolves it), `g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp && ./celeros_tests`, `python3 test/duk/run.py`. If the JS API moved, regenerate types first: `node tools/sdk/celer.js types` (commit `tools/sdk/types/celer.d.ts` alongside).
 - **Apps and deps ship to the hub in the same task.** A fix that is committed but not published does not exist for any device. App changed (`data/apps/`, `hub_apps/`, or a board overlay whose app is in the hub catalog): bump `version` + write `changelog` in `app.json`, commit, then `node tools/sdk/celer.js publish <Pasta>` — the hub rejects the same version again (`--force` is not a workaround) and `celerhub` refuses a dirty tree. Dep changed (`tools/sdk/engine/*.js`): bump the `version: 'x.y.z'` declared inside the module, commit, then `python3 tools/celerhub.py publish-dep tools/sdk/engine/<mod>.js`, and regenerate the factory copies it vendors into apps (`data/modules/<nome>/<versao>/` + `deps.json` — see `data/AGENTS.md`). Close the loop with `python3 tools/celerhub.py list` (apps) and `python3 tools/celerhub.py deps-status` (deps; exit 1 when behind). Board-only factory apps ship via `flash_data.sh` instead — no hub catalog entry.
 - **Releases are cut by tag**: pushing `v*` triggers `release.yml` (per-board factory zips + CelerOS Flasher). Tag deliberately after bench validation, never as a side effect.
 - **Release notes are in English** (audience: first-time flashers; the repo's public artifacts — README, wiki EN pages — are English). The annotated tag body becomes the notes' preamble, so write tag bodies in English too; the flash instructions template lives inside `release.yml` and must teach the Flasher workflow (download flasher + board zip, extract together, board -> port -> erase on first flash).
@@ -118,10 +121,19 @@ python3 tools/celerctl.py top -w                                             # p
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool (the watch's path)
 python3 tools/celerctl.py debug MyApp                                       # JS debugger REPL (S3 boards: CELEROS_JS_DEBUGGER)
 
+# Celer Studio (game editor; project is NOT an app until `build`)
+node tools/sdk/celer.js studio init ~/Jogo --name "Meu Jogo"   # project + starter scene
+node tools/sdk/celer.js studio ~/Jogo serve --open            # Unity-style GUI (127.0.0.1:8421)
+node tools/sdk/celer.js studio ~/Jogo describe --json         # discovery for humans/AI
+node tools/sdk/celer.js studio ~/Jogo apply ops.json         # atomic op batch
+node tools/sdk/celer.js studio ~/Jogo build                   # flat ES5 app in .studio/build
+node tools/sdk/celer.js studio ~/Jogo run --frames 0,600      # host harness + PNGs
+
 # Validation battery (run before any push; CI runs the same)
 node test/js_harness/run.js
 node test/app_lint/run.js
 node test/sdk/run.js
+node test/studio/run.js                 # editor: formato/ops/build/runtime/CLI x HTTP
 node test/debug/run.js
 node test/meshsim/run.js                 # E2E da malha: apps reais em N nos simulados
 node test/public_boundary/run.js         # fronteira publico/privado (sem verticais fechadas)
@@ -141,5 +153,6 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 - `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated). `python3 tools/sdkconfig_check.py` lists every bench build dir whose sdkconfig drifted from its board's defaults (in 2026-10 the watch and dog bench builds still ran a 32 KB main stack the defaults had cut to 24 KB). `dependencies.lock` flip-flops with the last-built target; don't commit build churn of it.
 - OTA: device reads update.json v2 (`version`, `api_version`, `firmware_url`, `firmware_sha256`, `firmware_signature`, `changelog`) from the hub, or from the URL in `/local/ota_url.txt` when set. HTTPS requires a valid ECDSA P-256 signature (public key in `main/OTA/OtaPublicKey.h`; private key OUTSIDE the repo in `CelerOS-Server/env/ota_signing_private.pem`; `publish_firmware.py` signs automatically). HTTP local with `/local/ota_allow_http.txt` may omit it for the bench. The web UI `/update` also accepts uploads.
+- **Celer Studio projects are file-first**: `celergame.project.json` + `Assets/**` (`*.meta` sidecars with stable GUIDs) + `*.scene.json`/`*.prefab.json`. `studio build` emits a flat ES5 app with the scene runtime inlined into `main.js` (no new hub dep); `.studio/` is cache. GUI, CLI and `POST /api/command` share `tools/studio/lib/ops.js`, so an agent can build a game without the browser. Docs: `Documentation/Studio_Guide.md` (+ `.pt-BR`).
 - `test/README`, `include/`, `lib/` are stale PlatformIO leftovers.
 - **Build env reality check (2026-10-18):** the firmware targets ESP-IDF **6.1** (`~/esp/v6.1/esp-idf`, python 3.14), but `~/.bashrc` has REGRESSED to v6.0/py3.13 — `get_idf` activates 6.0 today even though it was fixed once on 2026-10-17. Verify `idf.py --version` after activating; if it prints 6.0, activate manually: `export IDF_PATH=$HOME/esp/v6.1/esp-idf IDF_TOOLS_PATH=$HOME/.espressif && source $IDF_PATH/export.sh`. Every bench build dir is configured under 6.1: the wrong env fails with a fullclean request — do NOT fullclean, fix the env instead.

@@ -30,6 +30,8 @@ jobs:
         run: node test/app_lint/run.js
       - name: SDK tests (scaffold/types/renderer/emu)
         run: node test/sdk/run.js
+      - name: Celer Studio tests (formato/ops/build/runtime/CLI x HTTP)
+        run: node test/studio/run.js
       - name: Debugger tests (protocolo dmsg + cliente contra alvo Duktape falso)
         run: node test/debug/run.js
       - name: Conformidade semver (vetor unico para celerhub.py, Loja e harness)

@@ -11,6 +11,7 @@ const { Project } = require('./lib/project');
 const { applyOps, undo, redo } = require('./lib/ops');
 const { validateProject } = require('./lib/validate');
 const { buildProject, exportBuild } = require('./lib/build');
+const { deployProject, readDeployReport } = require('./lib/deploy');
 const { runProject } = require('./lib/run');
 // describeData e carregado sob demanda: `node studio.js serve` entra no
 // server por dentro do proprio studio, e um require no topo devolveria o
@@ -84,6 +85,7 @@ function startStudio(opts) {
         return {
             ok: true, describe: d, scenes, prefabs, rev: project.data.rev,
             build: buildReport(),
+            deploy: readDeployReport(projectDir),
             play: play ? { url: play.url, port: play.port, running: true } : { running: false },
         };
     }
@@ -100,6 +102,7 @@ function startStudio(opts) {
             ok: true,
             describe: describeProject(project),
             build: buildReport(),
+            deploy: readDeployReport(projectDir),
             play: play ? { url: play.url, port: play.port, running: true } : { running: false },
         };
     }
@@ -206,6 +209,25 @@ function startStudio(opts) {
             return;
         }
 
+        if (req.method === 'GET' && url === '/api/deploy.zip') {
+            const report = readDeployReport(projectDir);
+            const abs = report && report.zip ? path.resolve(report.zip) : '';
+            if (!abs || !F.isInside(projectDir, abs) || !fs.existsSync(abs)) {
+                sendText(res, 404, 'sem app.zip');
+                return;
+            }
+            fs.readFile(abs, (err, buf) => {
+                if (err) { sendText(res, 404, 'sem app.zip'); return; }
+                res.writeHead(200, {
+                    'Content-Type': 'application/zip',
+                    'Content-Disposition': 'attachment; filename="app.zip"',
+                    'Cache-Control': 'no-store',
+                });
+                res.end(buf);
+            });
+            return;
+        }
+
         if (req.method === 'GET' && url === '/api/run.png') {
             const p = path.join(projectDir, '.studio', 'run', 'tela.png');
             fs.readFile(p, (err, buf) => {
@@ -253,6 +275,9 @@ function startStudio(opts) {
             } else if (body.cmd === 'stop') {
                 stopPlay();
                 out = { ok: true, play: { running: false } };
+            } else if (body.cmd === 'deploy') {
+                if (play) stopPlay();
+                out = deployProject(projectDir, { out: body.out, noBuild: !!body.noBuild });
             } else if (body.cmd === 'export') {
                 out = exportBuild(projectDir, body.target, { force: !!body.force });
             } else if (body.cmd === 'describe') {

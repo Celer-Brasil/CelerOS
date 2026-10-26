@@ -69,6 +69,11 @@
       <iframe id="gameFrame" title="preview do jogo"></iframe>
     </div>
     <div id="buildWrap" hidden>
+      <div id="deployBar">
+        <button id="btnDeploy" class="primary" title="valida, builda, enxuga o JS e gera app.zip">Compilar app.zip</button>
+        <a id="deployLink" class="deploy-link" hidden download="app.zip">baixar app.zip</a>
+        <span id="deployInfo" class="hint"></span>
+      </div>
       <pre id="buildInfo">sem build</pre>
       <div id="buildBudget"></div>
       <div id="shotWrap"><img id="runShot" alt="screenshot do jogo" hidden></div>

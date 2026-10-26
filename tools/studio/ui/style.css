@@ -100,6 +100,9 @@ input[type=color] { padding: 2px; height: 26px; cursor: pointer; }
 #gameWrap, #buildWrap { flex: 1; min-height: 0; }
 #gameWrap iframe { width: 100%; height: 100%; border: 0; background: #070a12; }
 #buildWrap { overflow: auto; padding: 12px; }
+#deployBar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.deploy-link { color: var(--accent); text-decoration: none; font-size: 12px; border-bottom: 1px dashed var(--accent); }
+.deploy-link:hover { color: #fff; }
 #buildInfo { background: #0d121b; border: 1px solid var(--line); border-radius: 8px;
              padding: 12px; color: #b8c6de; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
 #shotWrap { margin-top: 12px; display: flex; justify-content: center; }

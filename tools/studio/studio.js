@@ -18,6 +18,7 @@ const { Project } = require('./lib/project');
 const { applyOps, undo, redo } = require('./lib/ops');
 const { validateProject } = require('./lib/validate');
 const { buildProject, exportBuild } = require('./lib/build');
+const { deployProject } = require('./lib/deploy');
 const { runProject } = require('./lib/run');
 const { componentCatalog, schemaDoc } = require('./lib/schema');
 const { STUDIO_VERSION, FORMAT } = require('./version');
@@ -25,7 +26,7 @@ const F = require('./lib/format');
 
 const COMMANDS = new Set([
     'init', 'describe', 'schema', 'import', 'import-game', 'apply', 'validate',
-    'build', 'run', 'export', 'undo', 'redo', 'fmt', 'serve', 'version', 'help',
+    'build', 'run', 'export', 'deploy', 'undo', 'redo', 'fmt', 'serve', 'version', 'help',
 ]);
 
 const OPS_HELP = [
@@ -70,6 +71,7 @@ function usage() {
     console.log('  build [--json]                                 gera o app flat em .studio/build');
     console.log('  run [--ms N] [--out PNG] [--frames 0,600] [--seed N] [--input TOQUES] [--no-build]');
     console.log('  export DESTINO [--force]                       copia o build para uma pasta');
+    console.log('  deploy [--out app.zip] [--no-build] [--json]   compila JS/assets e gera o app.zip');
     console.log('  undo | redo                                    desfaz/refaz o ultimo lote');
     console.log('  fmt                                            reescreve tudo canonico');
     console.log('  serve [--port P] [--open]                      abre a GUI web (Unity-style)');
@@ -335,6 +337,24 @@ function main(argv) {
             const r = exportBuild(projectDir, target, { force: !!flags.force });
             if (json) console.log(JSON.stringify(r, null, 2));
             else console.log('exportado: ' + r.dir + ' (' + r.files.length + ' arquivos)');
+            return;
+        }
+        if (cmd === 'deploy') {
+            const r = deployProject(projectDir, {
+                out: flags.out || flags._[0],
+                noBuild: !!flags['no-build'],
+            });
+            if (json) console.log(JSON.stringify(r, null, 2));
+            else {
+                console.log('deploy: ' + r.zip);
+                console.log('  app: ' + r.app + ' ' + r.version +
+                            '  zip: ' + (r.bytes / 1024).toFixed(1) + 'KB' +
+                            '  sha256: ' + r.sha256.slice(0, 12));
+                console.log('  JS: ' + (r.js.before / 1024).toFixed(1) + ' -> ' +
+                            (r.js.after / 1024).toFixed(1) + 'KB (enxuto)' +
+                            '  assets: ' + (r.assets.bytes / 1024).toFixed(1) + 'KB' +
+                            '  extras: ' + (r.build.extras === null ? '?' : r.build.extras));
+            }
             return;
         }
         if (cmd === 'undo' || cmd === 'redo') {

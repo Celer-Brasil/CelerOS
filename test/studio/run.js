@@ -17,6 +17,8 @@ const { Project } = require('../../tools/studio/lib/project');
 const { applyOps, undo, redo } = require('../../tools/studio/lib/ops');
 const { validateProject } = require('../../tools/studio/lib/validate');
 const { buildProject } = require('../../tools/studio/lib/build');
+const { deployProject } = require('../../tools/studio/lib/deploy');
+const { readZip } = require('../../tools/studio/lib/zip');
 const { runProject } = require('../../tools/studio/lib/run');
 const { runAppFolder } = require('../../tools/sdk/lib/runner.js');
 const { startStudio } = require('../../tools/studio/server');
@@ -258,6 +260,23 @@ let built = null;
     check('debug/prof ligados no app gerado',
         mainSrc.indexOf('E.debug = true') >= 0 && mainSrc.indexOf('E.prof.on = true') >= 0);
     check('bases incluem a pasta slug do celerctl', mainSrc.indexOf('/sd/apps/' + F.slug(Project.open(base).data.packageName) + '/') >= 0);
+
+    // deploy: JS enxuto, assets usados e zip deterministico/instalavel
+    const depFile = path.join(base, '.studio/deploy/test-app.zip');
+    const dep = deployProject(base, { noBuild: true, out: depFile });
+    const entries = readZip(fs.readFileSync(depFile));
+    const byName = new Map(entries.map((e) => [e.name, e.data.toString('utf8')]));
+    check('deploy gera app.zip + report', fs.existsSync(depFile) &&
+        fs.existsSync(path.join(base, '.studio/deploy/report.json')) && dep.bytes === fs.statSync(depFile).size);
+    check('deploy tem app.json/main.js/icon na raiz', byName.has('app.json') &&
+        byName.has('main.js') && entries.some((e) => e.name === 'icon.png'));
+    check('deploy enxuga JS (jsstrip)', byName.get('main.js').indexOf('// GERADO') < 0 &&
+        byName.get('main.js').indexOf('/*') < 0 && dep.js.after < dep.js.before);
+    check('deploy inclui os assets referenciados e manifesto compacto',
+        entries.some((e) => e.name === 'atlas.png') &&
+        !byName.get('app.json').includes('\n'));
+    const dep2 = deployProject(base, { noBuild: true, out: depFile });
+    check('deploy deterministico (mesmo sha256)', dep2.sha256 === dep.sha256);
 })();
 
 // --------------------------------------------------------- runtime/run -----
@@ -423,6 +442,13 @@ let built = null;
         check(name + ': ' + built.version + ' build+run',
             !r.err && r.frames && r.frames.length === 2 && !!r.frames[1].png,
             r.err || 'frames=' + (r.frames ? r.frames.length : 0));
+        const proj = Project.open(dir);
+        check(name + ': runtime nativo', proj.data.runtime === 'studio');
+        const dep = deployProject(dir, {
+            noBuild: true, out: path.join(dir, '.studio/deploy/test-app.zip'),
+        });
+        check(name + ': app.zip', dep.ok && dep.bytes > 0 && dep.js.after > 0 &&
+            fs.existsSync(dep.zip));
     }
 })();
 

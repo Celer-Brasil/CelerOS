@@ -2012,6 +2012,19 @@ function renderBuild() {
   }
   box.textContent = lines.join('\n');
 
+  const dz = S.snap.deploy;
+  const di = $('#deployInfo');
+  const dl = $('#deployLink');
+  if (di) di.textContent = dz
+    ? ('app.zip ' + (dz.bytes / 1024).toFixed(1) + 'KB · JS ' +
+       (dz.js.before / 1024).toFixed(1) + ' -> ' + (dz.js.after / 1024).toFixed(1) + 'KB · sha ' +
+       dz.sha256.slice(0, 12))
+    : 'ainda sem deploy; clique em Compilar app.zip';
+  if (dl) {
+    dl.hidden = !dz;
+    if (dz) dl.href = '/api/deploy.zip?t=' + Date.now();
+  }
+
   if (budget) {
     const lim = S.snap.describe.limits || {};
     const row = (label, used, max, unit) => {
@@ -2081,6 +2094,23 @@ async function doBuild() {
     log('build ok: ' + r.build.dir + ' (' + r.build.extras + ' extras, ' +
         (r.build.jsBytes / 1024).toFixed(1) + 'KB JS)', 'ok');
     for (const w of r.build.warnings || []) log('aviso[' + w.code + '] ' + w.message, 'warn');
+    if (r.snapshot) setSnapshot(r.snapshot, { keepInspector: true });
+    setTab('build');
+  } catch (e) { logError(e); }
+}
+
+async function doDeploy() {
+  try {
+    setTab('build');
+    const r = await api('/api/command', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd: 'deploy' }),
+    });
+    log('deploy: ' + r.zip + ' (' + (r.bytes / 1024).toFixed(1) + 'KB, sha ' +
+        r.sha256.slice(0, 12) + ')', 'ok');
+    log('  JS ' + (r.js.before / 1024).toFixed(1) + ' -> ' + (r.js.after / 1024).toFixed(1) +
+        'KB · assets ' + (r.assets.bytes / 1024).toFixed(1) + 'KB', 'dim');
+    for (const w of (r.build && r.build.warnings) || []) log('aviso[' + w.code + '] ' + w.message, 'warn');
     if (r.snapshot) setSnapshot(r.snapshot, { keepInspector: true });
     setTab('build');
   } catch (e) { logError(e); }
@@ -2302,6 +2332,7 @@ function wireEvents() {
   for (const b of $$('#gizmoBar [data-gizmo]')) b.onclick = () => setGizmo(b.dataset.gizmo);
   $('#btnValidate').onclick = doValidate;
   $('#btnBuild').onclick = doBuild;
+  $('#btnDeploy').onclick = doDeploy;
   $('#btnRun').onclick = doRun;
   $('#btnPlay').onclick = doPlay;
   $('#btnStop').onclick = doStop;

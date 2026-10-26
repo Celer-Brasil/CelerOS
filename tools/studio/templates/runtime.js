@@ -7,6 +7,10 @@ function studioBoot(E, data) {
     var S = System;
     var A = data.assets || {};
     var SC = data.scenes || {};
+    var NAME = data.names || {};
+    var byName = {};
+    var an;
+    for (an in A) if (A[an] && A[an].n) byName[A[an].n] = A[an];
 
     function firstKey(obj) {
         for (var k in obj) return k;
@@ -39,10 +43,17 @@ function studioBoot(E, data) {
 
     function makeTilemap(tm, asset) {
         var cols = tm.cols, rows = tm.rows, data = tm.data, solids = tm.solids;
+        var solidValues = tm.solidValues || null;
         var auto = tm.autotile || null;
         var map = E.tilemap({
             cols: cols, rows: rows, cell: tm.cell, ox: tm.ox, oy: tm.oy, data: data,
+            // tileset com solidity por TILE (Studio): o valor da celula
+            // manda, entao map.set() para quebrar caixa/abrir saida ja
+            // atualiza a colisao; cenas antigas usam a grade `solids`.
             solid: function (v, c, r) {
+                if (solidValues && v !== undefined && v !== null && v >= 0) {
+                    return !!solidValues[v];
+                }
                 return !!(solids && solids[r * cols + c]);
             },
             paint: function (c, r, x, y) {
@@ -64,8 +75,13 @@ function studioBoot(E, data) {
     }
 
     function spriteOpts(e) {
-        // ax/ay ausentes = ancora do metadado (E.spr.meta/slot), nao 0.5 fixo
-        var o = { scale: e.sx > 0 ? e.sx : 1, key: e.key };
+        // ax/ay ausentes = ancora do metadado (E.spr.meta/slot), nao 0.5 fixo.
+        // rot (graus, como o editor grava) e sy sao aplicados de verdade desde
+        // o spr 1.7: giro pelo drawSprite e escala por eixo no caminho afim
+        var sx = e.sx > 0 ? e.sx : 1, sy = e.sy > 0 ? e.sy : sx;
+        var o = { scale: sx, key: e.key };
+        if (sy !== sx) o.scaleY = sy;
+        if (e.rot) o.angle = e.rot;
         if (e.ax !== undefined) o.ax = e.ax;
         if (e.ay !== undefined) o.ay = e.ay;
         return o;
@@ -168,9 +184,10 @@ function studioBoot(E, data) {
         }
     }
 
-    function enterScene(s) {
+    function enterScene(s, arg) {
         var def = s._def;
         var k, i, j;
+        s.arg = arg;
         var load = def.load || [];
         for (k = 0; k < load.length; k++) loadAsset(A[load[k]]);
 
@@ -184,7 +201,7 @@ function studioBoot(E, data) {
                 ax: d.ax, ay: d.ay, z: d.z,
                 spr: null, key: 0, anim: null, clips: null, playing: false,
                 text: null, shape: null, col: null, hud: null, meta: null,
-                scripts: [], fields: {}, current: ''
+                data: null, scripts: [], fields: {}, current: ''
             };
             // hitbox do metadado na MESMA origem do desenho, em coords de MUNDO
             ent.box = function (scale, out) {
@@ -235,12 +252,22 @@ function studioBoot(E, data) {
                 else if (c.t === 'shape') { ent.shape = c; }
                 else if (c.t === 'col') { ent.col = c; }
                 else if (c.t === 'hud') { ent.hud = c; }
+                else if (c.t === 'data') { ent.data = c.fields || {}; }
                 else if (c.t === 'script') {
                     ent.fields[c.id || ('s' + j)] = c.fields || {};
                     var mod = null;
                     try { mod = require(c.m); } catch (e) { mod = null; }
                     if (mod) {
-                        var ctx = { E: E, scene: s, entity: ent, assets: A };
+                        var ctx = {
+                            E: E, scene: s, entity: ent, assets: A, arg: arg,
+                            save: E.save, data: E.data,
+                            asset: function (n) { return byName[n] || null; },
+                            go: function (n, o) {
+                                var key = scenes[n] ? n : (NAME[n] || n);
+                                // o 2o argumento do ctx.go e o arg da cena
+                                E.goto(key, { arg: o });
+                            }
+                        };
                         var inst = mod.create ? mod.create(ctx) : {};
                         if (!inst) inst = {};
                         inst.fields = c.fields || {};
@@ -248,7 +275,6 @@ function studioBoot(E, data) {
                         inst._mod = mod;
                         inst._ctx = ctx;
                         ent.scripts.push(inst);
-                        if (mod.start) mod.start.call(inst, ctx);
                     }
                 }
             }
@@ -262,6 +288,46 @@ function studioBoot(E, data) {
             if (asset && E.tilemap) s._tms.push({ def: tms[i], map: makeTilemap(tms[i], asset) });
         }
         s._tms.sort(function (a, b) { return (a.def.layer || 0) - (b.def.layer || 0); });
+
+        // API de jogo para scripts: entidades/tilemaps/dados da cena
+        s.entities = s._ents;
+        s.tilemaps = s._tms;
+        s.title = def.title || s._def.name;
+        s.data = def.data || {};
+        s.find = function (ref) {
+            for (var ei = 0; ei < s._ents.length; ei++) {
+                if (s._ents[ei].fid === ref || s._ents[ei].name === ref) return s._ents[ei];
+            }
+            return null;
+        };
+        s.tm = function (id) {
+            for (var ti = 0; ti < s._tms.length; ti++) if (s._tms[ti].def.id === id) return s._tms[ti].map;
+            return null;
+        };
+        s.solidAt = function (x, y) {
+            for (var ti = 0; ti < s._tms.length; ti++) {
+                var t = s._tms[ti].def;
+                if (t.cols && t.rows && t.cell &&
+                    x >= (t.ox || 0) && y >= (t.oy || 0) &&
+                    x < (t.ox || 0) + t.cols * t.cell &&
+                    y < (t.oy || 0) + t.rows * t.cell) {
+                    if (s._tms[ti].map.solidAt(x, y)) return true;
+                }
+            }
+            return false;
+        };
+        s.rectSolid = function (x, y, w, h) {
+            for (var ti = 0; ti < s._tms.length; ti++) {
+                var t = s._tms[ti].def;
+                if (t.cols && t.rows && t.cell &&
+                    x < (t.ox || 0) + t.cols * t.cell && x + w > (t.ox || 0) &&
+                    y < (t.oy || 0) + t.rows * t.cell && y + h > (t.oy || 0)) {
+                    if (s._tms[ti].map.rectSolid(x, y, w, h)) return true;
+                }
+            }
+            return false;
+        };
+        s.asset = function (n) { return byName[n] || null; };
 
         // pintor do fundo: apaga a caixa suja com a cor da cena e MARCA as
         // celulas de tilemap que ela toca (o flush do draw repinta por cima).
@@ -304,6 +370,17 @@ function studioBoot(E, data) {
         if (music && typeof S.playWav === 'function' &&
             E.spr && E.spr.bases && E.spr.bases.length) {
             try { S.playWav(E.spr.bases[0] + music.f); } catch (e) {}
+        }
+
+        // start() depois de TODAS as entidades/tilemaps: o controlador da
+        // cena ja encontra o mundo inteiro montado
+        for (i = 0; i < s._ents.length; i++) {
+            var se = s._ents[i];
+            if (se.active === false) continue;
+            for (j = 0; j < se.scripts.length; j++) {
+                var si = se.scripts[j];
+                if (si._mod.start) si._mod.start.call(si, si._ctx);
+            }
         }
     }
 
@@ -382,12 +459,15 @@ function studioBoot(E, data) {
             fps: def.fps,
             static: !!def.static,
             _def: def,
+            title: def.title || name,
+            data: def.data || {},
+            arg: undefined,
             _ents: [],
             _tms: [],
             _camX: -1,
             _camY: -1
         };
-        s.enter = function () { enterScene(this); };
+        s.enter = function (arg) { enterScene(this, arg); };
         s.exit = function () { exitScene(this); };
         s.update = function (dt) { updateScene(this, dt); };
         s.draw = function () { drawScene(this); };

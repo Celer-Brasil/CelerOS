@@ -127,7 +127,7 @@ function validateProjectData(p, out) {
     if (typeof p.version === 'string' && !SEMVER_RE.test(p.version)) {
         out.push(err('schema.format', 'version', 'versao deve ser x.y.z'));
     }
-    if (p.api !== undefined && (!isInt(p.api) || p.api < 1 || p.api > 50)) {
+    if (p.api !== undefined && (!isInt(p.api) || p.api < 1 || p.api > 51)) {
         out.push(err('schema.range', 'api', 'api deve ser 1..50'));
     }
     if (p.requires !== undefined) {
@@ -204,6 +204,13 @@ function validateSceneData(s, out) {
             }
             if (st.fps !== undefined && (!isInt(st.fps) || st.fps < 0 || st.fps > 60)) {
                 out.push(err('schema.range', 'settings.fps', 'fps deve ser 0..60'));
+            }
+            if (st.assets !== undefined &&
+                (!Array.isArray(st.assets) || st.assets.some((x) => typeof x !== 'string'))) {
+                out.push(err('schema.type', 'settings.assets', 'assets deve ser array de GUIDs/nomes'));
+            }
+            if (st.data !== undefined && !isObj(st.data)) {
+                out.push(err('schema.type', 'settings.data', 'data deve ser objeto'));
             }
             if (st.camera !== undefined) {
                 if (!isObj(st.camera)) out.push(err('schema.type', 'settings.camera', 'camera deve ser objeto'));

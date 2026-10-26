@@ -86,6 +86,13 @@
         "script": { "type": "script", "required": true, "label": "Script" },
         "fields": { "type": "json", "default": {}, "label": "Campos" }
       }
+    },
+    "data": {
+      "label": "Dados",
+      "fields": {
+        "fields": { "type": "json", "default": {}, "label": "Dados",
+                    "hint": "livre para scripts: tipo, patrulha, item, onda..." }
+      }
     }
   }
 }

@@ -200,6 +200,9 @@ function convertComponent(project, plan, c, at, load) {
     if (c.type === 'hud') {
         return { t: 'hud', a: f.anchor | 0, mx: f.mx || 0, my: f.my || 0 };
     }
+    if (c.type === 'data') {
+        return { t: 'data', fields: f.fields || {} };
+    }
     if (c.type === 'script') {
         const asset = project.asset(f.script);
         if (!asset) failBuild('script inexistente em ' + at + ': ' + f.script);
@@ -339,13 +342,24 @@ function buildScenes(project, plan, warnings) {
             const asset = project.asset(tm.tileset);
             const ra = asset ? plan.byGuid.get(asset.guid) : null;
             if (!asset || !ra) failBuild('tileset do build nao resolvido: ' + tm.tileset);
+            const tileDefs = (asset.meta.settings && Array.isArray(asset.meta.settings.tiles))
+                ? asset.meta.settings.tiles : null;
+            const solidValues = tileDefs && tileDefs.some((t) => t && t.solid)
+                ? tileDefs.map((t) => !!(t && t.solid)) : null;
             tilemaps.push({
                 id: tm.id, tileset: asset.guid, cols: tm.cols, rows: tm.rows,
                 cell: tm.cell, ox: tm.ox || 0, oy: tm.oy || 0, layer: tm.layer || 0,
-                data: tm.data, solids: tm.solids || null, autotile: tm.autotile || null,
+                data: tm.data, solids: tm.solids || null, solidValues: solidValues,
+                autotile: tm.autotile || null,
             });
         }
         if (st.music) load.add(st.music);
+        for (const ref of st.assets || []) {
+            const a = project.asset(ref);
+            if (a) load.add(a.guid);
+            else warnings.push({ code: 'scene.asset', path: 'cena ' + sc.name,
+                                 message: 'asset da cena nao encontrado: ' + ref });
+        }
 
         let follow = null;
         if (st.camera && st.camera.follow) {
@@ -358,6 +372,8 @@ function buildScenes(project, plan, warnings) {
         }
         out[key] = {
             name: key,
+            title: sc.name,
+            data: st.data || {},
             fps: st.fps !== undefined ? st.fps : (project.data.canvas.fps || 30),
             static: st.static ? true : false,
             bg: F.parseColor(st.bg, 0x0000),
@@ -372,7 +388,9 @@ function buildScenes(project, plan, warnings) {
             tilemaps: tilemaps,
         };
     }
-    return { scenes: out, keyByGuid };
+    const names = {};
+    for (const key of Object.keys(out)) names[out[key].title] = key;
+    return { scenes: out, keyByGuid, names };
 }
 
 function generateMain(project, opts) {
@@ -581,7 +599,8 @@ function buildProject(dir, opts) {
     const assetsObj = {};
     for (const [guid, a] of plan.byGuid) if (used.has(guid)) assetsObj[guid] = a;
     const copies = plan.copies.filter((c) => used.has(c.guid));
-    const data = { format: 1, assets: assetsObj, start: startKey, scenes: built.scenes };
+    const data = { format: 1, assets: assetsObj, start: startKey,
+                   names: built.names, scenes: built.scenes };
 
     // copia assets e scripts
     for (const c of copies) {
@@ -628,7 +647,8 @@ function buildProject(dir, opts) {
         F.writeText(path.join(buildDir, 'game.data.js'), 'module.exports = ' + dataJson + ';\n');
         dataFiles.push('game.data.js');
     } else {
-        const head = JSON.stringify({ format: 1, assets: assetsObj, start: startKey });
+        const head = JSON.stringify({ format: 1, assets: assetsObj, start: startKey,
+                                      names: built.names });
         const parts = [];
         let cur = {}, curSize = 2;
         const names = Object.keys(built.scenes).sort();

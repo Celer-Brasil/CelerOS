@@ -16,6 +16,9 @@
         "fps": { "type": "integer", "minimum": 0, "maximum": 60 },
         "static": { "type": "boolean" },
         "music": { "type": "string", "description": "referencia guid do asset de audio" },
+        "assets": { "type": "array", "items": { "type": "string" },
+                    "description": "assets carregados na cena para scripts (GUID ou nome)" },
+        "data": { "type": "object", "description": "dados livres da cena lidos por scripts (fase, ondas, etc.)" },
         "camera": {
           "type": "object",
           "properties": {

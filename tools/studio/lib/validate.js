@@ -147,6 +147,16 @@ function checkScene(project, sc, asset, errors) {
     const at = asset ? asset.relPath : ('cena ' + (sc && sc.name));
     if (!sc || typeof sc !== 'object') return;
     if (sc.settings) {
+        for (const ref of sc.settings.assets || []) {
+            const a = project.asset(ref);
+            if (!a) {
+                errors.push({ code: 'ref.asset', path: at + '.settings.assets',
+                              message: 'asset da cena nao existe: ' + ref });
+            } else if (a.kind === 'scene' || a.kind === 'prefab') {
+                errors.push({ code: 'ref.asset', path: at + '.settings.assets',
+                              message: a.name + ' nao e asset carregavel' });
+            }
+        }
         if (sc.settings.music) {
             const a = project.asset(sc.settings.music);
             if (!a) errors.push({ code: 'ref.missing', path: at + '.settings.music', message: 'audio inexistente' });

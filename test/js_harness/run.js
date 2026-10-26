@@ -263,6 +263,7 @@ function makeEnv() {
     // {touches:[{id,x,y,size}...]} (API 43, multi) — getTouch/getTouches
     // consomem UM quadro por chamada (o da cabeca); fila vazia = sem toque
     var touchQ = [];
+    var screenOn = true;   // API 51: __harness.setScreenOn alterna
     function normFrame(f) {
         if (f && f.touches) {
             var ts = f.touches, out = [];
@@ -578,6 +579,9 @@ function makeEnv() {
     getDay: function() { return wall().getUTCDate(); },
     getWeekday: function() { return wall().getUTCDay(); },   // API 13 (domingo=0)
     keepAwake: function() {},               // API 13 (no-op no host)
+    // API 51: estado do vidro — o teste alterna com __harness.setScreenOn
+    isScreenOn: function() { return screenOn ? true : false; },
+    screenState: function() { return screenOn ? 'on' : 'off'; },
     setVolume: function() {},               // API 13 (audio)
     getVolume: function() { return 100; },
     getTimezone: function() { return 'UTC'; },
@@ -1359,6 +1363,8 @@ function makeEnv() {
         if (st.hasOwnProperty('code')) linkPairCode = String(st.code);
     },
     pushTouch: function(frames) { touchQ = touchQ.concat(frames); },
+    // API 51: liga/apaga o "vidro" do host (System.isScreenOn)
+    setScreenOn: function(v) { screenOn = !!v; },
     pushKb: function(evts) { kbEvents = kbEvents.concat(evts); },
     pushLink: function(msgs) { linkRx = linkRx.concat(msgs); },
     pushSealed: function(msgs) { linkSealedRx = linkSealedRx.concat(msgs); },

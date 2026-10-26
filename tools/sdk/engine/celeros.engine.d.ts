@@ -74,8 +74,18 @@ declare namespace E {
     let fps: number;
     /** ms gastos no ultimo quadro (update + draw) */
     let frameMs: number;
+    /** estado do vidro (API 51): false = AOD/apagado — o loop nao roda
+     *  update nem draw enquanto a tela esta apagada */
+    let screenOn: boolean;
+    /** gancho opcional chamado quando a tela apaga (pausar/salvar) */
+    let onSleep: (() => void) | null;
+    /** gancho opcional chamado quando a tela volta (retomar/repintar) */
+    let onWake: (() => void) | null;
     /** Pool nativo de sprites (createSprite): UM dono por slot, contagem unica
      *  e falha barulhenta no log. spr/world alocam por aqui. */
+    /** visivel na camera? extents w/h (canto sup. esq.), posicao _wx/_wy
+     *  quando ha no (celeros.game.node), senao x/y; sem w/h = sempre visivel */
+    function cull(e: Entity, o?: { pad?: number }): boolean;
     const slots: {
         /** quantos slots estao ocupados agora */
         n(): number;
@@ -83,6 +93,12 @@ declare namespace E {
         create(dono: string, w: number, h: number): number;
         /** devolve o slot ao pool (id 0 = nada a fazer) */
         release(id: number): void;
+        /** geracao do slot: muda a cada realocacao do id (id reciclado nao
+         *  desenha arte nova por um nome velho) */
+        gen(id: number): number;
+        /** orcamento ADVISORY antes de alocar: bytes fisicos estimados
+         *  (16 bits, caindo para 8) contra maxAllocRAM/freePSRAM */
+        fit(w: number, h: number): { ok: boolean; bytes: number; depth: number; motivo: string };
         /** {used, cap, owners: {dono: slots}} para diagnostico */
         report(): { used: number; cap: number; owners: Record<string, number> };
     };
@@ -299,7 +315,9 @@ declare namespace E {
         count: number;
         add(o: Entity): Entity;
         update(dt: number): void;
-        draw(): void;
+        /** draw({cull}) pula quem esta fora da camera (extents w/h; sem
+         *  tamanho desenha sempre; e.screen isento; pad = folga em px) */
+        draw(o?: { cull?: boolean; pad?: number }): void;
         each(fn: (o: Entity) => void): void;
         clear(): void;
         /** 1o vivo que passa em fn, ou null */
@@ -652,7 +670,11 @@ declare namespace E {
         /** Hitbox do metadado na MESMA origem do blit: [x, y, w, h]. Aceita o
          *  nome do metadado (quadro 0 da grade) ou o de um quadro; `out`
          *  (array da cena) evita alocar por quadro. null sem hitbox. */
-        box(name: string, x: number, y: number, scale?: number, out?: number[]): number[] | null;
+        /** escala uniforme (numero) ou {scale, scaleX, scaleY, angle}: com giro
+         *  devolve o AABB dos 4 cantos da hitbox em volta da ancora */
+        box(name: string, x: number, y: number,
+            scale?: number | { scale?: number; scaleX?: number; scaleY?: number; angle?: number },
+            out?: number[]): number[] | null;
         /** libera o slot do sheet e todas as regioes dele */
         freeSheet(name: string): void;
         has(name: string): boolean;
@@ -663,14 +685,25 @@ declare namespace E {
         blit(name: string, x: number, y: number,
              opts?: { key?: number; cx?: boolean; cy?: boolean;
                       /** ancora 0..1 (ax 0.5 + ay 1 = x,y e o pe) */
-                      ax?: number; ay?: number }): void;
+                      ax?: number; ay?: number;
+                      /** GRAUS, horario: sai do copySprite e vai pelo drawSprite */
+                      angle?: number;
+                      /** escala por eixo (nao uniforme tambem vai pelo afim) */
+                      /** 1.7: scaleX/scaleY; com giro ou eixo != 1 usa o afim */
+                      scaleX?: number; scaleY?: number }): void;
         /** id do sprite recebendo desenho (quem grava num sprite marca: o stamp
          *  em escala 1 so usa o atalho do pushSprite no quadro) */
         alvo: number;
         /** desenha no alvo CORRENTE (quadro ou sprite do useSprite), com escala
          *  (drawSprite, API 33); key null = opaco. false se nada desenhavel */
+        /** desenha no alvo corrente. {angle} (GRAUS, horario) gira em volta da
+         *  ANCORA (ax/ay) pelo drawSprite e a caixa suja vira o AABB dos cantos;
+         *  scaleX/scaleY escalam por eixo. Sem giro e escala uniforme 1 valem
+         *  os caminhos rapidos (copySprite/pushSprite). Regiao de folha NAO gira
+         *  (o drawSprite nao recorta a origem): avisa 1x e desenha sem giro. */
         stamp(name: string, x: number, y: number,
-              o?: { scale?: number; key?: number | null; cx?: boolean; cy?: boolean;
+              o?: { scale?: number; scaleX?: number; scaleY?: number; angle?: number;
+                    key?: number | null; cx?: boolean; cy?: boolean;
                     ax?: number; ay?: number }): boolean;
         /** 1.5: grava quadros ja carregados numa escala nova, todos num slot so.
          *  Os novos nomes desenham em escala 1 (pushSprite no quadro); sem slot,

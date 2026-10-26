@@ -48,6 +48,13 @@
 // fps, ancora, hitbox) vindo de um modulo de dados do app; E.spr.animOf
 // monta o E.anim do clipe; E.spr.box devolve a hitbox na mesma origem do
 // blit; a ancora (ax/ay) do metadado vale como default do blit/stamp.
+// 1.7.0: GIRO e ESCALA POR EIXO no desenho — {angle (graus), scaleX,
+// scaleY} em stamp/blit/anim.draw. O giro vai pelo drawSprite (API 33) com
+// o centro corrigido para a ANCORA (ax/ay) cair em (x, y) — sem isso o pe
+// no chao deslizava — e a caixa suja vira o AABB dos 4 cantos girados. Sem
+// giro e escala uniforme os caminhos rapidos (copySprite/pushSprite)
+// continuam valendo; regiao de folha nao gira (o drawSprite nao tem
+// retangulo de origem) e avisa 1x. E.spr.box aceita {sx, sy, angle}.
 
 var E = require('celeros.game');
 var S = System;
@@ -56,22 +63,37 @@ var _stO = { key: 0 };
 // API 45: regiao de sprite -> alvo corrente numa chamada, sem escala (inclusive
 // DENTRO de um sprite: a sala do world gravada sem o drawSprite afim)
 var HAS_COPY = typeof S.copySprite === 'function';
-var _alO = { scale: 1, key: 0, ax: 0, ay: 0 };   // stamp/blit de apelido
+var _alO = { scaleX: 1, scaleY: 1, angle: 0, key: 0, ax: 0, ay: 0 };   // stamp/blit de apelido
 var _psO = { scale: 1, key: null };              // gravacao do prescale
 
-// repassa ancora/cor-chave para o desenho do original de um apelido
-function alias(s, x, y, o, k) {
-    _alO.scale = k * s._k;
+// repassa ancora/giro/escala para o desenho do original de um apelido
+function alias(s, x, y, o, kx, ky, ang) {
+    _alO.scaleX = kx * s._k;
+    _alO.scaleY = ky * s._k;
+    _alO.angle = ang || 0;
     _alO.key = o && o.key !== undefined ? o.key : 0x0000;
     _alO.ax = o ? (o.ax !== undefined ? o.ax : (o.cx ? 0.5 : 0)) : 0;
     _alO.ay = o ? (o.ay !== undefined ? o.ay : (o.cy ? 0.5 : 0)) : 0;
     return E.spr.stamp(s.alias, x, y, _alO);
 }
 
+// slot reciclado? Um id liberado e reaproveitado desenharia ARTE NOVA por um
+// nome velho: a geracao do ledger (E.slots.gen) muda a cada alocacao do
+// mesmo id e o slot guarda a geracao com que nasceu. Id desconhecido no
+// ledger (sprite criado direto por System.createSprite) tem geracao 0 dos
+// dois lados e continua valendo.
+function reciclado(s) {
+    if (!E.slots.gen) return false;
+    var id = s.sheet ? s.sheet.id : s.id;
+    if (!id) return false;
+    var g = s.sheet ? s.sheet.gen : s.gen;
+    return g !== undefined && g !== E.slots.gen(id);
+}
+
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.6.0',
+    version: '1.7.0',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
@@ -112,6 +134,7 @@ E.spr = {
                 S.useSprite(0);
                 if (ok) {
                     slot.id = id;
+                    slot.gen = E.slots.gen(id);
                 } else {
                     E.slots.release(id);
                 }
@@ -167,6 +190,7 @@ E.spr = {
             S.useSprite(0);
             if (ok) {
                 sh.id = id;
+                sh.gen = E.slots.gen(id);
             } else {
                 E.slots.release(id);
             }
@@ -281,15 +305,44 @@ E.spr = {
         // chamada pelo nome do metadado (heroi): a caixa e a do quadro 0
         if (!s && m) s = E.spr._slots[(m.prefix === undefined ? name : m.prefix) + 0] || null;
         if (!m || !m.hitbox || !s) return null;
-        var k = scale === undefined || scale === null ? 1 : scale;
-        var hb = m.hitbox;
-        var ox = Math.round(x - s.w * k * (s.ax || 0));
-        var oy = Math.round(y - s.h * k * (s.ay || 0));
-        var o = out || [];
-        o[0] = ox + Math.round(hb[0] * k);
-        o[1] = oy + Math.round(hb[1] * k);
-        o[2] = Math.round(hb[2] * k);
-        o[3] = Math.round(hb[3] * k);
+        // escala: numero (uniforme) ou {scale, scaleX, scaleY, angle}; com
+        // giro a caixa e o AABB dos 4 cantos em volta da ancora (x, y)
+        var kx = 1, ky = 1, ang = 0;
+        if (scale && typeof scale === 'object') {
+            kx = scale.scaleX !== undefined ? scale.scaleX : (scale.scale !== undefined ? scale.scale : 1);
+            ky = scale.scaleY !== undefined ? scale.scaleY : kx;
+            ang = scale.angle || 0;
+        } else if (scale !== undefined && scale !== null) {
+            kx = ky = scale;
+        }
+        var hb = m.hitbox, ax = s.ax || 0, ay = s.ay || 0, o = out || [];
+        if (ang) {
+            var rad = ang * 0.017453292519943295, co = Math.cos(rad), sn = Math.sin(rad);
+            var lx = [(hb[0] - s.w * ax) * kx, (hb[0] + hb[2] - s.w * ax) * kx];
+            var ly = [(hb[1] - s.h * ay) * ky, (hb[1] + hb[3] - s.h * ay) * ky];
+            var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, i, j, wx, wy;
+            for (i = 0; i < 2; i++) {
+                for (j = 0; j < 2; j++) {
+                    wx = x + (co * lx[i] - sn * ly[j]);
+                    wy = y + (sn * lx[i] + co * ly[j]);
+                    if (wx < minx) minx = wx;
+                    if (wy < miny) miny = wy;
+                    if (wx > maxx) maxx = wx;
+                    if (wy > maxy) maxy = wy;
+                }
+            }
+            o[0] = Math.round(minx);
+            o[1] = Math.round(miny);
+            o[2] = Math.round(maxx - minx);
+            o[3] = Math.round(maxy - miny);
+            return o;
+        }
+        var ox = Math.round(x - s.w * kx * ax);
+        var oy = Math.round(y - s.h * ky * ay);
+        o[0] = ox + Math.round(hb[0] * kx);
+        o[1] = oy + Math.round(hb[1] * ky);
+        o[2] = Math.round(hb[2] * kx);
+        o[3] = Math.round(hb[3] * ky);
         return o;
     },
 
@@ -307,7 +360,17 @@ E.spr = {
     blit: function (name, x, y, opts) {
         var s = E.spr._slots[name];
         if (!s) return;
-        if (s.alias) { alias(s, x, y, opts, 1); return; }
+        if (s.alias) { alias(s, x, y, opts, 1, 1, opts && opts.angle ? opts.angle : 0); return; }
+        if (reciclado(s)) {
+            E._warn('spr: ' + name + ' usa um slot reciclado (arte nova no lugar da antiga)');
+            return;
+        }
+        // giro/escala por eixo pedem o caminho afim do stamp (copySprite e
+        // pushSprite nao giram nem escalam por eixo)
+        if (opts && (opts.angle || opts.scaleX !== undefined || opts.scaleY !== undefined)) {
+            E.spr.stamp(name, x, y, opts);
+            return;
+        }
         // sem slot E sem painter nada pode ser desenhado (PNG falhou no
         // load/sheet e a def nao trouxe paint): no-op SECO — antes registrava
         // a caixa na camada suja mesmo assim e o "apagar" do quadro seguinte
@@ -352,30 +415,62 @@ E.spr = {
         }
     },
 
-    // desenha no alvo corrente (quadro OU sprite selecionado por
-    // useSprite), com escala: o {scale (1), key (cor-chave; null = opaco;
-    // default preto), cx/cy/ax/ay como no blit}. Regiao de folha recorta
-    // com setClip no alvo e desenha a folha inteira deslocada pelo
-    // drawSprite. Sem drawSprite (firmware sem API 33/placa sem PSRAM) cai
-    // no blit (escala 1, so quadro) ou no painter. Devolve false se nada
-    // pode ser desenhado
+    // desenha no alvo corrente (quadro OU sprite selecionado por useSprite).
+    // o = { scale (1), scaleX/scaleY (por eixo; vencem o scale), angle
+    // (GRAUS, horario), key (cor-chave; null = opaco; default preto),
+    // cx/cy/ax/ay }. Sem giro nem escala por eixo valem os caminhos rapidos
+    // de sempre (copySprite/pushSprite em escala 1). Com giro: drawSprite com
+    // o centro corrigido para a ANCORA cair em (x, y) e a caixa suja vira o
+    // AABB dos cantos girados. Regiao de folha nao gira (o drawSprite nao tem
+    // retangulo de origem): avisa 1x e desenha sem giro. Devolve false se
+    // nada pode ser desenhado
     stamp: function (name, x, y, o) {
         var s = E.spr._slots[name];
         if (!s) return false;
         o = o || EMPTY;
-        var k = o.scale || 1;
-        if (s.alias) return alias(s, x, y, o, k);
-        var w = s.w * k, h = s.h * k;
+        var kx = o.scaleX !== undefined ? o.scaleX : (o.scale !== undefined ? o.scale : 1);
+        var ky = o.scaleY !== undefined ? o.scaleY : kx;
+        if (!(kx > 0)) kx = 1;
+        if (!(ky > 0)) ky = 1;
+        var ang = o.angle || 0;
+        if (s.alias) return alias(s, x, y, o, kx, ky, ang);
+        if (reciclado(s)) {
+            E._warn('spr: ' + name + ' usa um slot reciclado (arte nova no lugar da antiga)');
+            return false;
+        }
+        // regiao de folha: o recorte e retangular e o drawSprite gira o sprite
+        // INTEIRO — girar a regiao mostraria a celula vizinha
+        if (ang && s.sheet) { E._warn('spr: regiao de folha nao gira (' + name + ')'); ang = 0; }
+        var id = s.sheet ? s.sheet.id : s.id;
+        var key = o.key === undefined ? 0x0000 : o.key;
         var ax = s.ax || 0, ay = s.ay || 0;   // default do metadado
         ax = o.ax !== undefined ? o.ax : (o.cx ? 0.5 : ax);
         ay = o.ay !== undefined ? o.ay : (o.cy ? 0.5 : ay);
+        var w = s.w * kx, h = s.h * ky;
+
+        if (ang && id && typeof S.drawSprite === 'function') {
+            // centro tal que a ancora (ax, ay) caia em (x, y) depois do giro:
+            //   C = P - R(ang) . ((ax - 0.5) * w, (ay - 0.5) * h)
+            // sem isto o "pe no chao" (ay 1) desliza ao girar
+            var rad = ang * 0.017453292519943295, co = Math.cos(rad), sn = Math.sin(rad);
+            var rx = (ax - 0.5) * w, ry = (ay - 0.5) * h;
+            var cx = x - (co * rx - sn * ry), cy = y - (sn * rx + co * ry);
+            // AABB dos 4 cantos em volta do mesmo centro do desenho
+            var hx = (Math.abs(w * co) + Math.abs(h * sn)) / 2;
+            var hy = (Math.abs(w * sn) + Math.abs(h * co)) / 2;
+            if (E.dirty.on && !E.spr.alvo) E.dirty.add(cx - hx, cy - hy, 2 * hx, 2 * hy);
+            S.drawSprite(id, cx, cy, ang, kx, ky, key === null ? undefined : key);
+            return true;
+        }
+        // sem drawSprite (placa/firmware sem API 33) nao ha giro: segue sem
+        if (ang) E._warn('spr: sem drawSprite nesta placa, giro ignorado (' + name + ')');
+
         var dx = Math.round(x - w * ax), dy = Math.round(y - h * ay);
-        var key = o.key === undefined ? 0x0000 : o.key;
-        var id = s.sheet ? s.sheet.id : s.id;
+        var k1 = kx === 1 && ky === 1;
         // escala 1 com copySprite (API 45): 1 chamada, no quadro OU dentro de
         // um sprite (E.spr.alvo) — dentro de sprite so havia o drawSprite
         // afim com recorte (~240 us por tile 32x32 no 4848; copySprite ~150-200)
-        if (k === 1 && id && HAS_COPY) {
+        if (k1 && id && HAS_COPY) {
             // dentro de um sprite (alvo) nao e caixa de TELA: nada a registrar
             if (E.dirty.on && !E.spr.alvo) E.dirty.add(dx, dy, s.w, s.h);
             S.copySprite(id, s.sheet ? s.rx : 0, s.sheet ? s.ry : 0, s.w, s.h, dx, dy,
@@ -386,7 +481,7 @@ E.spr = {
         // drawSprite e afim por pixel e custava ~4x por entidade no 4848.
         // Gravando DENTRO de um sprite (E.spr.alvo, ex. o fundo da sala do
         // world) o pushSprite nao serve: ele so empurra para o quadro
-        if (k === 1 && id && !E.spr.alvo) {
+        if (k1 && id && !E.spr.alvo) {
             // inline (sem o blit por cima): no Duktape cada camada de
             // funcao/opts pesava mais que o push em si (~0,45 ms vs 0,2)
             var kk1 = key === null ? undefined : key;
@@ -411,16 +506,17 @@ E.spr = {
             if (s.sheet) {
                 var sh = s.sheet;
                 S.setClip(dx, dy, W2, H2);
-                S.drawSprite(id, dx + (sh.w / 2 - s.rx) * k, dy + (sh.h / 2 - s.ry) * k, 0, k, k, kk);
+                S.drawSprite(id, dx + (sh.w / 2 - s.rx) * kx, dy + (sh.h / 2 - s.ry) * ky,
+                             0, kx, ky, kk);
                 S.clearClip();
             } else {
-                S.drawSprite(id, dx + w / 2, dy + h / 2, 0, k, k, kk);
+                S.drawSprite(id, dx + w / 2, dy + h / 2, 0, kx, ky, kk);
             }
             if (E.dirty.on && !E.spr.alvo) E.dirty.add(dx, dy, W2, H2);
             return true;
         }
         if (s.paint) {
-            if (s.sheet) s.paint(name, dx, dy, k);
+            if (s.sheet) s.paint(name, dx, dy, kx);
             else s.paint(w, h, dx, dy);
             if (E.dirty.on && !E.spr.alvo) E.dirty.add(dx, dy, w, h);
             return true;
@@ -482,7 +578,7 @@ E.spr = {
         S.useSprite(0);
         var shn = o.name || ('@ps' + id);
         if (E.spr._sheets[shn]) E.spr.freeSheet(shn);
-        var sh = { id: id, w: totW, h: totH, name: shn, regs: [] };
+        var sh = { id: id, w: totW, h: totH, name: shn, regs: [], gen: E.slots.gen(id) };
         for (i = 0; i < items.length; i++) {
             it = items[i];
             E.spr._slots[it.as] = { id: id, w: it.w, h: it.h, sheet: sh, rx: it.x, ry: it.y, paint: null };
@@ -575,7 +671,7 @@ E.anim = function (frames, fps, loop) {
             var f = this.frames[this.i];
             if (f === undefined) return;
             if (typeof f === 'function') f(x, y);
-            else if (opts && opts.scale) E.spr.stamp(f, x, y, opts);   // 1.4: escala
+            else if (opts && (opts.scale || opts.scaleX || opts.scaleY || opts.angle)) E.spr.stamp(f, x, y, opts);
             else E.spr.blit(f, x, y, opts);
         }
     };

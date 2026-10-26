@@ -72,8 +72,18 @@ declare namespace E {
     let fps: number;
     /** ms gastos no ultimo quadro (update + draw) */
     let frameMs: number;
+    /** estado do vidro (API 51): false = AOD/apagado — o loop nao roda
+     *  update nem draw enquanto a tela esta apagada */
+    let screenOn: boolean;
+    /** gancho opcional chamado quando a tela apaga (pausar/salvar) */
+    let onSleep: (() => void) | null;
+    /** gancho opcional chamado quando a tela volta (retomar/repintar) */
+    let onWake: (() => void) | null;
     /** Pool nativo de sprites (createSprite): UM dono por slot, contagem unica
      *  e falha barulhenta no log. spr/world alocam por aqui. */
+    /** visivel na camera? extents w/h (canto sup. esq.), posicao _wx/_wy
+     *  quando ha no (celeros.game.node), senao x/y; sem w/h = sempre visivel */
+    function cull(e: Entity, o?: { pad?: number }): boolean;
     const slots: {
         /** quantos slots estao ocupados agora */
         n(): number;
@@ -81,6 +91,12 @@ declare namespace E {
         create(dono: string, w: number, h: number): number;
         /** devolve o slot ao pool (id 0 = nada a fazer) */
         release(id: number): void;
+        /** geracao do slot: muda a cada realocacao do id (id reciclado nao
+         *  desenha arte nova por um nome velho) */
+        gen(id: number): number;
+        /** orcamento ADVISORY antes de alocar: bytes fisicos estimados
+         *  (16 bits, caindo para 8) contra maxAllocRAM/freePSRAM */
+        fit(w: number, h: number): { ok: boolean; bytes: number; depth: number; motivo: string };
         /** {used, cap, owners: {dono: slots}} para diagnostico */
         report(): { used: number; cap: number; owners: Record<string, number> };
     };
@@ -297,7 +313,9 @@ declare namespace E {
         count: number;
         add(o: Entity): Entity;
         update(dt: number): void;
-        draw(): void;
+        /** draw({cull}) pula quem esta fora da camera (extents w/h; sem
+         *  tamanho desenha sempre; e.screen isento; pad = folga em px) */
+        draw(o?: { cull?: boolean; pad?: number }): void;
         each(fn: (o: Entity) => void): void;
         clear(): void;
         /** 1o vivo que passa em fn, ou null */

@@ -57,7 +57,11 @@ declare namespace E {
         /** Hitbox do metadado na MESMA origem do blit: [x, y, w, h]. Aceita o
          *  nome do metadado (quadro 0 da grade) ou o de um quadro; `out`
          *  (array da cena) evita alocar por quadro. null sem hitbox. */
-        box(name: string, x: number, y: number, scale?: number, out?: number[]): number[] | null;
+        /** escala uniforme (numero) ou {scale, scaleX, scaleY, angle}: com giro
+         *  devolve o AABB dos 4 cantos da hitbox em volta da ancora */
+        box(name: string, x: number, y: number,
+            scale?: number | { scale?: number; scaleX?: number; scaleY?: number; angle?: number },
+            out?: number[]): number[] | null;
         /** libera o slot do sheet e todas as regioes dele */
         freeSheet(name: string): void;
         has(name: string): boolean;
@@ -68,14 +72,25 @@ declare namespace E {
         blit(name: string, x: number, y: number,
              opts?: { key?: number; cx?: boolean; cy?: boolean;
                       /** ancora 0..1 (ax 0.5 + ay 1 = x,y e o pe) */
-                      ax?: number; ay?: number }): void;
+                      ax?: number; ay?: number;
+                      /** GRAUS, horario: sai do copySprite e vai pelo drawSprite */
+                      angle?: number;
+                      /** escala por eixo (nao uniforme tambem vai pelo afim) */
+                      /** 1.7: scaleX/scaleY; com giro ou eixo != 1 usa o afim */
+                      scaleX?: number; scaleY?: number }): void;
         /** id do sprite recebendo desenho (quem grava num sprite marca: o stamp
          *  em escala 1 so usa o atalho do pushSprite no quadro) */
         alvo: number;
         /** desenha no alvo CORRENTE (quadro ou sprite do useSprite), com escala
          *  (drawSprite, API 33); key null = opaco. false se nada desenhavel */
+        /** desenha no alvo corrente. {angle} (GRAUS, horario) gira em volta da
+         *  ANCORA (ax/ay) pelo drawSprite e a caixa suja vira o AABB dos cantos;
+         *  scaleX/scaleY escalam por eixo. Sem giro e escala uniforme 1 valem
+         *  os caminhos rapidos (copySprite/pushSprite). Regiao de folha NAO gira
+         *  (o drawSprite nao recorta a origem): avisa 1x e desenha sem giro. */
         stamp(name: string, x: number, y: number,
-              o?: { scale?: number; key?: number | null; cx?: boolean; cy?: boolean;
+              o?: { scale?: number; scaleX?: number; scaleY?: number; angle?: number;
+                    key?: number | null; cx?: boolean; cy?: boolean;
                     ax?: number; ay?: number }): boolean;
         /** 1.5: grava quadros ja carregados numa escala nova, todos num slot so.
          *  Os novos nomes desenham em escala 1 (pushSprite no quadro); sem slot,

@@ -237,6 +237,15 @@ balas.update(E.dt); balas.draw();
 
 Pools pré-alocam tudo: zero alocação por frame significa zero engasgo de GC. Os dois recipientes têm `each(fn)` para iteração em lote (o do pool pula os mortos — sem laço de catação no seu frame).
 
+**Culling opcional (core 1.6):** `g.draw({cull: true})` (e `pool.draw`)
+pulam a entidade cuja caixa (`x/y` + `w/h`, canto superior esquerdo) não
+intersecta a câmera; `pad` dá folga em px. **Sem `w/h` conhecido a entidade
+desenha sempre** (como um renderer sem extents) e `e.screen` (HUD) nunca é
+cullado. Custa uma comparação por entidade e economiza a chamada nativa
+inteira — com `drawSprite` a ~1,25 ms, uma horda fora da tela é dinheiro
+jogado. O apagamento não é afetado: a camada suja já apaga as caixas do
+quadro anterior.
+
 ## 9. Sprites e animação
 
 O pool de sprites do firmware tem **16 slots** em placas com PSRAM desde a API 33 (8 antes disso, desde a API 29; 1 sem PSRAM — sprite come RAM interna ali) (`System.spriteSlots()` informa o limite da placa; a engine consulta sozinha). O `E.spr.load` decodifica cada PNG **uma vez** para dentro de um slot e guarda um `paint` procedural de fallback, então o jogo roda mesmo sem os assets ou em placa sem sprites:
@@ -269,6 +278,26 @@ var brilho = E.anim(["bau", "chao"], 4);   // flipbook por regiões
 E.spr.free("chao");       // tira só o nome (o slot é do sheet)
 E.spr.freeSheet("tiles"); // devolve o slot e apaga todas as regiões
 ```
+
+**Giro e escala por eixo (spr 1.7, API 33):** `{angle}` em GRAUS (horário) e
+`{scaleX, scaleY}` no `stamp`/`blit`/`anim.draw`. O giro usa o `drawSprite`
+nativo e acontece em volta da **âncora** (`ax/ay`) — o pé no chão fica no lugar
+ao girar, não o centro — e a caixa suja vira o AABB dos quatro cantos (sem
+rastro). Sem giro e com escala uniforme 1 continuam valendo os caminhos
+rápidos (`copySprite`/`pushSprite`); com giro ou eixo diferente o custo é o do
+afim (~1,25 ms por sprite no 4848 — meça com `E.prof`):
+
+```js
+E.spr.stamp("canhao", x, y, { ax: 0.5, ay: 1, angle: 45 });      // girado
+E.spr.stamp("nave", x, y, { scaleX: 2, scaleY: 1 });              // esticada
+var box = E.spr.box("heroi", x, y, { angle: 90 });                // hitbox girada
+```
+
+Limites: **região de folha não gira** — o `drawSprite` desenha o sprite inteiro
+e o recorte é retangular, então uma região girada mostraria a célula vizinha; a
+engine avisa 1x e desenha sem giro (para girar, carregue o quadro como sprite
+próprio com `prescale`/`load`). Placa sem `drawSprite` (CYD/ESP32) idem: avisa
+e desenha reto.
 
 Flipbook sem slot extra: os frames são painters (ou nomes de sprite carregado):
 
@@ -691,6 +720,37 @@ Custo: é módulo, não core — quem não adota não paga. Prefabs nomeados
 (`E.scene.prefab('sala1', lista)` e `instantiate('sala1')`) reusam o mesmo dado
 em vários mapas.
 
+## 14g. Hierarquia de transform (`celeros.game.node`, opcional)
+
+Partes articuladas (canhão na torre, chama no estopim, HUD composto) sem conta
+na mão. O filho **segue** o pai: cada tick escreve `e.x/e.y` de MUNDO a partir
+do offset local, da rotação (graus) e da escala — desenho, colisão e camada
+suja continuam lendo `e.x/e.y` como sempre.
+
+```js
+var E = require("celeros.game"); require("celeros.game.node");
+E.node.attach(canhao, torre, { ox: 0, oy: -6 });      // canhao segue a torre
+// no update, depois de mover a torre:
+torre.x += 20;
+E.node.tick();                                        // aplica ja
+E.spr.stamp("canhao", canhao.x, canhao.y, { angle: E.node.rotOf(canhao) });
+```
+
+- `attach(filho, pai, {ox, oy, rot, sx, sy})` recusa ciclo (avisa 1x);
+  `detach(filho)` solta e o filho **fica onde está**; `setPos(filho, ox, oy,
+  rot)` é o setter combinado do offset; `wx/wy/rotOf/scaleXOf/parentOf` leem o
+  mundo.
+- **`E.node.tick()` já roda no começo do quadro** (registrado em
+  `E._modTicks`): o filho usa o mundo do **quadro anterior**. Para zero atraso,
+  chame de novo no fim do `update`, depois de mover o pai (é barato: uma cadeia
+  de multiplicações, com caminho sem `sin/cos` quando o pai não gira).
+- Posição de filho é do `setPos`/`rot`, não de `e.x` (o tick sobrescreve).
+- Escala não uniforme em pai girado não é representável por (rotação, escala):
+  o resultado combina e pode cisalhar — evite.
+- Na cena como dado, o registro ganha `pai: "#nome"` (+ `ox/oy/rot/sx/sy`) e o
+  `instantiate` liga antes do `start`; o `save` reemite os offsets vivos. Exige
+  o módulo adotado (a cena não o arrasta como dependência).
+
 ## 15. Física (`celeros.physics`, opcional)
 
 **A maioria dos jogos não precisa de módulo de física.** Num device
@@ -1038,6 +1098,35 @@ metadado (quadro 0 da grade) ou o de um quadro (`'h4'`).
 - `group.remove(o)` **dentro do update** não corrompe mais o laço: durante o tick ele marca
   `dead` e o próprio laço recolhe. Fora do update continua removendo na hora.
 
+## 18e. Rodada 2 do estudo do deki (core 1.6, spr 1.7, node 1.0, cena 1.1)
+
+Segunda leva do que o estudo do `deki-engine` rendeu (o primeiro capítulo está
+no `DekiEngine_Estudo.pt-BR.md`). Tudo aditivo; declare `^1.6.0` no core,
+`^1.7.0` no spr, `^1.0.0` no node.
+
+- **Rotação e escala por eixo no sprite** (§9): `{angle}`, `{scaleX, scaleY}`;
+  gira em volta da âncora e a caixa suja vira o AABB girado.
+- **Culling** (§8): `g.draw({cull: true, pad})`, sem `w/h` desenha sempre.
+- **Hierarquia** (§14g): `celeros.game.node` + `pai: "#nome"` na cena.
+- **Geração de slot** (`E.slots.gen`): um id reciclado não desenha arte nova
+  por um nome velho — o spr recusa e avisa 1x.
+- **Orçamento** (`E.slots.fit(w, h)`): bytes físicos estimados (16 bits,
+  caindo para 8) contra `maxAllocRAM`/`freePSRAM`; **advisory** (o host/emulador
+  não tem PSRAM e diz não). A mensagem de falha do `create` passou a dizer o
+  motivo do orçamento.
+- **Sono** (firmware API 51): `System.isScreenOn()`/`System.screenState()` e,
+  na engine, `E.onSleep`/`E.onWake`. Com a tela apagada ou em AOD o loop **não
+  roda update nem desenhar** (o `present` dos apps já é suprimido); no wake a
+  engine reancora o `dt`, remonta o pacing e repinta tudo. `E.screenOn` diz o
+  estado atual. Como o `E.init` chama `keepAwake(true)` por padrão, jogo
+  comum nunca chega a dormir; quem quer a economia solta o keep-awake
+  (`E.init({ keepAwake: false })`). Padrão para salvar no sono:
+
+  ```js
+  E.onSleep = function () { E.pause(true); E.save.setObj("estado", salvar()); };
+  E.onWake  = function () { E.pause(false); };
+  ```
+
 ## 18b. CelerGame 1.1 (core 1.1.0, fx/spr/tilemap/ui/sfx 1.1.0)
 
 Versão aditiva: toda chamada da 1.0 continua valendo. Declare `^1.1.0` no
@@ -1182,6 +1271,11 @@ no JS quando os mundos nativos acabam).
 | `E.slots.create/release/n/report`, `cena.dispose()` | pool de sprites com dono + lugar de devolver o recurso nativo (§18d) |
 | `E.ax/ay/anchor`, `E.inset` | HUD em 9 pontos, ciente da margem segura do vidro (§18d) |
 | `E.spr.meta/animOf/box` | metadados de arte (grade, clipes, fps, âncora, hitbox) num módulo de dados (§18d) |
+| `E.spr.stamp/blit {angle, scaleX, scaleY}`, `E.spr.box` | giro (em volta da âncora) e escala por eixo; caixa suja girada (§9, §18e) |
+| `g.draw({cull, pad})`, `pool.draw({cull})` | pula entidade fora da câmera pelos extents `w/h` (§8) |
+| `E.slots.fit(w, h)`, `E.slots.gen(id)` | orçamento de bytes ANTES de alocar; geração do slot (id reciclado) (§18e) |
+| `E.node.attach/detach/tick/setPos`, `E.node.wx/wy/rotOf` | hierarquia pai/filho com cache world (§14g) |
+| `E.onSleep/onWake`, `E.screenOn`, `System.isScreenOn/screenState` | tela apagou/acordou: pausar, salvar, repintar (§18e, firmware API 51) |
 | `P.verletFast`, `P.rigid`, `P.hit` | a escada de física: verlet nativo, corpo rígido nativo, sobreposição estática (módulo opcional — §15) |
 
 O autocomplete do editor vem no scaffold: o `.d.ts` de cada módulo adotado (`celeros.game.d.ts`, `celeros.game.fx.d.ts`, ...) junto do `celer.d.ts` (API do firmware); quem faz `require("celeros.engine")` segue com o `celeros.engine.d.ts` tudo-em-um, GERADO a partir dos `.d.ts` dos módulos por `node tools/sdk/lib/engine_dts.js` (edite o arquivo do módulo e rode de novo; o `test/sdk` falha com drift e com membro público da engine sem tipo).

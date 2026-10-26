@@ -28,6 +28,11 @@
 // Chaves de topo desconhecidas sao ignoradas; versao MAIOR que a suportada
 // e' recusada inteira (load devolve null e avisa) em vez de corromper.
 //
+// 1.1.0: campo `pai: "#nome"` (+ ox/oy/rot/sx/sy) — o registro vira FILHO
+// de outra entidade pelo celeros.game.node (opt-in: a cena nao arrasta o no
+// como dep). O parentesco e' ligado na fase 2b do instantiate (depois das
+// refs, antes do start) e o save reemite os offsets VIVOS.
+//
 // Custo: so quem adota paga; o core nao muda. Uma cena de 30 entidades
 // custa um JSON pequeno (o parse e' do Duktape, nao da engine).
 
@@ -38,7 +43,7 @@ var EMPTY = {};
 var META = { tipo: 1, x: 1, y: 1, id: 1 };
 
 E.scene = {
-    version: '1.0.0',
+    version: '1.1.0',
     formato: 1,
     _tipos: {},
     _prefabs: {},
@@ -134,6 +139,17 @@ E.scene = {
             if (grupo && grupo.add) grupo.add(e);
         }
         for (i = 0; i < criados.length; i++) resolveRefs(criados[i], mapa);
+        // fase 2b: PARENTESCO (pai: "#nome" + ox/oy/rot/sx/sy) — depois das
+        // refs e antes do start, para o start ja ler x/y de mundo. Exige o
+        // modulo celeros.game.node (opt-in: a cena nao o arrasta como dep)
+        for (i = 0; i < criados.length; i++) {
+            var f2 = criados[i], pf = f2.props;
+            if (!pf || typeof pf.pai !== 'string') continue;
+            var pai2 = mapa[pf.pai.charAt(0) === '#' ? pf.pai.substring(1) : pf.pai];
+            if (!pai2 || pai2 === f2) continue;
+            if (!E.node) { E._warn('scene: campo pai exige celeros.game.node'); continue; }
+            E.node.attach(f2, pai2, { ox: pf.ox, oy: pf.oy, rot: pf.rot, sx: pf.sx, sy: pf.sy });
+        }
         for (i = 0; i < criados.length; i++) {
             var d = E.scene._tipos[criados[i].tipo];
             if (d && d.start) d.start(criados[i]);
@@ -169,6 +185,18 @@ E.scene = {
                     if (antigo && antigo[kk] !== undefined) continue;  // chave ja migrada
                     rec[kk] = refDe(p[kk]);
                 }
+            }
+            // filho de no: reemite o parentesco com os offsets VIVOS (o
+            // setPos pode ter mudado desde o dado original; o x/y acima e'
+            // de mundo e o load recalcula pelo pai)
+            var no = e._no;
+            if (no && no.p) {
+                rec.pai = no.p.nome !== undefined ? '#' + no.p.nome : '#' + no.p.id;
+                rec.ox = no.ox;
+                rec.oy = no.oy;
+                if (no.rot) rec.rot = no.rot;
+                if (no.sx !== 1) rec.sx = no.sx;
+                if (no.sy !== 1) rec.sy = no.sy;
             }
             out.push(rec);
         }

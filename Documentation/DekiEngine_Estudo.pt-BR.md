@@ -403,7 +403,148 @@ depois). O guia (§14f, EN e pt-BR) documenta o formato.
 
 ---
 
-## 8. Referências
+## 8. Rodada 2 — render, hierarquia, energia e assets
+
+A primeira rodada absorveu o núcleo (A0–A6) e a cena como dado (B1). Este
+capítulo cobre o que ficou de fora e agora foi estudado a fundo: o modelo de
+transform do `Object`, a ordenação/culling do pacote de renderização, a câmera,
+os ganchos de energia, a identidade de asset e o tick declarado — mais a tabela
+de custos do nosso firmware, que é o que decide o que vale a pena.
+
+### 8.1 O que o nosso firmware já permite (e custa)
+
+Medido no 4848 (comentários de bancada em `Game_Engine_Guide.pt-BR.md:887-915`
+e `celeros.game.spr.js:31-43`):
+
+| Operação | Custo |
+|---|---:|
+| chamada de função JS vazia | ~15 µs |
+| `Math.round` / `System.millis` | ~20 µs |
+| `copySprite` 32x32 (recorte de origem, sem giro/escala) | ~150-200 µs |
+| `pushSprite` (escala 1, canto superior esquerdo) | ~0,2 ms |
+| `drawSprite` afim (giro e/ou escala ≠ 1) | ~1,25 ms por chamada |
+| `drawPNG` | ~9 ms |
+| `present()` do quadro | ~1,8 ms |
+| GC completo do Duktape | ~40 ms (1x a cada 10 s com PSRAM) |
+
+E os limites que nenhuma feature nova pode furar: **32 caixas sujas** com fusão
+(`main/Display/FrameSprite.h:44`), **16 slots de sprite** (1 sem PSRAM),
+`createSprite` alocando no tamanho **físico** (`jsx(w)`/`appSh(h)` — um "240x320"
+no 4848 pede ~480x453), queda de 16 para 8 bits e de PSRAM para DMA interno,
+reciclagem silenciosa do sprite corrente com o pool cheio, e texto só com
+tamanho inteiro 1..10 (`JsGfx.cpp:552-559`) — sem escala fracionária.
+
+Assinaturas que restringem o desenho: `drawSprite` gira em torno do **centro** e
+não aceita retângulo de origem (`JsGfx.cpp:203-245`); `copySprite` aceita recorte
+mas não gira nem escala (`:294-330`); `pushSprite` empurra só para o quadro
+(`:154-174`); o clip é sempre retangular e não aninha
+(`JsSystemApps.cpp:126-147`).
+
+### 8.2 Hierarquia de transform (o que o deki faz)
+
+Cada `Object` guarda o transform local e um cache world com flag de sujo
+(`Object.h:69-96`); `GetWorldTransform` recomputa sob demanda uma vez
+(`Object.h:234-243`). `RecomputeWorldTransform` garante o world do pai
+recursivamente, multiplica escalas e soma rotações, e **pula o trig quando a
+rotação world do pai é exatamente zero** — soma direta, declarada bit-idêntica
+ao caminho com `sin/cos` (`Object.cpp:536-542`). Setters sujam a subárvore com
+corte cedo se já estava suja (`Object.cpp:571-585`).
+
+As armadilhas que valem como requisito no nosso lado: um root reparentado
+**continua na lista de roots** e passa a ser visitado duas vezes
+(`Object.cpp:232-256` vs `Scene.cpp:555-568`); `RemoveChild` suja só o filho,
+não a subárvore, então os netos ficam com cache velho e o corte do dirty impede
+a correção depois (`Object.cpp:258-272`); `AddChild`/`InsertChildAt` **não
+checam ciclo** (só `SetParent` checa, `:281-285`); `OwnerScene` propaga um nível
+só; e escala não uniforme em pai rotacionado não é representável por
+`(rot, escala)` — o deki ignora isso e o resultado é cisalhamento perdido.
+
+Portável inteiro em ES5, com duas exigências: setter **combinado** de posição
+(dois setters = duas passadas na subárvore) e leitura por campos/scratch, nunca
+um objeto novo por sprite por frame.
+
+### 8.3 Ordenação e culling (pacote de renderização)
+
+O core do deki só define `ISortableProvider::GetSortingOrder()`
+(`ISortableProvider.h:26-33`); a política mora no pacote. O comparador é
+`order` e, no empate, `seq` (o índice de inserção), para ser estável **sem
+`stable_sort` e sem buffer temporário** — e a ordenação é **por grupo de
+irmãos**, não global: o pai desenha antes dos filhos e um nó sem desenho próprio
+promove os filhos ao grupo. Culling usa `GetContentExtents` com raio
+conservador `(|extW·sx| + |extH·sy|)·ppm + 2`; **sem extents conhecidos,
+desenha sempre**.
+
+Duas lições para nós: `Array.prototype.sort` não é garantidamente estável em
+ES5 (empates trocando de quadro = flicker) e ordenar por frame é desperdício —
+o `E.group.sort` por inserção já é estável e O(n) quando quase ordenado.
+
+### 8.4 Câmera (por que não entra agora)
+
+O deki não tem campo de zoom: zoom é `orthoHeight` (metros visíveis), com
+`pixelsPerMeter` derivado e `pixelPerfect` arredondando para múltiplo inteiro da
+densidade de arte, nunca abaixo de 1x (`ScreenScale.h:16-54`); a câmera também
+snapa no grid de arte no pacote. A matemática é portável, mas no nosso caso
+trocar o zoom empurra **todo** sprite para o caminho afim (~1,25 ms contra
+150-200 µs do `copySprite`) e o texto não tem escala fracionária — teria de ser
+re-layout com `E.font` discreto. Por isso o zoom fica de fora desta rodada.
+
+### 8.5 Energia
+
+`IPower` tem dois estados e dois ganchos: `RegisterOnScreenOn` e
+`RegisterOnBeforeSleep` (`IPower.h:47-73`), e **o boot conta como wake**
+(`IPower.h:23-24`) — a rotina de wake precisa ser idempotente. Deep sleep no
+ESP32 é reset: o que não foi salvo antes sumiu. Do lado do JS do CelerOS não
+existe estado de tela nenhum (só `keepAwake` e `deepSleep`, que é reboot), e a
+escada dim/AOD/off só existe no watch (`ScreenPower.cpp:185-191,286-325`); no
+4848 só o timeout de backlight. Copiar a máquina de estados para o JS seria
+duplicar o dono do rádio/painel — o gancho certo é **ler** o estado e reagir.
+
+### 8.6 Assets: epoch, cache negativo e orçamento
+
+`AssetRef` guarda `cachedEpoch` e `loadAttempted` (`AssetRef.h:21-34`):
+`Get()` invalida quando o epoch mudou (o ponteiro pode estar morto), marca a
+tentativa **antes** de carregar (falha real não é retentada por frame) e a
+libera quando o manager ainda não está pronto (`:47-66`). O `AssetManager` sonda
+`FileExists` antes do loader para asset ausente resolver a null sem poluir o log
+(`AssetManager.cpp:545-558`). O epoch significa "o ponteiro pode ter morrido",
+**não** "o cache mudou" — subir a cada load invalida tudo e devolve I/O em massa.
+E a pré-checagem de memória (`FitsInMemory`) mora no `Scene.cpp:286-300`, não no
+`Memory`: alocar e liberar uma sonda é heurística; o que o chamador precisa é
+recusar antes de tentar.
+
+### 8.7 Tick declarado
+
+Só componente que declara `Update` é tickado (`Component.h:37,103`;
+`LifecycleManager.cpp:245-252`). O ganho em C++ é pular a caminhada de
+hierarquia e a chamada virtual por componente de dado; em JS a checagem de
+propriedade é barata e o ganho seria modesto — fica fora até o `E.prof` mostrar
+peso no update.
+
+### 8.8 Lista ranqueada e o que esta rodada faz
+
+| # | Ideia | Valor | Onde | Nesta rodada |
+|---|---|---|---|---|
+| C0 | Rotação de sprite (`angle` em `stamp`/`blit`/`anim.draw`) | alto | `spr` | **sim** — pivô corrigido por `ax/ay`, caixa suja girada; região de folha avisa (o nativo não recorta a origem ao girar) |
+| C1 | Escala por eixo (`scaleX/scaleY`) | alto | `spr` | **sim** — fecha a outra metade da limitação do Studio (`sy`) |
+| C2 | Culling opt-in em `group`/`pool` | alto | core | **sim** — extents `w/h`, sem tamanho desenha sempre |
+| C3 | Hierarquia de transform | alto se houver partes articuladas | módulo `node` | **sim** — `attach/detach/tick`, fast path sem trig, ciclo barrado em todo attach, `pai: "#nome"` na cena |
+| C4 | Estado de tela + `onSleep/onWake` | médio-alto | firmware + core | **sim** — `System.isScreenOn()`/`screenState()` (API 51) e o gancho que para update/draw e repinta tudo ao voltar |
+| C5 | Geração de slot (epoch) | médio | core | **sim** — id reciclado não desenha arte nova |
+| C6 | Orçamento antes de alocar (`fit`) | médio | core | **sim** — bytes físicos contra `maxAllocRAM`/`freePSRAM` |
+| C7 | Zoom de câmera, tick declarado, sort com `seq` | baixo hoje | — | não (motivos em 8.4 e 8.7) |
+
+**Estado em 2026-10-26:** C0–C6 **implementados e publicados** — core 1.6.0,
+spr 1.7.0, cena 1.1.0, `celeros.game.node` 1.0.0, shim 1.8.0, firmware **API 51**
+(`System.isScreenOn`/`screenState`). Dois desvios conscientes do desenho
+original, ambos testados: (a) o `E.slots.fit` ficou **advisory** em vez de
+gatear o `create` — o host/emulador não tem PSRAM e diria "não" para sprites
+que ele aloca de verdade; o valor foi para a mensagem de falha do `create`;
+(b) o tick do `node` **recalcula** em vez de usar flag de sujo — o jogo pode
+mover o pai escrevendo `e.x`, e os bugs de propagação do deki (`RemoveChild`
+que não suja a subárvore) desaparecem com isso. Bancada pendente: custo do giro
+no 4848, a escada dim/AOD/off do watch e um jogo real usando rotação/hierarquia.
+
+## 9. Referências
 
 **deki-engine** (clone local, verificado): `README.md`, `src/Engine.cpp`,
 `src/LifecycleManager.{h,cpp}`, `src/Scene.cpp`, `src/SceneMessagePack.cpp`,

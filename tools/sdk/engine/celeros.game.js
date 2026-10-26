@@ -105,8 +105,15 @@
 // de sprites com dono, contagem unica e falha barulhenta; spr/world deixam
 // de mexer em E.spr._used a mao. Cena {dispose} chamado ao sair (devolve
 // slot/pool). E.ax/E.ay/E.anchor: HUD em 9 pontos, ciente do inset do vidro.
+// 1.6.0: CULLING opt-in — g.draw({cull:true}) / pool.draw({cull:true}) pulam
+// quem esta fora da camera pelos extents e.w/e.h (sem tamanho conhecido
+// DESENHA SEMPRE, e.screen isento; pad opcional). E.slots.gen(id): a geracao
+// do slot muda a cada realocacao e o spr recusa desenhar um id reciclado por
+// um nome velho. E.slots.fit(w, h): orcamento advisory (bytes fisicos contra
+// maxAllocRAM/freePSRAM) para o jogo recusar antes de alocar; a mensagem de
+// falha do create passa a dizer o motivo do orcamento.
 
-var E = { version: '1.5.0' };
+var E = { version: '1.6.0' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -140,6 +147,7 @@ E._inited = false;  // modulo carregado DEPOIS do init se auto-inicializa
 E.slots = (function () {
     var own = {};    // dono -> slots vivos
     var who = {};    // id do slot -> dono
+    var gera = {};   // id do slot -> geracao (muda a cada alocacao do mesmo id)
     var n = 0;       // contagem com o spr fora (legado: E.spr._used)
     // a contagem e UMA so: quando o spr esta carregado ela mora em
     // E.spr._used (campo antigo, que apps como a Lenda ainda ajustam a mao);
@@ -153,21 +161,58 @@ E.slots = (function () {
         n = v;
         if (E.spr && E.spr._used !== undefined) E.spr._used = v;
     }
-    function fail(dono, w, h) {
+    function fail(dono, w, h, porque) {
         E._warn('sem slot de sprite para ' + dono + ' (' + w + 'x' + h + ', ' +
                 get() + '/' + E.caps.slots + ' usados' +
-                (E.caps.psram ? ', psram' : ', sem psram') + ')');
+                (E.caps.psram ? ', psram' : ', sem psram') +
+                (porque ? '; ' + porque : '') + ')');
     }
     return {
         // quantos slots estao ocupados AGORA (le o campo vivo)
         n: get,
+        // GERACAO do slot: muda quando o id e' realocado. Quem guardou um id
+        // (regiao de folha, handle de app) compara e recusa desenhar arte
+        // nova por um nome velho (a licao do epoch do AssetRef do deki)
+        gen: function (id) { return gera[id] || 0; },
+        // orcamento ADVISORIO de uma alocacao: bytes estimados contra o maior
+        // bloco livre e a PSRAM livre (o createSprite aloca no tamanho FISICO
+        // e ainda cai de 16 para 8 bits). Nao substitui o create: serve para
+        // o jogo recusar antes de tentar (e o host, sem PSRAM, pode dizer nao)
+        fit: function (w, h) {
+            var info = null;
+            try { info = S.getInfo(); } catch (e) { info = null; }
+            var fw = 1, fh = 1;
+            if (info && E.W > 0 && E.H > 0) {
+                fw = info.screenW > 0 ? info.screenW / E.W : 1;
+                fh = info.screenH > 0 ? info.screenH / E.H : 1;
+                if (fw < 1) fw = 1;
+                if (fh < 1) fh = 1;
+            }
+            var pw = Math.ceil((w * fw) / 8) * 8;   // LovyanGFX alinha a linha em 8
+            var ph = Math.ceil(h * fh);
+            var b16 = pw * ph * 2 + ph;             // +1 byte de cabecalho por linha
+            var b8 = pw * ph + ph;
+            var maxA = info ? (info.maxAllocRAM || 0) : 0;
+            var pfree = info ? (info.freePSRAM || 0) : 0;
+            if (!E.caps.sprites) return { ok: false, bytes: b16, depth: 16, motivo: 'sem createSprite' };
+            if (pfree > 0 && b16 <= pfree) return { ok: true, bytes: b16, depth: 16, motivo: '' };
+            if (maxA > 0 && b16 <= maxA) return { ok: true, bytes: b16, depth: 16, motivo: '' };
+            if (maxA > 0 && b8 <= maxA) return { ok: true, bytes: b8, depth: 8, motivo: 'so cabe em 8 bits' };
+            return { ok: false, bytes: b16, depth: 16,
+                     motivo: 'sem bloco livre de ' + b16 + ' B (maior ' + maxA + ')' };
+        },
         // aloca 1 slot do pool; 0 = nao coube/falhou (avisa no log)
         create: function (dono, w, h) {
-            if (!E.caps.sprites || get() >= E.caps.slots) { fail(dono, w, h); return 0; }
+            if (!E.caps.sprites || get() >= E.caps.slots) { fail(dono, w, h, 'pool cheio'); return 0; }
             var id = 0;
             try { id = S.createSprite(w, h) || 0; } catch (e) { id = 0; }
-            if (!id) { fail(dono, w, h); return 0; }
+            if (!id) {
+                var f = E.slots.fit(w, h);
+                fail(dono, w, h, f.motivo || 'createSprite devolveu 0');
+                return 0;
+            }
             set(get() + 1);
+            gera[id] = (gera[id] || 0) + 1;
             own[dono] = (own[dono] || 0) + 1;
             who[id] = dono;
             return id;
@@ -908,6 +953,14 @@ E.timeScale = 1;
 // quadro e caixas da camada suja no canto superior esquerdo
 E.debug = false;
 E.frameMs = 0;          // ms gastos no ultimo quadro (update + draw)
+// tela (API 51): E.screenOn e' o estado atual do vidro (on/dim = true, aod
+// e apagado = false). Com a tela apagada o loop nao roda update nem draw;
+// E.onSleep/onWake sao ganchos opcionais chamados na borda (o jogo pode
+// pausar/salvar no sono e retomar no wake). Firmware sem System.isScreenOn
+// fica sempre ligado.
+E.screenOn = true;
+E.onSleep = null;
+E.onWake = null;
 E.quit = function () { E._quit = true; };
 // cena static: agenda um draw (estado mudou). Em cena comum e no-op.
 E.redraw = function () { E._redraw = true; };
@@ -1012,6 +1065,10 @@ E.run = function (scenes, first, firstArg) {
     _paceUs = 0;
     _yieldUs = 0;
     var cur = null;
+    // API 51: o vidro esta entregando quadro? (firmware antigo = sempre)
+    var _telaFn = typeof S.isScreenOn === 'function' ? S.isScreenOn : null;
+    var _telaEm = 0;
+    E.screenOn = _telaFn ? !!_telaFn() : true;
 
     // arg (goto/push {arg}) chega no enter(arg): a fase escolhida no menu
     // vai direto para a cena do jogo sem passar pelo E.data
@@ -1157,6 +1214,33 @@ E.run = function (scenes, first, firstArg) {
         }
         // marcas do E.prof (0 quando desligado): input -> mods -> update -> draw
         var P = E.prof, pt0 = P.on ? S.micros() : 0;
+        // tela apagada/AOD (API 51): nao roda update nem draw — o firmware ja
+        // suprime o present dos apps, e desenhar seria trabalho jogado fora.
+        // Poll a cada 200 ms (o isScreenOn e' uma chamada nativa) e dispara
+        // E.onSleep/E.onWake na borda. No wake: dt reancorado (o sono pode ter
+        // durado minutos), pacing remontado e repaint integral (os quadros
+        // suprimidos deixaram o vidro velho).
+        if (_telaFn && now - _telaEm >= 200) {
+            _telaEm = now;
+            var vivo = !!_telaFn();
+            if (vivo !== E.screenOn) {
+                E.screenOn = vivo;
+                if (!vivo) {
+                    if (E.onSleep) E.onSleep();
+                } else {
+                    E._last = now;
+                    _paceUs = 0;
+                    _paceFps = -1;
+                    E._redraw = true;
+                    E.dirty.full();
+                    if (E.onWake) E.onWake();
+                }
+            }
+        }
+        if (!E.screenOn) {
+            S.delay(50);   // 20 despertares/s: o vidro volta no proximo poll
+            continue;
+        }
         E._pollInput(now);
         var pti = P.on ? S.micros() : 0;
         E.audio._tick();
@@ -1616,10 +1700,17 @@ E.group = function () {
         g._busy = false;
         g.count = a.length;
     };
-    g.draw = function () {
-        var a = g.items;
-        for (var i = 0; i < a.length; i++) {
-            if (!a[i].dead && a[i].draw) a[i].draw();
+    // draw({cull, pad}): com cull, pula quem esta fora da camera (E.cull).
+    // O apagamento do quadro anterior nao depende disto: a camada suja ja
+    // apaga as caixas do _prev mesmo que o objeto tenha saido da tela
+    g.draw = function (o) {
+        var a = g.items, i, e;
+        var cul = o && o.cull;
+        for (i = 0; i < a.length; i++) {
+            e = a[i];
+            if (e.dead || !e.draw) continue;
+            if (cul && !E.cull(e, o)) continue;
+            e.draw();
         }
     };
     g.each = function (fn) {
@@ -1720,9 +1811,13 @@ E.pool = function (n, factory) {
             }
             p.alive = n2;
         },
-        draw: function () {
+        // draw({cull, pad}) como no E.group: pula o pool fora da camera
+        draw: function (o) {
+            var cul = o && o.cull;
             for (var j = 0; j < items.length; j++) {
-                if (!items[j].dead && items[j].draw) items[j].draw();
+                if (items[j].dead || !items[j].draw) continue;
+                if (cul && !E.cull(items[j], o)) continue;
+                items[j].draw();
             }
         },
         each: function (fn) {
@@ -1746,6 +1841,23 @@ E.pool = function (n, factory) {
 };
 
 // ---------------------------------------------------------- camera -------
+
+// visivel na camera? Extents vem de e.w/e.h (canto superior esquerdo), que e'
+// a convencao que os jogos ja usam; sem tamanho conhecido DESENHA SEMPRE
+// (como o deki sem GetContentExtents) e objeto de tela (e.screen) nunca e'
+// cullado. A posicao e' _wx/_wy quando o celeros.game.node ja calculou o
+// mundo (filho de algo), senao x/y. pad = folga em px alem do extents.
+E.cull = function (e, o) {
+    if (!e || e.screen) return true;
+    var w = e.w, h = e.h;
+    if (!(w > 0) || !(h > 0)) return true;
+    var pad = (o && o.pad) || 0;
+    var x = e._wx !== undefined ? e._wx : e.x;
+    var y = e._wy !== undefined ? e._wy : e.y;
+    var c = E.cam;
+    return (x + w + pad) >= c.x && (x - pad) <= (c.x + E.W) &&
+           (y + h + pad) >= c.y && (y - pad) <= (c.y + E.H);
+};
 
 E.cam = {
     x: 0, y: 0,          // canto sup. esq. da camera no mundo

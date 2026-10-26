@@ -379,11 +379,11 @@ module.exports = function (check) {
     // ------------------------------------------------- d.ts sem drift --
     // todo membro PUBLICO (sem _) de cada modulo tem que aparecer no d.ts
     // dele E no celeros.engine.d.ts (a uniao) — API nova sem tipo nao passa
-    c = fresh(['fx', 'spr', 'tilemap', 'ui', 'scene']);
+    c = fresh(['fx', 'spr', 'tilemap', 'ui', 'scene', 'node']);
     var E = c.E;
     var dts = {};
     ['celeros.game', 'celeros.game.fx', 'celeros.game.spr', 'celeros.game.tilemap',
-     'celeros.game.ui', 'celeros.game.scene', 'celeros.engine', 'celeros.sfx'].forEach(function (n) {
+     'celeros.game.ui', 'celeros.game.scene', 'celeros.game.node', 'celeros.engine', 'celeros.sfx'].forEach(function (n) {
         dts[n] = fs.readFileSync(path.join(ENGINE_DIR, n + '.d.ts'), 'utf8');
     });
     function faltam(obj, txt, prefixo) {
@@ -407,20 +407,21 @@ module.exports = function (check) {
         [E.ui, 'celeros.game.ui', 'E.ui.'],
         [E.ui.list({ items: [] }), 'celeros.game.ui', 'list().'],
         [E.scene, 'celeros.game.scene', 'E.scene.'],
+        [E.node, 'celeros.game.node', 'E.node.'],
         [SFX, 'celeros.sfx', 'SFX.']
     ];
     var semTipo = [], semUniao = [];
     // decoracoes dos modulos no E (cada uma checada no d.ts do proprio modulo)
-    var ignora = { exports: 1, fx: 1, spr: 1, tilemap: 1, ui: 1, anim: 1, scene: 1 };
+    var ignora = { exports: 1, fx: 1, spr: 1, tilemap: 1, ui: 1, anim: 1, scene: 1, node: 1 };
     mapa.forEach(function (row) {
         semTipo = semTipo.concat(faltam(row[0], dts[row[1]], row[2]).filter(function (k) {
             return !ignora[k.split('.').pop()];
         }));
         // o ui e o scene sao modulos opt-in: nao entram no pacote montado
         if (row[1] !== 'celeros.sfx' && row[1] !== 'celeros.game.ui' &&
-            row[1] !== 'celeros.game.scene') {
+            row[1] !== 'celeros.game.scene' && row[1] !== 'celeros.game.node') {
             semUniao = semUniao.concat(faltam(row[0], dts['celeros.engine'], row[2]).filter(function (k) {
-                return k !== 'E.ui' && k !== 'E.scene';   // opt-in: fora do pacote montado
+                return k !== 'E.ui' && k !== 'E.scene' && k !== 'E.node';   // opt-in: fora do pacote montado
             }));
         }
     });

@@ -237,6 +237,14 @@ bullets.update(E.dt); bullets.draw();
 
 Pools pre-allocate everything: no per-frame allocation means no GC hiccups. Both containers have `each(fn)` for bulk iteration (the pool's skips the dead — no scavenging loop in your frame).
 
+**Optional culling (core 1.6):** `g.draw({cull: true})` (and `pool.draw`)
+skip the entity whose box (`x/y` + `w/h`, top-left) does not intersect the
+camera; `pad` adds slack in px. **Without a known `w/h` the entity is always
+drawn** (like a renderer with no extents) and `e.screen` (HUD) is never culled.
+It costs one comparison per entity and saves the whole native call — with
+`drawSprite` at ~1.25 ms, an off-screen horde is wasted money. Erasing is not
+affected: the dirty layer already clears the previous frame's boxes.
+
 ## 9. Sprites and animation
 
 The firmware sprite pool has **16 slots** on PSRAM boards since API 33 (8 before that, since API 29; 1 without PSRAM — sprites eat internal RAM there) (`System.spriteSlots()` reports the board's limit; the engine queries it automatically). `E.spr.load` decodes each PNG **once** into a slot and keeps a procedural `paint` fallback, so the game runs even with missing assets or on boards without sprites:
@@ -269,6 +277,27 @@ var brilho = E.anim(["bau", "chao"], 4);   // flipbook over regions
 E.spr.free("chao");       // removes the name only (the slot is the sheet's)
 E.spr.freeSheet("tiles"); // gives the slot back and drops every region
 ```
+
+**Rotation and per-axis scale (spr 1.7, API 33):** `{angle}` in DEGREES
+(clockwise) and `{scaleX, scaleY}` on `stamp`/`blit`/`anim.draw`. Rotation uses
+the native `drawSprite` and happens around the **anchor** (`ax/ay`) — the feet
+stay put instead of the center — and the dirty box becomes the four rotated
+corners' AABB (no smearing). Without rotation and with uniform scale 1 the fast
+paths (`copySprite`/`pushSprite`) still apply; with rotation or a per-axis
+scale the cost is the affine one (~1.25 ms per sprite on the 4848 — measure
+with `E.prof`):
+
+```js
+E.spr.stamp("cannon", x, y, { ax: 0.5, ay: 1, angle: 45 });      // rotated
+E.spr.stamp("ship", x, y, { scaleX: 2, scaleY: 1 });              // stretched
+var box = E.spr.box("hero", x, y, { angle: 90 });                 // rotated hitbox
+```
+
+Limits: **a sheet region does not rotate** — `drawSprite` draws the whole
+sprite and the clip is rectangular, so a rotated region would show the
+neighbouring cell; the engine warns once and draws it straight (load the frame
+as its own sprite with `prescale`/`load` to rotate it). Boards without
+`drawSprite` (CYD/ESP32) behave the same: warn and draw unrotated.
 
 Flipbook animation without extra slots: frames are painter functions (or loaded sprite names):
 
@@ -689,6 +718,39 @@ Cost: it is a module, not core — nothing is paid unless adopted. Named prefabs
 (`E.scene.prefab('room1', list)` plus `instantiate('room1')`) reuse the same data
 across maps.
 
+## 14g. Transform hierarchy (`celeros.game.node`, optional)
+
+Articulated parts (cannon on turret, fuse on a bomb, composed HUD) without hand
+math. The child **follows** the parent: every tick writes WORLD `e.x/e.y` from
+the local offset, rotation (degrees) and scale — drawing, collision and the
+dirty layer keep reading `e.x/e.y` as always.
+
+```js
+var E = require("celeros.game"); require("celeros.game.node");
+E.node.attach(cannon, turret, { ox: 0, oy: -6 });      // cannon follows turret
+// in update, after moving the turret:
+turret.x += 20;
+E.node.tick();                                         // applies now
+E.spr.stamp("cannon", cannon.x, cannon.y, { angle: E.node.rotOf(cannon) });
+```
+
+- `attach(child, parent, {ox, oy, rot, sx, sy})` refuses cycles (warns once);
+  `detach(child)` releases it and the child **stays where it is**;
+  `setPos(child, ox, oy, rot)` is the combined offset setter;
+  `wx/wy/rotOf/scaleXOf/parentOf` read the world.
+- **`E.node.tick()` already runs at the start of the frame** (registered in
+  `E._modTicks`): the child uses the **previous frame's** parent world. For zero
+  lag call it again at the end of `update`, after moving the parent (it is
+  cheap: a chain of multiplications, with a `sin/cos`-free path when the parent
+  is not rotated).
+- A child's position comes from `setPos`/`rot`, not from writing `e.x` (the tick
+  overwrites it).
+- Non-uniform scale under a rotated parent is not representable by
+  (rotation, scale): the result combines and may shear — avoid it.
+- In scene data a record takes `pai: "#name"` (+ `ox/oy/rot/sx/sy`) and
+  `instantiate` links it before `start`; `save` re-emits the live offsets. It
+  requires the module to be adopted (the scene does not pull it as a dep).
+
 ## 15. Physics (`celeros.physics`, optional)
 
 **Most games need no physics module at all.** On a Duktape device an
@@ -1041,6 +1103,35 @@ metadata name (grid frame 0) or a frame name (`'h4'`).
 - `group.remove(o)` **inside update** no longer corrupts the loop: during the tick it marks
   `dead` and the loop itself collects it. Outside update it still removes immediately.
 
+## 18e. Round 2 of the deki study (core 1.6, spr 1.7, node 1.0, scene 1.1)
+
+Second batch from the `deki-engine` study (the first chapter lives in
+`DekiEngine_Estudo.pt-BR.md`). All additive; declare `^1.6.0` for the core,
+`^1.7.0` for spr, `^1.0.0` for node.
+
+- **Sprite rotation and per-axis scale** (§9): `{angle}`, `{scaleX, scaleY}`;
+  rotates around the anchor and the dirty box becomes the rotated AABB.
+- **Culling** (§8): `g.draw({cull: true, pad})`, no `w/h` means always drawn.
+- **Hierarchy** (§14g): `celeros.game.node` + `pai: "#name"` in scenes.
+- **Slot generation** (`E.slots.gen`): a recycled id never draws new art under
+  an old name — spr refuses and warns once.
+- **Budget** (`E.slots.fit(w, h)`): estimated physical bytes (16-bit, falling
+  back to 8) against `maxAllocRAM`/`freePSRAM`; **advisory** (the host/emulator
+  has no PSRAM and says no). `create`'s failure message now carries the budget
+  reason.
+- **Sleep** (firmware API 51): `System.isScreenOn()`/`System.screenState()` and,
+  in the engine, `E.onSleep`/`E.onWake`. With the screen off or in AOD the loop
+  **runs neither update nor draw** (the app `present` is already suppressed);
+  on wake the engine re-anchors `dt`, rebuilds pacing and repaints everything.
+  `E.screenOn` is the current state. Since `E.init` calls `keepAwake(true)` by
+  default, a normal game never sleeps; release it
+  (`E.init({ keepAwake: false })`) to save power. Saving on sleep:
+
+  ```js
+  E.onSleep = function () { E.pause(true); E.save.setObj("state", snapshot()); };
+  E.onWake  = function () { E.pause(false); };
+  ```
+
 ## 18b. CelerGame 1.1 (core 1.1.0, fx/spr/tilemap/ui/sfx 1.1.0)
 
 Additive release: every 1.0 call keeps working. Declare `^1.1.0` in `app.json`
@@ -1184,6 +1275,11 @@ run out).
 | `E.slots.create/release/n/report`, `scene.dispose()` | owned sprite pool + the place to return a native resource (§18d) |
 | `E.ax/ay/anchor`, `E.inset` | 9-point HUD aware of the glass safe margin (§18d) |
 | `E.spr.meta/animOf/box` | art metadata (grid, clips, fps, anchor, hitbox) in a data module (§18d) |
+| `E.spr.stamp/blit {angle, scaleX, scaleY}`, `E.spr.box` | rotation (around the anchor) and per-axis scale; rotated dirty box (§9, §18e) |
+| `g.draw({cull, pad})`, `pool.draw({cull})` | skip entities outside the camera by their `w/h` extents (§8) |
+| `E.slots.fit(w, h)`, `E.slots.gen(id)` | byte budget BEFORE allocating; slot generation (recycled id) (§18e) |
+| `E.node.attach/detach/tick/setPos`, `E.node.wx/wy/rotOf` | parent/child hierarchy with world cache (§14g) |
+| `E.onSleep/onWake`, `E.screenOn`, `System.isScreenOn/screenState` | screen went off/woke: pause, save, repaint (§18e, firmware API 51) |
 | `E.scene.def/spawn/instantiate`, `E.scene.save/load/migra`, `E.scene.prefab` | scene and prefab as data: references by name resolved before `start`, versioned save/load with migration (§14f) |
 | `P.verletFast`, `P.rigid`, `P.hit` | the physics ladder: native Verlet, native rigid bodies, static overlap (optional module — §15) |
 

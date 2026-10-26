@@ -338,7 +338,7 @@ foreach(page ${CELEROS_WEB_PAGES})
 endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    CELEROS_VERSION="1.11.6"
+    CELEROS_VERSION="1.12.0"
     CELEROS_API_LEVEL=51
 )
 

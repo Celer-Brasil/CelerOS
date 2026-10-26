@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "rev": 2,
+  "name": "Mapa",
+  "guid": "ead0961680ee71be22a7aa623425f5fb",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "screen": "map"
+    },
+    "bg": "#080c16",
+    "static": true
+  },
+  "entities": [
+    {
+      "name": "Controle",
+      "fid": "e_0d2aa8e8",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_f6662d30",
+          "fields": {
+            "script": "52378124decf85728bb70f1163844877"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

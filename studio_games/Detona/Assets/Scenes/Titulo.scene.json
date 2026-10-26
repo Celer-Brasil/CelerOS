@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "rev": 2,
+  "name": "Titulo",
+  "guid": "44b601a248e72ea59a5d7a5012e83b21",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "screen": "title"
+    },
+    "bg": "#0b1020",
+    "static": true
+  },
+  "entities": [
+    {
+      "name": "Fundo",
+      "fid": "e_efb9d79a",
+      "active": true,
+      "z": -10,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1.875,
+        "sy": 1.875,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_588c6a52",
+          "fields": {
+            "key": "#000000",
+            "sprite": "08500ac4f56573a93701a9ad74dbf39a"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Controle",
+      "fid": "e_4ae75f99",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_8ec94b6a",
+          "fields": {
+            "script": "52378124decf85728bb70f1163844877"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

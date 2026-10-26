@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "guid": "5c36a4674686e1d42c26906d9f5aafaf",
+  "importer": "tileset",
+  "settings": {
+    "w": 128,
+    "h": 32,
+    "mode": "grid",
+    "cols": 4,
+    "rows": 1,
+    "tw": 32,
+    "th": 32,
+    "pivot": [
+      0.5,
+      0.5
+    ],
+    "key": "#000000",
+    "prefix": "",
+    "tiles": [
+      {
+        "name": "0",
+        "solid": false
+      },
+      {
+        "name": "1",
+        "solid": true
+      },
+      {
+        "name": "2",
+        "solid": true
+      },
+      {
+        "name": "3",
+        "solid": false
+      }
+    ]
+  }
+}

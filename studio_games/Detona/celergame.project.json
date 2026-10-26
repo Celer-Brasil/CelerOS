@@ -1,31 +1,27 @@
 {
   "format": 1,
-  "rev": 4,
+  "rev": 6,
   "studio": "0.1.0",
   "name": "Detona!",
   "packageName": "celeros.detona",
-  "version": "0.10.2",
+  "version": "1.0.0",
   "author": "CelerOS",
-  "description": "Bomberman de grade em tela cheia nos pixels nativos do vidro: abra caminho com bombas, pegue powerups (chute, detonador, escudo), acha a saida escondida e limpa a arena. O pavio das bombas e quantizado na BATIDA da trilha chiptune — a explosao cai no compasso e as correntes cascateiam de meio tempo em meio tempo. Campanha em 3 mundos com chefes e modo sobrevivencia.",
+  "description": "Remake NATIVO do Detona no Celer Studio: 3 mundos, 6 fases montadas em tilemaps editaveis, 3 tilesets, chefe com barra de vida, powerups, bombas remotas, d-pad/swipe, HUD e progressao salva. Sem bridge legado: cada fase e uma cena do editor.",
   "type": "Game",
   "category": "Estrategia",
-  "api": 30,
+  "api": 50,
   "requires": [
     "psram"
   ],
   "topbar": false,
   "permissions": [],
   "deps": {
-    "celeros.game": "^1.4.2",
-    "celeros.game.fx": "^1.4.0",
-    "celeros.game.kit": "^1.0.0",
-    "celeros.game.pad": "^1.2.0",
-    "celeros.game.spr": "^1.5.0",
-    "celeros.game.tilemap": "^1.0.0",
-    "celeros.game.ui": "^1.2.0",
-    "celeros.mesh": "^1.0.0"
+    "celeros.game": "^1.5.0",
+    "celeros.game.fx": "^1.4.2",
+    "celeros.game.spr": "^1.6.0",
+    "celeros.game.tilemap": "^1.3.0"
   },
-  "changelog": "0.10.2 - ranges das deps atualizados para o que o kit 0.10 ja usa (fx ^1.4.0, ui ^1.2.0, pad ^1.2.0; nenhum codigo mudou)\n0.10.1 - +35% de fps no 4848 (17,8 -> 25 sem teto): arte do atlas IA gravada 1x na escala da celula (celeros.game.spr 1.5 prescale) — jogador, bombas, slimes, orbe e piso desenhavam pelo drawSprite afim ~20x por quadro; campos de fluxo da IA so quando ha bicho que persegue e so quando o jogador troca de celula ou a grade muda (eram 2 a cada 0,5 s, ~32 ms cada, com solucos de ~100 ms); os fallbacks de sprite cobertos pelo atlas nao queimam vagas do pool\n0.10.0 - KIT E ATLAS DE IA: adota celeros.game.kit (path/fsm/events/steer/stats/inv/script/collide/level + E.sfx) e celeros.game.pad; saem celeros.grid e celeros.sfx (8 deps no total). A IA larga o BFS proprio: perseguicao e fuga usam E.path.flow com o custo lido do mundo (arena.em) e a mesma ordem de vizinhos do BFS antigo, entao a seed do duelo e as ondas seguem identicas. Campanha/sobrevivencia/duelo/round viram uma E.fsm (so troca o modo — a trilha e o beat nao param nem reiniciam) e bomba/powerup/chute/morte passam por E.events, com som/efeito/rede em ouvintes fora do laco. O joystick manual vira E.pad.stick (multitoque, E.pad.draw; toque seco segue plantando). ARTE: ai_atlas 4x4 de 64 (jogador/slime/bomba/powerup) e ai_bg como piso por fase; os PNGs pequenos ficam de fallback e o pool de 8 slots segue com folga (atlas+piso+2 blocos+4 bichos).\n0.9.2 - o titulo nao decodifica mais a arte 480x480 (~105 KB) no boot: o decode nativo segurava o aparelho por dezenas de segundos (o HostLink parava de responder); entra o titulo tipografico e a arte fica no repo para uma versao com imagem menor. Sprites pequenos seguem em PNG\n0.9.1 - titulo com a arte 480 mantem a linha de recordes visivel (campanha e sobrevivencia numa linha so, botoes 12u abaixo) e o cabecalho do lobby e repintado todo quadro para o veu de transicao nao apagar; dialogo do duelo com fonte ajustada ao vidro\n0.9.0 - UI DA FAMILIA CELERGAME: adota a dep celeros.game.ui (core + ui; nenhum app usava ainda) no lobby do duelo, na pausa e nas telas de fim. Lobby vira uma E.ui.list com rolagem por arrasto: cada Detona por perto aparece com nome e status (livre / te desafia) e o toque no nome convida ou aceita na hora; RECUSAR/CANCELAR seguem em botao e o protocolo da malha fica intacto (mesmas mensagens dhl/di/da0/da1/ds/dy/dq). Um botao COMO JOGAR abre E.ui.dialog com as regras do 1x1 (texto datilografado; tap completa e depois fecha), com som de ui/ok/back da tabela do core. Pausa passa a ser o E.ui.pause padrao (Continuar / Recomecar / Sair) sobre a arena congelada: Continuar retoma do ponto exato da trilha (musicPos de sempre) e Recomecar regenera a fase/rodada com a musica do zero. Telas de fim (campanha, sobrevivencia e duelo) usam E.ui.menu para as acoes mantendo os dados de cada uma (pontos, bonus de tempo, recorde, rounds/placar e o rotulo PROXIMA FASE). Efeitos continuos do E.fx com pool FIXO e zero alocacao por quadro: faisca no pavio de cada bomba (emissor com follow, rate 2,5/s), rastro nas bombas chutadas (E.fx.trail), respiro de fogo no respiro do Forno e anel nas erupcoes e no cuspe do cuspidor que faltavam; tudo morre no exit da arena e nao vaza entre cenas. test.js continua passando sem mudanca (mesmos toques do titulo/fim/sobrevivencia e o protocolo injetado). No titulo com a arte 480 a linha de recordes vai numa linha so e os botoes descem 12u para nao cobre-la\n0.8.0 - migra para a familia CelerGame (core + fx + spr + tilemap no lugar do pacote celeros.engine; sfx/grid/mesh segue): mesmo E, compile mais leve, adocao explicita; transicoes de cena (fade/wipe/iris) nas trocas de titulo/jogo/fim — pausa e retomada continuam instantaneas (recurso novo do core 1.0)\n0.7.0 - RODADA DE ARTE E NOVOS BICHOS: powerups ganham icone (PNG RGBA por celula com a borda na cor exata de cada um, placa arredondada sobre o piso; letra colorida segue como fallback); blocos tematicos por mundo (caixa de madeira com musgo/rocha magmatica/painel tech destrutivel e granito/obsidiana/blindagem fixa — o slot de hardware troca o desenho por fase, blit rapido igual); chao ganha pedrinhas e manchas pela seed da fase; CUSPIDOR no Forno (tanque de 2 acertos, cospe fogo de 1 celula quando o jogador alinha — a boca acende meio tempo antes, labareda de ambiente como os respiros) e LADRAO no Jardim (ronda os powerups expostos, engole o mais proximo e foge de quem tem bomba; ao morrer abre o saco e devolve tudo na celula livre); MAPAS por mundo a partir do 2o nivel: canteiros de moitas no Jardim, veios de obsidiana em diagonal com macicos de macio no Forno (cada peca nova so fica se a arena inteira continua alcancavel) e camaras com portas de 1 celula no Nucleo; duelo ganha arena Irma com o padrao do Forno (mesma seed nos dois aparelhos); chefe remasterizado no tamanho do slot 2x2 (o PNG antigo de 92px era clipado no canto); blindado, divisor e o rival do duelo tambem ganham sprite text2d (as vagas de slot por fase cobrem todos os bichos da arena; no duelo, sem spawns, o rival pega slot); painter dos blocos tinge com a cor do mundo nas telas pequenas; 0.6.0 - DUELO 1x1 pela malha CelerNet (dep celeros.mesh): lobby com os Detona por perto (heartbeat), convite/aceite e melhor de 3 rounds na MESMA arena por seed; o radio troca so eventos discretos de 1 quadro (posicao por celula, bomba com o pavio no beat do dono, chute, detonador, powerup pego, morte) — cada jogador e a autoridade do proprio corpo e da propria morte (os dois avisarem = empate); rival interpolado na tela, rounds no HUD, saida do canto vira desistencia no duelo e o host comanda o proximo round; 0.5.1 - render por eventos: a grade avisa as celulas que mudam (antes 195 celulas varridas por quadro, ~7 ms de Duktape); powerup estatico; fuzz das 24 fases no CI; 0.5.0 - movimento de grade de verdade: andar por trilhas, sair da propria bomba sem ser cuspido pra dentro da parede (a bomba virava tile solido com o jogador dentro e o solver o jogava no bloco vizinho), quina assistida, para alinhado na celula ao soltar o dedo e velocidade com teto (o patins chegava a ~10 cel/s); bichos novos: BLINDADO (2 acertos) e DIVISOR (se parte em 2 minis); cacador e blindado fogem das bombas prestes a explodir; acerto da labareda pela celula que o bicho ocupa (no meio do passo ele escapava), chefe com invencivel apos o golpe (perdia 8 hp numa bomba so), contato do chefe 2x2 no tamanho certo, bicho desvia de bomba plantada no caminho e as bombas do chefe nao dao combo/pontos nem ferem o proprio chefe; perigos por mundo: respiros de fogo no Forno que entram em erupcao na batida (avisam no tempo anterior) e portais em pares no Nucleo; powerups novos PERFURANTE (a chama atravessa blocos) e RELOGIO (+30 s); cartao de abertura da fase, dicas no 1-1, pavio que avermelha e pisca rapido no fim, bomba do chefe marcada, toque longo aciona o detonador, bonus de tempo no fim e CAMPANHA COMPLETA ao derrubar o chefe do 3-8; pausa so nas paredes do canto (engolia a celula 13,1); sem a dep de fisica (o BFS de perseguicao foi para a celeros.grid 1.1): o pacote cabe no teto; 0.4.0 - sobre a engine 1.2: o cenario vira E.tilemap de celulas sujas (antes ~600 chamadas de desenho por quadro e o vidro inteiro empurrado a cada frame; agora so repintam as celulas sob o que se moveu ou mudou), HUD em colunas que so repinta quando muda (texto no tamanho certo: o size 2 sobre a fonte ja promovida dava 50 px), menus em cena static, 30 fps fixos (era sem teto), sem flash dourado nem tremor a cada bomba (so explosao grande brilha a borda; tremor so na morte), joystick flutuante (segure o dedo deslocado e o boneco anda; toque seco planta), botao de pausa visivel no canto, pausa por cima da arena e volta do ponto da musica, sons misturados na trilha sem travar o loop (System.sfx, API 32), CHUTE consertado (a bomba esbarrava na propria marca e parava na 1a celula), desenho respeita o deslocamento da grade (OX/OY) em telas que nao sao 480; 0.3.0 - sobre deps do hub (API 30): engine/physics 1.1 + as novas celeros.sfx (efeitos chiptune com duck) e celeros.grid (arena classica, solvabilidade e sorteio) — sem vendor no pacote; combo x2..x5 quando a explosao cai no TEMPO FORTE da batida; saida garantida alcancavel (nunca em bolso cercado por parede) com aviso ao abrir; explosao grande/ganha tamanho com o alcance; alerta de tempo; 0.2.0 - campanha 3 mundos + sobrevivencia; 0.1.0 - nucleo",
+  "changelog": "1.0.0: remake nativo no Celer Studio. As 6 fases agora sao cenas editaveis (tilemap 15x13 + solidos + entidades), com 3 tilesets (Jardim/Forno/Nucleo), saida escondida sob caixa, powerups (alcance, bomba, velocidade, remoto, escudo, vida), chefe com 12 HP e barra, 3 estrelas por fase, mapa de fases, pausa, tela final e progresso salvo. Controlador unico em ES5, sem modo legado.",
   "canvas": {
     "w": 480,
     "h": 480,
@@ -33,24 +29,16 @@
     "fps": 30,
     "inset": 0
   },
-  "startScene": "e9d723dace14634cf7cf3dd7944de568",
+  "startScene": "44b601a248e72ea59a5d7a5012e83b21",
   "build": {
     "out": ".studio/build",
     "splitKB": 96
   },
   "editor": {
-    "grid": 8,
+    "grid": 16,
     "snap": true,
     "debug": false,
     "prof": false
   },
-  "legacy": {
-    "name": "Detona",
-    "bases": [
-      "/local/apps/Detona/",
-      "/sd/apps/Detona/"
-    ],
-    "entry": "main.js"
-  },
-  "runtime": "legacy"
+  "runtime": "studio"
 }

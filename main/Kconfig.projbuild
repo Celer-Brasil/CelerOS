@@ -17,6 +17,24 @@ config CELEROS_USB_NATIVE
         CONFIG_TINYUSB_CDC_ENABLED=y
         CONFIG_TINYUSB_CDC_COUNT=2
 
+config CELEROS_USB_MSC
+    bool "Modo pen drive (MSC): expor o cartao SD ao PC para recuperacao"
+    depends on CELEROS_USB_NATIVE
+    default n
+    help
+      'reboot msc' no shell grava uma flag no NVS e reinicia; o boot
+      seguinte nao sobe kernel/launcher/servicos — desanexa o VFS do /sd,
+      expoe os setores crus como LUN MSC (o PC monta o FAT32) e espera o
+      usuario segurar o botao para sair. Serve para tirar logs/fotos e
+      colocar apps no cartao num aparelho sem shell utilizavel.
+
+      Ao ativar, habilite tambem no sdkconfig do board:
+        CONFIG_TINYUSB_MSC_ENABLED=y
+      (a interface MSC aparece no descritor em TODOS os boots; sem LUN
+      montado o PC a ve como leitor vazio). So placas com USB nativo E
+      slot SD usam de fato — hoje o watch; o devkit-s3 tem o OTG ocupado
+      pelo USB Host e as demais nao tem USB device.
+
 config CELEROS_LINK_ON_USJ
     bool "SerialLink (celerctl) pela USB-Serial/JTAG nativa"
     depends on IDF_TARGET_ESP32S3 && !CELEROS_USB_NATIVE

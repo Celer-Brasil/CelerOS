@@ -73,6 +73,53 @@ CelerDisplay& tft = Board::display();
 static LauncherScreen s_launcher;  // base da pilha do Navigator
 #endif
 
+#if CONFIG_CELEROS_USB_MSC
+// ---------------------------------------------------------------------------
+// Modo recuperacao/pen drive (watch): 'reboot msc' grava a flag no NVS e
+// reinicia; aqui o SD (ja montado pelo FileSystem::init) e desanexado do VFS
+// e exposto ao PC como LUN MSC. Sem kernel, launcher, servicos ou LogPersist:
+// o cartao pertence ao host ate o reboot. Sai segurando o botao ~1 s.
+// ---------------------------------------------------------------------------
+static void usbMscMode() {
+    celer_log_println("modo pen drive (MSC): expondo o SD ao PC");
+    const bool ok = FileSystem::detachSDForHost() && USBDevice::initMsc();
+    if (!ok) celer_log_println("MSC: sem cartao SD ou USB indisponivel");
+#if CONFIG_CELEROS_UI
+    Backlight::init(&tft);  // brilho padrao: a tela precisa ser legivel no modo
+    if (!Board::profile().headless) {
+        tft.fillScreen(THEME_BG);
+        tft.setTextDatum(MC_DATUM);
+        tft.setTextColor(THEME_TEXT);
+        tft.drawString(i18n::TR("Modo pen drive", "Mass-storage mode"),
+                       UI::cx(), UI::sy(110), kui::type::title());
+        tft.setTextColor(THEME_TEXT_DIM);
+        tft.drawString(ok ? i18n::TR("Cartao SD exposto ao PC.", "SD card exposed to the PC.")
+                          : i18n::TR("Falhou (sem cartao SD?).", "Failed (no SD card?)."),
+                       UI::cx(), UI::sy(150), kui::type::body());
+        tft.drawString(i18n::TR("Segure o botao para sair.", "Hold the button to exit."),
+                       UI::cx(), UI::sy(186), kui::type::body());
+    }
+#endif
+    if (!ok) delay(5000);  // sem SD nao ha o que expor: volta logo ao normal
+
+    // Sai segurando o botao fisico (~1 s, debounce de 20 x 50 ms)
+    const int pin = Board::profile().buttonPin;
+    if (pin >= 0) pinMode(pin, INPUT_PULLUP);
+    uint32_t held = 0;
+    for (;;) {
+        if (pin >= 0 && digitalRead(pin) == LOW) {
+            if (++held >= 20) break;
+        } else {
+            held = 0;
+        }
+        delay(50);
+    }
+    celer_log_println("saindo do modo pen drive (reboot)");
+    delay(300);
+    esp_restart();
+}
+#endif  // CONFIG_CELEROS_USB_MSC
+
 // Splash de boot no tema: logo embutida (gerada por tools/make_splash.py) +
 // status + trilho da barra de progresso (a barra e preenchida pelo scan de
 // apps em (sx(20), sy(200), sx(200), sy(10))). O blit usa zoom do design
@@ -154,6 +201,11 @@ static void celerSetup() {
     // Registro do crash anterior vira linha em /local/log/crash.txt (o agente
     // de frota reporta; em placas sem vidro e o UNICO registro visivel)
     CrashRecord::consumeAndLog();
+#if CONFIG_CELEROS_USB_MSC
+    // 'reboot msc': flag one-shot (NVS) consumida aqui; usbMscMode nunca
+    // retorna (sai por reboot quando o usuario segura o botao)
+    if (FileSystem::usbMscFlagConsume()) usbMscMode();
+#endif
 
     ramStage("fs");
 

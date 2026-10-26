@@ -34,6 +34,11 @@ CONFIG_CELEROS_USB_NATIVE=y
 # ATENCAO: arquivo de defaults NAO aceita comentario inline na linha da opcao.
 CONFIG_TINYUSB_CDC_ENABLED=y
 CONFIG_TINYUSB_CDC_COUNT=2
+# Modo pen drive ('reboot msc'): expoe o SD ao PC como LUN. Unica placa com
+# USB nativo + slot SD; a interface MSC existe no descritor em todos os boots
+# (sem LUN montado = leitor vazio no PC).
+CONFIG_CELEROS_USB_MSC=y
+CONFIG_TINYUSB_MSC_ENABLED=y
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 

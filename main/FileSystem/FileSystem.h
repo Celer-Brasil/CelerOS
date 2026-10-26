@@ -19,6 +19,10 @@ struct FileEntry {
     bool isDir;
 };
 
+// sdmmc_card_t (handle do SD para o modo MSC do USBDevice). Vem do IDF:
+// o typedef nao pode ser redeclarado a mao (struct sdmmc_card + typedef).
+#include <sdmmc_cmd.h>
+
 // Par "chave":"valor" de um objeto JSON flat (deps.json do app): o tipo e
 // o parser vivem no header puro Utils/JsonMap.h (testado no host).
 #include "../Utils/JsonMap.h"
@@ -92,6 +96,18 @@ public:
      *  nao pode esperar ate CONFIG_FATFS_TIMEOUT_MS deve adiar o acesso). */
     static bool sdScanBusy();
     static bool formatSD();
+
+    // Modo pen drive (MSC, watch): desmonta SO o VFS do /sd, mantendo o card
+    // inicializado para o USB host virar o dono dos setores. unmountSD() NAO
+    // serve: ele libera o sdmmc_card_t (esp_vfs_fat_sdcard_unmount).
+    static bool detachSDForHost();
+    /** @brief Handle do card (nullptr = SD nao montado neste boot). */
+    static sdmmc_card_t* sdCard();
+
+    // Flag NVS one-shot "proximo boot = modo recuperacao MSC" (padrao do
+    // sd format): o shell 'reboot msc' grava e reinicia; o boot consome.
+    static void usbMscFlagSet(bool on);
+    static bool usbMscFlagConsume();
     
 private:
     // Pinos do SD vem do perfil da placa (Boards/<placa>/Board.cpp) via

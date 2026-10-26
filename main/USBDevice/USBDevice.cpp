@@ -18,6 +18,13 @@
 #include "tinyusb_cdc_acm.h"
 #include "tusb.h"
 
+#if CONFIG_CELEROS_USB_MSC
+#include "tinyusb_msc.h"
+#include "esp_blockdev.h"
+#include "sdmmc_cmd.h"
+#include "../FileSystem/FileSystem.h"
+#endif
+
 #include "CelerShell.h"
 #include "HostLink.h"
 #include "esp_attr.h"
@@ -125,7 +132,6 @@ bool USBDevice::init() {
         ESP_LOGE(TAG, "tinyusb_driver_install: %s", esp_err_to_name(err));
         return false;
     }
-
     const tinyusb_config_cdcacm_t shellCfg = {
         .cdc_port = CDC_SHELL,
         .callback_rx = &cdcRxCallback,
@@ -175,6 +181,88 @@ bool USBDevice::init() {
     return true;
 }
 
+#if CONFIG_CELEROS_USB_MSC
+// ---------------------------------------------------------------------------
+// Modo pen drive (recuperacao): SD exposta ao PC como LUN MSC. O boot NAO
+// sobe kernel/launcher/servicos neste modo (main.cpp); so o shell CDC0 para
+// logs/comandos, porque o cartao pertence ao host ate o reboot.
+// ---------------------------------------------------------------------------
+bool USBDevice::initMsc() {
+    // serial da MAC: mesma identidade do modo normal (celerctl/PC reconhecem)
+    static char serial[16];
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(serial, sizeof(serial), "K%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    descriptor_str_default[3] = serial;
+
+    const tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+    esp_err_t err = tinyusb_driver_install(&tusb_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MSC: tinyusb_driver_install: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    // CDC0 (shell) segue util; o CDC1 fica declarado no descritor (Kconfig
+    // TINYUSB_CDC_COUNT=2) mas sem task/protocolo neste modo.
+    const tinyusb_config_cdcacm_t shellCfg = {
+        .cdc_port = CDC_SHELL,
+        .callback_rx = &cdcRxCallback,
+        .callback_rx_wanted_char = nullptr,
+        .callback_line_state_changed = nullptr,
+        .callback_line_coding_changed = nullptr,
+    };
+    if (tinyusb_cdcacm_init(&shellCfg) != ESP_OK) {
+        ESP_LOGE(TAG, "MSC: falha ao iniciar CDC0");
+        return false;
+    }
+    s_shellRx = xStreamBufferCreate(2048, 1);
+    s_writeMutex = xSemaphoreCreateMutex();
+    if (s_shellRx == nullptr || s_writeMutex == nullptr) {
+        ESP_LOGE(TAG, "MSC: sem memoria para buffers");
+        return false;
+    }
+    if (xTaskCreate(usbShellTask, "usb_shell", 6144, nullptr, 3, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "MSC: falha ao criar task do shell");
+        return false;
+    }
+
+    // Blockdev do IDF sobre o sdmmc_card_t (SDSPI): o driver MSC le/escreve
+    // setores crus; o PC monta o FAT32. O card segue inicializado — o VFS do
+    // /sd foi desanexado antes (FileSystem::detachSDForHost).
+    sdmmc_card_t* card = FileSystem::sdCard();
+    esp_blockdev_handle_t bd = nullptr;
+    if (card == nullptr || sdmmc_get_blockdev(card, &bd) != ESP_OK || bd == nullptr) {
+        ESP_LOGE(TAG, "MSC: sem blockdev do SD (cartao ausente?)");
+        return false;
+    }
+
+    tinyusb_msc_driver_config_t drv = {};
+    drv.user_flags.auto_mount_off = 1;  // dono fixo: USB ate o reboot
+    err = tinyusb_msc_install_driver(&drv);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MSC: install_driver: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    tinyusb_msc_storage_config_t st = {};
+    st.medium.blockdev = bd;
+    st.fat_fs.do_not_format = true;  // NUNCA formata o cartao do cliente
+    st.mount_point = TINYUSB_MSC_STORAGE_MOUNT_USB;
+    err = tinyusb_msc_new_storage_blockdev(&st, nullptr);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "MSC: new_storage_blockdev: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    ESP_LOGI(TAG, "modo pen drive: SD exposto como LUN (CDC0 shell ativo)");
+    return true;
+}
+#else
+bool USBDevice::initMsc() {
+    return false;  // placa sem CONFIG_CELEROS_USB_MSC
+}
+#endif
+
 void USBDevice::shellWrite(const char* data, size_t len) {
     cdcWrite(CDC_SHELL, (const uint8_t*)data, len);
 }
@@ -203,6 +291,9 @@ bool USBDevice::isMounted() {
 #else  // USB nativo desativado: tudo no-op (celerctl roda na UART via SerialLink)
 
 bool USBDevice::init() {
+    return false;
+}
+bool USBDevice::initMsc() {
     return false;
 }
 void USBDevice::shellWrite(const char*, size_t) {}

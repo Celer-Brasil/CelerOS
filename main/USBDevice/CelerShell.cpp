@@ -1257,6 +1257,18 @@ int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         vTaskDelay(pdMS_TO_TICKS(3000));
         abort();
     }
+    if (argc > 1 && strcmp(argv[1], "msc") == 0) {
+#if CONFIG_CELEROS_USB_MSC
+        // Flag one-shot consumida no boot (main.cpp/usbMscMode): o proximo
+        // boot desanexa o /sd e expoe o cartao ao PC ate o reboot de saida.
+        FileSystem::usbMscFlagSet(true);
+        print(ctx, "reiniciando em modo pen drive (SD exposto ao PC)...\r\n");
+        vTaskDelay(pdMS_TO_TICKS(300));
+        esp_restart();
+#else
+        print(ctx, "reboot msc: sem suporte nesta placa (CELEROS_USB_MSC)\r\n");
+#endif
+    }
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();

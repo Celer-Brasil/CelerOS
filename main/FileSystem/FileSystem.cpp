@@ -329,6 +329,55 @@ void FileSystem::unmountSD() {
 #endif
 }
 
+bool FileSystem::detachSDForHost() {
+#if CONFIG_CELEROS_SD_CARD
+    if (s_sd_card == nullptr) return false;
+    while (s_sdFreeBusy) vTaskDelay(pdMS_TO_TICKS(50));
+    // Tira o FATFS do drive e o caminho do VFS, mas NAO toca no card/host:
+    // o sdmmc_card_t segue valido para o blockdev do modo pen drive (MSC).
+    f_mount(nullptr, "", 0);
+    esp_vfs_fat_unregister_path("/sd");
+    s_sdFreeReady = false;
+    return true;
+#else
+    return false;
+#endif
+}
+
+sdmmc_card_t* FileSystem::sdCard() {
+#if CONFIG_CELEROS_SD_CARD
+    return s_sd_card;
+#else
+    return nullptr;
+#endif
+}
+
+// Flag one-shot do modo pen drive: mesmo namespace/chave do formato de SD
+// (nvs "fs"), consumida no boot (usbMscFlagConsume) para o modo valer UMA vez.
+static bool usbMscFlagGet() {
+    nvs_handle_t h;
+    if (nvs_open("fs", NVS_READONLY, &h) != ESP_OK) return false;
+    uint8_t v = 0;
+    nvs_get_u8(h, "usb_msc", &v);
+    nvs_close(h);
+    return v != 0;
+}
+
+void FileSystem::usbMscFlagSet(bool on) {
+    nvs_handle_t h;
+    if (nvs_open("fs", NVS_READWRITE, &h) != ESP_OK) return;
+    if (on) nvs_set_u8(h, "usb_msc", 1);
+    else nvs_erase_key(h, "usb_msc");
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool FileSystem::usbMscFlagConsume() {
+    if (!usbMscFlagGet()) return false;
+    usbMscFlagSet(false);
+    return true;
+}
+
 bool FileSystem::formatSD() {
 #if CONFIG_CELEROS_SD_CARD
     // DESTRUTIVO: so pelo comando explicito do shell ("sd format") ou da Web

@@ -490,28 +490,36 @@ test suite proves they produce equivalent files.
 
 ## GUI tour
 
-- **Hierarquia**: scene, entities, prefab instances (badge) and tilemaps.
-- **Viewport**: pan with middle mouse or Space+drag, zoom with the wheel,
-  drag entities with snap; grid, camera bounds, colliders and prefab children
-  are drawn. `Fit` frames the scene.
-- **Inspetor**: generated from the component schema. Entity transform,
-  components, scene settings, camera, tilemaps and asset importers are all
-  editable. JSON fields are validated on blur.
-- **Assets**: drag files onto the panel (or use Importar), thumbnails,
-  double-click a scene to open it, a script to edit it. The importer settings
-  (slicing, pivot, color-key, `anims`/`fps`/`loop`, hitbox) are in the
-  inspector; the preview draws the hitbox and the sprite anchor.
-- **Tilemap painter**: select a tilemap, pick a tile in the palette (or the
-  eraser) and click/drag in the viewport; right-click erases. The palette
-  paints `data`, the "solido" checkbox also sets `solids`; the stroke commits
-  as one `tilemap.set` on pointer-up. Changing cols/rows resizes preserving
-  the top-left.
-- **Play**: builds the package and starts the live emulator in an iframe
-  (pause/step/restart/record/screenshot are the emulator's own controls).
-- **Console**: harness logs, build diagnostics, lint errors, command results.
-- **Command bar**: accepts the same JSON ops or `build`, `validate`, `run`,
-  `play`, `stop`, `undo`, `redo`, `fmt`. This is the fastest way for a human
-  or an agent to act without clicking.
+- **Hierarquia**: cena, entidades, instâncias de prefab e tilemaps; filtro por
+  nome/fid; `+` cria entidade; o topo tem `+ cena`.
+- **Projeto**: botão `Projeto` (ou clique no nome) abre identidade, canvas,
+  API, runtime, cena inicial, descrição/changelog, permissões, deps, psram e
+  orçamento do pacote. `build`/`validar` ficam no próprio painel.
+- **Viewport**: pan com botão do meio ou Espaço+arrastar, zoom na roda;
+  grade/snap; coordenadas no canto; `Fit`. A entidade selecionada ganha
+  gizmos **Mover/Girar/Escalar** (`W`/`E`/`R`), com handles de X/Y, anel de
+  rotação e cantos de escala. Setas movem a entidade; `Shift` amplia o passo;
+  `Ctrl+D` duplica; `F` enquadra; `Delete` apaga.
+- **Drag-and-drop**: arraste um sprite/atlas/tileset para a cena e nasce uma
+  entidade com componente sprite; arraste um prefab para instanciá-lo; solte
+  um script numa entidade selecionada para anexá-lo.
+- **Inspetor**: painel do projeto, cena (incluindo `settings.data`,
+  `settings.assets`, música e câmera), entidade, tilemap e assets, gerado do
+  schema. Também cria/instancia prefabs, mostra uso do asset e edita sólidos
+  por tile do tileset. Clipes de animação do `.meta` têm preview com play/fps.
+- **Assets**: filtro por nome/caminho, importar, thumbnails, duplo clique em
+  cena/script; configurações de fatiamento, pivot, cor-chave, anims/hitbox;
+  o preview desenha hitbox e âncora.
+- **Tilemap painter**: selecione um tilemap, escolha um tile na paleta (ou a
+  borracha) e clique/arraste no viewport; botão direito apaga. A paleta grava
+  `data`, o checkbox "solido" também grava `solids`; o traço vira um único
+  `tilemap.set` no pointer-up. Mudar cols/rows redimensiona preservando o
+  canto superior esquerdo.
+- **Build**: relatório do pacote + barras de extras/JS/assets/deps contra os
+  tetos do ESP32; avisos de lint, arquivos gerados e screenshot do `run`.
+- **Play**: gera o pacote e abre o emulador ao vivo num iframe.
+- **Console/barra de comandos**: logs, diagnósticos e as mesmas ops JSON do
+  CLI/API; atalhos `build`, `validate`, `run`, `play`, `stop`, `undo`, `redo`.
 
 ## AI operation
 
@@ -567,9 +575,10 @@ OTA updates firmware only; the app package still ships through the store or
   engine's `celeros.game.scene` data module is available to scripts when the
   project declares it, but the generated Studio runtime does not require it
   (prefabs are flattened, component behavior is the Studio runner).
-- The tilemap painter is in the GUI; a visual atlas slicer (drag regions), an
-  animation timeline and a dedicated prefab editing view are still phase 6
-  (use `asset.set`/`component.set`/`op` batches until then).
+- The GUI has tilemap painting, per-tile solids, animation clip preview, prefab
+  create/instance and project settings. A visual atlas slicer (dragging
+  arbitrary regions) and a dedicated prefab editing view are still the next
+  editor steps; use `asset.set`/`component.set`/`op` batches until then.
 - The four `studio_games/` projects are native: scenes, tilemaps and entities
   drive the runtime. The legacy bridge is optional and only applies to
   projects still created with `import-game`. Visual transitions are still not

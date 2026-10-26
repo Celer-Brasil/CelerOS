@@ -120,16 +120,27 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 4. Docs e testes.
 
 ## GUI (ui/app.js)
-- Hierarquia (cena/entidades/prefabs/tilemaps), inspetor dirigido pelo schema,
-  viewport (pan/zoom/grid/snap/arraste), assets, console, abas Cena/Jogo/Build,
-  barra de comandos e Play em iframe.
-- Pincel de tilemap: paleta de regioes do tileset, borracha, checkbox solido;
-  clique/arraste no viewport, botao direito apaga; commit unico em
-  `tilemap.set` no pointer-up; cols/rows redimensionam preservando o canto.
-- Inspetor de asset: modo/grade/pivot/cor-chave, `anims`/`fps`/`loop`, hitbox;
-  o viewport desenha hitbox e ancora do sprite selecionado; entidades `hud`
-  aparecem na posicao ancorada e com a margem `canvas.inset`.
-- Diagnostico: toggles de `E.debug`/`E.prof` (rebuild/play) e `canvas.inset`.
+- Hierarquia (cena/entidades/prefabs/tilemaps) com filtro; `+ cena` no topo,
+  `+` entidade no painel; inspetor dirigido pelo schema; viewport
+  (pan/zoom/grid/snap/arraste/coordenadas); assets com filtro; console; abas
+  Cena/Jogo/Build; barra de comandos; Play em iframe.
+- Painel **Projeto** (`Projeto`/nome): identidade, canvas/API/runtime, cena
+  inicial, descricao/changelog, permissoes, deps, psram, build.splitKB e
+  resumo do pacote. E o mesmo `project.set` do CLI/API.
+- Cena: `settings.data`, `settings.assets` e `settings.music` editaveis (JSON
+  validado); `scene.set` aceita `replace` para trocar `data`/`assets` sem
+  mesclar chaves antigas.
+- Gizmos 2D no viewport: Mover/Girar/Escalar (`W`/`E`/`R`), handles X/Y, anel e
+  cantos; setas movem, Shift amplia, Ctrl+D duplica, F enquadra, Delete apaga.
+  Drag-and-drop de sprite/atlas/tileset/prefab/script para a cena.
+- Pincel de tilemap: paleta de regioes, borracha, checkbox solido; commit
+  unico em `tilemap.set`; cols/rows preservam o canto. O asset tileset tem
+  solido por tile (`tiles[i].solid`) e o runtime usa `solidValues`.
+- Inspetor de asset: modo/grade/pivot/cor-chave, `anims`/`fps`/`loop`, hitbox,
+  uso em cenas/prefabs, preview de clipe com play/fps; viewport desenha hitbox
+  e ancora; entidades `hud` aparecem ancoradas com `canvas.inset`.
+- Build: relatorio + barras extras/JS/assets/deps contra os tetos; diagnostico
+  `E.debug`/`E.prof` no painel do projeto/cena.
 
 ## CONTRATO DE IA
 - `studio describe --json` descobre projeto, componentes, ops, limites e

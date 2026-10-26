@@ -40,6 +40,7 @@ static std::atomic<uint32_t> s_svcTicks{0};
 static std::atomic<uint32_t> s_svcOverruns{0};
 static std::atomic<uint32_t> s_svcBusyMsMax{0};
 static std::atomic<uint64_t> s_svcBusyMsSum{0};
+static std::atomic<bool> s_memLow{false};
 
 void noteJsAlloc() {
     uint32_t n = s_jsAlive.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -75,6 +76,10 @@ void noteSvcTick(uint32_t busyMs, uint32_t budgetMs) {
     if (budgetMs > 0 && busyMs > budgetMs) s_svcOverruns.fetch_add(1, std::memory_order_relaxed);
 }
 
+void noteMemLevel(bool low) {
+    s_memLow.store(low, std::memory_order_relaxed);
+}
+
 // ---- coleta (consumidores: handleStats do HostLink, top do shell) ----
 
 static char stateChar(eTaskState s) {
@@ -104,6 +109,7 @@ bool take(Snapshot& out) {
     out.intFree = (uint32_t)mi.total_free_bytes;
     out.intMin = (uint32_t)mi.minimum_free_bytes;
     out.intLargest = (uint32_t)mi.largest_free_block;
+    out.memLow = s_memLow.load(std::memory_order_relaxed);
     heap_caps_get_info(&mi, MALLOC_CAP_SPIRAM);  // sem PSRAM: zeros
     out.psramFree = (uint32_t)mi.total_free_bytes;
     // IDF 6 tirou o campo total_bytes do multi_heap_info_t

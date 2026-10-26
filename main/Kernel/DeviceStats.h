@@ -31,6 +31,9 @@ struct Snapshot {
     // heap 8-bit geral (mesmo recorte do "free" do shell: inclui PSRAM) e interna
     uint32_t heapFree, heapMin, heapLargest;
     uint32_t intFree, intMin, intLargest;
+    // RAM interna no limite (MemWatch): espelho do ultimo classify(). O
+    // celerctl mostra "RAM INTERNA BAIXA" sem outra consulta.
+    bool memLow;
     uint32_t psramFree, psramTotal, psramMin, psramLargest;
     // app JS corrente: consumo = launchFree - nowFree (mesma semantica do
     // System.getInfo().appRAM); alocacoes Duktape VIVAS (contagem, nao bytes —
@@ -81,6 +84,10 @@ void notePresent(uint32_t us, bool pushedFrame);
 // budgetMs = orcamento (kTickBudgetMs) — acima dele conta overrun.
 void noteSvcTick(uint32_t busyMs, uint32_t budgetMs);
 
+// Nivel de RAM interna do MemWatch (transicao Ok<->Low). O snapshot le o
+// ultimo valor; toJson publica heap.low.
+void noteMemLevel(bool low);
+
 }  // namespace DeviceStats
 
 // ---- implementacao inline (host-testavel) ----
@@ -121,7 +128,7 @@ inline size_t toJson(const Snapshot& s, char* buf, size_t cap) {
     detail::JsonBuf j(buf, cap);
     j.add("{\"uptime_us\":%llu,\"cpu_mhz\":%u,"
           "\"heap\":{\"free\":%u,\"min\":%u,\"largest\":%u,"
-          "\"int_free\":%u,\"int_min\":%u,\"int_largest\":%u,"
+          "\"int_free\":%u,\"int_min\":%u,\"int_largest\":%u,\"low\":%d,"
           "\"psram_free\":%u,\"psram_total\":%u,\"psram_min\":%u,\"psram_largest\":%u},"
           "\"js\":{\"active\":%d,\"launch_free\":%u,\"now_free\":%u,"
           "\"allocs\":%u,\"allocs_peak\":%u},"
@@ -129,7 +136,7 @@ inline size_t toJson(const Snapshot& s, char* buf, size_t cap) {
           "\"ui\":{\"frames\":%llu,\"presents\":%llu,\"us\":%llu,\"us_max\":%llu},",
           (unsigned long long)s.uptimeUs, (unsigned)s.cpuFreqMHz,
           s.heapFree, s.heapMin, s.heapLargest,
-          s.intFree, s.intMin, s.intLargest,
+          s.intFree, s.intMin, s.intLargest, s.memLow ? 1 : 0,
           s.psramFree, s.psramTotal, s.psramMin, s.psramLargest,
           s.jsActive ? 1 : 0, s.jsLaunchFree, s.jsNowFree, s.jsAllocs, s.jsAllocsPeak,
           (unsigned long long)s.loopBusyUs, (unsigned long long)s.loopTotalUs,

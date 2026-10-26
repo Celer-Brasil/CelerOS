@@ -28,6 +28,7 @@ set(CELEROS_SRCS
     "Kernel/Services.cpp"
     "Kernel/AppServices.cpp"
     "Kernel/DeviceStats.cpp"
+    "Kernel/MemWatch.cpp"
     "Launcher/LauncherUI.cpp"
     "Runtime/JSBindings.cpp"
     "Runtime/JsGfx.cpp"

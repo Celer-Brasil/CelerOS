@@ -1678,9 +1678,12 @@ def _summary_lines(b, a=None, window_s=None):
     if h["psram_total"]:
         psram = (f"  PSRAM {human_size(h['psram_free'])}/{human_size(h['psram_total'])}"
                  f" (min {human_size(h['psram_min'])}, maior {human_size(h['psram_largest'])})")
+    # heap.low vem do MemWatch (firmware >= Onda 2); firmware antigo nao manda.
+    low = "  RAM INTERNA BAIXA" if h.get("low") else ""
     lines.append(f"heap {human_size(h['free'])} (min {human_size(h['min'])}, "
                  f"maior {human_size(h['largest'])})  "
-                 f"interna {human_size(h['int_free'])} (min {human_size(h['int_min'])}){psram}")
+                 f"interna {human_size(h['int_free'])} (min {human_size(h['int_min'])})"
+                 f"{psram}{low}")
     js = b["js"]
     if js["active"]:
         uso = max(0, js["launch_free"] - js["now_free"])

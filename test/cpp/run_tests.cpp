@@ -11,6 +11,7 @@
 #include "../../main/Utils/AlarmCalc.h"
 #include "../../main/Utils/GbProto.h"
 #include "../../main/Kernel/DeviceStats.h"
+#include "../../main/Kernel/MemWatch.h"
 #include "../../main/Hardware/MusicEngine.h"
 #include "../../main/Display/DirtyRects.h"
 #include "../../main/Utils/JsonMap.h"
@@ -499,6 +500,12 @@ static void testDeviceStatsJson() {
     CHECK(js.find("\"stk\":12000") != std::string::npos);
     CHECK(js.find("\"trunc\":0") != std::string::npos);
     CHECK(js.find("\"allocs_peak\":700") != std::string::npos);
+    CHECK(js.find("\"low\":0") != std::string::npos);
+    s.memLow = true;
+    char lb[2048];
+    size_t ln = DeviceStats::toJson(s, lb, sizeof(lb));
+    CHECK(ln > 0);
+    CHECK(std::string(lb, ln).find("\"low\":1") != std::string::npos);
 
     // caps cada vez maiores: JSON sempre fechado, nunca estoura o buffer
     for (size_t cap : {40u, 200u, 400u, 520u, 700u, 1000u}) {
@@ -517,6 +524,22 @@ static void testDeviceStatsJson() {
     char eb[600];
     size_t en = DeviceStats::toJson(e, eb, sizeof(eb));
     CHECK(en > 0 && std::string(eb, en).find("\"tasks\":[],\"trunc\":0") != std::string::npos);
+}
+
+// MemWatch::classify: limiares, bordas exatas e histerese (sem ESP-IDF).
+static void testMemWatch() {
+    using MemWatch::Level;
+    const uint32_t k = 1024;
+    CHECK(MemWatch::classify(20 * k, 8 * k, Level::Ok) == Level::Ok);
+    CHECK(MemWatch::classify(9 * k, 8 * k, Level::Ok) == Level::Low);
+    CHECK(MemWatch::classify(20 * k, 1 * k, Level::Ok) == Level::Low);
+    // bordas exatas contam como Ok (comparacao estrita)
+    CHECK(MemWatch::classify(10 * k, 2 * k, Level::Ok) == Level::Ok);
+    // em Low, 12 KB ainda nao re-arma (precisa de 14 KB)
+    CHECK(MemWatch::classify(12 * k, 8 * k, Level::Low) == Level::Low);
+    // re-arme exige free >= 14 KB E largest >= 2 KB
+    CHECK(MemWatch::classify(14 * k, 2 * k, Level::Low) == Level::Ok);
+    CHECK(MemWatch::classify(15 * k, 1 * k, Level::Low) == Level::Low);
 }
 
 // ---- MusicEngine (System.playMusic, API 25) ----
@@ -2833,6 +2856,7 @@ int main() {
     testAlarmCalc();
     testGbProto();
     testDeviceStatsJson();
+    testMemWatch();
     testMusicEngine();
     testMusicHandoff();
     testSfxVoice();

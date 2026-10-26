@@ -250,6 +250,7 @@ let built = null;
     const mainSrc = fs.readFileSync(path.join(built.dir, 'main.js'), 'utf8');
     check('debug/prof ligados no app gerado',
         mainSrc.indexOf('E.debug = true') >= 0 && mainSrc.indexOf('E.prof.on = true') >= 0);
+    check('bases incluem a pasta slug do celerctl', mainSrc.indexOf('/sd/apps/' + F.slug(Project.open(base).data.packageName) + '/') >= 0);
 })();
 
 // --------------------------------------------------------- runtime/run -----

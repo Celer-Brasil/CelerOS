@@ -405,10 +405,19 @@ function generateMain(project, opts) {
     const p = project.data;
     const pkg = p.packageName;
     const name = p.name.replace(/"/g, '\\"');
-    const bases = [
-        '/local/apps/' + pkg + '/', '/sd/apps/' + pkg + '/',
-        '/local/apps/' + name + '/', '/sd/apps/' + name + '/',
+    // bases de asset: o celerctl instala a pasta com F.slug(packageName)
+    // (ex.: celeros.detona -> /sd/apps/celeros_detona), enquanto o app
+    // original usa o packageName e o nome. Inclui as quatro variantes para
+    // o mesmo app rodar no Studio, no cartao e no /local.
+    const dirs = [
+        '/local/apps/', '/sd/apps/',
     ];
+    const names = [];
+    for (const n of [pkg, name, F.slug(pkg), F.slug(name)]) {
+        if (n && names.indexOf(n) < 0) names.push(n);
+    }
+    const bases = [];
+    for (const d of dirs) for (const n of names) bases.push(d + n + '/');
     src += '\nE.init({ dir: "' + name + '", fps: ' + (p.canvas.fps !== undefined ? p.canvas.fps : 30) +
            ', native: ' + (p.canvas.native ? 'true' : 'false') +
            ', save: "' + F.slug(p.name, 6) + '."' +

@@ -220,10 +220,10 @@ changed.
 
 | Project | Original | Native version | Scenes | Extras | JS | Assets |
 |---------|----------|----------------|--------|--------|----|--------|
-| `studio_games/Detona` | `hub_apps/Detona` | 1.0.0 | 9 | 7 | 57.9 KB | 132.2 KB |
-| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.0 | 13 | 12 | 88.3 KB | 78.9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.0 | 23 | 8 | 111.0 KB | 205.3 KB |
-| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.0 | 5 | 5 | 36.9 KB | 110.8 KB |
+| `studio_games/Detona` | `hub_apps/Detona` | 1.0.1 | 9 | 7 | 57.9 KB | 132.2 KB |
+| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88.3 KB | 78.9 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.1 | 23 | 8 | 111.0 KB | 205.3 KB |
+| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36.9 KB | 110.8 KB |
 
 Open, edit and play like any project:
 
@@ -236,18 +236,18 @@ node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 
 What each remount added:
 
-- **Detona 1.0.0** — six campaign levels as editable 15x13 tilemaps with three
+- **Detona 1.0.1** — six campaign levels as editable 15x13 tilemaps with three
   tilesets (garden/forge/core), hidden exit under a crate, powerups (range,
   bomb, speed, remote, shield, life), a 12 HP boss with an HP bar, stars,
   level map, pause, d-pad + swipe and saved progress.
-- **Arrasa 2.0.0** — the original ten stages as scenes; each box/goblin/king is
+- **Arrasa 2.0.1** — the original ten stages as scenes; each box/goblin/king is
   an entity with its texture/rotation synced to a `P.rigid` body. Sling aim,
   seven projectile powers, TNT chains, impact damage, stars, saved progress.
-- **Lenda de Celer 2.0.0** — all 20 original ASCII rooms as scenes (Campo,
+- **Lenda de Celer 2.0.1** — all 20 original ASCII rooms as scenes (Campo,
   Gruta and Templo), tile solids per tile, portals for edges/doors/stairs/
   caves/cracked walls, sword/bomb/boomerang, chests, Sage, crystal shop, a
   three-phase Guardian, automatic save, continue, victory and game over.
-- **Supernova 3.0.0** — a 10-wave campaign with a boss every five waves plus an
+- **Supernova 3.0.1** — a 10-wave campaign with a boss every five waves plus an
   endless mode, three-phase boss, combo x1..x5, orbs, SUPERNOVA blast, triple
   shot, graze hitbox, pause, record and native title/victory/loss scenes.
 

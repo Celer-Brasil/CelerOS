@@ -24,6 +24,9 @@
 
 var INDEX_URL = "https://os.celer.tec.br/store/index.json";
 var HUB_BASE = INDEX_URL.substring(0, INDEX_URL.indexOf("/store/"));
+// Catalogo compacto (hub >= 0.16): 1 request, 14 campos por linha, sem
+// JSON. Resolve o corte de 32 KB do Net.get que forcava 5 categorias na CYD.
+var ALL_TXT = HUB_BASE + "/store/all.txt";
 // Cache de dependencias compartilhadas (API 30): /local/modules/<nome>/
 // <versao>/<nome>.js — escrita permitida a system apps (a loja e uma).
 // Compatibilidade de hardware: apps com requires ["psram"] sao bloqueados
@@ -524,6 +527,7 @@ function entryToItem(pkg, e) {
         published: e.published_at || "",
         req: e.requires || [],
         files: e.files || null,
+        nfiles: e.nfiles || 0,   // multi-arquivo no catalogo compacto
         deps: e.deps || null,
         zip: e.zip || null      // {url, size, md5} quando o hub serve o pacote
     };
@@ -542,6 +546,7 @@ function fillItemFromMeta(it) {
     it.req = m.requires || it.req || [];
     it.files = m.files || it.files || null;
     it.deps = m.deps || it.deps || null;
+    it.changelog = m.changelog || it.changelog || "";
     return it;
 }
 
@@ -575,6 +580,62 @@ function updApps() {
     return out;
 }
 
+// Catalogo compacto: /store/all.txt, 14 campos por linha (pkg, nome,
+// versao, api, categoria, size, md5, requires, deps, zip_md5, zip_size,
+// icon, nfiles, changelog). O rodape "#end N" detecta truncamento do
+// Net.get (32 KB sem PSRAM); qualquer falha cai no caminho JSON de sempre.
+function parseDepsField(s) {
+    if (!s) return null;
+    var out = {}, parts = String(s).split(";");
+    for (var i = 0; i < parts.length; i++) {
+        var kv = parts[i].split("=");
+        if (kv.length === 2 && kv[0] && kv[1]) out[kv[0]] = kv[1];
+    }
+    return out;
+}
+
+function parseCompactCatalog(body) {
+    if (!body) return null;
+    var lines = String(body).split("\n");
+    if (lines.length < 3) return null;
+    if (lines[0].indexOf("#pkg\tname\tversion\tapi\tcategory") !== 0) return null;
+    var last = lines[lines.length - 1];
+    if (last.indexOf("#end\t") !== 0) return null;
+    var expect = parseInt(last.substring(5), 10);
+    if (!(expect >= 0)) return null;
+    var out = [];
+    for (var i = 1; i < lines.length - 1; i++) {
+        var ln = lines[i];
+        if (!ln || ln.charAt(0) === "#") continue;
+        var f = ln.split("\t");
+        if (f.length < 14 || !f[0]) continue;
+        var pkg = f[0];
+        var e = {
+            meta: HUB_BASE + "/store/apps/" + pkg + "/app.json",
+            app: HUB_BASE + "/store/apps/" + pkg + "/main.js",
+            name: f[1],
+            version: f[2],
+            api: parseInt(f[3], 10) || 1,
+            category: f[4] || "Apps",
+            size: parseInt(f[5], 10) || 0,
+            md5: f[6],
+            requires: f[7] ? f[7].split(",") : [],
+            deps: parseDepsField(f[8]),
+            changelog: f[13] || ""
+        };
+        if (f[9]) {
+            e.zip = { url: HUB_BASE + "/store/apps/" + pkg + "/app.zip",
+                      md5: f[9], size: parseInt(f[10], 10) || 0 };
+        }
+        if (f[11] === "1") e.icon = HUB_BASE + "/store/apps/" + pkg + "/icon.png";
+        var nfiles = parseInt(f[12], 10) || 0;
+        if (nfiles > 0) e.nfiles = nfiles;  // multi-arquivo: files vem do meta
+        out.push({ pkg: pkg, e: e });
+    }
+    if (out.length !== expect) return null;  // truncou no meio
+    return out;
+}
+
 function loadCatalog() {
     apps = [];
     curCat = "Todos";
@@ -602,7 +663,17 @@ function loadCatalog() {
     var entries = [];
     var catsIdx = idx.categories;
     var gotAll = false;
-    if (catsIdx["Todos"] && HAS_PSRAM) {
+
+    // Compacto primeiro: 1 request, ~10-20 KB (cabe no teto de 32 KB do
+    // Net.get) e sem JSON.parse. Hub antigo (404) ou truncamento cai no
+    // caminho all.json/categorias abaixo, sem regressao.
+    drawLoading("Baixando catálogo...", "todos os apps");
+    System.delay(30);
+    var compact = parseCompactCatalog(fetchText(ALL_TXT));
+    if (compact) { entries = compact; gotAll = true; }
+    compact = null;
+
+    if (!gotAll && catsIdx["Todos"] && HAS_PSRAM) {
         // 2.9.1: o caminho do all.json custa ~2x o catalogo de /local (o
         // download e o cache reescrito no fim). /local apertado (a bancada
         // vive com <200 KB) derruba a escrita no meio, o load murcha para as
@@ -873,6 +944,9 @@ function screenList() {
             var i = UI.list("store" + curTab, LX, listY, LW, listH, curRows(), { rowH: 50 });
             if (i >= 0) {
                 selIt = items[i];
+                // catalogo compacto nao traz descricao/autor: busca o
+                // app.json no primeiro toque (1 request por app visto)
+                if (!selIt.desc && selIt.metaUrl) fillItemFromMeta(selIt);
                 return "detail";
             }
         }
@@ -1280,12 +1354,30 @@ function installApp() {
         if (free > 0 && free < need) fail = "Sem espaço no disco";
     }
 
-    var json = "";
+    var json = "", meta = null;
     if (!fail && it.metaUrl) {
         drawDownload(it.name, "app.json", false);
         System.delay(30);
         json = fetchText(it.metaUrl);
         if (!json) fail = "Erro ao baixar app.json";
+        else { try { meta = JSON.parse(json); } catch (e5) { meta = null; } }
+    }
+
+    // Catalogo compacto nao traz files/requires: o app.json e a fonte deles
+    // no install. Multi-arquivo sem o meta = falha clara (nunca instalar so
+    // o main.js e deixar o app quebrado). O espaco e rechecado com os extras.
+    if (!fail && meta) {
+        var hadFiles = !!it.files;
+        if (!hadFiles && meta.files) it.files = meta.files;
+        if ((!it.req || !it.req.length) && meta.requires) it.req = meta.requires;
+        if (!hadFiles && it.files && free > 0) {
+            var extraBytes = 0, en;
+            for (en in it.files) if (it.files.hasOwnProperty(en)) {
+                extraBytes += (it.files[en] || {}).size || 0;
+            }
+            if (free < need + extraBytes) fail = "Sem espaço no disco";
+        }
+        if (it.nfiles > 0 && !it.files) fail = "Erro ao ler app.json";
     }
 
     // Deps compartilhadas (API 30): resolve os ranges do app.json baixado
@@ -1294,9 +1386,8 @@ function installApp() {
     // do launcher recolhe no proximo scan). Deps vivem sempre no /local,
     // mesmo com o app indo para o SD.
     var depIndex = null, depResolved = null;
-    if (!fail && json) {
-        var wantDeps = null;
-        try { wantDeps = JSON.parse(json).deps || null; } catch (e5) { wantDeps = null; }
+    if (!fail && meta) {
+        var wantDeps = meta.deps || null;
         if (wantDeps) {
             drawDownload(it.name, "dependências", false);
             System.delay(30);
@@ -1534,6 +1625,8 @@ if (typeof __harness !== "undefined" && __harness.storeTest) {
         catalog: function () { return apps; },
         installApp: installApp,
         fmtKB: fmtKB,
+        parseCompactCatalog: parseCompactCatalog,
+        parseDepsField: parseDepsField,
         cats: function () { return cats; },
         setCat: function (c) { curCat = c; },
         filtered: filteredApps,

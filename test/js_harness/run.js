@@ -1760,6 +1760,34 @@ function runInline(src, env) {
     check('cmpV menor', api.cmpV('1.0.0', '1.0.1') === -1);
     check('fmtKB', api.fmtKB(4000) === '3.9 KB' && api.fmtKB(30720) === '30 KB');
 
+    // catalogo compacto (all.txt): parser puro + deteccao de truncamento
+    var tsv = '#pkg\tname\tversion\tapi\tcategory\tsize\tmd5\trequires\tdeps\tzip_md5\tzip_size\ticon\tnfiles\tchangelog\n' +
+              'celeros.a\tAlpha\t1.0.0\t50\tJogos\t12345\tabc\tpsram\tspr=^1.6.0\t\t\t1\t0\t2.0.0 - nota\n' +
+              'celeros.b\tBeta\t2.0.0\t48\tApps\t0\tdef\t\t\tzzz\t999\t0\t3\t3.0.0 - extra\n' +
+              '#end\t2';
+    var compact = api.parseCompactCatalog(tsv);
+    check('compacto: 2 entradas', compact && compact.length === 2);
+    if (compact) {
+        var ca = compact[0].e, cb = compact[1].e;
+        check('compacto: campos',
+              ca.name === 'Alpha' && ca.version === '1.0.0' && ca.api === 50 &&
+              ca.category === 'Jogos' && ca.size === 12345 && ca.md5 === 'abc' &&
+              ca.requires[0] === 'psram' && ca.deps.spr === '^1.6.0' &&
+              ca.changelog === '2.0.0 - nota');
+        check('compacto: zip/icon/nfiles',
+              cb.zip && cb.zip.md5 === 'zzz' && cb.zip.size === 999 &&
+              !cb.icon && cb.nfiles === 3);
+        check('compacto: urls derivadas do hub',
+              ca.meta.indexOf('/store/apps/celeros.a/app.json') >= 0 &&
+              ca.app.indexOf('/store/apps/celeros.a/main.js') >= 0);
+    }
+    check('compacto: sem #end e recusado',
+          api.parseCompactCatalog(tsv.replace('#end\t2', '')) === null);
+    check('compacto: #end errado e recusado',
+          api.parseCompactCatalog(tsv.replace('#end\t2', '#end\t3')) === null);
+    check('compacto: header errado e recusado',
+          api.parseCompactCatalog(tsv.replace('#pkg', 'pkg')) === null);
+
     // token do hub: /local/hub_token.txt anexa ?token= SO em URLs do hub
     // (apps privados); sem o arquivo a loja fica identica a de sempre.
     check('sem token: hubUrl devolve a URL original',

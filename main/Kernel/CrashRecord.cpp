@@ -20,6 +20,8 @@
 #if CONFIG_CELEROS_CRASH_SCREEN
 #include "../Display/Layout.h"
 #include "../Display/Theme.h"
+#include "../Display/ScreenCapture.h"
+#include "../FileSystem/FileSystem.h"
 #include "../Utils/I18n.h"
 #include "../UI/Kui.h"
 #include "../Compat/Arduino.h"  // delay/digitalRead/pinMode/millis
@@ -215,6 +217,124 @@ void consumeAndLog() {
 
 #if CONFIG_CELEROS_CRASH_SCREEN
 
+// ---------------------------------------------------------------------------
+// Foto da tela de crash em BMP 24-bit (top-down) ao lado do crash.txt: a
+// evidencia fica PERMANENTE no aparelho e e pullavel como o log (o agente de
+// frota pode subir junto) — sem depender do timing do USB, que so responde
+// depois do reboot (bancada 2026-10-26: a janela de 7 s nao era capturavel
+// de fora). Best-effort: /sd quando montado, senao /local/log; FS cheio = sem
+// foto (o crash.txt do consumeAndLog continua sendo a fonte primaria).
+// Pixels vem de ScreenCapture::stream (RLE {u16 count, u16 rgb565} LE), na
+// task da UI: leitura direta, sem fila.
+// ---------------------------------------------------------------------------
+static bool saveCrashShot(CelerDisplay& tft) {
+    const int w = (int)tft.width();
+    const int h = (int)tft.height();
+    if (w <= 0 || h <= 0 || w > 1024 || h > 1024) return false;
+    const uint32_t stride = ((uint32_t)w * 3u + 3u) & ~3u;
+
+    const bool sd = FileSystem::sdMounted();
+    const char* dir = sd ? "/sd/log" : "/local/log";
+    const char* path = sd ? "/sd/log/crash.bmp" : "/local/log/crash.bmp";
+    mkdir(dir, 0777);
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr) {
+        celer_log_printf("crash.bmp: %s indisponivel\n", dir);
+        return false;
+    }
+
+    // Cabecalho BMP (54 B). Altura NEGATIVA = linhas de cima para baixo
+    // (o stream vem em ordem de varredura, sem precisar buffer da tela toda).
+    uint8_t hdr[54] = {0};
+    const uint32_t imgSize = stride * (uint32_t)h;
+    const uint32_t fileSize = 54 + imgSize;
+    hdr[0] = 'B'; hdr[1] = 'M';
+    memcpy(hdr + 2, &fileSize, 4);
+    const uint32_t off = 54;
+    memcpy(hdr + 10, &off, 4);
+    const uint32_t biSize = 40;
+    memcpy(hdr + 14, &biSize, 4);
+    int32_t bw = w, bh = -h;
+    memcpy(hdr + 18, &bw, 4);
+    memcpy(hdr + 22, &bh, 4);
+    const uint16_t planes = 1, bpp = 24;
+    memcpy(hdr + 26, &planes, 2);
+    memcpy(hdr + 28, &bpp, 2);
+    memcpy(hdr + 34, &imgSize, 4);
+    if (fwrite(hdr, 1, sizeof(hdr), f) != sizeof(hdr)) {
+        fclose(f);
+        return false;
+    }
+
+    struct Cursor {
+        FILE* f;
+        int w;
+        int x;
+        uint32_t stride;
+    } cur = {f, w, 0, stride};
+    auto sink = [&cur](const uint8_t* data, size_t n) -> bool {
+        for (size_t i = 0; i + 3 < n; i += 4) {
+            const uint16_t count = (uint16_t)(data[i] | (data[i + 1] << 8));
+            const uint16_t px = (uint16_t)(data[i + 2] | (data[i + 3] << 8));
+            const uint8_t b = (uint8_t)((px & 0x1F) << 3);
+            const uint8_t g = (uint8_t)(((px >> 5) & 0x3F) << 2);
+            const uint8_t rr = (uint8_t)(((px >> 11) & 0x1F) << 3);
+            for (uint16_t k = 0; k < count; k++) {
+                const uint8_t bgr[3] = {b, g, rr};
+                if (fwrite(bgr, 1, 3, cur.f) != 3) return false;
+                if (++cur.x == cur.w) {
+                    // padding de linha do BMP ate multiplo de 4
+                    const uint32_t pad = cur.stride - (uint32_t)cur.w * 3u;
+                    const uint8_t zeros[3] = {0, 0, 0};
+                    if (pad > 0 && fwrite(zeros, 1, pad, cur.f) != pad) return false;
+                    cur.x = 0;
+                }
+            }
+        }
+        return true;
+    };
+
+    uint8_t buf[1024];
+    bool ok = ScreenCapture::stream(true, buf, sizeof(buf), sink);
+    ok = (fclose(f) == 0) && ok;
+    if (!ok) {
+        remove(path);  // arquivo parcial nao serve de evidencia
+        celer_log_printf("crash.bmp: falhou ao gravar (%dx%d)\n", w, h);
+    } else {
+        celer_log_printf("crash.bmp: gravado %s (%dx%d, %u B)\n", path, w, h, (unsigned)fileSize);
+    }
+    return ok;
+}
+
+// Desenha cabendo na largura: usa a fonte grande se couber, cai para a
+// pequena e, em ultimo caso, trunca com "..." — no watch (412 px reais) o
+// titulo do tamanho do smartdisplay vazava a borda direita (bancada).
+static void drawFit(CelerDisplay& tft, const char* s, int x, int y, int maxW,
+                    const lgfx::IFont* big, const lgfx::IFont* small) {
+    if (tft.textWidth(s, big) <= maxW) {
+        tft.drawString(s, x, y, big);
+        return;
+    }
+    if (tft.textWidth(s, small) <= maxW) {
+        tft.drawString(s, x, y, small);
+        return;
+    }
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%s", s);
+    size_t n = strlen(buf);
+    while (n > 1) {
+        buf[n] = '\0';
+        char withDots[100];
+        snprintf(withDots, sizeof(withDots), "%s...", buf);
+        if (tft.textWidth(withDots, small) <= maxW) {
+            tft.drawString(withDots, x, y, small);
+            return;
+        }
+        n--;
+    }
+    tft.drawString(buf, x, y, small);
+}
+
 void showScreen() {
     // Registro da copia em RAM (consumeAndLog ja rodou e pode ter limpado o
     // magic com o arquivo gravado) ou direto do RTC se ainda nao consumido.
@@ -229,24 +349,25 @@ void showScreen() {
     tft.fillRect(0, hdr - UI::sy(3), UI::W, UI::sy(3), THEME_ERR);
     tft.setTextDatum(ML_DATUM);
     tft.setTextColor(THEME_TEXT);
-    tft.drawString(i18n::TR("O sistema reiniciou após um erro", "System restarted after a crash"),
-                   UI::sx(14), hdr / 2, kui::type::title());
+    drawFit(tft, i18n::TR("O sistema reiniciou após um erro", "System restarted after a crash"),
+            UI::sx(14), hdr / 2, UI::W - UI::sx(20), kui::type::title(), kui::type::body());
     tft.setTextDatum(TL_DATUM);
     tft.setTextColor(THEME_TEXT_DIM);
 
+    const int maxW = UI::W - UI::sx(20);
     char buf[96];
     snprintf(buf, sizeof(buf), "CelerOS %s  |  %s", CELEROS_VERSION, Board::profile().id);
-    tft.drawString(buf, UI::sx(14), hdr + UI::sy(14), kui::type::body());
+    drawFit(tft, buf, UI::sx(14), hdr + UI::sy(14), maxW, kui::type::body(), kui::type::caption());
     snprintf(buf, sizeof(buf), "causa: %s  (uptime %lus)", causeLabel(rec.cause),
              (unsigned long)(rec.uptimeMs / 1000UL));
-    tft.drawString(buf, UI::sx(14), hdr + UI::sy(32), kui::type::body());
+    drawFit(tft, buf, UI::sx(14), hdr + UI::sy(32), maxW, kui::type::body(), kui::type::caption());
     snprintf(buf, sizeof(buf), "addr 0x%08x  pc 0x%08x", (unsigned)rec.addr,
              rec.nPcs > 0 ? (unsigned)rec.pcs[0] : 0u);
-    tft.drawString(buf, UI::sx(14), hdr + UI::sy(50), kui::type::body());
+    drawFit(tft, buf, UI::sx(14), hdr + UI::sy(50), maxW, kui::type::body(), kui::type::caption());
     if (CelerKernel::crashPkg()[0]) {
         snprintf(buf, sizeof(buf), "app: %s (%s)", CelerKernel::crashTitle(),
                  CelerKernel::crashPkg());
-        tft.drawString(buf, UI::sx(14), hdr + UI::sy(68), kui::type::body());
+        drawFit(tft, buf, UI::sx(14), hdr + UI::sy(68), maxW, kui::type::body(), kui::type::caption());
     }
     tft.endWrite();
 
@@ -260,6 +381,10 @@ void showScreen() {
              rec.nPcs > 0 ? (unsigned)rec.pcs[0] : 0u);
     const int qw = (UI::W < UI::H ? UI::W : UI::H) * 2 / 5;
     tft.qrcode(qr, (UI::W - qw) / 2, UI::sy(160), qw, 5);
+
+    // Evidencia permanente: a foto da tela vai para <log>/crash.bmp (pullavel
+    // como o crash.txt; o agente de frota pode anexar no evento de crash)
+    saveCrashShot(tft);
 
     // ~7 s de leitura (ou botao fisico para pular): nao trava o boot — no
     // varejo, aparelho parado parece defeito. O link serial ja esta de pe

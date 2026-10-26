@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include "esp_attr.h"
 #include "esp_system.h"
+#include "esp_cpu_utils.h"  // esp_cpu_process_stack_pc (mascara o PC do Xtensa)
 #include "esp_debug_helpers.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -26,6 +27,10 @@
 
 #if !defined(CELEROS_VERSION)
 #define CELEROS_VERSION "?"
+#endif
+
+#if defined(__XTENSA__)
+#include "xtensa_context.h"  // XtExcFrame: frame de excecao do panic (IDF)
 #endif
 
 namespace {
@@ -61,21 +66,43 @@ void recordBasics(uint16_t cause, uint32_t addr) {
     s_rec.nPcs = 0;
 }
 
-// Backtrace a mao por frame-pointer (tecnica do IDF/Tactility): PCs validados
-// contra codigo executavel; frame invalido ENCERRA a walk, nao trava.
-void recordBacktrace() {
+// Backtrace a mao por frame-pointer (tecnica do IDF/Tactility): o primeiro
+// frame vem do FRAME DE EXCECAO do panic (info->frame) — a walker a partir
+// da funcao corrente nao enxerga o frame do trap e voltava vazia (bancada
+// devkit-s3 2026-10-26: crash.txt com "pcs" sem nada). PCs validados contra
+// codigo executavel; frame podre ENCERRA a walk, nao trava.
+void recordBacktrace(const void* excFrame) {
     esp_backtrace_frame_t frame;
-    uint32_t pc = 0, sp = 0, nextPc = 0;
-    esp_backtrace_get_start(&pc, &sp, &nextPc);
-    frame.pc = pc;
-    frame.sp = sp;
-    frame.next_pc = nextPc;
-    frame.exc_frame = nullptr;
-    if (esp_ptr_executable((void*)pc)) s_rec.pcs[s_rec.nPcs++] = pc;
-    for (int i = 0; i < 32 && s_rec.nPcs < kMaxPcs; i++) {
-        if (frame.next_pc == 0 || !esp_ptr_executable((void*)frame.next_pc)) break;
+#if defined(__XTENSA__)
+    if (excFrame != nullptr) {
+        const XtExcFrame* xt = (const XtExcFrame*)excFrame;
+        frame.pc = xt->pc;
+        frame.sp = xt->a1;
+        frame.next_pc = xt->a0;
+        frame.exc_frame = xt;
+    } else
+#endif
+    {
+        uint32_t pc = 0, sp = 0, nextPc = 0;
+        esp_backtrace_get_start(&pc, &sp, &nextPc);
+        frame.pc = pc;
+        frame.sp = sp;
+        frame.next_pc = nextPc;
+        frame.exc_frame = nullptr;
+    }
+    // PC sempre mascarado como o IDF faz (esp_cpu_process_stack_pc limpa os
+    // bits de janela do endereco de retorno do Xtensa: um a0 com 0x80......
+    // falharia em esp_ptr_executable e a cadeia inteira seria descartada).
+    uint32_t pc0 = esp_cpu_process_stack_pc(frame.pc);
+    if (esp_ptr_executable((void*)pc0)) s_rec.pcs[s_rec.nPcs++] = pc0;
+    // Mesmo laco do esp_backtrace_print_from_frame (IDF): NAO pre-valida o
+    // next_pc (num trap de abort ele pode nao casar com nenhum range na
+    // primeira transicao — validar antes cortava a cadeia no 1o frame);
+    // o walker valida o stack pointer por dentro.
+    for (int i = 0; i < 32 && s_rec.nPcs < kMaxPcs && frame.next_pc != 0; i++) {
         if (!esp_backtrace_get_next_frame(&frame)) break;
-        if (esp_ptr_executable((void*)frame.pc)) s_rec.pcs[s_rec.nPcs++] = frame.pc;
+        uint32_t pc = esp_cpu_process_stack_pc(frame.pc);
+        if (esp_ptr_executable((void*)pc)) s_rec.pcs[s_rec.nPcs++] = pc;
     }
 }
 
@@ -100,7 +127,7 @@ const char* causeLabel(uint16_t cause) {
 extern "C" void __real_esp_panic_handler(panic_info_t* info);
 extern "C" void __wrap_esp_panic_handler(panic_info_t* info) {
     recordBasics((uint16_t)info->exception, (uint32_t)(uintptr_t)info->addr);
-    recordBacktrace();
+    recordBacktrace(info->frame);
     __real_esp_panic_handler(info);
 }
 

@@ -21,6 +21,7 @@
 #include "JsInternal.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Utils/Verlet2D.h"
+#include "../Utils/Mem.h"
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -91,14 +92,13 @@ duk_ret_t JSBindings::js_verletNew(duk_context* ctx) {
         if (s_worlds[i]) continue;
         // PSRAM primeiro (os jogos de fisica sao as placas S3); sem ela o
         // mundo vive na RAM interna — ~18KB cabem no Physics Drop sem PSRAM
-        void* mem = heap_caps_malloc(sizeof(VWorld) + kLinkBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!mem) mem = heap_caps_malloc(sizeof(VWorld) + kLinkBytes, MALLOC_CAP_8BIT);
-        if (!mem) { duk_push_int(ctx, -1); return 1; }
-        memset(mem, 0, sizeof(VWorld) + kLinkBytes);
-        VWorld* w = (VWorld*)mem;
+        void* worldMem = mem::alloc(sizeof(VWorld) + kLinkBytes, mem::Want::Psram);
+        if (!worldMem) { duk_push_int(ctx, -1); return 1; }
+        memset(worldMem, 0, sizeof(VWorld) + kLinkBytes);
+        VWorld* w = (VWorld*)worldMem;
         w->iterations = iters;
         w->radius = radius;
-        w->linked = (uint8_t*)mem + sizeof(VWorld);
+        w->linked = (uint8_t*)worldMem + sizeof(VWorld);
         s_worlds[i] = w;
         duk_push_int(ctx, i + 1);
         return 1;

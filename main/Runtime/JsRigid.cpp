@@ -15,6 +15,7 @@
 #include "JsInternal.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Utils/Rigid2D.h"
+#include "../Utils/Mem.h"
 #include <cstdlib>
 #include "esp_heap_caps.h"
 
@@ -50,10 +51,9 @@ duk_ret_t JSBindings::js_rigidNew(duk_context* ctx) {
     for (int i = 0; i < kMaxWorlds; i++) {
         if (s_rworlds[i]) continue;
         // ~60 KB por mundo: PSRAM primeiro (as placas do binding tem)
-        void* mem = heap_caps_malloc(sizeof(R::World), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!mem) mem = heap_caps_malloc(sizeof(R::World), MALLOC_CAP_8BIT);
-        if (!mem) { duk_push_int(ctx, -1); return 1; }
-        R::World* w = (R::World*)mem;
+        void* worldMem = mem::alloc(sizeof(R::World), mem::Want::Psram);
+        if (!worldMem) { duk_push_int(ctx, -1); return 1; }
+        R::World* w = (R::World*)worldMem;
         R::worldInit(w, iters);
         s_rworlds[i] = w;
         duk_push_int(ctx, i + 1);

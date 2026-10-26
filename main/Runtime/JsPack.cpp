@@ -13,6 +13,7 @@
 #include "../Bluetooth/NetKeys.h"
 #include "../Boards/Board.h"
 #include "../Utils/AppPerms.h"
+#include "../Utils/Mem.h"
 
 #include <stdio.h>
 #include "esp_heap_caps.h"
@@ -213,8 +214,7 @@ constexpr size_t kResBuf = resproto::MAX_DATA;
 uint8_t* resBuf() {
     static uint8_t* s_buf = nullptr;
     if (s_buf == nullptr) {
-        s_buf = (uint8_t*)heap_caps_malloc(kResBuf, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (s_buf == nullptr) s_buf = (uint8_t*)heap_caps_malloc(kResBuf, MALLOC_CAP_8BIT);
+        s_buf = (uint8_t*)mem::alloc(kResBuf, mem::Want::Psram);
     }
     return s_buf;
 }

@@ -2,6 +2,7 @@
 #include "../Assets/Fonts/CelerFonts.h"
 #include "Theme.h"
 #include "Layout.h"
+#include "../Utils/Mem.h"
 #include <Arduino.h>
 #include <string>
 #include <cstdio>
@@ -45,8 +46,7 @@ bool roomForIcon() {
 }
 
 void* iconAlloc(size_t n) {
-    void* p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    return p ? p : malloc(n);
+    return mem::alloc(n, mem::Want::Psram);
 }
 
 // Caminho no cache em flash: hash do caminho de origem + tamanho + mtime

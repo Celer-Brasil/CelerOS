@@ -23,6 +23,7 @@
 #include "../Utils/CelerSettings.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/SemVer.h"
+#include "../Utils/Mem.h"
 #include "../Boards/Board.h"
 
 OtaUpdateInfo OtaManager::info;
@@ -458,8 +459,7 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
     }
 
     constexpr size_t kBuf = 8192;
-    char* buf = (char*)heap_caps_malloc(kBuf, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buf == nullptr) buf = (char*)malloc(kBuf);
+    char* buf = (char*)mem::alloc(kBuf, mem::Want::Psram);
     if (buf == nullptr) {
         esp_ota_abort(ota);
         OtaGuard::release();

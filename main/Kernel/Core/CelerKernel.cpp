@@ -14,6 +14,7 @@
 #include "../../Compat/Arduino.h"  // celerAnalogWriteReset (fim de app)
 #include "../../Utils/JsStrip.h"
 #include "../../Utils/I18n.h"
+#include "../../Utils/Mem.h"
 #include "../DeviceStats.h"
 #include <vector>
 #include "esp_heap_caps.h"
@@ -303,8 +304,7 @@ static char* loadAppSource(const char* path, size_t* lenOut, bool* oom) {
             rewind(f);
         }
         if (raw > 0) {
-            char* buf = (char*)heap_caps_malloc(raw + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (buf == nullptr) buf = (char*)heap_caps_malloc(raw + 1, MALLOC_CAP_8BIT);
+            char* buf = (char*)mem::alloc(raw + 1, mem::Want::Psram);
             if (buf == nullptr) {
                 fclose(f);
                 *oom = true;

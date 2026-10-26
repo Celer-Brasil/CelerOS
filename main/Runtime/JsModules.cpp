@@ -33,6 +33,7 @@
 #include "JsInternal.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Utils/JsStrip.h"
+#include "../Utils/Mem.h"
 #include "../FileSystem/FileSystem.h"
 #include <cstdio>
 #include <cstdlib>
@@ -123,8 +124,7 @@ void jsLoadAppDeps(const char* appDir) {
     int n = FileSystem::parseJsonStringMap(json, pairs, kMaxSharedDeps);
     if (n > 0) {
         size_t sz = sizeof(SharedDep) * (size_t)n;
-        s_sharedDeps = (SharedDep*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_sharedDeps) s_sharedDeps = (SharedDep*)heap_caps_malloc(sz, MALLOC_CAP_8BIT);
+        s_sharedDeps = (SharedDep*)mem::alloc(sz, mem::Want::Psram);
     }
     if (!s_sharedDeps) n = 0;
     for (int i = 0; i < n && s_sharedDepCount < kMaxSharedDeps; i++) {

@@ -1,7 +1,8 @@
 # Tactility → CelerOS: plano de execução
 
 **Português (BR)** · 2026-10-25 · Derivado de `Tactility_Analise.pt-BR.md`
-Estado: **Fase 0 concluída · Fase 1: código e builds concluídos, bench pendente**
+Estado: **Fase 0/1 (código e builds) concluídas · Fase 2: itens 1, 3, 4 e 6 ·
+Fase 3: item 1 (código) · bench pendente**
 
 Este documento transforma o estudo em trabalho executável. A ordem, o porquê e
 as referências de código estão no estudo; aqui ficam os passos, os arquivos, os
@@ -219,11 +220,20 @@ com **80.592 B livres** no slot.
 
 Só começa com "go" e prioridade escolhida.
 
-1. **Catálogo compacto da Loja** — `CelerOS-Server`: rota `/store/all.txt`
-   (TSV, campos mínimos, linha ≤1024 B; descrição/changelog sob demanda) + casos
-   em `tools/test_api.py`. CelerOS: Loja lê TSV com fallback para `all.json`,
-   bump + `publish`, teste no `js_harness`. **Gate manual: deploy do hub antes
-   de publicar o app.**
+**Status (2026-10-25):** item 1 (catálogo compacto) implementado no servidor
+(`7ade402`) e no app (`12490ae`); deploy do hub e publish da Loja pendentes, na
+ordem do item. Demais itens não iniciados.
+
+1. **Catálogo compacto da Loja** — **feito no código, deploy/publicação
+   pendentes.** `CelerOS-Server`: rota `/store/all.txt` (TSV, 14 campos/app,
+   cabeçalho + `#end N`, `vary: Authorization`, HUB_VERSION 0.15.2) e casos em
+   `tools/test_api.py`. CelerOS: a Loja tenta o TSV antes do `all.json`/
+   categorias, valida o `#end` e cai no caminho antigo em qualquer falha;
+   descrição/autor vêm do `app.json` no primeiro toque; multi-arquivo busca o
+   `files` no install. Versão 2.9.6 + 7 checks no `js_harness`.
+   **Ordem manual: deploy do hub (tag 0.15.2) → `celer.js publish` da Loja.**
+   Publicar antes do deploy é seguro (o app cai no fallback), mas consome a
+   versão sem o ganho.
 2. **Simulador host** — `test/host_ui/` com CMake próprio, `lgfx::Panel_sdl` e
    uma `Screen` do Kui; PNG por frame para diff visual; job de CI opcional.
 3. **Fatias de firmware em teste host** — Kui (geometria/hit-test/foco), parser

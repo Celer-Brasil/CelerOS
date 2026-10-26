@@ -1,0 +1,93 @@
+{
+  "format": 1,
+  "rev": 5,
+  "name": "Campanha",
+  "guid": "2c7e1a0069720eb375d2e11a8952193c",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "mode": "campaign",
+      "maxWave": 10,
+      "screen": "game"
+    },
+    "bg": "#05060a",
+    "static": false
+  },
+  "entities": [
+    {
+      "name": "Fundo",
+      "fid": "e_fe30be65",
+      "active": true,
+      "z": -10,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 2.5,
+        "sy": 2.5,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_ff8bf78e",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "8bf6c623ff0fab024f22d0787ae15cdc"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Nave",
+      "fid": "e_728a64b5",
+      "active": true,
+      "z": 20,
+      "transform": {
+        "x": 240,
+        "y": 384,
+        "rot": 0,
+        "sx": 1.125,
+        "sy": 1.125,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_39aded07",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "6efdfc9f74c1f5439993836bbb1ccd2c#ai0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Controle",
+      "fid": "e_5074daec",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_90b5f7a3",
+          "fields": {
+            "script": "5165f022eb8ec77de1e0c77927523e6c"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

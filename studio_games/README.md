@@ -12,12 +12,13 @@ Os controladores ficam em `Assets/Scripts/` e são ES5 como qualquer app.
 | `Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.1 | 23 | 20 salas ASCII + tilemap, espada/bomba/bumerangue, baús, Sábio, loja, Guardião, save |
 | `Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | campanha de 10 ondas + infinito, chefe 3 fases, combo, orbes, supernova, recorde |
 
-Build/run headless:
+Build/run/deploy headless:
 
 ```bash
 node tools/sdk/celer.js studio "studio_games/Detona" build
 node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 # navegar menus (coordenadas 480x480): 300 tap 240,300 -> --input toques.txt
+node tools/sdk/celer.js studio "studio_games/Detona" deploy  # .studio/deploy/app.zip
 ```
 
 ## O que é editável

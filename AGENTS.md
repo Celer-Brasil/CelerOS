@@ -42,7 +42,7 @@ CelerOS/
 | Firmware size / what costs flash | `python3 tools/size_report.py` | CYD OTA slot is the binding constraint |
 | System apps, app.json rules | `data/AGENTS.md` | ES5 only |
 | Device CLI, data flashing, local OTA server | `tools/AGENTS.md` | |
-| Game editor (Celer Studio): project/scene/prefab formats, GUI, headless build, native remounts | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` + `studio_games/README.md` | file-first; GUI/CLI/HTTP share one op bus; build emits a flat ES5 app with the runtime inlined; Detona/Arrasa/Lenda/Supernova are native scenes (controllers in `Assets/Scripts`) |
+| Game editor (Celer Studio): project/scene/prefab formats, GUI, headless build/deploy, native remounts | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` + `studio_games/README.md` | file-first; GUI/CLI/HTTP share one op bus; build emits a flat ES5 app with the runtime inlined; Detona/Arrasa/Lenda/Supernova are native scenes (controllers in `Assets/Scripts`) |
 | JS API docs for app authors | `Documentation/JS_API_Guide*.md` | keep EN and pt-BR in sync |
 
 ## CODE MAP
@@ -132,6 +132,7 @@ node tools/sdk/celer.js studio ~/Jogo run --frames 0,600      # host harness + P
 node tools/sdk/celer.js studio import-game hub_apps/Detona /tmp/Detona-legado  # bridge legada (app ainda nao portado)
 node tools/sdk/celer.js studio "studio_games/Detona" serve --open  # jogo nativo no editor
 node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
+node tools/sdk/celer.js studio "studio_games/Detona" deploy   # app.zip enxuto
 
 # Validation battery (run before any push; CI runs the same)
 node test/js_harness/run.js

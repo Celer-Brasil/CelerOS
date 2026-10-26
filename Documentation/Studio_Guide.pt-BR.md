@@ -424,6 +424,7 @@ vir em `--dir`. `--json` torna todo comando legível por máquina; erros trazem
 | `build` | grava o pacote plano do app |
 | `run` | build + execução no harness do host (`--ms`, `--out`, `--frames 0,600`, `--seed`, `--input toques.txt`, `--no-build`) |
 | `export DIR` | copia o build para uma pasta (`--force`) |
+| `deploy [--out app.zip] [--no-build]` | valida/builda, enxuga JS e empacota os assets usados num `app.zip` determinístico |
 | `undo` / `redo` | restaura o lote anterior / reaplica |
 | `fmt` | reescreve todo JSON/meta de forma canônica |
 | `serve` | abre a GUI (`--port`, 8421 por padrão; `--open`) |
@@ -478,7 +479,7 @@ O servidor da GUI escuta em `127.0.0.1` (sem autenticação; é ferramenta local
 | `GET /api/events` | SSE: mudanças de arquivo e estado do play |
 | `GET /api/assets?path=Assets/...` | serve um asset do projeto (path com jail) |
 | `GET /api/run.png` | último screenshot headless |
-| `POST /api/command` | `{ops:[...], dryRun, ifRev}` ou `{cmd:"build"\|"validate"\|"run"\|"play"\|"stop"\|"undo"\|"redo"\|"fmt"\|"export"\|"describe"}` |
+| `POST /api/command` | `{ops:[...], dryRun, ifRev}` ou `{cmd:"build"\|"validate"\|"run"\|"play"\|"stop"\|"deploy"\|"undo"\|"redo"\|"fmt"\|"export"\|"describe"}` |
 | `POST /api/upload?name=&importer=&grid=&cols=&rows=&tw=&th=` | bytes crus do arquivo; importa pela mesma op `asset.import` |
 
 Toda resposta de comando inclui `snapshot`, então o cliente re-renderiza sem
@@ -532,22 +533,30 @@ de testes prova que produzem arquivos equivalentes.
 O mesmo contrato existe via HTTP (`POST /api/command`), então uma IA pode
 dirigir uma sessão viva do editor enquanto um humano acompanha o viewport.
 
-## Deploy
+## Deploy / app.zip
+
+O `deploy` é a "compilação" do Studio: valida e builda, passa todo `.js` pelo
+mesmo `jsstrip` do hub, mantém só os assets escolhidos pelo build, compacta o
+`app.json` e grava um ZIP determinístico com `app.json` na raiz (o layout
+aceito pelo `celerctl apps installzip`).
 
 ```bash
-# copia o pacote plano para uma pasta de app do hub (ou staging)
-node tools/sdk/celer.js studio ~/Jogo export hub_apps/MeuJogo --force
+# padrão: <projeto>/.studio/deploy/app.zip + report.json
+node tools/sdk/celer.js studio ~/Jogo deploy
 
-# bancada: instala + roda no device
-python3 tools/celerctl.py apps install hub_apps/MeuJogo --deps-local --run
+# destino customizado e GUI: aba Build -> "Compilar app.zip"
+node tools/sdk/celer.js studio ~/Jogo deploy --out dist/MeuJogo.zip
 
-# publica (suba version + changelog no celergame.project.json antes,
-# depois build/export e celerhub)
-node tools/sdk/celer.js publish hub_apps/MeuJogo
+# bancada: instala o zip e roda no device
+python3 tools/celerctl.py apps installzip ~/Jogo/.studio/deploy/app.zip --run
 ```
 
-OTA atualiza só o firmware; o pacote do app continua indo pela loja ou pelo
-`celerctl`.
+O comando imprime e grava em `report.json`: bytes do ZIP, SHA-256, JS
+antes/depois, bytes de assets, lista de entradas, extras e avisos do build.
+O timestamp é fixo (1980-01-01) e as entradas são ordenadas, então as mesmas
+fontes/build geram os mesmos bytes. `--no-build` reutiliza um build existente.
+Os assets são filtrados pelo build, copiados sem perda e comprimidos no ZIP
+(sem recodificar imagem). OTA atualiza firmware, não apps.
 
 ## Limitações (v1)
 

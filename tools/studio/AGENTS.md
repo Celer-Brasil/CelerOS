@@ -19,6 +19,8 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 | `lib/ops.js` | barramento de ops, lote atomico, undo/redo, journal |
 | `lib/validate.js` | schema/refs + limites de pacote + lint ES5 |
 | `lib/build.js` | codegen determinista: main/data/scripts/assets/app.json; tilemap leva `solidValues` |
+| `lib/zip.js` | ZIP deterministico (deflate 9, CRC32, timestamp fixo) + leitor de verificacao |
+| `lib/deploy.js` | compilacao de deploy: build + jsstrip + assets usados -> app.zip/report |
 | `lib/run.js` | executa o build no harness do host (PNG/frames/input) |
 | `lib/import_game.js` | import-game: app existente -> projeto legado (assets/metas/scripts) |
 | `lib/live.js` | filho do Play (emulador ao vivo) |
@@ -139,8 +141,9 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 - Inspetor de asset: modo/grade/pivot/cor-chave, `anims`/`fps`/`loop`, hitbox,
   uso em cenas/prefabs, preview de clipe com play/fps; viewport desenha hitbox
   e ancora; entidades `hud` aparecem ancoradas com `canvas.inset`.
-- Build: relatorio + barras extras/JS/assets/deps contra os tetos; diagnostico
-  `E.debug`/`E.prof` no painel do projeto/cena.
+- Build: relatorio + barras extras/JS/assets/deps contra os tetos;
+  `Compilar app.zip` gera/baixa o pacote enxuto; diagnostico `E.debug`/`E.prof`
+  no painel do projeto/cena.
 
 ## CONTRATO DE IA
 - `studio describe --json` descobre projeto, componentes, ops, limites e
@@ -161,6 +164,11 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 - Metadados de arte vao no `game.data` (nao em .json lido em runtime): o app
   nao precisa de permissao `fs` para `E.spr.meta`/`E.scene`.
 - `app_lint` roda no pacote final e bloqueia o build em erro.
+- `deploy` gera `.studio/deploy/app.zip` (ou `--out`) depois de enxugar todo
+  `.js` com jsstrip, compactar `app.json` e incluir so assets do build;
+  `report.json` tem bytes antes/depois, assets, SHA-256 e entradas. ZIP
+  deterministico (timestamp fixo, ordenado, deflate 9) e compativel com
+  `celerctl apps installzip` (app.json na raiz).
 - `run` usa `microsBias:1` no runner do host (ver "QUIRK" abaixo).
 
 ## QUIRK DO HOST (pacing da engine)
@@ -177,7 +185,8 @@ sem alinhar com o dono do arquivo: e trabalho em voo.
   1.6, tilemap.set/resize, ops/dry-run/undo, build determinista, app gerado no
   harness (spr.meta/animOf/box + HUD ancorado), cena nativa (`settings.data`,
   `data`, `ctx.go` com arg, solidos por tile), prefab achatado, CLI x HTTP,
-  build+run dos 4 jogos de `studio_games/` e a bridge legada.
+  build+run dos 4 jogos de `studio_games/`, deploy/app.zip deterministico e a
+  bridge legada.
 - `node tools/sdk/celer.js check` cobre drift de types/renderer/deps.
 - Preview: `serve --open`; headless: `run --frames 0,600`.
 

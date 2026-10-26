@@ -427,6 +427,7 @@ carry `{code, message, hint, diagnostics}` and exit code 1.
 | `build` | write the flat app package |
 | `run` | build + run on the host harness (`--ms`, `--out`, `--frames 0,600`, `--seed`, `--input toques.txt`, `--no-build`) |
 | `export DIR` | copy the build to a folder (`--force`) |
+| `deploy [--out app.zip] [--no-build]` | validate/build, strip JS, pack used assets into a deterministic `app.zip` |
 | `undo` / `redo` | restore the previous batch / reapply |
 | `fmt` | rewrite all JSON/metas canonically |
 | `serve` | open the GUI (`--port`, default 8421; `--open`) |
@@ -481,7 +482,7 @@ The GUI server binds to `127.0.0.1` (no authentication; it is a local tool).
 | `GET /api/events` | SSE: file changes and play state |
 | `GET /api/assets?path=Assets/...` | serve a project asset (path jailed) |
 | `GET /api/run.png` | last headless screenshot |
-| `POST /api/command` | `{ops:[...], dryRun, ifRev}` or `{cmd:"build"\|"validate"\|"run"\|"play"\|"stop"\|"undo"\|"redo"\|"fmt"\|"export"\|"describe"}` |
+| `POST /api/command` | `{ops:[...], dryRun, ifRev}` or `{cmd:"build"\|"validate"\|"run"\|"play"\|"stop"\|"deploy"\|"undo"\|"redo"\|"fmt"\|"export"\|"describe"}` |
 | `POST /api/upload?name=&importer=&grid=&cols=&rows=&tw=&th=` | raw file bytes; imports via the same `asset.import` op |
 
 Every command response includes `snapshot`, so a client can re-render without
@@ -535,22 +536,30 @@ test suite proves they produce equivalent files.
 The same contract is available over HTTP (`POST /api/command`), so an agent
 can drive a live editor session while a human watches the viewport.
 
-## Deploy
+## Deploy / app.zip
+
+`deploy` is the Studio "compile" step: it validates and builds, runs every JS
+file through the same `jsstrip` used by the hub, keeps only the assets the
+build selected, compacts `app.json`, and writes a deterministic ZIP with
+`app.json` at the root (the layout accepted by `celerctl apps installzip`).
 
 ```bash
-# copy the flat package into a hub app folder (or any staging dir)
-node tools/sdk/celer.js studio ~/Jogo export hub_apps/MeuJogo --force
+# default: <project>/.studio/deploy/app.zip + report.json
+node tools/sdk/celer.js studio ~/Jogo deploy
 
-# bench: install + run on the device
-python3 tools/celerctl.py apps install hub_apps/MeuJogo --deps-local --run
+# custom destination and the GUI: Build tab -> "Compilar app.zip"
+node tools/sdk/celer.js studio ~/Jogo deploy --out dist/MeuJogo.zip
 
-# publish (bump version + changelog in celergame.project.json first,
-# then build/export and run celerhub)
-node tools/sdk/celer.js publish hub_apps/MeuJogo
+# bench: install the zip and run on the device
+python3 tools/celerctl.py apps installzip ~/Jogo/.studio/deploy/app.zip --run
 ```
 
-OTA updates firmware only; the app package still ships through the store or
-`celerctl`.
+The command prints and records in `report.json`: ZIP bytes, SHA-256,
+before/after JS bytes, asset bytes, entry list, extras and build warnings.
+Timestamps are fixed (1980-01-01) and entries are sorted, so the same sources
+and build produce the same ZIP bytes. `--no-build` reuses an existing build.
+Assets are filtered by the build; they are copied losslessly and compressed
+inside the ZIP (no image re-encoding). OTA updates firmware only, not apps.
 
 ## Limitations (v1)
 

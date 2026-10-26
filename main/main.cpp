@@ -37,6 +37,7 @@
 #include "Kernel/Services.h"
 #include "Kernel/AppServices.h"
 #include "Kernel/DeviceStats.h"
+#include "Kernel/CrashRecord.h"
 #if CONFIG_CELEROS_UI
 #include "Settings/TouchCalibrator.h"
 #endif
@@ -108,6 +109,9 @@ static void ramStage(const char* stage) {
 
 static void celerSetup() {
     Serial.begin(115200);
+    // Forense de crash: o wrap do esp_panic_handler grava causa/backtrace em
+    // RAM RTC. Quanto antes, mais do boot ele cobre.
+    CrashRecord::installPanicHook();
     // NimBLE em INFO dispara "GATT procedure initiated" a cada notify (o
     // link vivo manda um ~1,6 s): afogava ring e kern.log. WARN basta — os
     // erros reais do host continuam aparecendo (bancada 2026-10-05)
@@ -131,6 +135,11 @@ static void celerSetup() {
 
 
     ramStage("display");
+#if CONFIG_CELEROS_CRASH_SCREEN
+    // Tela de crash do boot ANTERIOR (registro em RAM RTC), antes do splash:
+    // quem liga o aparelho para investigar ve o que houve sem abrir logcat
+    CrashRecord::showScreen();
+#endif
     bootSplash(i18n::TR("Iniciando...", "Starting..."));
 
     // Initialize File Systems (LittleFS & SD)
@@ -142,6 +151,9 @@ static void celerSetup() {
         delay(1000);
 #endif
     }
+    // Registro do crash anterior vira linha em /local/log/crash.txt (o agente
+    // de frota reporta; em placas sem vidro e o UNICO registro visivel)
+    CrashRecord::consumeAndLog();
 
     ramStage("fs");
 

@@ -22,6 +22,7 @@ set(CELEROS_SRCS
     "OTA/OtaManager.cpp"
     "Kernel/Core/CelerKernel.cpp"
     "Kernel/AppRunner.cpp"
+    "Kernel/CrashRecord.cpp"
     "Kernel/TimeManager.cpp"
     "Kernel/Alarms.cpp"
     "Kernel/Notifications.cpp"
@@ -345,3 +346,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 if(CONFIG_CELEROS_APP_TASK)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CELEROS_APP_TASK=1)
 endif()
+
+# Forense de crash (Kernel/CrashRecord): o wrap captura causa/endereco/
+# backtrace em RAM RTC ANTES do handler de verdade imprimir e reiniciar.
+idf_build_set_property(LINK_OPTIONS "-Wl,--wrap=esp_panic_handler" APPEND)

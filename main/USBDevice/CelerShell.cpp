@@ -1249,6 +1249,14 @@ int cmdDebug(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 }
 
 int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    if (argc > 1 && strcmp(argv[1], "panic") == 0) {
+        // Bancada da forense de crash: abort() real passa pelo wrap do
+        // esp_panic_handler (Kernel/CrashRecord) -> reboot -> crash.txt e,
+        // nas placas com vidro, tela de crash com QR no boot seguinte.
+        print(ctx, "reboot panic: abort() em 3s (registro RTC + tela no boot seguinte)\r\n");
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        abort();
+    }
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();

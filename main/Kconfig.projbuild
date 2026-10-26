@@ -214,6 +214,18 @@ config CELEROS_UI
       painel stub que jogava tudo fora). O catalogo de apps (scan/launch/
       autostart) e o shell seguem de pe: a interface e o celerctl/web.
 
+config CELEROS_CRASH_SCREEN
+    bool "Tela de crash com QR no boot seguinte a um panic"
+    depends on CELEROS_UI
+    default y
+    help
+      O registro em RAM RTC (Kernel/CrashRecord) e SEMPRE compilado — em
+      placas sem vidro ele vira apenas a linha em /local/log/crash.txt. Esta
+      opcao adiciona a tela nativa desenhada antes do splash: causa, app,
+      PCs e um QR com o resumo (fotografavel), ~7 s ou botao para pular. O
+      custo e pequeno (o QR usa o codificador que ja vem na LovyanGFX) e o
+      boot NUNCA fica preso: se o slot OTA da CYD apertar, desligue aqui.
+
 config CELEROS_SMARTDISPLAY_RELAYS
     int "Reles da SmartDisplay 4848S040 (variante Y, 0-3)"
     range 0 3

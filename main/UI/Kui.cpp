@@ -4,12 +4,14 @@
 #include "../Display/Icon.h"
 #include "../Display/Backlight.h"
 #include "../Hardware/InputBus.h"
+#include "../Kernel/DeviceStats.h"  // profiling do quadro (celerctl top)
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
 #include <cmath>
 #include <new>
 #include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -144,11 +146,18 @@ Canvas::Canvas(CelerDisplay& dev, lgfx::LGFXBase* directTarget)
     : m_dev(dev), m_target(directTarget ? directTarget : &dev) {}
 
 void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
+    // Profiling (celerctl top): o custo de um quadro da UI nativa, separado
+    // em montagem (compor) e entrega ao vidro (push). O present() dos apps
+    // mede o mesmo por outro caminho (DeviceStats::notePresent).
+    const int64_t t0 = esp_timer_get_time();
+    uint32_t composeUs = 0, pushUs = 0;
     if (direct || !ensureBuffer(m_dev)) {
         m_mode = Direct;
         m_target = &m_dev;
         m_offY = 0;
         fn(*this);
+        composeUs = (uint32_t)(esp_timer_get_time() - t0);
+        DeviceStats::noteKuiFrame(composeUs, 0, true);  // Direct: composicao completa
         return;
     }
 
@@ -159,13 +168,17 @@ void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
         s_buf->clearClipRect();
         s_buf->fillScreen(THEME_BG);
         fn(*this);
+        composeUs = (uint32_t)(esp_timer_get_time() - t0);
+        const int64_t t1 = esp_timer_get_time();
         s_buf->pushSprite(&m_dev, 0, 0);
+        pushUs = (uint32_t)(esp_timer_get_time() - t1);
     } else {
         // Uma passada por faixa: tudo fora dela e recortado pelo sprite.
         // Ping-pong: compoe a faixa N no buffer livre enquanto o DMA envia a
         // N-1; antes de reusar um buffer, espera o DMA que le dele.
         m_dev.startWrite();
         int cur = 0;
+        int64_t composeStart = t0;
         for (int y = 0; y < m_dev.height(); y += s_bandH) {
             CelerSprite* b = s_bufs[cur];
             m_target = b;
@@ -173,8 +186,12 @@ void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
             b->clearClipRect();
             b->fillScreen(THEME_BG);
             fn(*this);
+            const int64_t cEnd = esp_timer_get_time();
+            composeUs += (uint32_t)(cEnd - composeStart);
             m_dev.waitDMA();  // faixa anterior (outro buffer) terminou de sair
             b->pushSprite(&m_dev, 0, y);
+            pushUs += (uint32_t)(esp_timer_get_time() - cEnd);
+            composeStart = esp_timer_get_time();
             cur ^= 1;
         }
         m_dev.waitDMA();
@@ -183,6 +200,58 @@ void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
     m_target = &m_dev;
     m_offY = 0;
     m_mode = Direct;
+    DeviceStats::noteKuiFrame(composeUs, pushUs, true);
+}
+
+void Canvas::renderRegion(const Rect& r, const std::function<void(Canvas&)>& fn) {
+    // Sem buffer full-frame (faixas na RAM interna / Direct) nao existe
+    // "quadro anterior" guardado para reaproveitar: refaz o quadro inteiro.
+    // O caminho por faixas ja e rapido (a CYD rola a 30+ fps) e o Direct nao
+    // tem buffer nenhum.
+    if (!ensureBuffer(m_dev) || s_bufMode != FullFrame) {
+        render(fn, false);
+        return;
+    }
+    Rect rc = r;
+    if (rc.x < 0) { rc.w += rc.x; rc.x = 0; }
+    if (rc.y < 0) { rc.h += rc.y; rc.y = 0; }
+    if (rc.x + rc.w > m_dev.width()) rc.w = m_dev.width() - rc.x;
+    if (rc.y + rc.h > m_dev.height()) rc.h = m_dev.height() - rc.y;
+    if (rc.w <= 0 || rc.h <= 0) {  // nada mudou: nada a compor nem a empurrar
+        DeviceStats::noteKuiFrame(0, 0, false);
+        return;
+    }
+
+    m_target = s_buf;
+    m_mode = FullFrame;
+    m_partial = true;
+    m_offY = 0;
+    m_clip = rc;
+    m_clipOn = true;
+
+    const int64_t t0 = esp_timer_get_time();
+    s_buf->setClipRect(rc.x, rc.y, rc.w, rc.h);
+    fn(*this);
+    s_buf->clearClipRect();
+    const uint32_t composeUs = (uint32_t)(esp_timer_get_time() - t0);
+
+    // Empurra so a regiao: o recorte do destino limita a copia (mesmo
+    // caminho que o present() dos apps usa para as caixas sujas — copia
+    // integral de quadro satura a PSRAM e o LCD_CAM embaralha linhas).
+    int32_t cx = 0, cy = 0, cw = 0, chh = 0;
+    m_dev.getClipRect(&cx, &cy, &cw, &chh);
+    const int64_t t1 = esp_timer_get_time();
+    m_dev.setClipRect(rc.x, rc.y, rc.w, rc.h);
+    s_buf->pushSprite(&m_dev, 0, 0);
+    m_dev.setClipRect(cx, cy, cw, chh);
+    const uint32_t pushUs = (uint32_t)(esp_timer_get_time() - t1);
+
+    m_clipOn = false;
+    m_partial = false;
+    m_target = &m_dev;
+    m_offY = 0;
+    m_mode = Direct;
+    DeviceStats::noteKuiFrame(composeUs, pushUs, false);  // PARCIAL: so a faixa mudou
 }
 
 void Canvas::fill(uint32_t color) { m_target->fillScreen(color); }
@@ -277,9 +346,25 @@ void Canvas::dim(const Rect& keep) {
     m_target->fillScreen((uint32_t)0x04060C);
 }
 
-void Canvas::setClip(const Rect& r) { m_target->setClipRect(r.x, Y(r.y), r.w, r.h); }
+void Canvas::setClip(const Rect& r) {
+    Rect c = r;
+    if (m_clipOn) {  // passada parcial: a tela nunca abre alem da regiao
+        const int x0 = c.x > m_clip.x ? c.x : m_clip.x;
+        const int y0 = c.y > m_clip.y ? c.y : m_clip.y;
+        const int x1 = (c.x + c.w) < (m_clip.x + m_clip.w) ? (c.x + c.w) : (m_clip.x + m_clip.w);
+        const int y1 = (c.y + c.h) < (m_clip.y + m_clip.h) ? (c.y + c.h) : (m_clip.y + m_clip.h);
+        c = {x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0};
+    }
+    m_target->setClipRect(c.x, Y(c.y), c.w, c.h);
+}
 
-void Canvas::clearClip() { m_target->clearClipRect(); }
+void Canvas::clearClip() {
+    if (m_clipOn) {
+        m_target->setClipRect(m_clip.x, m_clip.y, m_clip.w, m_clip.h);
+        return;
+    }
+    m_target->clearClipRect();
+}
 
 void Canvas::text(const char* s, int x, int y, const lgfx::IFont* font, uint32_t color, int datum) {
     m_target->setTextDatum(datum);
@@ -1173,16 +1258,24 @@ void drawToast(Canvas& c, const Toast& t) {
 void drawFrame() {
     if (s_canvas == nullptr || s_stack.empty()) return;
     Screen* top = s_stack.back();
-    s_canvas->render(
-        [top](Canvas& c) {
-            top->draw(c);
-            if (s_dialog != nullptr) s_dialog->draw(c);
-            if (!s_toasts.empty()) {
-                if (s_toasts.front().shownAtMs == 0) s_toasts.front().shownAtMs = millis() | 1;
-                drawToast(c, s_toasts.front());
-            }
-        },
-        top->wantsDirectDraw());
+    auto paint = [top](Canvas& c) {
+        top->draw(c);
+        if (s_dialog != nullptr) s_dialog->draw(c);
+        if (!s_toasts.empty()) {
+            if (s_toasts.front().shownAtMs == 0) s_toasts.front().shownAtMs = millis() | 1;
+            drawToast(c, s_toasts.front());
+        }
+    };
+    // Quadro parcial (arrasto do launcher no 4848): so a regiao que mudou e
+    // composta e empurrada. Dialogo/toast por cima invalidam a regiao (sao
+    // desenhados por cima do conteudo inteiro) e caem no quadro completo.
+    Rect pr;
+    if (s_dialog == nullptr && s_toasts.empty() && !top->wantsDirectDraw() &&
+        top->partialFrame(pr)) {
+        s_canvas->renderRegion(pr, paint);
+        return;
+    }
+    s_canvas->render(paint, top->wantsDirectDraw());
 }
 
 bool (*s_gestureHook)(const TouchEvent&) = nullptr;

@@ -36,6 +36,14 @@ static std::atomic<uint64_t> s_uiFrames{0};
 static std::atomic<uint64_t> s_uiPresents{0};
 static std::atomic<uint64_t> s_uiFrameUs{0};
 static std::atomic<uint64_t> s_uiFrameUsMax{0};
+static std::atomic<uint64_t> s_kuiPresents{0};
+static std::atomic<uint64_t> s_kuiComposeUs{0};
+static std::atomic<uint64_t> s_kuiPushUs{0};
+static std::atomic<uint64_t> s_kuiMaxUs{0};
+static std::atomic<uint64_t> s_kuiPartial{0};
+static std::atomic<uint64_t> s_kuiFull{0};
+static std::atomic<uint64_t> s_kuiPartComposeUs{0};
+static std::atomic<uint64_t> s_kuiPartPushUs{0};
 static std::atomic<uint32_t> s_svcTicks{0};
 static std::atomic<uint32_t> s_svcOverruns{0};
 static std::atomic<uint32_t> s_svcBusyMsMax{0};
@@ -65,6 +73,23 @@ void notePresent(uint32_t us, bool pushedFrame) {
     while (us > m && !s_uiFrameUsMax.compare_exchange_weak(m, us, std::memory_order_relaxed)) {
     }
     if (pushedFrame) s_uiFrames.fetch_add(1, std::memory_order_relaxed);
+}
+
+void noteKuiFrame(uint32_t composeUs, uint32_t pushUs, bool fullFrame) {
+    s_kuiPresents.fetch_add(1, std::memory_order_relaxed);
+    s_kuiComposeUs.fetch_add(composeUs, std::memory_order_relaxed);
+    s_kuiPushUs.fetch_add(pushUs, std::memory_order_relaxed);
+    const uint64_t total = (uint64_t)composeUs + pushUs;
+    uint64_t m = s_kuiMaxUs.load(std::memory_order_relaxed);
+    while (total > m && !s_kuiMaxUs.compare_exchange_weak(m, total, std::memory_order_relaxed)) {
+    }
+    if (fullFrame) {
+        s_kuiFull.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        s_kuiPartial.fetch_add(1, std::memory_order_relaxed);
+        s_kuiPartComposeUs.fetch_add(composeUs, std::memory_order_relaxed);
+        s_kuiPartPushUs.fetch_add(pushUs, std::memory_order_relaxed);
+    }
 }
 
 void noteSvcTick(uint32_t busyMs, uint32_t budgetMs) {
@@ -131,6 +156,14 @@ bool take(Snapshot& out) {
     out.uiPresents = s_uiPresents.load(std::memory_order_relaxed);
     out.uiFrameUs = s_uiFrameUs.load(std::memory_order_relaxed);
     out.uiFrameUsMax = s_uiFrameUsMax.load(std::memory_order_relaxed);
+    out.kuiPresents = s_kuiPresents.load(std::memory_order_relaxed);
+    out.kuiComposeUs = s_kuiComposeUs.load(std::memory_order_relaxed);
+    out.kuiPushUs = s_kuiPushUs.load(std::memory_order_relaxed);
+    out.kuiMaxUs = s_kuiMaxUs.load(std::memory_order_relaxed);
+    out.kuiPartial = s_kuiPartial.load(std::memory_order_relaxed);
+    out.kuiFull = s_kuiFull.load(std::memory_order_relaxed);
+    out.kuiPartComposeUs = s_kuiPartComposeUs.load(std::memory_order_relaxed);
+    out.kuiPartPushUs = s_kuiPartPushUs.load(std::memory_order_relaxed);
 
     out.svcTicks = s_svcTicks.load(std::memory_order_relaxed);
     out.svcOverruns = s_svcOverruns.load(std::memory_order_relaxed);

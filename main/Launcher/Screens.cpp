@@ -76,6 +76,35 @@ kui::Rect LauncherScreen::cellRect(int entryIndex) const {
     return {gridLeft() + col * gridCellW(), gridTop() + row * gridCellH(), gridCellW(), gridCellH()};
 }
 
+int LauncherScreen::dragPage() const {
+    if (m_dragDx < 0) return page + 1;  // arrastou para a esquerda: entra a proxima
+    if (m_dragDx > 0) return page - 1;  // para a direita: entra a anterior
+    return page;
+}
+
+int LauncherScreen::dragXOff() const {
+    if (m_dragDx < 0) return m_dragDx + UI::W;  // capa encostada na direita
+    if (m_dragDx > 0) return m_dragDx - UI::W;  // capa encostada na esquerda
+    return 0;
+}
+
+bool LauncherScreen::partialFrame(kui::Rect& out) {
+    // So a troca de pagina do grid por arrasto: lista rola vertical (todo o
+    // miolo muda) e sem arrasto nao ha o que reaproveitar do quadro anterior.
+    if (listMode() || m_dragDx == 0 || m_dragPushed == 0) return false;
+    if (m_needClear) return false;  // vidro pode ter conteudo de outra tela
+    // Trocou de lado no meio do gesto (raro): as duas faixas mudam — quadro
+    // inteiro e mais barato que compor as duas.
+    if ((m_dragDx < 0) != (m_dragPushed < 0)) return false;
+    const int a = m_dragPushed, b = m_dragDx;
+    const int lo = a < b ? a : b, hi = a < b ? b : a;
+    if (hi == lo) return false;
+    // dx < 0: a faixa e a da direita (largura |dx|); dx > 0: a da esquerda.
+    const int x = (b < 0 ? UI::W : 0) + lo;
+    out = {x, gridTop(), hi - lo, gridAreaH()};
+    return true;
+}
+
 void LauncherScreen::onResume() {
     // voltou de app/dialog/erro: o vidro contem conteudo de outra tela —
     // o proximo draw precisa limpar o fundo (modo direto sem sprite)
@@ -92,6 +121,7 @@ void LauncherScreen::onEnter() {
     clampScroll();  // lista pode ter encolhido: rolagem valida na entrada
     m_noWifiPref = FileSystem::exists("/local/nowifi.txt");
     m_dragDx = 0;
+    m_dragPushed = 0;   // o proximo desenho e um quadro inteiro
 }
 
 // Bateria: corpo + polo + nivel (cor por faixa) e % ao lado; raio quando
@@ -181,7 +211,8 @@ void LauncherScreen::draw(kui::Canvas& c) {
     bool clearBg = m_needClear || m_dragDx != 0;
     m_needClear = false;
     if (clearBg && c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
-    if (c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
+    // Passada parcial (arrasto): a barra de status ja esta no buffer/vidro
+    if (!c.partial() && c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
 
     if (listMode()) {
         // lista: fundo sempre limpo (a rolagem move tudo); o canvas do watch
@@ -211,9 +242,16 @@ void LauncherScreen::draw(kui::Canvas& c) {
         return;
     }
 
-    // grid: pagina atual deslocada pelo arrasto + vizinha entrando pela borda
+    // grid: a pagina atual fica parada e a que entra desliza POR CIMA,
+    // acompanhando o dedo (transicao de capa). Antes as duas paginas andavam
+    // juntas — bonito, mas cada evento do arrasto mudava a tela INTEIRA, e
+    // no 4848 um quadro completo custa ~76 ms (compor 47 + push 30): o gesto
+    // rodava a 13 fps e "agarrava" (bancada 2026-10-26). Com a capa o que
+    // muda entre dois eventos e so a faixa |dx_novo - dx_anterior|, que a
+    // passada PARCIAL compoe e empurra sozinha (renderRegion).
     const lgfx::IFont* labelFont = kui::type::caption();
     const int labelGap = UI::big ? 8 : 4;
+    kui::Rect cull{0, 0, UI::W, UI::H};  // passada parcial: so as celulas da faixa
     auto drawPage = [&](int pg, int xOff) {
         if (pg < 0 || pg >= LauncherUI::gridTotalPages()) return;
         for (int entry = pg * gridCellsPerPage();
@@ -221,6 +259,8 @@ void LauncherScreen::draw(kui::Canvas& c) {
             kui::Rect cell = cellRect(entry);
             cell.x += xOff;
             if (cell.x + cell.w <= 0 || cell.x >= UI::W || !c.visible(cell)) continue;
+            // fora da faixa que muda: nao recompõe (icone custa readRect+blend)
+            if (cell.x + cell.w <= cull.x || cell.x >= cull.x + cull.w) continue;
             int iconX = cell.x + (cell.w - Icon::SIZE) / 2;
             int labelH = c.fontHeight(labelFont);
             int iconY = cell.y + (cell.h - Icon::SIZE - labelGap - labelH) / 2;
@@ -242,11 +282,36 @@ void LauncherScreen::draw(kui::Canvas& c) {
                    iconY + Icon::SIZE + labelGap, labelFont, THEME_TEXT, TC_DATUM);
         }
     };
+    // Passada PARCIAL do arrasto: o buffer/vidro ja tem a pagina atual; so a
+    // faixa que mudou desde a ultima passada e refeita. Crescendo a capa, a
+    // faixa nova mostra a pagina que entra; encolhendo, volta a pagina atual.
+    if (c.partial()) {
+        kui::Rect ch{};
+        if (!partialFrame(ch)) { ch = {0, gridTop(), UI::W, gridAreaH()}; }
+        const int prevW = m_dragPushed < 0 ? -m_dragPushed : m_dragPushed;
+        const int curW = m_dragDx < 0 ? -m_dragDx : m_dragDx;
+        cull = ch;
+        c.setClip(ch);
+        c.fillRect(ch, THEME_BG);
+        if (curW > prevW) drawPage(dragPage(), dragXOff());
+        else drawPage(page, 0);
+        c.clearClip();
+        m_dragPushed = m_dragDx;
+        return;
+    }
+
     c.setClip({0, gridHeaderH(), UI::W, UI::H - gridHeaderH()});
-    drawPage(page, m_dragDx);
-    if (m_dragDx < 0) drawPage(page + 1, m_dragDx + UI::W);
-    if (m_dragDx > 0) drawPage(page - 1, m_dragDx - UI::W);
+    drawPage(page, 0);
+    if (m_dragDx != 0) {
+        // capa: preenche a faixa e desenha por cima a pagina que entra
+        const int xOff = dragXOff();
+        c.fillRect({xOff < 0 ? 0 : xOff, gridTop(),
+                    (m_dragDx < 0 ? -m_dragDx : m_dragDx), gridAreaH()},
+                   THEME_BG);
+        drawPage(dragPage(), xOff);
+    }
     c.clearClip();
+    m_dragPushed = m_dragDx;
 
     // indicador de pagina: pilula na atual
     int tp = LauncherUI::gridTotalPages();
@@ -414,6 +479,8 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
                 return false;
             }
             int dx = ev.dx();
+            if (dx > UI::W) dx = UI::W;      // a capa nunca passa da largura
+            if (dx < -UI::W) dx = -UI::W;
             if ((page == 0 && dx > 0) || (page == tp - 1 && dx < 0)) dx /= 3;  // resistencia nas pontas
             if (dx != m_dragDx) {
                 m_dragDx = dx;

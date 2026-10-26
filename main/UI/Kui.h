@@ -114,6 +114,17 @@ public:
     // display (telas legacy, que limpam/desenham por conta propria).
     void render(const std::function<void(Canvas&)>& fn, bool direct = false);
 
+    // Frame PARCIAL: o buffer ja contem o quadro anterior, entao NAO pinta o
+    // fundo da tela nem empurra o quadro inteiro — compoe com recorte em `r`
+    // e empurra so `r` (o recorte do pushImage do LGFX limita a copia).
+    // So vale no FullFrame (PSRAM); nos outros modos cai no render() normal.
+    // Invariante: ao fim de cada passada, buffer e vidro continuam iguais —
+    // quem chama compoe exatamente a regiao que mudou desde a ultima.
+    void renderRegion(const Rect& r, const std::function<void(Canvas&)>& fn);
+
+    // A passada em andamento e parcial (renderRegion)?
+    bool partial() const { return m_partial; }
+
     // Modo do frame em andamento
     Mode mode() const { return m_mode; }
 
@@ -175,6 +186,12 @@ private:
     lgfx::LGFXBase* m_target;
     int m_offY = 0;        // topo da faixa corrente (Bands)
     Mode m_mode = Direct;
+    // Recorte duro da passada parcial: setClip()/clearClip() da tela nunca
+    // abrem alem dele (senao o buffer ganharia pixels que nao foram ao vidro
+    // e a invariante "buffer == vidro" quebraria na passada seguinte).
+    Rect m_clip;
+    bool m_clipOn = false;
+    bool m_partial = false;
     int Y(int y) const { return y - m_offY; }
 };
 
@@ -248,6 +265,12 @@ public:
     virtual void onTick(uint32_t dtMs) { (void)dtMs; }
     // Telas antigas (embrulhadas) desenham direto no display, sem sprite
     virtual bool wantsDirectDraw() const { return false; }
+    // Quadro parcial (opcional): devolve a UNICA regiao que mudou desde o
+    // ultimo desenho e o Navigator compoe/empurra so ela (renderRegion).
+    // So telas que mantem a invariante "buffer == vidro" podem usar: nada
+    // de fill da tela inteira nem de desenhar fora da regiao devolvida.
+    // false = quadro inteiro, como sempre.
+    virtual bool partialFrame(Rect& out) { (void)out; return false; }
     // Swipe a partir da borda esquerda volta (Navigator::pop)
     virtual bool allowsBackGesture() const { return true; }
     // true = o conteudo desta tela e gerenciado por OUTRA task (app JS em

@@ -663,6 +663,25 @@ int cmdTop(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
               (unsigned)((b->uiFrameUs - a->uiFrameUs) / dPresents),
               (unsigned)b->uiFrameUsMax);
     }
+    // Quadro da UI nativa (launcher/paineis/teclado): quantos quadros na
+    // janela e quanto custou compor x empurrar. No 4848 (RGB/PSRAM) o push e
+    // a copia do framebuffer e domina o quadro; na CYD o push e por faixa.
+    const uint64_t dKui = b->kuiPresents - a->kuiPresents;
+    if (dKui > 0) {
+        print(ctx, "launcher: %u fps  compor %uus  push %uus  (pico %uus, %u parciais/%u cheios)\r\n",
+              (unsigned)(dKui * 1000ULL / windowMs),
+              (unsigned)((b->kuiComposeUs - a->kuiComposeUs) / dKui),
+              (unsigned)((b->kuiPushUs - a->kuiPushUs) / dKui),
+              (unsigned)b->kuiMaxUs,
+              (unsigned)(b->kuiPartial - a->kuiPartial),
+              (unsigned)(b->kuiFull - a->kuiFull));
+        const uint64_t dPar = b->kuiPartial - a->kuiPartial;
+        if (dPar > 0) {
+            print(ctx, "  parciais: compor %uus  push %uus\r\n",
+                  (unsigned)((b->kuiPartComposeUs - a->kuiPartComposeUs) / dPar),
+                  (unsigned)((b->kuiPartPushUs - a->kuiPartPushUs) / dPar));
+        }
+    }
 
     // svchost de servicos (API 42): foto do AppServices + delta dos contadores
     // do pump (DeviceStats, incrementados pelo AppServices::tick) na janela.

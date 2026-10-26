@@ -16,10 +16,16 @@ public:
     void draw(kui::Canvas& c) override;
     bool onTouch(const kui::TouchEvent& ev) override;
     void onTick(uint32_t dtMs) override;
+    // Arrasto de pagina por passadas parciais (ver draw): devolve a faixa que
+    // mudou desde a ultima composicao. false = quadro inteiro.
+    bool partialFrame(kui::Rect& out) override;
 
 private:
     kui::Rect cellRect(int entryIndex) const;
     void drawStatusBar(kui::Canvas& c);
+    // Arrasto de pagina: a pagina que ENTRA (capa) e o deslocamento dela
+    int dragPage() const;
+    int dragXOff() const;
     int page = 0;
     std::string lastClock;
     bool lastWifi = false;
@@ -27,6 +33,7 @@ private:
     bool m_noWifiPref = false;     // /local/nowifi.txt (lido no onEnter, nao por frame)
     uint32_t m_pollAccumMs = 0;    // relogio/wifi checados a cada 250 ms
     int m_dragDx = 0;              // arrasto horizontal em curso (pagina acompanha o dedo)
+    int m_dragPushed = 0;          // m_dragDx da ultima passada composta (buffer == vidro)
     int m_dragAccum = 0;           // modo direto: dx acumulado do arrasto (flip no release)
     bool m_needClear = true;       // Direct sem sprite: so limpa o fundo quando o desenho muda de fato (anti-flicker)
     int m_scroll = 0;              // modo lista (BoardProfile::launcherList): rolagem vertical em px

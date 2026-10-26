@@ -46,6 +46,14 @@ struct Snapshot {
     // ai quem bombeia e o present()) e o present() dos apps
     uint64_t loopBusyUs, loopTotalUs;
     uint64_t uiFrames, uiPresents, uiFrameUs, uiFrameUsMax;
+    // Quadro da UI NATIVA (Canvas::render: launcher, paineis, teclado),
+    // separado do present() dos apps: compor = fill + draw(); push = entrega
+    // ao vidro. No 4848 o push e uma copia PSRAM->PSRAM do framebuffer RGB
+    // (460 KB) que divide banda com o DMA do painel — esta medida existe
+    // para enxergar esse custo, que o present dos apps nao mostra.
+    uint64_t kuiPresents, kuiComposeUs, kuiPushUs, kuiMaxUs;
+    uint64_t kuiPartial, kuiFull;  // quadros parciais (arrasto) x completos
+    uint64_t kuiPartComposeUs, kuiPartPushUs;  // custo SOMENTE dos parciais
     uint64_t uptimeUs;
     uint32_t cpuFreqMHz;
     uint32_t taskCount;
@@ -80,6 +88,11 @@ void noteJsAlloc();
 void noteJsFree();
 void noteLoopIter(uint32_t busyUs, uint32_t totalUs);
 void notePresent(uint32_t us, bool pushedFrame);
+// Um quadro da UI nativa (Canvas::render/renderRegion). composeUs = montagem
+// no buffer, pushUs = copia ao vidro (0 no modo Direct, que desenha direto no
+// alvo). fullFrame = composicao do quadro inteiro (false = passada parcial do
+// arrasto, que compoe/empurra so a faixa que mudou).
+void noteKuiFrame(uint32_t composeUs, uint32_t pushUs, bool fullFrame);
 // Um giro do pump do svchost (AppServices::tick): busyMs = ms do giro,
 // budgetMs = orcamento (kTickBudgetMs) — acima dele conta overrun.
 void noteSvcTick(uint32_t busyMs, uint32_t budgetMs);
@@ -133,7 +146,9 @@ inline size_t toJson(const Snapshot& s, char* buf, size_t cap) {
           "\"js\":{\"active\":%d,\"launch_free\":%u,\"now_free\":%u,"
           "\"allocs\":%u,\"allocs_peak\":%u},"
           "\"loop\":{\"busy_us\":%llu,\"total_us\":%llu},"
-          "\"ui\":{\"frames\":%llu,\"presents\":%llu,\"us\":%llu,\"us_max\":%llu},",
+          "\"ui\":{\"frames\":%llu,\"presents\":%llu,\"us\":%llu,\"us_max\":%llu},"
+          "\"kui\":{\"presents\":%llu,\"compose_us\":%llu,\"push_us\":%llu,\"us_max\":%llu,"
+          "\"partial\":%llu,\"full\":%llu,\"pcompose_us\":%llu,\"ppush_us\":%llu},",
           (unsigned long long)s.uptimeUs, (unsigned)s.cpuFreqMHz,
           s.heapFree, s.heapMin, s.heapLargest,
           s.intFree, s.intMin, s.intLargest, s.memLow ? 1 : 0,
@@ -141,7 +156,11 @@ inline size_t toJson(const Snapshot& s, char* buf, size_t cap) {
           s.jsActive ? 1 : 0, s.jsLaunchFree, s.jsNowFree, s.jsAllocs, s.jsAllocsPeak,
           (unsigned long long)s.loopBusyUs, (unsigned long long)s.loopTotalUs,
           (unsigned long long)s.uiFrames, (unsigned long long)s.uiPresents,
-          (unsigned long long)s.uiFrameUs, (unsigned long long)s.uiFrameUsMax);
+          (unsigned long long)s.uiFrameUs, (unsigned long long)s.uiFrameUsMax,
+          (unsigned long long)s.kuiPresents, (unsigned long long)s.kuiComposeUs,
+          (unsigned long long)s.kuiPushUs, (unsigned long long)s.kuiMaxUs,
+          (unsigned long long)s.kuiPartial, (unsigned long long)s.kuiFull,
+          (unsigned long long)s.kuiPartComposeUs, (unsigned long long)s.kuiPartPushUs);
     if (!j.ovf) {
         j.add("\"total_rt_us\":%llu,\"tasks\":[", (unsigned long long)s.totalRunTimeUs);
         bool truncated = s.truncated;

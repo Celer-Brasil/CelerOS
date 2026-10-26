@@ -128,3 +128,8 @@ CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_MIC is not set
 # CONFIG_CELEROS_JS_PHYSICS is not set
 # CONFIG_CELEROS_WEB_SERVER is not set
+# Tela de crash com QR fica de fora no perfil lite: o codificador QR da
+# LovyanGFX custa ~10 KB de flash e o slot OTA da CYD e o mais apertado das
+# placas. O REGISTRO continua inteiro (RAM RTC + /local/log/crash.txt, que o
+# agente de frota reporta); so a tela/QR nao entra.
+# CONFIG_CELEROS_CRASH_SCREEN is not set

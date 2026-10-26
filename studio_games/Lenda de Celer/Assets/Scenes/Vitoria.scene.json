@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "rev": 2,
+  "name": "Vitoria",
+  "guid": "e34c4bcf08069cc645ca6a28b95e5f39",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "screen": "win"
+    },
+    "bg": "#0b1020",
+    "static": true
+  },
+  "entities": [
+    {
+      "name": "Controle",
+      "fid": "e_c6d4a5e2",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_046a0598",
+          "fields": {
+            "script": "d32b7e44afaef263ffde5e79a5e69f3b"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "rev": 2,
+  "name": "Titulo",
+  "guid": "21cad2170397329f66c2d6b87d490a39",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "screen": "title"
+    },
+    "bg": "#0b1020",
+    "static": true
+  },
+  "entities": [
+    {
+      "name": "TituloArte",
+      "fid": "e_3da81822",
+      "active": true,
+      "z": -10,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_b35776c0",
+          "fields": {
+            "key": "#000000",
+            "sprite": "6d8f0bf5295ad47b7366fed26e31e13a"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Controle",
+      "fid": "e_9ea34109",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_61520002",
+          "fields": {
+            "script": "d32b7e44afaef263ffde5e79a5e69f3b"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

@@ -27,7 +27,7 @@
       },
       {
         "name": "2",
-        "solid": false
+        "solid": true
       },
       {
         "name": "3",
@@ -39,7 +39,7 @@
       },
       {
         "name": "5",
-        "solid": false
+        "solid": true
       },
       {
         "name": "6",
@@ -47,15 +47,15 @@
       },
       {
         "name": "7",
-        "solid": false
+        "solid": true
       },
       {
         "name": "8",
-        "solid": false
+        "solid": true
       },
       {
         "name": "9",
-        "solid": false
+        "solid": true
       },
       {
         "name": "10",
@@ -63,23 +63,23 @@
       },
       {
         "name": "11",
-        "solid": false
+        "solid": true
       },
       {
         "name": "12",
-        "solid": false
+        "solid": true
       },
       {
         "name": "13",
-        "solid": false
+        "solid": true
       },
       {
         "name": "14",
-        "solid": false
+        "solid": true
       },
       {
         "name": "15",
-        "solid": false
+        "solid": true
       },
       {
         "name": "16",
@@ -87,15 +87,15 @@
       },
       {
         "name": "17",
-        "solid": false
+        "solid": true
       },
       {
         "name": "18",
-        "solid": false
+        "solid": true
       },
       {
         "name": "19",
-        "solid": false
+        "solid": true
       },
       {
         "name": "20",
@@ -107,7 +107,7 @@
       },
       {
         "name": "22",
-        "solid": false
+        "solid": true
       },
       {
         "name": "23",

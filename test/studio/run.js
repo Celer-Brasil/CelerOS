@@ -477,6 +477,47 @@ let built = null;
             dep.js.after > 0 && fs.existsSync(dep.zip) && missing.length === 0,
             missing.join(',') || 'sem deps.json');
     }
+
+    // Lenda: HUD memoizado fora da camada suja + pausa pelo botao do HUD.
+    // Sem o memo, hearts() rodava todo quadro (~60x na janela abaixo).
+    const lendaDir = path.join(ROOT, 'studio_games', 'Lenda de Celer');
+    const lenda = buildProject(lendaDir, {});
+    let hearts = 0, wrapped = false, pausedOk = false, resumedOk = false, stage = 0;
+    runAppFolder(lenda.dir, {
+        render: true, stopAtMs: 2600, microsBias: 1,
+        events: (env) => {
+            const origDelay = env.System.delay;
+            env.System.delay = function (ms) {
+                const s = env.__harness.lenda;
+                const now = env.System.millis();
+                if (stage === 0 && s && s.ctx && s.E) {
+                    stage = 1;
+                    s.ctx.go('Campo 1,1');
+                    const origHearts = s.E.gfx.hearts;
+                    s.E.gfx.hearts = function () {
+                        hearts++;
+                        return origHearts.apply(this, arguments);
+                    };
+                    wrapped = true;
+                } else if (stage === 1 && now > 1600) {
+                    stage = 2;
+                    env.__harness.tap(458, 18);   // pausa
+                } else if (stage === 2 && now > 1900) {
+                    pausedOk = !!s.paused;
+                    stage = 3;
+                    env.__harness.tap(240, 249);  // continuar
+                } else if (stage === 3 && now > 2300) {
+                    resumedOk = !s.paused;
+                    stage = 4;
+                }
+                return origDelay.call(env.System, ms);
+            };
+        },
+    });
+    check('Lenda: pausa pelo botao do HUD', wrapped && pausedOk && resumedOk,
+        'wrapped=' + wrapped + ' paused=' + pausedOk + ' resumed=' + resumedOk);
+    check('Lenda: HUD memoizado (coracoes nao redesenham por quadro)', hearts <= 4,
+        'hearts=' + hearts);
 })();
 
 // --------------------------------------------------------- CLI x HTTP ------

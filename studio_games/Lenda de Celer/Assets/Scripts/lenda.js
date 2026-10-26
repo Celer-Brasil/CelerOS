@@ -3,6 +3,7 @@
 // spawns como entidades. O script cuida do heroi, combate, baus, Sabio,
 // loja, portais, save automatico e HUD. ES5.
 
+var PERF_LOG = false;  // medicao de bancada; falso no build final
 var SONG = {
     bpm: 108, loops: 8,
     tracks: [
@@ -31,6 +32,31 @@ var HERO_ATK = { up: 6, right: 7, down: 8, left: 9 };
 var DIRV = { up: [0, -1], right: [1, 0], down: [0, 1], left: [-1, 0] };
 var OURO = 0xFFE0, BRANCO = 0xFFFF, VERDE = 0x07E0, VERM = 0xF800;
 var TEXT = 0xE71C, TEXT2 = 0x9CF3, PAINEL = 0x10C3, ESCURO = 0x0861, AGUA = 0x041F;
+
+// opcoes de sprite reutilizadas: o draw roda todo quadro e alocar um objeto
+// por peca no Duktape custa caro (o GC aparece como engasgo no 4848)
+var OPT_ROCK = { scale: 0.7, key: 0x0000 };
+var OPT_ITEM = { scale: 1, key: 0x0000 };
+var OPT_SWORD = { scale: 1.15, key: 0x0000, ax: 0.5, ay: 0.5 };
+var OPT_ACTION = { scale: 1.08, key: 0x0000 };
+var WORLD_RING = { fill: false };
+var WORLD_DOT = { fill: true };
+var ACT_RECT = { r: 8, screen: true };
+var JOY_RING = { fill: false, screen: true };
+var JOY_DOT = { fill: true, screen: true };
+var MSG_TXT = { px: 16, align: 'center', color: 0x101010, bg: 0xFFE0, screen: true };
+var ACT_TXT = { px: 10, align: 'center', valign: 'middle', color: OURO, screen: true };
+
+var HERO_FRAME = ['heroi#heroi0', 'heroi#heroi1', 'heroi#heroi2', 'heroi#heroi3',
+                  'heroi#heroi4', 'heroi#heroi5', 'heroi#heroi6', 'heroi#heroi7',
+                  'heroi#heroi8', 'heroi#heroi9'];
+var ENEMY_FRAME = {
+    polvo: ['inimigos#inimigos0', 'inimigos#inimigos1'],
+    morcego: ['inimigos#inimigos2', 'inimigos#inimigos3'],
+    esqueleto: ['inimigos#inimigos4', 'inimigos#inimigos5'],
+    geleia: ['inimigos#inimigos6', 'inimigos#inimigos7'],
+    chefe: ['chefe#chefe0', 'chefe#chefe1']
+};
 
 function C(hex) {
     return ((hex >> 19) & 31) << 11 | ((hex >> 10) & 63) << 5 | ((hex >> 3) & 31);
@@ -101,6 +127,28 @@ exports.start = function (ctx) {
 
 // ------------------------------------------------------------- sala ------
 
+// botoes de tela fixos: atualizar/draw nao alocam um objeto por quadro
+function initButtons(s) {
+    var W = s.W, H = s.H;
+    s.buttons = {
+        a: { x: W - 56, y: H - 52, w: 46, h: 40 },
+        b: { x: W - 56, y: H - 100, w: 46, h: 40 },
+        pause: { x: W - 36, y: 6, w: 28, h: 24 }
+    };
+    s.btnPause = s.buttons.pause;
+}
+
+// recorte do mundo: o apagar das caixas sujas e o desenho do jogo nao
+// invadem a faixa do HUD (o HUD desenha com unclip e depois devolve)
+function applyGameClip(s, E) {
+    if (E.dirty && E.dirty.on && E.caps && E.caps.clip && E.dirty.clip) {
+        E.dirty.clip(0, OY, s.W, s.H - OY);
+        if (typeof System !== 'undefined' && System.setClip) {
+            System.setClip(0, OY, s.W, s.H - OY);
+        }
+    }
+}
+
 function startRoom(s, ctx) {
     var E = s.E = ctx.E;
     var d = ctx.scene.data || {};
@@ -122,6 +170,9 @@ function startRoom(s, ctx) {
     }
     s.hx = cx(at[0]);
     s.hy = cy(at[1]);
+    initButtons(s);
+    s.hudKey = '';
+    applyGameClip(s, E);
     s.dir = 'down';
     s.walkT = 0;
     s.frame = 0;
@@ -194,10 +245,28 @@ function saveState(s) {
 
 exports.update = function (dt, ctx) {
     var s = this, E = s.E;
-    if (s.screen === 'title') return updateTitle(s, E, ctx);
-    if (s.screen === 'win') return updateWin(s, E, ctx);
-    if (s.screen === 'lose') return updateLose(s, E, ctx);
-    updateGame(s, E, ctx, dt);
+    if (s.screen === 'title') updateTitle(s, E, ctx);
+    else if (s.screen === 'win') updateWin(s, E, ctx);
+    else if (s.screen === 'lose') updateLose(s, E, ctx);
+    else updateGame(s, E, ctx, dt);
+    // diagnostico opt-in (E.debug no build ou pelo debugger): o overlay ja
+    // mostra fps; o log permite medir na bancada sem foto
+    if (E.debug || PERF_LOG) {
+        s._perfT = (s._perfT || 0) + dt;
+        if (s._perfT >= 2) {
+            s._perfT = 0;
+            var d = E.dirty && E.dirty._prev ? E.dirty._prev : [];
+            var area = 0;
+            for (var di = 0; di < d.length; di += 4) area += d[di + 2] * d[di + 3];
+            System.print('[lenda] fps=' + E.fps + ' frame=' + E.frameMs + 'ms dirty=' +
+                  (d.length / 4) + ' area=' + area +
+                  ' full=' + (E.dirty && E.dirty._wasFull ? 1 : 0) +
+                  ' cells=' + (s.map ? s.map.dirty() : 0) +
+                  ' upd=' + (E.prof ? (E.prof.update / 1000 | 0) : 0) +
+                  ' draw=' + (E.prof ? (E.prof.draw / 1000 | 0) : 0) +
+                  ' scene=' + E.sceneName);
+        }
+    }
 };
 
 function updateTitle(s, E, ctx) {
@@ -340,9 +409,10 @@ function updateHeroAnim(s) {
     else if (s.dir === 'up') f = 2 + s.frame;
     else if (s.dir === 'right') f = 4;
     else f = 5;
-    if (s.invuln > 0 && Math.floor(s.invuln * 12) % 2 === 0) s.hero.active = false;
-    else s.hero.active = true;
-    s.hero.spr = 'heroi#heroi' + f;
+    var active = !(s.invuln > 0 && Math.floor(s.invuln * 12) % 2 === 0);
+    if (s.hero.active !== active) s.hero.active = active;
+    var spr = HERO_FRAME[f];
+    if (s.hero.spr !== spr) s.hero.spr = spr;
 }
 
 function drawSword(s, E) {
@@ -354,9 +424,8 @@ function drawSword(s, E) {
     else if (s.dir === 'down') y += CELL * 0.8;
     else { x += CELL * 0.18; y -= CELL * 0.8; }
     if (E.spr && E.spr.has && E.spr.has('heroi#heroi' + f)) {
-        E.spr.stamp('heroi#heroi' + f, x, y,
-            { scale: 1.15, key: 0x0000, ax: 0.5, ay: 0.5 });
-        E.gfx.circle(x, y, 3, 0xFFE0, { fill: true });
+        E.spr.stamp('heroi#heroi' + f, x, y, OPT_SWORD);
+        E.gfx.circle(x, y, 3, 0xFFE0, WORLD_DOT);
     }
 }
 
@@ -565,14 +634,20 @@ function updateEnemies(s, E, dt) {
             moveEnt(s, e, dx / d * speed * dt, dy / d * speed * dt);
         }
         if (s.hero) {
-            e.ent.x = e.x; e.ent.y = e.y;
+            if (e.ent.x !== e.x) e.ent.x = e.x;
+            if (e.ent.y !== e.y) e.ent.y = e.y;
             var fr = 0;
             if (e.type === 'morcego') fr = 2 + (Math.floor(e.t * 5) % 2);
             else if (e.type === 'esqueleto') fr = 4 + (Math.floor(e.t * 5) % 2);
             else if (e.type === 'geleia') fr = 6 + (Math.floor(e.t * 5) % 2);
             else if (e.type === 'polvo') fr = Math.floor(e.t * 5) % 2;
-            if (e.type === 'chefe') e.ent.spr = 'chefe#chefe' + (e.flash > 0 ? 1 : 0);
-            else e.ent.spr = 'inimigos#inimigos' + fr;
+            var spr;
+            if (e.type === 'chefe') spr = ENEMY_FRAME.chefe[e.flash > 0 ? 1 : 0];
+            else {
+                var list = ENEMY_FRAME[e.type] || ENEMY_FRAME.polvo;
+                spr = list[fr % list.length];
+            }
+            if (e.ent.spr !== spr) e.ent.spr = spr;
         }
         var rr = e.r + 9;
         if (dist2(e.x, e.y, s.hx, s.hy) < rr * rr) hurtHero(s, E, e.type === 'chefe' ? 2 : 1);
@@ -821,44 +896,37 @@ function drawLose(s, E) {
 
 function drawGame(s, E) {
     var W = s.W, H = s.H, i;
-    // projeteis/bomba/bumerangue por cima das entidades
+    if (!s.buttons) initButtons(s);
+    // projeteis/bomba/bumerangue por cima das entidades (recorte do mundo
+    // ativo: nada disso invade a faixa do HUD)
     for (i = 0; i < s.rocks.length; i++) {
         var r = s.rocks[i];
-        E.spr.stamp('inimigos#inimigos11', r.x, r.y, { scale: 0.7, key: 0x0000 });
+        E.spr.stamp('inimigos#inimigos11', r.x, r.y, OPT_ROCK);
     }
     for (i = 0; i < s.bombs.length; i++) {
         var b = s.bombs[i];
-        E.spr.stamp('itens#itens4', cx(b.c), cy(b.r), { scale: 1, key: 0x0000 });
-        if (b.t < 0.4) E.gfx.circle(cx(b.c), cy(b.r), 9, VERM, { fill: false });
+        E.spr.stamp('itens#itens4', cx(b.c), cy(b.r), OPT_ITEM);
+        if (b.t < 0.4) E.gfx.circle(cx(b.c), cy(b.r), 9, VERM, WORLD_RING);
     }
     if (s.boomerang) {
-        E.spr.stamp('itens#itens5', s.boomerang.x, s.boomerang.y, { scale: 1, key: 0x0000 });
+        E.spr.stamp('itens#itens5', s.boomerang.x, s.boomerang.y, OPT_ITEM);
     }
     for (i = 0; i < s.enemies.length; i++) {
         var en = s.enemies[i];
         if (en.hp > 0 && en.flash > 0) {
-            E.gfx.circle(en.x, en.y, en.r + 3, BRANCO, { fill: false });
+            E.gfx.circle(en.x, en.y, en.r + 3, BRANCO, WORLD_RING);
         }
     }
     drawSword(s, E);
-    // HUD
+    // HUD e botoes: memoizados fora da camada suja
     drawHud(s, E);
     // joystick
     if (s.joy && E.input.down) {
-        E.gfx.circle(s.joy.x, s.joy.y, 20, C(0x2A3A5A), { fill: false, screen: true });
-        E.gfx.circle(s.joy.x, s.joy.y, 4, OURO, { fill: true, screen: true });
+        E.gfx.circle(s.joy.x, s.joy.y, 20, C(0x2A3A5A), JOY_RING);
+        E.gfx.circle(s.joy.x, s.joy.y, 4, OURO, JOY_DOT);
     }
-    // botoes A/B
-    s.buttons = {
-        a: { x: W - 56, y: H - 52, w: 46, h: 40 },
-        b: { x: W - 56, y: H - 100, w: 46, h: 40 },
-        pause: { x: W - 36, y: 6, w: 28, h: 24 }
-    };
-    drawAction(E, s.buttons.a, 'A', 'itens#itens9');
-    drawAction(E, s.buttons.b, 'B', s.st.itemB === 'bumerangue' ? 'itens#itens5' : 'itens#itens4');
     if (s.msg) {
-        E.gfx.text(s.msg, W / 2, H - 70, { px: 16, align: 'center',
-            color: 0x101010, bg: 0xFFE0, screen: true });
+        E.gfx.text(s.msg, W / 2, H - 70, MSG_TXT);
     }
     if (s.dialog) {
         var dlg = s.dialog;
@@ -870,6 +938,7 @@ function drawGame(s, E) {
             { px: 11, align: 'center', color: TEXT2 });
     }
     if (s.paused) {
+        if (E.dirty.unclip) E.dirty.unclip();   // a pausa cobre tambem o HUD
         E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
         E.gfx.panel(60, 150, W - 120, 190, { bg: PAINEL, stroke: OURO, r: 12, screen: true });
         E.gfx.text('PAUSA', W / 2, 186, { px: 32, align: 'center', color: OURO });
@@ -877,6 +946,7 @@ function drawGame(s, E) {
             { primary: true, screen: true, px: 17 });
         s.btnMenuPause = E.gfx.button('MENU', W / 2 - 60, 282, 120, 32,
             { primary: false, screen: true, px: 13 });
+        applyGameClip(s, E);
     }
     if (s.dead || s.win) {
         E.gfx.text(s.win ? 'GUARDIAO DERROTADO!' : 'VOCE CAIU',
@@ -886,16 +956,41 @@ function drawGame(s, E) {
 }
 
 function drawAction(E, r, key, icon) {
-    E.gfx.rect(r.x, r.y, r.w, r.h, C(0x1B2740), { r: 8, screen: true });
+    E.gfx.rect(r.x, r.y, r.w, r.h, C(0x1B2740), ACT_RECT);
     if (E.spr && E.spr.has && E.spr.has(icon)) {
-        E.spr.stamp(icon, r.x + r.w / 2, r.y + r.h / 2 + 1,
-            { scale: 1.08, key: 0x0000 });
+        E.spr.stamp(icon, r.x + r.w / 2, r.y + r.h / 2 + 1, OPT_ACTION);
     }
-    E.gfx.text(key, r.x + 8, r.y + 7, { px: 10, align: 'center', valign: 'middle',
-        color: OURO, screen: true });
+    E.gfx.text(key, r.x + 8, r.y + 7, ACT_TXT);
+}
+
+function hudKey(s) {
+    return s.st.hp + '|' + s.st.hpMax + '|' + s.st.crystals + '|' + s.st.bombs +
+        '|' + s.st.keys + '|' + (s.st.sword || 1) + '|' + s.st.itemB +
+        '|' + s.roomName;
+}
+
+function hudTouched(s, E) {
+    if (!E.dirty || !E.dirty.touches) return true;
+    if (E.dirty.touches(0, 0, s.W, OY)) return true;
+    // dialogo/mensagem cobrem a faixa dos botoes: nao vale repintar o HUD
+    // inteiro por quadro; quando o overlay sai, a caixa suja dele forca o
+    // repaint dos botoes
+    if (s.dialog || s.msg) return false;
+    var b = s.buttons;
+    return E.dirty.touches(b.a.x, b.a.y, b.a.w, b.a.h) ||
+        E.dirty.touches(b.b.x, b.b.y, b.b.w, b.b.h) ||
+        E.dirty.touches(b.pause.x, b.pause.y, b.pause.w, b.pause.h);
 }
 
 function drawHud(s, E) {
+    if (!s.st || s.paused || s.dead || s.win) return;
+    var key = hudKey(s);
+    if (s.hudKey === key && !hudTouched(s, E)) return;
+    s.hudKey = key;
+    // HUD fora da camada suja: parado ele nao entra no apaga-redesenha do
+    // mundo. O recorte nativo e solto so durante o HUD e devolvido depois.
+    E.dirty._mute++;
+    if (E.dirty.unclip) E.dirty.unclip();
     var W = s.W;
     E.gfx.rect(0, 0, W, OY, C(0x080C16), { screen: true });
     E.gfx.rect(0, OY - 2, W, 2, OURO, { screen: true });
@@ -904,9 +999,16 @@ function drawHud(s, E) {
     E.gfx.hearts(s.st.hp, s.st.hpMax, 40, 26, { size: 10, color: VERM,
         empty: 0x3008, screen: true });
     var info = 'CRISTAIS ' + s.st.crystals + '   BOMBAS ' + s.st.bombs +
-        '   CHAVES ' + s.st.keys + (s.st.sage ? '   ESPADA 2' : '   ESPADA 1');
+        '   CHAVES ' + s.st.keys + '   ESPADA ' + (s.st.sword || 1);
     E.gfx.text(info, W / 2, 48, { px: 11, align: 'center', color: TEXT2,
         fit: W - 80, screen: true });
     E.gfx.text('II', W - 22, 18, { px: 13, align: 'center', valign: 'middle',
         color: BRANCO, screen: true });
+    if (!s.dialog) {
+        drawAction(E, s.buttons.a, 'A', 'itens#itens9');
+        drawAction(E, s.buttons.b, 'B',
+            s.st.itemB === 'bumerangue' ? 'itens#itens5' : 'itens#itens4');
+    }
+    E.dirty._mute--;
+    applyGameClip(s, E);
 }

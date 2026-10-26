@@ -222,7 +222,7 @@ script do projeto. Os apps originais em `hub_apps/` não foram alterados.
 |---------|----------|---------------|-------|--------|----|--------|
 | `studio_games/Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 7 | 57,9 KB | 132,2 KB |
 | `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88,3 KB | 78,9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.4 | 23 | 9 | 112,3 KB | 206,7 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.5 | 23 | 9 | 115,1 KB | 206,7 KB |
 | `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36,9 KB | 110,8 KB |
 
 Abra, edite e jogue como qualquer projeto:
@@ -244,10 +244,10 @@ O que cada remontagem ganhou:
   uma entidade com textura/rotação sincronizada a um corpo `P.rigid`.
   Estilingue, sete poderes de pedra, TNT em cadeia, dano por impacto, estrelas
   e progresso salvo.
-- **Lenda de Celer 2.0.4** — as 20 salas ASCII originais como cenas (Campo,
+- **Lenda de Celer 2.0.5** — as 20 salas ASCII originais como cenas (Campo,
   Gruta e Templo), sólidos por tile, portais de borda/porta/escada/caverna/
   rachadura, espada/bomba/bumerangue, baús, Sábio, loja de cristais, Guardião
-  em três fases, save automático, continuar, vitória e fim. Os botões A/B usam ícones de espada/bomba/bumerangue; a espada é um overlay separado (o corpo não some) e os tilemaps desenham a célula pelo canto. A 2.0.4 também leva o `deps.json` resolvido dentro do pacote, então a instalação direta acha os módulos compartilhados da engine.
+  em três fases, save automático, continuar, vitória e fim. Os botões A/B usam ícones de espada/bomba/bumerangue; a espada é um overlay separado (o corpo não some) e os tilemaps desenham a célula pelo canto. A 2.0.4 também leva o `deps.json` resolvido dentro do pacote, então a instalação direta acha os módulos compartilhados da engine. A 2.0.5 memoiza o HUD fora da camada suja, recorta a repintura do mundo na faixa do HUD (sem 12 círculos de coração, ícones de botão e textos por quadro) e reutiliza opções de sprite e nomes de frames.
 - **Supernova 3.0.1** — campanha de 10 ondas com chefe a cada cinco e modo
   infinito, chefe em três fases, combo x1..x5, orbes, SUPERNOVA, tiro triplo,
   hitbox de graze, pausa, recorde e cenas nativas de título/vitória/derrota.

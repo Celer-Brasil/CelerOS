@@ -45,6 +45,10 @@ function studioBoot(E, data) {
         var cols = tm.cols, rows = tm.rows, data = tm.data, solids = tm.solids;
         var solidValues = tm.solidValues || null;
         var auto = tm.autotile || null;
+        // nome do slot e opcoes reaproveitados: o flush repinta varias
+        // celulas por quadro e concatenar/objetar por celula pesa no Duktape
+        var tileSlots = {};
+        var tileOpts = { scale: 1, ax: 0, ay: 0 };
         var map = E.tilemap({
             cols: cols, rows: rows, cell: tm.cell, ox: tm.ox, oy: tm.oy, data: data,
             // tileset com solidity por TILE (Studio): o valor da celula
@@ -69,10 +73,10 @@ function studioBoot(E, data) {
                 // ter ax/ay do .spr.meta (pivot 0.5 por default), e usa-lo
                 // aqui deslocava cada tile meia celula (buracos pretos nas
                 // bordas/portas)
-                E.spr.stamp(asset.n + '#' + v,
-                            x - E.cam.x + E.cam.ox,
-                            y - E.cam.y + E.cam.oy,
-                            { scale: 1, ax: 0, ay: 0 });
+                var slot = tileSlots[v];
+                if (!slot) slot = tileSlots[v] = asset.n + '#' + v;
+                E.spr.stamp(slot, x - E.cam.x + E.cam.ox,
+                            y - E.cam.y + E.cam.oy, tileOpts);
             }
         });
         map.all();

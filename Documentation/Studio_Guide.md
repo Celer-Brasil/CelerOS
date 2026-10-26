@@ -222,7 +222,7 @@ changed.
 |---------|----------|----------------|--------|--------|----|--------|
 | `studio_games/Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 7 | 57.9 KB | 132.2 KB |
 | `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88.3 KB | 78.9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.4 | 23 | 9 | 112.3 KB | 206.7 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.5 | 23 | 9 | 115.1 KB | 206.7 KB |
 | `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36.9 KB | 110.8 KB |
 
 Open, edit and play like any project:
@@ -243,14 +243,16 @@ What each remount added:
 - **Arrasa 2.0.1** — the original ten stages as scenes; each box/goblin/king is
   an entity with its texture/rotation synced to a `P.rigid` body. Sling aim,
   seven projectile powers, TNT chains, impact damage, stars, saved progress.
-- **Lenda de Celer 2.0.4** — all 20 original ASCII rooms as scenes (Campo,
+- **Lenda de Celer 2.0.5** — all 20 original ASCII rooms as scenes (Campo,
   Gruta and Templo), tile solids per tile, portals for edges/doors/stairs/
   caves/cracked walls, sword/bomb/boomerang, chests, Sage, crystal shop, a
   three-phase Guardian, automatic save, continue, victory and game over. The A/B
   buttons use sword/bomb/boomerang icons, the sword is a separate overlay (the
   body stays visible), and tilemaps anchor each cell at the corner. 2.0.4 also
   ships the resolved `deps.json` inside the package, so a direct install finds
-  the shared engine modules.
+  the shared engine modules. 2.0.5 memoizes the HUD outside the dirty layer,
+  clips the world repaint at the HUD band (no more 12 heart circles, button
+  icons and texts per frame) and reuses sprite options/frame names.
 - **Supernova 3.0.1** — a 10-wave campaign with a boss every five waves plus an
   endless mode, three-phase boss, combo x1..x5, orbs, SUPERNOVA blast, triple
   shot, graze hitbox, pause, record and native title/victory/loss scenes.

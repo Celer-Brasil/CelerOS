@@ -20,6 +20,12 @@ const S = {
   tile: { active: false, tmId: null, value: 0, solid: false,
           data: null, solids: null, dirty: false, painting: false,
           strokeValue: 0, hover: null },
+  gizmo: 'move',
+  mouse: null,
+  assetFilter: '',
+  hierFilter: '',
+  dragAsset: null,
+  animPreview: null,
 };
 
 // ------------------------------------------------------------- helpers ----
@@ -171,6 +177,7 @@ function selectionExists() {
     return !!sc && (sc.tilemaps || []).some((t) => t.id === S.sel.id);
   }
   if (S.sel.kind === 'asset') return !!assetByGuid(S.sel.id);
+  if (S.sel.kind === 'project') return true;
   return true;
 }
 
@@ -222,6 +229,8 @@ function renderHierarchy() {
   box.innerHTML = '';
   const sc = currentScene();
   if (!sc) { box.appendChild(el('div', { class: 'empty', text: 'nenhuma cena' })); return; }
+  const q = (S.hierFilter || '').trim().toLowerCase();
+  const show = (s) => !q || String(s || '').toLowerCase().indexOf(q) >= 0;
 
   const sceneRow = el('div', {
     class: 'row scene' + (S.sel.kind === 'scene' ? ' sel' : ''),
@@ -229,7 +238,10 @@ function renderHierarchy() {
   }, [el('span', { class: 'ico', text: '▤' }), el('span', { class: 'nm', text: sc.name })]);
   box.appendChild(sceneRow);
 
+  let shown = 0;
   for (const e of sc.entities || []) {
+    if (!show(e.name) && !show(e.fid)) continue;
+    shown++;
     const row = el('div', {
       class: 'row' + (S.sel.kind === 'entity' && S.sel.id === e.fid ? ' sel' : ''),
       title: e.fid,
@@ -243,6 +255,8 @@ function renderHierarchy() {
   }
 
   for (const tm of sc.tilemaps || []) {
+    if (!show(tm.id) && !show(tm.tileset)) continue;
+    shown++;
     const a = asset(tm.tileset);
     const row = el('div', {
       class: 'row tm' + (S.sel.kind === 'tilemap' && S.sel.id === tm.id ? ' sel' : ''),
@@ -254,10 +268,16 @@ function renderHierarchy() {
     ]);
     box.appendChild(row);
   }
+  if (!shown && q) box.appendChild(el('div', { class: 'empty', text: 'nada casa com o filtro' }));
 }
 
 function selectEntity(fid) {
   S.sel = { kind: 'entity', id: fid, comp: null };
+  renderHierarchy(); renderInspector(); draw();
+}
+
+function selectProject() {
+  S.sel = { kind: 'project', id: null, comp: null };
   renderHierarchy(); renderInspector(); draw();
 }
 
@@ -287,7 +307,9 @@ function renderAssets() {
   const box = $('#assets');
   box.innerHTML = '';
   const groups = { Sprite: [], Audio: [], Script: [], Cena: [], Prefab: [] };
+  const q = (S.assetFilter || '').trim().toLowerCase();
   for (const a of S.snap.describe.assets || []) {
+    if (q && String(a.name + ' ' + a.path + ' ' + a.kind).toLowerCase().indexOf(q) < 0) continue;
     let g = 'Sprite';
     if (a.kind === 'audio') g = 'Audio';
     else if (a.kind === 'script') g = 'Script';
@@ -302,6 +324,15 @@ function renderAssets() {
       const row = el('div', {
         class: 'row' + (S.sel.kind === 'asset' && S.sel.id === a.guid ? ' sel' : ''),
         title: a.path,
+        draggable: 'true',
+        ondragstart: (ev) => {
+          S.dragAsset = a.guid;
+          try {
+            ev.dataTransfer.setData('text/plain', JSON.stringify({ guid: a.guid, kind: a.kind }));
+            ev.dataTransfer.effectAllowed = 'copy';
+          } catch (e) {}
+        },
+        ondragend: () => { S.dragAsset = null; },
         onclick: () => selectAsset(a.guid),
         ondblclick: () => {
           if (a.kind === 'scene') { S.sceneGuid = a.guid; S.sel = { kind: 'scene', id: null, comp: null }; renderSceneSel(); renderHierarchy(); renderInspector(); draw(); }
@@ -341,8 +372,8 @@ function selectAsset(guid) {
 
 // ----------------------------------------------------------- inspector ----
 
-function field(label, input) {
-  return el('div', { class: 'field' }, [el('label', { text: label }), input]);
+function field(label, input, wide) {
+  return el('div', { class: 'field' + (wide ? ' wide' : '') }, [el('label', { text: label }), input]);
 }
 function num(value, onChange, step) {
   const i = el('input', { type: 'number', step: step || 1 });
@@ -379,6 +410,13 @@ function select(value, values, onChange) {
   s.addEventListener('change', () => onChange(s.value));
   return s;
 }
+function longText(value, onChange) {
+  const t = el('textarea');
+  t.value = value === undefined || value === null ? '' : value;
+  t.addEventListener('change', () => onChange(t.value));
+  return t;
+}
+
 function jsonArea(value, onCommit) {
   const t = el('textarea');
   t.value = JSON.stringify(value || {}, null, 2);
@@ -390,12 +428,18 @@ function jsonArea(value, onCommit) {
 }
 
 function renderInspector() {
+  stopAnimPreview();
   const box = $('#inspector');
   const kind = $('#inspKind');
   box.innerHTML = '';
   if (!S.snap) return;
   const sc = currentScene();
 
+  if (S.sel.kind === 'project') {
+    kind.textContent = 'PROJETO';
+    renderProjectInspector(box);
+    return;
+  }
   if (S.sel.kind === 'asset') {
     kind.textContent = 'ASSET';
     renderAssetInspector(box, assetByGuid(S.sel.id));
@@ -419,6 +463,64 @@ function renderInspector() {
   if (sc) renderSceneInspector(box, sc); else box.appendChild(el('div', { class: 'empty', text: 'sem cena' }));
 }
 
+function renderProjectInspector(box) {
+  const prj = S.snap.describe.project;
+  const lim = S.snap.describe.limits || {};
+  const set = (patch) => projectSet(patch);
+  box.appendChild(el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'IDENTIDADE' }),
+    field('nome', text(prj.name, (v) => set({ name: v }))),
+    field('pacote', text(prj.packageName, (v) => set({ packageName: v }))),
+    field('versao', text(prj.version, (v) => set({ version: v }))),
+    field('autor', text(prj.author || '', (v) => set({ author: v }))),
+    field('categoria', text(prj.category || '', (v) => set({ category: v }))),
+    field('tipo', text(prj.type || 'Game', (v) => set({ type: v }))),
+    field('API', num(prj.api, (v) => set({ api: v }), 1)),
+    field('runtime', el('input', { type: 'text', value: prj.runtime || 'studio', disabled: 'disabled' })),
+    field('start scene', select(prj.startScene || '', (S.snap.describe.scenes || []).map((sc) => ({
+      value: sc.guid, label: sc.name,
+    })), (v) => set({ startScene: v }))),
+    field('descricao', longText(prj.description || '', (v) => set({ description: v })), true),
+    field('changelog', longText(prj.changelog || '', (v) => set({ changelog: v })), true),
+  ]));
+
+  const cv = prj.canvas || {};
+  box.appendChild(el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'CANVAS / ESP32' }),
+    field('largura', num(cv.w || 240, (v) => set({ canvas: { w: v } }), 1)),
+    field('altura', num(cv.h || 320, (v) => set({ canvas: { h: v } }), 1)),
+    field('nativo', check(cv.native, (v) => set({ canvas: { native: v } }))),
+    field('fps', num(cv.fps === undefined ? 30 : cv.fps, (v) => set({ canvas: { fps: v } }), 1)),
+    field('inset', num(cv.inset || 0, (v) => set({ canvas: { inset: v } }), 1)),
+    field('split KB', num((prj.build || {}).splitKB || 96, (v) => set({ build: { splitKB: v } }), 1)),
+    el('div', { class: 'hint', text: 'canvas nativo usa pixels fisicos; apps em 240x320 usam UI::sx/sy' }),
+  ]));
+
+  const psram = (prj.requires || []).indexOf('psram') >= 0;
+  box.appendChild(el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'PACOTE' }),
+    field('topbar', check(prj.topbar, (v) => set({ topbar: v }))),
+    field('psram', check(psram, (v) => set({ requires: v ? ['psram'] : [] }))),
+    field('permissoes', jsonArea(prj.permissions || [], (v) => set({ permissions: v })), true),
+    field('deps', jsonArea(prj.deps || {}, (v) => set({ deps: v })), true),
+    el('div', { class: 'hint', text: Object.keys(prj.deps || {}).length + '/' + (lim.deps || 8) +
+      ' deps · teto JS ' + (lim.jsKB || 1024) + 'KB · assets ' + (lim.assetsKB || 256) + 'KB' }),
+  ]));
+
+  const b = S.snap.build;
+  box.appendChild(el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'STATUS DO BUILD' }),
+    el('div', { class: 'usage', text: b
+      ? (b.extras + '/16 extras · ' + (b.jsBytes / 1024).toFixed(1) + 'KB JS · ' +
+         (b.assetBytes / 1024).toFixed(1) + 'KB assets')
+      : 'sem build ainda' }),
+    el('div', { class: 'rowbtns' }, [
+      el('button', { class: 'mini primary', text: 'build', onclick: doBuild }),
+      el('button', { class: 'mini', text: 'validar', onclick: doValidate }),
+    ]),
+  ]));
+}
+
 function renderSceneInspector(box, sc) {
   const st = sc.settings || {};
   box.appendChild(el('div', { class: 'insp-section' }, [
@@ -432,7 +534,28 @@ function renderSceneInspector(box, sc) {
         class: 'mini', text: sc.guid === S.snap.describe.project.startScene ? 'cena inicial ✓' : 'definir inicial',
         onclick: () => ops([{ op: 'scene.start', scene: sc.guid }]),
       }),
+      el('button', {
+        class: 'mini', text: 'excluir cena',
+        onclick: () => {
+          if ((S.snap.describe.scenes || []).length <= 1) { log('o projeto precisa de ao menos uma cena', 'err'); return; }
+          if (!confirm('Excluir a cena "' + sc.name + '"?')) return;
+          ops([{ op: 'scene.delete', scene: sc.guid }]).then((r) => {
+            S.sceneGuid = null; S.sel = { kind: 'scene', id: null, comp: null };
+            if (r.snapshot) setSnapshot(r.snapshot, {}); else loadSnapshot({});
+          });
+        },
+      }),
     ]),
+  ]));
+
+  box.appendChild(el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'DADOS DA CENA' }),
+    field('data (JSON)', jsonArea(st.data || {}, (v) => sceneSetting(sc, { data: v }, ['data'])), true),
+    field('assets (JSON)', jsonArea(st.assets || [], (v) => sceneSetting(sc, { assets: v }, ['assets'])), true),
+    field('musica', select(st.music || '', [{ value: '', label: '(nenhuma)' }].concat(
+      (S.snap.describe.assets || []).filter((a) => a.kind === 'audio')
+        .map((a) => ({ value: a.guid, label: a.name }))), (v) => sceneSetting(sc, { music: v }, ['music']))),
+    el('div', { class: 'hint', text: 'data/assets sao lidos pelo controlador da cena; assets aceita GUID ou nome' }),
   ]));
 
   const cam = st.camera || {};
@@ -501,8 +624,10 @@ function projectSet(patch) {
   ops([{ op: 'project.set', ...patch }], { keepInspector: true });
 }
 
-function sceneSetting(sc, patch) {
-  ops([{ op: 'scene.set', scene: sc.guid, settings: patch }], { keepInspector: true });
+function sceneSetting(sc, patch, replace) {
+  const op = { op: 'scene.set', scene: sc.guid, settings: patch };
+  if (replace) op.replace = replace;
+  ops([op], { keepInspector: true });
 }
 function cameraSetting(sc, patch) {
   ops([{ op: 'scene.set', scene: sc.guid, settings: { camera: patch } }], { keepInspector: true });
@@ -659,6 +784,17 @@ function renderEntityInspector(box, sc, e) {
       el('button', {
         class: 'mini', text: 'duplicar',
         onclick: () => ops([{ op: 'entity.duplicate', scene: sc.guid, entity: e.fid }]),
+      }),
+      el('button', {
+        class: 'mini', text: 'criar prefab',
+        onclick: () => {
+          const name = prompt('nome do prefab (sem extensao):', e.name);
+          if (!name) return;
+          ops([{ op: 'prefab.create', name, scene: sc.guid, entity: e.fid }]).then((r) => {
+            const pf = r.results && r.results[0] && r.results[0].prefab;
+            if (pf) selectAsset(pf.guid);
+          }).catch(() => {});
+        },
       }),
       el('button', {
         class: 'mini', text: 'excluir entidade',
@@ -837,8 +973,139 @@ function renderTilemapInspector(box, sc, tm) {
   ]));
 }
 
+function stopAnimPreview() {
+  if (S.animPreview && S.animPreview.timer) clearInterval(S.animPreview.timer);
+  S.animPreview = null;
+}
+
+function refGuid(ref) { return ref ? String(ref).split('#')[0] : ''; }
+
+function assetUsage(guid) {
+  const scenes = [], prefabs = [];
+  const useEntity = (e) => {
+    let hit = e.prefab === guid;
+    for (const c of e.components || []) {
+      const f = c.fields || {};
+      if (c.type === 'sprite' && refGuid(f.sprite) === guid) hit = true;
+      if (c.type === 'script' && refGuid(f.script) === guid) hit = true;
+      if (c.type === 'anim') {
+        if (f.meta && refGuid(f.meta) === guid) hit = true;
+        const clips = f.clips || {};
+        for (const k in clips) {
+          for (const fr of (clips[k].frames || [])) if (refGuid(fr) === guid) hit = true;
+        }
+      }
+    }
+    return hit;
+  };
+  for (const sc of Object.values(S.snap.scenes || {})) {
+    let hit = false;
+    for (const tm of sc.tilemaps || []) if (tm.tileset === guid) hit = true;
+    for (const ref of (sc.settings && sc.settings.assets) || []) if (refGuid(ref) === guid) hit = true;
+    for (const e of sc.entities || []) if (useEntity(e)) hit = true;
+    if (hit) scenes.push(sc.name);
+  }
+  for (const pf of Object.values(S.snap.prefabs || {})) {
+    let hit = false;
+    for (const e of pf.entities || []) if (useEntity(e)) hit = true;
+    if (hit) prefabs.push(pf.name);
+  }
+  return { scenes, prefabs };
+}
+
+function tilesetSolidsSection(a, set) {
+  const st = a.settings || {};
+  const regs = a.regionsList || [];
+  const tiles = (st.tiles || []).slice();
+  while (tiles.length < regs.length) tiles.push({ name: String(tiles.length), solid: false });
+  const sec = el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'SOLIDOS DO TILESET' }),
+    el('div', { class: 'hint', text: 'marcado = colide no runtime; map.set usa o valor atual da celula' }),
+  ]);
+  const grid = el('div', { class: 'tilesolids' });
+  regs.forEach((r, i) => {
+    const cell = el('label', { class: 'tilesolid', title: 'tile ' + i + ' (' + r.name + ')' });
+    if (st.w && st.h) {
+      const k = Math.min(36 / r.w, 36 / r.h);
+      cell.style.backgroundImage = 'url(' + JSON.stringify('/api/assets?path=' + encodeURIComponent(a.path)) + ')';
+      cell.style.backgroundSize = (st.w * k) + 'px ' + (st.h * k) + 'px';
+      cell.style.backgroundPosition = '-' + (r.x * k) + 'px -' + (r.y * k) + 'px';
+    }
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = !!tiles[i].solid;
+    cb.addEventListener('change', () => {
+      const copy = tiles.map((t) => ({ name: t.name, solid: !!t.solid }));
+      copy[i].solid = cb.checked;
+      set({ tiles: copy });
+    });
+    cell.appendChild(cb);
+    cell.appendChild(el('span', { text: String(i) }));
+    grid.appendChild(cell);
+  });
+  sec.appendChild(grid);
+  return sec;
+}
+
+function animPreviewSection(a) {
+  const st = a.settings || {};
+  const anims = st.anims || {};
+  const names = Object.keys(anims);
+  if (!names.length) return null;
+  const regs = a.regionsList || [];
+  let clip = names[0], idx = 0, timer = null;
+  const frame = el('div', { class: 'anim-frame' });
+  const clipSel = select(clip, names.map((n) => ({ value: n, label: n })), (v) => {
+    clip = v; idx = 0; show();
+  });
+  const fps = el('input', { type: 'number', min: '1', max: '30' });
+  fps.value = (st.fps && st.fps[clip]) || 6;
+  const btn = el('button', { class: 'mini', text: 'play' });
+  const stop = () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+    btn.textContent = 'play';
+    if (S.animPreview) S.animPreview.timer = null;
+  };
+  const frameRegion = () => {
+    const list = anims[clip] || [];
+    if (!list.length) return null;
+    const it = list[idx % list.length];
+    const name = typeof it === 'number' ? (regs[it] || {}).name : it;
+    return regs.find((r) => String(r.name) === String(name)) || null;
+  };
+  const show = () => {
+    const r = frameRegion();
+    if (!r || !st.w || !st.h) return;
+    const k = Math.min(96 / r.w, 96 / r.h);
+    frame.style.backgroundImage = 'url(' + JSON.stringify('/api/assets?path=' + encodeURIComponent(a.path)) + ')';
+    frame.style.backgroundSize = (st.w * k) + 'px ' + (st.h * k) + 'px';
+    frame.style.backgroundPosition = '-' + (r.x * k) + 'px -' + (r.y * k) + 'px';
+  };
+  btn.onclick = () => {
+    if (timer) { stop(); return; }
+    const rate = Math.max(1, Math.min(30, +fps.value || 6));
+    timer = setInterval(() => { idx++; show(); }, 1000 / rate);
+    btn.textContent = 'stop';
+    if (!S.animPreview) S.animPreview = {};
+    S.animPreview.timer = timer;
+    show();
+  };
+  clipSel.addEventListener('change', stop);
+  show();
+  return el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'PREVIEW DE ANIMACAO' }),
+    field('clipe', clipSel),
+    field('fps', fps),
+    el('div', { class: 'preview-wrap' }, [frame, el('div', {}, [
+      btn, el('div', { class: 'hint', text: (anims[clip] || []).length + ' quadros' }),
+      el('div', { class: 'hint', text: 'frames do .meta (E.spr.animOf)' }),
+    ])]),
+  ]);
+}
+
 function renderAssetInspector(box, a) {
   if (!a) { box.appendChild(el('div', { class: 'empty', text: 'asset sumiu' })); return; }
+  const usage = assetUsage(a.guid);
   box.appendChild(el('div', { class: 'insp-section' }, [
     el('h4', { text: (KIND_LABEL[a.kind] || a.kind).toUpperCase() }),
     field('nome', text(a.name, (v) => ops([{ op: 'asset.rename', asset: a.guid, name: v }]))),
@@ -846,6 +1113,10 @@ function renderAssetInspector(box, a) {
     field('arquivo', el('input', { type: 'text', value: a.path, disabled: 'disabled' })),
     field('importer', el('input', { type: 'text', value: a.importer, disabled: 'disabled' })),
     field('bytes', el('input', { type: 'text', value: a.size, disabled: 'disabled' })),
+    el('div', { class: 'usage', text: usage.scenes.length || usage.prefabs.length
+      ? 'usado em ' + usage.scenes.length + ' cena(s)' + (usage.prefabs.length ? ' e ' + usage.prefabs.length + ' prefab(s)' : '') +
+        ': ' + usage.scenes.concat(usage.prefabs).slice(0, 3).join(', ')
+      : 'nao usado no build' }),
   ]));
 
   if (['sprite', 'sprite-sheet', 'tileset'].includes(a.kind)) {
@@ -891,6 +1162,9 @@ function renderAssetInspector(box, a) {
         el('img', { class: 'asset-thumb', src: '/api/assets?path=' + encodeURIComponent(a.path), style: 'width:96px;height:96px' }),
       ]),
     ]));
+    const ap = animPreviewSection(a);
+    if (ap) box.appendChild(ap);
+    if (a.kind === 'tileset') box.appendChild(tilesetSolidsSection(a, set));
   } else if (a.kind === 'audio') {
     const st = a.settings || {};
     const set = (patch) => ops([{ op: 'asset.set', asset: a.guid, settings: patch }], { keepInspector: true });
@@ -904,6 +1178,28 @@ function renderAssetInspector(box, a) {
       el('h4', { text: 'SCRIPT' }),
       el('div', { class: 'rowbtns' }, [
         el('button', { class: 'mini', text: 'abrir editor', onclick: () => openScript(a) }),
+      ]),
+    ]));
+  }
+  if (a.kind === 'prefab') {
+    const pf = prefabByGuid(a.guid);
+    box.appendChild(el('div', { class: 'insp-section' }, [
+      el('h4', { text: 'PREFAB' }),
+      el('div', { class: 'hint', text: pf ? (pf.entities || []).length + ' entidade(s) locais; o build achata' : 'prefab ilegivel' }),
+      el('div', { class: 'rowbtns' }, [
+        el('button', {
+          class: 'mini primary', text: 'instanciar na cena',
+          onclick: () => {
+            const sc = currentScene();
+            if (!sc) { log('abra uma cena antes', 'err'); return; }
+            const m = sceneMetrics();
+            ops([{ op: 'prefab.instance', scene: sc.guid, prefab: a.guid,
+                   x: Math.round(m.w / 2), y: Math.round(m.h / 2), z: 0 }]).then((r) => {
+              const e = r.results && r.results[0] && r.results[0].entity;
+              if (e) selectEntity(e.fid);
+            });
+          },
+        }),
       ]),
     ]));
   }
@@ -1287,11 +1583,12 @@ function drawEntity(ctx, e, selected, dragPreview) {
     }
     return;
   }
-  const x = dragPreview ? dragPreview.x : (t.x || 0);
-  const y = dragPreview ? dragPreview.y : (t.y || 0);
-  const rot = (t.rot || 0) * Math.PI / 180;
-  const sx = t.sx === undefined ? 1 : t.sx;
-  const sy = t.sy === undefined ? 1 : t.sy;
+  const pv = dragPreview || {};
+  const x = pv.x !== undefined ? pv.x : (t.x || 0);
+  const y = pv.y !== undefined ? pv.y : (t.y || 0);
+  const rot = (pv.rot !== undefined ? pv.rot : (t.rot || 0)) * Math.PI / 180;
+  const sx = pv.sx !== undefined ? pv.sx : (t.sx === undefined ? 1 : t.sx);
+  const sy = pv.sy !== undefined ? pv.sy : (t.sy === undefined ? 1 : t.sy);
   const piv = spritePivot(e);
   const ax = t.ax === undefined ? piv.ax : t.ax;
   const ay = t.ay === undefined ? piv.ay : t.ay;
@@ -1368,6 +1665,159 @@ function drawEntity(ctx, e, selected, dragPreview) {
   }
 }
 
+function selectedLiveEntity() {
+  const sc = currentScene();
+  if (!sc || S.sel.kind !== 'entity') return null;
+  return sceneEntity(sc, S.sel.id);
+}
+
+function gizmoPivot(e) {
+  const t = e.transform || {};
+  return { x: t.x || 0, y: t.y || 0 };
+}
+
+function gizmoLen() { return 46 / Math.max(0.2, S.view.zoom); }
+function gizmoR() { return 7 / Math.max(0.2, S.view.zoom); }
+
+function setGizmo(mode) {
+  if (['move', 'rotate', 'scale'].indexOf(mode) < 0) return;
+  S.gizmo = mode;
+  for (const b of $$('#gizmoBar [data-gizmo]')) b.classList.toggle('active', b.dataset.gizmo === mode);
+  draw();
+}
+
+function drawGizmo(ctx, e) {
+  const t = e.transform || {};
+  const p = gizmoPivot(e);
+  const L = gizmoLen(), r = gizmoR();
+  ctx.save();
+  ctx.lineWidth = 2 / Math.max(0.2, S.view.zoom);
+  ctx.font = (10 / Math.max(0.2, S.view.zoom)) + 'px system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  if (S.gizmo === 'move') {
+    ctx.strokeStyle = '#ff6b6b';
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + L, p.y); ctx.stroke();
+    ctx.fillStyle = '#ff6b6b'; ctx.fillRect(p.x + L - r, p.y - r, r * 2, r * 2);
+    ctx.fillStyle = '#ff6b6b'; ctx.fillText('X', p.x + L + r * 1.5, p.y);
+    ctx.strokeStyle = '#6ee7a8';
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y + L); ctx.stroke();
+    ctx.fillStyle = '#6ee7a8'; ctx.fillRect(p.x - r, p.y + L - r, r * 2, r * 2);
+    ctx.fillText('Y', p.x, p.y + L + r * 1.6);
+  } else if (S.gizmo === 'rotate') {
+    const R = 38 / Math.max(0.2, S.view.zoom);
+    const a = (t.rot || 0) * Math.PI / 180;
+    ctx.strokeStyle = '#ffd479';
+    ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p.x, p.y);
+    ctx.lineTo(p.x + Math.cos(a) * R, p.y + Math.sin(a) * R); ctx.stroke();
+    ctx.fillStyle = '#ffd479';
+    ctx.beginPath(); ctx.arc(p.x + Math.cos(a) * R, p.y + Math.sin(a) * R, r, 0, Math.PI * 2); ctx.fill();
+  } else {
+    const b = entityBounds(e);
+    const R = r;
+    ctx.strokeStyle = 'rgba(255,212,121,.65)';
+    ctx.setLineDash([4 / Math.max(0.2, S.view.zoom), 3 / Math.max(0.2, S.view.zoom)]);
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ffd479';
+    for (const q of [[b.x + b.w, b.y + b.h], [b.x + b.w, b.y + b.h / 2], [b.x + b.w / 2, b.y + b.h]]) {
+      ctx.fillRect(q[0] - R, q[1] - R, R * 2, R * 2);
+    }
+  }
+  ctx.fillStyle = '#38bcf8';
+  ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.7, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function gizmoAt(w, e) {
+  const p = gizmoPivot(e);
+  const L = gizmoLen(), r = gizmoR() * 1.5;
+  if (S.gizmo === 'move') {
+    if (Math.abs(w.y - p.y) <= r && w.x >= p.x && w.x <= p.x + L + r) return 'x';
+    if (Math.abs(w.x - p.x) <= r && w.y >= p.y && w.y <= p.y + L + r) return 'y';
+  } else if (S.gizmo === 'rotate') {
+    const R = 38 / Math.max(0.2, S.view.zoom);
+    const d = Math.sqrt((w.x - p.x) * (w.x - p.x) + (w.y - p.y) * (w.y - p.y));
+    if (Math.abs(d - R) <= r) return 'rot';
+  } else {
+    const b = entityBounds(e);
+    const pts = {
+      sxy: [b.x + b.w, b.y + b.h],
+      sx: [b.x + b.w, b.y + b.h / 2],
+      sy: [b.x + b.w / 2, b.y + b.h],
+    };
+    for (const k in pts) {
+      if (Math.abs(w.x - pts[k][0]) <= r && Math.abs(w.y - pts[k][1]) <= r) return k;
+    }
+  }
+  return null;
+}
+
+function beginGizmo(ev, e, axis) {
+  const t = e.transform || {};
+  const p = gizmoPivot(e);
+  S.drag = {
+    kind: 'gizmo', axis, fid: e.fid, startW: screenToWorld(ev),
+    startX: t.x || 0, startY: t.y || 0, startRot: t.rot || 0,
+    startSX: t.sx === undefined ? 1 : t.sx, startSY: t.sy === undefined ? 1 : t.sy,
+    pivot: p, preview: null,
+  };
+  $('#view').setPointerCapture(ev.pointerId);
+}
+
+function snapVal(v) {
+  if (!$('#chkSnap').checked) return Math.round(v * 100) / 100;
+  const step = (S.snap.describe.project.editor && S.snap.describe.project.editor.grid) || 8;
+  return Math.round(v / step) * step;
+}
+
+function updateGizmoDrag(ev) {
+  const d = S.drag; if (!d || d.kind !== 'gizmo') return;
+  const w = screenToWorld(ev);
+  const dx = w.x - d.startW.x, dy = w.y - d.startW.y;
+  if (S.gizmo === 'move') {
+    const pv = { x: d.startX, y: d.startY };
+    if (d.axis === 'x') pv.x = snapVal(d.startX + dx);
+    else if (d.axis === 'y') pv.y = snapVal(d.startY + dy);
+    else { pv.x = snapVal(d.startX + dx); pv.y = snapVal(d.startY + dy); }
+    d.preview = pv;
+  } else if (S.gizmo === 'rotate') {
+    const a0 = Math.atan2(d.startW.y - d.pivot.y, d.startW.x - d.pivot.x);
+    const a1 = Math.atan2(w.y - d.pivot.y, w.x - d.pivot.x);
+    let deg = d.startRot + (a1 - a0) * 180 / Math.PI;
+    if ($('#chkSnap').checked) deg = Math.round(deg / 15) * 15;
+    d.preview = { rot: Math.round(deg * 10) / 10 };
+  } else {
+    const f = (a, b) => Math.abs(b) < 0.0001 ? 1 : a / b;
+    if (d.axis === 'sxy') {
+      const d0 = Math.sqrt((d.startW.x - d.pivot.x) ** 2 + (d.startW.y - d.pivot.y) ** 2) || 1;
+      const d1 = Math.sqrt((w.x - d.pivot.x) ** 2 + (w.y - d.pivot.y) ** 2);
+      const k = Math.max(0.05, d1 / d0);
+      d.preview = { sx: Math.round(d.startSX * k * 100) / 100,
+                    sy: Math.round(d.startSY * k * 100) / 100 };
+    } else if (d.axis === 'sx') {
+      const k = Math.max(0.05, f(w.x - d.pivot.x, d.startW.x - d.pivot.x));
+      d.preview = { sx: Math.round(d.startSX * k * 100) / 100 };
+    } else {
+      const k = Math.max(0.05, f(w.y - d.pivot.y, d.startW.y - d.pivot.y));
+      d.preview = { sy: Math.round(d.startSY * k * 100) / 100 };
+    }
+  }
+  draw();
+}
+
+function commitGizmo() {
+  const d = S.drag;
+  S.drag = null;
+  if (!d || d.kind !== 'gizmo' || !d.preview) return;
+  const sc = currentScene();
+  const e = sc && sceneEntity(sc, d.fid);
+  if (!e) return;
+  const tr = {};
+  for (const k of ['x', 'y', 'rot', 'sx', 'sy']) if (d.preview[k] !== undefined) tr[k] = d.preview[k];
+  entitySet(sc, e, { transform: tr });
+}
+
 function draw() {
   const cv = $('#view');
   const wrap = $('#sceneWrap');
@@ -1441,6 +1891,9 @@ function draw() {
       ? S.drag.preview : null;
     drawEntity(ctx, e, selected, preview);
   }
+
+  const selE = selectedLiveEntity();
+  if (selE && !hudBox(selE)) drawGizmo(ctx, selE);
 
   const cam = st.camera || {};
   if (cam.bounds) {
@@ -1540,7 +1993,9 @@ function compSet(sc, e, c, name, value) {
 
 function renderBuild() {
   const box = $('#buildInfo');
+  const budget = $('#buildBudget');
   const b = S.snap ? S.snap.build : null;
+  if (budget) budget.innerHTML = '';
   if (!b) { box.textContent = 'sem build. Clique em Build.'; return; }
   const lines = [];
   lines.push('pacote: ' + b.app + ' ' + b.version + (b.runtime === 'legacy' ? '  (runtime legado: ' + b.entry + ')' : ''));
@@ -1556,6 +2011,27 @@ function renderBuild() {
     for (const w of b.warnings) lines.push('  [' + w.code + '] ' + w.message);
   }
   box.textContent = lines.join('\n');
+
+  if (budget) {
+    const lim = S.snap.describe.limits || {};
+    const row = (label, used, max, unit) => {
+      const pct = max ? Math.max(0, Math.min(100, used / max * 100)) : 0;
+      const cls = pct > 100 ? 'err' : (pct > 80 ? 'warn' : '');
+      const r = el('div', { class: 'budget-row' }, [
+        el('span', { text: label }),
+        el('div', { class: 'budget-bar' }, [
+          el('div', { class: 'budget-fill ' + cls, style: 'width:' + pct + '%' }),
+        ]),
+        el('span', { text: used.toFixed(used < 10 ? 2 : 1) + '/' + max + ' ' + unit }),
+      ]);
+      budget.appendChild(r);
+    };
+    row('extras', b.extras, lim.extras || 16, 'itens');
+    row('JS total', b.jsBytes / 1024, lim.jsKB || 1024, 'KB');
+    row('assets', b.assetBytes / 1024, lim.assetsKB || 256, 'KB');
+    const deps = Object.keys(S.snap.describe.project.deps || {}).length;
+    row('deps', deps, lim.deps || 8, 'mods');
+  }
 }
 
 function renderPlay() {
@@ -1752,10 +2228,78 @@ async function runCommand(raw) {
   log('comando desconhecido: ' + cmd + ' (help)', 'err');
 }
 
+function cid() { return 'c_' + Math.random().toString(36).slice(2, 10); }
+
+async function dropAssetAt(ev) {
+  ev.preventDefault();
+  const sc = currentScene();
+  if (!sc || !S.snap) return;
+  let data = null;
+  try { data = JSON.parse(ev.dataTransfer.getData('text/plain') || 'null'); } catch (e) {}
+  const a = data && data.guid ? assetByGuid(data.guid) : assetByGuid(S.dragAsset);
+  S.dragAsset = null;
+  if (!a) { log('asset solto nao reconhecido', 'err'); return; }
+  const w = screenToWorld(ev);
+  const x = Math.round(w.x), y = Math.round(w.y);
+  try {
+    if (a.kind === 'scene') {
+      S.sceneGuid = a.guid;
+      S.sel = { kind: 'scene', id: null, comp: null };
+      renderSceneSel(); renderHierarchy(); renderInspector(); draw();
+      return;
+    }
+    if (a.kind === 'prefab') {
+      const r = await ops([{ op: 'prefab.instance', scene: sc.guid, prefab: a.guid, x, y, z: 0 }]);
+      const e = r.results && r.results[0] && r.results[0].entity;
+      if (e) selectEntity(e.fid);
+      return;
+    }
+    if (['sprite', 'sprite-sheet', 'tileset'].includes(a.kind)) {
+      const reg = (a.regionsList || [])[0];
+      if (!reg) { log('asset sem regiao', 'err'); return; }
+      const ref = a.guid + '#' + reg.name;
+      const key = (a.settings && a.settings.key) || '#000000';
+      const r = await ops([{ op: 'entity.create', scene: sc.guid, name: a.name, x, y, z: 1,
+        components: [{ id: cid(), type: 'sprite', fields: { sprite: ref, key } }] }]);
+      const e = r.results && r.results[0] && r.results[0].entity;
+      if (e) selectEntity(e.fid);
+      return;
+    }
+    if (a.kind === 'script') {
+      if (S.sel.kind === 'entity') {
+        const e = sceneEntity(sc, S.sel.id);
+        if (e) {
+          await ops([{ op: 'component.add', scene: sc.guid, entity: e.fid, id: cid(),
+                       type: 'script', fields: { script: a.guid } }]);
+          return;
+        }
+      }
+      const r = await ops([{ op: 'entity.create', scene: sc.guid, name: a.name, x, y, z: 0,
+        components: [{ id: cid(), type: 'script', fields: { script: a.guid } }] }]);
+      const e = r.results && r.results[0] && r.results[0].entity;
+      if (e) selectEntity(e.fid);
+      return;
+    }
+    log('arraste sprite/atlas/tileset/prefab/script para a cena', 'dim');
+  } catch (e) { logError(e); }
+}
+
 // --------------------------------------------------------------- events ----
 
 function wireEvents() {
   $('#sceneSel').addEventListener('change', () => {});
+  $('#btnProject').onclick = selectProject;
+  $('#btnNewScene').onclick = async () => {
+    const name = prompt('nome da nova cena:', 'Nova cena');
+    if (!name) return;
+    const r = await ops([{ op: 'scene.create', name }]);
+    const sc = ((r.snapshot && r.snapshot.describe.scenes) || []).find((x) => x.name === name);
+    if (sc) { S.sceneGuid = sc.guid; S.sel = { kind: 'scene', id: null, comp: null }; setSnapshot(r.snapshot, {}); }
+  };
+  $('#projName').onclick = selectProject;
+  $('#hierSearch').addEventListener('input', (ev) => { S.hierFilter = ev.target.value; renderHierarchy(); });
+  $('#assetSearch').addEventListener('input', (ev) => { S.assetFilter = ev.target.value; renderAssets(); });
+  for (const b of $$('#gizmoBar [data-gizmo]')) b.onclick = () => setGizmo(b.dataset.gizmo);
   $('#btnValidate').onclick = doValidate;
   $('#btnBuild').onclick = doBuild;
   $('#btnRun').onclick = doRun;
@@ -1812,6 +2356,41 @@ function wireEvents() {
       ev.preventDefault();
       undoRedo(ev.shiftKey ? 'redo' : 'undo');
     }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || S.sel.kind !== 'entity') return;
+      ev.preventDefault();
+      const sc = currentScene();
+      const e = sc && sceneEntity(sc, S.sel.id);
+      if (e) ops([{ op: 'entity.duplicate', scene: sc.guid, entity: e.fid }]).then((r) => {
+        const dup = r.results && r.results[0] && r.results[0].entity;
+        if (dup) selectEntity(dup.fid);
+      });
+    }
+    if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+      const key = ev.key.toLowerCase();
+      if (key === 'w' || key === 'e' || key === 'r') {
+        setGizmo(key === 'w' ? 'move' : (key === 'e' ? 'rotate' : 'scale'));
+        ev.preventDefault();
+      }
+      if (key === 'f') { fitView(true); ev.preventDefault(); }
+      if (S.sel.kind === 'entity' && /^Arrow(Left|Right|Up|Down)$/.test(ev.key)) {
+        const sc = currentScene();
+        const ent = sc && sceneEntity(sc, S.sel.id);
+        if (ent) {
+          const step = ($('#chkSnap').checked
+            ? ((S.snap.describe.project.editor && S.snap.describe.project.editor.grid) || 8) : 1) *
+            (ev.shiftKey ? 5 : 1);
+          const t = ent.transform || {};
+          const patch = { x: t.x || 0, y: t.y || 0 };
+          if (ev.key === 'ArrowLeft') patch.x -= step;
+          if (ev.key === 'ArrowRight') patch.x += step;
+          if (ev.key === 'ArrowUp') patch.y -= step;
+          if (ev.key === 'ArrowDown') patch.y += step;
+          entitySet(sc, ent, { transform: patch });
+          ev.preventDefault();
+        }
+      }
+    }
     if (ev.key === 'F5') { ev.preventDefault(); if (S.snap.play && S.snap.play.running) doStop(); else doPlay(); }
     if ((ev.key === 'Delete' || ev.key === 'Backspace') &&
         tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' &&
@@ -1855,6 +2434,11 @@ function wireEvents() {
       }
     }
     if (ev.button !== 0) return;
+    const selE = selectedLiveEntity();
+    if (selE && !hudBox(selE)) {
+      const g = gizmoAt(w, selE);
+      if (g) { beginGizmo(ev, selE, g); return; }
+    }
     const fid = hitTest(w);
     if (!fid) {
       S.sel = { kind: 'scene', id: null, comp: null };
@@ -1874,6 +2458,13 @@ function wireEvents() {
   });
   cv.addEventListener('pointermove', (ev) => {
     if (!S.snap) return;
+    if (S.tab === 'scene') {
+      const mw = screenToWorld(ev);
+      S.mouse = mw;
+      const cl = $('#coordLabel');
+      if (cl) cl.textContent = Math.round(mw.x) + ', ' + Math.round(mw.y);
+    }
+    if (S.drag && S.drag.kind === 'gizmo') { updateGizmoDrag(ev); return; }
     if (S.pan) {
       S.view.panX = S.pan.px + (ev.clientX - S.pan.sx);
       S.view.panY = S.pan.py + (ev.clientY - S.pan.sy);
@@ -1898,6 +2489,7 @@ function wireEvents() {
     draw();
   });
   cv.addEventListener('pointerup', (ev) => {
+    if (S.drag && S.drag.kind === 'gizmo') { commitGizmo(); draw(); return; }
     if (S.tile.painting) { commitPaint(); return; }
     if (S.pan) { S.pan = null; return; }
     if (!S.drag) return;
@@ -1921,6 +2513,14 @@ function wireEvents() {
     $('#zoomLabel').textContent = S.view.zoom.toFixed(2) + 'x';
     draw();
   }, { passive: false });
+
+  cv.addEventListener('dragover', (ev) => {
+    if (S.dragAsset || (ev.dataTransfer && ev.dataTransfer.types.indexOf('text/plain') >= 0)) {
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'copy';
+    }
+  });
+  cv.addEventListener('drop', (ev) => { if (S.tab === 'scene') dropAssetAt(ev); });
 
   new ResizeObserver(() => draw()).observe($('#sceneWrap'));
 

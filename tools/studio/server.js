@@ -12,7 +12,10 @@ const { applyOps, undo, redo } = require('./lib/ops');
 const { validateProject } = require('./lib/validate');
 const { buildProject, exportBuild } = require('./lib/build');
 const { runProject } = require('./lib/run');
-const { describeData } = require('./studio');
+// describeData e carregado sob demanda: `node studio.js serve` entra no
+// server por dentro do proprio studio, e um require no topo devolveria o
+// exports ainda vazio (circular) -> 'describeData is not a function'.
+function describeProject(p) { return require('./studio').describeData(p); }
 
 const UI_DIR = path.join(__dirname, 'ui');
 const MIME = {
@@ -73,7 +76,7 @@ function startStudio(opts) {
 
     function snapshot() {
         project = Project.open(projectDir);
-        const d = describeData(project);
+        const d = describeProject(project);
         const scenes = {};
         for (const sc of project.sceneByGuid.values()) scenes[sc.guid] = sc;
         const prefabs = {};
@@ -95,7 +98,7 @@ function startStudio(opts) {
         project = Project.open(projectDir);
         return {
             ok: true,
-            describe: describeData(project),
+            describe: describeProject(project),
             build: buildReport(),
             play: play ? { url: play.url, port: play.port, running: true } : { running: false },
         };

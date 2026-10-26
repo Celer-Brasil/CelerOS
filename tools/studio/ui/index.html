@@ -9,8 +9,10 @@
 <body>
 <header id="topbar">
   <div class="brand">CELER <b>STUDIO</b></div>
-  <div id="projName" class="proj">carregando...</div>
+  <div id="projName" class="proj" title="abrir configuracoes do projeto">carregando...</div>
+  <button id="btnProject" class="mini" title="configuracoes do projeto">Projeto</button>
   <select id="sceneSel" title="cena aberta"></select>
+  <button id="btnNewScene" class="mini" title="criar cena">+ cena</button>
   <div class="spacer"></div>
   <button id="btnValidate" title="schema, refs, limites e ES5">Validar</button>
   <button id="btnBuild" title="gera o app flat em .studio/build">Build</button>
@@ -26,6 +28,7 @@
   <aside id="left">
     <section class="panel" id="hierPanel">
       <div class="panel-head"><span>HIERARQUIA</span><button id="btnAddEntity" class="mini" title="nova entidade">+</button></div>
+      <div class="searchbar"><input id="hierSearch" placeholder="filtrar hierarquia..." autocomplete="off"></div>
       <div id="hierarchy" class="scroll"></div>
     </section>
     <section class="panel" id="assetPanel">
@@ -35,6 +38,7 @@
           <input id="fileInput" type="file" multiple hidden>
         </label>
       </div>
+      <div class="searchbar"><input id="assetSearch" placeholder="filtrar assets..." autocomplete="off"></div>
       <div id="assets" class="scroll"></div>
     </section>
   </aside>
@@ -52,6 +56,12 @@
     </div>
     <div id="sceneWrap">
       <canvas id="view"></canvas>
+      <div id="gizmoBar">
+        <button data-gizmo="move" class="active" title="W: mover">Mover</button>
+        <button data-gizmo="rotate" title="E: girar">Girar</button>
+        <button data-gizmo="scale" title="R: escalar">Escalar</button>
+        <span id="coordLabel" class="pill">0, 0</span>
+      </div>
       <div id="legacyBanner" class="legacy-banner" hidden></div>
       <div id="viewHint" class="hint"></div>
     </div>
@@ -60,6 +70,7 @@
     </div>
     <div id="buildWrap" hidden>
       <pre id="buildInfo">sem build</pre>
+      <div id="buildBudget"></div>
       <div id="shotWrap"><img id="runShot" alt="screenshot do jogo" hidden></div>
     </div>
   </main>

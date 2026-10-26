@@ -566,6 +566,15 @@ class Project {
                 startScene: this.data.startScene,
                 deps: this.data.deps || {},
                 build: this.data.build || {},
+                // campos de publicacao/editaveis no painel Projeto
+                author: this.data.author || '',
+                description: this.data.description || '',
+                type: this.data.type || 'Game',
+                category: this.data.category || 'Jogos',
+                topbar: this.data.topbar === undefined ? false : !!this.data.topbar,
+                permissions: this.data.permissions || [],
+                requires: this.data.requires || [],
+                changelog: this.data.changelog || '',
             },
             scenes: this.sceneList().map((s) => {
                 const a = this.byGuid.get(s.guid);

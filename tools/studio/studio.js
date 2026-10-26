@@ -33,7 +33,7 @@ const OPS_HELP = [
     { op: 'scene.create', args: 'name' },
     { op: 'scene.delete', args: 'scene' },
     { op: 'scene.rename', args: 'scene, name' },
-    { op: 'scene.set', args: 'scene, settings{bg,fps,static,camera}, name?' },
+    { op: 'scene.set', args: 'scene, settings{bg,fps,static,data,assets,music,camera}, replace?, name?' },
     { op: 'scene.start', args: 'scene' },
     { op: 'entity.create', args: 'scene|prefab, name, fid?, x?, y?, z?, transform?, prefab?, components?' },
     { op: 'entity.set', args: 'scene|prefab, entity, name?, active?, z?, transform?' },

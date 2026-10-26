@@ -247,6 +247,11 @@ const OPS = {
         if (op.name) sc.name = op.name;
         if (op.settings) {
             sc.settings = sc.settings || {};
+            // replace: chaves que devem ser SUBSTITUIDAS (JSON de dados da
+            // cena/assets), nao mescladas com o valor anterior
+            if (Array.isArray(op.replace)) {
+                for (const k of op.replace) delete sc.settings[k];
+            }
             deepMerge(sc.settings, op.settings);
         }
         project.writeScene(sc);

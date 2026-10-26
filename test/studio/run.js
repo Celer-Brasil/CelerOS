@@ -221,6 +221,13 @@ let atlasGuid = null;
     const t3 = Project.open(base).scene('Fase 1').tilemaps[0];
     check('tilemap.set redimensiona preservando o canto e nasce vazio',
         t3.cols === 8 && t3.data.length === 40 && t3.data[0] === 2 && t3.data[39] === -1);
+    applyOps(base, [
+        { op: 'scene.set', scene: 'Fase 1', settings: { data: { a: 1, b: 2 } }, replace: ['data'] },
+        { op: 'scene.set', scene: 'Fase 1', settings: { data: { a: 9 } }, replace: ['data'] },
+    ], {});
+    const sd = Project.open(base).scene('Fase 1').settings.data;
+    check('scene.set replace troca data (nao mescla chaves antigas)', sd.a === 9 && sd.b === undefined,
+        JSON.stringify(sd));
 })();
 
 // --------------------------------------------------------------- build -----

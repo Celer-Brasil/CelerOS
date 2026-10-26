@@ -59,6 +59,11 @@ inline int parseJsonStringMap(const std::string& j, JsonStringPair* o, int m) {
 #define MALLOC_CAP_8BIT 2
 inline void* heap_caps_malloc(size_t n, unsigned) { return malloc(n); }
 inline void heap_caps_free(void* p) { free(p); }
+// shim do mem::alloc (main/Utils/Mem.h e firmware-only: inclui esp_heap_caps.h)
+namespace mem {
+enum class Want : unsigned { Internal, Psram, Any };
+inline void* alloc(size_t n, Want, Want = Want::Any) { return malloc(n); }
+}
 extern "C" duk_bool_t celer_exec_timeout_check(void* udata) { (void)udata; return 0; }
 namespace CelerKernel { inline void noteAppYield() {} }
 std::string s_appDir;

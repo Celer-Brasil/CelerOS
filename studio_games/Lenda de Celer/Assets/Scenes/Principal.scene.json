@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "rev": 3,
+  "name": "Legado",
+  "guid": "0669dbe245f8e843fc4a3e82d93deb19",
+  "settings": {
+    "fps": 30,
+    "bg": "#0b1020",
+    "static": false
+  },
+  "entities": [
+    {
+      "name": "Titulo",
+      "fid": "e_94deefc2",
+      "active": true,
+      "z": 10,
+      "transform": {
+        "x": 240,
+        "y": 220,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "text",
+          "id": "c_63beada7",
+          "fields": {
+            "text": "Lenda de Celer - runtime legado",
+            "color": "#e8eefc",
+            "px": 20,
+            "align": "center"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

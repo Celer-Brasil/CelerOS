@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "rev": 4,
+  "studio": "0.1.0",
+  "name": "Arrasa!",
+  "packageName": "celeros.arrasa",
+  "version": "1.3.2",
+  "author": "CelerOS",
+  "description": "Estilingue contra a fortaleza dos goblins, com fisica de corpo rigido NATIVA: tabuas e blocos de madeira, gelo e pedra giram, empilham, tombam e quebram pelo impacto; a pedra puxa o elastico de couro, voa e nunca atravessa nada. 10 fases com estrelas, TNT e 7 tipos de pedra com poderes: pedrao, tripla (racha em 3), flecha (dispara reto), bomba, chocadeira (solta ovo-bomba) e bumerangue (volta por tras).",
+  "type": "Game",
+  "category": "Arcade",
+  "api": 33,
+  "requires": [
+    "psram"
+  ],
+  "topbar": false,
+  "permissions": [],
+  "deps": {
+    "celeros.game": "^1.4.2",
+    "celeros.game.combat": "^1.0.0",
+    "celeros.game.fx": "^1.4.0",
+    "celeros.game.level": "^1.1.0",
+    "celeros.game.spr": "^1.5.0",
+    "celeros.game.steer": "^1.0.0",
+    "celeros.game.ui": "^1.2.0",
+    "celeros.physics": "^2.1.1"
+  },
+  "changelog": "1.3.2 - bateria mais robusta: o tiro conhecido da fase 1 e resolvido no passo de projeto (1/30) em vez do relogio do harness — o pacing do core 1.5 anda em quadros de 33/34 ms (30 fps = 33,33 ms) e a trajetoria da pedra depende do dt; o hook do __harness passa a expor processa(), entao os eventos do passo (rastro, sfx, placar) continuam chegando ao jogo\n1.3.1 - goblins, rei e pedras do atlas IA gravados 1x na escala da tela (celeros.game.spr 1.5 prescale): drawSprite afim por quadro so nas pecas que giram\n1.3.0 - engine 1.4 e arte de IA: goblins, rei, catapulta e a pedra vem do ai_atlas (grade 4x4 de 64 px, cor-chave magenta 0xF81F) e o campo de flores ai_bg entra no cenario composto do painter, em tiles na faixa do chao (camada suja e canvas nativo mantidos); os projeteis principais ganham um E.combat.shot espelho (map/onWall/onHit) para hitboxes e knockback, as explosoes registram E.combat.blast e o impacto usa E.combat.knock, sem trocar o solver de corpo rigido dos corpos; goblins e rei vagam entre os turnos com E.steer.agent (wander/within) por impulso no solver; estrelas e desbloqueio passam pelo E.level.progress mantendo as chaves antigas est*/pts* do save; adota as deps celeros.game.spr 1.4, combat 1.0, level 1.1 e steer 1.0\n1.2.0 - adota a CelerGame UI 1.0.1: selecao de fases com E.ui.list mostrando o nome e as estrelas do NVS (desbloqueadas na frente, bloqueadas marcadas e com o pick barrado); pausa padrao E.ui.pause (Continuar/Recomecar/Sair) mantendo a mesma fase, o tempo parado e a musica retomada do ponto; tela de fim com E.ui.menu mantendo placar, estrelas animadas e recorde; rastro de particulas nos projeteis em voo (bumerangue, bomba, pedra e pedrao) com UM emissor reaproveitado e anel de choque no primeiro impacto; fumaca curta no estopim da chocadeira, da bomba e da TNT atingida; E.audio.sfxTable com throw/hit/boom/win/fail tocados nos eventos (a trilha continua); transicoes fade/wipe/iris nos fluxos menu -> jogo -> fim\n1.1.1 - equilibrio: as metas de estrela cabem no maximo de pontos de TODAS as fases (a 1 tinha 3 estrelas impossiveis: meta 3200 contra maximo 2300); agora 2 estrelas = metade do estrago, 3 = 60% do estrago com uma pedra sobrando\n1.1.0 - migra para a familia CelerGame (core + fx no lugar do pacote celeros.engine; physics segue): mesmo E, compile mais leve, adocao explicita; transicoes de cena (fade/wipe/iris) nas trocas de titulo/jogo/fim — pausa e retomada continuam instantaneas (recurso novo do core 1.0)\n1.0.1 - desempenho: so redesenha o que se mexe (estilingue e nome da fase parados saem do quadro a quadro), leitura direta do estado da fisica, fundo restaurado numa chamada (API 34, cai no caminho antigo sem ela), peca que acorda nao deixa rastro; 1.0.0 - jogo novo sobre o corpo rigido nativo (API 33): pecas que giram e empilham, dano por impacto, TNT e bomba com explosao radial, tripla que racha no ar, elastico que estica e afina, mira com trajetoria, rastro do voo (some ao fim do turno), pedras flecha/bumerangue/chocadeira com arte propria, 10 fases com 3 estrelas e recorde por fase, arte gerada (personagens, cenario, texturas)",
+  "canvas": {
+    "w": 480,
+    "h": 480,
+    "native": true,
+    "fps": 30,
+    "inset": 0
+  },
+  "startScene": "96db9ffcea6c0a0b01b9c3f5173aa313",
+  "build": {
+    "out": ".studio/build",
+    "splitKB": 96
+  },
+  "editor": {
+    "grid": 8,
+    "snap": true,
+    "debug": false,
+    "prof": false
+  },
+  "legacy": {
+    "name": "Arrasa",
+    "bases": [
+      "/local/apps/Arrasa/",
+      "/sd/apps/Arrasa/"
+    ],
+    "entry": "main.js"
+  },
+  "runtime": "legacy"
+}

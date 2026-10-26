@@ -24,8 +24,8 @@ const { STUDIO_VERSION, FORMAT } = require('./version');
 const F = require('./lib/format');
 
 const COMMANDS = new Set([
-    'init', 'describe', 'schema', 'import', 'apply', 'validate', 'build', 'run',
-    'export', 'undo', 'redo', 'fmt', 'serve', 'version', 'help',
+    'init', 'describe', 'schema', 'import', 'import-game', 'apply', 'validate',
+    'build', 'run', 'export', 'undo', 'redo', 'fmt', 'serve', 'version', 'help',
 ]);
 
 const OPS_HELP = [
@@ -64,10 +64,11 @@ function usage() {
     console.log('  describe [--json]                              estado, componentes, ops e limites');
     console.log('  schema [project|scene|prefab|meta|components]  JSON Schema do formato');
     console.log('  import ARQUIVO [--importer K] [--grid CxR] [--tw N --th N] [--name N]');
+    console.log('  import-game APP [DEST]                         importa um app existente em modo legado');
     console.log('  apply [ARQ|-] [--op JSON] [--dry-run] [--if-rev N]  executa um lote de ops');
     console.log('  validate [--json]                              schema, refs, limites, ES5');
     console.log('  build [--json]                                 gera o app flat em .studio/build');
-    console.log('  run [--ms N] [--out PNG] [--frames 0,600] [--seed N] [--no-build]');
+    console.log('  run [--ms N] [--out PNG] [--frames 0,600] [--seed N] [--input TOQUES] [--no-build]');
     console.log('  export DESTINO [--force]                       copia o build para uma pasta');
     console.log('  undo | redo                                    desfaz/refaz o ultimo lote');
     console.log('  fmt                                            reescreve tudo canonico');
@@ -245,6 +246,24 @@ function main(argv) {
             }
             return;
         }
+        if (cmd === 'import-game') {
+            const appDir = flags._[0] || flags.app;
+            if (!appDir) F.fail('op.args', 'import-game exige a pasta do app');
+            const dest = flags._[1] || flags.dest;
+            const { importGame } = require('./lib/import_game');
+            const r = importGame(appDir, dest, { name: flags.name });
+            if (json) console.log(JSON.stringify(r, null, 2));
+            else {
+                console.log('projeto legado: ' + r.dir);
+                console.log('  app: ' + r.legacy.entry + '  assets: ' + r.imported.assets.length +
+                            '  scripts: ' + r.imported.scripts.length);
+                console.log('  validacao: ' + (r.ok ? 'OK' : r.validation.errors.length + ' erro(s)') +
+                            ', ' + r.validation.warnings.length + ' aviso(s)');
+                for (const d of r.validation.errors) console.log('  erro[' + d.code + '] ' + (d.path || '') + ': ' + d.message);
+                for (const d of r.validation.warnings) console.log('  aviso[' + d.code + '] ' + (d.path || '') + ': ' + d.message);
+            }
+            process.exit(r.ok ? 0 : 1);
+        }
         if (cmd === 'apply') {
             const ops = readOps(flags);
             const r = applyOps(projectDir, ops, {
@@ -298,6 +317,7 @@ function main(argv) {
                 out: flags.out,
                 frames: flags.frames,
                 seed: flags.seed !== undefined ? +flags.seed : undefined,
+                input: flags.input,
                 noBuild: !!flags['no-build'],
             });
             if (json) console.log(JSON.stringify(r, null, 2));

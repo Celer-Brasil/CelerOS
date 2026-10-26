@@ -207,9 +207,10 @@ const OPS = {
         const data = project.data;
         for (const k of ['name', 'packageName', 'version', 'author', 'description', 'type',
                          'category', 'api', 'requires', 'topbar', 'permissions', 'changelog',
-                         'startScene']) {
+                         'startScene', 'runtime']) {
             if (op[k] !== undefined) data[k] = op[k];
         }
+        if (op.legacy !== undefined) data.legacy = F.deepClone(op.legacy);
         for (const k of ['canvas', 'build', 'editor']) {
             if (op[k] !== undefined) {
                 data[k] = data[k] || {};

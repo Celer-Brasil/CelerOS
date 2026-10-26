@@ -171,6 +171,23 @@ function validateProjectData(p, out) {
     if (p.startScene !== undefined && typeof p.startScene !== 'string') {
         out.push(err('schema.type', 'startScene', 'startScene deve ser GUID ou vazio'));
     }
+    if (p.runtime !== undefined && p.runtime !== 'studio' && p.runtime !== 'legacy') {
+        out.push(err('schema.enum', 'runtime', 'runtime deve ser studio ou legacy'));
+    }
+    if (p.runtime === 'legacy') {
+        if (!isObj(p.legacy)) out.push(err('schema.required', 'legacy', 'modo legado exige legacy.entry'));
+        else {
+            if (typeof p.legacy.entry !== 'string' || !p.legacy.entry) {
+                out.push(err('schema.required', 'legacy.entry', 'script de entrada obrigatorio'));
+            }
+            if (p.legacy.bases !== undefined &&
+                (!Array.isArray(p.legacy.bases) || p.legacy.bases.some((b) => typeof b !== 'string'))) {
+                out.push(err('schema.type', 'legacy.bases', 'bases deve ser array de strings'));
+            }
+        }
+    } else if (p.legacy !== undefined) {
+        out.push(err('schema.enum', 'legacy', 'legacy so vale com runtime: "legacy"'));
+    }
 }
 
 function validateSceneData(s, out) {

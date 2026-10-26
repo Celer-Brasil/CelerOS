@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "rev": 3,
+  "name": "Legado",
+  "guid": "e9d723dace14634cf7cf3dd7944de568",
+  "settings": {
+    "fps": 30,
+    "bg": "#0b1020",
+    "static": false
+  },
+  "entities": [
+    {
+      "name": "Titulo",
+      "fid": "e_e4b0bbfb",
+      "active": true,
+      "z": 10,
+      "transform": {
+        "x": 240,
+        "y": 220,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "text",
+          "id": "c_6dc93592",
+          "fields": {
+            "text": "Detona! - runtime legado",
+            "color": "#e8eefc",
+            "px": 20,
+            "align": "center"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

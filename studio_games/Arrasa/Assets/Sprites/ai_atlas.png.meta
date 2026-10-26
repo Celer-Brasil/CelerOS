@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "guid": "914e1473e714e427ba27bb66362a8d3f",
+  "importer": "sprite-sheet",
+  "settings": {
+    "w": 256,
+    "h": 256,
+    "mode": "grid",
+    "cols": 4,
+    "rows": 4,
+    "tw": 64,
+    "th": 64,
+    "pivot": [
+      0.5,
+      0.5
+    ],
+    "key": "#000000",
+    "prefix": ""
+  }
+}

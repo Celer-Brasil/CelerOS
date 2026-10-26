@@ -15,6 +15,7 @@ CelerOS/
 ├── components/      # everything here is built (Network, Http, System, Storage/NVS, Utility, ErrorCodes, duktape, LovyanGFX)
 ├── data/            # LittleFS image contents: system JS apps + icons (flashed separately)
 ├── hub_apps/        # App Store apps, same layout as data/apps (covered by data/AGENTS.md)
+├── studio_games/    # 4 maiores jogos remontados no Celer Studio (modo legado; own README)
 ├── boards/<b>/      # per-board sdkconfig.defaults (+ data/ overlay & data-exclude.txt on the watch)
 ├── tools/           # celerctl, app_lint, sdk, studio (editor), flash_data.sh, ota_server, celerhub, generators
 │   └── studio/      # Celer Studio: projeto/cena/prefab/meta + GUI + build ES5 (own AGENTS.md)
@@ -41,7 +42,7 @@ CelerOS/
 | Firmware size / what costs flash | `python3 tools/size_report.py` | CYD OTA slot is the binding constraint |
 | System apps, app.json rules | `data/AGENTS.md` | ES5 only |
 | Device CLI, data flashing, local OTA server | `tools/AGENTS.md` | |
-| Game editor (Celer Studio): project/scene/prefab formats, GUI, headless build | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` | file-first; GUI/CLI/HTTP share one op bus; build emits a flat ES5 app with the runtime inlined |
+| Game editor (Celer Studio): project/scene/prefab formats, GUI, headless build, legacy remounts | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` + `studio_games/README.md` | file-first; GUI/CLI/HTTP share one op bus; build emits a flat ES5 app with the runtime inlined; Detona/Arrasa/Lenda/Supernova live in `studio_games/` as legacy projects |
 | JS API docs for app authors | `Documentation/JS_API_Guide*.md` | keep EN and pt-BR in sync |
 
 ## CODE MAP
@@ -128,6 +129,8 @@ node tools/sdk/celer.js studio ~/Jogo describe --json         # discovery for hu
 node tools/sdk/celer.js studio ~/Jogo apply ops.json         # atomic op batch
 node tools/sdk/celer.js studio ~/Jogo build                   # flat ES5 app in .studio/build
 node tools/sdk/celer.js studio ~/Jogo run --frames 0,600      # host harness + PNGs
+node tools/sdk/celer.js studio import-game hub_apps/Detona studio_games/Detona  # remonta um app existente (legado)
+node tools/sdk/celer.js studio "studio_games/Detona" serve --open  # jogo original no editor
 
 # Validation battery (run before any push; CI runs the same)
 node test/js_harness/run.js

@@ -141,6 +141,16 @@ function setSnapshot(s, opts) {
   renderAssets();
   renderBuild();
   renderPlay();
+  const runtime = d.project.runtime || 'studio';
+  const banner = $('#legacyBanner');
+  if (banner) {
+    if (runtime === 'legacy') {
+      banner.hidden = false;
+      banner.textContent = 'MODO LEGADO — Play roda ' +
+        ((d.project.legacy && d.project.legacy.entry) || 'main.js') +
+        '; a cena e um cartao. Edite os scripts/assets no painel.';
+    } else banner.hidden = true;
+  }
   if (!opts.keepInspector) renderInspector();
   draw();
 }
@@ -172,6 +182,7 @@ function renderHeader() {
   document.title = d.project.name + ' — Celer Studio';
   const b = S.snap.build;
   let st = 'rev ' + S.snap.rev + '  ·  ' + d.scenes.length + ' cenas  ·  ' + d.assets.length + ' assets';
+  if ((d.project.runtime || 'studio') === 'legacy') st += '  ·  LEGADO';
   if (b) st += '  ·  build ' + b.extras + ' extras, ' + (b.jsBytes / 1024).toFixed(1) + 'KB JS';
   if (S.snap.play && S.snap.play.running) st += '  ·  PLAY';
   $('#status').textContent = st;
@@ -1532,7 +1543,7 @@ function renderBuild() {
   const b = S.snap ? S.snap.build : null;
   if (!b) { box.textContent = 'sem build. Clique em Build.'; return; }
   const lines = [];
-  lines.push('pacote: ' + b.app + ' ' + b.version);
+  lines.push('pacote: ' + b.app + ' ' + b.version + (b.runtime === 'legacy' ? '  (runtime legado: ' + b.entry + ')' : ''));
   lines.push('pasta:  ' + b.dir);
   lines.push('extras: ' + b.extras + '/16   JS: ' + (b.jsBytes / 1024).toFixed(1) + 'KB   assets: ' +
              (b.assetBytes / 1024).toFixed(1) + 'KB');

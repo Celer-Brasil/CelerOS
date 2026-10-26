@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "guid": "375ba94c4ef94339b0b73f3e786e9500",
+  "importer": "sprite",
+  "settings": {
+    "w": 256,
+    "h": 256,
+    "mode": "single",
+    "pivot": [
+      0.5,
+      0.5
+    ],
+    "key": "#000000"
+  }
+}

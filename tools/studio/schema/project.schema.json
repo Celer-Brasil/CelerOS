@@ -38,6 +38,18 @@
       }
     },
     "startScene": { "type": "string", "description": "GUID da cena inicial (vazio antes da primeira cena)" },
+    "runtime": { "enum": ["studio", "legacy"], "description": "studio = componentes/cenas do Studio; legacy = roda o main.js original via bridge" },
+    "legacy": {
+      "type": "object",
+      "description": "Modo legado: o app original e copiado como fonte e roda dentro do Play do Studio.",
+      "required": ["entry"],
+      "properties": {
+        "entry": { "type": "string", "description": "nome do script de entrada (ex: main.js)" },
+        "name": { "type": "string", "description": "nome da pasta original (opcional)" },
+        "bases": { "type": "array", "items": { "type": "string" },
+                   "description": "prefixos de asset extras do app original" }
+      }
+    },
     "build": {
       "type": "object",
       "properties": {

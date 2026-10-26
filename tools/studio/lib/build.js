@@ -12,6 +12,7 @@ const { validateProject, isShipped } = require('./validate');
 const { strip } = require('../../sdk/lib/jsstrip.js');
 
 const RUNTIME = fs.readFileSync(path.join(__dirname, '..', 'templates', 'runtime.js'), 'utf8');
+const LEGACY = fs.readFileSync(path.join(__dirname, '..', 'templates', 'legacy.js'), 'utf8');
 const HEADER = '// GERADO POR CELER STUDIO ' + require('../version').STUDIO_VERSION +
     ' - NAO EDITE. Fonte: celergame.project.json + Assets/**.\n';
 
@@ -407,6 +408,142 @@ function stripSize(src) {
     try { return strip(src).length; } catch (e) { return Buffer.byteLength(src, 'utf8'); }
 }
 
+function generateLegacyMain(project) {
+    const p = project.data;
+    const deps = Object.keys(p.deps || {}).sort();
+    const req = new Set(['celeros.game']);
+    for (const d of deps) if (d.indexOf('celeros.game.') === 0) req.add(d);
+    let src = HEADER;
+    const ordered = Array.from(req).sort((a, b) => a === 'celeros.game' ? -1 : (b === 'celeros.game' ? 1 : a.localeCompare(b)));
+    for (const d of ordered) src += (d === 'celeros.game' ? 'var E = ' : '') + 'require("' + d + '");\n';
+    src += '\n' + LEGACY + '\n';
+    const bases = (p.legacy && p.legacy.bases) || [];
+    src += 'legacyBoot(E, { entry: "legacy.main", pkg: ' + JSON.stringify(p.packageName) +
+           ', bases: ' + JSON.stringify(bases) + ' });\n';
+    return src;
+}
+
+function buildLegacy(project, check, warnings, buildDir) {
+    const p = project.data;
+    const legacy = p.legacy || {};
+    const entry = legacy.entry;
+    const scripts = project.assets.filter((a) => a.kind === 'script')
+        .sort((a, b) => a.relPath.localeCompare(b.relPath));
+    const entryAsset = scripts.find((a) => a.fileName === entry || a.name === String(entry).replace(/\.js$/, ''));
+    if (!entryAsset) failBuild('script de entrada do modo legado nao encontrado: ' + entry);
+
+    const used = new Set(['main.js', 'app.json', 'icon.png']);
+    const scriptFiles = [];
+    for (const a of scripts) {
+        if (a.fileName === 'test.js') continue;   // dev-only no app original
+        const out = a.fileName === entryAsset.fileName ? 'legacy.main.js' : a.fileName;
+        if (!/^[A-Za-z0-9_.-]{1,63}\.js$/.test(out)) {
+            failBuild('script com nome invalido para o pacote: ' + out);
+        }
+        if (used.has(out.toLowerCase())) failBuild('dois arquivos com o mesmo nome: ' + out);
+        used.add(out.toLowerCase());
+        fs.copyFileSync(a.absPath, path.join(buildDir, out));
+        scriptFiles.push(out);
+    }
+
+    const copies = [];
+    const assets = project.assets.filter((a) => isShipped(a.kind) && a.kind !== 'script')
+        .sort((a, b) => a.relPath.localeCompare(b.relPath));
+    let assetBytes = 0;
+    for (const a of assets) {
+        if (a.fileName === 'icon.png') continue;   // icone do projeto
+        if (!/^[A-Za-z0-9._-]{1,64}$/.test(a.fileName)) {
+            failBuild('asset com nome invalido para o pacote: ' + a.fileName);
+        }
+        if (used.has(a.fileName.toLowerCase())) failBuild('dois arquivos com o mesmo nome: ' + a.fileName);
+        used.add(a.fileName.toLowerCase());
+        fs.copyFileSync(a.absPath, path.join(buildDir, a.fileName));
+        copies.push(a.fileName);
+        assetBytes += a.size;
+    }
+    if (assetBytes > 256 * 1024) {
+        failBuild('assets somam ' + (assetBytes / 1024).toFixed(1) + 'KB (maximo 256KB)');
+    }
+
+    const app = {
+        name: p.name,
+        packageName: p.packageName,
+        version: p.version,
+        author: p.author || 'Celer Studio',
+        description: p.description || '',
+        type: p.type || 'Game',
+        category: p.category || 'Jogos',
+        api: p.api,
+        requires: p.requires || [],
+        topbar: p.topbar === undefined ? false : !!p.topbar,
+        permissions: p.permissions || [],
+        deps: p.deps || {},
+        changelog: p.changelog || (p.version + ': build do Celer Studio (legado)'),
+    };
+    F.writeJson(path.join(buildDir, 'app.json'), app);
+
+    const icon = path.join(project.dir, 'icon.png');
+    if (fs.existsSync(icon)) fs.copyFileSync(icon, path.join(buildDir, 'icon.png'));
+    else {
+        try {
+            const { makeIconPng } = require('../../sdk/lib/icon.js');
+            fs.writeFileSync(path.join(buildDir, 'icon.png'), makeIconPng(p.name[0] || 'C'));
+        } catch (e) { /* opcional */ }
+    }
+
+    F.writeText(path.join(buildDir, 'main.js'), generateLegacyMain(project));
+
+    const extras = scriptFiles.length + copies.length;
+    if (extras > 16) failBuild('pacote com ' + extras + ' extras (maximo 16): reduza scripts/assets');
+    if (extras >= 14) warnings.push({ code: 'package.extras', path: 'pacote', message: extras + ' extras (limite 16)' });
+
+    const jsFiles = ['main.js'].concat(scriptFiles);
+    let jsTotal = 0;
+    const jsSizes = {};
+    for (const f of jsFiles) {
+        const src = fs.readFileSync(path.join(buildDir, f), 'utf8');
+        const n = stripSize(src);
+        jsSizes[f] = n;
+        jsTotal += n;
+        if (n > 256 * 1024) failBuild(f + ' tem ' + (n / 1024).toFixed(1) + 'KB (limite do require 256KB)');
+        if (n > 30 * 1024 && (p.api || 0) < 6) failBuild(f + ' > 30KB exige api >= 6');
+    }
+    const psram = (p.requires || []).indexOf('psram') >= 0;
+    const ceiling = psram ? 1024 * 1024 : 48 * 1024;
+    if (jsTotal > ceiling) {
+        failBuild('JS enxuto soma ' + (jsTotal / 1024).toFixed(1) + 'KB (teto ' +
+                  (psram ? '1MB' : '48KB sem psram'));
+    }
+
+    const { runLint } = require('../../app_lint/lint.js');
+    const lint = runLint([buildDir], {});
+    const lintErrors = [];
+    for (const a of lint.apps) {
+        for (const d of a.diagnostics) {
+            if (d.severity === 'erro') lintErrors.push(d);
+            else warnings.push({ code: 'lint.' + d.rule, path: d.file + ':' + d.line, message: d.message });
+        }
+    }
+    if (lintErrors.length) {
+        throw new F.StudioError('build.lint', 'app_lint reprovou o build legado (' + lintErrors.length + ' erro(s))',
+            { diagnostics: lintErrors });
+    }
+
+    const report = {
+        ts: Date.now(), dir: buildDir, app: app.packageName, version: app.version,
+        runtime: 'legacy', entry: entry, extras: extras, jsBytes: jsTotal, jsSizes: jsSizes,
+        assetBytes: assetBytes, files: fs.readdirSync(buildDir).sort(), warnings: warnings,
+    };
+    F.writeJson(path.join(project.studioDir, 'report.json'), report);
+
+    return {
+        ok: true, dir: buildDir, app: app.packageName, version: app.version,
+        runtime: 'legacy', entry: entry, files: report.files, extras: extras,
+        jsBytes: jsTotal, assetBytes: assetBytes, warnings: warnings,
+        dataFiles: [], scripts: scriptFiles,
+    };
+}
+
 function buildProject(dir, opts) {
     opts = opts || {};
     const project = Project.open(dir);
@@ -428,6 +565,7 @@ function buildProject(dir, opts) {
     }
     fs.rmSync(buildDir, { recursive: true, force: true });
     fs.mkdirSync(buildDir, { recursive: true });
+    if (project.data.runtime === 'legacy') return buildLegacy(project, check, warnings, buildDir);
 
     const plan = planAssets(project);
     if (!plan.scripts.length) warnings.push({ code: 'build.scripts', path: 'Assets/Scripts', message: 'nenhum script de componente' });

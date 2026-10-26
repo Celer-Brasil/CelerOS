@@ -210,6 +210,57 @@ the prefab entity `fid`:
 
 Nesting is flattened recursively at build time (limit 4 levels).
 
+## Remounting existing games (legacy mode)
+
+`studio import-game` scaffolds an editable project from an existing app:
+
+```bash
+node tools/sdk/celer.js studio import-game hub_apps/Detona studio_games/Detona
+node tools/sdk/celer.js studio "studio_games/Detona" serve --open
+node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
+```
+
+The importer copies root PNG/QOA/WAV assets into `Assets/Sprites|Audio` (the
+known atlases are sliced: `ai_atlas` 4x4x64, `tileset` 8x3x32, Lenda's sheets),
+copies root `.js` files into `Assets/Scripts` with their original names, and
+imports the app metadata (`packageName`, `version`, `api`, `deps`,
+`permissions`, `requires`). It writes:
+
+```json
+"runtime": "legacy",
+"legacy": { "entry": "main.js", "name": "Detona",
+            "bases": ["/local/apps/Detona/", "/sd/apps/Detona/"] }
+```
+
+A legacy build copies every script/asset flat under the original names,
+renames the original entry to `legacy.main.js`, and generates a `main.js`
+that calls the **legacy bridge** (`tools/studio/templates/legacy.js`). The
+bridge captures the original `E.run` scene table, runs it inside the Studio
+`E.run`, and redirects `E.goto`/`push`/`pop`; input, modules, timers, tweens,
+camera, audio and the dirty layer stay engine-owned. The original app calls
+`E.init` normally; the bridge prepends the package asset bases.
+
+Asset and script edits in the project are the ones that ship. The scene panel
+is a **card**: the legacy runtime does not consume Studio entities/tilemaps/
+prefabs yet. Visual scene transitions (fade/wipe/iris) are skipped in this
+first pass; static menu redraw behavior is preserved.
+
+The repo ships the four biggest games as legacy projects:
+
+| Project | Original | Version | Extras | JS | Assets |
+|---------|----------|---------|--------|----|--------|
+| `studio_games/Detona` | `hub_apps/Detona` | 0.10.2 | 6 | 104.7 KB | 130.5 KB |
+| `studio_games/Arrasa` | `hub_apps/Arrasa` | 1.3.2 | 15 | 65.2 KB | 176.8 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 1.0.4 | 13 | 54.4 KB | 205.3 KB |
+| `studio_games/Supernova` | `hub_apps/Supernova` | 2.6.2 | 4 | 42.3 KB | 131.9 KB |
+
+All four open, build and play in the Studio (titles and gameplay). Use
+`run --input toques.txt` to navigate menus, e.g. `200 tap 240,270`.
+
+Next step of the remount: import each game's levels/rooms/phases into Studio
+scenes/tilemaps/prefabs, adapt the game script to read them, and drop
+`runtime: "legacy"` once the native scene is behavior-complete.
+
 ## Components
 
 | Type | Fields |
@@ -329,10 +380,11 @@ carry `{code, message, hint, diagnostics}` and exit code 1.
 | `describe` | project summary, component catalog, ops, limits, assets/scenes |
 | `schema [project\|scene\|prefab\|meta\|components]` | JSON Schema |
 | `import FILE` | import PNG/QOA/WAV/JS (`--importer`, `--grid CxR`, `--tw/--th`, `--prefix`, `--key`, `--pivot x,y`, `--loop`, `--gain`) |
+| `import-game APP [DEST]` | scaffold an editable **legacy** project from an existing app (assets, scripts, metadata, original main) |
 | `apply [FILE\|-] [--op JSON]` | run an op batch atomically (`--dry-run`, `--if-rev N`) |
 | `validate` | schema, refs, package limits, ES5 lint |
 | `build` | write the flat app package |
-| `run` | build + run on the host harness (`--ms`, `--out`, `--frames 0,600`, `--seed`, `--no-build`) |
+| `run` | build + run on the host harness (`--ms`, `--out`, `--frames 0,600`, `--seed`, `--input toques.txt`, `--no-build`) |
 | `export DIR` | copy the build to a folder (`--force`) |
 | `undo` / `redo` | restore the previous batch / reapply |
 | `fmt` | rewrite all JSON/metas canonically |
@@ -475,6 +527,9 @@ OTA updates firmware only; the app package still ships through the store or
 - The tilemap painter is in the GUI; a visual atlas slicer (drag regions), an
   animation timeline and a dedicated prefab editing view are still phase 6
   (use `asset.set`/`component.set`/`op` batches until then).
+- Legacy projects run the original code: scene/tilemap/prefab edits do not
+  affect the runtime yet, and visual transitions are skipped. The four
+  `studio_games/` projects are a first remount, not a native port.
 - `music` on a scene is started with `System.playWav` on scene entry (one
   shot); v1 has no runtime mixer/loop control. The audio importer's `loop` and
   `gain` settings are stored in the `.meta` for tooling, not applied yet.
@@ -492,4 +547,6 @@ spr 1.6 metadata (`anims`/fps/loop/hitbox), `tilemap.set`/resize (the painter
 commit), atomic batches/dry-run/undo/redo, deterministic builds, the generated
 app on the host harness (`E.spr.meta`/`animOf`/`box`, anchored HUD pixels,
 frames differ when a script moves an entity), prefab flattening, and CLI x HTTP
-equivalence. CI runs it before the firmware matrix.
+equivalence, and the legacy bridge (import-game, original E.run capture,
+`E.goto` scene switch, package asset bases). CI runs it before the firmware
+matrix.

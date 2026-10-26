@@ -228,8 +228,9 @@ function checkAssetFiles(project, errors, warnings) {
             errors.push({ code: 'asset.missing', path: at, message: 'arquivo nao existe' });
             continue;
         }
-        total += a.size;
-        if (a.size > 128 * 1024) {
+        // o teto de 256KB e dos assets nao-JS; scripts tem teto proprio (256KB)
+        if (a.kind !== 'script') total += a.size;
+        if (a.kind !== 'script' && a.size > 128 * 1024) {
             errors.push({ code: 'asset.toobig', path: at, message: (a.size / 1024).toFixed(1) + 'KB (maximo 128KB)' });
         }
         if (isGraphic(a.kind)) {
@@ -319,10 +320,11 @@ function checkScripts(project, errors, warnings) {
 }
 
 function checkLimits(project, errors, warnings) {
+    const legacy = project.data.runtime === 'legacy';
     const shipped = project.assets.filter((a) => isShipped(a.kind));
     const scripts = shipped.filter((a) => a.kind === 'script').length;
     const files = shipped.length - scripts + scripts;   // assets + scripts (1 arquivo cada)
-    const extras = files + 1;                            // + game.data.js (pode dividir)
+    const extras = files + (legacy ? 0 : 1);             // + game.data.js no runtime Studio
     if (extras > 16) {
         errors.push({ code: 'package.extras', path: 'Assets',
                       message: 'pacote teria ' + extras + ' extras (maximo 16): reduza scripts/assets' });
@@ -331,10 +333,12 @@ function checkLimits(project, errors, warnings) {
                         message: 'pacote com ' + extras + ' extras (limite 16; data pode dividir)' });
     }
     const deps = project.data.deps || {};
-    const need = ['celeros.game', 'celeros.game.spr', 'celeros.game.tilemap'];
+    const need = legacy ? ['celeros.game']
+        : ['celeros.game', 'celeros.game.spr', 'celeros.game.tilemap'];
     for (const n of need) {
         if (!deps[n]) {
-            errors.push({ code: 'deps.missing', path: 'deps', message: 'o runtime gerado exige ' + n });
+            errors.push({ code: 'deps.missing', path: 'deps',
+                          message: (legacy ? 'o modo legado exige ' : 'o runtime gerado exige ') + n });
         }
     }
     for (const n of Object.keys(deps)) {
@@ -358,11 +362,22 @@ function validateProject(project, opts) {
     for (const issue of project.issues || []) {
         errors.push({ code: issue.code, path: issue.path, message: issue.message });
     }
-    if (!project.scene(project.data.startScene) && (project.data.startScene || project.sceneList().length)) {
+    const legacy = project.data.runtime === 'legacy';
+    if (!legacy && !project.scene(project.data.startScene) &&
+        (project.data.startScene || project.sceneList().length)) {
         errors.push({ code: 'scene.start', path: 'startScene',
                       message: project.data.startScene
                           ? 'cena inicial inexistente: ' + project.data.startScene
                           : 'projeto sem cena inicial' });
+    }
+    if (legacy) {
+        const entry = project.data.legacy && project.data.legacy.entry;
+        const found = entry && project.assets.some((a) =>
+            a.kind === 'script' && (a.fileName === entry || a.name === entry.replace(/\.js$/, '')));
+        if (!found) {
+            errors.push({ code: 'legacy.entry', path: 'legacy.entry',
+                          message: 'script de entrada do modo legado nao encontrado: ' + entry });
+        }
     }
     for (const sc of project.sceneByGuid.values()) {
         checkScene(project, sc, project.byGuid.get(sc.guid), errors);

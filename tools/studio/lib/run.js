@@ -27,6 +27,12 @@ function runProject(dir, opts) {
         ? path.resolve(opts.out)
         : path.join(project.studioDir, 'run', 'tela.png');
     const seed = opts.seed !== undefined && opts.seed !== null ? (opts.seed >>> 0) : 7;
+    let events = null;
+    if (opts.input) {
+        const { parseInputScript, wireInput } = require('../../sdk/lib/input.js');
+        const script = parseInputScript(fs.readFileSync(path.resolve(opts.input), 'utf8'));
+        events = (env) => wireInput(env, script);
+    }
     let r;
     try {
         r = runAppFolder(built.dir, {
@@ -35,6 +41,7 @@ function runProject(dir, opts) {
             frames: frames,
             framesPng: true,
             seed: seed,
+            events: events,
             microsBias: 1,
         });
     } catch (e) {

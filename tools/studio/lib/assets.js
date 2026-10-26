@@ -128,6 +128,23 @@ function createScript(project, name, content) {
     return { asset, created: [abs, path.join(project.dir, rel + '.meta')] };
 }
 
+// copia um script existente mantendo o NOME ORIGINAL do arquivo (o modo
+// legado usa require() com esses nomes)
+function importScriptFile(project, src, fileName) {
+    const name = String(fileName || path.basename(src));
+    if (!/^[A-Za-z0-9_.-]{1,63}\.js$/.test(name)) {
+        F.fail('asset.name', 'nome de script invalido para o pacote: ' + name);
+    }
+    const rel = 'Assets/Scripts/' + name;
+    const abs = project.resolveInside(rel);
+    if (fs.existsSync(abs)) F.fail('asset.exists', 'script ja existe no projeto: ' + rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.copyFileSync(path.resolve(src), abs);
+    const meta = { format: 1, guid: F.newGuid(), importer: 'script', settings: { props: {} } };
+    F.writeJson(path.join(project.dir, rel + '.meta'), meta);
+    return { asset: project.registerAsset(rel, meta), created: [abs, path.join(project.dir, rel + '.meta')] };
+}
+
 function scriptTemplate(name) {
     return '// ' + name + ' — componente de script do Celer Studio (ES5).\n' +
            '// O runtime chama start/update/draw com this = entidade e ctx = { E, scene, entity, assets }.\n' +
@@ -172,4 +189,4 @@ function setAssetSettings(project, asset, patch) {
     return asset;
 }
 
-module.exports = { importAsset, createScript, setAssetSettings, scriptTemplate, pngInfo, parseGrid, EXT_KIND };
+module.exports = { importAsset, importScriptFile, createScript, setAssetSettings, scriptTemplate, pngInfo, parseGrid, EXT_KIND };

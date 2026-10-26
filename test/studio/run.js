@@ -19,6 +19,7 @@ const { validateProject } = require('../../tools/studio/lib/validate');
 const { buildProject } = require('../../tools/studio/lib/build');
 const { runProject } = require('../../tools/studio/lib/run');
 const { startStudio } = require('../../tools/studio/server');
+const { importGame } = require('../../tools/studio/lib/import_game');
 const { encodePng, decodePng } = require('../../tools/sdk/lib/png.js');
 const F = require('../../tools/studio/lib/format');
 
@@ -343,8 +344,58 @@ let built = null;
     check('state responde describe + build', st.ok === true && !!st.describe && !!st.describe.project);
     await new Promise((resolve) => srv.close(resolve));
 
+    // ------------------------------------------------------ legado -----
+    console.log('Studio modo legado:');
+    const legApp = tmpDir('legacy-app');
+    const legProj = tmpDir('legacy-proj');
+    const legPngPath = path.join(legApp, 'px.png');
+    const px = Buffer.alloc(4 * 4 * 3);
+    for (let i = 0; i < 16; i++) { px[i * 3 + 2] = 255; }   // azul
+    fs.writeFileSync(legPngPath, encodePng(4, 4, px, false));
+    fs.writeFileSync(path.join(legApp, 'app.json'), JSON.stringify({
+        name: 'Legado Teste', packageName: 'br.test.legado', version: '0.1.0',
+        author: 'Teste', description: 'fixture do modo legado', type: 'Game',
+        category: 'Jogos', api: 50, requires: ['psram'], permissions: [],
+        deps: { 'celeros.game': '^1.5.0', 'celeros.game.spr': '^1.6.0' },
+    }, null, 2));
+    fs.writeFileSync(path.join(legApp, 'main.js'),
+        "var E = require('celeros.game');\n" +
+        "require('celeros.game.spr');\n" +
+        "E.init({ dir: 'Legado Teste', fps: 30, save: 'legado.' });\n" +
+        "E.spr.load([{ name: 'px', file: 'px', w: 4, h: 4 }]);\n" +
+        "E.run({\n" +
+        "  vermelho: { update: function (dt) { this.t = (this.t || 0) + dt; if (this.t > 0.2) E.goto('verde'); },\n" +
+        "              draw: function () { System.fillScreen(0xF800); E.spr.blit('px', 0, 0, { key: null }); } },\n" +
+        "  verde: { update: function (dt) { this.t = (this.t || 0) + dt; if (this.t > 1.2) E.quit(); },\n" +
+        "           draw: function () { System.fillScreen(0x07E0); E.spr.blit('px', 0, 0, { key: null }); } }\n" +
+        "}, 'vermelho');\n");
+    const imp = importGame(legApp, legProj, {});
+    check('import-game cria projeto legado valido', imp.ok === true &&
+        Project.open(legProj).data.runtime === 'legacy', JSON.stringify(imp.validation));
+    const legBuild = buildProject(legProj, {});
+    check('build legado copia entry/bridge/assets',
+        fs.existsSync(path.join(legBuild.dir, 'legacy.main.js')) &&
+        fs.existsSync(path.join(legBuild.dir, 'px.png')) &&
+        fs.readFileSync(path.join(legBuild.dir, 'main.js'), 'utf8').indexOf('legacyBoot') >= 0);
+    const legRun = runProject(legProj, { ms: 900, frames: '0,300,800',
+                                          out: path.join(legProj, '.studio/run/leg.png') });
+    check('bridge roda o main original e troca de cena', legRun.ok === true &&
+        legRun.frames.length === 3, legRun.error || '');
+    if (legRun.ok && legRun.frames.length === 3) {
+        const f0 = decodePng(fs.readFileSync(legRun.frames[0].file));
+        const f1 = decodePng(fs.readFileSync(legRun.frames[1].file));
+        const p0 = (10 * f0.w + 10) * 4;
+        const p1 = (10 * f1.w + 10) * 4;
+        const s0 = (1 * f0.w + 1) * 4;
+        check('legado: cena 1 vermelha e cena 2 verde', f0.rgba[p0] > 200 && f0.rgba[p0 + 1] < 40 &&
+            f1.rgba[p1 + 1] > 200 && f1.rgba[p1] < 40,
+            JSON.stringify([f0.rgba[p0], f0.rgba[p0 + 1], f1.rgba[p1], f1.rgba[p1 + 1]]));
+        check('legado: sprite carregado pelos bases do pacote', f0.rgba[s0 + 2] > 200 &&
+            f0.rgba[s0] < 40);
+    }
+
     // limpeza
-    for (const d of [base, a, b]) fs.rmSync(d, { recursive: true, force: true });
+    for (const d of [base, a, b, legApp, legProj]) fs.rmSync(d, { recursive: true, force: true });
     console.log('');
     console.log(failures ? failures + ' falha(s)' : 'todos os testes do Studio passaram');
     process.exit(failures ? 1 : 0);

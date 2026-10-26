@@ -1,0 +1,118 @@
+{
+  "format": 1,
+  "guid": "307ea7d3e74365fa23309159636819ed",
+  "importer": "tileset",
+  "settings": {
+    "w": 256,
+    "h": 96,
+    "mode": "grid",
+    "cols": 8,
+    "rows": 3,
+    "tw": 32,
+    "th": 32,
+    "pivot": [
+      0.5,
+      0.5
+    ],
+    "key": "#000000",
+    "prefix": "",
+    "tiles": [
+      {
+        "name": "0",
+        "solid": false
+      },
+      {
+        "name": "1",
+        "solid": false
+      },
+      {
+        "name": "2",
+        "solid": false
+      },
+      {
+        "name": "3",
+        "solid": false
+      },
+      {
+        "name": "4",
+        "solid": false
+      },
+      {
+        "name": "5",
+        "solid": false
+      },
+      {
+        "name": "6",
+        "solid": false
+      },
+      {
+        "name": "7",
+        "solid": false
+      },
+      {
+        "name": "8",
+        "solid": false
+      },
+      {
+        "name": "9",
+        "solid": false
+      },
+      {
+        "name": "10",
+        "solid": false
+      },
+      {
+        "name": "11",
+        "solid": false
+      },
+      {
+        "name": "12",
+        "solid": false
+      },
+      {
+        "name": "13",
+        "solid": false
+      },
+      {
+        "name": "14",
+        "solid": false
+      },
+      {
+        "name": "15",
+        "solid": false
+      },
+      {
+        "name": "16",
+        "solid": false
+      },
+      {
+        "name": "17",
+        "solid": false
+      },
+      {
+        "name": "18",
+        "solid": false
+      },
+      {
+        "name": "19",
+        "solid": false
+      },
+      {
+        "name": "20",
+        "solid": false
+      },
+      {
+        "name": "21",
+        "solid": false
+      },
+      {
+        "name": "22",
+        "solid": false
+      },
+      {
+        "name": "23",
+        "solid": false
+      }
+    ]
+  }
+}

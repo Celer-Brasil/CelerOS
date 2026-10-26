@@ -19,9 +19,11 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 | `lib/ops.js` | barramento de ops, lote atomico, undo/redo, journal |
 | `lib/validate.js` | schema/refs + limites de pacote + lint ES5 |
 | `lib/build.js` | codegen determinista: main/data/scripts/assets/app.json |
-| `lib/run.js` | executa o build no harness do host (PNG/frames) |
+| `lib/run.js` | executa o build no harness do host (PNG/frames/input) |
+| `lib/import_game.js` | import-game: app existente -> projeto legado (assets/metas/scripts) |
 | `lib/live.js` | filho do Play (emulador ao vivo) |
 | `templates/runtime.js` | runtime de cenas ES5, concatenado no main.js |
+| `templates/legacy.js` | bridge do modo legado: captura E.run, redireciona goto/push/pop |
 | `schema/*.json` | JSON Schemas + catalogo de componentes (fonte de tudo) |
 | `ui/` | GUI sem build (index/style/app.js) |
 
@@ -53,6 +55,24 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 | `E.prof`, `E.debug` | `editor.prof`/`editor.debug` viram `E.prof.on`/`E.debug` no main gerado |
 | `E.slots` | automatico no spr; nenhum codigo do Studio mexe em `_used` |
 | `celeros.game.scene` | opcional para scripts (o projeto pode declarar); o runner do Studio ainda achata prefabs e nao o exige |
+
+## MODO LEGADO (jogos remontados)
+- `studio import-game <app> <projeto>` copia assets/metas/scripts com os nomes
+  originais, importa o app.json e grava `runtime: "legacy"` + `legacy.entry`.
+- `build` legado: copia tudo flat, renomeia o entry para `legacy.main.js`,
+  gera `main.js` com `templates/legacy.js` embutido. Sem `game.data.js`.
+- A bridge captura o `E.run` original, roda a tabela de cenas dentro do
+  `E.run` do Studio e redireciona `E.goto/push/pop/depth`; input, modulos,
+  timers, tweens, camera, audio e dirty layer seguem do loop externo.
+  Transicoes visuais sao ignoradas; `static` e preservado via
+  `wrapper.static`.
+- `E.init` e `E.spr.bases` sao interceptados para os caminhos do pacote
+  (`/local/apps/<pkg>/`, `/sd/...`) entrarem antes dos bases do app.
+- A cena do Studio e um CARTAO: edicoes de entidade/tilemap/prefab NAO afetam
+  o runtime legado. Assets/scripts sim.
+- Os 4 jogos estao em `studio_games/` (Detona, Arrasa, Lenda de Celer,
+  Supernova); ver `studio_games/README.md`. Proximo passo: extrair levels para
+  cenas e trocar o legado por componentes nativos, sistema por sistema.
 
 ## COMO ESTENDER
 ### Componente novo
@@ -124,7 +144,8 @@ sem alinhar com o dono do arquivo: e trabalho em voo.
 ## TESTES
 - `node test/studio/run.js` (CI): formato canonico, import, metadata do spr
   1.6, tilemap.set/resize, ops/dry-run/undo, build determinista, app gerado no
-  harness (spr.meta/animOf/box + HUD ancorado), prefab achatado, CLI x HTTP.
+  harness (spr.meta/animOf/box + HUD ancorado), prefab achatado, CLI x HTTP e
+  a bridge legada (import-game, goto entre cenas, bases do pacote).
 - `node tools/sdk/celer.js check` cobre drift de types/renderer/deps.
 - Preview: `serve --open`; headless: `run --frames 0,600`.
 
@@ -137,3 +158,6 @@ sem alinhar com o dono do arquivo: e trabalho em voo.
 - Usar ES6 nos scripts (Duktape).
 - Esquecer `studio fmt` depois de editar JSON a mao (o build tolera, mas o
   diff fica sujo).
+- Editar a cena de um projeto `runtime: "legacy"` esperando mudar o jogo: o
+  runtime legado usa o main/scripts originais, nao a cena. Migre o sistema
+  para componentes nativos antes de remover `runtime: "legacy"`.

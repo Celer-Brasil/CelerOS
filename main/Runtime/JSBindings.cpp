@@ -1238,6 +1238,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"getTemperature", js_getTemperature, 0},
         {"hasTemperatureSensor", js_hasTemperatureSensor, 0},
         {"getInfo", js_getInfo, 0},
+        {"isScreenOn", js_isScreenOn, 0},     // API 51: tela entregando quadro?
+        {"screenState", js_screenState, 0},   // API 51: on|dim|aod|off
     };
     putFns(ctx, kFns7);
     

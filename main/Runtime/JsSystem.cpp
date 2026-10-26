@@ -412,6 +412,28 @@ duk_ret_t JSBindings::js_keepAwake(duk_context *ctx) {
     return 0;
 }
 
+duk_ret_t JSBindings::js_isScreenOn(duk_context *ctx) {
+    // API 51: a tela esta entregando quadro AGORA? O jogo usa para pausar e
+    // salvar quando o vidro apaga. "dim" conta como ligada (o app e' visivel);
+    // AOD e off nao (o present dos apps e' suprimido — o watch desenha o AOD).
+    // Placa sem estados de tela (ScreenPower inativo) cai no Backlight.
+    int st = ScreenPower::state();
+    bool on = !Backlight::isOff() && st >= 2;
+    duk_push_boolean(ctx, on ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_screenState(duk_context *ctx) {
+    // API 51: "on" | "dim" | "aod" | "off" (placas sem estados: on/off)
+    int st = ScreenPower::state();
+    const char *s = "on";
+    if (Backlight::isOff() || st <= 0) s = "off";
+    else if (st == 1) s = "aod";
+    else if (st == 2) s = "dim";
+    duk_push_string(ctx, s);
+    return 1;
+}
+
 duk_ret_t JSBindings::js_getDate(duk_context *ctx) {
     duk_push_string(ctx, TimeManager::getFormattedDate().c_str());
     return 1;

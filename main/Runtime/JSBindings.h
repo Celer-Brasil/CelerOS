@@ -210,6 +210,8 @@ public:
     static duk_ret_t js_sensorsStepHistory(duk_context *ctx);  // API 15: dias fechados
     static duk_ret_t js_getWeekday(duk_context *ctx);     // 0=dom..6=sab
     static duk_ret_t js_keepAwake(duk_context *ctx);      // jogos: tela acesa
+    static duk_ret_t js_isScreenOn(duk_context *ctx);     // API 51: tela entregando quadro?
+    static duk_ret_t js_screenState(duk_context *ctx);    // API 51: on|dim|aod|off
     static duk_ret_t js_notify(duk_context *ctx);     // toast + historico
     static duk_ret_t js_notifications(duk_context *ctx);      // lista (system)
     static duk_ret_t js_notificationsClear(duk_context *ctx); // limpar (system)

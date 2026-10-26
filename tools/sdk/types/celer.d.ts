@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 50 — 362 funcoes.
+// API level 51 — 364 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -147,6 +147,8 @@ declare const System: {
     hasTemperatureSensor(): any;
     /** devolve um objeto com o estado atual do hardware ESP32, incluindo uso de memória, velocidade de CPU e especificações. Útil para */
     getInfo(): any;
+    isScreenOn(): any;
+    screenState(): any;
     /** devolve a hora local atual formatada pelo SO, respeitando automaticamente a preferência do usuário (12 ou 24 horas). */
     getTime(): any;
     /** devolve o segundo local atual direto do RTC. */

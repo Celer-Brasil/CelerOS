@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 50
+### Nível de API: 51
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -1617,6 +1617,17 @@ em placas sem o hardware as chamadas degradam limpo (feature-detect com
   `System.keepAwake(ms)` (expira sozinho). Jogos e apps de treino chamam
   ao abrir. **Solto automaticamente quando o app fecha.** No-op em placas
   sem estados de tela.
+
+### 19.5b `System.isScreenOn()` / `System.screenState()` (API 51)
+
+- **Retorna:** `Boolean` / `String` (`"on" | "dim" | "aod" | "off"`).
+- **Descrição:** estado do vidro AGORA. `isScreenOn` é `true` quando o app
+  está visível (pleno ou dim) e `false` em AOD e apagado — o `present()` dos
+  apps é suprimido nesses dois. Em placa sem a escada do watch (o 4848, a
+  CYD) só existe ligado/apagado, pelo timeout do backlight. É o gancho que o
+  jogo usa para pausar/animar e salvar: a engine o consome em
+  `E.onSleep`/`E.onWake` (§18e do Game Engine Guide).
+- **Exemplo:** `if (!System.isScreenOn()) { pararMusica(); salvar(); }`
 
 ### 19.6 `System.setVolume(pct)` / `System.getVolume()` (API 13)
 

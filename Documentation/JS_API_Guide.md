@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 50
+### API Level: 51
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1315,6 +1315,17 @@ without the hardware the calls degrade gracefully (feature-detect with
   with `System.keepAwake(ms)` (expires by itself). Games and workout apps
   call it on start. **Released automatically when the app closes.** No-op
   on boards without screen states.
+
+### 19.5b `System.isScreenOn()` / `System.screenState()` (API 51)
+
+- **Returns:** `Boolean` / `String` (`"on" | "dim" | "aod" | "off"`).
+- **Description:** the glass state RIGHT NOW. `isScreenOn` is `true` while the
+  app is visible (full or dim) and `false` in AOD and off — the app's
+  `present()` is suppressed in both. On boards without the watch ladder (the
+  4848, the CYD) it is only on/off, driven by the backlight timeout. It is the
+  hook a game uses to pause/animate and save: the engine consumes it in
+  `E.onSleep`/`E.onWake` (§18e of the Game Engine Guide).
+- **Example:** `if (!System.isScreenOn()) { stopMusic(); save(); }`
 
 ### 19.6 `System.setVolume(pct)` / `System.getVolume()` (API 13)
 

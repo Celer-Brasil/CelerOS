@@ -338,7 +338,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.11.6"
-    CELEROS_API_LEVEL=50
+    CELEROS_API_LEVEL=51
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

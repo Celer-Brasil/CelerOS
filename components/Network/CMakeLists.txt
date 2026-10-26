@@ -10,6 +10,7 @@ idf_component_register(
         "WifiAP.cpp"
         "CaptivePortal.cpp"
         "IPAddress.cpp"
+        "CredCipher.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         esp_wifi
@@ -19,6 +20,7 @@ idf_component_register(
         esp_http_server
         lwip
         nvs_flash
+        mbedtls
         Utility
         ErrorCodes
         Storage

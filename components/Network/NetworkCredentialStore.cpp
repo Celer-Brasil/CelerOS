@@ -2,6 +2,7 @@
 #include "NetworkClock.h"
 #include "NVS.h"
 #include "CommonErrorCodes.h"
+#include "CredCipher.h"
 #include "esp_log.h"
 #include <algorithm>
 #include <cstring>
@@ -46,6 +47,14 @@ ErrorCode NetworkCredentialStore::init() {
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to initialize NVS: %s", err.description());
         return err;
+    }
+
+    // Chave da cifra de senha (AES-CCM, sobe/genera uma vez). Falha fechado:
+    // sem cifra o store nao salva — persistir texto claro no NVS seria pior
+    // que recusar a rede.
+    if (!CredCipher::init()) {
+        ESP_LOGE(TAG, "Failed to initialize credential cipher");
+        return CommonErrorCodes::OperationFailed;
     }
 
     // Load existing networks from NVS
@@ -375,10 +384,11 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
 
     // Load each network
     bool sawLegacy = false;
+    bool sawPlain = false;
     for (uint8_t i = 0; i < count && i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
         KnownNetwork network;
         bool legacy = false;
-        err = loadNetworkFromNvs(i, network, &legacy);
+        err = loadNetworkFromNvs(i, network, &legacy, &sawPlain);
         if (legacy) sawLegacy = true;
         if (err == CommonErrorCodes::None) {
             _networks.push_back(network);
@@ -389,14 +399,14 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
     }
 
     const size_t loaded = _networks.size();
-    // Entrada vinda do formato pipe legado: regrava tudo no formato por
-    // campo (migracao transparente, uma unica vez) — fora da guarda, o
-    // saveToNvs tira o proprio snapshot
-    const bool migrate = sawLegacy && loaded > 0;
+    // Entrada em formato antigo (pipe legado ou senha em claro): regrava tudo
+    // no formato atual (senha cifrada) — migracao transparente, uma unica
+    // vez. Fora da guarda, o saveToNvs tira o proprio snapshot.
+    const bool migrate = (sawLegacy || sawPlain) && loaded > 0;
     xSemaphoreGive(_mutex);
 
     if (migrate) {
-        ESP_LOGI(TAG, "Migrating legacy pipe format to per-field keys...");
+        ESP_LOGI(TAG, "Migrating legacy network entries (senha passa a ser cifrada)...");
         saveToNvs();
     }
 
@@ -414,7 +424,8 @@ static std::string fieldKey(size_t index, const char* suffix) {
 }
 
 static const char* F_SSID = "s";
-static const char* F_PASS = "w";
+static const char* F_PASS = "w";   // legado (texto claro): so leitura + migracao
+static const char* F_CPASS = "cw"; // senha cifrada (hex nonce||ct||tag)
 static const char* F_PRIO = "pr";
 static const char* F_RSSI = "r";
 static const char* F_LASTC = "lc";
@@ -461,6 +472,7 @@ ErrorCode NetworkCredentialStore::saveToNvs() {
     for (size_t i = snapshot.size(); i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_SSID));
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_PASS));
+        NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_CPASS));
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_PRIO));
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_RSSI));
         NVS::eraseKey(NetworkStoreConstants::NVS_NAMESPACE, fieldKey(i, F_LASTC));
@@ -478,8 +490,23 @@ ErrorCode NetworkCredentialStore::saveNetworkToNvs(size_t index, const KnownNetw
     const std::string ns = NetworkStoreConstants::NVS_NAMESPACE;
     ErrorCode err = NVS::storeValue<std::string>(ns, fieldKey(index, F_SSID), network.ssid, true);
     if (err != CommonErrorCodes::None) return err;
-    err = NVS::storeValue<std::string>(ns, fieldKey(index, F_PASS), network.password, true);
-    if (err != CommonErrorCodes::None) return err;
+
+    // Senha cifrada em "cw"; a chave "w" em claro e apagada (migracao). Rede
+    // aberta (sem senha): nenhum dos dois campos existe.
+    if (network.password[0] != '\0') {
+        char hex[192];
+        if (!CredCipher::encrypt(network.password, hex, sizeof(hex))) {
+            ESP_LOGE(TAG, "Falhou ao cifrar a senha de %s", network.ssid);
+            return CommonErrorCodes::OperationFailed;
+        }
+        err = NVS::storeValue<std::string>(ns, fieldKey(index, F_CPASS), hex, true);
+        if (err != CommonErrorCodes::None) return err;
+        NVS::eraseKey(ns, fieldKey(index, F_PASS));
+    } else {
+        NVS::eraseKey(ns, fieldKey(index, F_CPASS));
+        NVS::eraseKey(ns, fieldKey(index, F_PASS));
+    }
+
     err = NVS::storeValue<int8_t>(ns, fieldKey(index, F_PRIO), network.priority, true);
     if (err != CommonErrorCodes::None) return err;
     err = NVS::storeValue<int8_t>(ns, fieldKey(index, F_RSSI), network.lastRssi, true);
@@ -494,8 +521,9 @@ ErrorCode NetworkCredentialStore::saveNetworkToNvs(size_t index, const KnownNetw
 }
 
 ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork& network,
-                                                     bool* legacyUsed) {
+                                                     bool* legacyUsed, bool* plainUsed) {
     if (legacyUsed != nullptr) *legacyUsed = false;
+    if (plainUsed != nullptr) *plainUsed = false;
     const std::string ns = NetworkStoreConstants::NVS_NAMESPACE;
 
     std::string ssid;
@@ -504,13 +532,29 @@ ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork&
         strncpy(network.ssid, ssid.c_str(), sizeof(network.ssid) - 1);
         network.ssid[sizeof(network.ssid) - 1] = '\0';
 
-        std::string pass;
-        if (NVS::readValue<std::string>(ns, fieldKey(index, F_PASS), pass) ==
+        // Senha: primeiro o formato cifrado atual ("cw"); se ausente, cai para
+        // o texto claro das versoes antigas ("w") e marca migracao — o
+        // loadFromNvs regravara tudo com a senha cifrada.
+        std::string cpass;
+        if (NVS::readValue<std::string>(ns, fieldKey(index, F_CPASS), cpass) ==
             CommonErrorCodes::None) {
-            strncpy(network.password, pass.c_str(), sizeof(network.password) - 1);
-            network.password[sizeof(network.password) - 1] = '\0';
+            if (!CredCipher::decrypt(cpass.c_str(), network.password,
+                                     sizeof(network.password))) {
+                // chave perdida/trocada: rede continua listada, mas a senha
+                // nao e recuperavel — o usuario redigita na proxima conexao
+                ESP_LOGW(TAG, "Senha indecifrável no indice %zu (chave perdida?)", index);
+                network.password[0] = '\0';
+            }
         } else {
-            network.password[0] = '\0';
+            std::string pass;
+            if (NVS::readValue<std::string>(ns, fieldKey(index, F_PASS), pass) ==
+                CommonErrorCodes::None) {
+                strncpy(network.password, pass.c_str(), sizeof(network.password) - 1);
+                network.password[sizeof(network.password) - 1] = '\0';
+                if (network.password[0] != '\0' && plainUsed != nullptr) *plainUsed = true;
+            } else {
+                network.password[0] = '\0';
+            }
         }
 
         int8_t prio = 0, rssi = 0;

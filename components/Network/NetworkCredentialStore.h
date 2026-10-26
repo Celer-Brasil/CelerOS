@@ -189,10 +189,12 @@ private:
      * @param network Output parameter for the loaded network.
      * @param legacyUsed Optional: set to true when the entry came from the
      *        legacy pipe-serialized format (triggers a one-time migration).
+     * @param plainUsed Optional: set to true when the password came from the
+     *        legacy plaintext field "w" (triggers re-save with encryption).
      * @return ErrorCode indicating success or failure.
      */
     ErrorCode loadNetworkFromNvs(size_t index, KnownNetwork& network,
-                                 bool* legacyUsed = nullptr);
+                                 bool* legacyUsed = nullptr, bool* plainUsed = nullptr);
 
     /**
      * @brief Find network index by SSID.

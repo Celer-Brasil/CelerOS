@@ -182,11 +182,6 @@ static void celerSetup() {
 
 
     ramStage("display");
-#if CONFIG_CELEROS_CRASH_SCREEN
-    // Tela de crash do boot ANTERIOR (registro em RAM RTC), antes do splash:
-    // quem liga o aparelho para investigar ve o que houve sem abrir logcat
-    CrashRecord::showScreen();
-#endif
     bootSplash(i18n::TR("Iniciando...", "Starting..."));
 
     // Initialize File Systems (LittleFS & SD)
@@ -224,6 +219,14 @@ static void celerSetup() {
 #if CONFIG_CELEROS_USB_NATIVE
     // USB nativo (TinyUSB): so para placas com GPIO19/20 livres
     USBDevice::init();
+#endif
+#if CONFIG_CELEROS_CRASH_SCREEN
+    // Tela de crash do boot ANTERIOR: DEPOIS do SerialLink/USB para o link
+    // estar de pe durante os 7 s (celerctl screencap/tap funcionam, a tela e
+    // verificavel remotamente; antes dela o host nao tinha nenhuma porta).
+    // O crash.txt ja foi gravado acima (consumeAndLog) e a copia em RAM
+    // garante o desenho mesmo com o magic limpo.
+    CrashRecord::showScreen();
 #endif
     // USB Host (API 48): pilha + tasks do host. No-op sem CELEROS_USB_HOST;
     // o Kconfig impede a convivencia com USB device/USJ no mesmo OTG.

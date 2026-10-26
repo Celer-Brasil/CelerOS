@@ -55,6 +55,12 @@ struct Record {
 
 RTC_NOINIT_ATTR Record s_rec;
 
+// Copia em RAM do boot: o consumeAndLog roda ANTES da tela (para o arquivo
+// existir cedo) e limpa o magic quando a gravacao deu certo — a tela que vem
+// depois (com o link serial ja de pe) le esta copia.
+static Record s_bootRecord;
+static bool s_bootValid = false;
+
 // Prepara o struct ANTES do backtrace (que pode andar frame podre): o
 // essencial (magic+causa+uptime) ja esta gravado se a walk engasgar.
 void recordBasics(uint16_t cause, uint32_t addr) {
@@ -147,6 +153,11 @@ bool pending() {
 void consumeAndLog() {
     if (!pending()) return;
 
+    // Copia o registro ANTES de qualquer limpeza: a tela (depois do link
+    // serial) le daqui; o magic so cai quando o arquivo foi persistido.
+    s_bootRecord = s_rec;
+    s_bootValid = true;
+
     // App corrente vem do kernel (s_crashApp/s_crashPkg sao estaticos em RAM:
     // leitura segura no boot, o valor e o do momento do panic)
     const char* app = CelerKernel::crashTitle();
@@ -177,9 +188,6 @@ void consumeAndLog() {
     mkdir("/local/log", 0777);
 
     // Anexa; acima de 32 KB recomeca o arquivo (um crash por linha ~300 B).
-    // O magic zera ANTES: um novo panic nesta sessao sobrescreve o registro.
-    s_rec.magic = 0;
-
     const char* kPath = "/local/log/crash.txt";
     FILE* probe = fopen(kPath, "r");
     bool full = false;
@@ -190,18 +198,28 @@ void consumeAndLog() {
     }
     FILE* f = fopen(kPath, full ? "w" : "a");
     if (f == nullptr) {
-        celer_log_printf("crash.txt: /local indisponivel (%u B perdidos)\n", (unsigned)n);
+        // FS cheio/indisponivel: NAO limpa o magic — o registro segue em RAM
+        // RTC e o proximo boot tenta de novo (a CYD da bancada com /local
+        // cheio perdia o crash para sempre no desenho anterior).
+        celer_log_printf("crash.txt: /local indisponivel (%u B retidos no RTC)\n", (unsigned)n);
         return;
     }
     bool ok = fwrite(line, 1, (size_t)n, f) == (size_t)n;
     ok = (fclose(f) == 0) && ok;
-    celer_log_printf("crash.txt: %s (%u B)\n", ok ? "gravado" : "falhou ao gravar", (unsigned)n);
+    if (ok) {
+        s_rec.magic = 0;  // persistido: o proximo panic sobrescreve o registro
+    }
+    celer_log_printf("crash.txt: %s (%u B)%s\n", ok ? "gravado" : "falhou ao gravar",
+                     (unsigned)n, ok ? "" : " (retido no RTC)");
 }
 
 #if CONFIG_CELEROS_CRASH_SCREEN
 
 void showScreen() {
-    if (!pending()) return;
+    // Registro da copia em RAM (consumeAndLog ja rodou e pode ter limpado o
+    // magic com o arquivo gravado) ou direto do RTC se ainda nao consumido.
+    if (!s_bootValid && !pending()) return;
+    const Record& rec = s_bootValid ? s_bootRecord : s_rec;
 
     CelerDisplay& tft = Board::display();
     tft.startWrite();
@@ -219,11 +237,11 @@ void showScreen() {
     char buf[96];
     snprintf(buf, sizeof(buf), "CelerOS %s  |  %s", CELEROS_VERSION, Board::profile().id);
     tft.drawString(buf, UI::sx(14), hdr + UI::sy(14), kui::type::body());
-    snprintf(buf, sizeof(buf), "causa: %s  (uptime %lus)", causeLabel(s_rec.cause),
-             (unsigned long)(s_rec.uptimeMs / 1000UL));
+    snprintf(buf, sizeof(buf), "causa: %s  (uptime %lus)", causeLabel(rec.cause),
+             (unsigned long)(rec.uptimeMs / 1000UL));
     tft.drawString(buf, UI::sx(14), hdr + UI::sy(32), kui::type::body());
-    snprintf(buf, sizeof(buf), "addr 0x%08x  pc 0x%08x", (unsigned)s_rec.addr,
-             s_rec.nPcs > 0 ? (unsigned)s_rec.pcs[0] : 0u);
+    snprintf(buf, sizeof(buf), "addr 0x%08x  pc 0x%08x", (unsigned)rec.addr,
+             rec.nPcs > 0 ? (unsigned)rec.pcs[0] : 0u);
     tft.drawString(buf, UI::sx(14), hdr + UI::sy(50), kui::type::body());
     if (CelerKernel::crashPkg()[0]) {
         snprintf(buf, sizeof(buf), "app: %s (%s)", CelerKernel::crashTitle(),
@@ -237,14 +255,15 @@ void showScreen() {
     // ~92 px; centralizado no terco de baixo.
     char qr[152];
     snprintf(qr, sizeof(qr), "CelerOS %s %s c=%s u=%lus a=%08x p=%08x",
-             CELEROS_VERSION, Board::profile().id, causeLabel(s_rec.cause),
-             (unsigned long)(s_rec.uptimeMs / 1000UL), (unsigned)s_rec.addr,
-             s_rec.nPcs > 0 ? (unsigned)s_rec.pcs[0] : 0u);
+             CELEROS_VERSION, Board::profile().id, causeLabel(rec.cause),
+             (unsigned long)(rec.uptimeMs / 1000UL), (unsigned)rec.addr,
+             rec.nPcs > 0 ? (unsigned)rec.pcs[0] : 0u);
     const int qw = (UI::W < UI::H ? UI::W : UI::H) * 2 / 5;
     tft.qrcode(qr, (UI::W - qw) / 2, UI::sy(160), qw, 5);
 
     // ~7 s de leitura (ou botao fisico para pular): nao trava o boot — no
-    // varejo, aparelho parado parece defeito.
+    // varejo, aparelho parado parece defeito. O link serial ja esta de pe
+    // (a tela roda depois do SerialLink::init): celerctl screencap captura.
     const uint32_t t0 = millis();
     const int pin = Board::profile().buttonPin;
     if (pin >= 0) pinMode(pin, INPUT_PULLUP);

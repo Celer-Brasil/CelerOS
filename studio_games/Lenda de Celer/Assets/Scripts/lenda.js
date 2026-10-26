@@ -333,15 +333,31 @@ function moveHero(s, dx, dy) {
 
 function updateHeroAnim(s) {
     if (!s.hero) return;
+    // o corpo continua visivel durante o golpe; a espada e um overlay
+    // desenhado por drawSword() (os quadros 6..9 da folha sao so a lamina)
     var f;
-    if (s.attackT > 0) f = HERO_ATK[s.dir] || 8;
-    else if (s.dir === 'down') f = s.frame;
+    if (s.dir === 'down') f = s.frame;
     else if (s.dir === 'up') f = 2 + s.frame;
     else if (s.dir === 'right') f = 4;
     else f = 5;
     if (s.invuln > 0 && Math.floor(s.invuln * 12) % 2 === 0) s.hero.active = false;
     else s.hero.active = true;
     s.hero.spr = 'heroi#heroi' + f;
+}
+
+function drawSword(s, E) {
+    if (s.attackT <= 0 || !s.hero || s.hero.active === false) return;
+    var f = HERO_ATK[s.dir] || 8;
+    var x = s.hx, y = s.hy - 4;
+    if (s.dir === 'right') x += CELL * 0.85;
+    else if (s.dir === 'left') x -= CELL * 0.85;
+    else if (s.dir === 'down') y += CELL * 0.8;
+    else { x += CELL * 0.18; y -= CELL * 0.8; }
+    if (E.spr && E.spr.has && E.spr.has('heroi#heroi' + f)) {
+        E.spr.stamp('heroi#heroi' + f, x, y,
+            { scale: 1.15, key: 0x0000, ax: 0.5, ay: 0.5 });
+        E.gfx.circle(x, y, 3, 0xFFE0, { fill: true });
+    }
 }
 
 // ------------------------------------------------------------ acoes ------
@@ -818,6 +834,13 @@ function drawGame(s, E) {
     if (s.boomerang) {
         E.spr.stamp('itens#itens5', s.boomerang.x, s.boomerang.y, { scale: 1, key: 0x0000 });
     }
+    for (i = 0; i < s.enemies.length; i++) {
+        var en = s.enemies[i];
+        if (en.hp > 0 && en.flash > 0) {
+            E.gfx.circle(en.x, en.y, en.r + 3, BRANCO, { fill: false });
+        }
+    }
+    drawSword(s, E);
     // HUD
     drawHud(s, E);
     // joystick

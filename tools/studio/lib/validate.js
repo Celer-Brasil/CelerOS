@@ -334,7 +334,10 @@ function checkLimits(project, errors, warnings) {
     const shipped = project.assets.filter((a) => isShipped(a.kind));
     const scripts = shipped.filter((a) => a.kind === 'script').length;
     const files = shipped.length - scripts + scripts;   // assets + scripts (1 arquivo cada)
-    const extras = files + (legacy ? 0 : 1);             // + game.data.js no runtime Studio
+    const deps = project.data.deps || {};
+    // + game.data.js no runtime Studio + deps.json quando ha deps: o hub
+    // conta o lock como extra, entao o build tem que contar tambem
+    const extras = files + (legacy ? 0 : 1) + (Object.keys(deps).length ? 1 : 0);
     if (extras > 16) {
         errors.push({ code: 'package.extras', path: 'Assets',
                       message: 'pacote teria ' + extras + ' extras (maximo 16): reduza scripts/assets' });
@@ -342,7 +345,6 @@ function checkLimits(project, errors, warnings) {
         warnings.push({ code: 'package.extras', path: 'Assets',
                         message: 'pacote com ' + extras + ' extras (limite 16; data pode dividir)' });
     }
-    const deps = project.data.deps || {};
     const need = legacy ? ['celeros.game']
         : ['celeros.game', 'celeros.game.spr', 'celeros.game.tilemap'];
     for (const n of need) {

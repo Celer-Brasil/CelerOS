@@ -222,7 +222,7 @@ changed.
 |---------|----------|----------------|--------|--------|----|--------|
 | `studio_games/Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 7 | 57.9 KB | 132.2 KB |
 | `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88.3 KB | 78.9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.3 | 23 | 8 | 111.0 KB | 205.3 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.4 | 23 | 9 | 112.3 KB | 206.7 KB |
 | `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36.9 KB | 110.8 KB |
 
 Open, edit and play like any project:
@@ -243,12 +243,14 @@ What each remount added:
 - **Arrasa 2.0.1** — the original ten stages as scenes; each box/goblin/king is
   an entity with its texture/rotation synced to a `P.rigid` body. Sling aim,
   seven projectile powers, TNT chains, impact damage, stars, saved progress.
-- **Lenda de Celer 2.0.3** — all 20 original ASCII rooms as scenes (Campo,
+- **Lenda de Celer 2.0.4** — all 20 original ASCII rooms as scenes (Campo,
   Gruta and Templo), tile solids per tile, portals for edges/doors/stairs/
   caves/cracked walls, sword/bomb/boomerang, chests, Sage, crystal shop, a
   three-phase Guardian, automatic save, continue, victory and game over. The A/B
   buttons use sword/bomb/boomerang icons, the sword is a separate overlay (the
-  body stays visible), and tilemaps anchor each cell at the corner.
+  body stays visible), and tilemaps anchor each cell at the corner. 2.0.4 also
+  ships the resolved `deps.json` inside the package, so a direct install finds
+  the shared engine modules.
 - **Supernova 3.0.1** — a 10-wave campaign with a boss every five waves plus an
   endless mode, three-phase boss, combo x1..x5, orbs, SUPERNOVA blast, triple
   shot, graze hitbox, pause, record and native title/victory/loss scenes.
@@ -544,6 +546,11 @@ can drive a live editor session while a human watches the viewport.
 file through the same `jsstrip` used by the hub, keeps only the assets the
 build selected, compacts `app.json`, and writes a deterministic ZIP with
 `app.json` at the root (the layout accepted by `celerctl apps installzip`).
+The ZIP also carries `deps.json` with the resolved `celeros.game.*` closure:
+the device `require` only falls back to `/local/modules` when that file is in
+the app folder, and the native `installzip` installs exactly what the package
+contains. The store may rewrite the lock from the hub index, but a directly
+installed package is already self-consistent.
 
 ```bash
 # default: <project>/.studio/deploy/app.zip + report.json
@@ -557,7 +564,8 @@ python3 tools/celerctl.py apps installzip ~/Jogo/.studio/deploy/app.zip --run
 ```
 
 The command prints and records in `report.json`: ZIP bytes, SHA-256,
-before/after JS bytes, asset bytes, entry list, extras and build warnings.
+before/after JS bytes, asset bytes, dependency lock, entry list, extras and
+build warnings.
 Timestamps are fixed (1980-01-01) and entries are sorted, so the same sources
 and build produce the same ZIP bytes. `--no-build` reuses an existing build.
 Assets are filtered by the build; they are copied losslessly and compressed

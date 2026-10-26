@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const F = require('./format');
 const { Project } = require('./project');
 const { buildProject } = require('./build');
+const { resolveLocal } = require('./deps');
 const { strip } = require('../../sdk/lib/jsstrip.js');
 const { createZip, readZip } = require('./zip');
 
@@ -53,6 +54,7 @@ function deployProject(dir, opts) {
     }).sort();
 
     for (const name of names) {
+        if (name === 'deps.json') continue;  // gerado abaixo a partir do build
         const abs = path.join(buildDir, name);
         let data = fs.readFileSync(abs);
         if (name.endsWith('.js')) {
@@ -76,11 +78,44 @@ function deployProject(dir, opts) {
         F.fail('deploy.layout', 'build nao tem app.json/main.js');
     }
 
+    // Lock de deps compartilhadas: o require do device so acha
+    // /local/modules quando a pasta do app tem este arquivo. O installzip
+    // nativo nao resolve deps, entao ele precisa viajar DENTRO do zip.
+    const directDeps = project.data.deps || {};
+    let depLock = {};
+    if (Object.keys(directDeps).length) {
+        try { depLock = resolveLocal(directDeps); }
+        catch (e) {
+            F.fail('deploy.deps', 'deps do app nao resolvem na arvore local: ' + e.message);
+        }
+        entries.push({
+            name: 'deps.json',
+            data: Buffer.from(JSON.stringify(depLock, Object.keys(depLock).sort(), 2) + '\n'),
+        });
+    }
+
+    // Todo require de modulo compartilhado no main.js tem que estar no lock;
+    // um build com deps faltando falha aqui em vez de crashar no device.
+    const localModules = new Set(names.filter((n) => n.endsWith('.js'))
+        .map((n) => n.slice(0, -3)));
+    // varre o main ja enxuto: comentario nao vira falso require
+    const mainSrc = entries.find((e) => e.name === 'main.js').data.toString('utf8');
+    const requireRe = /require\(\s*["']([^"']+)["']\s*\)/g;
+    let rm;
+    while ((rm = requireRe.exec(mainSrc)) !== null) {
+        const mod = rm[1];
+        if (localModules.has(mod) || depLock[mod]) continue;
+        F.fail('deploy.deps',
+            'main.js requer "' + mod + '", que nao esta na pasta nem no deps.json');
+    }
+
     const zip = createZip(entries);
     // releitura: garante CRC, central directory e layout instalavel
     const back = readZip(zip);
     const backNames = new Set(back.map((e) => e.name));
-    for (const required of ['app.json', 'main.js', 'icon.png']) {
+    const mustHave = ['app.json', 'main.js', 'icon.png'];
+    if (Object.keys(depLock).length) mustHave.push('deps.json');
+    for (const required of mustHave) {
         if (!backNames.has(required)) F.fail('deploy.layout', 'zip sem ' + required);
     }
     const sha256 = crypto.createHash('sha256').update(zip).digest('hex');
@@ -100,6 +135,7 @@ function deployProject(dir, opts) {
         bytes: zip.length,
         sha256,
         entries: back.map((e) => ({ name: e.name, bytes: e.data.length, method: e.method })),
+        deps: depLock,
         js: {
             before: jsBefore,
             after: jsAfter,

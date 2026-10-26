@@ -9,7 +9,7 @@ Os controladores ficam em `Assets/Scripts/` e são ES5 como qualquer app.
 |---------|----------|--------|-------|-----------|
 | `Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 6 fases 15x13, 3 tilesets, saída sob caixa, 6 powerups, chefe 12 HP, estrelas/progresso |
 | `Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 10 fases com peças/entidades + `P.rigid`, estilingue, 7 pedras, TNT, estrelas |
-| `Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.3 | 23 | 20 salas ASCII + tilemap, espada/bomba/bumerangue, baús, Sábio, loja, Guardião, save |
+| `Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.4 | 23 | 20 salas ASCII + tilemap, espada/bomba/bumerangue, baús, Sábio, loja, Guardião, save |
 | `Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | campanha de 10 ondas + infinito, chefe 3 fases, combo, orbes, supernova, recorde |
 
 Build/run/deploy headless:

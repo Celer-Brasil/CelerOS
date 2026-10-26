@@ -9,6 +9,7 @@ const F = require('./format');
 const SC = require('./schema');
 const { Project } = require('./project');
 const { validateProject, isShipped } = require('./validate');
+const { resolveLocal } = require('./deps');
 const { strip } = require('../../sdk/lib/jsstrip.js');
 
 const RUNTIME = fs.readFileSync(path.join(__dirname, '..', 'templates', 'runtime.js'), 'utf8');
@@ -435,6 +436,24 @@ function stripSize(src) {
     try { return strip(src).length; } catch (e) { return Buffer.byteLength(src, 'utf8'); }
 }
 
+// Lock das deps compartilhadas no proprio pacote. O require do device le
+// <pasta>/deps.json para achar /local/modules; sem ele um app instalado pelo
+// zip (installzip/App Store) nao abre. Grava depois do lint para nao contar
+// como extra.
+function writeDepsLock(project, buildDir) {
+    const direct = project.data.deps || {};
+    const file = path.join(buildDir, 'deps.json');
+    if (!Object.keys(direct).length) {
+        try { fs.rmSync(file, { force: true }); } catch (e) { /* sem lock */ }
+        return {};
+    }
+    let lock;
+    try { lock = resolveLocal(direct); }
+    catch (e) { failBuild('deps do app nao resolvem na arvore local: ' + e.message); }
+    F.writeJson(file, lock);
+    return lock;
+}
+
 function generateLegacyMain(project) {
     const p = project.data;
     const deps = Object.keys(p.deps || {}).sort();
@@ -520,7 +539,8 @@ function buildLegacy(project, check, warnings, buildDir) {
 
     F.writeText(path.join(buildDir, 'main.js'), generateLegacyMain(project));
 
-    const extras = scriptFiles.length + copies.length;
+    const extras = scriptFiles.length + copies.length +
+        (Object.keys(p.deps || {}).length ? 1 : 0);   // deps.json conta extra
     if (extras > 16) failBuild('pacote com ' + extras + ' extras (maximo 16): reduza scripts/assets');
     if (extras >= 14) warnings.push({ code: 'package.extras', path: 'pacote', message: extras + ' extras (limite 16)' });
 
@@ -556,17 +576,19 @@ function buildLegacy(project, check, warnings, buildDir) {
             { diagnostics: lintErrors });
     }
 
+    const depsLock = writeDepsLock(project, buildDir);
     const report = {
         ts: Date.now(), dir: buildDir, app: app.packageName, version: app.version,
         runtime: 'legacy', entry: entry, extras: extras, jsBytes: jsTotal, jsSizes: jsSizes,
-        assetBytes: assetBytes, files: fs.readdirSync(buildDir).sort(), warnings: warnings,
+        assetBytes: assetBytes, deps: depsLock,
+        files: fs.readdirSync(buildDir).sort(), warnings: warnings,
     };
     F.writeJson(path.join(project.studioDir, 'report.json'), report);
 
     return {
         ok: true, dir: buildDir, app: app.packageName, version: app.version,
         runtime: 'legacy', entry: entry, files: report.files, extras: extras,
-        jsBytes: jsTotal, assetBytes: assetBytes, warnings: warnings,
+        jsBytes: jsTotal, assetBytes: assetBytes, deps: depsLock, warnings: warnings,
         dataFiles: [], scripts: scriptFiles,
     };
 }
@@ -691,8 +713,10 @@ function buildProject(dir, opts) {
     // main.js com o runtime embutido
     F.writeText(path.join(buildDir, 'main.js'), generateMain(project));
 
-    // limites de pacote (extras = tudo menos app.json/main.js/icon.png)
-    const extras = dataFiles.length + plan.scripts.length + copies.length;
+    // limites de pacote (extras = tudo menos app.json/main.js/icon.png;
+    // deps.json conta como extra porque o hub o inclui no teto)
+    const extras = dataFiles.length + plan.scripts.length + copies.length +
+        (Object.keys(p.deps || {}).length ? 1 : 0);
     if (extras > 16) {
         failBuild('pacote com ' + extras + ' extras (maximo 16): reduza assets/scripts');
     }
@@ -741,10 +765,12 @@ function buildProject(dir, opts) {
             { diagnostics: lintErrors });
     }
 
+    const depsLock = writeDepsLock(project, buildDir);
     // relatorio (cache)
     const report = {
         ts: Date.now(), dir: buildDir, app: app.packageName, version: app.version,
         extras: extras, jsBytes: jsTotal, jsSizes: jsSizes, assetBytes: assetBytes,
+        deps: depsLock,
         files: fs.readdirSync(buildDir).sort(), warnings: warnings,
     };
     F.writeJson(path.join(project.studioDir, 'report.json'), report);
@@ -752,7 +778,8 @@ function buildProject(dir, opts) {
     return {
         ok: true, dir: buildDir, app: app.packageName, version: app.version,
         files: report.files, extras: extras, jsBytes: jsTotal, assetBytes: assetBytes,
-        warnings: warnings, dataFiles: dataFiles, scripts: plan.scripts.map((s) => s.file),
+        deps: depsLock, warnings: warnings, dataFiles: dataFiles,
+        scripts: plan.scripts.map((s) => s.file),
     };
 }
 

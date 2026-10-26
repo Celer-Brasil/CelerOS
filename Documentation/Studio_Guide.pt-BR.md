@@ -222,7 +222,7 @@ script do projeto. Os apps originais em `hub_apps/` não foram alterados.
 |---------|----------|---------------|-------|--------|----|--------|
 | `studio_games/Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 7 | 57,9 KB | 132,2 KB |
 | `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88,3 KB | 78,9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.3 | 23 | 8 | 111,0 KB | 205,3 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.4 | 23 | 9 | 112,3 KB | 206,7 KB |
 | `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36,9 KB | 110,8 KB |
 
 Abra, edite e jogue como qualquer projeto:
@@ -244,10 +244,10 @@ O que cada remontagem ganhou:
   uma entidade com textura/rotação sincronizada a um corpo `P.rigid`.
   Estilingue, sete poderes de pedra, TNT em cadeia, dano por impacto, estrelas
   e progresso salvo.
-- **Lenda de Celer 2.0.3** — as 20 salas ASCII originais como cenas (Campo,
+- **Lenda de Celer 2.0.4** — as 20 salas ASCII originais como cenas (Campo,
   Gruta e Templo), sólidos por tile, portais de borda/porta/escada/caverna/
   rachadura, espada/bomba/bumerangue, baús, Sábio, loja de cristais, Guardião
-  em três fases, save automático, continuar, vitória e fim. Os botões A/B usam ícones de espada/bomba/bumerangue; a espada é um overlay separado (o corpo não some) e os tilemaps desenham a célula pelo canto.
+  em três fases, save automático, continuar, vitória e fim. Os botões A/B usam ícones de espada/bomba/bumerangue; a espada é um overlay separado (o corpo não some) e os tilemaps desenham a célula pelo canto. A 2.0.4 também leva o `deps.json` resolvido dentro do pacote, então a instalação direta acha os módulos compartilhados da engine.
 - **Supernova 3.0.1** — campanha de 10 ondas com chefe a cada cinco e modo
   infinito, chefe em três fases, combo x1..x5, orbes, SUPERNOVA, tiro triplo,
   hitbox de graze, pausa, recorde e cenas nativas de título/vitória/derrota.
@@ -538,7 +538,11 @@ dirigir uma sessão viva do editor enquanto um humano acompanha o viewport.
 O `deploy` é a "compilação" do Studio: valida e builda, passa todo `.js` pelo
 mesmo `jsstrip` do hub, mantém só os assets escolhidos pelo build, compacta o
 `app.json` e grava um ZIP determinístico com `app.json` na raiz (o layout
-aceito pelo `celerctl apps installzip`).
+aceito pelo `celerctl apps installzip`). O ZIP também leva o `deps.json` com
+o fecho resolvido de `celeros.game.*`: o `require` do device só cai para
+`/local/modules` com esse arquivo na pasta do app, e o `installzip` nativo
+instala exatamente o que está no pacote. A Loja pode regravar o lock com o
+índice do hub, mas um pacote instalado direto já sai completo.
 
 ```bash
 # padrão: <projeto>/.studio/deploy/app.zip + report.json
@@ -552,7 +556,8 @@ python3 tools/celerctl.py apps installzip ~/Jogo/.studio/deploy/app.zip --run
 ```
 
 O comando imprime e grava em `report.json`: bytes do ZIP, SHA-256, JS
-antes/depois, bytes de assets, lista de entradas, extras e avisos do build.
+antes/depois, bytes de assets, fecho das deps, lista de entradas, extras e
+avisos do build.
 O timestamp é fixo (1980-01-01) e as entradas são ordenadas, então as mesmas
 fontes/build geram os mesmos bytes. `--no-build` reutiliza um build existente.
 Os assets são filtrados pelo build, copiados sem perda e comprimidos no ZIP

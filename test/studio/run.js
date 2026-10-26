@@ -275,6 +275,17 @@ let built = null;
     check('deploy inclui os assets referenciados e manifesto compacto',
         entries.some((e) => e.name === 'atlas.png') &&
         !byName.get('app.json').includes('\n'));
+    const lock = JSON.parse(byName.get('deps.json') || '{}');
+    const shared = [];
+    let mr;
+    const reReq = /require\(\s*["']([^"']+)["']\s*\)/g;
+    while ((mr = reReq.exec(mainSrc)) !== null) {
+        if (!byName.has(mr[1] + '.js')) shared.push(mr[1]);
+    }
+    check('deploy leva deps.json com todo require compartilhado',
+        shared.length > 0 && shared.every((m) => !!lock[m]) &&
+        lock['celeros.game'] && lock['celeros.game.spr'],
+        JSON.stringify({ shared, lock }));
     const dep2 = deployProject(base, { noBuild: true, out: depFile });
     check('deploy deterministico (mesmo sha256)', dep2.sha256 === dep.sha256);
 })();
@@ -451,8 +462,20 @@ let built = null;
         const dep = deployProject(dir, {
             noBuild: true, out: path.join(dir, '.studio/deploy/test-app.zip'),
         });
-        check(name + ': app.zip', dep.ok && dep.bytes > 0 && dep.js.after > 0 &&
-            fs.existsSync(dep.zip));
+        const zipEntries = readZip(fs.readFileSync(dep.zip));
+        const zipByName = new Map(zipEntries.map((e) => [e.name, e.data.toString('utf8')]));
+        const zipLock = JSON.parse(zipByName.get('deps.json') || '{}');
+        const localJs = new Set(zipEntries.filter((e) => e.name.endsWith('.js'))
+            .map((e) => e.name.slice(0, -3)));
+        const missing = [];
+        let zr;
+        const zre = /require\(\s*["']([^"']+)["']\s*\)/g;
+        while ((zr = zre.exec(zipByName.get('main.js') || '')) !== null) {
+            if (!localJs.has(zr[1]) && !zipLock[zr[1]]) missing.push(zr[1]);
+        }
+        check(name + ': app.zip leva deps.json p/ o require', dep.ok && dep.bytes > 0 &&
+            dep.js.after > 0 && fs.existsSync(dep.zip) && missing.length === 0,
+            missing.join(',') || 'sem deps.json');
     }
 })();
 

@@ -18,7 +18,8 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 | `lib/assets.js` | import PNG/QOA/WAV/JS, meta, fatiamento, script template |
 | `lib/ops.js` | barramento de ops, lote atomico, undo/redo, journal |
 | `lib/validate.js` | schema/refs + limites de pacote + lint ES5 |
-| `lib/build.js` | codegen determinista: main/data/scripts/assets/app.json; tilemap leva `solidValues` |
+| `lib/build.js` | codegen determinista: main/data/scripts/assets/app.json/deps.json; tilemap leva `solidValues` |
+| `lib/deps.js` | fecho de deps de `tools/sdk/engine` (index.json + literal `version:`) -> lock `{nome: versao}` |
 | `lib/zip.js` | ZIP deterministico (deflate 9, CRC32, timestamp fixo) + leitor de verificacao |
 | `lib/deploy.js` | compilacao de deploy: build + jsstrip + assets usados -> app.zip/report |
 | `lib/run.js` | executa o build no harness do host (PNG/frames/input) |
@@ -158,17 +159,27 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 
 ## BUILD/LIMITES (resumo)
 - Saida: `.studio/build/<slug(packageName)>/` (`main.js` com runtime inline,
-  `game.data.js`/partes, `s.<slug>.js`, assets planos, `app.json`, `icon.png`).
-- Extras = partes de data + scripts + assets (main/app.json/icon sao livres).
+  `game.data.js`/partes, `s.<slug>.js`, assets planos, `app.json`, `icon.png`,
+  `deps.json` quando o projeto declara deps).
+- Extras = partes de data + scripts + assets + `deps.json` quando ha deps
+  (main/app.json/icon sao livres; o lock e escrito depois do lint, mas conta
+  no teto porque o hub tambem o conta).
+- `deps.json` e o FECHO resolvido na arvore local (`tilemap` -> `celeros.game`,
+  etc.), nao so as deps diretas: o require do device le esse mapa ate 32
+  modulos e sem ele so procura o `.js` dentro da pasta do app.
+- Todo `require("x")` do main gerado precisa estar na pasta ou no lock; o
+  deploy falha com `deploy.deps` em vez de gerar um zip que crasha no device.
 - So assets referenciados por cenas entram; todos os scripts entram.
 - Metadados de arte vao no `game.data` (nao em .json lido em runtime): o app
   nao precisa de permissao `fs` para `E.spr.meta`/`E.scene`.
 - `app_lint` roda no pacote final e bloqueia o build em erro.
 - `deploy` gera `.studio/deploy/app.zip` (ou `--out`) depois de enxugar todo
-  `.js` com jsstrip, compactar `app.json` e incluir so assets do build;
-  `report.json` tem bytes antes/depois, assets, SHA-256 e entradas. ZIP
-  deterministico (timestamp fixo, ordenado, deflate 9) e compativel com
-  `celerctl apps installzip` (app.json na raiz).
+  `.js` com jsstrip, compactar `app.json`, incluir so assets do build e
+  regravar o `deps.json`; `report.json` tem bytes antes/depois, assets, lock,
+  SHA-256 e entradas. ZIP deterministico (timestamp fixo, ordenado, deflate 9)
+  e compativel com `celerctl apps installzip` (app.json na raiz). O
+  `installzip` nativo e dep-cego: o lock DENTRO do zip e o que evita o
+  `require: modulo nao encontrado` no primeiro boot.
 - `run` usa `microsBias:1` no runner do host (ver "QUIRK" abaixo).
 
 ## QUIRK DO HOST (pacing da engine)
@@ -185,8 +196,8 @@ sem alinhar com o dono do arquivo: e trabalho em voo.
   1.6, tilemap.set/resize, ops/dry-run/undo, build determinista, app gerado no
   harness (spr.meta/animOf/box + HUD ancorado), cena nativa (`settings.data`,
   `data`, `ctx.go` com arg, solidos por tile), prefab achatado, CLI x HTTP,
-  build+run dos 4 jogos de `studio_games/`, deploy/app.zip deterministico e a
-  bridge legada.
+  build+run dos 4 jogos de `studio_games/`, deploy/app.zip deterministico
+  (com deps.json cobrindo todo require compartilhado) e a bridge legada.
 - `node tools/sdk/celer.js check` cobre drift de types/renderer/deps.
 - Preview: `serve --open`; headless: `run --frames 0,600`.
 

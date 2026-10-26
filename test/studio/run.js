@@ -18,6 +18,7 @@ const { applyOps, undo, redo } = require('../../tools/studio/lib/ops');
 const { validateProject } = require('../../tools/studio/lib/validate');
 const { buildProject } = require('../../tools/studio/lib/build');
 const { runProject } = require('../../tools/studio/lib/run');
+const { runAppFolder } = require('../../tools/sdk/lib/runner.js');
 const { startStudio } = require('../../tools/studio/server');
 const { importGame } = require('../../tools/studio/lib/import_game');
 const { encodePng, decodePng } = require('../../tools/sdk/lib/png.js');
@@ -312,6 +313,109 @@ let built = null;
     inst = data.scenes.fase_1.entities.filter((e) => e.fid.indexOf('e_moeda2/') === 0);
     check('override de transform soma na instancia', inst[0] && inst[0].x === 204,
           inst[0] && String(inst[0].x));
+})();
+
+
+// ------------------------------------------------------- native scenes ----
+(function () {
+    console.log('Studio cenas nativas:');
+    const dir = tmpDir('native');
+    Project.init(dir, { name: 'Nativa' });
+    const atlasFile = path.join(dir, 'atlas.png');
+    makeAtlas(atlasFile);
+    let r = applyOps(dir, [
+        { op: 'asset.import', src: atlasFile, importer: 'tileset', name: 'atlas',
+          cols: 2, rows: 2, tw: 32, th: 32 },
+    ]);
+    const atlasId = r.results[0].asset.guid;
+    r = applyOps(dir, [
+        { op: 'asset.set', asset: atlasId,
+          settings: { tiles: [{ name: '0', solid: false }, { name: '1', solid: true },
+                              { name: '2', solid: true }, { name: '3', solid: false }] } },
+        { op: 'script.set', name: 'ctrl', content:
+            "exports.create = function (ctx) { return {}; };\n" +
+            "exports.start = function (ctx) {\n" +
+            "  var s = this, sc = ctx.scene;\n" +
+            "  if (sc.data && sc.data.n === 7) {\n" +
+            "    var map = sc.tm('mapa');\n" +
+            "    var rect = sc.rectSolid(8, 8, 32, 32);\n" +
+            "    var before = sc.solidAt(16, 16);\n" +
+            "    if (map) map.set(0, 0, 0);\n" +
+            "    var after = sc.solidAt(16, 16);\n" +
+            "    if (typeof __harness !== 'undefined') __harness.native = {\n" +
+            "      scene: sc.title, found: !!sc.find('hero'), map: !!map,\n" +
+            "      asset: !!ctx.asset('atlas'), data: sc.data.n,\n" +
+            "      before: before, after: after, rect: rect\n" +
+            "    };\n" +
+            "  } else if (typeof __harness !== 'undefined') {\n" +
+            "    __harness.native = __harness.native || {};\n" +
+            "    __harness.native.b = true;\n" +
+            "    __harness.native.arg = ctx.arg && ctx.arg.hello;\n" +
+            "  }\n" +
+            "};\n" +
+            "exports.update = function (dt, ctx) {\n" +
+            "  if (this.went) return;\n" +
+            "  this.went = true;\n" +
+            "  if (ctx.scene.data && ctx.scene.data.next) ctx.go(ctx.scene.data.next, { hello: 42 });\n" +
+            "};\n" },
+    ]);
+    const scriptId = r.results[1].asset.guid;
+    check('script de cena criado', !!scriptId);
+    r = applyOps(dir, [
+        { op: 'scene.create', name: 'A' },
+        { op: 'scene.create', name: 'B' },
+        { op: 'scene.set', scene: 'A', settings: { data: { n: 7, next: 'B' }, assets: [atlasId] } },
+        { op: 'scene.start', scene: 'A' },
+        { op: 'entity.create', scene: 'A', fid: 'e_hero', name: 'hero', x: 48, y: 16 },
+        { op: 'entity.create', scene: 'A', fid: 'e_ctrl', name: 'ctrl', x: 0, y: 0, z: 100 },
+        { op: 'component.add', scene: 'A', entity: 'e_hero', type: 'data',
+          fields: { fields: { kind: 'hero' } } },
+        { op: 'component.add', scene: 'A', entity: 'e_ctrl', type: 'script',
+          fields: { script: scriptId } },
+        { op: 'tilemap.add', scene: 'A', tileset: atlasId, id: 'mapa', cols: 4, rows: 3,
+          cell: 32, ox: 0, oy: 0,
+          data: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          solids: [true, false, false, false, false, false, false, false, false, false, false, false] },
+        { op: 'entity.create', scene: 'B', fid: 'e_ctrl2', name: 'ctrl', x: 0, y: 0, z: 100 },
+        { op: 'component.add', scene: 'B', entity: 'e_ctrl2', type: 'script',
+          fields: { script: scriptId } },
+    ]);
+    const built = buildProject(dir, {});
+    const d = loadData(built.dir);
+    const tmA = d.scenes.a.tilemaps[0];
+    check('build leva solidValues do tileset (1/2 solidos)',
+        JSON.stringify(tmA.solidValues) === '[false,true,true,false]',
+        JSON.stringify(tmA.solidValues));
+    const rr = require('../../tools/sdk/lib/runner.js').runAppFolder(built.dir,
+        { stopAtMs: 300, microsBias: 1 });
+    const nat = rr.env && rr.env.__harness && rr.env.__harness.native;
+    check('ctx.scene.data + find + tm + asset', nat && nat.found && nat.map && nat.asset &&
+        nat.data === 7, JSON.stringify(nat));
+    check('tile solido por tile e map.set atualiza colisao', nat && nat.before === true &&
+        nat.after === false, JSON.stringify(nat));
+    check('rectSolid consulta o mapa', nat && nat.rect === true, JSON.stringify(nat));
+    check('ctx.go troca de cena e leva ctx.arg', nat && nat.b === true && nat.arg === 42,
+        JSON.stringify(nat));
+    fs.rmSync(dir, { recursive: true, force: true });
+})();
+
+
+// ------------------------------------------------------- native games ----
+(function () {
+    console.log('Studio jogos nativos:');
+    const games = ['Detona', 'Arrasa', 'Lenda de Celer', 'Supernova'];
+    for (const name of games) {
+        const dir = path.join(ROOT, 'studio_games', name);
+        let built = null;
+        try { built = buildProject(dir, {}); }
+        catch (e) { check(name + ': build', false, e.message); continue; }
+        const r = runAppFolder(built.dir, {
+            render: true, frames: [0, 220], framesPng: true, microsBias: 1,
+        });
+        check(name + ': ' + built.version + ' build+run',
+            !r.err && r.frames && r.frames.length === 2 && !!r.frames[1].png,
+            r.err || 'frames=' + (r.frames ? r.frames.length : 0));
+    }
 })();
 
 // --------------------------------------------------------- CLI x HTTP ------

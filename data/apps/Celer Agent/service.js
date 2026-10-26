@@ -24,6 +24,8 @@ var cloud = require("celeros.cloud");
 var CONFIG_PATH = "/local/celercloud.json";
 var DEFAULT_HUB = "https://os.celer.tec.br";
 var OTA_PENDING = "ota_pending";
+var CRASH_SEEN = "crash_seen";
+var CRASH_PATH = "/local/log/crash.txt";
 var LAST_BEAT = "last_beat";
 var LAST_RESULT = "last_result";
 var LAST_ERROR = "last_error";
@@ -614,6 +616,8 @@ function diagnostics() {
     try { info = System.getInfo(); } catch (e) { info = null; }
     var wifi = null;
     try { wifi = System.wifiStatus(); } catch (e) { wifi = null; }
+    var crashTail = readText(CRASH_PATH);
+    if (crashTail.length > 400) crashTail = crashTail.substring(crashTail.length - 400);
     return {
         firmware: String(System.getOSVersion() || ""),
         apiLevel: Number(System.getAPILevel()) || 0,
@@ -623,7 +627,8 @@ function diagnostics() {
         wifi: !!(wifi && wifi.connected),
         apps: installedApps().length,
         otaSigned: signedOta(),
-        otaPending: String(Storage.get(OTA_PENDING, ""))
+        otaPending: String(Storage.get(OTA_PENDING, "")),
+        crashTail: crashTail
     };
 }
 
@@ -645,6 +650,30 @@ function checkOtaResult() {
         });
     }
     Storage.remove(OTA_PENDING);
+}
+
+// Crash do firmware (forense em RAM RTC, 1.12.0+): o firmware anexa uma
+// linha em /local/log/crash.txt por panic. Reporta so a parte NOVA (cursor
+// com o tamanho ja visto) e pelo outbox — sobrevive a boot sem rede. Um
+// panic na propria sessao do agente tambem cai aqui no boot seguinte.
+function checkCrash() {
+    var text = readText(CRASH_PATH);
+    if (!text) return;
+    var seen = Number(Storage.get(CRASH_SEEN, "0")) || 0;
+    if (text.length < seen) seen = 0;  // arquivo truncado/recomecado (32KB)
+    if (text.length <= seen) return;
+    var fresh = text.substring(seen);
+    var nl = fresh.lastIndexOf("\n");
+    if (nl < 0) return;  // linha parcial (escrita interrompida): fica p/ proximo tick
+    Storage.set(CRASH_SEEN, String(text.length));
+    var tail = fresh.substring(0, nl);
+    if (tail.length > 400) tail = tail.substring(tail.length - 400);
+    cloud.report({
+        type: "agent.device_crash",
+        severity: "warning",
+        payload: { tail: tail }
+    });
+    log("crash novo reportado (" + tail.length + " B)");
 }
 
 // Tipos que este agente possui. open/close (e qualquer comando de outra
@@ -770,6 +799,7 @@ function tick() {
             cfg = readConfig();
             log("configurado device=" + (cfg && cfg.deviceId ? cfg.deviceId : "?"));
             checkOtaResult();
+            checkCrash();
         }
         var desired = cloud.heartbeat(heartbeatExtra(), true);
         if (desired === null) {
@@ -796,6 +826,7 @@ function start() {
         cfg = readConfig();
         log("iniciado device=" + (cfg && cfg.deviceId ? cfg.deviceId : "?"));
         checkOtaResult();
+        checkCrash();
     } else {
         log("aguardando config: " + cloud.lastError());
     }

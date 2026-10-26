@@ -1,0 +1,266 @@
+{
+  "format": 1,
+  "rev": 2,
+  "name": "Fase 1",
+  "guid": "00ecf8bd6df3d80f81820aa63756c836",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "name": "Primeiro estrago",
+      "ground": 290,
+      "level": 1,
+      "screen": "game",
+      "shots": [
+        "pedra",
+        "pedra"
+      ]
+    },
+    "bg": "#0a1a12",
+    "static": false,
+    "assets": [
+      "dbfcc2ac2d56ee1292c0dfe968bae915",
+      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "b008a784ee0ce873595510ff5b75f349",
+      "f3e8953166f83e96637b5346b48e4157",
+      "e3b697d07bd0213ad78d38dae91b808b"
+    ]
+  },
+  "entities": [
+    {
+      "name": "Fundo",
+      "fid": "e_d2d06b35",
+      "active": true,
+      "z": -10,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_8c986a67",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "6c22d9b75fc2ebe9d4ef5e24a3172749"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Controle",
+      "fid": "e_ad51c289",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_caeee014",
+          "fields": {
+            "script": "f6a2036e97941b7efbd8bb8031edf59b"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Goblin 1",
+      "fid": "e_c8ca5cfe",
+      "active": true,
+      "z": 20,
+      "transform": {
+        "x": 348,
+        "y": 424.5,
+        "rot": 0,
+        "sx": 0.328125,
+        "sy": 0.328125,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_2c7e1c12",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+          }
+        },
+        {
+          "type": "data",
+          "id": "c_1f1842cd",
+          "fields": {
+            "fields": {
+              "type": "goblin",
+              "kind": "goblin",
+              "r": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Peca 2",
+      "fid": "e_9cd31c29",
+      "active": true,
+      "z": 6,
+      "transform": {
+        "x": 319.5,
+        "y": 412.5,
+        "rot": 0,
+        "sx": 0.140625,
+        "sy": 3.75,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_ad738c4f",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "efd19956a30fbb689f04e08f459c7691"
+          }
+        },
+        {
+          "type": "data",
+          "id": "c_d9e795a3",
+          "fields": {
+            "fields": {
+              "w": 6,
+              "h": 30,
+              "kind": "box",
+              "angle": 0,
+              "mat": "madeira"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Peca 3",
+      "fid": "e_60ce26bd",
+      "active": true,
+      "z": 6,
+      "transform": {
+        "x": 376.5,
+        "y": 412.5,
+        "rot": 0,
+        "sx": 0.140625,
+        "sy": 3.75,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_53a13b5e",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "efd19956a30fbb689f04e08f459c7691"
+          }
+        },
+        {
+          "type": "data",
+          "id": "c_6485a8b0",
+          "fields": {
+            "fields": {
+              "w": 6,
+              "h": 30,
+              "kind": "box",
+              "angle": 0,
+              "mat": "madeira"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Peca 4",
+      "fid": "e_c8e13db8",
+      "active": true,
+      "z": 6,
+      "transform": {
+        "x": 348,
+        "y": 385.5,
+        "rot": 0,
+        "sx": 1.03125,
+        "sy": 0.75,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_99af92ee",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "efd19956a30fbb689f04e08f459c7691"
+          }
+        },
+        {
+          "type": "data",
+          "id": "c_f212f78f",
+          "fields": {
+            "fields": {
+              "w": 44,
+              "h": 6,
+              "kind": "box",
+              "angle": 0,
+              "mat": "madeira"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Goblin 5",
+      "fid": "e_8a753e3d",
+      "active": true,
+      "z": 20,
+      "transform": {
+        "x": 348,
+        "y": 370.5,
+        "rot": 0,
+        "sx": 0.328125,
+        "sy": 0.328125,
+        "ax": 0.5,
+        "ay": 0.5
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "id": "c_7b2e3012",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+          }
+        },
+        {
+          "type": "data",
+          "id": "c_02085df9",
+          "fields": {
+            "fields": {
+              "type": "goblin",
+              "kind": "goblin",
+              "r": 7
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

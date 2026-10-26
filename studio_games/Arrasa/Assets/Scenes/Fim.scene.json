@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "rev": 2,
+  "name": "Fim",
+  "guid": "63c0d958767b3a01a20e261405b741bb",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "screen": "end"
+    },
+    "bg": "#0a1a12",
+    "static": true
+  },
+  "entities": [
+    {
+      "name": "Controle",
+      "fid": "e_462c8a55",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_07480f2e",
+          "fields": {
+            "script": "f6a2036e97941b7efbd8bb8031edf59b"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 3,
   "name": "Campo 0,2",
   "guid": "d37c81a1cd507572d12a0ed3894abf46",
   "settings": {
@@ -60,7 +60,10 @@
       ]
     },
     "bg": "#0b1020",
-    "static": false
+    "static": false,
+    "assets": [
+      "188539848446b129911ef98181d69bf7"
+    ]
   },
   "entities": [
     {

@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 3,
   "name": "Templo 0,1",
   "guid": "2e979e9a2311ad0ef47d407dfc35213f",
   "settings": {
@@ -27,7 +27,10 @@
       ]
     },
     "bg": "#0b1020",
-    "static": false
+    "static": false,
+    "assets": [
+      "188539848446b129911ef98181d69bf7"
+    ]
   },
   "entities": [
     {

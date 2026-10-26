@@ -831,8 +831,8 @@ function drawGame(s, E) {
         b: { x: W - 56, y: H - 100, w: 46, h: 40 },
         pause: { x: W - 36, y: 6, w: 28, h: 24 }
     };
-    drawAction(E, s.buttons.a, 'A', 'ESPADA');
-    drawAction(E, s.buttons.b, 'B', s.st.itemB === 'bumerangue' ? 'BUMER.' : 'BOMBA');
+    drawAction(E, s.buttons.a, 'A', 'itens#itens9');
+    drawAction(E, s.buttons.b, 'B', s.st.itemB === 'bumerangue' ? 'itens#itens5' : 'itens#itens4');
     if (s.msg) {
         E.gfx.text(s.msg, W / 2, H - 70, { px: 16, align: 'center',
             color: 0x101010, bg: 0xFFE0, screen: true });
@@ -862,12 +862,14 @@ function drawGame(s, E) {
     }
 }
 
-function drawAction(E, r, key, label) {
+function drawAction(E, r, key, icon) {
     E.gfx.rect(r.x, r.y, r.w, r.h, C(0x1B2740), { r: 8, screen: true });
-    E.gfx.text(key, r.x + 12, r.y + r.h / 2, { px: 18, align: 'center', valign: 'middle',
+    if (E.spr && E.spr.has && E.spr.has(icon)) {
+        E.spr.stamp(icon, r.x + r.w / 2, r.y + r.h / 2 + 1,
+            { scale: 1.08, key: 0x0000 });
+    }
+    E.gfx.text(key, r.x + 8, r.y + 7, { px: 10, align: 'center', valign: 'middle',
         color: OURO, screen: true });
-    E.gfx.text(label, r.x + r.w - 7, r.y + r.h / 2, { px: 9, align: 'right', valign: 'middle',
-        color: TEXT2, screen: true });
 }
 
 function drawHud(s, E) {

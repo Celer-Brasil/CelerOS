@@ -300,6 +300,10 @@ let built = null;
         }
     }
     check('HUD ancorado no topo-direito (E.anchor)', hudPix);
+    const ti = (20 * shot.w + 20) * 4;
+    check('tilemap desenha a celula pelo canto (anchor 0)',
+        shot.rgba[ti + 2] > 180 && shot.rgba[ti] < 80,
+        JSON.stringify([shot.rgba[ti], shot.rgba[ti + 1], shot.rgba[ti + 2]]));
     let firstFrame = null;
     if (r.frames.length === 2) {
         const a = fs.readFileSync(r.frames[0].file);

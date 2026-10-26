@@ -65,9 +65,14 @@ function studioBoot(E, data) {
                 }
                 if (v === undefined || v === null || v < 0) return;
                 if (!E.spr) return;
+                // tilemap desenha a celula pelo CANTO: o slot da folha pode
+                // ter ax/ay do .spr.meta (pivot 0.5 por default), e usa-lo
+                // aqui deslocava cada tile meia celula (buracos pretos nas
+                // bordas/portas)
                 E.spr.stamp(asset.n + '#' + v,
                             x - E.cam.x + E.cam.ox,
-                            y - E.cam.y + E.cam.oy, { scale: 1 });
+                            y - E.cam.y + E.cam.oy,
+                            { scale: 1, ax: 0, ay: 0 });
             }
         });
         map.all();

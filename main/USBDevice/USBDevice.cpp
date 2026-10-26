@@ -22,7 +22,21 @@
 #include "tinyusb_msc.h"
 #include "esp_blockdev.h"
 #include "sdmmc_cmd.h"
+#include "class/cdc/cdc_device.h"  // TUD_CDC_DESCRIPTOR (descritor do modo normal)
 #include "../FileSystem/FileSystem.h"
+
+// Descritor do modo NORMAL: CDC dupla SEM a interface MSC. Com
+// TINYUSB_MSC_ENABLED=y o descritor gerado pelo esp_tinyusb inclui o MSC em
+// TODOS os boots e o host recusava o SET_CONFIG (bancada watch 2026-10-26:
+// "can't set config #1, error -32" -> nenhum ttyACM, USB morto no modo
+// normal). O modo pen drive (initMsc) usa o descritor gerado, que TEM a MSC.
+// ITFs/EPs/strings iguais aos do gerado (CDC0 0/1, CDC1 2/3; string 4).
+static const uint8_t kNormalFsConfig[] = {
+    TUD_CONFIG_DESCRIPTOR(1, 4, 0, TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN * 2,
+                          TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_CDC_DESCRIPTOR(0, 4, 0x80 | 1, 8, 2, 0x80 | 2, 64),
+    TUD_CDC_DESCRIPTOR(2, 4, 0x80 | 3, 8, 4, 0x80 | 4, 64),
+};
 #endif
 
 #include "CelerShell.h"
@@ -126,13 +140,17 @@ bool USBDevice::init() {
     snprintf(serial, sizeof(serial), "K%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     descriptor_str_default[3] = serial;
 
-    const tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+#if CONFIG_CELEROS_USB_MSC
+    // Modo normal: descritor CDC-dupla SEM MSC (o gerado traria a interface
+    // MSC e o host recusava o SET_CONFIG — ver kNormalFsConfig)
+    tusb_cfg.descriptor.full_speed_config = kNormalFsConfig;
+#endif
     esp_err_t err = tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "tinyusb_driver_install: %s", esp_err_to_name(err));
         return false;
-    }
-    const tinyusb_config_cdcacm_t shellCfg = {
+    }    const tinyusb_config_cdcacm_t shellCfg = {
         .cdc_port = CDC_SHELL,
         .callback_rx = &cdcRxCallback,
         .callback_rx_wanted_char = nullptr,

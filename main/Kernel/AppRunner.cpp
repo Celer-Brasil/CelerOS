@@ -8,6 +8,8 @@
 #include "Core/CelerKernel.h"
 #include "../../UI/Kui.h"
 #include "../../USBDevice/LogSink.h"
+#include "../../USBDevice/LogPersist.h"
+#include <cstdio>
 
 namespace {
 
@@ -31,6 +33,16 @@ void appTask(void* raw) {
 
     CelerKernel::runFile(p->filePath.c_str(), p->title.c_str(), p->topbarFixed,
                          p->appPkg.c_str(), p->perms);
+
+    // Sobra de stack da task do app (palavras de 4B), junto da linha de
+    // sessao que o runFile emite. O caminho sincrono roda na task do
+    // launcher — la nao existe "HWM do app" para reportar.
+    {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "sessao: hwm da task = %u words",
+                 (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+        LogPersist::app(p->appPkg.c_str(), msg);
+    }
 
     // Desinscreve ANTES do vTaskDelete: no IDF 6.x o TWDT nao tem hook de
     // exclusao — entry pendurada apontava para um TCB ja livre (o idle

@@ -22,6 +22,10 @@ public:
     // Mensagem do fatal do Duktape que reiniciou o aparelho (uma vez; nullptr
     // se o ultimo reset nao foi um fatal JS)
     static const char* takeLastFatal();
+    // App corrente (titulo/pacote) para o registro de crash do firmware
+    // (CrashRecord le no momento do panic — RAM .bss, sem flash, sem malloc)
+    static const char* crashTitle();
+    static const char* crashPkg();
     // Persiste o ultimo erro de app em /local/lastcrash.txt (header versao/
     // data/app + detail). Best-effort SEM alocacao C++: roda tambem no caminho
     // de OOM, onde um std::string/new que nao cresce aborta o aparelho

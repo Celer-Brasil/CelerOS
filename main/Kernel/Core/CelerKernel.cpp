@@ -2,6 +2,7 @@
 #include "../../Boards/Board.h"  // perfil (buttonPin dispensa erro de runtime no headless)
 #include "../../USBDevice/JsDebugger.h"
 #include "../../USBDevice/LogSink.h"
+#include "../../USBDevice/LogPersist.h"
 #include "../../Display/Layout.h"
 #include "../../Runtime/JSBindings.h"
 #include "../../FileSystem/FileSystem.h"
@@ -49,6 +50,13 @@ static uint32_t s_jsSliceStart = 0;
 static bool s_jsTimedOut = false;
 static uint32_t s_jsSliceMs = 1000;  // apps; servicos rodem com 250 (API 42)
 
+// Telemetria da sessao corrente do app (uma linha no apps.log no fim do
+// runFile): motivo de saida preenchido pelo checkJSError, pelo hook de
+// timeout e pelos returns antecipados de carga. O fatal do Duktape reinicia
+// o aparelho e NUNCA passa aqui — esse caminho fica no RTC s_fatalMsg.
+static const char* s_exitReason = "ok";
+static uint32_t s_sessionStart = 0;
+
 // Alocador do Duktape (definicao junto das reservas, abaixo)
 static void* my_alloc(void* udata, duk_size_t size);
 static void* my_realloc(void* udata, void* ptr, duk_size_t size);
@@ -87,6 +95,7 @@ extern "C" duk_bool_t celer_exec_timeout_check(void* udata) {
     }
     if (now - s_jsSliceStart > s_jsSliceMs) {
         s_jsTimedOut = true;
+        s_exitReason = "timeout";
         return 1;  // o executor levanta RangeError "execution timeout"
     }
     return 0;
@@ -435,6 +444,11 @@ const char* CelerKernel::takeLastFatal() {
     return s_fatalMsg;
 }
 
+// App corrente para o CrashRecord (chamado no contexto do panic: leitura de
+// .bss, sem alocacao, sem flash)
+const char* CelerKernel::crashTitle() { return s_crashApp; }
+const char* CelerKernel::crashPkg() { return s_crashPkg; }
+
 // ---------------------------------------------------------------------------
 // Last crash persistente: a stack de um erro de app antes so existia no
 // logcat (ring de RAM) — reboot ou tela de erro fechada e ela sumia. Gravado
@@ -531,6 +545,22 @@ void CelerKernel::init(CelerDisplay *tft) {
     celer_log_println("CelerKernel initialized successfully.");
 }
 
+// ---------------------------------------------------------------------------
+// Telemetria de fim de sessao (apps.log, uma linha por app): duracao, motivo
+// de saida e o heap antes/depois. Buffer de stack + LogPersist::app (zero
+// malloc): roda tambem nos caminhos de OOM, onde std::string/new abortariam
+// o aparelho.
+// ---------------------------------------------------------------------------
+static void logAppSession(const char* appPkg, uint32_t startMs, size_t heapStart) {
+    const size_t heapEnd = heap_caps_get_free_size(MALLOC_CAP_8BIT) +
+                           heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT);
+    char msg[112];
+    snprintf(msg, sizeof(msg), "sessao=%.1fs saida=%s heap %u->%u",
+             (millis() - startMs) / 1000.0f, s_exitReason,
+             (unsigned)heapStart, (unsigned)heapEnd);
+    LogPersist::app((appPkg != nullptr && appPkg[0] != '\0') ? appPkg : "run", msg);
+}
+
 void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
     if (result != 0) {
         // Saida limpa: erro marcado com a propriedade celerExit (throwAppExit
@@ -543,11 +573,13 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             duk_pop(ctx);
             if (marked) {
                 duk_pop(ctx);
+                s_exitReason = "exitApp";
                 return;
             }
         } else if (duk_is_string(ctx, -1) &&
                    strcmp(duk_safe_to_string(ctx, -1), "OS_EXIT") == 0) {
             duk_pop(ctx);
+            s_exitReason = "exitApp";
             return;
         }
 
@@ -565,6 +597,7 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
         if (strstr(errorMsg, "alloc") != nullptr || strstr(errorMsg, "out of memory") != nullptr) {
             // antes este caminho era mudo (nem no UART): morte silenciosa do app
             celer_log_printf("JS OOM (sem memoria): %s\n", errorMsg);
+            s_exitReason = "oom";
             recordCrash("OOM (sem memoria)", errorMsg);
             showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
             duk_pop(ctx);
@@ -572,11 +605,17 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
             return;
         }
 
+        // O RangeError do hook de timeout ja marca la cima; substring aqui so
+        // cobre o caso de o app re-lancar o erro dele mesmo
+        s_exitReason = strstr(errorMsg, "execution timeout") != nullptr ? "timeout" : "erro";
+
         celer_log_print("JS Execution Error: ");
         celer_log_println(errorMsg);
         recordCrash("Erro no app", errorMsg);
 
         showRuntimeError(i18n::TR("Erro no app", "App error"), errorMsg);
+    } else {
+        s_exitReason = "ok";
     }
     duk_pop(ctx); // pop result or error
 }
@@ -598,6 +637,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     s_crashApp[sizeof(s_crashApp) - 1] = 0;
     strncpy(s_crashPkg, appPkg ? appPkg : "", sizeof(s_crashPkg) - 1);
     s_crashPkg[sizeof(s_crashPkg) - 1] = 0;
+    s_sessionStart = millis();
+    s_exitReason = "ok";
     if (ctx) {
         JSBindings::heapDetaching();  // heap morto: present() de servico nao bombeia
         duk_destroy_heap(ctx);
@@ -626,6 +667,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         celer_log_printf(srcOom ? "sem bloco para o fonte: %s (maior bloco %u)\n" : "Failed to read JS file: %s\n",
                          filePath, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         if (srcOom) showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
+        s_exitReason = "fonte_oom";
+        logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         return;
     }
 
@@ -633,6 +676,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         celer_log_printf("heap baixo p/ app JS: livre=%u precisa=%u (fonte %u)\n",
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)dukHeapNeed(srcLen),
                          (unsigned)srcLen);
+        s_exitReason = "budget_oom";
+        logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         free(src);
         showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
@@ -644,6 +689,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     if (!ctx) {
         free(src);
         celer_log_println("Failed to create Duktape heap for app.");
+        s_exitReason = "heap_oom";
+        logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
     }
@@ -685,6 +732,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
                          (unsigned)(millis() - t0));
         if (rc != 0) {
             checkJSError(ctx, rc);
+            s_exitReason = "compile";  // checkJSError marcou "erro": o app nem rodou
+            logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
             JsDebugger::detach(ctx);
             JSBindings::heapDetaching();
             duk_destroy_heap(ctx);
@@ -711,6 +760,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     JSBindings::heapDetaching();  // antes do destroy: nem um tick de servico
     duk_destroy_heap(ctx);
     ctx = nullptr;
+
+    logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
 }
 
 void CelerKernel::loop() {

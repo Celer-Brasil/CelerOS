@@ -164,14 +164,15 @@ de 30 min com Loja baixando + jogo. Se o painel RGB perder estabilidade,
 Só começa com "go" depois do bench da Fase 1. Um commit por item (ou por área,
 quando o item é uma migração mecânica).
 
-**Status (2026-10-25):** feitos os itens 1 (Mem.h), 4 (boards.json) e 6 (RAM
-baixa); pendentes 2 (FlashIo), 3 (Settings), 5 (capabilities), 7 (start/stop) e
-8 (auditoria de timers). O bench da Fase 1 segue aberto e é o gate do XIP/IRAM,
-não destes itens.
+**Status (2026-10-25):** feitos os itens 1 (Mem.h), 3 (Settings), 4 (boards.json)
+e 6 (RAM baixa); pendentes 2 (FlashIo), 5 (capabilities), 7 (start/stop) e 8
+(auditoria de timers). O FlashIo fica para depois do bench: é o item que o
+`lcddma` valida. O bench da Fase 1 segue aberto e é o gate do XIP/IRAM, não
+destes itens.
 
-Build da Onda 2 (cyd/smartdisplay/devkit): 1.557.040 / 2.661.552 / 1.323.408 B,
-ou +224 / +2.288 / +336 B sobre a Fase 1 — dentro do teto de 8 KB. CYD segue
-com **81.360 B livres** no slot.
+Build da Onda 2 (cyd/smartdisplay/devkit): 1.557.808 / 2.662.464 / 1.324.256 B,
+ou +992 / +3.200 / +1.184 B sobre a Fase 1 — dentro do teto de 8 KB. CYD segue
+com **80.592 B livres** no slot.
 
 1. **`Utils/Mem.h`** — feito: `mem::alloc(size, desired, required = Any)`
    header-only (precedente `TaskCaps.h`); `Psram` prefere PSRAM e cai para 8-bit,
@@ -185,9 +186,13 @@ com **81.360 B livres** no slot.
    Escrita ≤4 KB continua síncrona; acima disso delega e espera janela com
    timeout, registrando flush de emergência. `LogPersist` migra para a camada.
    Validação: `lcddma` com Loja baixando + jogo, teste host da fila, telemetria.
-3. **Settings tipado** — tabela `{key, tipo, default, faixa}`, `setDebounced`
-   (2 s), `settings_ver` + migração; migrar `CelerSettings::` por área; teste
-   host de validação/migração.
+3. **Settings tipado** — feito: `Settings::{h,cpp}` com tabela de 15 chaves
+   (default + faixa), `getBool/getInt/getStr`, `setIntDebounced` (2 s, tick no
+   serviço `settings`, flush no deep sleep) e `migrate()` central no boot
+   (import dos `.txt` + `settings_ver=1`). Migrados Backlight, BoardIO,
+   ScreenPower, LauncherUI, Notifications, PhoneLink, CelerNet e
+   WebManager/JsSystemApps. Chave desconhecida segue string (compat com
+   `System.setting`). Correção preservada: `web_on` sem chave continua false.
 4. **`boards/boards.json` + `tools/gen_boards.py`** — feito: fonte única
    validada (`--check`) contra defaults/`Board.cpp`/CSV/canal de OTA, matrix do
    CI, `flash_data.sh` e `CELEROS_BOARD` do CMake (não do Kconfig — o Kconfig

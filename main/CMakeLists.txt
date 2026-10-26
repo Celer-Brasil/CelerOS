@@ -47,6 +47,7 @@ set(CELEROS_SRCS
     "Settings/TouchCalibrator.cpp"
     "Utils/PinStore.cpp"
     "Utils/CelerSettings.cpp"
+    "Utils/Settings.cpp"
     "Utils/AppGrants.cpp"
     "Utils/AppZip.cpp"
     "Utils/AppPackage.cpp"

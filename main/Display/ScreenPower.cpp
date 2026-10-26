@@ -8,6 +8,7 @@
 #include "../Kernel/Notifications.h"
 #include "../UI/Kui.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "../Utils/I18n.h"
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../Bluetooth/PhoneLink.h"
@@ -162,18 +163,18 @@ namespace ScreenPower {
 
 void reloadSettings() {
     if (!s_active) return;
-    int offMin = atoi(CelerSettings::get("screen_off_min", "3").c_str());
+    int offMin = Settings::getInt("screen_off_min", 3);
     if (offMin < 1) offMin = 1;
     if (offMin > 5) offMin = 5;
-    int glance = atoi(CelerSettings::get("glance_sec", "5").c_str());
+    int glance = Settings::getInt("glance_sec", 5);
     if (glance != 3 && glance != 8) glance = 5;
     s_glanceMs = glance * 1000UL;
-    int dsMin = atoi(CelerSettings::get("deep_sleep_min", "15").c_str());
+    int dsMin = Settings::getInt("deep_sleep_min", 15);
     if (dsMin < 0) dsMin = 0;
     if (dsMin > 120) dsMin = 120;
     s_deepSleepMs = (uint32_t)dsMin * 60000UL;
-    s_raiseWake = CelerSettings::get("raise_wake", "1") == "1";
-    s_aodOn = CelerSettings::get("aod", "1") == "1";
+    s_raiseWake = Settings::getBool("raise_wake");
+    s_aodOn = Settings::getBool("aod");
 
     // OFF logico continua no Backlight (timeout + wake consumido no touch)
     Backlight::setIdleTimeout((uint32_t)offMin * 60000UL, false);
@@ -383,14 +384,14 @@ void sleepNow() {
 
 void setRaiseWake(bool on) {
     s_raiseWake = on;
-    CelerSettings::set("raise_wake", on ? "1" : "0");
+    Settings::setBool("raise_wake", on);
 }
 
 bool raiseWake() { return s_raiseWake; }
 
 void setAodEnabled(bool on) {
     s_aodOn = on;
-    CelerSettings::set("aod", on ? "1" : "0");
+    Settings::setBool("aod", on);
 }
 
 bool aodEnabled() { return s_aodOn; }
@@ -407,6 +408,9 @@ void keepAwakeFor(uint32_t ms) {
 void deepSleepNow() {
     const BoardProfile& bp = Board::profile();
     ESP_LOGI("celer.power", "deep sleep (EXT1 nos botoes)");
+
+    // Ajustes pendentes do debounce (brilho/volume) antes de hibernar.
+    Settings::flush();
 
     // Painel: dorme mesmo se a tela ainda estava acesa (brilho 0 + SLPIN)
     if (bp.screenSleep && s_state != 0) bp.screenSleep();
@@ -432,7 +436,7 @@ void deepSleepNow() {
     // INT do IMU (opt-in "imu_wake": cada movimento forte acorda = boot
     // inteiro, entao fica desligado por padrao). Com o ULP no comando do
     // raise (bit1 acima) a INT fica com ele — filtro melhor que o EXT1 cru.
-    const int imuPin = (!(ulp & 2) && CelerSettings::get("imu_wake", "") == "1") ? bp.imuWakePin : -1;
+    const int imuPin = (!(ulp & 2) && Settings::getBool("imu_wake", false)) ? bp.imuWakePin : -1;
     int pins[3] = {bp.buttonPin, bp.buttonPin2, imuPin};
     for (int p : pins) {
         if (p < 0) continue;

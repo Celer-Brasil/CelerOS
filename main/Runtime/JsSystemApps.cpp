@@ -20,6 +20,7 @@
 #include "../Utils/StrUtils.h"
 #include "../Utils/PinStore.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "esp_sleep.h"
 #include "esp_task_wdt.h"
 #include "../Hardware/BoardIO.h"
@@ -510,10 +511,10 @@ duk_ret_t JSBindings::js_webSetActive(duk_context *ctx) {
     // legado: o boot decide pelo NVS, entao desligar nao sobrevivia ao
     // reboot (a migracao one-shot consumia o arquivo e o NVS "1" vencia).
     if (duk_require_boolean(ctx, 0)) {
-        CelerSettings::set("web_on", "1");
+        Settings::setBool("web_on", true);
         if (WebManager::isActive()) WebManager::startWebServerIfNeeded();
     } else {
-        CelerSettings::set("web_on", "");  // valor vazio apaga a key
+        Settings::setBool("web_on", false);
         WebManager::stopWebServer();
     }
     return 0;

@@ -16,6 +16,7 @@
 #include "../Boards/Board.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "../Display/Backlight.h"
 #include "../Kernel/Alarms.h"
 
@@ -194,7 +195,7 @@ void LauncherUI::idleHomeTick() {
     if (now - s_checkAt < 1000) return;
     s_checkAt = now;
     if (s_idleS < 0 || (now / 1000) % 30 == 0) {  // releitura barata do ajuste
-        s_idleS = atoi(CelerSettings::get("home_idle_s", "30").c_str());
+        s_idleS = Settings::getInt("home_idle_s", 30);
     }
     if (s_idleS <= 0) return;  // 0 = desligado
     if (Alarms::ringing()) return;  // a AlarmScreen fica por cima ate parar

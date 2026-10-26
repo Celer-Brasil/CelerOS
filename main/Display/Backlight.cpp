@@ -2,6 +2,7 @@
 #include <string>
 #include <Arduino.h>
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "../Utils/StrUtils.h"
 #include "../Boards/Board.h"
 #include "../Hardware/BoardIO.h"
@@ -46,7 +47,9 @@ void Backlight::set(int level, bool persist) {
     currentLevel = level;
     apply(autoOn ? autoTarget() : level);
     if (persist) {
-        CelerSettings::set("brightness", std::to_string(level).c_str());
+        // Debounce: apps JS podem chamar System.setBrightness por passo do
+        // slider; o servico "settings" grava 2 s depois (flush no sono).
+        Settings::setIntDebounced("brightness", level);
     }
 }
 
@@ -58,7 +61,7 @@ void Backlight::setAuto(bool on, bool persist) {
     autoOn = on && autoSupported();
     luxAvg = -1;
     lastTickMs = 0;
-    if (persist) CelerSettings::set("auto_brightness", autoOn ? "1" : "0");
+    if (persist) Settings::setBool("auto_brightness", autoOn);
     if (autoOn) {
         tick();  // aplica ja, sem esperar o proximo segundo
     } else {
@@ -103,7 +106,7 @@ void Backlight::setIdleTimeout(uint32_t ms, bool persist) {
         screenOff = false;
         apply(autoOn ? autoTarget() : currentLevel);
     }
-    if (persist) CelerSettings::set("screen_timeout", ms ? std::to_string(ms).c_str() : "");
+    if (persist) Settings::setInt("screen_timeout", (int)ms);
 }
 
 uint32_t Backlight::idleTimeout() { return idleTimeoutMs; }
@@ -147,10 +150,10 @@ void Backlight::forceOff() {
 
 void Backlight::init(CelerDisplay* tft) {
     blTft = tft;
-    int lvl = (int)kstr::toInt(CelerSettings::get("brightness", "100"));
+    int lvl = Settings::getInt("brightness", 100);
     if (lvl < 5 || lvl > 100) lvl = 100;
     set(lvl, false);
-    setAuto(CelerSettings::get("auto_brightness", "0") == "1", false);
-    setIdleTimeout((uint32_t)kstr::toInt(CelerSettings::get("screen_timeout", "0")), false);
+    setAuto(Settings::getBool("auto_brightness"), false);
+    setIdleTimeout((uint32_t)Settings::getInt("screen_timeout"), false);
     lastActivityMs = millis();
 }

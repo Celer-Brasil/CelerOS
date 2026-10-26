@@ -6,6 +6,7 @@
 #include <math.h>
 #include "../Boards/Board.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -1403,7 +1404,7 @@ int s_volume = -1;  // 0..100; -1 = ainda nao carregou do NVS
 
 void volumeLoad() {
     if (s_volume >= 0) return;
-    int v = atoi(CelerSettings::get("volume", "100").c_str());
+    int v = Settings::getInt("volume", 100);
     s_volume = (v < 0 || v > 100) ? 100 : v;
 }
 }  // namespace
@@ -1418,9 +1419,7 @@ void setVolumePct(int pct, bool persist) {
     if (pct > 100) pct = 100;
     s_volume = pct;
     if (persist) {
-        char v[8];
-        snprintf(v, sizeof(v), "%d", pct);
-        CelerSettings::set("volume", v);
+        Settings::setIntDebounced("volume", pct);
     }
 }
 

@@ -11,6 +11,7 @@
 #include "../Kernel/TimeManager.h"
 #include "../UI/Kui.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "../Utils/GbProto.h"
 #include "../Launcher/LauncherUI.h"
 
@@ -364,7 +365,7 @@ namespace PhoneLink {
 void init() {
     defaultName();
     loadWeather();
-    s_enabled = CelerSettings::get("phone_on", "1") == "1";
+    s_enabled = Settings::getBool("phone_on", true);
     Notifications::setOnDismiss(onDismiss);
     // O BLE sobe no tick, ~8 s depois do boot: o WiFi (startAsync) pega a
     // RAM interna primeiro e, se o NimBLE falhar, o USB/logcat ja esta no ar
@@ -522,7 +523,7 @@ bool enabled() { return s_enabled; }
 
 void setEnabled(bool on) {
     s_enabled = on;
-    CelerSettings::set("phone_on", on ? "1" : "0");
+    Settings::setBool("phone_on", on);
     if (on) {
         s_bleUp = false;  // o proximo tick sobe/re-anuncia
         s_advHoldUntil = 0;

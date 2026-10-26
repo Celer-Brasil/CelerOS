@@ -21,6 +21,7 @@
 #include "Hardware/Buttons.h"
 #include "Hardware/BoardIO.h"
 #include "FileSystem/FileSystem.h"
+#include "Utils/Settings.h"
 #include "Launcher/LauncherUI.h"
 #if CONFIG_CELEROS_UI
 #include "Launcher/AlarmScreen.h"
@@ -143,6 +144,10 @@ static void celerSetup() {
     }
 
     ramStage("fs");
+
+    // Import dos .txt legados + carimbo de schema (idempotente). Central no
+    // boot: antes so rodava junto do WebManager, ausente nas placas lite.
+    Settings::migrate();
 #if !CONFIG_CELEROS_USB_NATIVE
     // Console/shell + canal celerctl na UART do console (CH340 no PC). Com
     // USB nativo (watch) o celerctl vai pelo CDC e a UART0 nao tem conector:

@@ -11,6 +11,7 @@
 #include "../../Kernel/AppServices.h"
 #include "../../Kernel/Notifications.h"
 #include "MemWatch.h"
+#include "../../Utils/Settings.h"
 #include "../../Display/Backlight.h"
 #if CONFIG_CELEROS_UI
 #include "../../Display/ScreenCapture.h"
@@ -103,6 +104,8 @@ void svcDebugBridge(bool inApp) { DebugBridge::tick(inApp); }
 // RAM interna (1x/s, sem alocacao): avisa na transicao para baixo e publica
 // o nivel no KL_STATS (heap.low). ALWAYS para valer com app aberto.
 void svcMemWatch(bool) { MemWatch::tick(); }
+// Debounce das configuracoes (sliders/volume): 200 ms de resolucao.
+void svcSettings(bool) { Settings::tick(); }
 
 // Alarmes/timer (Kernel/Alarms) conferidos 1x/s ANTES do corte do AOD: com a
 // tela apagada/AOD (o normal no watchface) o alarme toca do mesmo jeito. O
@@ -178,6 +181,7 @@ const CelerServices::Service kServices[] = {
     {"logpersist", svcLogPersist, CelerServices::ALWAYS},
     {"notifications", svcNotifications, CelerServices::ALWAYS},
     {"memwatch", svcMemWatch, CelerServices::ALWAYS},
+    {"settings", svcSettings, CelerServices::ALWAYS},
     {"dbgbridge", svcDebugBridge, CelerServices::ALWAYS},
     // ALWAYS: o TimeManager nao chama mais Alarms::tick; este e o unico
     // caminho, 1x/s (o gate interno), com app aberto ou nao.

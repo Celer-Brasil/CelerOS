@@ -12,6 +12,7 @@
 #include "../../main/Utils/GbProto.h"
 #include "../../main/Kernel/DeviceStats.h"
 #include "../../main/Kernel/MemWatch.h"
+#include "../../main/Utils/Settings.h"
 #include "../../main/Hardware/MusicEngine.h"
 #include "../../main/Display/DirtyRects.h"
 #include "../../main/Utils/JsonMap.h"
@@ -540,6 +541,53 @@ static void testMemWatch() {
     // re-arme exige free >= 14 KB E largest >= 2 KB
     CHECK(MemWatch::classify(14 * k, 2 * k, Level::Low) == Level::Ok);
     CHECK(MemWatch::classify(15 * k, 1 * k, Level::Low) == Level::Low);
+}
+
+// Settings: registro tipado puro (defaults, faixas, parse). O backend NVS
+// fica no .cpp do firmware; aqui valida o que decide o valor.
+static void testSettings() {
+    using Settings::Type;
+    const Settings::KeyDef* b = Settings::lookup("brightness");
+    CHECK(b != nullptr && b->type == Type::Int);
+    CHECK(Settings::parseInt(b->def, nullptr) == false);  // nullptr = recusa
+    int def = 0;
+    CHECK(Settings::parseInt(b->def, &def) && def == 100);
+    CHECK(Settings::clampInt(*b, 0) == 5);
+    CHECK(Settings::clampInt(*b, 200) == 100);
+    CHECK(Settings::clampInt(*b, 50) == 50);
+    CHECK(Settings::lookup("nao_existe") == nullptr);
+
+    bool v = false;
+    CHECK(Settings::parseBool("1", &v) && v);
+    CHECK(Settings::parseBool("true", &v) && v);
+    CHECK(Settings::parseBool("on", &v) && v);
+    CHECK(Settings::parseBool("0", &v) && !v);
+    CHECK(Settings::parseBool("", &v) && !v);
+    CHECK(Settings::parseBool("false", &v) && !v);
+    CHECK(Settings::parseBool("off", &v) && !v);
+    CHECK(!Settings::parseBool("talvez", &v));
+
+    int n = 0;
+    CHECK(Settings::parseInt("42", &n) && n == 42);
+    CHECK(Settings::parseInt("-5", &n) && n == -5);
+    CHECK(!Settings::parseInt("", &n));
+    CHECK(!Settings::parseInt("12x", &n));
+    CHECK(!Settings::parseInt("1.5", &n));
+
+    // Sanidade do manifesto: chave unica, default na faixa, min <= max.
+    for (size_t i = 0; i < Settings::kKeyCount; ++i) {
+        const Settings::KeyDef& d = Settings::kKeys[i];
+        CHECK(Settings::lookup(d.key) == &d);  // lookup acha a primeira
+        CHECK(d.min <= d.max);
+        if (d.type == Type::Int) {
+            int dv = 0;
+            CHECK(Settings::parseInt(d.def, &dv));
+            CHECK(dv >= d.min && dv <= d.max);
+        } else if (d.type == Type::Bool) {
+            bool dv = false;
+            CHECK(Settings::parseBool(d.def, &dv));
+        }
+    }
 }
 
 // ---- MusicEngine (System.playMusic, API 25) ----
@@ -2857,6 +2905,7 @@ int main() {
     testGbProto();
     testDeviceStatsJson();
     testMemWatch();
+    testSettings();
     testMusicEngine();
     testMusicHandoff();
     testSfxVoice();

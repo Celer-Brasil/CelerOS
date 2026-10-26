@@ -22,6 +22,7 @@
 #include "host/ble_hs.h"
 
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "CelerLink.h"
 #include "NetFrame.h"
 #include "NetKeys.h"
@@ -822,7 +823,7 @@ bool tryStart(const char* name, const char* net, bool relay, bool persist) {
     // O pedido (setting) entra ANTES dos gates: com a RAM interna apertada
     // (app aberto numa placa sem BLE no ar) o start() do JS e ACEITO e o
     // tick do servico sobe o no sozinho quando a interna voltar (10 s).
-    if (persist) CelerSettings::set("celernet", "1");
+    if (persist) Settings::setBool("celernet", true);
     // sem latch: falha de RAM agora nao trava o BLE/Phone Link ate o reboot
     if (!CelerLink::ensureStarted(false)) {  // gate de RAM interna (BLE off)
         s_lastAutoTryMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -950,7 +951,7 @@ bool CelerNet::start(const char* name, const char* net, bool relay) {
 }
 
 bool CelerNet::stop() {
-    CelerSettings::set("celernet", "0");
+    Settings::setBool("celernet", false);
     xSemaphoreTakeRecursive(lock(), portMAX_DELAY);
     bool wasActive = s_active;
     s_active = false;
@@ -1279,7 +1280,7 @@ static constexpr uint32_t K_STABLE_MS = 120000;
 static uint32_t s_meshUpMs = 0;  // desde quando a malha esta no ar (0 = fora)
 
 bool CelerNet::enabledSetting() {
-    return CelerSettings::get("celernet", "0") == "1";
+    return Settings::getBool("celernet", false);
 }
 
 void CelerNet::tick() {

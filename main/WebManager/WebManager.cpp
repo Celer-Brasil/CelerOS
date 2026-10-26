@@ -22,6 +22,7 @@
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "../Kernel/TimeManager.h"
 #include "../OTA/OtaGuard.h"
 #include "../OTA/OtaManager.h"
@@ -81,7 +82,7 @@ static NetworkManager& nm() { return NetworkManager::instance(); }
 
 // Flags de config em NVS (F3; web_on.txt/nowifi.txt/config_install_sd.txt
 // sao importados e apagados no primeiro boot com CelerSettings::migrateLegacy)
-static bool cfgFlag(const char* key) { return CelerSettings::get(key) == "1"; }
+static bool cfgFlag(const char* key) { return Settings::getBool(key); }
 
 WifiConnection& WebManager::wifi() { return *nm().getWifiConnection(); }
 
@@ -217,13 +218,13 @@ bool WebManager::enable() {
 }
 
 bool WebManager::enableAsync() {
-    CelerSettings::set("nowifi", "");
+    Settings::setBool("nowifi", false);
     nm().setAutoReconnect(true);
     return startAsync();  // init idempotente; a task de reconexao conecta
 }
 
 void WebManager::disablePersist() {
-    CelerSettings::set("nowifi", "1");
+    Settings::setBool("nowifi", true);
     disable();
 }
 

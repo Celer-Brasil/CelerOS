@@ -3,6 +3,7 @@
 #include "../FileSystem/FileSystem.h"
 #include "../Launcher/NotificationAlert.h"
 #include "../Utils/CelerSettings.h"
+#include "../Utils/Settings.h"
 #include "../Display/ScreenPower.h"
 #include "../Display/Theme.h"
 #include "../UI/Kui.h"
@@ -282,14 +283,14 @@ void markAllRead() {
 
 bool dnd() {
     std::lock_guard<std::recursive_mutex> lock(s_mux);
-    if (s_dnd < 0) s_dnd = CelerSettings::get("dnd", "") == "1" ? 1 : 0;
+    if (s_dnd < 0) s_dnd = Settings::getBool("dnd", false) ? 1 : 0;
     return s_dnd == 1;
 }
 
 void setDnd(bool on) {
     std::lock_guard<std::recursive_mutex> lock(s_mux);
     s_dnd = on ? 1 : 0;
-    CelerSettings::set("dnd", on ? "1" : "");
+    Settings::setBool("dnd", on);
 }
 
 }  // namespace Notifications

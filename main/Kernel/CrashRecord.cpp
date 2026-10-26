@@ -153,7 +153,12 @@ bool pending() {
 }
 
 void consumeAndLog() {
-    if (!pending()) return;
+    // Persiste em QUALQUER boot com registro valido (nao so logo apos o
+    // panic): se o FS estava cheio no boot do crash, o magic fica no RTC e o
+    // proximo boot — mesmo um reboot normal — tenta de novo. A TELA continua
+    // gated por pending() (reset == PANIC): um registro retido nao reabre a
+    // tela em todo boot, so persiste quando houver espaco.
+    if (s_rec.magic != kMagic || s_rec.layout != kLayout) return;
 
     // Copia o registro ANTES de qualquer limpeza: a tela (depois do link
     // serial) le daqui; o magic so cai quando o arquivo foi persistido.
@@ -336,9 +341,12 @@ static void drawFit(CelerDisplay& tft, const char* s, int x, int y, int maxW,
 }
 
 void showScreen() {
-    // Registro da copia em RAM (consumeAndLog ja rodou e pode ter limpado o
-    // magic com o arquivo gravado) ou direto do RTC se ainda nao consumido.
-    if (!s_bootValid && !pending()) return;
+    // So no boot que SEGUE um panic (watchdog nao conta): o registro pode
+    // estar na copia em RAM (ja persistido pelo consumeAndLog) ou ainda no
+    // RTC. Um registro retido por FS cheio NAO reabre a tela em reboots
+    // normais — so persiste quando houver espaco.
+    if (esp_reset_reason() != ESP_RST_PANIC) return;
+    if (!s_bootValid && !(s_rec.magic == kMagic && s_rec.layout == kLayout)) return;
     const Record& rec = s_bootValid ? s_bootRecord : s_rec;
 
     CelerDisplay& tft = Board::display();

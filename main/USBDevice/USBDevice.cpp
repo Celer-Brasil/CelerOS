@@ -37,6 +37,18 @@ static const uint8_t kNormalFsConfig[] = {
     TUD_CDC_DESCRIPTOR(0, 4, 0x80 | 1, 8, 2, 0x80 | 2, 64),
     TUD_CDC_DESCRIPTOR(2, 4, 0x80 | 3, 8, 4, 0x80 | 4, 64),
 };
+
+// Descritor do MODO PEN DRIVE: 1 CDC (shell/log) + 1 MSC, so. O descritor
+// gerado (2 CDC + MSC) tambem falhava o SET_CONFIG no host (mesmo -32 do
+// modo normal) — o watch ficou preso no modo pen drive sem LUN e sem shell
+// (bancada 2026-10-26). Menos interfaces/endpoints = caminho deterministico.
+// Strings 4 (CDC) e 5 (MSC) do array gerado; EPs 1..3.
+static const uint8_t kMscFsConfig[] = {
+    TUD_CONFIG_DESCRIPTOR(1, 3, 0, TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_MSC_DESC_LEN,
+                          TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
+    TUD_CDC_DESCRIPTOR(0, 4, 0x80 | 1, 8, 2, 0x80 | 2, 64),
+    TUD_MSC_DESCRIPTOR(2, 5, 3, 0x80 | 3, 64),
+};
 #endif
 
 #include "CelerShell.h"
@@ -213,7 +225,10 @@ bool USBDevice::initMsc() {
     snprintf(serial, sizeof(serial), "K%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     descriptor_str_default[3] = serial;
 
-    const tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+    // Descritor do modo pen drive: 1 CDC + MSC (ver kMscFsConfig; o gerado
+    // com 2 CDC + MSC nao passava o SET_CONFIG do host)
+    tusb_cfg.descriptor.full_speed_config = kMscFsConfig;
     esp_err_t err = tinyusb_driver_install(&tusb_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "MSC: tinyusb_driver_install: %s", esp_err_to_name(err));

@@ -82,6 +82,10 @@ static LauncherScreen s_launcher;  // base da pilha do Navigator
 // ---------------------------------------------------------------------------
 static void usbMscMode() {
     celer_log_println("modo pen drive (MSC): expondo o SD ao PC");
+    // Gancho de logs no CDC0 ANTES de instalar o driver: os ESP_LOG da
+    // inicializacao do MSC (blockdev/storage) chegam no shell do modo pen
+    // drive — sem isso o unico diagnostico era a tela (sem motivo).
+    SerialLink::initLogOnly();
     const bool ok = FileSystem::detachSDForHost() && USBDevice::initMsc();
     if (!ok) celer_log_println("MSC: sem cartao SD ou USB indisponivel");
 #if CONFIG_CELEROS_UI

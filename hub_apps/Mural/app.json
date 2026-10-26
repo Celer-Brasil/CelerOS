@@ -1,14 +1,14 @@
 {
   "name": "Mural",
   "packageName": "celeros.mural",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "author": "CelerOS",
   "description": "Mural de recados da casa pela malha CelerNet: o recado chega a todo aparelho com o Mural aberto — até nos que estavam desligados ou longe na hora, porque cada mural guarda os recados e sincroniza com os vizinhos (algoritmo Trickle: silêncio quando todos concordam, rapidez quando alguém volta atrasado).",
   "type": "App",
   "category": "Utility",
   "api": 30,
   "permissions": [],
-  "changelog": "1.3.0 - migrado para o CelerKit (deps celeros.app.*): loop/tema no celeros.app (A.run), protocolo de malha no celeros.app.mesh (familia \"m\") e cache de linhas no celeros.app.list; resumo do mural cacheado (era recalculado e alocado a cada quadro); celeros.mesh vendorizado na pasta porque o service.js roda fora do carregador de apps e o require dele falhava no boot (o servico ficava morto ate o primeiro app aberto) — protocolo no ar inalterado\n1.2.1 - sem a permissao system: o app e o servico so usam Storage/CelerNet/Pack/notify, nenhuma chamada gated (era um chip de consentimento a mais no install); id e autor de recado recebido sao cortados no teto (24/16 chars) para um vizinho com texto enorme nao encher o Storage do mural\n1.2.0 - o Trickle continua com o app FECHADO: servico em segundo plano (API 42) sincroniza o mural e notifica recado novo; dorme com app aberto (o app da vez drena a malha)\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: recados persistidos (24), resumo m# de vizinho direto com intervalo Trickle 4..32 s, refofoca m+ com supressao e indicador de sincronia",
+  "changelog": "1.3.1 - servico sem Bluetooth: anuncio, confirmacao e recado checam CelerNet e o servico dorme em vez de estourar; a copia vendorizada do celeros.mesh.js saiu (a dep do hub e a mesma)\n1.3.0 - migrado para o CelerKit (deps celeros.app.*): loop/tema no celeros.app (A.run), protocolo de malha no celeros.app.mesh (familia \"m\") e cache de linhas no celeros.app.list; resumo do mural cacheado (era recalculado e alocado a cada quadro); celeros.mesh vendorizado na pasta porque o service.js roda fora do carregador de apps e o require dele falhava no boot (o servico ficava morto ate o primeiro app aberto) — protocolo no ar inalterado\n1.2.1 - sem a permissao system: o app e o servico so usam Storage/CelerNet/Pack/notify, nenhuma chamada gated (era um chip de consentimento a mais no install); id e autor de recado recebido sao cortados no teto (24/16 chars) para um vizinho com texto enorme nao encher o Storage do mural\n1.2.0 - o Trickle continua com o app FECHADO: servico em segundo plano (API 42) sincroniza o mural e notifica recado novo; dorme com app aberto (o app da vez drena a malha)\n1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: recados persistidos (24), resumo m# de vizinho direto com intervalo Trickle 4..32 s, refofoca m+ com supressao e indicador de sincronia",
   "deps": {
     "celeros.app": "^1.0.0",
     "celeros.app.mesh": "^1.0.0",

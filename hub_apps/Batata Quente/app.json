@@ -1,14 +1,14 @@
 {
   "name": "Batata Quente",
   "packageName": "celeros.batataquente",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "author": "CelerOS",
   "description": "Batata quente de verdade entre aparelhos: a batata voa pela malha CelerNet de mão em mão (quantos saltos precisar), o pavio é secreto e os bipes aceleram. Quem estiver segurando quando estourar queima. Abra em 2 ou mais aparelhos com Bluetooth.",
   "type": "Game",
   "category": "Arcade",
   "api": 30,
   "permissions": [],
-  "changelog": "1.1.2 - o pavio nao queima de uma vez o tempo em que a malha caiu (quadro longo vira no maximo 250 ms) e o LED laranja apaga quando a batata sai da mao por um 'peguei' de outro\n1.1.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: roda por presenca do app (bh), passe por unicast com o pavio restante (bp), confirmacao por broadcast que serve de ACK (bk), reenvio em 3,5 s e batata que volta apos 3 tentativas, placar de queimadas",
+  "changelog": "1.1.3 - placa sem Bluetooth (sem CelerNet) nao derruba mais o app: os envios da malha passam por uma deteccao unica e o inicio da partida avisa 'Placa sem malha (Bluetooth)'\n1.1.2 - o pavio nao queima de uma vez o tempo em que a malha caiu (quadro longo vira no maximo 250 ms) e o LED laranja apaga quando a batata sai da mao por um 'peguei' de outro\n1.1.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: roda por presenca do app (bh), passe por unicast com o pavio restante (bp), confirmacao por broadcast que serve de ACK (bk), reenvio em 3,5 s e batata que volta apos 3 tentativas, placar de queimadas",
   "deps": {
     "celeros.mesh": "^1.0.0"
   }

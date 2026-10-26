@@ -73,6 +73,7 @@ const OPTIONAL_ROOTS = {
   Mic: 'Mic e opcional (placas com microfone + perm "mic"): proteja com typeof Mic !== "undefined" antes de usar',
   USB: 'USB e opcional (placas com USB Host + perm "usb", API 48): proteja com typeof USB !== "undefined" antes de usar',
   Input: 'Input e opcional (so com a perm "input", API 48): proteja com typeof Input !== "undefined" antes de usar',
+  Service: 'Service e opcional (so o service.js rodando no svchost, API 42): proteja com typeof Service !== "undefined" antes de usar',
 };
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem
@@ -541,6 +542,10 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
   const globalWhitelist = new Set(ES5_GLOBALS.concat(Object.keys(BANNED_GLOBALS)));
   for (const c of manifest.globalConsts) globalWhitelist.add(c.name);
   for (const n of NAMESPACE_ROOTS) globalWhitelist.add(n);
+  // raizes OPCIONAIS (Mic, CelerNet, Service...) existem no aparelho/contexto
+  // certo: sem isto o uso protegido por typeof virava "variavel nao
+  // declarada". O uso SEM typeof continua avisando pela regra "feature".
+  for (const n of Object.keys(OPTIONAL_ROOTS)) globalWhitelist.add(n);
   // fns registradas direto no global (setTimeout/setInterval/require no init)
   const globalFnByName = {};
   for (const f of (manifest.objects.global && manifest.objects.global.fns) || []) {
@@ -657,16 +662,24 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
         if (parent && parent.type === 'MemberExpression' && parent.object === node) break;
         if (node.computed) break;
         const chain = memberChain(node);
+        // raiz OPCIONAL usada como objeto: vale para a regra "feature" mesmo
+        // quando ela nao e um NAMESPACE_ROOT (Mic, Camera, WakeWord, Service)
+        if (chain && OPTIONAL_ROOTS[chain.root] && !optionalUse[chain.root] &&
+            !scopeHas(scopeAt, chain.root) && !implicitGlobals.has(chain.root)) {
+          optionalUse[chain.root] = node;
+        }
         if (!chain || NAMESPACE_ROOTS.indexOf(chain.root) < 0) break;
         if (scopeHas(scopeAt, chain.root) || implicitGlobals.has(chain.root)) break; // shadow local
         if (parent && parent.type === 'UnaryExpression' && parent.operator === 'typeof') {
           // feature-detect de um membro (typeof System.led === "function"):
-          // o app trata a ausencia, entao a permissao dele vira opcional
+          // o app trata a ausencia, entao a permissao dele vira opcional.
+          // A RAIZ entra junto: testar o membro tambem detecta a ausencia
+          // do objeto (typeof Mic.start === "function" sem typeof Mic)
           typeofTargets.add(chain.root + '.' + chain.parts.join('.'));
+          typeofTargets.add(chain.root);
           checkMemberExistence(chain, node, node.property, true, false);
           break;
         }
-        if (OPTIONAL_ROOTS[chain.root] && !optionalUse[chain.root]) optionalUse[chain.root] = node;
         checkMemberExistence(chain, node, node.property, true, true);
         break;
       }
@@ -769,6 +782,13 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
     }
     const appApi = typeof appInfo.api === 'number' ? appInfo.api : 1;
     for (const u of apiFnUses.concat(bareGlobalUses)) {
+      // uso protegido por typeof do MESMO caminho (ou da raiz) ja trata a
+      // ausencia em firmware antigo: o app roda com o recurso desligado, e
+      // exigir a API no app.json esconderia o app dessas placas. Raiz so
+      // vale quando ela e OPCIONAL (objeto inteiro pode faltar)
+      if (typeofTargets.has(u.qualified)) continue;
+      const root = u.qualified.split('.')[0];
+      if (OPTIONAL_ROOTS[root] && typeofTargets.has(root)) continue;
       if (u.entry.apiLevel && u.entry.apiLevel > appApi && !reported.has('nivel:' + u.qualified)) {
         reported.add('nivel:' + u.qualified);
         d(u.node, 'aviso', 'nivel', u.qualified + ' exige API ' + u.entry.apiLevel + '; o app.json declara api ' + appApi);

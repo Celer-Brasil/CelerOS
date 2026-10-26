@@ -7,6 +7,9 @@
  * é o app da vez; ao acordar, o sinal das vigias leva um ciclo para
  * renovar (sem "sumiu" fantasma). Requer firmware API 42. */
 var mesh = require("celeros.mesh");
+// CelerNet so existe em placa com Bluetooth: o alarme local vale sem malha,
+// mas o broadcast nao pode derrubar o heap do servico numa CYD
+var TEM_MALHA = typeof CelerNet !== "undefined";
 var KINDS = { m: "movimento", s: "barulho", p: "pânico", v: "vigia sumiu" };
 
 var guards = {};             // id -> {name, armed, at, missing}
@@ -26,7 +29,7 @@ function ring(zone, kind) {
 function raiseMissing(id, now) {
     alarmN++;
     Storage.set("n", "" + alarmN);
-    CelerNet.broadcast("a!" + alarmN + ".v" + id, 8);
+    if (TEM_MALHA) CelerNet.broadcast("a!" + alarmN + ".v" + id, 8);
     ring(nameOf(id), "v");
 }
 

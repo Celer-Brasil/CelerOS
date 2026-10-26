@@ -1,7 +1,7 @@
 {
   "name": "Regras",
   "packageName": "celeros.regras",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "CelerOS",
   "description": "Reflexos da matilha: regras quando/entao sobre envelopes do Pack (API 42)",
   "api": 42,
@@ -13,5 +13,5 @@
   "deps": {
     "celeros.app": "^1.0.0"
   },
-  "changelog": "1.1.0 - migrado para o CelerKit (dep celeros.app): tela no A.run do kit com header com voltar e regras lidas do rules.json a cada 2 s (era lido e parseado em todo frame, 10x por segundo); service.js fica como esta de proposito (regra tem que disparar com app aberto - os gates do celeros.app.svc dormiriam o servico em foreground - e o notificar repete por envelope, nao e notify-once)\n1.0.2 - install.sh reescrito no dialeto do sh do CelerOS (if/else/end de ShellLogic.h): then/fi do Bourne eram comando desconhecido no modo restrito e o sh -e parava ali (rc=1) - o setup falhava em todo boot mesmo com o caminho absoluto da 1.0.1; 1.0.1 - install.sh semeia o rules.json com o caminho ABSOLUTO /local/data/celeros.regras (o relativo ../data caia em /local/apps/data ou /sd/data e o shell restrito negava a escrita); no servico, um erro de send/Storage nao mata mais o callback por chamar System.print (ausente na superficie do svchost); tela em 10 fps (o UI.end(120) era clampado a 60)"
+  "changelog": "1.1.1 - placa sem Bluetooth: o servico le e envia pelo Pack so quando ele existe (notificar e guardar seguem valendo)\n1.1.0 - migrado para o CelerKit (dep celeros.app): tela no A.run do kit com header com voltar e regras lidas do rules.json a cada 2 s (era lido e parseado em todo frame, 10x por segundo); service.js fica como esta de proposito (regra tem que disparar com app aberto - os gates do celeros.app.svc dormiriam o servico em foreground - e o notificar repete por envelope, nao e notify-once)\n1.0.2 - install.sh reescrito no dialeto do sh do CelerOS (if/else/end de ShellLogic.h): then/fi do Bourne eram comando desconhecido no modo restrito e o sh -e parava ali (rc=1) - o setup falhava em todo boot mesmo com o caminho absoluto da 1.0.1; 1.0.1 - install.sh semeia o rules.json com o caminho ABSOLUTO /local/data/celeros.regras (o relativo ../data caia em /local/apps/data ou /sd/data e o shell restrito negava a escrita); no servico, um erro de send/Storage nao mata mais o callback por chamar System.print (ausente na superficie do svchost); tela em 10 fps (o UI.end(120) era clampado a 60)"
 }

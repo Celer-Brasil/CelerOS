@@ -29,6 +29,9 @@ A.mesh.family("s");
 var tab = 0;
 var nodes = [];
 var nodesRev = 0;          // muda quando a presenca muda (carimbo do cache)
+// CelerNet so existe em placa com Bluetooth: o drain roda no quadro e nao
+// pode depender do gate estar antes dele na ordem do desenho
+var TEM_MALHA = typeof CelerNet !== "undefined";
 
 // ---- ping ----------------------------------------------------------------
 var PING_N = 10, PING_GAP = 1500, PING_TIMEOUT = 6000;
@@ -102,6 +105,7 @@ function myBat() {
 // ---- recepcao (sempre: o Sonar aberto responde aos outros) ---------------
 // CelerNet.poll cru (ver cabecalho: o A.mesh.each engole "=" alheio a req()).
 function drain(now) {
+    if (!TEM_MALHA) return;
     var m, got = false;
     while ((m = CelerNet.poll()) !== null) {
         var s = "" + m.msg;

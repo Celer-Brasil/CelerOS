@@ -1664,7 +1664,7 @@ function voicePrompt() {
         "Reacao ou animo: dog_bark " +
         "ou dog_emotion. Pergunta ou conversa com o dono (bateria, nome, " +
         "como voce esta, oi): dog_speak com resposta CURTA e com graca (ate " +
-        "150 caracteres — e FALADA) NO IDIOMA em que o dono falou (portugues, " +
+        "150 caracteres - e FALADA) NO IDIOMA em que o dono falou (portugues, " +
         "ingles, espanhol...). Pedido de 'fala'/'diga algo' tambem e dog_speak " +
         "(voz), NAO dog_bark. Frase silenciosa (so no controle pareado, sem " +
         "voz): dog_say. Audio vazio, ruido ou conversa sem pedido: nao chame " +
@@ -1720,7 +1720,7 @@ function voiceTools() {
               text: { type: "string", description: "ate 60 caracteres, portugues" }
           }, required: ["text"] } } },
         { type: "function", function: { name: "dog_speak",
-          description: "FALA em voz alta (voz do cao): perguntas, conversa, saudacao e pedidos de 'fala'/'diga algo' (isto NAO e latido). Frase CURTA (ate 150 caracteres) NO MESMO IDIOMA em que o dono falou — a voz fala o que esta escrito. Pode prefixar o tom (ex.: 'Diga animado: ...')",
+          description: "FALA em voz alta (voz do cao): perguntas, conversa, saudacao e pedidos de 'fala'/'diga algo' (isto NAO e latido). Frase CURTA (ate 150 caracteres) NO MESMO IDIOMA em que o dono falou - a voz fala o que esta escrito. Pode prefixar o tom (ex.: 'Diga animado: ...')",
           parameters: { type: "object", properties: {
               text: { type: "string", description: "frase para FALAR no idioma da pergunta, ate 150 caracteres" },
               lang: { type: "string", description: "idioma da fala, ex.: pt-BR, en-US, es-ES" }
@@ -2142,7 +2142,7 @@ function scriptApi() {
                 if (!s2 || typeof System.playMusic !== "function") return false;
                 try { return !!System.playMusic(s2); } catch (e) { return false; }
             },
-            stop: function () { if (System.musicStop) System.musicStop(); return true; },
+            stop: function () { if (typeof System.musicStop === "function") System.musicStop(); return true; },
             playing: function () {
                 if (typeof System.musicPlaying !== "function") return false;
                 try { return System.musicPlaying() === true; } catch (e) { return false; }

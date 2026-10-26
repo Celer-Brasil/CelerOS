@@ -75,6 +75,18 @@ const CASES = [
     appInfo: { api: 22, permissions: [] },
     expect: { 'aviso:perm': 1 },  // so o factoryReset; o led tem typeof
   },
+  {
+    name: 'feature-detect protege raiz opcional e nivel de API (zero avisos)',
+    file: 'feature_ok.js',
+    appInfo: { api: 2, permissions: [] },
+    expect: {},
+  },
+  {
+    name: 'raiz opcional sem typeof e API sem typeof avisam',
+    file: 'feature_sem_guarda.js',
+    appInfo: { api: 2, permissions: ['system'] },
+    expect: { 'aviso:feature': 3, 'aviso:nivel': 1 },
+  },
 ];
 
 console.log('== Testes do app_lint (fixtures) ==');

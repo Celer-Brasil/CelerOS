@@ -5,6 +5,9 @@
  * fila se roubam recados). Ao acordar, o estado recarrega do Storage —
  * o Mural aberto pode ter mudado o mural. Requer firmware API 42. */
 var mesh = require("celeros.mesh");
+// CelerNet so existe em placa com Bluetooth: o servico dorme sem malha, mas
+// nenhum envio pode derrubar o heap do servico numa CYD
+var TEM_MALHA = typeof CelerNet !== "undefined";
 var MAX_POSTS = 24, MAX_TXT = 48, MAX_ID = 24, MAX_BY = 16;
 var IMIN = 4000, IMAX = 32000;
 
@@ -75,6 +78,7 @@ function inconsistent(now) {
     }
 }
 function trickle(now) {
+    if (!TEM_MALHA) return;
     if (!fired && now >= tFire) {
         fired = true;
         if (consistent < 1) CelerNet.broadcast("m#" + digest(), 1);

@@ -15,6 +15,9 @@
  * servico (erro do dono visivel, sem mascara). Nas ACOES, um send/Storage
  * que estoure e contido: uma regra ruim nao pode matar o servico. */
 var DATA = "/local/data/celeros.regras/rules.json";
+// Pack so existe em placa com Bluetooth: sem ele as regras de "enviar" nao
+// tem por onde sair (notificar/guardar seguem valendo)
+var TEM_PACK = typeof Pack !== "undefined";
 var regras = [];
 var servidas = 0;
 
@@ -48,7 +51,7 @@ function executar(r, envelope) {
         // vir chave comprida demais para o Storage: um regra ruim nao pode
         // derrubar o servico inteiro (promessa do cabecalho)
         try {
-            Pack.send(alvo, r.enviar.msg !== undefined ? r.enviar.msg : { eco: r.quando });
+            if (TEM_PACK) Pack.send(alvo, r.enviar.msg !== undefined ? r.enviar.msg : { eco: r.quando });
         } catch (e) {
             log("regras: enviar falhou (" + r.quando + "): " + e);
         }
@@ -67,7 +70,7 @@ function tick() {
     // teto por giro: o svchost tem orcamento de 8 ms/tick e a fila do Pack
     // (ringbuffer) pode vir cheia de uma rajada — drena 16 e o resto no
     // proximo segundo, em vez de segurar o pump dos outros servicos
-    while (n < 16 && (env = Pack.poll()) !== null) {
+    while (TEM_PACK && n < 16 && (env = Pack.poll()) !== null) {
         n++;
         servidas++;
         // Pack.poll() entrega {from, fromName, data} — o dado e "data"

@@ -20,6 +20,9 @@ var somFn = typeof System.sfx === "function" ? System.sfx :
             (typeof System.playTone === "function" ? System.playTone : null);
 
 var mesh = require("celeros.mesh");
+// placas sem Bluetooth nao tem CelerNet: a malha e o jogo, entao a partida
+// nao comeca — mas nenhuma chamada crua pode derrubar o app aberto na CYD
+var TEM_MALHA = typeof CelerNet !== "undefined";
 var T = System.theme();
 // LED da placa: System.led so existe com a permissao "gpio" (o app nao pede
 // consentimento de hardware por causa de um enfeite) — sem ela, nada acende
@@ -67,8 +70,8 @@ function burn(id) {
 function startRound() {
     round = 100 + Math.floor(Math.random() * 899);
     var ms = 12000 + Math.floor(Math.random() * 13000);
-    if (!CelerNet.broadcast("bs" + round + "," + Math.round(ms / 100), 6)) {
-        UI.toast("Malha ocupada, tente de novo");
+    if (!TEM_MALHA || !CelerNet.broadcast("bs" + round + "," + Math.round(ms / 100), 6)) {
+        UI.toast(TEM_MALHA ? "Malha ocupada, tente de novo" : "Placa sem malha (Bluetooth)");
         return;
     }
     passN = 0;
@@ -103,13 +106,14 @@ function pass() {
     UI.invalidate();
 }
 function sendPass() {
-    var ok = CelerNet.send(transit.to, "bp" + round + "." + transit.n + "." + transit.ds, { urgent: true });
+    var ok = TEM_MALHA &&
+             CelerNet.send(transit.to, "bp" + round + "." + transit.n + "." + transit.ds, { urgent: true });
     transit.at = System.millis();
     if (!ok) transit.at -= 2500;   // destino sumiu da presença: tenta logo de novo
 }
 function boom() {
     holding = false;
-    CelerNet.broadcast("bx" + round, 6);
+    if (TEM_MALHA) CelerNet.broadcast("bx" + round, 6);
     burn(me.id);
     loser = me.id;
     state = OVER;
@@ -147,11 +151,11 @@ function onMsg(m, now) {
                 grab(m.from, ds * 100);
                 System.beep(1200, 40);
             }
-            CelerNet.broadcast("bk" + round + "." + n, 6);   // o "peguei" é o ACK
+            if (TEM_MALHA) CelerNet.broadcast("bk" + round + "." + n, 6);   // o "peguei" é o ACK
         } else if (n < passN) {
             // passe velho reenviado (o "bk" dele se perdeu e a batata já
             // seguiu): confirma assim mesmo para o remetente parar de insistir
-            CelerNet.broadcast("bk" + round + "." + n, 6);
+            if (TEM_MALHA) CelerNet.broadcast("bk" + round + "." + n, 6);
         }
     } else if (op === "k") {
         var k = a.split(".");
@@ -188,7 +192,7 @@ function tick(now) {
     if (dt > 250) dt = 250;
     if (now - helloAt > 3000) {
         helloAt = now;
-        CelerNet.broadcast("bh" + (state === LOBBY ? "l" : "g"), 6);
+        if (TEM_MALHA) CelerNet.broadcast("bh" + (state === LOBBY ? "l" : "g"), 6);
         touchPlayer(me.id, me.name);
     }
     if (state === GAME && holding) {

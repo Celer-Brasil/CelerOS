@@ -635,15 +635,20 @@ function cmdCheck() {
     }
 
     // 4) drift das deps compartilhadas repo x hub (aviso — o gate DURO de
-    // publicacao e o `celerhub.py deps-status`, que sai 1; aqui so avisamos)
+    // publicacao e o `celerhub.py deps-status`, que sai 1; aqui so avisamos).
+    // status 1 tambem acontece SEM TOKEN (e ai nao ha drift nenhum): so e'
+    // drift quando a saida traz o veredito, senao o check mentia.
     const dep = spawnSync('python3', [path.join(ROOT, 'tools', 'celerhub.py'), 'deps-status'],
                           { encoding: 'utf8', timeout: 90000 });
-    if (dep.status === 1) {
+    const depOut = String(dep.stdout || '') + String(dep.stderr || '');
+    if (dep.status === 1 && /drift:/.test(depOut)) {
         console.log('aviso: deps compartilhadas com drift repo x hub (publish-dep resolve):');
-        for (const l of String(dep.stdout || '').trim().split('\n')) console.log('      ' + l);
+        for (const l of depOut.trim().split('\n')) console.log('      ' + l);
     } else if (dep.status !== 0 || dep.error) {
-        console.log('deps: hub inalcancavel — drift repo x hub nao checado '
-                    + '(rode `python3 tools/celerhub.py deps-status`)');
+        const motivo = (depOut.trim().split('\n').pop() || '').trim();
+        console.log('deps: drift repo x hub nao checado'
+                    + (motivo ? ' (' + motivo + ')' : '')
+                    + ' — rode `python3 tools/celerhub.py deps-status`');
     } else {
         console.log('deps: tools/sdk/engine em paridade com o hub');
     }

@@ -169,6 +169,10 @@ baixa); pendentes 2 (FlashIo), 3 (Settings), 5 (capabilities), 7 (start/stop) e
 8 (auditoria de timers). O bench da Fase 1 segue aberto e é o gate do XIP/IRAM,
 não destes itens.
 
+Build da Onda 2 (cyd/smartdisplay/devkit): 1.557.040 / 2.661.552 / 1.323.408 B,
+ou +224 / +2.288 / +336 B sobre a Fase 1 — dentro do teto de 8 KB. CYD segue
+com **81.360 B livres** no slot.
+
 1. **`Utils/Mem.h`** — feito: `mem::alloc(size, desired, required = Any)`
    header-only (precedente `TaskCaps.h`); `Psram` prefere PSRAM e cai para 8-bit,
    `required` é o piso, OOM devolve `nullptr`. Migrados os 7 pares claros em

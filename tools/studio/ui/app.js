@@ -17,6 +17,9 @@ const S = {
   drag: null,
   pan: null,
   dpr: window.devicePixelRatio || 1,
+  tile: { active: false, tmId: null, value: 0, solid: false,
+          data: null, solids: null, dirty: false, painting: false,
+          strokeValue: 0, hover: null },
 };
 
 // ------------------------------------------------------------- helpers ----
@@ -471,6 +474,20 @@ function renderSceneInspector(box, sc) {
     sec.appendChild(el('div', { class: 'empty', text: 'importe um PNG e mude o importer para tileset' }));
   }
   box.appendChild(sec);
+
+  const ed = S.snap.describe.project.editor || {};
+  const cv = S.snap.describe.project.canvas || {};
+  box.appendChild(el('div', { class: 'insp-section' }, [
+    el('h4', { text: 'DIAGNOSTICO (REBUILD/PLAY)' }),
+    field('debug (E.debug)', check(ed.debug, (v) => projectSet({ editor: { debug: v } }))),
+    field('profiler (E.prof)', check(ed.prof, (v) => projectSet({ editor: { prof: v } }))),
+    field('inset preview', num(cv.inset || 0, (v) => projectSet({ canvas: { inset: v } }), 1)),
+    el('div', { class: 'hint', text: 'o device usa E.inset do firmware; aqui e so o preview' }),
+  ]));
+}
+
+function projectSet(patch) {
+  ops([{ op: 'project.set', ...patch }], { keepInspector: true });
 }
 
 function sceneSetting(sc, patch) {
@@ -510,6 +527,9 @@ function renderEntityInspector(box, sc, e) {
       field('overrides', jsonArea(e.overrides || {}, (v) => entitySet(sc, e, { overrides: v }))),
     ]));
   }
+  const piv = spritePivot(e);
+  const axShown = t.ax === undefined ? piv.ax : t.ax;
+  const ayShown = t.ay === undefined ? piv.ay : t.ay;
   box.appendChild(el('div', { class: 'insp-section' }, [
     el('h4', { text: 'TRANSFORM' }),
     field('x', num(t.x, (v) => entitySet(sc, e, { transform: { x: v } }))),
@@ -517,8 +537,9 @@ function renderEntityInspector(box, sc, e) {
     field('rot', num(t.rot || 0, (v) => entitySet(sc, e, { transform: { rot: v } }))),
     field('escala x', num(t.sx === undefined ? 1 : t.sx, (v) => entitySet(sc, e, { transform: { sx: v } }), 0.1)),
     field('escala y', num(t.sy === undefined ? 1 : t.sy, (v) => entitySet(sc, e, { transform: { sy: v } }), 0.1)),
-    field('ancora x', num(t.ax === undefined ? 0.5 : t.ax, (v) => entitySet(sc, e, { transform: { ax: v } }), 0.1)),
-    field('ancora y', num(t.ay === undefined ? 0.5 : t.ay, (v) => entitySet(sc, e, { transform: { ay: v } }), 0.1)),
+    field('ancora x', num(axShown, (v) => entitySet(sc, e, { transform: { ax: v } }), 0.1)),
+    field('ancora y', num(ayShown, (v) => entitySet(sc, e, { transform: { ay: v } }), 0.1)),
+    el('div', { class: 'hint', text: 'ancora ausente herda o pivot do sprite (E.spr.meta)' }),
   ]));
 
   const cat = (S.snap.describe.components || {});
@@ -567,6 +588,29 @@ function renderEntityInspector(box, sc, e) {
         const sa = asset(val);
         input.value = sa ? sa.guid : (val || '');
         input.addEventListener('change', () => compSet(sc, e, c, name, input.value));
+      } else if (def.type === 'asset') {
+        input = el('select');
+        input.appendChild(el('option', { value: '', text: '(nenhum)' }));
+        for (const a of S.snap.describe.assets || []) {
+          if (['sprite', 'sprite-sheet', 'tileset'].includes(a.kind)) {
+            input.appendChild(el('option', { value: a.guid, text: a.name }));
+          }
+        }
+        const sa = asset(val);
+        input.value = sa ? sa.guid : (val || '');
+        input.addEventListener('change', () => {
+          const ma = asset(input.value);
+          const anims = (ma && ma.settings && ma.settings.anims) || {};
+          const first = Object.keys(anims)[0] || '';
+          const cur = (c.fields || {}).current;
+          const list = [{ op: 'component.set', scene: sc.guid, entity: e.fid,
+                          component: c.id, field: name, value: input.value }];
+          if (first && (!cur || !anims[cur])) {
+            list.push({ op: 'component.set', scene: sc.guid, entity: e.fid,
+                        component: c.id, field: 'current', value: first });
+          }
+          ops(list);
+        });
       } else if (def.type === 'json') {
         input = jsonArea(val === undefined ? def.default : val, (v) => compSet(sc, e, c, name, v));
       } else {
@@ -618,6 +662,131 @@ function renderEntityInspector(box, sc, e) {
   ]));
 }
 
+function tileByCurrent() {
+  const sc = currentScene();
+  if (!sc) return null;
+  return (sc.tilemaps || []).find((t) => t.id === S.tile.tmId) || null;
+}
+
+function beginStroke(tm, value) {
+  if (!S.tile.data || S.tile.tmId !== tm.id) {
+    S.tile.data = tm.data.slice();
+    S.tile.solids = tm.solids ? tm.solids.slice() : new Array(tm.data.length).fill(false);
+  }
+  S.tile.tmId = tm.id;
+  S.tile.strokeValue = value;
+  S.tile.painting = true;
+}
+
+function paintAt(ev) {
+  const sc = currentScene();
+  const tm = (sc && (sc.tilemaps || []).find((t) => t.id === S.tile.tmId)) || null;
+  if (!tm) return false;
+  const w = screenToWorld(ev);
+  const c = Math.floor((w.x - (tm.ox || 0)) / tm.cell);
+  const r = Math.floor((w.y - (tm.oy || 0)) / tm.cell);
+  if (c < 0 || r < 0 || c >= tm.cols || r >= tm.rows) return false;
+  const i = r * tm.cols + c;
+  const v = S.tile.strokeValue;
+  S.tile.data[i] = v;
+  S.tile.solids[i] = v >= 0 ? !!S.tile.solid : false;
+  // espelho na cena viva para o viewport mostrar na hora
+  tm.data[i] = v;
+  if (!tm.solids) tm.solids = new Array(tm.data.length).fill(false);
+  tm.solids[i] = S.tile.solids[i];
+  S.tile.dirty = true;
+  S.tile.hover = { c, r };
+  draw();
+  return true;
+}
+
+function commitPaint() {
+  if (!S.tile.painting) return;
+  S.tile.painting = false;
+  if (!S.tile.dirty) return;
+  const sc = currentScene();
+  const tm = tileByCurrent();
+  if (!sc || !tm) return;
+  const data = S.tile.data.slice();
+  const solids = S.tile.solids.slice();
+  S.tile.data = null;
+  S.tile.solids = null;
+  S.tile.dirty = false;
+  log('tilemap: gravando ' + tm.id, 'dim');
+  ops([{ op: 'tilemap.set', scene: sc.guid, tilemap: tm.id, data: data, solids: solids }],
+      { keepInspector: true }).catch(() => loadSnapshot({ keepInspector: true }));
+}
+
+function updateTileHover(ev) {
+  const tm = tileByCurrent();
+  if (!tm) return;
+  const w = screenToWorld(ev);
+  const c = Math.floor((w.x - (tm.ox || 0)) / tm.cell);
+  const r = Math.floor((w.y - (tm.oy || 0)) / tm.cell);
+  const inside = c >= 0 && r >= 0 && c < tm.cols && r < tm.rows;
+  const next = inside ? { c, r } : null;
+  const cur = S.tile.hover;
+  if ((next && cur && next.c === cur.c && next.r === cur.r) || (!next && !cur)) return;
+  S.tile.hover = next;
+  draw();
+}
+
+function togglePaint(tm) {
+  if (S.tile.active && S.tile.tmId === tm.id) {
+    S.tile.active = false;
+    S.tile.painting = false;
+  } else {
+    S.tile.active = true;
+    S.tile.tmId = tm.id;
+    S.tile.data = null;
+    S.tile.solids = null;
+    S.tile.dirty = false;
+    S.tile.painting = false;
+  }
+  S.tile.hover = null;
+  const cv = $('#view');
+  if (cv) cv.style.cursor = S.tile.active ? 'crosshair' : '';
+  renderInspector();
+  draw();
+}
+
+function tilePalette(a, tm) {
+  const pal = el('div', { class: 'tilepal' });
+  const regs = (a && a.regionsList) || [];
+  const addTile = (idx, label) => {
+    const r = idx >= 0 ? regs[idx] : null;
+    const sel = S.tile.tmId === tm.id && S.tile.value === idx;
+    const d = el('div', { class: 'tile' + (sel ? ' sel' : ''), title: label || String(idx) });
+    if (r && a.settings) {
+      const k = Math.min(28 / r.w, 28 / r.h);
+      d.style.backgroundImage = 'url(' + JSON.stringify('/api/assets?path=' + encodeURIComponent(a.path)) + ')';
+      d.style.backgroundSize = (a.settings.w * k) + 'px ' + (a.settings.h * k) + 'px';
+      d.style.backgroundPosition = '-' + (r.x * k) + 'px -' + (r.y * k) + 'px';
+      d.style.imageRendering = 'pixelated';
+    } else {
+      d.textContent = 'x';
+      d.style.color = '#ff8b8b';
+    }
+    d.onclick = () => {
+      S.tile.tmId = tm.id;
+      S.tile.value = idx;
+      S.tile.active = true;
+      S.tile.data = null;
+      S.tile.solids = null;
+      S.tile.dirty = false;
+      S.tile.painting = false;
+      const cv = $('#view');
+      if (cv) cv.style.cursor = 'crosshair';
+      renderInspector();
+      draw();
+    };
+    pal.appendChild(d);
+  };
+  addTile(-1, 'apagar');
+  regs.forEach((r, i) => addTile(i, r.name));
+  return pal;
+}
+
 function renderTilemapInspector(box, sc, tm) {
   const tilesets = (S.snap.describe.assets || []).filter((a) => a.kind === 'tileset' || a.kind === 'sprite-sheet');
   const set = (patch) => ops([{ op: 'tilemap.set', scene: sc.guid, tilemap: tm.id, ...patch }], { keepInspector: true });
@@ -630,12 +799,24 @@ function renderTilemapInspector(box, sc, tm) {
     field('ox', num(tm.ox || 0, (v) => set({ ox: v }))),
     field('oy', num(tm.oy || 0, (v) => set({ oy: v }))),
     field('layer', num(tm.layer || 0, (v) => set({ layer: v }), 1)),
-    el('div', { class: 'hint', text: 'dados: ' + (tm.data || []).length + ' celulas; solids: ' + ((tm.solids || []).filter(Boolean).length) + ' solidas' }),
+    el('h4', { text: 'PINCEL' }),
+    tilePalette(asset(tm.tileset), tm),
+    field('solido', check(S.tile.solid, (v) => { S.tile.solid = v; })),
+    el('div', { class: 'rowbtns' }, [
+      el('button', {
+        class: 'mini' + (S.tile.active && S.tile.tmId === tm.id ? ' primary' : ''),
+        text: S.tile.active && S.tile.tmId === tm.id ? 'parar pincel' : 'pintar no viewport',
+        onclick: () => togglePaint(tm),
+      }),
+    ]),
+    el('div', { class: 'hint', text: 'clique/arraste no viewport; botao direito apaga; ' +
+      (tm.data || []).length + ' celulas, ' + ((tm.solids || []).filter(Boolean).length) + ' solidas' }),
     el('div', { class: 'rowbtns' }, [
       el('button', {
         class: 'mini', text: 'excluir tilemap',
         onclick: () => {
           if (!confirm('Excluir ' + tm.id + '?')) return;
+          S.tile.active = false;
           ops([{ op: 'tilemap.remove', scene: sc.guid, tilemap: tm.id }]).then(() => {
             S.sel = { kind: 'scene', id: null, comp: null }; renderHierarchy(); renderInspector(); draw();
           });
@@ -673,8 +854,28 @@ function renderAssetInspector(box, a) {
       field('pivot x', num((st.pivot || [0.5, 0.5])[0], (v) => set({ pivot: [v, (st.pivot || [0.5, 0.5])[1]] }), 0.1)),
       field('pivot y', num((st.pivot || [0.5, 0.5])[1], (v) => set({ pivot: [(st.pivot || [0.5, 0.5])[0], v] }), 0.1)),
       field('cor-chave', color(st.key || '#000000', (v) => set({ key: v }))),
+      field('hitbox x', num((st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[0],
+        (v) => set({ hitbox: [v, (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[1],
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[2],
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[3]] }))),
+      field('hitbox y', num((st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[1],
+        (v) => set({ hitbox: [(st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[0], v,
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[2],
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[3]] }))),
+      field('hitbox w', num((st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[2],
+        (v) => set({ hitbox: [(st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[0],
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[1], v,
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[3]] }))),
+      field('hitbox h', num((st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[3],
+        (v) => set({ hitbox: [(st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[0],
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[1],
+                             (st.hitbox || [0, 0, st.tw || st.w || 16, st.th || st.h || 16])[2], v] }))),
+      field('anims', jsonArea(st.anims || {}, (v) => set({ anims: v }))),
+      field('fps', jsonArea(st.fps || {}, (v) => set({ fps: v }))),
+      field('loop', jsonArea(st.loop || {}, (v) => set({ loop: v }))),
       el('div', { class: 'hint', text: (a.regionsList || []).length + ' regioes: ' +
-        (a.regionsList || []).slice(0, 10).map((r) => r.name).join(', ') }),
+        (a.regionsList || []).slice(0, 10).map((r) => r.name).join(', ') +
+        ' — anims/fps/loop/hitbox vao para E.spr.meta' }),
       el('div', { class: 'rowbtns' }, [
         el('img', { class: 'asset-thumb', src: '/api/assets?path=' + encodeURIComponent(a.path), style: 'width:96px;height:96px' }),
       ]),
@@ -755,8 +956,9 @@ function expandEntities(scene) {
           rot: (ct.rot || 0) + brot,
           sx: (ct.sx === undefined ? 1 : ct.sx) * bsx,
           sy: (ct.sy === undefined ? 1 : ct.sy) * bsy,
-          ax: ct.ax === undefined ? 0.5 : ct.ax, ay: ct.ay === undefined ? 0.5 : ct.ay,
         };
+        if (ct.ax !== undefined) cl.transform.ax = ct.ax;
+        if (ct.ay !== undefined) cl.transform.ay = ct.ay;
         cl.z = bz + (child.z || 0);
         if (cl.prefab) walk(cl, owner || e.fid, 0, 0, 0, 1, 1, 0, depth + 1);
         else { cl._owner = owner || e.fid; out.push(cl); }
@@ -770,8 +972,9 @@ function expandEntities(scene) {
       rot: (t.rot || 0) + rot,
       sx: (t.sx === undefined ? 1 : t.sx) * sx,
       sy: (t.sy === undefined ? 1 : t.sy) * sy,
-      ax: t.ax === undefined ? 0.5 : t.ax, ay: t.ay === undefined ? 0.5 : t.ay,
     };
+    if (t.ax !== undefined) c.transform.ax = t.ax;
+    if (t.ay !== undefined) c.transform.ay = t.ay;
     c.z = (e.z || 0) + dz;
     c._owner = owner || e.fid;
     out.push(c);
@@ -804,17 +1007,66 @@ function tsPx(ts, px) {
   return { tiny: 9, small: 11, body: 13, label: 15, big: 20, title: 28, huge: 40 }[ts] || 13;
 }
 
-function entityParts(e) {
-  const out = { sprite: null, text: null, shape: null, col: null };
-  const sc = compOf(e, 'sprite');
-  if (sc) out.sprite = resolveRef((sc.fields || {}).sprite);
+function graphicAssetOf(e) {
   const an = compOf(e, 'anim');
-  if (!out.sprite && an) {
+  if (an) {
     const f = an.fields || {};
+    if (f.meta) {
+      const a = asset(f.meta);
+      if (a) return a;
+    }
     const clips = f.clips || {};
     const clip = clips[f.current] || clips[Object.keys(clips)[0]];
     const fr = clip && clip.frames && clip.frames[0];
-    if (fr) out.sprite = resolveRef(fr);
+    const r = resolveRef(fr);
+    if (r) return r.asset;
+  }
+  const sc = compOf(e, 'sprite');
+  if (sc) {
+    const r = resolveRef((sc.fields || {}).sprite);
+    if (r) return r.asset;
+  }
+  return null;
+}
+
+function spritePivot(e) {
+  const a = graphicAssetOf(e);
+  const p = (a && a.settings && a.settings.pivot) || [0.5, 0.5];
+  return { ax: p[0] === undefined ? 0.5 : p[0], ay: p[1] === undefined ? 0.5 : p[1] };
+}
+
+// primeiro quadro de um clipe declarado no .meta (E.spr.animOf)
+function metaFrame(a, clipName) {
+  const st = a.settings || {};
+  const anims = st.anims || {};
+  const list = anims[clipName] || anims[Object.keys(anims)[0]];
+  if (!list || !list.length) return null;
+  const it = list[0];
+  const name = typeof it === 'number' ? (a.regionsList[it] || {}).name : it;
+  if (name === undefined) return null;
+  const r = (a.regionsList || []).find((x) => String(x.name) === String(name));
+  return r ? { asset: a, region: r } : null;
+}
+
+function entityParts(e) {
+  const out = { sprite: null, text: null, shape: null, col: null };
+  const an = compOf(e, 'anim');
+  if (an) {
+    const f = an.fields || {};
+    if (f.meta) {
+      const a = asset(f.meta);
+      if (a) out.sprite = metaFrame(a, f.current);
+    }
+    if (!out.sprite) {
+      const clips = f.clips || {};
+      const clip = clips[f.current] || clips[Object.keys(clips)[0]];
+      const fr = clip && clip.frames && clip.frames[0];
+      if (fr) out.sprite = resolveRef(fr);
+    }
+  }
+  if (!out.sprite) {
+    const sc = compOf(e, 'sprite');
+    if (sc) out.sprite = resolveRef((sc.fields || {}).sprite);
   }
   const tx = compOf(e, 'text');
   if (tx) out.text = tx.fields || {};
@@ -823,6 +1075,155 @@ function entityParts(e) {
   const co = compOf(e, 'collider');
   if (co) out.col = co.fields || {};
   return out;
+}
+
+function entitySize(e) {
+  const p = entityParts(e);
+  const t = e.transform || {};
+  const sx = t.sx === undefined ? 1 : t.sx;
+  const sy = t.sy === undefined ? 1 : t.sy;
+  if (p.sprite) {
+    const r = p.sprite.region;
+    return { w: r.w * sx, h: r.h * sy };
+  }
+  if (p.text) {
+    const px = tsPx(p.text.ts, p.text.px);
+    const cv = $('#view').getContext('2d');
+    cv.save();
+    cv.font = px + 'px ui-monospace, monospace';
+    const w = cv.measureText(String(p.text.text || '')).width;
+    cv.restore();
+    return { w, h: px + 2 };
+  }
+  if (p.shape) {
+    if (p.shape.shape === 'circle') {
+      const r = p.shape.r || (p.shape.w || 0) / 2;
+      return { w: r * 2, h: r * 2 };
+    }
+    if (p.shape.shape === 'line') return { w: Math.abs(p.shape.x2 || 0), h: Math.abs(p.shape.y2 || 0) };
+    return { w: p.shape.w || 0, h: p.shape.h || 0 };
+  }
+  return { w: 20, h: 20 };
+}
+
+function anchorBox(pt, x, y, w, h) {
+  const cv = S.snap.describe.project.canvas || {};
+  const W = cv.w || 240, H = cv.h || 320;
+  const inset = cv.inset || 0;
+  const col = pt % 3, row = Math.floor(pt / 3);
+  const bx = col === 0 ? inset + x : (col === 1 ? (W - w) / 2 + x : W - inset - w - x);
+  const by = row === 0 ? y : (row === 1 ? (H - h) / 2 + y : H - h - y);
+  return { x: bx, y: by, w, h };
+}
+
+function hudBox(e) {
+  const h = compOf(e, 'hud');
+  if (!h) return null;
+  const f = h.fields || {};
+  const s = entitySize(e);
+  return anchorBox(f.anchor | 0, f.mx || 0, f.my || 0, s.w, s.h);
+}
+
+function drawHudEntity(ctx, e, b) {
+  const p = entityParts(e);
+  const t = e.transform || {};
+  const sx = t.sx === undefined ? 1 : t.sx;
+  const sy = t.sy === undefined ? 1 : t.sy;
+  if (p.sprite) {
+    const img = imageFor(p.sprite.asset);
+    const r = p.sprite.region;
+    const piv = spritePivot(e);
+    const ax = t.ax === undefined ? piv.ax : t.ax;
+    const ay = t.ay === undefined ? piv.ay : t.ay;
+    if (img && img.complete && img.naturalWidth) {
+      ctx.drawImage(img, r.x, r.y, r.w, r.h,
+        b.x + b.w * ax - r.w * sx * ax, b.y + b.h * ay - r.h * sy * ay,
+        r.w * sx, r.h * sy);
+    }
+  }
+  if (p.text) {
+    const px = tsPx(p.text.ts, p.text.px);
+    ctx.save();
+    ctx.font = px + 'px ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    if (p.text.shadow) { ctx.fillStyle = p.text.shadow; ctx.fillText(String(p.text.text || ''), b.x + 1, b.y + 1); }
+    ctx.fillStyle = p.text.color || '#ffffff';
+    ctx.fillText(String(p.text.text || ''), b.x, b.y);
+    ctx.restore();
+  }
+  if (p.shape) {
+    ctx.save();
+    ctx.fillStyle = p.shape.color || '#38bcf8';
+    ctx.strokeStyle = p.shape.color || '#38bcf8';
+    if (p.shape.shape === 'circle') {
+      ctx.beginPath();
+      ctx.arc(b.x + b.w / 2, b.y + b.h / 2, p.shape.r || (p.shape.w || 0) / 2, 0, Math.PI * 2);
+      if (p.shape.fill === false) ctx.stroke(); else ctx.fill();
+    } else if (p.shape.shape === 'line') {
+      ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + (p.shape.x2 || 0), b.y + (p.shape.y2 || 0));
+      ctx.lineWidth = p.shape.w || 1; ctx.stroke();
+    } else if (p.shape.fill === false) {
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+    } else ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.restore();
+  }
+}
+
+function drawHitbox(ctx, e) {
+  const a = graphicAssetOf(e);
+  if (!a || !a.settings || !a.settings.hitbox) return;
+  const p = entityParts(e);
+  if (!p.sprite) return;
+  const t = e.transform || {};
+  const sx = t.sx === undefined ? 1 : t.sx;
+  const sy = t.sy === undefined ? 1 : t.sy;
+  const piv = spritePivot(e);
+  const ax = t.ax === undefined ? piv.ax : t.ax;
+  const ay = t.ay === undefined ? piv.ay : t.ay;
+  const r = p.sprite.region;
+  const hb = a.settings.hitbox;
+  const x0 = (t.x || 0) - r.w * sx * ax;
+  const y0 = (t.y || 0) - r.h * sy * ay;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,90,200,.95)';
+  ctx.lineWidth = 1 / S.view.zoom;
+  ctx.setLineDash([3 / S.view.zoom, 2 / S.view.zoom]);
+  ctx.strokeRect(x0 + hb[0] * sx, y0 + hb[1] * sy, hb[2] * sx, hb[3] * sy);
+  ctx.restore();
+}
+
+function entityBounds(e) {
+  const hud = hudBox(e);
+  if (hud) return hud;
+  const t = e.transform || {};
+  const p = entityParts(e);
+  if (p.sprite) {
+    const s = entitySize(e);
+    const piv = spritePivot(e);
+    const ax = t.ax === undefined ? piv.ax : t.ax;
+    const ay = t.ay === undefined ? piv.ay : t.ay;
+    return { x: (t.x || 0) - s.w * ax, y: (t.y || 0) - s.h * ay, w: s.w, h: s.h };
+  }
+  if (p.text) {
+    const s = entitySize(e);
+    const px = tsPx(p.text.ts, p.text.px);
+    const x = p.text.align === 'center' ? (t.x || 0) - s.w / 2 : (p.text.align === 'right' ? (t.x || 0) - s.w : (t.x || 0));
+    const y = p.text.valign === 'middle' ? (t.y || 0) - s.h / 2 : (p.text.valign === 'bottom' ? (t.y || 0) - s.h : (t.y || 0));
+    return { x, y, w: s.w, h: s.h };
+  }
+  if (p.shape) {
+    if (p.shape.shape === 'circle') {
+      const r = p.shape.r || (p.shape.w || 0) / 2;
+      return { x: (t.x || 0) - r, y: (t.y || 0) - r, w: r * 2, h: r * 2 };
+    }
+    if (p.shape.shape === 'line') {
+      return { x: (t.x || 0), y: (t.y || 0), w: p.shape.x2 || 0, h: p.shape.y2 || 0 };
+    }
+    return { x: (t.x || 0) - (p.shape.w || 0) / 2, y: (t.y || 0) - (p.shape.h || 0) / 2,
+             w: p.shape.w || 0, h: p.shape.h || 0 };
+  }
+  return { x: (t.x || 0) - 10, y: (t.y || 0) - 10, w: 20, h: 20 };
 }
 
 function entityBounds(e) {
@@ -862,13 +1263,27 @@ function entityBounds(e) {
 
 function drawEntity(ctx, e, selected, dragPreview) {
   const t = e.transform || {};
+  const hud = hudBox(e);
+  if (hud) {
+    drawHudEntity(ctx, e, hud);
+    if (selected) {
+      ctx.save();
+      ctx.strokeStyle = '#38bcf8';
+      ctx.lineWidth = 1.5 / S.view.zoom;
+      ctx.setLineDash([4 / S.view.zoom, 3 / S.view.zoom]);
+      ctx.strokeRect(hud.x, hud.y, hud.w, hud.h);
+      ctx.restore();
+    }
+    return;
+  }
   const x = dragPreview ? dragPreview.x : (t.x || 0);
   const y = dragPreview ? dragPreview.y : (t.y || 0);
   const rot = (t.rot || 0) * Math.PI / 180;
   const sx = t.sx === undefined ? 1 : t.sx;
   const sy = t.sy === undefined ? 1 : t.sy;
-  const ax = t.ax === undefined ? 0.5 : t.ax;
-  const ay = t.ay === undefined ? 0.5 : t.ay;
+  const piv = spritePivot(e);
+  const ax = t.ax === undefined ? piv.ax : t.ax;
+  const ay = t.ay === undefined ? piv.ay : t.ay;
   const p = entityParts(e);
 
   if (p.sprite) {
@@ -930,6 +1345,7 @@ function drawEntity(ctx, e, selected, dragPreview) {
     ctx.restore();
   }
   if (selected) {
+    drawHitbox(ctx, e);
     const b = entityBounds(e);
     if (dragPreview) { b.x += dragPreview.x - (t.x || 0); b.y += dragPreview.y - (t.y || 0); }
     ctx.save();
@@ -967,6 +1383,16 @@ function draw() {
   const st = sc.settings || {};
   ctx.fillStyle = st.bg || '#000000';
   ctx.fillRect(0, 0, m.w, m.h);
+
+  const inset = (S.snap.describe.project.canvas || {}).inset || 0;
+  if (inset > 0) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,212,121,.55)';
+    ctx.setLineDash([5 / S.view.zoom, 4 / S.view.zoom]);
+    ctx.lineWidth = 1 / S.view.zoom;
+    ctx.strokeRect(inset, inset, m.w - inset * 2, m.h - inset * 2);
+    ctx.restore();
+  }
 
   if ($('#chkGrid').checked) {
     const step = (S.snap.describe.project.editor && S.snap.describe.project.editor.grid) || 8;
@@ -1015,13 +1441,27 @@ function draw() {
     ctx.restore();
   }
 
+  if (S.tile.active && S.tile.hover) {
+    const tm = tileByCurrent();
+    if (tm) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(56,188,248,.95)';
+      ctx.lineWidth = 1.5 / S.view.zoom;
+      ctx.strokeRect((tm.ox || 0) + S.tile.hover.c * tm.cell,
+                     (tm.oy || 0) + S.tile.hover.r * tm.cell, tm.cell, tm.cell);
+      ctx.restore();
+    }
+  }
+
   ctx.strokeStyle = 'rgba(120,150,200,.35)';
   ctx.lineWidth = 1 / S.view.zoom;
   ctx.strokeRect(0, 0, m.w, m.h);
   ctx.restore();
 
+  cv.style.cursor = S.tile.active ? 'crosshair' : '';
   $('#viewHint').textContent = S.view.zoom.toFixed(2) + 'x  ·  ' +
-    (S.sel.kind === 'entity' ? 'entidade ' + S.sel.id : (S.sel.kind === 'asset' ? 'asset ' + (assetByGuid(S.sel.id) || {}).name : 'cena'));
+    (S.sel.kind === 'entity' ? 'entidade ' + S.sel.id : (S.sel.kind === 'asset' ? 'asset ' + (assetByGuid(S.sel.id) || {}).name : 'cena')) +
+    (S.tile.active ? '  ·  PINTANDO ' + (S.tile.value < 0 ? '(borracha)' : S.tile.value) : '');
 }
 
 function fitView(redraw) {
@@ -1395,6 +1835,14 @@ function wireEvents() {
       cv.setPointerCapture(ev.pointerId);
       return;
     }
+    if (S.tile.active && S.tile.tmId && ev.button !== 1) {
+      const tm = tileByCurrent();
+      if (tm) {
+        beginStroke(tm, ev.button === 2 ? -1 : S.tile.value);
+        if (paintAt(ev)) { cv.setPointerCapture(ev.pointerId); return; }
+        S.tile.painting = false;
+      }
+    }
     if (ev.button !== 0) return;
     const fid = hitTest(w);
     if (!fid) {
@@ -1406,6 +1854,7 @@ function wireEvents() {
     const sc = currentScene();
     const e = sceneEntity(sc, fid);
     if (!e) return;
+    if (compOf(e, 'hud')) return;   // HUD e ancorado pelos campos mx/my
     S.drag = {
       fid: fid, startW: w, startX: (e.transform || {}).x || 0, startY: (e.transform || {}).y || 0,
       moved: false, preview: null,
@@ -1419,6 +1868,10 @@ function wireEvents() {
       S.view.panY = S.pan.py + (ev.clientY - S.pan.sy);
       draw();
       return;
+    }
+    if (S.tile.active) {
+      if (S.tile.painting) { paintAt(ev); return; }
+      updateTileHover(ev);
     }
     if (!S.drag) return;
     const w = screenToWorld(ev);
@@ -1434,6 +1887,7 @@ function wireEvents() {
     draw();
   });
   cv.addEventListener('pointerup', (ev) => {
+    if (S.tile.painting) { commitPaint(); return; }
     if (S.pan) { S.pan = null; return; }
     if (!S.drag) return;
     const d = S.drag;

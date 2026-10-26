@@ -25,6 +25,8 @@
     "anim": {
       "label": "Animacao",
       "fields": {
+        "meta": { "type": "asset", "default": "", "label": "Metadados do atlas",
+                  "hint": "asset sprite-sheet; usa E.spr.animOf (spr 1.6)" },
         "clips": {
           "type": "json",
           "default": {},
@@ -33,6 +35,15 @@
         },
         "current": { "type": "string", "default": "", "label": "Clipe atual" },
         "autoplay": { "type": "bool", "default": true, "label": "Tocar ao entrar" }
+      }
+    },
+    "hud": {
+      "label": "HUD",
+      "fields": {
+        "anchor": { "type": "int", "default": 0, "min": 0, "max": 8, "label": "Ancora 0..8",
+                    "hint": "0=NO, 1=N, 2=NE, 4=centro, 8=SE (E.anchor)" },
+        "mx": { "type": "number", "default": 4, "label": "Margem X" },
+        "my": { "type": "number", "default": 4, "label": "Margem Y" }
       }
     },
     "text": {

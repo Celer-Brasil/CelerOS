@@ -101,7 +101,11 @@ safe.
     "pivot": [0.5, 0.5],
     "key": "#000000",
     "prefix": "",
-    "tiles": [{ "name": "0", "solid": false }]
+    "tiles": [{ "name": "0", "solid": false }],
+    "anims": { "idle": [0, 1], "run": [2, 3, 4, 5] },
+    "fps": { "run": 12 },
+    "loop": { "idle": true, "run": true },
+    "hitbox": [8, 8, 48, 48]
   }
 }
 ```
@@ -109,6 +113,12 @@ safe.
 Importers: `sprite` (single image), `sprite-sheet` (grid or explicit
 regions), `tileset` (grid + tile metadata), `audio`, `script`, `scene`,
 `prefab`. Colors are `#RRGGBB` in source; the build converts them to RGB565.
+
+`pivot`, `anims`, `fps`, `loop` and `hitbox` are the engine's
+`E.spr.meta` contract (spr 1.6): the build registers them in the generated
+data module, so `blit`/`stamp` inherit the anchor and `E.spr.animOf`/`box`
+work in scripts. `anims` entries are grid indices (or explicit runtime
+region names); `fps` is per clip; `hitbox` is `[x,y,w,h]` inside the frame.
 
 ### Scene
 
@@ -130,7 +140,7 @@ regions), `tileset` (grid + tile metadata), `audio`, `script`, `scene`,
       "name": "Heroi",
       "active": true,
       "z": 5,
-      "transform": { "x": 80, "y": 120, "rot": 0, "sx": 1, "sy": 1, "ax": 0.5, "ay": 1 },
+      "transform": { "x": 80, "y": 120, "rot": 0, "sx": 1, "sy": 1 },
       "components": [
         { "id": "c_spr", "type": "sprite", "fields": { "sprite": "GUID#heroi0", "key": "#000000" } },
         { "id": "c_scr", "type": "script", "fields": { "script": "GUID", "fields": { "speed": 60 } } }
@@ -150,7 +160,9 @@ regions), `tileset` (grid + tile metadata), `audio`, `script`, `scene`,
 }
 ```
 
-- Every entity has an implicit `transform`; `z` is the draw order.
+- Every entity has an implicit `transform`; `z` is the draw order. `ax`/`ay`
+  are optional: when omitted, the sprite's `.meta` pivot is used (spr 1.6);
+  an explicit value overrides it.
 - `fid` is the stable entity id inside the scene/prefab.
 - Sprite refs are `"<asset guid>#<region>"` (single-image assets may omit
   `#region` when the importer mode is `single`).
@@ -203,11 +215,15 @@ Nesting is flattened recursively at build time (limit 4 levels).
 | Type | Fields |
 |------|--------|
 | `sprite` | `sprite` (ref), `key` (color-key) |
-| `anim` | `clips` (`{name:{frames:[refs],fps,loop}}`), `current`, `autoplay` |
+| `anim` | `meta` (atlas asset for `E.spr.animOf`), `clips` (`{name:{frames:[refs],fps,loop}}`), `current`, `autoplay` |
 | `text` | `text`, `color`, `px` or `ts` (`tiny..huge`), `align`, `valign`, `shadow` |
 | `shape` | `shape` (`rect`, `circle`, `line`), `w`, `h`, `r`, `x2`, `y2`, `color`, `fill` |
 | `collider` | `shape`, `w`, `h`, `r` (editor gizmo + `entity.col` for scripts) |
 | `script` | `script` (script asset ref), `fields` (JSON sent to the script) |
+| `hud` | `anchor` (0..8 numeric keypad), `mx`, `my` — positions the entity's sprite/text/shape with `E.anchor` (core 1.5), safe-margin aware |
+
+When an `anim` has `meta`, the runtime asks `E.spr.animOf(meta, current)` for
+the clip declared in the atlas `.meta`; explicit `clips` remain as a fallback.
 
 `transform` is implicit and appears in the inspector. The single source of
 truth for fields, types, defaults and GUI forms is
@@ -233,9 +249,11 @@ exports.draw = function (ctx) { /* optional, after built-in components */ };
 exports.destroy = function (ctx) { /* optional */ };
 ```
 
-`ctx.entity` exposes `x, y, rot, sx, sy, ax, ay, z, active, fields` and
-`setClip(name)` for animated entities. The script is linted by `app_lint`
-(ES5 only) during build.
+`ctx.entity` exposes `x, y, rot, sx, sy, ax, ay, z, active, fields`,
+`setClip(name)` for animated entities and `box(scale, out)` — the atlas hitbox
+from `E.spr.box`, in world coordinates. `ctx.E` is the engine object, so
+scripts can use `E.spr.animOf`, `E.prof`, `E.anchor`, etc. The script is
+linted by `app_lint` (ES5 only) during build.
 
 ## Assets and limits
 
@@ -282,6 +300,19 @@ The runtime (`tools/studio/templates/runtime.js`, ES5) is **inlined** into
 8 dep slots. It loads each scene's sheets on entry and frees them on exit,
 uses `E.dirty` with a painter that repaints tilemap cells, draws tilemaps by
 layer, entities by `z`, runs scripts, and follows the scene camera.
+
+It is built on the current engine line:
+
+- sheets are registered with **`E.spr.meta`** (grid, prefix, anchor, anims,
+  fps, loop, hitbox); single images use `E.spr.load` + `E.spr.meta`;
+- `anim` components with `meta` use **`E.spr.animOf`**; scripts get
+  **`entity.box()`** via `E.spr.box`;
+- `hud` components use **`E.anchor`** (`E.ax/ay`, `E.inset`), so HUD entities
+  sit at the 9 anchor points without camera math;
+- `editor.debug` sets `E.debug`, `editor.prof` sets `E.prof.on` (the overlay
+  then shows `u`/`d` section times); the sprite pool is automatically tracked
+  by **`E.slots`**;
+- scene music is started with `System.playWav` on entry.
 
 Builds are deterministic: sorted assets/scenes, no timestamps in the package,
 stable generated names. `.studio/report.json` records sizes and warnings.
@@ -375,7 +406,13 @@ test suite proves they produce equivalent files.
   editable. JSON fields are validated on blur.
 - **Assets**: drag files onto the panel (or use Importar), thumbnails,
   double-click a scene to open it, a script to edit it. The importer settings
-  (slicing/pivot/key) are in the inspector.
+  (slicing, pivot, color-key, `anims`/`fps`/`loop`, hitbox) are in the
+  inspector; the preview draws the hitbox and the sprite anchor.
+- **Tilemap painter**: select a tilemap, pick a tile in the palette (or the
+  eraser) and click/drag in the viewport; right-click erases. The palette
+  paints `data`, the "solido" checkbox also sets `solids`; the stroke commits
+  as one `tilemap.set` on pointer-up. Changing cols/rows resizes preserving
+  the top-left.
 - **Play**: builds the package and starts the live emulator in an iframe
   (pause/step/restart/record/screenshot are the emulator's own controls).
 - **Console**: harness logs, build diagnostics, lint errors, command results.
@@ -431,9 +468,13 @@ OTA updates firmware only; the app package still ships through the store or
   tilemap or scene music. An asset used only inside a script must also be
   referenced by a (possibly inactive) component so the build packs it.
 - Prefab nesting is flattened at build time; the editor hierarchy is
-  organizational (transforms are absolute, not inherited at runtime).
-- The GUI paints scenes but the tilemap painter/atlas slicer/animator timeline
-  are phase 6; use `tilemap.paint`/`asset.set` ops until then.
+  organizational (transforms are absolute, not inherited at runtime). The
+  engine's `celeros.game.scene` data module is available to scripts when the
+  project declares it, but the generated Studio runtime does not require it
+  (prefabs are flattened, component behavior is the Studio runner).
+- The tilemap painter is in the GUI; a visual atlas slicer (drag regions), an
+  animation timeline and a dedicated prefab editing view are still phase 6
+  (use `asset.set`/`component.set`/`op` batches until then).
 - `music` on a scene is started with `System.playWav` on scene entry (one
   shot); v1 has no runtime mixer/loop control. The audio importer's `loop` and
   `gain` settings are stored in the `.meta` for tooling, not applied yet.
@@ -446,7 +487,9 @@ OTA updates firmware only; the app package still ships through the store or
 node test/studio/run.js
 ```
 
-Covers canonical JSON round-trips, GUID uniqueness, asset import/grid,
-atomic batches/dry-run/undo/redo, deterministic builds, the generated app on
-the host harness (frames differ when a script moves an entity), prefab
-flattening, and CLI x HTTP equivalence. CI runs it before the firmware matrix.
+Covers canonical JSON round-trips, GUID uniqueness, asset import/grid, the
+spr 1.6 metadata (`anims`/fps/loop/hitbox), `tilemap.set`/resize (the painter
+commit), atomic batches/dry-run/undo/redo, deterministic builds, the generated
+app on the host harness (`E.spr.meta`/`animOf`/`box`, anchored HUD pixels,
+frames differ when a script moves an entity), prefab flattening, and CLI x HTTP
+equivalence. CI runs it before the firmware matrix.

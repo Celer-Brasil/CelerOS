@@ -23,6 +23,11 @@
         "prefix": { "type": "string" },
         "regions": { "type": "object", "description": "nome -> [x,y,w,h] em pixels" },
         "tiles": { "type": "array", "description": "[{name, solid}] por indice de celula" },
+        "anims": { "type": "object", "description": "clipe -> [indice da grade | nome da regiao] (E.spr.meta)" },
+        "fps": { "type": "object", "description": "clipe -> fps (E.spr.meta)" },
+        "loop": { "type": "object", "description": "clipe -> booleano (E.spr.meta)" },
+        "hitbox": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4,
+                    "description": "[x,y,w,h] dentro do quadro (E.spr.box)" },
         "loop": { "type": "boolean" },
         "gain": { "type": "number" },
         "props": { "type": "object", "description": "defaults declarados por um script de componente" }

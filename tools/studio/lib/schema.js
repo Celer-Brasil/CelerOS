@@ -154,6 +154,19 @@ function validateProjectData(p, out) {
         if (p.canvas.fps !== undefined && (!isInt(p.canvas.fps) || p.canvas.fps < 0 || p.canvas.fps > 60)) {
             out.push(err('schema.range', 'canvas.fps', 'fps deve ser 0..60'));
         }
+        if (p.canvas.inset !== undefined && (!isInt(p.canvas.inset) || p.canvas.inset < 0 || p.canvas.inset > 64)) {
+            out.push(err('schema.range', 'canvas.inset', 'inset deve ser 0..64'));
+        }
+    }
+    if (p.editor !== undefined) {
+        if (!isObj(p.editor)) out.push(err('schema.type', 'editor', 'editor deve ser objeto'));
+        else {
+            for (const k of ['debug', 'prof']) {
+                if (p.editor[k] !== undefined && typeof p.editor[k] !== 'boolean') {
+                    out.push(err('schema.type', 'editor.' + k, 'booleano'));
+                }
+            }
+        }
     }
     if (p.startScene !== undefined && typeof p.startScene !== 'string') {
         out.push(err('schema.type', 'startScene', 'startScene deve ser GUID ou vazio'));
@@ -265,6 +278,47 @@ function validateMetaData(m, out) {
         }
         if (s.key !== undefined && (typeof s.key !== 'string' || !COLOR_RE.test(s.key))) {
             out.push(err('schema.type', 'settings.key', 'key = #RRGGBB'));
+        }
+        if (s.anims !== undefined) {
+            if (!isObj(s.anims)) out.push(err('schema.type', 'settings.anims', 'anims deve ser objeto clipe -> lista'));
+            else {
+                for (const clip of Object.keys(s.anims)) {
+                    const list = s.anims[clip];
+                    if (!Array.isArray(list)) {
+                        out.push(err('schema.type', 'settings.anims.' + clip, 'lista de indices/nomes'));
+                    } else {
+                        for (let i = 0; i < list.length; i++) {
+                            const it = list[i];
+                            if (!isInt(it) && typeof it !== 'string') {
+                                out.push(err('schema.type', 'settings.anims.' + clip + '[' + i + ']',
+                                             'indice inteiro ou nome de regiao'));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (s.fps !== undefined) {
+            if (!isObj(s.fps)) out.push(err('schema.type', 'settings.fps', 'fps deve ser objeto clipe -> numero'));
+            else for (const clip of Object.keys(s.fps)) {
+                if (!isNum(s.fps[clip]) || s.fps[clip] <= 0) {
+                    out.push(err('schema.range', 'settings.fps.' + clip, 'fps > 0'));
+                }
+            }
+        }
+        if (s.loop !== undefined) {
+            if (!isObj(s.loop)) out.push(err('schema.type', 'settings.loop', 'loop deve ser objeto clipe -> booleano'));
+            else for (const clip of Object.keys(s.loop)) {
+                if (typeof s.loop[clip] !== 'boolean') {
+                    out.push(err('schema.type', 'settings.loop.' + clip, 'booleano'));
+                }
+            }
+        }
+        if (s.hitbox !== undefined) {
+            if (!Array.isArray(s.hitbox) || s.hitbox.length !== 4 ||
+                s.hitbox.some((v) => !isNum(v)) || s.hitbox[2] <= 0 || s.hitbox[3] <= 0) {
+                out.push(err('schema.type', 'settings.hitbox', 'hitbox = [x, y, w, h] com w/h > 0'));
+            }
         }
     }
     if (m.importer === 'audio') {

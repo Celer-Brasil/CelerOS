@@ -162,15 +162,17 @@ function componentOf(entity, ref) {
 
 function defaultTransform(op) {
     const t = op && op.transform ? op.transform : {};
-    return {
+    const out = {
         x: F.round(t.x !== undefined ? t.x : (op && op.x !== undefined ? op.x : 0)),
         y: F.round(t.y !== undefined ? t.y : (op && op.y !== undefined ? op.y : 0)),
         rot: F.round(t.rot || 0),
         sx: F.round(t.sx !== undefined ? t.sx : 1),
         sy: F.round(t.sy !== undefined ? t.sy : 1),
-        ax: F.round(t.ax !== undefined ? t.ax : 0.5),
-        ay: F.round(t.ay !== undefined ? t.ay : 0.5),
     };
+    // ax/ay ausentes = herda o pivot do sprite (E.spr.meta)
+    if (t.ax !== undefined) out.ax = F.round(t.ax);
+    if (t.ay !== undefined) out.ay = F.round(t.ay);
+    return out;
 }
 
 function mergeTransform(entity, patch) {
@@ -546,6 +548,8 @@ const OPS = {
         if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
         const tm = (sc.tilemaps || []).find((t) => t.id === op.tilemap);
         if (!tm) F.fail('ref.tilemap', 'tilemap inexistente: ' + op.tilemap);
+        const oldCols = tm.cols, oldRows = tm.rows;
+        const oldData = tm.data, oldSolids = tm.solids;
         for (const k of ['cols', 'rows', 'cell', 'ox', 'oy', 'layer', 'data', 'solids', 'autotile']) {
             if (op[k] !== undefined) tm[k] = F.deepClone(op[k]);
         }
@@ -553,6 +557,27 @@ const OPS = {
             const asset = project.asset(op.tileset);
             if (!asset) F.fail('ref.tileset', 'tileset inexistente: ' + op.tileset);
             tm.tileset = asset.guid;
+        }
+        // mudar cols/rows pelo inspetor redimensiona preservando o canto
+        // superior esquerdo; celulas novas nascem vazias (-1)
+        const resized = tm.cols !== oldCols || tm.rows !== oldRows;
+        if (resized && op.data === undefined && Array.isArray(oldData)) {
+            const nd = [];
+            for (let r = 0; r < tm.rows; r++) {
+                for (let c = 0; c < tm.cols; c++) {
+                    nd.push(r < oldRows && c < oldCols ? oldData[r * oldCols + c] : -1);
+                }
+            }
+            tm.data = nd;
+        }
+        if (resized && op.solids === undefined && Array.isArray(oldSolids)) {
+            const ns = [];
+            for (let r = 0; r < tm.rows; r++) {
+                for (let c = 0; c < tm.cols; c++) {
+                    ns.push(r < oldRows && c < oldCols ? !!oldSolids[r * oldCols + c] : false);
+                }
+            }
+            tm.solids = ns;
         }
         if (tm.data && tm.cols && tm.rows && tm.data.length !== tm.cols * tm.rows) {
             F.fail('schema.range', 'data tem ' + tm.data.length + ', esperava ' + (tm.cols * tm.rows));

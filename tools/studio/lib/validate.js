@@ -74,6 +74,24 @@ function checkEntity(project, e, at, errors) {
             else if (a.kind !== 'script') errors.push({ code: 'ref.script', path: cat2 + '.fields.script', message: a.name + ' nao e script' });
         }
         if (c.type === 'anim') {
+            if (f.meta) {
+                const ma = project.asset(f.meta);
+                if (!ma) {
+                    errors.push({ code: 'ref.missing', path: cat2 + '.fields.meta', message: 'asset de metadados inexistente: ' + f.meta });
+                } else if (!['sprite', 'sprite-sheet', 'tileset'].includes(ma.kind)) {
+                    errors.push({ code: 'ref.sprite', path: cat2 + '.fields.meta', message: ma.name + ' nao e asset grafico' });
+                } else if ((ma.meta.settings || {}).mode === 'single') {
+                    errors.push({ code: 'asset.anims', path: cat2 + '.fields.meta',
+                                  message: ma.name + ' e imagem unica; anims exigem grade/regioes' });
+                } else {
+                    const anims = (ma.meta.settings || {}).anims || {};
+                    if (!Object.keys(anims).length) {
+                        errors.push({ code: 'asset.anims', path: cat2 + '.fields.meta', message: ma.name + ' nao tem anims no .meta' });
+                    } else if (f.current && !anims[f.current]) {
+                        errors.push({ code: 'ref.clip', path: cat2 + '.fields.current', message: 'clipe "' + f.current + '" nao existe em ' + ma.name + '.anims' });
+                    }
+                }
+            }
             const clips = f.clips || {};
             if (!clips || typeof clips !== 'object') {
                 errors.push({ code: 'schema.type', path: cat2 + '.fields.clips', message: 'clips deve ser objeto' });
@@ -90,7 +108,7 @@ function checkEntity(project, e, at, errors) {
                         errors.push({ code: 'schema.range', path: cat2 + '.fields.clips.' + clipName + '.fps', message: 'fps > 0' });
                     }
                 }
-                if (f.current && !clips[f.current]) {
+                if (!f.meta && f.current && !clips[f.current]) {
                     errors.push({ code: 'ref.clip', path: cat2 + '.fields.current', message: 'clipe atual nao existe: ' + f.current });
                 }
             }
@@ -230,6 +248,24 @@ function checkAssetFiles(project, errors, warnings) {
                 }
                 if (a.kind === 'tileset' && Array.isArray(st.tiles) && st.tiles.length < cols * rows) {
                     warnings.push({ code: 'asset.tiles', path: at, message: 'tiles tem ' + st.tiles.length + ', grade tem ' + cols * rows });
+                }
+            }
+            if (st.anims && (st.mode || 'single') === 'single') {
+                errors.push({ code: 'asset.anims', path: at,
+                              message: 'anims exige modo grid/regions (imagem unica nao tem quadros)' });
+            } else if (st.anims) {
+                const nregs = project.regions(a).length;
+                for (const clip of Object.keys(st.anims)) {
+                    const list = st.anims[clip] || [];
+                    for (let i = 0; i < list.length; i++) {
+                        const it = list[i];
+                        if (typeof it === 'number' && (!SC.isInt(it) || it < 0 || it >= nregs)) {
+                            errors.push({
+                                code: 'asset.anims', path: at,
+                                message: 'anims.' + clip + '[' + i + '] = ' + it + ' fora de 0..' + (nregs - 1),
+                            });
+                        }
+                    }
                 }
             }
         }

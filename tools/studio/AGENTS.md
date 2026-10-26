@@ -40,6 +40,19 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
   256 KB de assets, 1 MB JS com PSRAM (48 KB sem), 256 KB/modulo.
 - **Prefab e achatado no build**; o runtime nunca resolve prefab.
 - **Nada de `#ifdef` de placa** e nada de dep nova no hub para o runtime.
+- **Engine atual**: o runtime usa `E.spr.meta`/`animOf`/`box` (spr 1.6),
+  `E.anchor`/`E.ax/ay` e `E.prof` (core 1.5) quando presentes (feature
+  detect); o projeto gerado declara `celeros.game ^1.5.0`, `spr ^1.6.0`.
+  Pivot do asset vira `ax/ay` do metadado; transform sem `ax/ay` herda.
+
+## INTEGRACAO COM A ENGINE (o que ja e usado)
+| Recurso | Onde o Studio usa |
+|---------|-------------------|
+| `E.spr.meta` / `animOf` / `box` | build grava `anims/fps/loop/hitbox/pivot`; runtime registra sheet+meta; componente `anim.meta` usa `animOf`; `entity.box()` usa `box` |
+| `E.ax/ay/anchor`, `E.inset` | componente `hud` (ancora 0..8) no runtime e no viewport; preview de `canvas.inset` |
+| `E.prof`, `E.debug` | `editor.prof`/`editor.debug` viram `E.prof.on`/`E.debug` no main gerado |
+| `E.slots` | automatico no spr; nenhum codigo do Studio mexe em `_used` |
+| `celeros.game.scene` | opcional para scripts (o projeto pode declarar); o runner do Studio ainda achata prefabs e nao o exige |
 
 ## COMO ESTENDER
 ### Componente novo
@@ -66,6 +79,18 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 3. `lib/build.js` (tabela de assets do runtime) e `lib/validate.js` (limites).
 4. Docs e testes.
 
+## GUI (ui/app.js)
+- Hierarquia (cena/entidades/prefabs/tilemaps), inspetor dirigido pelo schema,
+  viewport (pan/zoom/grid/snap/arraste), assets, console, abas Cena/Jogo/Build,
+  barra de comandos e Play em iframe.
+- Pincel de tilemap: paleta de regioes do tileset, borracha, checkbox solido;
+  clique/arraste no viewport, botao direito apaga; commit unico em
+  `tilemap.set` no pointer-up; cols/rows redimensionam preservando o canto.
+- Inspetor de asset: modo/grade/pivot/cor-chave, `anims`/`fps`/`loop`, hitbox;
+  o viewport desenha hitbox e ancora do sprite selecionado; entidades `hud`
+  aparecem na posicao ancorada e com a margem `canvas.inset`.
+- Diagnostico: toggles de `E.debug`/`E.prof` (rebuild/play) e `canvas.inset`.
+
 ## CONTRATO DE IA
 - `studio describe --json` descobre projeto, componentes, ops, limites e
   assets; `studio schema components` da os campos.
@@ -82,6 +107,8 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
   `game.data.js`/partes, `s.<slug>.js`, assets planos, `app.json`, `icon.png`).
 - Extras = partes de data + scripts + assets (main/app.json/icon sao livres).
 - So assets referenciados por cenas entram; todos os scripts entram.
+- Metadados de arte vao no `game.data` (nao em .json lido em runtime): o app
+  nao precisa de permissao `fs` para `E.spr.meta`/`E.scene`.
 - `app_lint` roda no pacote final e bloqueia o build em erro.
 - `run` usa `microsBias:1` no runner do host (ver "QUIRK" abaixo).
 
@@ -95,8 +122,9 @@ sempre liga (run e preview). Nao edite `celeros.game.js` para "consertar" isso
 sem alinhar com o dono do arquivo: e trabalho em voo.
 
 ## TESTES
-- `node test/studio/run.js` (CI): formato canonico, import, ops/dry-run/undo,
-  build determinista, app gerado no harness, prefab achatado, CLI x HTTP.
+- `node test/studio/run.js` (CI): formato canonico, import, metadata do spr
+  1.6, tilemap.set/resize, ops/dry-run/undo, build determinista, app gerado no
+  harness (spr.meta/animOf/box + HUD ancorado), prefab achatado, CLI x HTTP.
 - `node tools/sdk/celer.js check` cobre drift de types/renderer/deps.
 - Preview: `serve --open`; headless: `run --frames 0,600`.
 

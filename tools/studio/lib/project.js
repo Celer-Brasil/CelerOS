@@ -83,10 +83,10 @@ class Project {
             permissions: [],
             deps: engineDeps(),
             changelog: '0.1.0: primeiro projeto',
-            canvas: { w: 240, h: 320, native: false, fps: 30 },
+            canvas: { w: 240, h: 320, native: false, fps: 30, inset: 0 },
             startScene: '',
             build: { out: '.studio/build', splitKB: 96 },
-            editor: { grid: 8, snap: true },
+            editor: { grid: 8, snap: true, debug: false, prof: false },
         };
 
         const scene = {

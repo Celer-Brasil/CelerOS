@@ -94,16 +94,33 @@ function planAssets(project) {
             byGuid.set(a.guid, { t: 'a', n: n, f: outName });
         } else {
             const regions = project.regions(a);
-            const single = a.kind === 'sprite' && (st.mode || 'single') === 'single';
+            const mode = st.mode || (a.kind === 'sprite' ? 'single' : 'grid');
+            const single = mode === 'single';
+            // E.spr.meta: o prefixo tem de reproduzir os nomes das regioes
+            // do build (n#<prefixo><indice>). O tileset usa indice puro.
+            const prefixBase = st.prefix !== undefined && st.prefix !== ''
+                ? st.prefix
+                : (a.meta.importer === 'tileset' ? '' : a.name);
+            const pivot = st.pivot || [0.5, 0.5];
+            const extra = {
+                mode: mode,
+                ax: pivot[0] === undefined ? 0.5 : pivot[0],
+                ay: pivot[1] === undefined ? 0.5 : pivot[1],
+            };
+            for (const k of ['anims', 'fps', 'loop', 'hitbox']) if (st[k] !== undefined) extra[k] = st[k];
             if (single) {
-                byGuid.set(a.guid, { t: 's', n: n, f: graphicFile, w: st.w || 0, h: st.h || 0 });
+                byGuid.set(a.guid, Object.assign({
+                    t: 's', n: n, f: graphicFile, w: st.w || 0, h: st.h || 0,
+                }, extra));
             } else {
                 const map = {};
                 for (const r of regions) map[n + '#' + r.name] = [r.x, r.y, r.w, r.h];
-                byGuid.set(a.guid, {
+                byGuid.set(a.guid, Object.assign({
                     t: 'g', n: n, f: graphicFile, w: st.w || 0, h: st.h || 0,
+                    cols: st.cols || 1, rows: st.rows || 1,
                     tw: st.tw || 16, th: st.th || 16, regions: map,
-                });
+                    prefix: n + '#' + prefixBase,
+                }, extra));
             }
         }
         copies.push({ from: a.absPath, to: outName, guid: a.guid });
@@ -142,8 +159,22 @@ function convertComponent(project, plan, c, at, load) {
                 loop: cl.loop === undefined ? true : cl.loop,
             };
         }
-        const cur = f.current || Object.keys(out)[0] || '';
-        return { t: 'anim', clips: out, current: cur, autoplay: f.autoplay !== false };
+        let metaName = null;
+        if (f.meta) {
+            const ma = project.asset(f.meta);
+            if (!ma) failBuild('asset de metadados inexistente em ' + at + ': ' + f.meta);
+            const ra = plan.byGuid.get(ma.guid);
+            if (!ra) failBuild('asset de metadados nao entrou no build: ' + ma.name);
+            metaName = ra.n;
+            load.add(ma.guid);
+        }
+        const anims = metaName && project.asset(f.meta)
+            ? (project.asset(f.meta).meta.settings || {}).anims || {} : {};
+        const cur = f.current || Object.keys(out)[0] || Object.keys(anims)[0] || '';
+        return {
+            t: 'anim', clips: out, current: cur, autoplay: f.autoplay !== false,
+            meta: metaName,
+        };
     }
     if (c.type === 'text') {
         const out = {
@@ -164,6 +195,9 @@ function convertComponent(project, plan, c, at, load) {
     }
     if (c.type === 'collider') {
         return { t: 'col', shape: f.shape || 'rect', w: f.w || 0, h: f.h || 0, r: f.r || 0 };
+    }
+    if (c.type === 'hud') {
+        return { t: 'hud', a: f.anchor | 0, mx: f.mx || 0, my: f.my || 0 };
     }
     if (c.type === 'script') {
         const asset = project.asset(f.script);
@@ -187,10 +221,11 @@ function convertEntity(project, plan, e, ctx, opts) {
         rot: F.round(t.rot || 0),
         sx: t.sx !== undefined ? t.sx : 1,
         sy: t.sy !== undefined ? t.sy : 1,
-        ax: t.ax !== undefined ? t.ax : 0.5,
-        ay: t.ay !== undefined ? t.ay : 0.5,
         comps: [],
     };
+    // ax/ay so entram quando o autor fixou: ausente = pivot do E.spr.meta
+    if (t.ax !== undefined) out.ax = t.ax;
+    if (t.ay !== undefined) out.ay = t.ay;
     const at = 'entidade ' + e.fid;
     for (const c of e.components || []) {
         out.comps.push(convertComponent(project, plan, c, at, ctx.load));
@@ -359,7 +394,10 @@ function generateMain(project, opts) {
            ', native: ' + (p.canvas.native ? 'true' : 'false') +
            ', save: "' + F.slug(p.name, 6) + '."' +
            (p.deps && p.deps['celeros.game.fx'] ? ', particles: 96' : '') +
-           ',\n         bases: ' + JSON.stringify(bases) + ' });\n\n';
+           ',\n         bases: ' + JSON.stringify(bases) + ' });\n';
+    if (p.editor && p.editor.debug) src += 'E.debug = true;\n';
+    if (p.editor && p.editor.prof) src += 'if (E.prof) E.prof.on = true;\n';
+    src += '\n';
     src += RUNTIME;
     src += '\nstudioBoot(E, require("game.data"));\n';
     return src;

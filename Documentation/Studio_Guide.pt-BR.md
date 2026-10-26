@@ -101,7 +101,11 @@ seguras.
     "pivot": [0.5, 0.5],
     "key": "#000000",
     "prefix": "",
-    "tiles": [{ "name": "0", "solid": false }]
+    "tiles": [{ "name": "0", "solid": false }],
+    "anims": { "idle": [0, 1], "run": [2, 3, 4, 5] },
+    "fps": { "run": 12 },
+    "loop": { "idle": true, "run": true },
+    "hitbox": [8, 8, 48, 48]
   }
 }
 ```
@@ -109,6 +113,12 @@ seguras.
 Importers: `sprite` (imagem única), `sprite-sheet` (grade ou regiões
 explícitas), `tileset` (grade + metadados de tile), `audio`, `script`,
 `scene`, `prefab`. Cores são `#RRGGBB` na fonte; o build converte para RGB565.
+
+`pivot`, `anims`, `fps`, `loop` e `hitbox` são o contrato do `E.spr.meta`
+(spr 1.6): o build registra tudo no módulo de dados gerado, então
+`blit`/`stamp` herdam a âncora e `E.spr.animOf`/`box` funcionam nos scripts.
+`anims` usa índices da grade (ou nomes de região explícitos); `fps` é por
+clipe; `hitbox` é `[x,y,w,h]` dentro do quadro.
 
 ### Cena
 
@@ -130,7 +140,7 @@ explícitas), `tileset` (grade + metadados de tile), `audio`, `script`,
       "name": "Heroi",
       "active": true,
       "z": 5,
-      "transform": { "x": 80, "y": 120, "rot": 0, "sx": 1, "sy": 1, "ax": 0.5, "ay": 1 },
+      "transform": { "x": 80, "y": 120, "rot": 0, "sx": 1, "sy": 1 },
       "components": [
         { "id": "c_spr", "type": "sprite", "fields": { "sprite": "GUID#heroi0", "key": "#000000" } },
         { "id": "c_scr", "type": "script", "fields": { "script": "GUID", "fields": { "speed": 60 } } }
@@ -150,7 +160,9 @@ explícitas), `tileset` (grade + metadados de tile), `audio`, `script`,
 }
 ```
 
-- Toda entidade tem `transform` implícito; `z` é a ordem de desenho.
+- Toda entidade tem `transform` implícito; `z` é a ordem de desenho. `ax`/`ay`
+  são opcionais: ausentes, usam o pivot do `.meta` do sprite (spr 1.6); um
+  valor explícito sobrescreve.
 - `fid` é o id estável da entidade dentro da cena/prefab.
 - Refs de sprite são `"<guid do asset>#<região>"` (assets de imagem única podem
   omitir `#região` quando o importer é `single`).
@@ -204,11 +216,15 @@ Aninhamento é achatado recursivamente no build (limite 4 níveis).
 | Tipo | Campos |
 |------|--------|
 | `sprite` | `sprite` (ref), `key` (cor-chave) |
-| `anim` | `clips` (`{nome:{frames:[refs],fps,loop}}`), `current`, `autoplay` |
+| `anim` | `meta` (asset de atlas para `E.spr.animOf`), `clips` (`{nome:{frames:[refs],fps,loop}}`), `current`, `autoplay` |
 | `text` | `text`, `color`, `px` ou `ts` (`tiny..huge`), `align`, `valign`, `shadow` |
 | `shape` | `shape` (`rect`, `circle`, `line`), `w`, `h`, `r`, `x2`, `y2`, `color`, `fill` |
 | `collider` | `shape`, `w`, `h`, `r` (gizmo do editor + `entity.col` para scripts) |
 | `script` | `script` (ref de script), `fields` (JSON entregue ao script) |
+| `hud` | `anchor` (0..8, teclado numérico), `mx`, `my` — posiciona sprite/texto/forma com `E.anchor` (core 1.5), ciente da margem segura |
+
+Com `meta`, o runtime pede `E.spr.animOf(meta, current)` do clipe declarado no
+`.meta` do atlas; `clips` explícitos continuam como fallback.
 
 `transform` é implícito e aparece no inspetor. A fonte única de campos, tipos,
 defaults e formulários da GUI é `tools/studio/schema/components.json`.
@@ -233,9 +249,11 @@ exports.draw = function (ctx) { /* opcional, depois dos componentes nativos */ }
 exports.destroy = function (ctx) { /* opcional */ };
 ```
 
-`ctx.entity` expõe `x, y, rot, sx, sy, ax, ay, z, active, fields` e
-`setClip(nome)` para entidades animadas. O script passa pelo `app_lint`
-(apenas ES5) durante o build.
+`ctx.entity` expõe `x, y, rot, sx, sy, ax, ay, z, active, fields`,
+`setClip(nome)` para entidades animadas e `box(scale, out)` — a hitbox do atlas
+via `E.spr.box`, em coordenadas de mundo. `ctx.E` é o objeto da engine, então
+os scripts podem usar `E.spr.animOf`, `E.prof`, `E.anchor` etc. O script passa
+pelo `app_lint` (apenas ES5) durante o build.
 
 ## Assets e limites
 
@@ -283,6 +301,19 @@ O runtime (`tools/studio/templates/runtime.js`, ES5) é **embutido** no
 saída, usa `E.dirty` com um painter que repinta as células de tilemap, desenha
 tilemaps por camada, entidades por `z`, roda os scripts e segue a câmera da
 cena.
+
+Ele usa a linha atual da engine:
+
+- sheets são registrados com **`E.spr.meta`** (grade, prefixo, âncora, anims,
+  fps, loop, hitbox); imagens únicas usam `E.spr.load` + `E.spr.meta`;
+- componentes `anim` com `meta` usam **`E.spr.animOf`**; scripts ganham
+  **`entity.box()`** via `E.spr.box`;
+- componentes `hud` usam **`E.anchor`** (`E.ax/ay`, `E.inset`), então entidades
+  de HUD ficam nos 9 pontos sem conta de câmera;
+- `editor.debug` liga `E.debug` e `editor.prof` liga `E.prof.on` (o overlay
+  passa a mostrar os tempos `u`/`d`); o pool de sprites é contado pelo
+  **`E.slots`**;
+- música de cena começa com `System.playWav` na entrada.
 
 Builds são determinísticos: assets/cenas ordenados, sem timestamp no pacote,
 nomes gerados estáveis. `.studio/report.json` guarda tamanhos e avisos.
@@ -376,7 +407,13 @@ de testes prova que produzem arquivos equivalentes.
   Campos JSON são validados ao sair.
 - **Assets**: arraste arquivos para o painel (ou use Importar), thumbnails,
   duplo clique numa cena abre, num script edita. As configurações do importer
-  (fatiamento/pivot/chave) ficam no inspetor.
+  (fatiamento, pivot, cor-chave, `anims`/`fps`/`loop`, hitbox) ficam no
+  inspetor; o preview desenha a hitbox e a âncora do sprite.
+- **Pincel de tilemap**: selecione um tilemap, escolha um tile na paleta (ou a
+  borracha) e clique/arraste no viewport; botão direito apaga. A paleta grava
+  `data`; o checkbox "solido" também grava `solids`; o traço vira um único
+  `tilemap.set` no pointer-up. Mudar cols/rows redimensiona preservando o
+  canto superior esquerdo.
 - **Play**: gera o pacote e abre o emulador ao vivo num iframe
   (pause/passo/reiniciar/gravar/screenshot são os controles do próprio
   emulador).
@@ -433,9 +470,13 @@ OTA atualiza só o firmware; o pacote do app continua indo pela loja ou pelo
   tilemap ou música de cena. Um asset usado só dentro de um script precisa
   também aparecer num componente (mesmo inativo) para o build empacotá-lo.
 - Aninhamento de prefab é achatado no build; a hierarquia do editor é
-  organizacional (transforms absolutos, sem herança em runtime).
-- A GUI desenha cenas, mas o pincel de tilemap, o fatiador de atlas e a
-  timeline do animator são fase 6; até lá use ops `tilemap.paint`/`asset.set`.
+  organizacional (transforms absolutos, sem herança em runtime). O módulo
+  `celeros.game.scene` da engine fica disponível para scripts quando o projeto
+  o declara, mas o runtime gerado do Studio não o exige (prefabs são
+  achatados, o comportamento é do runner do Studio).
+- O pincel de tilemap está na GUI; um fatiador visual de atlas (arrastar
+  regiões), uma timeline de animação e uma view dedicada de edição de prefab
+  ainda são fase 6 (até lá use lotes de `asset.set`/`component.set`/ops).
 - `music` de uma cena começa com `System.playWav` na entrada (uma vez); a v1
   não tem mixer/loop de runtime. `loop` e `gain` do importer de áudio ficam
   gravados no `.meta` para ferramentas, mas ainda não são aplicados.
@@ -449,7 +490,8 @@ node test/studio/run.js
 ```
 
 Cobre round-trip de JSON canônico, unicidade de GUIDs, import/grade de assets,
-lotes atômicos/dry-run/undo/redo, builds determinísticos, o app gerado no
-harness do host (frames diferentes quando um script move uma entidade),
-achatamento de prefab e equivalência CLI x HTTP. O CI roda antes da matriz de
-firmware.
+os metadados do spr 1.6 (`anims`/fps/loop/hitbox), `tilemap.set`/resize (commit
+do pincel), lotes atômicos/dry-run/undo/redo, builds determinísticos, o app
+gerado no harness do host (`E.spr.meta`/`animOf`/`box`, pixels do HUD ancorado,
+frames diferentes quando um script move uma entidade), achatamento de prefab e
+equivalência CLI x HTTP. O CI roda antes da matriz de firmware.

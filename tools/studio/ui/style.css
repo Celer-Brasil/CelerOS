@@ -108,6 +108,11 @@ input[type=color] { padding: 2px; height: 26px; cursor: pointer; }
 .rowbtns { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
 .asset-thumb { width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated;
                background: #0a0e16; border: 1px solid var(--line); border-radius: 3px; }
+.tilepal { display: flex; flex-wrap: wrap; gap: 3px; margin: 5px 0 8px; }
+.tilepal .tile { width: 28px; height: 28px; background-color: #0a0e16; border: 1px solid var(--line2);
+                 border-radius: 4px; cursor: pointer; image-rendering: pixelated; }
+.tilepal .tile:hover { border-color: #5a7099; }
+.tilepal .tile.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .badge { font-size: 9.5px; color: #9fb0cc; background: #1b2740; border: 1px solid var(--line2);
          border-radius: 4px; padding: 0 4px; }
 .filebtn { cursor: pointer; }

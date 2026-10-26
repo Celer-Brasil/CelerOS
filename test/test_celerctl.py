@@ -1375,17 +1375,22 @@ class TestAppsDeps(unittest.TestCase):
         # --deps-local: tools/sdk/engine entra no indice com a versao do modulo
         # (forma objeto `version: 'x'` OU atribuicao `E.version = 'x'` do shim)
         loc = C._local_sdk_deps()
-        eng = (Path(C.__file__).resolve().parent / "sdk" / "engine" / "celeros.engine.js").read_text()
+        eng_dir = Path(C.__file__).resolve().parent / "sdk" / "engine"
+        eng = (eng_dir / "celeros.engine.js").read_text()
         ver = re.search(r"version\s*[:=]\s*'([0-9.]+)'", eng).group(1)
         self.assertIn(ver, loc["celeros.engine"])
         self.assertTrue(loc["celeros.engine"][ver]["_local"].endswith("celeros.engine.js"))
         # familia CelerGame: as arestas do index.json viajam no indice local
-        # (o resolve do install instala as transitivas junto)
-        self.assertEqual(loc["celeros.engine"][ver]["deps"].get("celeros.game"), "^1.0.0")
+        # (o resolve do install instala as transitivas junto). O esperado vem
+        # do PROPRIO index.json: range fixo aqui ja driftou uma vez (engine
+        # passou a exigir ^1.6.0 e o teste ficou no ^1.0.0).
+        edges = json.loads((eng_dir / "index.json").read_text())
+        self.assertEqual(loc["celeros.engine"][ver]["deps"].get("celeros.game"),
+                         edges["celeros.engine"]["deps"]["celeros.game"])
         fxv = re.search(r"version\s*[:=]\s*'([0-9.]+)'",
-                        (Path(C.__file__).resolve().parent / "sdk" / "engine" /
-                         "celeros.game.fx.js").read_text()).group(1)
-        self.assertEqual(loc["celeros.game.fx"][fxv]["deps"], {"celeros.game": "^1.0.0"})
+                        (eng_dir / "celeros.game.fx.js").read_text()).group(1)
+        self.assertEqual(loc["celeros.game.fx"][fxv]["deps"],
+                         {"celeros.game": edges["celeros.game.fx"]["deps"]["celeros.game"]})
         self.assertIn("celeros.game", loc)
         # local mais novo vence o hub na mesma resolucao; mais velho nao
         # (indice com a familia INTEIRA do SDK local: o resolve segue as

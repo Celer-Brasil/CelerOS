@@ -164,10 +164,18 @@ de 30 min com Loja baixando + jogo. Se o painel RGB perder estabilidade,
 Só começa com "go" depois do bench da Fase 1. Um commit por item (ou por área,
 quando o item é uma migração mecânica).
 
-1. **`Utils/Mem.h`** — `mem::alloc(size, required, desired, tag)` header-only
-   (precedente `TaskCaps.h`), fallback required→default e contadores por tag.
-   Migrar os 89 usos em 4 commits: Runtime/JS, Display, Kernel, Connectivity.
-   Validação: builds + bench de OOM + contadores no `celerctl stats`.
+**Status (2026-10-25):** feitos os itens 1 (Mem.h), 4 (boards.json) e 6 (RAM
+baixa); pendentes 2 (FlashIo), 3 (Settings), 5 (capabilities), 7 (start/stop) e
+8 (auditoria de timers). O bench da Fase 1 segue aberto e é o gate do XIP/IRAM,
+não destes itens.
+
+1. **`Utils/Mem.h`** — feito: `mem::alloc(size, desired, required = Any)`
+   header-only (precedente `TaskCaps.h`); `Psram` prefere PSRAM e cai para 8-bit,
+   `required` é o piso, OOM devolve `nullptr`. Migrados os 7 pares claros em
+   `JsPack`, `JsModules`, `JsPhysics`, `JsRigid`, `CelerKernel` (só o caminho
+   PSRAM→8-bit), `Icon` e `OtaManager`. O caminho `PSRAM→IRAM_8BIT→8BIT` do
+   fonte do `CelerKernel` **não** foi tocado (a IRAM-as-heap do CYD é
+   deliberada). Sem contadores nesta rodada.
 2. **`FileSystem/FlashIo`** — worker único com pilha interna, fila, staging em
    PSRAM e `screenSafeWindow()` por `ScreenPower::state()` (0 off/1 AOD).
    Escrita ≤4 KB continua síncrona; acima disso delega e espera janela com
@@ -176,15 +184,21 @@ quando o item é uma migração mecânica).
 3. **Settings tipado** — tabela `{key, tipo, default, faixa}`, `setDebounced`
    (2 s), `settings_ver` + migração; migrar `CelerSettings::` por área; teste
    host de validação/migração.
-4. **`boards/boards.json` + `tools/gen_boards.py`** — fonte única que gera
-   matriz do CI, `BOARDS` do `size_report`, casos do `flash_data.sh` (inclui
-   `cyd-vspi`), validação do `CELEROS_BOARD`/Kconfig e canais de OTA; teste host
-   no CI. `sdkconfig.defaults` continua manual.
+4. **`boards/boards.json` + `tools/gen_boards.py`** — feito: fonte única
+   validada (`--check`) contra defaults/`Board.cpp`/CSV/canal de OTA, matrix do
+   CI, `flash_data.sh` e `CELEROS_BOARD` do CMake (não do Kconfig — o Kconfig
+   guarda as flags de feature). `size_report.BOARDS` vem do manifest; o
+   `cyd-vspi` entrou no `flash_data.sh`. YAML/shell seguem estáticos: a
+   validação é o gate, não geração.
 5. **Capabilities no `BoardProfile`** — `fullFrame`, `preferExternal`,
    `slowRefresh`, `swapXY`, `mirror`, `mono`; remover branches de placa de
    `Kui`/`Icon`/`FrameSprite`/`ScreenPower`; teste host de geometria.
-6. **Aviso de RAM interna baixa** — serviço ALWAYS com limiares 10.000 B /
-   2.000 B, indicador no topbar e `celerctl stats`.
+6. **Aviso de RAM interna baixa** — feito: `MemWatch::classify` puro (10 KB
+   livres / 2 KB maior bloco, re-arme em 14 KB), serviço ALWAYS 1 Hz e
+   `heap.low` no KL_STATS (o `celerctl stats/top` mostra "RAM INTERNA BAIXA").
+   **Sem toast**: `Navigator::toast` recebe `std::string` e pode abortar
+   justamente sob RAM baixa; o aviso fica no log + stats. Indicador no topbar
+   fica para a rodada de capabilities.
 7. **Contrato start/stop nos serviços** — hooks opcionais em `struct Service` e
    `startAll/stopAll` no boot/sleep; migrar web, malha e PhoneLink primeiro.
 8. **Auditoria de timers nativos** — mapear callbacks `esp_timer` (áudio, mic,

@@ -1051,6 +1051,7 @@ function makeEnv() {
     // handoff de musica — espelho do firmware (dedup/tamanhos ficam la).
     var packRx = [];
     var resList = [], resHandles = [], resExposed = {}, resWrites = [];
+    var resRules = [];   // reflexos nativos (API 47): regra em memoria no host
     var packCaps = { speaker: true, mic: false, display: true, motors: false,
                  leds: false, hub: false };
     // API 40: matilha privada e convite (estado so no host)
@@ -1140,6 +1141,25 @@ function makeEnv() {
     },
     sessions: function(name) { return resExposed.hasOwnProperty(name) ? resExposed[name] : -1; },
     pollWrite: function() { return resWrites.length ? resWrites.shift() : null; },
+    // reflexos nativos (API 47): no host a regra fica em memoria; o id
+    // devolvido e' 1.. para o app poder remover (o firmware usa o NVS)
+    ruleAdd: function(regra) {
+        if (!regra || typeof regra !== 'object') return -1;
+        var id = resRules.length ? resRules[resRules.length - 1].id + 1 : 1;
+        resRules.push({ id: id, regra: regra });
+        return id;
+    },
+    ruleDel: function(id) {
+        for (var i = 0; i < resRules.length; i++) {
+            if (resRules[i].id === id) { resRules.splice(i, 1); return true; }
+        }
+        return false;
+    },
+    ruleList: function() {
+        var out = [];
+        for (var i = 0; i < resRules.length; i++) out.push(resRules[i].regra);
+        return out;
+    },
     // audio de outro no (R3): sessoes sobre o mic/speaker do vizinho; no host
     // o audio e simulado (a gravacao devolve um WAV mudo do tamanho pedido)
     listen: function(to) { return env.Pack.open(to, 'mic'); },

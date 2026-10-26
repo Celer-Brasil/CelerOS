@@ -656,17 +656,24 @@ Time configuration (persisted by TimeManager). The setters **require `"system"`*
 
 **One style at a time:** the async task stack plus a blocking `Net.get` running in the same app can exhaust internal RAM on tight boards (the request then fails with a connect error). Use the async API *or* the blocking one within a single app. `pollGet` returns `null` while running, then `{done:true, ok, status, body, error}` (body capped at 32 KB, like the blocking calls). `cancelGet` abandons a request (the slot frees itself when the task times out; tasks never get killed mid-TLS). Two concurrent requests max.
 
-### 12.4 WiFi (Net)
+### 12.4 WiFi (`Net.wifiScan()` / `Net.wifiConnect(ssid, pass)` / `Net.wifiDisconnect()`)
 
 - `Net.wifiScan()` → array `[{ssid, rssi, secure}]` (blocking, ~2s).
 - `Net.wifiConnect(ssid, password)` → Boolean (blocking, up to 15s; saves credentials).
 - `Net.wifiDisconnect()` — disconnects STA, keeps saved networks.
 
-### 12.5 File copy (FS)
+### 12.5 File copy (`FS.copyFile(from, to)` / `FS.copyDirectory(from, to)` / `FS.removeDirectory(path)`)
 
 - `FS.copyFile(src, dst)` → Boolean — binary safe.
 - `FS.copyDirectory(srcDir, dstDir)` → Boolean — recursive copy.
 - `FS.removeDirectory(path)` → Boolean — **recursive** delete (unlike `FS.rmdir`, which requires an empty dir).
+
+#### `FS.appData()` -> String
+
+Absolute path of the app's private folder (`/local/data/<packageName>/`, with
+the trailing slash), created on first call. Returns `""` when app.json has no
+`packageName`. It is the same folder the `install.sh` and the package Storage
+use.
 
 ### 12.6 App package (app.json)
 
@@ -1052,7 +1059,8 @@ The two examples also work as a pair with the nRF Connect app on a phone
 
 ## 16. API Level 12 — Timers, Storage, multi-sprites and binary FS
 
-### 16.1 Timers (`setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`)
+### 16.1 Timers
+
 
 Browser-style globals. They fire **where the app yields** — the start of
 `System.delay`, `System.getTouch`, `System.keypadPoll` and the blocking
@@ -1077,7 +1085,21 @@ setTimeout(function () {
   **once** on the next yield (catch-up, no burst).
 - Timers die with the app — nothing crosses apps.
 
-### 16.2 `Storage` — private per-app persistence
+#### `setTimeout(fn, ms)` / `global.setTimeout(fn, ms)` -> Number
+Runs `fn` once, `ms` milliseconds later (10 ms floor). Returns the id (`0` =
+no free slot; at most 8 live timers).
+
+#### `setInterval(fn, ms)` / `global.setInterval(fn, ms)` -> Number
+Repeats `fn` every `ms` until `clearInterval`. A late interval fires once on
+the next yield (no burst).
+
+#### `clearTimeout(id)` / `global.clearTimeout(id)`
+Cancels a pending `setTimeout`.
+
+#### `clearInterval(id)` / `global.clearInterval(id)`
+Cancels a `setInterval`.
+
+### 16.2 Storage (`Storage.get(key[, def])` / `Storage.set(key, value)` / `Storage.remove(key)` / `Storage.clear()` / `Storage.clearFor(pkg)`) — private per-app persistence
 
 CelerOS's localStorage: key-value in NVS with a **namespace of its own per
 `packageName`** (`System.setting` is global and apps collided). No
@@ -1104,7 +1126,7 @@ Storage.clear();                       // wipes EVERYTHING of this app
   `"system"` capability (App Store 2.1.3+ uses it on uninstall; `clear()`
   only wipes the CALLING app's own Storage).
 
-### 16.3 Multi-sprites (`System.useSprite`)
+### 16.3 Multi-sprites (`System.useSprite(id)`)
 
 `System.createSprite(w, h)` now returns an **id** `1..8` (`0` = failed) and
 the new sprite becomes the target of subsequent operations (old apps that
@@ -1128,7 +1150,7 @@ Up to **8 sprites with PSRAM, 1 without** (API 29 doubled the pool;
 `System.spriteSlots()` reports the board's limit — the silent 8-bit fallback
 for huge sprites still applies).
 
-### 16.4 Binary FS (`FS.readFile` / `FS.writeFile`)
+### 16.4 Binary FS (`FS.readFile(path[, max])` / `FS.writeFile(path, data)`)
 
 Byte-level read and write — each file byte becomes one character (0–255) of
 the string. `readTextFile` truncated at the first `\0`; these do not.
@@ -1180,7 +1202,7 @@ System.deepSleep(0, 4);           // pin 4 only (0 ms = error)
 System.deepSleep(600000, 4);      // whichever comes first
 ```
 
-### 17.3 Daily alarm — `System.setAlarm(h, m[, msg])` / `clearAlarm()` / `getAlarm()`
+### 17.3 Daily alarm — `System.setAlarm(h, m[, msg])` / `System.clearAlarm()` / `System.getAlarm()`
 
 Fires at the **next** occurrence of `h:m` (today if it has not passed yet,
 otherwise tomorrow) with an **ALARME: msg** toast, then disarms. In RAM
@@ -1228,7 +1250,7 @@ files require `"system"`).
 System.playWav("/sd/alert.wav");
 ```
 
-### 18.2 `System.notify(title[, msg])` + notification center
+### 18.2 `System.notify(title[, msg])` + notification center (`System.notifications()` / `System.notificationsClear()`)
 
 Toast **now** + history entry in `/local/notifications.txt` (cap 20,
 protected by the jail — apps only write through this call). **Settings →
@@ -1837,7 +1859,7 @@ require)` and returns `module.exports`. Modules may require modules (same
 folder); cycles receive the partial `exports` (CommonJS behavior). No
 permission needed: it is the app's own code.
 
-#### `require(name)` (API 23)
+#### `require(name)` / `global.require(name)` (API 23)
 - **Parameters:** module `name`, `[A-Za-z0-9_.-]` (optional `.js` suffix, no path) — resolves to `<app folder>/name.js`; since API 30, if the file is not in the folder and the app's `deps.json` references the name, it falls back to the dependency cache at `/local/modules` (section 35).
 - **Returns:** the module's `module.exports` (`{}` when it exports nothing).
 - **Errors:** module not found, invalid name, syntax/eval error (propagates as a catchable exception), max nesting depth (8).
@@ -1891,6 +1913,12 @@ of LittleFS per second of speech (24 kHz): 300 chars of text ≈ 20 s ≈
   - `played` — `true` when it played to the end; `false` with `ok` true means `play:false` or cut by `AI.cancel()` (a speaker busy at the first byte falls back to playing the finished file);
   - `error`/`detail` — transport error and the API's own message (invalid voice, balance...).
 - `AI.cancel()` cuts the speech mid-flight (sound stops at the next chunk).
+
+#### `AI.cancel()` -> Boolean (API 18)
+
+Forgets the in-flight AI request (an ongoing speech is stopped too). `true` =
+there was something to drop; `false` = nothing pending. The slot is free for
+the next call.
 
 #### `AI.warm([provider])` (API 24)
 - **Parameters:** `provider` (String, optional; `"deepseek"` default or `"openrouter"`).
@@ -3080,6 +3108,21 @@ From the shell/celerctl: `svc reflex ls`, `svc reflex add lum lt 20 2 local
 rele1 on`, `svc reflex add lum gt 35 0 local rele1 off`, `svc reflex notify
 bat lt 15 1 Battery low`, `svc reflex del 1` (`res rule ...` on celerctl). The
 `adc` sensor and remote sensors are not evaluated by a rule in this version.
+
+#### `Pack.onEvent(h)` -> Object|null
+Pending threshold event from the session: `{v, dir:"gt"|"lt", at:ms}`. Queue of
+1 (the newest); the continuous sample stays in `read`.
+
+#### `Pack.ruleAdd(rule)` -> Number
+Creates a rule in NVS (`id` or `-1`). `rule`: `{sensor, op:"gt"|"lt", valor,
+h, alvo, no, on}` for an actuator or `{sensor, op, valor, h, notificar}` for a
+notification. Permission `"system"`.
+
+#### `Pack.ruleDel(id)` -> Boolean
+Removes the rule by id.
+
+#### `Pack.ruleList()` -> Array
+Persisted rules: `[{id, sensor, op, valor, h, alvo, no?, on, notificar?}]`.
 
 ### ACL: who may open each resource
 

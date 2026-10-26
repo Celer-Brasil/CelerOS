@@ -920,19 +920,25 @@ fuso vazio, maior que 48 caracteres ou com `|`/caracteres de controle;
 
 **Um estilo por vez:** a stack da task assíncrona somada a um `Net.get` bloqueante no mesmo app pode estourar a RAM interna em boards no limite (a requisição então falha com erro de conexão). Use a API assíncrona *ou* a bloqueante dentro de um mesmo app. `pollGet` devolve `null` enquanto roda e depois `{done:true, ok, status, body, error}` (corpo limitado a 32 KB, igual às chamadas bloqueantes). `cancelGet` abandona a requisição (o slot se libera quando a task estoura o timeout; tasks nunca são mortas no meio do TLS). Máximo de 2 requisições concorrentes.
 
-### 12.4 WiFi (Net)
+### 12.4 WiFi (`Net.wifiScan()` / `Net.wifiConnect(ssid, senha)` / `Net.wifiDisconnect()`)
 
 - `Net.wifiScan()` → array `[{ssid, rssi, secure}]` (bloqueante, ~2s).
 - `Net.wifiConnect(ssid, password)` → Boolean (bloqueante, até 15s; salva as
   credenciais).
 - `Net.wifiDisconnect()` — desconecta o STA, mantém redes salvas.
 
-### 12.5 Cópia de arquivos (FS)
+### 12.5 Cópia de arquivos (`FS.copyFile(de, para)` / `FS.copyDirectory(de, para)` / `FS.removeDirectory(caminho)`)
 
 - `FS.copyFile(src, dst)` → Boolean — binário seguro.
 - `FS.copyDirectory(srcDir, dstDir)` → Boolean — cópia recursiva.
 - `FS.removeDirectory(path)` → Boolean — exclusão **recursiva** (diferente
   de `FS.rmdir`, que exige diretório vazio).
+
+#### `FS.appData()` -> String
+
+Caminho absoluto da pasta privada do app (`/local/data/<packageName>/`, com a
+barra final), criada na primeira chamada. Sem `packageName` no app.json
+devolve `""`. E' a mesma pasta que o `install.sh` e o Storage do pacote usam.
 
 ### 12.6 Pacote de app (app.json)
 
@@ -1344,7 +1350,8 @@ Os dois exemplos também funcionam em par com o app nRF Connect no celular
 
 ## 16. Nível de API 12 — Timers, Storage, sprites múltiplos e FS binário
 
-### 16.1 Timers (`setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`)
+### 16.1 Timers
+
 
 Globais no padrão do navegador. Disparam **nos pontos onde o app cede** — o
 início de `System.delay`, `System.getTouch`, `System.keypadPoll` e das
@@ -1371,7 +1378,21 @@ setTimeout(function () {
   **uma vez** na cedida seguinte (catch-up sem rajada).
 - Os timers morrem com o app — nada atravessa apps.
 
-### 16.2 `Storage` — persistência privada do app
+#### `setTimeout(fn, ms)` / `global.setTimeout(fn, ms)` -> Number
+Agenda `fn` uma vez, `ms` milissegundos depois (piso de 10 ms). Devolve o id
+(`0` = sem vaga; maximo de 8 timers vivos).
+
+#### `setInterval(fn, ms)` / `global.setInterval(fn, ms)` -> Number
+Repete `fn` a cada `ms` ate `clearInterval`. Intervalo atrasado dispara uma
+vez na cedida seguinte (sem rajada).
+
+#### `clearTimeout(id)` / `global.clearTimeout(id)`
+Cancela um `setTimeout` pendente.
+
+#### `clearInterval(id)` / `global.clearInterval(id)`
+Cancela um `setInterval`.
+
+### 16.2 Storage (`Storage.get(chave[, padrao])` / `Storage.set(chave, valor)` / `Storage.remove(chave)` / `Storage.clear()` / `Storage.clearFor(pacote)`) — persistência privada do app
 
 O "localStorage" do CelerOS: chave-valor em NVS com **namespace próprio por
 `packageName`** (o `System.setting` é global e apps colidiam entre si).
@@ -1401,7 +1422,7 @@ Storage.clear();                       // apaga TUDO do app
   permissao `"system"` (a App Store 2.1.3+ usa na desinstalacao; `clear()`
   so apaga o Storage do PROPRIO app).
 
-### 16.3 Sprites múltiplos (`System.useSprite`)
+### 16.3 Sprites múltiplos (`System.useSprite(id)`)
 
 `System.createSprite(w, h)` agora devolve um **id** `1..8` (`0` = falhou) e o
 sprite novo vira o alvo das próximas operações (apps antigos que ignoram o
@@ -1425,7 +1446,7 @@ Máximo de **8 sprites com PSRAM, 1 sem PSRAM** (API 29 dobrou o pool;
 `System.spriteSlots()` informa o limite da placa — o degradê silencioso para
 8-bit do sprite gigante continua valendo).
 
-### 16.4 FS binário (`FS.readFile` / `FS.writeFile`)
+### 16.4 FS binário (`FS.readFile(caminho[, max])` / `FS.writeFile(caminho, dados)`)
 
 Leitura e escrita de **bytes** — cada byte do arquivo vira um caractere
 (0–255) da string. O `readTextFile` truncava no primeiro `\0`; estes não.
@@ -1478,7 +1499,7 @@ System.deepSleep(0, 4);           // so o pino 4 (0 ms = erro)
 System.deepSleep(600000, 4);      // o que vier primeiro
 ```
 
-### 17.3 Alarme do dia — `System.setAlarm(h, m[, msg])` / `clearAlarm()` / `getAlarm()`
+### 17.3 Alarme do dia — `System.setAlarm(h, m[, msg])` / `System.clearAlarm()` / `System.getAlarm()`
 
 Dispara na **próxima** ocorrência de `h:m` (hoje se ainda não passou, senão
 amanhã) com um toast **ALARME: msg** e desarma. Em RAM (não sobrevive a
@@ -1530,7 +1551,7 @@ valem (arquivo do sistema exige `"system"`).
 System.playWav("/sd/aviso.wav");
 ```
 
-### 18.2 `System.notify(titulo[, msg])` + centro de notificações
+### 18.2 `System.notify(titulo[, msg])` + centro de notificações (`System.notifications()` / `System.notificationsClear()`)
 
 Toast **agora** + registro no histórico `/local/notifications.txt` (cap 20
 entradas, protegido pelo jail — apps só escrevem nele por esta chamada). O
@@ -2145,7 +2166,7 @@ devolve `module.exports`. Módulos podem requerer módulos (mesma pasta);
 ciclos recebem `exports` parcial (padrão CommonJS). Sem permissão: é código
 do próprio app.
 
-#### `require(nome)` (API 23)
+#### `require(nome)` / `global.require(nome)` (API 23)
 - **Parâmetros:** `nome` do módulo `[A-Za-z0-9_.-]` (sufixo `.js` opcional, sem caminho) — resolve para `<pasta do app>/nome.js`; desde a API 30, se o arquivo não existir na pasta e o `deps.json` do app referenciar o nome, cai para o cache de dependências em `/local/modules` (seção 35).
 - **Retorna:** o `module.exports` do módulo (`{}` se o módulo não exportar nada).
 - **Erros:** módulo não encontrado, nome inválido, erro de sintaxe/eval (propaga como exceção — capturável com `try/catch`), profundidade máxima de aninhamento (8).
@@ -2198,6 +2219,12 @@ chars de texto ≈ 20 s ≈ 960 KB — por isso o teto de 300 chars no `text`.
   - `played` — `true` quando tocou até o fim; `false` com `ok` true significa `play:false` ou corte pelo `AI.cancel()` (alto-falante ocupado no primeiro byte cai no playback do arquivo terminado);
   - `error`/`detail` — erro de transporte e a mensagem da própria API (voz inválida, saldo...).
 - `AI.cancel()` corta a fala no meio (o som para no próximo chunk).
+
+#### `AI.cancel()` -> Boolean (API 18)
+
+Esquece a requisicao de IA em curso (uma fala em andamento tambem e'
+interrompida). `true` = havia algo a descartar; `false` = nada pendente. O
+slot fica livre para a proxima chamada.
 
 #### `AI.warm([provider])` (API 24)
 - **Parâmetros:** `provider` (String, opcional; `"deepseek"` padrão ou `"openrouter"`).

@@ -12,6 +12,7 @@ require("celeros.app.data");      // cache do clima em arquivo + cidade no NVS
 require("celeros.app.form");      // seletor bloqueante + askNum validado
 require("celeros.app.list");      // linhas dos dias cacheadas por carimbo
 require("celeros.app.text");      // saneamento Latin-1 do que vem de fora
+require("celeros.app.style");     // UI kit 2.0: hero card + botoes
 
 A.init();
 var T = A.T;
@@ -278,23 +279,31 @@ function telaMain(c) {
     var cid = cidade();
     UI.text(cid ? A.text.fit(cid.n) : "?", 120, 12, { align: "center", color: T.textDim, id: 1 });
     if (!d) {
-        UI.card(LX, 44, LW, 120);
-        UI.text("Sem dados ainda", 120, 76, { role: "title", align: "center", color: T.textDim });
-        UI.text(msg || "Toque em Atualizar", 120, 112, { role: "caption", align: "center", color: T.textDim });
-        UI.cardEnd();
+        A.style.card(LX, 44, LW, 120, {
+            full: c.full, elev: 1, grad: true,
+            draw: function () {
+                UI.text("Sem dados ainda", 120, 76, { role: "title", align: "center", color: T.textDim });
+                UI.text(msg || "Toque em Atualizar", 120, 112, { role: "caption", align: "center", color: T.textDim });
+            }
+        });
     } else {
         // cartao principal: gradiente + temperatura grande (so no frame total)
-        if (c.full) System.fillGradient(LX, 40, LW, 124, T.accentD, T.card, 14);
-        UI.text(d.t + "°C", 120, 54, { role: "display", align: "center", color: d.t >= 30 ? T.warn : T.text });
-        UI.text(A.text.fit(d.txt), 120, 104, { role: "title", align: "center", color: T.accent });
-        if (d.hum >= 0) UI.text("umidade " + d.hum + "%", 120, 136, { role: "caption", align: "center", color: T.textDim });
+        A.style.card(LX, 40, LW, 124, {
+            full: c.full, elev: 1, grad: false, stroke: false, r: 14,
+            draw: function () {
+                if (c.full) System.fillGradient(LX, 40, LW, 124, T.accentD, T.card, 14);
+                UI.text(d.t + "°C", 120, 54, { role: "display", align: "center", color: d.t >= 30 ? T.warn : T.text });
+                UI.text(A.text.fit(d.txt), 120, 104, { role: "title", align: "center", color: T.accent });
+                if (d.hum >= 0) UI.text("umidade " + d.hum + "%", 120, 136, { role: "caption", align: "center", color: T.textDim });
+            }
+        });
         var rows = listaDias.rows();
         if (rows.length) UI.list("dias", LX, 172, LW, 3 * 30 + 4, rows, { rowH: 30 });
     }
     var info = msg || (d ? (velho() ? "dados de " + d.date : "de hoje, " + d.hour + "h") : "");
     UI.text(info, 120, 268, { role: "caption", align: "center", color: msg === "Sem conexão" ? T.err : T.textDim, id: 2 });
-    if (UI.button("Atualizar", LX, 282, 132, 32)) busca();
-    if (UI.button("Cidade", LX + 140, 282, LW - 140, 32, { style: "ghost" })) {
+    if (A.style.button("Atualizar", LX, 282, 132, 32)) busca();
+    if (A.style.button("Cidade", LX + 140, 282, LW - 140, 32, { variant: "ghost" })) {
         if (escolheCidade()) {
             d = null;                    // cidade nova: cache antigo nao engana
             msg = "";

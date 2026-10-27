@@ -31,9 +31,24 @@ var CIANO = 0x07FF, CIANOD = 0x03EF, MAGENTA = 0xF81F, LARANJA = 0xFD20;
 var OURO = 0xFFE0, BRANCO = 0xFFFF, VERDE = 0x07E0, VERMELHO = 0xF800;
 var ESCURO = 0x0861, PAINEL = 0x10C3, TEXTO = 0xE71C, TEXTO2 = 0x9CF3;
 
-var HUD_H = 64;
-var PLAYER_Y = 384;
 var HIT_R = 14;
+
+// naves.png: grade 8x3 de 48 px (text2d generate/vfx/items). Par = normal,
+// impar = silhueta branca do golpe; nomes prontos (concatenar por quadro
+// pesa no Duktape)
+var N = [];
+for (var _n = 0; _n < 24; _n++) N.push('naves#n' + _n);
+var ENEMY_ART = { drone: 0, sentinel: 2, splitter: 4, mini: 6 };
+var A_BOOM = 8, A_ORB = 14, A_TRIPLE = 16, A_LIFE = 17;
+var BOSS_ART = ['chefe#c0', 'chefe#c1'];
+var OPT_ART = { key: 0xF81F };
+var OPT_BOOM2 = { key: 0xF81F, scale: 2 };
+var BG_BAKE = { scale: 2, ax: 0, ay: 0, key: null };
+var BOOM_T = 0.05;          // segundos por quadro da explosao (6 quadros)
+var DROP_NAME = { orb: '+25', triple: 'TIRO TRIPLO', life: '+1 VIDA' };
+var BOOM_CYAN = [0x07FF, 0xFFFF];
+var BOOM_GOLD = [0xFFE0, 0xFD20, 0xFFFF];
+var UI_THEME = { accent: '#22e4ff', accent2: '#7a4dff', onAccent: 0x0000, radius: 14 };
 
 function C(hex) {
     return ((hex >> 19) & 31) << 11 | ((hex >> 10) & 63) << 5 | ((hex >> 3) & 31);
@@ -90,16 +105,14 @@ exports.start = function (ctx) {
     s.msgT = 0;
     s.player = null;
     s.playerEnt = null;
-    s.btnPause = null;
-    s.btnSuper = null;
-    s.btnResume = null;
-    s.btnMenuPause = null;
-    s.btnRetry = null;
-    s.btnMenuEnd = null;
-    s.btnAgain = null;
-    s.btnTitle = null;
+    s.act = null;
+    s.grab = false;
 
     if (typeof __harness !== 'undefined') __harness.supernova = s;
+    if (E.ui) {
+        E.ui.preset('neon');
+        E.ui.theme(UI_THEME);
+    }
 
     if (s.screen === 'title') {
         if (E.audio) E.audio.music(SONG);
@@ -120,8 +133,10 @@ function startGame(s, ctx) {
     s.mode = d.mode || 'campaign';
     s.maxWave = d.maxWave || (s.mode === 'endless' ? 999 : 10);
     s.W = E.W; s.H = E.H; s.U = E.U;
-    s.HUD_H = Math.round(32 * E.U);
-    s.playH = s.H - s.HUD_H;
+    s.HUD_H = Math.round(22 * E.U);
+    s.top = 0;
+    s.bot = s.H - s.HUD_H;
+    s.playH = s.bot;
     s.player = { x: s.W / 2, y: s.H * 0.8, r: HIT_R, cool: 0, invuln: 1.2, vx: 0 };
     s.playerEnt = ctx.scene.find('Nave');
     if (s.playerEnt) {
@@ -135,11 +150,14 @@ function startGame(s, ctx) {
     s.ebullets = [];
     s.orbs = [];
     s.waveQueue = [];
-    s.stars = [];
-    for (var i = 0; i < 64; i++) {
-        s.stars.push({ x: Math.random() * s.W, y: s.HUD_H + Math.random() * s.playH,
-                       z: 1 + Math.floor(Math.random() * 3), v: 18 + Math.random() * 90 });
-    }
+    // campo de estrelas da engine: so as que mudaram de pixel pintam, e a
+    // area para antes do HUD (estrela nao suja a caixa memoizada)
+    s.stars = E.fx ? E.fx.stars(56, { h: s.bot, vy: 70, stride: 2,
+                                      colors: [0x8410, 0xCE79] }) : null;
+    s.booms = [];
+    s.t = 0;
+    s.art = !!(E.spr && E.spr.has && E.spr.has(N[0]));
+    setupBackground(s, E, ctx);
     s.wave = 0;
     s.waveActive = false;
     s.nextWaveT = 0.9;
@@ -171,27 +189,36 @@ exports.update = function (dt, ctx) {
     updateGame(s, E, ctx, dt);
 };
 
+// os widgets do kit de UI decidem no draw e deixam a acao em s.act; o
+// update do quadro seguinte a executa (troca de cena fora do draw)
+function takeAct(s) {
+    var a = s.act;
+    s.act = null;
+    return a;
+}
+
 function updateTitle(s, E, ctx) {
-    if (s.btnCamp && E.hit(s.btnCamp)) {
-        E.audio && E.audio.sfx('ok');
+    var a = takeAct(s);
+    if (a === 'camp' || a === 'endless') {
+        if (E.audio) E.audio.sfx('ok');
         E.data.score = 0;
-        E.data.mode = 'campaign';
-        ctx.go('Campanha');
-    } else if (s.btnEnd && E.hit(s.btnEnd)) {
-        E.audio && E.audio.sfx('ok');
-        E.data.score = 0;
-        E.data.mode = 'endless';
-        ctx.go('Infinito');
+        E.data.mode = a === 'camp' ? 'campaign' : 'endless';
+        ctx.go(a === 'camp' ? 'Campanha' : 'Infinito');
     }
 }
 
 function updateEnd(s, E, ctx) {
-    if (s.btnAgain && E.hit(s.btnAgain)) {
+    var a = takeAct(s);
+    if (a === 'again') {
         E.data.score = 0;
         ctx.go(s.mode === 'endless' ? 'Infinito' : 'Campanha');
-    } else if (s.btnTitle && E.hit(s.btnTitle)) {
+    } else if (a === 'title') {
         ctx.go('Titulo');
     }
+}
+
+function inRect(r, x, y) {
+    return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 }
 
 function updateGame(s, E, ctx, dt) {
@@ -215,15 +242,21 @@ function updateGame(s, E, ctx, dt) {
         }
         return;
     }
+    var act = takeAct(s);
     if (s.paused) {
-        if (s.btnResume && E.hit(s.btnResume)) s.paused = false;
-        else if (s.btnMenuPause && E.hit(s.btnMenuPause)) ctx.go('Titulo');
+        if (act === 'resume') { s.paused = false; E.redraw(); }
+        else if (act === 'menu') ctx.go('Titulo');
         return;
     }
-    if (s.btnPause && E.hit(s.btnPause)) { s.paused = true; return; }
-    if (s.btnSuper && s.charge >= 100 && E.hit(s.btnSuper)) {
-        fireSuper(s, E);
-        return;
+    // pausa/SUPER no press: o arrasto da nave nao espera o release
+    if (E.input.justDown) {
+        if (inRect(BTN_PAUSE, E.input.x, E.input.y)) { s.paused = true; s.grab = true; return; }
+        if (inRect(BTN_SUPER, E.input.x, E.input.y)) {
+            s.grab = true;
+            if (s.charge >= 100) fireSuper(s, E);
+            return;
+        }
+        s.grab = false;
     }
 
     if (s.msgT > 0) { s.msgT -= dt; if (s.msgT <= 0) s.msg = ''; }
@@ -235,7 +268,8 @@ function updateGame(s, E, ctx, dt) {
     if (s.superT > 0) s.superT -= dt;
 
     var p = s.player;
-    if (E.input.down) p.x = clamp(p.x + E.input.dx, 30, s.W - 30);
+    if (E.input.down && !s.grab) p.x = clamp(p.x + E.input.dx, 30, s.W - 30);
+    if (!E.input.down) s.grab = false;
     p.y = s.H * 0.8;
     if (p.invuln > 0) {
         p.invuln -= dt;
@@ -250,7 +284,9 @@ function updateGame(s, E, ctx, dt) {
         firePlayer(s);
     }
 
-    updateStars(s, dt);
+    s.t += dt;
+    if (s.stars) s.stars.update(dt);
+    updateBooms(s, dt);
     updateWave(s, E, dt);
     updateEnemies(s, E, dt);
     updateBullets(s, E, dt);
@@ -261,17 +297,53 @@ function updateGame(s, E, ctx, dt) {
     }
 }
 
-function updateStars(s, dt) {
-    var st = s.stars;
-    for (var i = 0; i < st.length; i++) {
-        var o = st[i];
-        o.y += o.v * dt;
-        if (o.y > s.H + 2) {
-            o.y = s.HUD_H - 2;
-            o.x = Math.random() * s.W;
-        }
+function updateBooms(s, dt) {
+    for (var i = s.booms.length - 1; i >= 0; i--) {
+        s.booms[i].t += dt;
+        if (s.booms[i].t >= BOOM_T * 6) s.booms.splice(i, 1);
     }
 }
+
+function addBoom(s, x, y, big) {
+    if (s.booms.length >= 12) s.booms.shift();
+    s.booms.push({ x: x, y: y, t: 0, big: !!big });
+}
+
+// fundo: a nebulosa de 240 px (limite de 128 KB por asset) e assada em 2x
+// num slot de tela na entrada; a camada suja restaura cada caixa com um
+// blitSprite (o Fundo antigo, 192 px em escala 2.5, era um afim de tela
+// cheia por quadro). O host nao pinta blit: la a entidade em escala 2 fica
+function setupBackground(s, E, ctx) {
+    s.bgEnt = ctx.scene.find('Fundo');
+    s.bg = 0;
+    if (typeof __harness !== 'undefined') return;
+    if (!E.spr || !E.spr.has || !E.spr.has('fundo') || !E.slots || !E.slots.create ||
+        typeof System === 'undefined' || typeof System.blitSprite !== 'function' ||
+        !E.dirty || !E.dirty.enable) return;
+    var slot = E.slots.create('supernova:fundo', s.W, s.H);
+    if (!slot) return;
+    E.dirty._mute++;
+    System.useSprite(slot);
+    E.spr.alvo = slot;
+    System.fillScreen(0);
+    E.spr.stamp('fundo', 0, 0, BG_BAKE);
+    E.spr.alvo = 0;
+    System.useSprite(0);
+    E.dirty._mute--;
+    s.bg = slot;
+    if (s.bgEnt) s.bgEnt.active = false;
+    E.dirty.enable(function (x, y, w, h) {
+        System.fillRect(x, y, w, h, 0);
+        System.blitSprite(slot, x, y, w, h);
+    });
+    E.redraw();
+}
+
+exports.destroy = function () {
+    var s = this, E = s.E;
+    if (s && s.bg && E && E.slots) E.slots.release(s.bg);
+    if (s) s.bg = 0;
+};
 
 // ------------------------------------------------------------- ondas ----
 
@@ -338,7 +410,7 @@ function updateWave(s, E, dt) {
 
 function spawnEnemy(s, E, type) {
     var W = s.W;
-    var e = { type: type, x: 40 + Math.random() * (W - 80), y: s.HUD_H + 24,
+    var e = { type: type, x: 40 + Math.random() * (W - 80), y: s.top - 24,
               hp: 1, maxhp: 1, r: 20, speed: 46, t: 0, cool: 1.2, seed: Math.random() * 9 };
     if (type === 'drone') { e.hp = 1; e.maxhp = 1; e.r = 20; e.speed = 46; }
     else if (type === 'sentinel') { e.hp = 3; e.maxhp = 3; e.r = 24; e.speed = 28; e.cool = 1.6; }
@@ -348,7 +420,7 @@ function spawnEnemy(s, E, type) {
 }
 
 function spawnBoss(s, E, n) {
-    var b = { type: 'boss', x: s.W / 2, y: s.HUD_H + 50, hp: 26 + 3 * n, maxhp: 26 + 3 * n,
+    var b = { type: 'boss', x: s.W / 2, y: s.top - 60, hp: 26 + 3 * n, maxhp: 26 + 3 * n,
               r: 46, speed: 34, t: 0, cool: 1.8, alt: 0, seed: 1.7, boss: true };
     s.boss = b;
     s.enemies.push(b);
@@ -396,11 +468,11 @@ function updateEnemies(s, E, dt) {
         e.cool -= dt;
         if (e.flash > 0) e.flash -= dt;
         if (e.boss) {
-            if (e.y < s.HUD_H + 90) e.y += 32 * dt;
+            if (e.y < s.top + 110) e.y += 40 * dt;
             e.x = s.W / 2 + Math.sin(e.t * 0.7 + e.seed) * (s.W * 0.22);
         } else {
             if (e.type === 'sentinel') {
-                if (e.y < s.HUD_H + 105) e.y += e.speed * dt;
+                if (e.y < s.top + 120) e.y += e.speed * dt;
                 else e.x += Math.sin(e.t * 1.4 + e.seed) * 22 * dt;
             } else if (e.type === 'mini') {
                 e.y += e.speed * dt;
@@ -409,7 +481,7 @@ function updateEnemies(s, E, dt) {
                 e.y += e.speed * dt;
                 e.x += Math.sin(e.t * 1.8 + e.seed) * 18 * dt;
             }
-            if (e.y > s.H + 40 || e.x < -50 || e.x > s.W + 50) {
+            if (e.y > s.bot + 30 || e.x < -50 || e.x > s.W + 50) {
                 s.enemies.splice(i, 1);
                 continue;
             }
@@ -417,8 +489,10 @@ function updateEnemies(s, E, dt) {
         // tiro inimigo
         if ((e.type === 'sentinel' || e.boss || e.type === 'splitter') && e.cool <= 0) {
             if (e.boss) bossShoot(s, E, e);
-            else if (e.type === 'sentinel') aimedFan(s, e.x, e.y, 3, 130);
-            else aimedShot(s, e.x, e.y, 120);
+            // rearma: sem isto o cool ficava <= 0 e o inimigo atirava todo
+            // quadro (um "laser" de tiros colados)
+            else if (e.type === 'sentinel') { aimedFan(s, e.x, e.y, 3, 130); e.cool = 1.8; }
+            else { aimedShot(s, e.x, e.y, 120); e.cool = 1.4; }
         }
         // corpo
         if (dist2(e.x, e.y, p.x, p.y) < (e.r + p.r) * (e.r + p.r)) {
@@ -484,13 +558,14 @@ function updateBullets(s, E, dt) {
     for (i = s.bullets.length - 1; i >= 0; i--) {
         var b = s.bullets[i];
         b.x += b.vx * dt; b.y += b.vy * dt;
-        if (b.y < s.HUD_H - 20) { s.bullets.splice(i, 1); continue; }
+        if (b.y < s.top - 20) { s.bullets.splice(i, 1); continue; }
         var hit = false;
         for (j = s.enemies.length - 1; j >= 0; j--) {
             var e = s.enemies[j];
             if (dist2(b.x, b.y, e.x, e.y) < (e.r + b.r) * (e.r + b.r)) {
                 e.hp -= b.dmg;
-                e.flash = 0.08;
+                // chefe sob fogo continuo: 1 quadro de silhueta, nao 50% branco
+                e.flash = e.boss ? 0.03 : 0.08;
                 if (e.hp <= 0) killEnemy(s, E, e, j, false);
                 hit = true;
                 break;
@@ -501,14 +576,16 @@ function updateBullets(s, E, dt) {
     for (i = s.ebullets.length - 1; i >= 0; i--) {
         var eb = s.ebullets[i];
         eb.x += eb.vx * dt; eb.y += eb.vy * dt;
-        if (eb.y < s.HUD_H - 20 || eb.y > s.H + 30 || eb.x < -30 || eb.x > s.W + 30) {
+        if (eb.y < s.top - 20 || eb.y > s.bot + 10 || eb.x < -30 || eb.x > s.W + 30) {
             s.ebullets.splice(i, 1);
             continue;
         }
         if (dist2(eb.x, eb.y, p.x, p.y) < (p.r + eb.r) * (p.r + eb.r)) {
             s.ebullets.splice(i, 1);
+            // hurtPlayer zera ebullets: seguir o laco lia indice morto
+            // (TypeError a cada tiro levado sem morrer)
             hurtPlayer(s, E);
-            if (s.over) return;
+            return;
         }
     }
 }
@@ -518,13 +595,16 @@ function updateOrbs(s, E, dt) {
     for (var i = s.orbs.length - 1; i >= 0; i--) {
         var o = s.orbs[i];
         o.y += 58 * dt;
-        if (o.y > s.H + 20) { s.orbs.splice(i, 1); continue; }
-        if (dist2(o.x, o.y, p.x, p.y) < 28 * 28) {
+        if (o.y > s.bot) { s.orbs.splice(i, 1); continue; }
+        if (dist2(o.x, o.y, p.x, p.y) < 30 * 30) {
             s.orbs.splice(i, 1);
-            s.charge = clamp(s.charge + 25, 0, 100);
+            var k = o.kind || 'orb';
+            if (k === 'triple') s.triple = 8;
+            else if (k === 'life') s.lives = Math.min(3, s.lives + 1);
+            else s.charge = clamp(s.charge + 25, 0, 100);
             s.score += 15;
             if (E.audio) E.audio.sfx('power', { gap: 60 });
-            if (E.fx) E.fx.popText(o.x, o.y, '+25', { color: CIANO, life: 0.6 });
+            if (E.fx) E.fx.popText(o.x, o.y, DROP_NAME[k], { color: k === 'life' ? VERMELHO : (k === 'triple' ? OURO : CIANO), life: 0.7 });
         }
     }
 }
@@ -539,8 +619,16 @@ function killEnemy(s, E, e, index, silent) {
     s.score += pts * s.mult;
     s.kills++;
     if (E.audio && !silent) E.audio.sfx(e.boss ? 'boom' : 'hit', { gap: 40 });
-    if (E.fx) E.fx.burst(e.x, e.y, { n: e.boss ? 30 : 12, color: e.boss ? OURO : CIANO,
-                                     speed: e.boss ? 220 : 120, life: e.boss ? 0.8 : 0.4 });
+    addBoom(s, e.x, e.y, e.boss);
+    if (E.fx) {
+        E.fx.burst(e.x, e.y, { n: e.boss ? 30 : 10, colors: e.boss ? BOOM_GOLD : BOOM_CYAN,
+                               speed: e.boss ? 220 : 120, life: e.boss ? 0.8 : 0.35,
+                               shape: 'spark' });
+        if (e.boss) {
+            E.fx.ring(e.x, e.y, { speed: 420, color: OURO });
+            E.fx.flash(OURO, 260, { full: true });
+        }
+    }
     if (e.type === 'splitter' && !e.boss) {
         for (var k = 0; k < 2; k++) {
             s.enemies.push({ type: 'mini', x: e.x + (k ? 12 : -12), y: e.y + 8,
@@ -550,11 +638,14 @@ function killEnemy(s, E, e, index, silent) {
     }
     if (e.boss) {
         s.triple = 10;
-        s.orbs.push({ x: e.x - 18, y: e.y, r: 12 });
-        s.orbs.push({ x: e.x + 18, y: e.y, r: 12 });
+        s.orbs.push({ x: e.x - 18, y: e.y, r: 12, kind: 'orb' });
+        s.orbs.push({ x: e.x + 18, y: e.y, r: 12, kind: 'orb' });
         if (s.mode === 'campaign' && s.wave >= s.maxWave) winGame(s, E);
-    } else if (Math.random() < 0.12) {
-        s.orbs.push({ x: e.x, y: e.y, r: 12 });
+    } else {
+        var roll = Math.random();
+        if (roll < 0.11) s.orbs.push({ x: e.x, y: e.y, r: 12, kind: 'orb' });
+        else if (roll < 0.135) s.orbs.push({ x: e.x, y: e.y, r: 12, kind: 'triple' });
+        else if (roll < 0.15 && s.lives < 3) s.orbs.push({ x: e.x, y: e.y, r: 12, kind: 'life' });
     }
 }
 
@@ -570,6 +661,7 @@ function hurtPlayer(s, E) {
     if (E.fx) {
         E.fx.flash(VERMELHO, 220, { full: true });
         E.fx.burst(s.player.x, s.player.y, { n: 20, color: LARANJA, speed: 180, life: 0.5 });
+        addBoom(s, s.player.x, s.player.y, false);
     }
     if (s.lives <= 0) {
         s.lives = 0;
@@ -605,142 +697,157 @@ exports.draw = function (ctx) {
     drawGame(s, E);
 };
 
+// ---------------------------------------------------------------- menus
+
+var LOGO_TXT = { px: 56, align: 'center', valign: 'middle', color: OURO,
+                 outline: C(0x2A0838), screen: true };
+var SUB_TXT = { px: 14, align: 'center', valign: 'middle', color: C(0xB8C4DC), screen: true };
+var BTN_CAMP = { variant: 'primary', ts: 'label' };
+var BTN_ENDL = { variant: 'secondary', icon: 'refresh' };
+var BTN_AGAIN = { variant: 'primary', icon: 'refresh' };
+var BTN_HOME = { variant: 'secondary', icon: 'home' };
+var BIG_SHIP = { key: 0xF81F, scale: 2 };
+
 function drawTitle(s, E) {
-    var W = s.W, H = s.H;
-    // a arte do titulo e uma entidade; esta faixa cobre a parte de baixo
-    E.gfx.rect(0, 236, W, H - 236, C(0x05060A), { screen: true });
-    E.gfx.text('SUPERNOVA', W / 2, 270, { px: 44, align: 'center', valign: 'middle',
-        color: OURO, shadow: 0x0000 });
-    E.gfx.text('campanha de 10 ondas  ·  chefe final', W / 2, 310,
-        { px: 14, align: 'center', color: TEXTO2 });
-    E.gfx.text('recorde  ' + s.best, W / 2, 334, { px: 14, align: 'center', color: CIANO });
-    s.btnCamp = E.gfx.button('CAMPANHA', W / 2 - 110, 366, 220, 46,
-        { primary: true, screen: true, px: 19 });
-    s.btnEnd = E.gfx.button('INFINITO', W / 2 - 90, 420, 180, 36,
-        { primary: false, screen: true, px: 15 });
+    var W = s.W;
+    // a arte do titulo (parallax text2d) e a entidade TituloArte
+    if (E.spr.has('nave')) E.spr.stamp('nave', W / 2, 150, BIG_SHIP);
+    E.gfx.text('SUPERNOVA', W / 2, 262, LOGO_TXT);
+    E.gfx.text('10 ondas  ·  chefe em 3 fases  ·  modo infinito', W / 2, 300, SUB_TXT);
+    var c = E.ui.card(40, 318, W - 80, 150);
+    if (E.ui.button('CAMPANHA', c.x, c.y, c.w - 110, 58, BTN_CAMP)) s.act = 'camp';
+    E.ui.badge('REC ' + s.best, c.x + c.w - 100, c.y + 11, { w: 100, color: OURO, textColor: 0x0000 });
+    if (E.ui.button('INFINITO', c.x, c.y + 70, c.w, 44, BTN_ENDL)) s.act = 'endless';
 }
 
 function drawEnd(s, E) {
-    var W = s.W, H = s.H;
-    E.gfx.rect(0, 0, W, H, C(0x05060A), { screen: true });
-    E.gfx.panel(40, 100, W - 80, 300, { bg: PAINEL, stroke: s.screen === 'win' ? OURO : VERMELHO, r: 12, screen: true });
-    E.gfx.text(s.screen === 'win' ? 'SETOR LIVRE' : 'NAVE PERDIDA',
-        W / 2, 145, { px: 34, align: 'center', color: s.screen === 'win' ? OURO : VERMELHO });
-    E.gfx.text('pontos  ' + s.score, W / 2, 195, { px: 22, align: 'center', color: BRANCO });
-    E.gfx.text('recorde  ' + s.best, W / 2, 226, { px: 15, align: 'center', color: TEXTO2 });
-    if (s.newBest) E.gfx.text('NOVO RECORDE!', W / 2, 250,
-        { px: 15, align: 'center', color: VERDE });
-    s.btnAgain = E.gfx.button('DE NOVO', W / 2 - 105, 290, 210, 44,
-        { primary: true, screen: true, px: 18 });
-    s.btnTitle = E.gfx.button('MENU', W / 2 - 75, 346, 150, 34,
-        { primary: false, screen: true, px: 14 });
+    var W = s.W, win = s.screen === 'win';
+    E.gfx.text(win ? 'SETOR LIVRE' : 'NAVE PERDIDA', W / 2, 70,
+               { px: 30, align: 'center', valign: 'middle', color: win ? OURO : VERMELHO,
+                 outline: 0x0000, screen: true });
+    if (E.spr.has('nave')) E.spr.stamp('nave', W / 2, 160, BIG_SHIP);
+    var c = E.ui.card(40, 230, W - 80, 230);
+    E.gfx.text('PONTOS', c.x, c.y, SUB_LEFT);
+    E.gfx.text('' + s.score, c.x, c.y + 20, SCORE_TXT);
+    E.gfx.text('recorde ' + s.best, c.x, c.y + 64, SUB_LEFT);
+    if (s.newBest) E.ui.badge('NOVO RECORDE!', c.x + c.w - 150, c.y + 24,
+                              { w: 150, color: VERDE, textColor: 0x0000 });
+    if (E.ui.button('DE NOVO', c.x, c.y + 100, c.w, 50, BTN_AGAIN)) s.act = 'again';
+    if (E.ui.button('MENU', c.x + c.w / 2 - 80, c.y + 160, 160, 40, BTN_HOME)) s.act = 'title';
 }
 
+// ---------------------------------------------------------------- jogo
+
+var SUB_LEFT = { px: 14, color: C(0xB8C4DC), screen: true };
+var SCORE_TXT = { px: 30, color: CIANO, screen: true };
+var BTN_PAUSE = { x: 10, y: 10, w: 48, h: 48 };
+var BTN_SUPER = { x: 400, y: 8, w: 72, h: 72 };
+var PAUSE_BTNS = [{ label: 'Menu', value: 'menu', icon: 'home' },
+                  { label: 'Continuar', value: 'resume' }];
+var BULLET = { r: 2, screen: true };
+var EBUL = { fill: true, screen: true };
+var RING_O = { fill: false, screen: true };
+var BOSS_BAR = { fg: MAGENTA, bg: 0x3008 };
+var BOSS_TXT = { px: 11, align: 'center', color: MAGENTA, outline: 0x0000, screen: true };
+var MSG_TXT = { px: 28, align: 'center', valign: 'middle', color: OURO,
+                outline: 0x0000, screen: true };
+var OVER_TXT = { px: 30, align: 'center', valign: 'middle', color: VERMELHO,
+                 outline: 0x0000, screen: true };
+var SUPER_RING = { th: 6, color: CIANO, bg: 0x18E3 };
+var SUPER_TXT = { px: 11, align: 'center', valign: 'middle', screen: true, color: TEXTO2 };
+var PANEL_O = { r: 12, screen: true, bw: 2, stroke: CIANOD };
+
 function drawGame(s, E) {
-    var W = s.W, H = s.H, i, p = s.player;
-    // estrelas (por cima do fundo; pequenas)
-    var st = s.stars;
-    for (i = 0; i < st.length; i++) {
-        var o = st[i];
-        var c = o.z === 3 ? 0xCE79 : (o.z === 2 ? 0x8410 : 0x4208);
-        E.gfx.rect(o.x, o.y, o.z === 3 ? 2 : 1, o.z === 3 ? 2 : 1, c, { screen: true });
-    }
-    // inimigos
+    var W = s.W, H = s.H, i, art = s.art;
+    if (s.stars) s.stars.draw();
+    // inimigos: silhueta branca no quadro do golpe (sem afim: escala 1)
     for (i = 0; i < s.enemies.length; i++) {
         var e = s.enemies[i];
-        if (e.boss) {
-            E.spr.stamp('ai_atlas#ai2', e.x, e.y, { scale: 2.06, key: 0xF81F });
+        var hit = e.flash > 0 ? 1 : 0;
+        if (!art) {
+            E.gfx.circle(e.x, e.y, e.r, hit ? BRANCO : MAGENTA, EBUL);
+        } else if (e.boss) {
+            E.spr.stamp(BOSS_ART[hit], e.x, e.y, OPT_ART);
         } else {
-            E.spr.stamp('inimigo#inimigo', e.x, e.y,
-                { scale: (e.r * 2 / 64) * (1 + 0.04 * Math.sin(s.t * 8 + e.x)),
-                  key: 0xF81F });
-        }
-        if (e.flash > 0) {
-            if (e.boss) {
-                E.gfx.circle(e.x - 24, e.y - 16, 3, BRANCO, { fill: true, screen: true });
-                E.gfx.circle(e.x + 20, e.y - 22, 2, BRANCO, { fill: true, screen: true });
-                E.gfx.circle(e.x + 2, e.y + 20, 3, BRANCO, { fill: true, screen: true });
-            } else {
-                E.gfx.circle(e.x, e.y, e.r + 2, BRANCO, { fill: false, screen: true });
-            }
-        }
-        if (e.boss) {
-            E.gfx.bar(e.x - 70, e.y - 60, 140, 8, e.hp / e.maxhp,
-                { fg: MAGENTA, bg: 0x3008, r: 4, screen: true });
+            E.spr.stamp(N[ENEMY_ART[e.type] + hit], e.x, e.y, OPT_ART);
         }
     }
-    // orbes
+    // drops: orbe pulsa em 2 quadros
     for (i = 0; i < s.orbs.length; i++) {
-        var orb = s.orbs[i];
-        E.spr.stamp('ai_atlas#ai3', orb.x, orb.y, { scale: 0.7, key: 0xF81F });
+        var o = s.orbs[i];
+        var k = o.kind === 'triple' ? A_TRIPLE : (o.kind === 'life' ? A_LIFE :
+                A_ORB + (Math.floor(s.t * 6) % 2));
+        if (art) E.spr.stamp(N[k], o.x, o.y, OPT_ART);
+        else E.gfx.circle(o.x, o.y, 10, CIANO, EBUL);
+    }
+    // explosoes (vfx text2d): 6 quadros; a do chefe em escala 2
+    for (i = 0; i < s.booms.length; i++) {
+        var bm = s.booms[i];
+        var f = Math.floor(bm.t / BOOM_T);
+        if (art && f < 6) E.spr.stamp(N[A_BOOM + f], bm.x, bm.y, bm.big ? OPT_BOOM2 : OPT_ART);
     }
     // tiros
+    var bc = s.triple > 0 ? OURO : CIANO;
     for (i = 0; i < s.bullets.length; i++) {
         var b = s.bullets[i];
-        E.gfx.rect(b.x - 2, b.y - 8, 4, 16, CIANO, { r: 2, screen: true });
+        E.gfx.rect(b.x - 2, b.y - 8, 4, 16, bc, BULLET);
     }
     for (i = 0; i < s.ebullets.length; i++) {
         var eb = s.ebullets[i];
-        E.gfx.circle(eb.x, eb.y, eb.r, eb.color, { fill: true, screen: true });
-        E.gfx.circle(eb.x - 1, eb.y - 1, 1.4, BRANCO, { fill: true, screen: true });
+        E.gfx.circle(eb.x, eb.y, eb.r, eb.color, EBUL);
+        E.gfx.circle(eb.x - 1, eb.y - 1, 1.4, BRANCO, EBUL);
     }
     if (s.superT > 0) {
-        E.gfx.circle(W / 2, H / 2, (0.55 - s.superT) * 900, CIANO, { fill: false, screen: true });
+        E.gfx.circle(W / 2, H / 2, (0.55 - s.superT) * 900, CIANO, RING_O);
     }
+    // chefe: barra no alto
+    if (s.boss && E.ui) {
+        E.ui.progress(W / 2 - 110, 14, 220, 12, s.boss.hp / s.boss.maxhp, BOSS_BAR);
+        E.gfx.text('SENTINELA-MOR  ·  FASE ' + (s.bossPhase || 1), W / 2, 32, BOSS_TXT);
+    }
+    // pausa e SUPER (anel = carga)
+    E.gfx.rect(BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w, BTN_PAUSE.h, C(0x0A1020), PANEL_O);
+    E.ui.icon('pause', BTN_PAUSE.x + 12, BTN_PAUSE.y + 12, 24, { color: TEXTO });
+    var full = s.charge >= 100;
+    var scx = BTN_SUPER.x + BTN_SUPER.w / 2, scy = BTN_SUPER.y + BTN_SUPER.h / 2;
+    E.gfx.circle(scx, scy, 28, full ? OURO : C(0x0A1020), EBUL);
+    SUPER_RING.color = full ? BRANCO : CIANO;
+    E.ui.ring(scx, scy, 35, s.charge / 100, SUPER_RING);
+    SUPER_TXT.color = full ? 0x0000 : TEXTO2;
+    E.gfx.text(full ? 'SUPER' : (s.charge | 0) + '%', scx, scy, SUPER_TXT);
 
     drawHud(s, E);
-    if (s.msg) {
-        E.gfx.text(s.msg, W / 2, H / 2, { px: 28, align: 'center', valign: 'middle',
-            color: OURO, bg: C(0x05060A), screen: true });
-    }
+    if (s.msg) E.gfx.text(s.msg, W / 2, s.bot / 2, MSG_TXT);
     if (s.paused) {
-        E.gfx.rect(0, 0, W, H, C(0x05060A), { screen: true });
-        E.gfx.panel(60, 150, W - 120, 190, { bg: PAINEL, stroke: CIANO, r: 12, screen: true });
-        E.gfx.text('PAUSA', W / 2, 186, { px: 32, align: 'center', color: CIANO });
-        s.btnResume = E.gfx.button('CONTINUAR', W / 2 - 100, 228, 200, 42,
-            { primary: true, screen: true, px: 17 });
-        s.btnMenuPause = E.gfx.button('MENU', W / 2 - 65, 282, 130, 34,
-            { primary: false, screen: true, px: 14 });
+        var r = E.ui.modal('pausa', { title: 'PAUSA', dismiss: false,
+                                      body: 'onda ' + Math.max(1, s.wave) + '  ·  ' + s.score + ' pts',
+                                      buttons: PAUSE_BTNS });
+        if (r !== null) s.act = r;
     }
-    if (s.over) {
-        E.gfx.text('NAVE PERDIDA', W / 2, H / 2, { px: 34, align: 'center', valign: 'middle',
-            color: VERMELHO, bg: C(0x05060A), screen: true });
-    }
+    if (s.over) E.gfx.text('NAVE PERDIDA', W / 2, s.bot / 2, OVER_TXT);
 }
 
+// HUD de baixo pelo E.ui.hud: memoizado pela assinatura (o antigo repintava
+// 10 textos e 2 barras por quadro)
+var HUD_O = { y: 0, h: 0, lives: 3, maxLives: 3, level: '', score: 0, best: 0,
+              bg: C(0x080C16), left: null };
+var HUD_L = [{ icon: null, text: 'x1', color: TEXTO2 },
+             { icon: 'plus', text: '', color: OURO }];
+var HUD_L1 = [HUD_L[0]];
+
 function drawHud(s, E) {
-    var W = s.W, HUD = s.HUD_H;
-    E.gfx.rect(0, 0, W, HUD, C(0x080C16), { screen: true });
-    E.gfx.rect(0, HUD - 2, W, 2, CIANOD, { screen: true });
-    E.gfx.text('PONTOS ' + s.score, 8, 6, { px: 16, color: BRANCO, screen: true });
-    E.gfx.text('ONDA ' + Math.max(1, s.wave) + (s.mode === 'campaign' ? '/' + s.maxWave : ''),
-        8, 27, { px: 13, color: TEXTO2, screen: true });
-    E.gfx.text('x' + s.mult, 8, 44, { px: 14, color: s.mult > 1 ? OURO : TEXTO2, screen: true });
-    // vidas
-    E.gfx.hearts(s.lives, 3, 98, 44, { size: 11, color: VERMELHO, empty: 0x3008, screen: true });
-    E.gfx.text('REC ' + s.best, W / 2, 6, { px: 13, align: 'center', color: TEXTO2, screen: true });
+    if (!E.ui) return;
+    HUD_O.y = s.bot;
+    HUD_O.h = s.HUD_H;
+    HUD_O.lives = s.lives;
+    HUD_O.level = 'ONDA ' + Math.max(1, s.wave) + (s.mode === 'campaign' ? '/' + s.maxWave : '');
+    HUD_O.score = s.score;
+    HUD_O.best = s.best;
+    HUD_L[0].text = 'x' + s.mult;
+    HUD_L[0].color = s.mult > 1 ? OURO : TEXTO2;
     if (s.triple > 0) {
-        E.gfx.text('TRIPLO ' + Math.ceil(s.triple), W / 2, 26,
-            { px: 13, align: 'center', color: OURO, screen: true });
-    }
-    // barra de supernova
-    var bx = W - 190, by = 46;
-    E.gfx.bar(bx, by, 110, 10, s.charge / 100,
-        { fg: s.charge >= 100 ? OURO : CIANO, bg: 0x10C3, r: 4, screen: true });
-    // botao super
-    s.btnSuper = { x: W - 72, y: 6, w: 62, h: 28 };
-    E.gfx.rect(s.btnSuper.x, s.btnSuper.y, s.btnSuper.w, s.btnSuper.h,
-        s.charge >= 100 ? OURO : 0x18E3, { r: 7, screen: true });
-    E.gfx.text('SUPER', s.btnSuper.x + s.btnSuper.w / 2, s.btnSuper.y + s.btnSuper.h / 2,
-        { px: 12, align: 'center', valign: 'middle',
-          color: s.charge >= 100 ? 0x0000 : TEXTO2, screen: true });
-    // pausa
-    s.btnPause = { x: W - 34, y: 36, w: 26, h: 22 };
-    E.gfx.rect(s.btnPause.x, s.btnPause.y, s.btnPause.w, s.btnPause.h, PAINEL,
-        { r: 5, screen: true });
-    E.gfx.text('II', s.btnPause.x + s.btnPause.w / 2, s.btnPause.y + s.btnPause.h / 2,
-        { px: 13, align: 'center', valign: 'middle', color: BRANCO, screen: true });
-    if (s.boss) {
-        E.gfx.text('SENTINELA-MOR', W / 2, 44, { px: 11, align: 'center', color: MAGENTA, screen: true });
-    }
+        HUD_L[1].text = 'TRIPLO ' + Math.ceil(s.triple);
+        HUD_O.left = HUD_L;
+    } else HUD_O.left = HUD_L1;
+    E.ui.hud(HUD_O);
 }

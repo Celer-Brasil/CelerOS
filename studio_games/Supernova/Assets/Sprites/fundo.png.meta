@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "guid": "8bf6c623ff0fab024f22d0787ae15cdc",
+  "guid": "b9e45c6174c41d21056d55a7a8d9ce28",
   "importer": "sprite",
   "settings": {
-    "w": 192,
-    "h": 192,
+    "w": 240,
+    "h": 240,
     "mode": "single",
     "pivot": [
       0.5,

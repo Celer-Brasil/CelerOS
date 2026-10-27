@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 10,
+  "rev": 12,
   "name": "Campanha",
   "guid": "2c7e1a0069720eb375d2e11a8952193c",
   "settings": {
@@ -13,8 +13,8 @@
     "bg": "#05060a",
     "static": false,
     "assets": [
-      "90c050a63fc8a40683c1aa02b05a436f",
-      "6efdfc9f74c1f5439993836bbb1ccd2c"
+      "3670d1fcd776d1b103b2c0b499dfbf07",
+      "ef7b6059392b4bd1d5333a32b1d5fa9b"
     ]
   },
   "entities": [
@@ -27,8 +27,8 @@
         "x": 0,
         "y": 0,
         "rot": 0,
-        "sx": 2.5,
-        "sy": 2.5,
+        "sx": 2,
+        "sy": 2,
         "ax": 0,
         "ay": 0
       },
@@ -38,7 +38,7 @@
           "id": "c_ff8bf78e",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "8bf6c623ff0fab024f22d0787ae15cdc"
+            "sprite": "b9e45c6174c41d21056d55a7a8d9ce28"
           }
         }
       ]
@@ -52,8 +52,8 @@
         "x": 240,
         "y": 384,
         "rot": 0,
-        "sx": 1.125,
-        "sy": 1.125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -63,7 +63,7 @@
           "id": "c_39aded07",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "5faba82efb8c3cc40951d972805eb63f#nave"
+            "sprite": "5faba82efb8c3cc40951d972805eb63f"
           }
         }
       ]

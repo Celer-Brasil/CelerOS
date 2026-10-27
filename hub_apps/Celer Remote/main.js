@@ -20,6 +20,8 @@
 
 var A = require("celeros.app");
 require("celeros.app.list");
+require("celeros.app.style");
+require("celeros.app.widgets");
 
 A.init();
 var T = A.T;
@@ -124,18 +126,25 @@ function doScan() {
 
 // ---- tela de scan --------------------------------------------------------------
 function scanFrame(c) {
-    UI.header("Celer Remote", { sub: peers.length ? peers.length + " por perto" : "" });
+    A.widgets.header("Celer Remote", { full: c.full, back: false,
+        sub: peers.length ? peers.length + " por perto" : "" });
     if (peers.length === 0) {
-        UI.card(LX, 56, LW, 120);
-        UI.text("Nenhum CelerOS por perto", 120, 76, { role: "title", align: "center", color: T.textDim, w: LW - 16 });
-        UI.text("Ligue o robô (ou outro aparelho com Celer Link) e procure de novo.", 120, 116,
-                { role: "caption", align: "center", color: T.textDim, w: LW - 24, lines: 3 });
-        UI.cardEnd();
+        A.style.card(LX, 56, LW, 120, {
+            full: c.full, elev: 1, grad: true,
+            draw: function (r) {
+                UI.text("Nenhum CelerOS por perto", LX + LW / 2, r.y + 10,
+                        { role: "title", align: "center", color: T.textDim, w: r.w });
+                UI.text("Ligue o robô (ou outro aparelho com Celer Link) e procure de novo.",
+                        LX + LW / 2, r.y + 50,
+                        { role: "caption", align: "center", color: T.textDim, w: r.w, lines: 3 });
+            }
+        });
     } else {
         var k = UI.list("peers", LX, 48, LW, 214, peerRows.rows(), { rowH: 48 });
         if (k >= 0) return connectTo(peers[k]) ? "ctrl" : undefined;
     }
-    if (UI.button("Procurar de novo", LX, 272, LW, 40, { style: peers.length ? "ghost" : "primary" })) {
+    if (A.style.button("Procurar de novo", LX, 272, LW, 40,
+                       { variant: peers.length ? "ghost" : "primary" })) {
         doScan();                     // spin dentro; nada mais desenha no frame
     }
 }
@@ -210,7 +219,7 @@ var STOP_IDX = 4;
 var MODE_BTN = [LX, 256, 92, 30];
 var TRICK_BTN = [LX + 96, 256, 62, 30];
 var TUNE_BTN = [LX + 162, 256, 70, 30];
-var WIFI_BTN = [W - 62, 4, 56, 32];
+var HDR_ACTS = [{ icon: "wifi", id: "wifi" }];
 var held = -1;
 var padDrawn = -2;      // seta desenhada por ultimo (-2 = redesenhar)
 var lastSend = 0;
@@ -323,14 +332,17 @@ function ctrlFrame(c) {
     }
 
     var name = (target && target.name) || st.peer || "?";
-    if (UI.header(name, { back: true, sub: wifiAvailable() ? "" : (st.rssi ? st.rssi + " dBm" : "") })) {
+    var hh = A.widgets.header(name, {
+        full: c.full, back: true,
+        sub: wifiAvailable() ? "" : (st.rssi ? st.rssi + " dBm" : ""),
+        actions: wifiAvailable() ? HDR_ACTS : null
+    });
+    if (hh.back) {
         leaveLink(null);
         return A.BACK;
     }
-    // WiFi do robo (API 21): verde = robo ja online
-    if (wifiAvailable() && UI.button("WiFi", WIFI_BTN[0], WIFI_BTN[1], WIFI_BTN[2], WIFI_BTN[3],
-                                     { color: tel.net ? T.ok : T.accentD, textColor: tel.net ? T.onAccent : T.text,
-                                       role: "caption" })) {
+    // WiFi do robo (API 21): a acao do header; o verde/online fica no estado
+    if (hh.action === "wifi") {
         held = -1;
         return "wifi";
     }
@@ -348,21 +360,21 @@ function ctrlFrame(c) {
     // Troca de marcha: so com robo que lista os modos dele (tel.modes) E ha
     // mais de um — o destino vai por nome, escolhido da lista do proprio
     // robo (um ciclo as cegas salvava no robo uma marcha que nao anda)
-    if (hasModes() && UI.button("marcha: " + tel.mode, MODE_BTN[0], MODE_BTN[1], MODE_BTN[2], MODE_BTN[3],
-                                { style: "ghost", role: "caption" })) {
+    if (hasModes() && A.style.button("marcha: " + tel.mode, MODE_BTN[0], MODE_BTN[1], MODE_BTN[2], MODE_BTN[3],
+                                     { variant: "ghost", role: "caption" })) {
         var next = tel.modes[(tel.modes.indexOf(tel.mode) + 1) % tel.modes.length];
         CelerLink.send({type: "mode", walk: next});
     }
     // Truques que o ROBO anunciou (tel.tricks): robo velho/sem truques nao mostra
-    if (hasTricks() && UI.button("truques", TRICK_BTN[0], TRICK_BTN[1],
-                                 TRICK_BTN[2], TRICK_BTN[3], { style: "ghost", role: "caption" })) {
+    if (hasTricks() && A.style.button("truques", TRICK_BTN[0], TRICK_BTN[1],
+                                      TRICK_BTN[2], TRICK_BTN[3], { variant: "ghost", role: "caption" })) {
         held = -1;
         return "tricks";
     }
     // Afino de bancada (Dog Face 1.9.7 anuncia tel.tune): ajusta o hop do
     // robo ao vivo pelo BLE — sem cabo
-    if (hasTune() && UI.button("afinar", TUNE_BTN[0], TUNE_BTN[1],
-                               TUNE_BTN[2], TUNE_BTN[3], { style: "ghost", role: "caption" })) {
+    if (hasTune() && A.style.button("afinar", TUNE_BTN[0], TUNE_BTN[1],
+                                    TUNE_BTN[2], TUNE_BTN[3], { variant: "ghost", role: "caption" })) {
         held = -1;
         return "tune";
     }
@@ -398,7 +410,9 @@ function wifiFrame(c) {
         wifiNets = res.nets || [];
         return undefined;   // o spin fechou o frame: a lista pinta no proximo
     }
-    if (UI.header("WiFi do robô", { back: true, sub: wifiNets.length ? "" : "nenhuma rede vista" })) {
+    var hw = A.widgets.header("WiFi do robô", { full: c.full, back: true,
+        sub: wifiNets.length ? "" : "nenhuma rede vista" });
+    if (hw.back) {
         note("WiFi: cancelado", 6000);
         return A.BACK;
     }
@@ -447,7 +461,9 @@ function wifiSend(ssid, secure) {
 // recusa truque pesado com ganido: o robo faz drama, o controle conta).
 function tricksFrame(c) {
     var names = (tel && tel.tricks) || [];
-    if (UI.header("Truques do cão", { back: true, sub: names.length + " no robô" })) return A.BACK;
+    var ht = A.widgets.header("Truques do cão", { full: c.full, back: true,
+        sub: names.length + " no robô" });
+    if (ht.back) return A.BACK;
     var k = UI.list("tricks", LX, 48, LW, 264, names, { rowH: 36 });
     if (k >= 0) {
         var nm = names[k];
@@ -497,20 +513,22 @@ function tuneFrame(c) {
         lastStance = waitMsg("stance", 1500);
         if (!lastHop) { note("afino: robo não respondeu (Dog Face 1.9.7+)", 6000); return A.BACK; }
     }
-    var back = UI.header("Afinar marcha", { back: true, sub: "vale na hora · fica salvo no robô" });
+    var hh = A.widgets.header("Afinar marcha", { full: c.full, back: true,
+        sub: "vale na hora · fica salvo no robô" });
+    var back = hh.back;
     var y = 50;
     for (var i = 0; i < TUNE_ROWS.length; i++) {
         var r = TUNE_ROWS[i];
         UI.text(r.lbl, LX + 2, y + 19, { role: "caption", color: T.textDim, w: 92 });
         UI.text("" + tuneVal(r), 158, y + 19,
                 { role: "caption", align: "right", w: 54, color: T.text });
-        if (UI.button("-", 162, y, 30, 30, { style: "ghost", role: "caption" })) { tuneBump(r, -r.stp); UI.invalidate(); }
-        if (UI.button("+", 198, y, 30, 30, { style: "ghost", role: "caption" })) { tuneBump(r, r.stp); UI.invalidate(); }
+        if (A.style.button("-", 162, y, 30, 30, { variant: "ghost", role: "caption" })) { tuneBump(r, -r.stp); UI.invalidate(); }
+        if (A.style.button("+", 198, y, 30, 30, { variant: "ghost", role: "caption" })) { tuneBump(r, r.stp); UI.invalidate(); }
         y += 34;
     }
     UI.text("abertura < 0: dianteira lidera o chute", 120, y + 4,
             { role: "caption", align: "center", color: T.textDim, w: LW });
-    if (UI.button("testar: andar 3 s", LX, y + 20, LW, 36)) {
+    if (A.style.button("testar: andar 3 s", LX, y + 20, LW, 36)) {
         spin("andando 3 s (solto o robô!)...");
         CelerLink.send({ type: "gait", name: "walk", repeat: true });
         System.delay(3000);

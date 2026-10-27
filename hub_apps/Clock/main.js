@@ -1,10 +1,14 @@
 // CelerOS Clock — relogio de mesa: hora, relogio mundial, alarme, cronometro
 // e timer. Migrado para o CelerKit: o core celeros.app fica com o laco
-// (A.run) e o tema; celeros.app.fmt empresta o pad2 do sistema. O acesso
-// numerico a hora (o relogio mundial faz aritmetica de fuso) nao existe no
-// fmt, entao o parse local de getTime/getTimezone permanece. ES5 (Duktape).
+// (A.run) e o tema; celeros.app.fmt empresta o pad2 do sistema; o UI kit 2.0
+// (style/widgets) da o anel, o card do alarme e os botoes tokenizados.
+// O acesso numerico a hora (o relogio mundial faz aritmetica de fuso) nao
+// existe no fmt, entao o parse local de getTime/getTimezone permanece.
+// ES5 (Duktape).
 var A = require("celeros.app");
 require("celeros.app.fmt");
+require("celeros.app.style");
+require("celeros.app.widgets");
 A.init();
 
 var TAB_CLOCK = 0;
@@ -126,8 +130,7 @@ function drawRing(cx, cy, r, frac, col, full) {
     var key = Math.floor(frac * 600);
     if (!full && key === ringSec) return;
     ringSec = key;
-    System.fillArc(cx, cy, r - 6, r, 0, 360, A.T.raised);
-    if (frac > 0) System.fillArc(cx, cy, r - 6, r, 270, 270 + 360 * frac, col);
+    A.widgets.ring(cx, cy, r, frac, { th: 6, bg: A.style.T.raised, color: col });
 }
 
 function renderClock(full) {
@@ -162,36 +165,39 @@ function renderWorld() {
     UI.list("world", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, worldRows, { rowH: 48 });
 }
 
-function renderAlarm() {
+function renderAlarm(full) {
     var T = A.T;
     UI.text("agora " + A.fmt.pad2(currentH) + ":" + A.fmt.pad2(currentM) + ":" + A.fmt.pad2(currentS),
             A.L.cx, A.L.top + 8, { role: "caption", align: "center", color: T.textDim });
     UI.text(A.fmt.pad2(alarmH) + ":" + A.fmt.pad2(alarmM), A.L.cx, A.L.top + 34,
             { role: "display", align: "center", color: alarmOn ? T.accent : T.text });
     var changed = false;
-    if (UI.button("H+", 16, A.L.top + 96, 48, 40, { style: "ghost" })) { alarmH = (alarmH + 1) % 24; changed = true; }
-    if (UI.button("H-", 70, A.L.top + 96, 48, 40, { style: "ghost" })) { alarmH = (alarmH + 23) % 24; changed = true; }
-    if (UI.button("M+", 122, A.L.top + 96, 48, 40, { style: "ghost" })) { alarmM = (alarmM + 1) % 60; changed = true; }
-    if (UI.button("M-", 176, A.L.top + 96, 48, 40, { style: "ghost" })) { alarmM = (alarmM + 59) % 60; changed = true; }
+    if (A.style.button("H+", 16, A.L.top + 96, 48, 40, { variant: "ghost" })) { alarmH = (alarmH + 1) % 24; changed = true; }
+    if (A.style.button("H-", 70, A.L.top + 96, 48, 40, { variant: "ghost" })) { alarmH = (alarmH + 23) % 24; changed = true; }
+    if (A.style.button("M+", 122, A.L.top + 96, 48, 40, { variant: "ghost" })) { alarmM = (alarmM + 1) % 60; changed = true; }
+    if (A.style.button("M-", 176, A.L.top + 96, 48, 40, { variant: "ghost" })) { alarmM = (alarmM + 59) % 60; changed = true; }
     // alarme ja ligado: reprograma o do OS com a hora nova
     if (changed && alarmOn && typeof System.setAlarm === "function") {
         try { System.setAlarm(alarmH, alarmM, "Alarme"); } catch (ec) {}
     }
-    UI.card(A.L.x, A.L.top + 152, A.L.w, 48);
-    UI.text("Alarme ligado", A.L.x + 12, A.L.top + 166);
-    var on = UI.toggle(A.L.x + A.L.w - 56, A.L.top + 164, alarmOn);
-    if (on !== alarmOn) {
-        alarmOn = on;
-        // alarme de verdade no OS (API 12+): dispara mesmo com o app fechado
-        if (typeof System.setAlarm === "function") {
-            if (alarmOn) {
-                try { System.setAlarm(alarmH, alarmM, "Alarme"); } catch (ea) {}
-            } else {
-                try { System.clearAlarm(); } catch (eb) {}
+    A.style.card(A.L.x, A.L.top + 152, A.L.w, 48, {
+        full: full, elev: 1, grad: true,
+        draw: function (r) {
+            UI.text("Alarme ligado", r.x, r.y + 6);
+            var on = UI.toggle(r.x + r.w - 46, r.y + 4, alarmOn);
+            if (on !== alarmOn) {
+                alarmOn = on;
+                // alarme de verdade no OS (API 12+): dispara mesmo com o app fechado
+                if (typeof System.setAlarm === "function") {
+                    if (alarmOn) {
+                        try { System.setAlarm(alarmH, alarmM, "Alarme"); } catch (ea) {}
+                    } else {
+                        try { System.clearAlarm(); } catch (eb) {}
+                    }
+                }
             }
         }
-    }
-    UI.cardEnd();
+    });
     UI.text("O alarme do sistema toca mesmo com o app fechado.", A.L.cx, A.L.top + 214,
             { role: "caption", align: "center", color: T.textDim, w: A.L.w, lines: 2 });
 }
@@ -201,8 +207,8 @@ function renderStopwatch(full) {
     var currentMs = swAccumulated + (swRunning ? System.millis() - swStart : 0);
     drawRing(A.L.cx, A.L.top + 92, 84, (currentMs % 60000) / 60000, swRunning ? T.ok : T.textDim, full);
     UI.text(formatMillis(currentMs), A.L.cx, A.L.top + 80, { role: "title", align: "center" });
-    if (UI.button(swRunning ? "Parar" : "Iniciar", A.L.x, A.L.top + 200, 108, 44,
-                  { color: swRunning ? T.warn : T.ok, textColor: T.onAccent })) {
+    if (A.style.button(swRunning ? "Parar" : "Iniciar", A.L.x, A.L.top + 200, 108, 44,
+                       { color: swRunning ? T.warn : T.ok, textColor: T.onAccent })) {
         if (swRunning) {
             swAccumulated += (System.millis() - swStart);
             swRunning = false;
@@ -211,7 +217,7 @@ function renderStopwatch(full) {
             swRunning = true;
         }
     }
-    if (UI.button("Zerar", A.L.x + 116, A.L.top + 200, 108, 44, { style: "ghost" })) {
+    if (A.style.button("Zerar", A.L.x + 116, A.L.top + 200, 108, 44, { variant: "ghost" })) {
         swRunning = false;
         swAccumulated = 0;
     }
@@ -236,14 +242,14 @@ function renderTimer(full) {
     drawRing(A.L.cx, A.L.top + 80, 72, base > 0 && currentMs <= base ? currentMs / base : 0, T.accent, full);
     UI.text(formatMillis(currentMs), A.L.cx, A.L.top + 68, { role: "title", align: "center" });
     if (!timerRunning) {
-        if (UI.button("+1 min", A.L.x, A.L.top + 164, 108, 32, { style: "ghost" })) { timerTotalMs += 60000; timerRemaining = timerTotalMs; }
-        if (UI.button("-1 min", A.L.x + 116, A.L.top + 164, 108, 32, { style: "ghost" }) && timerTotalMs >= 60000) {
+        if (A.style.button("+1 min", A.L.x, A.L.top + 164, 108, 32, { variant: "ghost" })) { timerTotalMs += 60000; timerRemaining = timerTotalMs; }
+        if (A.style.button("-1 min", A.L.x + 116, A.L.top + 164, 108, 32, { variant: "ghost" }) && timerTotalMs >= 60000) {
             timerTotalMs -= 60000;
             timerRemaining = timerTotalMs;
         }
     }
-    if (UI.button(timerRunning ? "Pausar" : "Iniciar", A.L.x, A.L.top + 208, 108, 44,
-                  { color: timerRunning ? T.warn : T.ok, textColor: T.onAccent })) {
+    if (A.style.button(timerRunning ? "Pausar" : "Iniciar", A.L.x, A.L.top + 208, 108, 44,
+                       { color: timerRunning ? T.warn : T.ok, textColor: T.onAccent })) {
         if (timerRunning) {
             timerTotalMs = timerTotalMs - (System.millis() - timerStart);
             timerRemaining = timerTotalMs;
@@ -255,7 +261,7 @@ function renderTimer(full) {
         }
         UI.invalidate();
     }
-    if (UI.button("Zerar", A.L.x + 116, A.L.top + 208, 108, 44, { style: "ghost" })) {
+    if (A.style.button("Zerar", A.L.x + 116, A.L.top + 208, 108, 44, { variant: "ghost" })) {
         timerRunning = false;
         timerTotalMs = 5 * 60 * 1000;
         timerRemaining = timerTotalMs;
@@ -268,7 +274,7 @@ function renderRinging(full) {
     var W = System.screenWidth(), H = System.screenHeight();
     if (full) System.fillGradient(0, 0, W, H, T.err, System.mixColor(T.err, 0, 60));
     UI.text("ACORDAR!", A.L.cx, 96, { role: "display", align: "center", color: 0xFFFF });
-    if (UI.button("Parar", 40, 200, 160, 60, { color: 0xFFFF, textColor: T.err, role: "title" })) {
+    if (A.style.button("Parar", 40, 200, 160, 60, { color: 0xFFFF, textColor: T.err, role: "title" })) {
         isAlarmRinging = false;
         UI.invalidate();
     }
@@ -302,7 +308,7 @@ A.run({
             UI.invalidate();
         } else if (currentTab === TAB_CLOCK) renderClock(c.full);
         else if (currentTab === TAB_WORLD) renderWorld();
-        else if (currentTab === TAB_ALARM) renderAlarm();
+        else if (currentTab === TAB_ALARM) renderAlarm(c.full);
         else if (currentTab === TAB_STOPWATCH) renderStopwatch(c.full);
         else if (currentTab === TAB_TIMER) renderTimer(c.full);
     }

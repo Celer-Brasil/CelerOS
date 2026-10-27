@@ -1,7 +1,7 @@
 {
   "name": "Clock",
   "packageName": "celeros.clock",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "api": 30,
   "permissions": [],
   "author": "CelerOS",
@@ -10,7 +10,9 @@
   "description": "Relogio completo: hora com segundos, fuso, horas do mundo, cronometro, timer e alarme que dispara pelo sistema (vale ate com o app fechado).",
   "deps": {
     "celeros.app": "^1.0.0",
-    "celeros.app.fmt": "^1.0.0"
+    "celeros.app.fmt": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.widgets": "^1.0.0"
   },
-  "changelog": "1.4.0 - migrado para o CelerKit (deps celeros.app.*): o core fica com o laco e o tema, o fmt com o padding numerico; bip repetido na tela de alarme, anel do timer esvazia ate zerar e lista do relogio mundial reconstruida so quando o minuto muda\n1.3.0 - visual novo com o toolkit UI (API 22): abas no topo, anel de segundos, relogio mundial em lista e controles nativos\n1.2.1 - alarme reprogramado ao mudar a hora com ele ligado; permissoes declaradas (nenhuma). 1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer"
+  "changelog": "1.5.0 - UI kit 2.0: anel do timer/cronometro e card do alarme no A.style/A.widgets (tokens + gradiente/sombra), botoes no A.style.button; abas e listas nativas seguem. 1.4.0 - migrado para o CelerKit (deps celeros.app.*): o core fica com o laco e o tema, o fmt com o padding numerico; bip repetido na tela de alarme, anel do timer esvazia ate zerar e lista do relogio mundial reconstruida so quando o minuto muda\n1.3.0 - visual novo com o toolkit UI (API 22): abas no topo, anel de segundos, relogio mundial em lista e controles nativos\n1.2.1 - alarme reprogramado ao mudar a hora com ele ligado; permissoes declaradas (nenhuma). 1.2.0 - tema CelerOS, PT-BR, alarme integrado ao OS (API 12+), dia da semana, tela sempre ligada e som no fim do timer"
 }

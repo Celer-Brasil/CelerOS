@@ -149,6 +149,35 @@ function check(name, ok, detail) {
     check('deleteSprite por id libera o pool (id 1 volta)', S2.createSprite(4, 4) === 1);
     S2.deleteSprite();
 
+    // pool de sprites x JsGfx.cpp: faixa fisica (0/teto recusam, TypeError
+    // fora de numero), reciclagem do CORRENTE com o pool cheio, slot liberado
+    // volta pelo menor id e deleteSprite sem numero derruba o corrente
+    var ids = [];
+    for (var i = 0; i < 16; i++) ids.push(S2.createSprite(4, 4));
+    var id17 = S2.createSprite(4, 4);           // pool cheio: recicla o corrente (16)
+    S2.deleteSprite(3);
+    var id18 = S2.createSprite(4, 4);           // menor slot livre = 3
+    check('createSprite: ids 1..16 e pool cheio recicla o CORRENTE (16)',
+          ids.join(',') === '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16' && id17 === 16,
+          ids.join(',') + ' id17=' + id17);
+    check('createSprite: slot liberado volta pelo menor id', id18 === 3, 'id18=' + id18);
+    check('createSprite: 0/negativo/teto fisico recusam (JsGfx.cpp)',
+          S2.createSprite(0, 4) === 0 && S2.createSprite(4, -1) === 0 &&
+          S2.createSprite(2049, 4) === 0);
+    var te = '';
+    try { S2.createSprite('a', 4); } catch (e) { te = e.name; }
+    check('createSprite: nao-number lanca TypeError (duk_require_int)', te === 'TypeError', te);
+    check('deleteSprite: sem numero apaga o CORRENTE (string/undefined)',
+          (function () { S2.deleteSprite('x'); return r2.sprite === null && r2.bound === false; })());
+    check('useSprite: id invalido desbinda e falha; 0 volta ao quadro',
+          S2.useSprite(99) === false && r2.bound === false && S2.useSprite(0) === true);
+    var teK = '';
+    S2.createSprite(4, 4);
+    try { S2.pushSprite(0, 0, 'k'); } catch (e) { teK = e.name; }
+    S2.deleteSprite();
+    check('pushSprite: cor-chave nao-number lanca TypeError (duk_require_uint)',
+          teK === 'TypeError', teK);
+
     // texto: glifo 'A' (0x41) com fg
     r.fg = T.fg; r.bg = T.bg; r.textSize = 1;
     r.drawString('A', 5, 5, 1);
@@ -1121,7 +1150,7 @@ function depsSize(nomes) {
         E2.run({ a: { update: function () { marks.push(1); if (marks.length >= 3) E2.quit(); } } }, 'a');
         check('familia enxuta (jsstrip) preserva as linhas e roda o loop',
               linhasIguais && marks.length === 3 &&
-              E2.version === '1.8.0' && E2._mods.length === 3,
+              E2.version === '1.9.0' && E2._mods.length === 3,
               'linhas=' + linhasIguais);
     })();
 
@@ -1303,7 +1332,8 @@ function depsSize(nomes) {
           JSON.stringify(r.grabbed.aud));
 
     // slots por sonda: o cap vem do firmware (spriteSlots) — a def que passa
-    // do limite vira painter; sem a chamada (firmware velho) fica em 4
+    // do limite vira painter; o stub do host modela placa COM PSRAM (16,
+    // como o JsGfx.cpp reporta)
     function slotDefs(n) {
         var defs = [];
         for (var i = 0; i < n; i++)
@@ -1314,10 +1344,10 @@ function depsSize(nomes) {
         'var E = require("celeros.engine"); E.init({ dir: "Teste" });' +
         '__harness.grab("cap", E.caps.slots);' +
         'E.spr.load(__harness.defs);' +
-        '__harness.grab("res", [E.spr._used, E.spr.backed("s3"), E.spr.backed("s4")]);',
-        function (env) { env.__harness.defs = slotDefs(5); });
-    check('slots: cap 4 do stub — 4 slots e a 5a def vira painter',
-          r.grabbed.cap === 4 && r.grabbed.res[0] === 4 &&
+        '__harness.grab("res", [E.spr._used, E.spr.backed("s15"), E.spr.backed("s16")]);',
+        function (env) { env.__harness.defs = slotDefs(17); });
+    check('slots: cap 16 do firmware (spriteSlots) — 16 slots e a 17a def vira painter',
+          r.grabbed.cap === 16 && r.grabbed.res[0] === 16 &&
           r.grabbed.res[1] === true && r.grabbed.res[2] === false,
           JSON.stringify(r.grabbed));
     r = runEngine(
@@ -1558,7 +1588,7 @@ function depsSize(nomes) {
     check('core-only: loop roda e fx/spr/tilemap ficam de FORA (nao adotados)',
           Array.isArray(out.core) && out.core[0] === 3 &&
           out.core[1] === undefined && out.core[2] === undefined &&
-          out.core[3] === undefined && out.core[4] === '1.6.0' && out.core[5] === '',
+          out.core[3] === undefined && out.core[4] === '1.7.0' && out.core[5] === '',
           JSON.stringify(out.core));
 
     // adocao por modulo: app.json declara SO o fx — o core chega pela
@@ -1582,7 +1612,7 @@ function depsSize(nomes) {
     } catch (e) { out.fx = 'erro: ' + e; }
     check('fx adotado sem declarar o core: transitiva resolve e decora o MESMO E',
           Array.isArray(out.fx) && out.fx[0] === 4 && out.fx[1] === 'fx' &&
-          out.fx[2] === '1.6.0',
+          out.fx[2] === '1.7.0',
           JSON.stringify(out.fx));
 
     // require de modulo que o app nao adotou (nem transitivo): erro claro
@@ -1610,8 +1640,8 @@ function depsSize(nomes) {
         env.__harness.grab = function (k, v) { out[k] = v; };
         fn4(env.System, env.Storage, env.__harness, req);
     } catch (e) { out.shim = 'erro: ' + e; }
-    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.6.0',
-          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.8.0' &&
+    check('shim celeros.engine: MESMO objeto do core + fx/spr/tilemap, version 1.9.0',
+          Array.isArray(out.shim) && out.shim[0] === true && out.shim[1] === '1.9.0' &&
           out.shim[2] === 'fx,spr,tilemap' && out.shim[3] === 'function' &&
           out.shim[4] === 'function' && out.shim[5] === 'function',
           JSON.stringify(out.shim));
@@ -2376,6 +2406,291 @@ function depsSize(nomes) {
         '__harness.grab("tr", [viu, fim]);');
     check('E.transitioning: true durante o veu e false depois',
           r.tr[0] === true && r.tr[1] === true, JSON.stringify(r.tr));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// ---------------------------------- ui 1.3: estilo, widgets e gfx 2 --
+(function () {
+    console.log('SDK CelerGame ui 1.3 + gfx 2 (tokens/icones/widgets/hud):');
+    var harness = require('../../test/js_harness/run.js');
+
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-ui13-'));
+    fs.writeFileSync(path.join(tmp, 'app.json'),
+                     JSON.stringify({ deps: { 'celeros.game': '^1.7.0',
+                                              'celeros.game.ui': '^1.3.0' } }));
+
+    function runSnippet(code, setup) {
+        var env = harness.makeEnv();
+        var req = harness.makeRequire(tmp, env);
+        var out = {};
+        env.__harness.grab = function (k, v) { out[k] = v; };
+        if (setup) setup(env);
+        var fn = new Function('System', 'Storage', '__harness', 'require', code);
+        fn(env.System, env.Storage, env.__harness, req);
+        return out;
+    }
+    function ch(c) { return [(c >> 11) & 31, (c >> 5) & 63, c & 31]; }
+
+    // ------------------------------------------------------- E.color ----
+    var r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var c = E.color;' +
+        '__harness.grab("col", [' +
+        ' c.hex("#ff0000"), c.hex("#0f0"), c.hex("#0000ff"), c.hex("00ff00"),' +
+        ' c.rgb(255, 0, 0), c.hsv(120, 1, 1), c.hsv(0, 0, 1),' +
+        ' c.mix(0xF800, 0x001F, 0.5),' +
+        ' c.shade(0x0000, 0.5), c.shade(0xFFFF, -0.5),' +
+        ' c.alpha(0xFFFF, 0x0000, 0.5),' +
+        ' c.luma(0xFFFF), c.luma(0x0000), c.contrast(0x0000), c.contrast(0xFFFF),' +
+        ' c.ramp(0xF800, 3).length' +
+        ']);');
+    check('E.color: hex/rgb/hsv/mix/shade/alpha/luma/contrast/ramp',
+          r.col[0] === 0xF800 && r.col[1] === 0x07E0 && r.col[2] === 0x001F &&
+          r.col[3] === 0x07E0 && r.col[4] === 0xF800 && r.col[5] === 0x07E0 &&
+          r.col[6] === 0xFFFF && r.col[7] === 0x8010 &&
+          r.col[8] === 0x8410 && r.col[9] === 0x8410 && r.col[10] === 0x8410 &&
+          r.col[11] === 255 && r.col[12] === 0 &&
+          r.col[13] === 0xFFFF && r.col[14] === 0x0000 && r.col[15] === 3,
+          JSON.stringify(r.col));
+
+    // ------------------------------------------ gfx.gradient (dir/raio) --
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var cs = [];' +
+        'System.fillGradient = function (x,y,w,h,a,b,rad) { cs.push(["g",x,y,w,h,rad]); };' +
+        'System.fillRect = function (x,y,w,h,c) { cs.push(["r",x,y,w,h,c]); };' +
+        'E.gfx.gradient(0,0,20,10,0xF800,0x001F,{screen:true,dir:"x",step:5});' +
+        'E.gfx.gradient(0,0,20,10,0xF800,0x001F,{screen:true,r:6});' +
+        '__harness.grab("gr", cs);');
+    var fr = 0, fg = null;
+    for (var i = 0; i < r.gr.length; i++) {
+        if (r.gr[i][0] === 'r') fr++;
+        else fg = r.gr[i];
+    }
+    var c0 = ch(r.gr[0][5]), c3 = ch(r.gr[3][5]);
+    check('gfx.gradient dir x vira faixas de fillRect e o raio chega no fillGradient',
+          fr === 4 && fg && fg[5] === 6 && r.gr[1][1] === 5 && r.gr[0][3] === 6,
+          JSON.stringify(r.gr));
+    check('gfx.gradient dir x: a primeira faixa puxa vermelho e a ultima azul',
+          c0[0] > c0[2] && c3[2] > c3[0],
+          JSON.stringify([r.gr[0][5], r.gr[3][5]]));
+
+    // ------------------------------------------ gfx.shadow + borda (bw) --
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var cs = [];' +
+        'System.fillSmoothRoundRect = function (x,y,w,h,rad,c) { cs.push([x,y,w,h,rad,c]); };' +
+        'System.fillRect = function (x,y,w,h,c) { cs.push([x,y,w,h,0,c]); };' +
+        'E.gfx.shadow(10,10,40,20,{r:6,layers:2,dy:2,blur:2,color:0x0000,bg:0xFFFF,screen:true});' +
+        'var n1 = cs.length;' +
+        'E.gfx.rect(50,10,40,20,0xF800,{r:6,bw:2,stroke:0xFFFF,screen:true});' +
+        '__harness.grab("sh", [n1, cs]);');
+    check('gfx.shadow: 2 camadas antes do painel', r.sh[0] === 2, String(r.sh[0]));
+    var sh = r.sh[1];
+    check('gfx.rect bw: borda externa (stroke) + interno (cor), raio recuado',
+          sh.length === 4 && sh[2][0] === 50 && sh[2][5] === 0xFFFF &&
+          sh[3][0] === 52 && sh[3][1] === 12 && sh[3][5] === 0xF800 &&
+          sh[2][4] === 6 && sh[3][4] === 4,
+          JSON.stringify(sh));
+
+    // ------------------------------------------ gfx.text outline+shadow --
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var n = 0, last = null;' +
+        'System.drawString = function (s,x,y,f) { n++; last = [x,y]; };' +
+        'E.gfx.text("X", 10, 10, {color:0xFFFF, outline:0x0000,' +
+        ' shadow:{dx:1, dy:2, color:0x0000}, screen:true});' +
+        '__harness.grab("tx", [n, last]);');
+    check('gfx.text outline+shadow: 6 drawString, principal por ultimo',
+          r.tx[0] === 6 && r.tx[1][0] === 10 && r.tx[1][1] === 10,
+          JSON.stringify(r.tx));
+
+    // ------------------------------------------ panel content + dim -----
+    r = runSnippet(
+        'var E = require("celeros.game"); E.init({});' +
+        'var c = E.gfx.panel(10,10,100,60,{pad:8,screen:true});' +
+        'var n = 0, col = -1;' +
+        'System.fillRect = function (x,y,w,h,cc) { n++; col = cc; };' +
+        'E.gfx.dim(0,0,240,320,50,{screen:true,bg:0xFFFF});' +
+        '__harness.grab("pn", [c.x,c.y,c.w,c.h,n,col]);');
+    check('gfx.panel devolve o content rect com pad',
+          r.pn[0] === 18 && r.pn[1] === 18 && r.pn[2] === 84 && r.pn[3] === 44,
+          JSON.stringify(r.pn));
+    check('gfx.dim pinta 1 fillRect com a cor misturada (50% preto no branco)',
+          r.pn[4] === 1 && r.pn[5] === 0x8410,
+          JSON.stringify([r.pn[4], r.pn[5]]));
+
+    // ------------------------------------------ preset flat ------------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'E.ui.preset("flat");' +
+        'var sm = 0, gr = 0;' +
+        'System.fillSmoothRoundRect = function () { sm++; };' +
+        'System.fillRect = function () { sm++; };' +
+        'System.fillGradient = function () { gr++; };' +
+        'E.ui.button("X", 10, 10, 80, 40);' +
+        'E.ui.card(10, 60, 80, 40);' +
+        '__harness.grab("fl", [sm, gr, E.ui.tokens.radius, E.ui.tokens.shadow,' +
+        ' E.ui.tokens.grad]);');
+    check('ui.preset flat: raio 6, sem sombra/gradiente (so fills solidos)',
+          r.fl[0] >= 3 && r.fl[1] === 0 && r.fl[2] === 6 && r.fl[3] === 0 &&
+          r.fl[4] === false,
+          JSON.stringify(r.fl));
+
+    // ------------------------------------------ widgets -----------------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var hitBtn = false, tog = false, chk = false, rad = false;' +
+        'var sl = -1, stp = 5, seg = 0, tab = 0, chp = false;' +
+        'var bd = 0, pr = 0, rg = 0, ic = null;' +
+        'var q = 0;' +
+        'E.run({ s: { update: function () { q++; if (q > 24) E.quit(); },' +
+        ' draw: function () {' +
+        '  if (E.ui.button("A", 20, 20, 80, 30)) hitBtn = true;' +
+        '  tog = E.ui.toggle(20, 60, tog);' +
+        '  chk = E.ui.check("", 20, 100, chk);' +
+        '  rad = E.ui.radio("", 20, 140, rad);' +
+        '  sl = E.ui.slider(20, 180, 100, sl < 0 ? 0 : sl, {min:0,max:100,step:10,id:"s1"});' +
+        '  stp = E.ui.stepper(20, 220, stp, {min:0,max:10,step:1,w:104,h:32});' +
+        '  seg = E.ui.segmented(20, 260, 120, ["A","B","C"], seg);' +
+        '  tab = E.ui.tabs(150, 260, 80, 30, ["A","B"], tab);' +
+        '  chp = E.ui.chip("C", 20, 296, {on:chp});' +
+        '  bd = E.ui.badge("9", 150, 20);' +
+        '  pr = E.ui.progress(150, 60, 80, 8, 0.5);' +
+        '  rg = E.ui.ring(200, 120, 20, 0.5);' +
+        '  ic = E.ui.icon("play", 120, 150, 16);' +
+        ' } } }, "s");' +
+        '__harness.grab("wg", [hitBtn, tog, chk, rad, sl, stp, seg, tab, chp,' +
+        ' bd, pr, rg, ic && ic.w]);',
+        function (env) {
+            env.__harness.pushTouch([
+                { x: 60, y: 35, touched: 1 }, { x: 60, y: 35, touched: 0 },
+                { x: 40, y: 72, touched: 1 }, { x: 40, y: 72, touched: 0 },
+                { x: 30, y: 110, touched: 1 }, { x: 30, y: 110, touched: 0 },
+                { x: 30, y: 150, touched: 1 }, { x: 30, y: 150, touched: 0 },
+                { x: 90, y: 194, touched: 1 }, { x: 90, y: 194, touched: 0 },
+                { x: 108, y: 236, touched: 1 }, { x: 108, y: 236, touched: 0 },
+                { x: 80, y: 276, touched: 1 }, { x: 80, y: 276, touched: 0 },
+                { x: 200, y: 275, touched: 1 }, { x: 200, y: 275, touched: 0 },
+                { x: 30, y: 308, touched: 1 }, { x: 30, y: 308, touched: 0 }
+            ]);
+        });
+    check('ui widgets: button/toggle/check/radio/slider/stepper/segmented/tabs/chip',
+          r.wg[0] === true && r.wg[1] === true && r.wg[2] === true &&
+          r.wg[3] === true && r.wg[4] === 70 && r.wg[5] === 6 &&
+          r.wg[6] === 1 && r.wg[7] === 1 && r.wg[8] === true,
+          JSON.stringify(r.wg));
+    check('ui widgets: badge/progress/ring/icon devolvem medida',
+          r.wg[9] > 0 && r.wg[10] === 0.5 && r.wg[11] === 0.5 && r.wg[12] === 16,
+          JSON.stringify(r.wg));
+
+    // ------------------------------------------ lista rica --------------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var itens = [{section:"SEC"}, {label:"A",value:"a"},' +
+        ' {label:"B",value:"b",disabled:true}, {label:"C",value:"c"}];' +
+        'for (var j = 0; j < 6; j++) itens.push({label:"D" + j, value:"d" + j});' +
+        'var pintou = 0, pego = null;' +
+        'var lst = E.ui.list({items: itens, row: 28, scrollbar: false,' +
+        ' paintRow: function (it,x,y,w,h,st) { pintou++; } });' +
+        'var q = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  q++;' +
+        '  if (q === 3) __harness.tap(120, 178);' +
+        '  if (q === 12) E.quit();' +
+        ' }, draw: function () { pego = lst.draw(20, 80, 200, 120) || pego; } } }, "s");' +
+        'lst.scrollBy(40);' +
+        '__harness.grab("ls", [pintou > 0, lst.index, pego, lst.scroll]);');
+    check('ui.list: secao nao e linha, paintRow pinta as linhas e o index vem certo',
+          r.ls[0] === true && r.ls[1] === 3 && r.ls[2] === 'c',
+          JSON.stringify(r.ls));
+    check('ui.list.scrollBy move o offset (conteudo maior que a caixa)',
+          r.ls[3] === 40, String(r.ls[3]));
+
+    // ------------------------------------------ scroll generico ---------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var off = -1, q = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  q++; if (q === 3) __harness.swipe(120, 190, 120, 110);' +
+        '  if (q > 18) E.quit();' +
+        ' }, draw: function () { off = E.ui.scroll("g", 20, 80, 200, 120, 600,' +
+        '  function () {}); } } }, "s");' +
+        '__harness.grab("sc", off);');
+    check('ui.scroll: arrasto dentro da area rola (offset > 0)',
+          r.sc > 0, String(r.sc));
+
+    // ------------------------------------------ modal/sheet -------------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var md = null, sh = null, mo = true, q = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  q++;' +
+        '  if (q === 4) __harness.tap(120, 20);' +
+        '  if (q === 12) __harness.tap(120, 100);' +
+        '  if (q > 22) E.quit();' +
+        ' }, draw: function () {' +
+        '  var a = E.ui.modal("m1", {title:"T", body:"B", h:160, open:mo});' +
+        '  if (a === "dismiss") { md = a; mo = false; }' +
+        '  var b = E.ui.sheet("s1", {h:160, open:true});' +
+        '  if (b) sh = b;' +
+        ' } } }, "s");' +
+        '__harness.grab("ms", [md, sh]);');
+    check('ui.modal: tap no veu devolve dismiss', r.ms[0] === 'dismiss', JSON.stringify(r.ms));
+    check('ui.sheet: tap fora devolve close', r.ms[1] === 'close', JSON.stringify(r.ms));
+
+    // ------------------------------------------ toast em fila -----------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'E.ui.toast("a"); E.ui.toast("b"); E.ui.toast("c"); E.ui.toast("d");' +
+        '__harness.grab("tq", [E.ui._toasts.length, E.ui._toasts[0].msg,' +
+        ' E.ui._toasts[2].msg]);');
+    check('ui.toast: fila de 3 (a mais antiga sai)',
+          r.tq[0] === 3 && r.tq[1] === 'b' && r.tq[2] === 'd', JSON.stringify(r.tq));
+
+    // ------------------------------------------ HUD memoizado -----------
+    r = runSnippet(
+        'var E = require("celeros.game.ui"); E.init({});' +
+        'var n = 0; System.drawString = function () { n++; };' +
+        'var n1 = -1, n2 = -1, q = 0;' +
+        'E.run({ s: { enter: function () { E.dirty.enable(0x0000); },' +
+        ' update: function () {' +
+        '  q++; if (q === 2) n1 = n; if (q === 5) { n2 = n; E.quit(); }' +
+        ' }, draw: function () { E.ui.hud({score: 10, time: "1:00"}); } } }, "s");' +
+        '__harness.grab("hud", [n1, n2]);');
+    check('ui.hud: memo na camada suja (nao redesenha com a assinatura igual)',
+          r.hud[0] > 0 && r.hud[1] === r.hud[0],
+          JSON.stringify(r.hud));
+
+    // ------------------------------------------ pixel: gradiente/sombra --
+    (function () {
+        var Rn = require('../../tools/sdk/lib/renderer.js').Renderer;
+        var rr = new Rn();
+        var env = harness.makeEnv();
+        rr.wire(env);
+        env.System.fillScreen(0x0000);
+        var req = harness.makeRequire(tmp, env);
+        var fn = new Function('System', 'Storage', '__harness', 'require',
+            'var E = require("celeros.game"); E.init({});' +
+            'E.gfx.gradient(0, 0, 240, 20, 0xF800, 0x001F,' +
+            ' {screen: true, dir: "x", step: 4});' +
+            'E.gfx.shadow(20, 60, 100, 40, {r: 8, layers: 2, dy: 4, blur: 4,' +
+            ' color: 0x0000, bg: 0xFFFF, screen: true});' +
+            'E.gfx.rect(20, 60, 100, 40, 0xFFFF, {r: 8, screen: true});');
+        fn(env.System, env.Storage, env.__harness, req);
+        var fb = rr.fb, w = rr.w;
+        var left = fb[2 * w + 2], right = fb[2 * w + 237];
+        var card = fb[80 * w + 70];
+        var sombra = fb[103 * w + 70], fundo = fb[103 * w + 200];
+        var l = ch(left), rt = ch(right);
+        check('pixel: gradiente horizontal vai do vermelho ao azul',
+              l[0] > l[2] && rt[2] > rt[0] && l[1] < 8 && rt[1] < 8,
+              JSON.stringify([left, right]));
+        check('pixel: card branco e sombra escurece abaixo dele',
+              card === 0xFFFF && sombra !== fundo && sombra !== 0x0000,
+              JSON.stringify([card, sombra, fundo]));
+    })();
 
     fs.rmSync(tmp, { recursive: true, force: true });
 })();

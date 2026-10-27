@@ -18,14 +18,23 @@ var FW_META = null;
 function fwMeta() {
     if (FW_META) return FW_META;
     FW_META = { api: 12, version: '1.2.0' };  // fallback fora da arvore
+    var raiz = null, main_ = null;
     try {
         var mk = fs.readFileSync(path.join(ROOT, 'main/CMakeLists.txt'), 'utf8');
         var m = mk.match(/CELEROS_API_LEVEL\s*=?\s*(\d+)/);
         if (m) FW_META.api = parseInt(m[1], 10);
         var root = fs.readFileSync(path.join(ROOT, 'CMakeLists.txt'), 'utf8');
         m = root.match(/project\s*\(\s*CelerOS\s+VERSION\s+(\d+\.\d+\.\d+)/);
-        if (m) FW_META.version = m[1];
+        if (m) { FW_META.version = m[1]; raiz = m[1]; }
+        m = mk.match(/CELEROS_VERSION\s*=\s*"?(\d+\.\d+\.\d+)/);
+        if (m) main_ = m[1];
     } catch (e) { /* mantem o fallback */ }
+    // a versao vive em DOIS lugares (root project() e CELEROS_VERSION do
+    // main) e o firmware reporta a do main: drift aqui e silencioso — o
+    // harness testaria contra uma versao que o aparelho nao tem
+    if (raiz && main_ && raiz !== main_)
+        throw new Error('versao do firmware divergente: CMakeLists.txt project() ' +
+                        raiz + ' x main/CMakeLists.txt CELEROS_VERSION ' + main_);
     return FW_META;
 }
 
@@ -48,27 +57,52 @@ function makeEnv() {
     env.__prelude = 'var BLACK=0x0000,WHITE=0xFFFF,RED=0xF800,GREEN=0x07E0,BLUE=0x001F,' +
                     'YELLOW=0xFFE0,CYAN=0x07FF,MAGENTA=0xF81F,ORANGE=0xFDA0,DARKGREY=0x7BEF;';
 
-    // ---- Timers (API 12): mesmo modelo do firmware — disparam no delay/
-    // getTouch (os pontos de "present"); erro do callback propaga.
-    var timers = [];
+    // ---- Timers (API 12): mesmo modelo do firmware (JsTimers.cpp) — pool
+    // FIXO de 8 slots (setTimeout ocupa o MENOR slot livre; o tick varre na
+    // ordem dos slots 0..7), piso 10ms, teto 2^31-1 (o `ms|0` do host velho
+    // dava a volta em 3e9 e o timeout "eterno" disparava em 10ms), callback
+    // dispara nos pontos de present (delay/getTouch/button); erro propaga.
+    // inTick: present DENTRO de callback e no-op no firmware (drain aninhado
+    // adia) — sem o guard, o interval redispitava dentro do proprio callback.
+    var slots = [];
+    for (var si = 0; si < 8; si++) slots.push(null);
     var nextTid = 1;
+    var timersInTick = false;
     function fireTimers() {
-        for (var i = 0; i < timers.length; i++) {
-            var t = timers[i];
-            if (clock >= t.at) {
-                if (t.repeat) {
-                    do { t.at += t.delay; } while (clock >= t.at);
-                } else {
-                    timers.splice(i--, 1);
-                }
-                t.fn();
+        if (timersInTick) return;
+        timersInTick = true;
+        try {
+        for (var i = 0; i < slots.length; i++) {
+            var t = slots[i];
+            if (!t || clock < t.at) continue;
+            if (t.repeat) {
+                do { t.at += t.delay; } while (clock >= t.at);
+            } else {
+                slots[i] = null;  // consome ANTES de chamar (slot reusavel)
             }
+            t.fn();
         }
+        } finally { timersInTick = false; }  // erro propaga e o guard cai (como o inTick do firmware)
     }
     var timersDropped = 0;   // drops do pool: silenciosos no firmware, no host precisam ser visiveis
     function timerAdd(fn, ms, repeat) {
-        if (typeof fn !== 'function') return 0;
-        if (timers.length >= 8) {
+        // firmware: duk_require_callable + duk_require_uint lancam TypeError
+        // (JsTimers.cpp timerStart); o host velho engolia e devolvia 0
+        if (typeof fn !== 'function')
+            throw new TypeError('setTimeout: callback (function) e obrigatorio');
+        if (typeof ms !== 'number')
+            throw new TypeError('setTimeout: ms (number) e obrigatorio');
+        // duk_require_uint: NaN -> 0; negativo -> 0 (piso 10 cobre); acima de
+        // 2^32 satura em 2^32-1 e o binding clampa em 2^31-1
+        if (ms !== ms) ms = 0;
+        if (ms < 0) ms = 0;
+        if (ms > 4294967295) ms = 4294967295;
+        if (ms > 2147483647) ms = 2147483647;
+        var d = Math.max(10, Math.floor(ms));
+        var slotIdx = -1;
+        for (var i = 0; i < slots.length; i++)
+            if (!slots[i]) { slotIdx = i; break; }
+        if (slotIdx < 0) {
             // espelha o firmware (retorna 0, JsTimers.cpp) — mas aqui o
             // silencio custa meia hora de debug: o 9o timer de um wire de
             // teste derrubava o ultimo tap do smoke e parecia bug do app
@@ -79,13 +113,14 @@ function makeEnv() {
                        + 'o firmware tem o mesmo limite)');
             return 0;
         }
-        var d = Math.max(10, ms | 0);
-        timers.push({ id: nextTid, fn: fn, delay: d, repeat: repeat, at: clock + d });
+        slots[slotIdx] = { id: nextTid, fn: fn, delay: d, repeat: repeat, at: clock + d };
         return nextTid++;
     }
     function timerDel(id) {
-        for (var i = 0; i < timers.length; i++)
-            if (timers[i].id === id) { timers.splice(i, 1); return; }
+        // id < 1 (0 = pool cheio) ou de timer ja consumido: no-op
+        if (!(id >= 1)) return;
+        for (var i = 0; i < slots.length; i++)
+            if (slots[i] && slots[i].id === id) { slots[i] = null; return; }
     }
 
     // ---- Storage (API 12): NVS privado do app — mapa em memoria por runApp
@@ -112,6 +147,118 @@ function makeEnv() {
         '/local/apps': { dir: true },
         '/local/config_snake_hi.txt': { data: '17' }
     };
+
+    // ---- Jail do FS (paridade de JsFsJail.h + JsFs.cpp) --------------------
+    // O firmware nega por FORMA canonica (sem "//", ".", ".."; so /local e
+    // /sd), por DONO (capability "system" ve tudo; "fs" nao ve protegidos de
+    // /local nem dados de outro app) e por ALVO de escrita (raizes de
+    // montagem, /local/apps, /local/modules). Conteudo negado LANCA erro;
+    // metadado negado responde "nao existe". O host velho normalizava o path
+    // (norm) e via tudo: /local/./wifi.txt existia aqui e nao existe la.
+    var PERM_FS = 1, PERM_SYSTEM = 8;
+    var PERM_LEGACY = 0xFFFFFFFF & ~(64 | 128);  // AppPerms.h: tudo menos usb/input
+    env.__perm = PERM_LEGACY;                    // apps antigos sem "permissions"
+    function fsHasPerm(bit) { return (env.__perm & bit) !== 0; }
+    function fsPathCanonical(p) {
+        var rest;
+        if (p.substring(0, 6) === '/local') rest = p.substring(6);
+        else if (p.substring(0, 3) === '/sd') rest = p.substring(3);
+        else return false;
+        if (rest !== '' && rest.charAt(0) !== '/') return false;  // "/localfoo", "/sdcard"
+        while (rest.charAt(0) === '/') {
+            var seg = rest.substring(1);
+            var end = seg.indexOf('/');
+            var s = end < 0 ? seg : seg.substring(0, end);
+            if (s === '') return end < 0 ? true : false;  // barra final unica ok; "//" nao
+            if (s === '.' || s === '..') return false;
+            if (end < 0) return true;
+            rest = seg.substring(end);
+        }
+        return rest === '';
+    }
+    function fsIsMountRoot(p, mount) {
+        if (p.substring(0, mount.length) !== mount) return false;
+        var c = p.charAt(mount.length);
+        return c === '' || (c === '/' && p.length === mount.length + 1);
+    }
+    function fsUnderAppsDir(p) {
+        function under(dir, fold) {
+            if (p.length < dir.length) return false;
+            for (var i = 0; i < dir.length; i++) {
+                var a = p.charAt(i), b = dir.charAt(i);
+                if (fold) {
+                    if (a >= 'A' && a <= 'Z') a = String.fromCharCode(a.charCodeAt(0) + 32);
+                    if (b >= 'A' && b <= 'Z') b = String.fromCharCode(b.charCodeAt(0) + 32);
+                }
+                if (a !== b) return false;
+            }
+            var c = p.charAt(dir.length);
+            return c === '' || c === '/';
+        }
+        return under('/local/apps', false) || under('/sd/apps', true);
+    }
+    function fsUnderSharedModules(p) {
+        return p.substring(0, 14) === '/local/modules' &&
+               (p.length === 14 || p.charAt(14) === '/');
+    }
+    function fsOtherAppData(p) {
+        var K = '/local/data/';
+        if (p.substring(0, K.length) !== K || p.length === K.length) return false;
+        var seg = p.substring(K.length);
+        var end = seg.indexOf('/');
+        var pkg = end < 0 ? seg : seg.substring(0, end);
+        var mine = env.__pkg ? String(env.__pkg) : '';
+        return mine === '' || pkg !== mine;
+    }
+    var FS_PROTECTED = ['/local/wifi.txt', '/local/wifi.txt.migrated', '/local/settings_pin.txt',
+        '/local/settings_pin2.bin', '/local/touch_cal_p.bin', '/local/autostart.txt',
+        '/local/ota_url.txt', '/local/ota_allow_http.txt', '/local/deepseek_key.txt',
+        '/local/openrouter_key.txt', '/local/config_time.txt', '/local/nowifi.txt',
+        '/local/web_on.txt', '/local/brightness.txt', '/local/config_install_sd.txt',
+        '/local/notifications.txt'];
+    function fsProtectedHit(p, prot) {
+        if (p.substring(0, prot.length) !== prot) return false;
+        var rest = p.substring(prot.length);
+        if (rest === '') return true;
+        if (rest === '.tmp' || rest === '.tmp/') return true;
+        return rest === '/';
+    }
+    function fsPathAllowed(p) {
+        if (!fsPathCanonical(p)) return false;
+        if (fsHasPerm(PERM_SYSTEM)) return true;
+        if (p.substring(0, 7) !== '/local/') return true;  // /sd
+        if (fsOtherAppData(p)) return false;
+        for (var i = 0; i < FS_PROTECTED.length; i++)
+            if (fsProtectedHit(p, FS_PROTECTED[i])) return false;
+        return true;
+    }
+    function fsWriteAllowed(p) {
+        if (!fsPathAllowed(p)) return false;
+        if (fsHasPerm(PERM_SYSTEM)) return true;
+        if (fsIsMountRoot(p, '/local') || fsIsMountRoot(p, '/sd') || fsIsMountRoot(p, '/local/data'))
+            return false;
+        return !fsUnderAppsDir(p) && !fsUnderSharedModules(p);
+    }
+    function fsTreeAllowed(p) {
+        if (!fsPathCanonical(p)) return false;
+        if (fsHasPerm(PERM_SYSTEM)) return true;
+        if (fsIsMountRoot(p, '/local') || fsIsMountRoot(p, '/local/data')) return false;
+        return fsPathAllowed(p);
+    }
+    function fsTreeWriteAllowed(p) {
+        if (!fsTreeAllowed(p)) return false;
+        if (fsHasPerm(PERM_SYSTEM)) return true;
+        if (fsIsMountRoot(p, '/sd')) return false;
+        return !fsUnderAppsDir(p) && !fsUnderSharedModules(p);
+    }
+    function fsDeny(p) {
+        throw new Error('FS: acesso negado a ' + p +
+                        ' (arquivo do sistema, pasta de apps ou dados de outro app)');
+    }
+    function fsTreeDeny(verb, p) {
+        throw new Error('FS: ' + verb + ' ' + p + ' requer permissao "system"');
+    }
+
     function parentOf(p) {
         var i = p.lastIndexOf('/');
         return i <= 0 ? '/' : p.substring(0, i);
@@ -129,10 +276,15 @@ function makeEnv() {
 
     var FS = {
         readTextFile: function(p) {
+            p = String(p);
+            if (!fsPathAllowed(p)) fsDeny(p);
             var e = files[norm(p)];
             return e && e.data !== undefined ? e.data : null;
         },
         writeTextFile: function(p, c) {
+            p = String(p);
+            if (!fsWriteAllowed(p)) fsDeny(p);
+            if (p.length > 192) throw new RangeError('FS: caminho longo demais');
             p = norm(p);
             var par = files[parentOf(p)];
             if (!par || !par.dir) return false;
@@ -140,21 +292,31 @@ function makeEnv() {
             return true;
         },
         readFile: function(p, maxLen) {
+            p = String(p);
+            if (!fsPathAllowed(p)) fsDeny(p);
             p = norm(p);
             var e = files[p];
             if (!e || e.dir) return null;
             var d = e.data;
             var cap = typeof maxLen === 'number' ? maxLen : 16384;
+            if (cap > 65536) cap = 65536;   // firmware: teto de 64KB (JsFs.cpp)
             return d.substring(0, cap);
         },
         writeFile: function(p, c) {
+            p = String(p);
+            if (!fsWriteAllowed(p)) fsDeny(p);
+            if (p.length > 192) throw new RangeError('FS.writeFile: caminho longo demais');
+            c = String(c);
+            if (c.length > 64 * 1024) throw new RangeError('FS.writeFile: maximo 64KB');
             p = norm(p);
             var par = files[parentOf(p)];
             if (!par || !par.dir) return false;
-            files[p] = { data: String(c) };
+            files[p] = { data: c };
             return true;
         },
         appendTextFile: function(p, c) {
+            p = String(p);
+            if (!fsWriteAllowed(p)) fsDeny(p);
             p = norm(p);
             var e = files[p];
             if (!e || e.data === undefined) return FS.writeTextFile(p, c);
@@ -162,12 +324,17 @@ function makeEnv() {
             return true;
         },
         deleteFile: function(p) {
+            p = String(p);
+            if (!fsWriteAllowed(p)) fsDeny(p);
             p = norm(p);
             if (!files[p] || files[p].dir) return false;
             delete files[p];
             return true;
         },
         renameFile: function(a, b) {
+            a = String(a); b = String(b);
+            if (!fsWriteAllowed(a)) fsDeny(a);
+            if (!fsWriteAllowed(b)) fsDeny(b);
             a = norm(a); b = norm(b);
             // semantica do rename() POSIX (FileSystem::renameFile): substitui
             // arquivo existente; so falha se origem nao existe ou b e diretorio
@@ -177,6 +344,10 @@ function makeEnv() {
             return true;
         },
         copyFile: function(a, b) {
+            a = String(a); b = String(b);
+            // firmware (js_copyFile): origem e destino; mensagens proprias
+            if (!fsPathAllowed(a)) throw new Error('FS: ' + a + ' e arquivo do sistema');
+            if (!fsWriteAllowed(b)) throw new Error('FS: escrita negada em ' + b);
             a = norm(a); b = norm(b);
             if (!files[a] || files[a].dir) return false;
             return FS.writeTextFile(b, files[a].data);
@@ -185,6 +356,10 @@ function makeEnv() {
         // cria a arvore de destino, para no primeiro erro; subpastas
         // existentes nao sao erro)
         copyDirectory: function(a, b) {
+            a = String(a); b = String(b);
+            // firmware (js_copyDirectory): arvore na origem E no destino
+            if (!fsTreeAllowed(a)) fsTreeDeny('copiar', a);
+            if (!fsTreeWriteAllowed(b)) fsTreeDeny('copiar para', b);
             a = norm(a); b = norm(b);
             var src = files[a];
             if (!src || !src.dir) return false;
@@ -203,10 +378,23 @@ function makeEnv() {
             }
             return ok;
         },
-        exists: function(p) { return !!files[norm(p)]; },
-        isDirectory: function(p) { var e = files[norm(p)]; return !!(e && e.dir); },
-        isFile: function(p) { var e = files[norm(p)]; return !!(e && !e.dir); },
+        exists: function(p) { p = String(p); return fsPathAllowed(p) && !!files[norm(p)]; },
+        isDirectory: function(p) {
+            p = String(p);
+            if (!fsPathAllowed(p)) return false;  // negado = "nao existe"
+            var e = files[norm(p)];
+            return !!(e && e.dir);
+        },
+        isFile: function(p) {
+            p = String(p);
+            if (!fsPathAllowed(p)) return false;
+            var e = files[norm(p)];
+            return !!(e && !e.dir);
+        },
         listDir: function(p) {
+            p = String(p);
+            // firmware: negado lista vazia (como ausente), sem erro
+            if (!fsPathAllowed(p)) return [];
             p = norm(p);
             var out = [];
             var prefix = p === '/' ? '/' : p + '/';
@@ -220,6 +408,8 @@ function makeEnv() {
             return out;
         },
         mkdir: function(p) {
+            p = String(p);
+            if (!fsWriteAllowed(p)) fsDeny(p);
             p = norm(p);
             if (files[p]) return false;
             var par = files[parentOf(p)];
@@ -228,6 +418,8 @@ function makeEnv() {
             return true;
         },
         rmdir: function(p) {
+            p = String(p);
+            if (!fsTreeWriteAllowed(p)) fsDeny(p);
             p = norm(p);
             var e = files[p];
             if (!e || !e.dir) return false;
@@ -236,13 +428,38 @@ function makeEnv() {
             return true;
         },
         removeDirectory: function(p) {
+            p = String(p);
+            if (!fsTreeWriteAllowed(p)) fsTreeDeny('remover', p);
             p = norm(p);
             if (!files[p] || !files[p].dir) return false;
-            for (var k in files) if (k.indexOf(p + '/') === 0) delete files[k];
-            delete files[p];
-            return true;
+            // removeTree (JSBindings.cpp): profunda ate 4 niveis e pula
+            // entradas que o jail nao deixa remover (nao sao dono)
+            function removeTree(dir, depth) {
+                if (depth > 4) return false;
+                var filhos = [];
+                for (var k in files) if (k.indexOf(dir + '/') === 0) filhos.push(k);
+                filhos.sort(function(x, y) { return x.length - y.length; });
+                for (var i = 0; i < filhos.length; i++) {
+                    var k2 = filhos[i];
+                    if (!fsWriteAllowed(k2)) continue;
+                    if (files[k2].dir) {
+                        if (!removeTree(k2, depth + 1)) return false;
+                    } else {
+                        delete files[k2];
+                    }
+                }
+                for (var k3 in files) if (k3.indexOf(dir + '/') === 0) return false;
+                delete files[dir];
+                return true;
+            }
+            return removeTree(p, 0);
         },
-        getFileSize: function(p) { var e = files[norm(p)]; return e && e.data !== undefined ? e.data.length : 0; },
+        getFileSize: function(p) {
+            p = String(p);
+            if (!fsPathAllowed(p)) return 0;
+            var e = files[norm(p)];
+            return e && e.data !== undefined ? e.data.length : 0;
+        },
         // pasta privada do app (F4): runApp deriva o packageName do app.json
         appData: function() {
             if (!env.__pkg) return '';
@@ -254,7 +471,11 @@ function makeEnv() {
         getTotalSpace: function() { return 384 * 1024; },
         getUsedSpace: function() { return 163 * 1024; },
         getFreeSpace: function() { return 221 * 1024; },
-        getFileMD5: function() { return 'deadbeef'; },
+        getFileMD5: function(p) {
+            p = String(p);
+            if (!fsPathAllowed(p)) fsDeny(p);
+            return 'deadbeef';
+        },
         mountSD: function() { return true; },
         unmountSD: function() {}
     };
@@ -273,6 +494,13 @@ function makeEnv() {
             return out;
         }
         return (f && f.touched) ? [{ id: 0, x: f.x || 0, y: f.y || 0, size: 0 }] : [];
+    }
+    // readAppTouch/readAppTouches (JsSystem.cpp) clampam o Y virtual em 0:
+    // dedo na faixa da topbar que o chrome nao consumiu nao vira y negativo
+    // (o cast direto devolvia ~-3 a -40; hoje satura). X nao e clamped la.
+    function clampY(pts) {
+        for (var i = 0; i < pts.length; i++) if (pts[i].y < 0) pts[i].y = 0;
+        return pts;
     }
     // fila de eventos do botao fisico (API 17): 1 curto, 2 longo — consumido
     // por System.button (no host so entra quem injetar aqui)
@@ -439,6 +667,41 @@ function makeEnv() {
 
     var rigidStub = require(path.join(ROOT, 'tools', 'sdk', 'lib', 'rigid2d.js')).makeStub();
 
+    // pool de sprites com IDENTIDADE como o firmware (JsGfx.cpp): 16 slots
+    // fixos (board com PSRAM que o host modela; spriteSlots reporta o mesmo),
+    // ids 1..16 = slot+1, aloca o MENOR slot livre, recicla o CORRENTE com o
+    // pool cheio (tftSprite — o velho `shift()` reciclava o mais antigo e
+    // colidia com o contrato do pushSprite/corrente), corrente nasce no
+    // create e troca no useSprite(id); useSprite invalido desbinda e falha.
+    env.__spriteSlots = [];      // 0..15, null = livre
+    env.__spriteCur = 0;         // id do corrente (0 = nenhum)
+    env.__spriteBound = false;
+    function spriteFree() {
+        for (var i = 0; i < 16; i++) if (!env.__spriteSlots[i]) return i;
+        return -1;
+    }
+    function spriteRelease(id) {
+        env.__spriteSlots[id - 1] = null;
+        if (env.__spriteCur === id) { env.__spriteCur = 0; env.__spriteBound = false; }
+    }
+    function spriteCreate(w, h) {
+        // firmware: duk_require_int lanca TypeError fora de numero
+        if (typeof w !== 'number' || typeof h !== 'number')
+            throw new TypeError('createSprite: largura/altura (number) sao obrigatorias');
+        // teto fisico de 2048 por lado e minimo 1 (id 0 = falha limpa)
+        if (!(w >= 1 && h >= 1 && w <= 2048 && h <= 2048)) return 0;
+        var slot = spriteFree();
+        if (slot < 0) {
+            // pool cheio: recicla o CORRENTE (apps antigos esperam isso)
+            if (!env.__spriteCur) return 0;
+            slot = env.__spriteCur - 1;
+            spriteRelease(env.__spriteCur);
+        }
+        env.__spriteSlots[slot] = { w: w, h: h };
+        env.__spriteCur = slot + 1;
+        env.__spriteBound = false;  // create nao binda
+        return slot + 1;
+    }
     env.System = {
     theme: function() { return JSON.parse(JSON.stringify(theme)); },
     color: function(r, g, b) { return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3); },
@@ -483,7 +746,10 @@ function makeEnv() {
     drawString: function(s) { log.push(String(s)); },
     textWidth: function(s, font) {
         s = String(s);
-        var per = font === 1 ? 6 : font === 4 ? 14 : 8;
+        // mesma metrica do renderer do emulador (ADVANCE 1:6, 2:8, 4:16); o
+        // 4 da DejaVu24 mede 15,28 px por glifo no firmware — o 14 antigo
+        // deslocava o texto centrado entre `test` e `emu`
+        var per = font === 1 ? 6 : font === 4 ? 16 : 8;
         return s.length * per;
     },
     // altura da fonte no espaco virtual (mesma metrica do renderer do
@@ -504,8 +770,11 @@ function makeEnv() {
         fireTimers();
         if (!touchQ.length) return { x: 0, y: 0, touched: 0 };
         var f = touchQ.shift();
-        if (!f.touches) return f;  // quadro legado: volta cru (como sempre)
-        var ts = normFrame(f);
+        if (!f.touches) {
+            // quadro legado: volta cru com o clamp de y do firmware
+            return { x: f.x || 0, y: f.y < 0 ? 0 : (f.y || 0), touched: f.touched ? 1 : 0 };
+        }
+        var ts = clampY(normFrame(f));
         return ts.length ? { x: ts[0].x, y: ts[0].y, touched: 1 } : { x: 0, y: 0, touched: 0 };
     },
     // API 43 (multitoque): TODOS os dedos do quadro, primario primeiro; []
@@ -513,7 +782,7 @@ function makeEnv() {
     getTouches: function() {
         fireTimers();
         if (!touchQ.length) return [];
-        return normFrame(touchQ.shift());
+        return clampY(normFrame(touchQ.shift()));
     },
     // API 17: botao fisico como input (placas buttonToApp). O host nao
     // tem botao: fila injetavel por testes (buttonQ) ou sempre 0.
@@ -623,14 +892,48 @@ function makeEnv() {
     getAutoBrightness: function() { return env.__autoBri; },
     setAutoBrightness: function(on) { env.__autoBri = !!on; return true; },
     present: function() { fireTimers(); }, isBuffered: function() { return false; },
-    useSprite: function() { return true; },
+    useSprite: function(id) {
+        // JsGfx.cpp: 0 = quadro (true); id invalido/livre desbinda e falha;
+        // valido troca o corrente E binda
+        id = id | 0;
+        if (id === 0) { env.__spriteBound = false; return true; }
+        if (id < 1 || id > 16 || !env.__spriteSlots[id - 1]) {
+            env.__spriteBound = false;
+            return false;
+        }
+        env.__spriteCur = id;
+        env.__spriteBound = true;
+        return true;
+    },
     setTextDatum: function() {},
-    createSprite: function() { return 1; },
-    deleteSprite: function() {},
+    // pool de sprites com IDENTIDADE como o firmware (ids 1..16; aloca o
+    // MENOR slot livre, recicla o CORRENTE com o pool cheio): ver
+    // spriteCreate logo acima de env.System
+    createSprite: spriteCreate,
+    deleteSprite: function(id) {
+        // sem arg: apaga o CORRENTE (compat); id fora de 1..16: no-op
+        var victim = env.__spriteCur;
+        if (typeof id === 'number') {
+            id = id | 0;
+            if (id < 1 || id > 16) return;
+            victim = env.__spriteSlots[id - 1] ? id : 0;
+            if (!victim) return;
+        }
+        if (victim) spriteRelease(victim);
+    },
     pushSprite: function() {},
-    bindSprite: function() { return true; },
-    // canvas nativo = placa S3 com PSRAM (pool de 16 desde a API 33)
-    spriteSlots: function() { return env.__nativeCanvas ? 16 : 4; },
+    bindSprite: function(enable) {
+        // firmware: duk_require_boolean (JsGfx.cpp)
+        if (typeof enable !== 'boolean')
+            throw new TypeError('bindSprite: boolean e obrigatorio');
+        if (env.__spriteCur) env.__spriteBound = enable;
+        else env.__spriteBound = false;
+        return true;
+    },
+    // canvas nativo ou nao: o host modela placa COM PSRAM (16 slots, como
+    // o spriteSlots do firmware reporta; o cap 4 do host velho nunca existiu
+    // no JsGfx.cpp — la e 16 com PSRAM e 1 sem)
+    spriteSlots: function() { return 16; },
     // Verlet nativo (API 31): espelho JS do binding C++ (verletStub
     // abaixo, mesmo contrato/aritmetica)
     verletNew: verletStub.verletNew,
@@ -1513,18 +1816,31 @@ function appDepClosure(appDir) {
     return want;
 }
 
+// deps.json do app (gravado pelo installer com a versao RESOLVIDA — o mesmo
+// arquivo que o JsModules.cpp consulta): precede o range bruto do app.json
+function appDepsResolved(appDir) {
+    try {
+        var d = JSON.parse(fs.readFileSync(path.join(appDir, 'deps.json'), 'utf8'));
+        return d && typeof d === 'object' ? d : null;
+    } catch (e) { return null; }
+}
+
 function resolveSharedDep(appDir, name, env) {
+    var resolved = appDepsResolved(appDir);
+    if (resolved && resolved[name] !== undefined)
+        return { path: path.join(ROOT, 'tools', 'sdk', 'engine', name + '.js'),
+                 ver: String(resolved[name]) };
     var want = appDepClosure(appDir);
     var range = want && want[name];
     if (!range) return null;
     var local = path.join(ROOT, 'tools', 'sdk', 'engine', name + '.js');
-    if (!fs.existsSync(local)) return null;
+    if (!fs.existsSync(local)) return { path: local, ver: null };
     var m = fs.readFileSync(local, 'utf8').match(/version\s*[:=]\s*'([^']+)'/);
     if (m && !satisfiesRange(range, m[1]) && env && env.__harness && env.__harness.log) {
     env.__harness.log.push('[harness] aviso: dep ' + name + ' local v' + m[1] +
                            ' nao satisfaz "' + range + '" do app.json');
     }
-    return local;
+    return { path: local, ver: null };
 }
 
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
@@ -1542,6 +1858,7 @@ function globalValues(env, req) {
 }
 function makeRequire(appDir, env) {
     var cache = {};
+    var depth = 0;
     function req(name) {
     if (!appDir) throw new Error('require: sem pasta de app (so funciona dentro de um app)');
     var base = String(name).length > 3 && String(name).slice(-3) === '.js'
@@ -1555,11 +1872,23 @@ function makeRequire(appDir, env) {
     if (!fs.existsSync(srcPath)) {
         var shared = resolveSharedDep(appDir, base, env);
         if (!shared) throw new Error('require: modulo nao encontrado: ' + base + '.js');
-        srcPath = shared;
+        if (!fs.existsSync(shared.path)) {
+            // dep declarada (deps.json do app) cujo arquivo sumiu do cache do
+            // hub: a mensagem e a do firmware (JsModules.cpp), nao a generica
+            throw new Error('require: dependencia ' + base + (shared.ver ? ' ' + shared.ver : '') +
+                            ' ausente — reinstale o app pela loja');
+        }
+        srcPath = shared.path;
     }
     var src = fs.readFileSync(srcPath, 'utf8');
     var fn = Function.apply(null, ['module', 'exports'].concat(GLOBAL_NAMES).concat([src]));
-    fn.apply(null, [mod, mod.exports].concat(globalValues(env, req)));
+    // JsModules.cpp: teto de PROFUNDIDADE de require aninhado (kMaxRequireDepth
+    // = 8): cadeia sem caso base lanca em vez de estourar a pilha da task
+    if (depth >= 8) throw new Error('require: profundidade maxima (ciclo sem caso base?)');
+    depth++;
+    try {
+        fn.apply(null, [mod, mod.exports].concat(globalValues(env, req)));
+    } finally { depth--; }
     cache[base] = mod.exports;
     return mod.exports;
     }
@@ -1575,6 +1904,13 @@ function runApp(relPath, wire) {
     var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
     if (mf && mf.packageName) env.__pkg = mf.packageName;
     } catch (e) { /* .js avulso: sem pkg */ }
+    // capabilities do app.json (AppPerms.h parsePermissions): campo ausente ou
+    // mal formado = PERM_LEGACY; valido = so o que foi declarado — o jail do
+    // FS e o System.* de nivel 3 olham essa mascara, como no firmware
+    try {
+    var raw = fs.readFileSync(path.join(appDir, 'app.json'), 'utf8');
+    env.__perm = parsePermissions(raw);
+    } catch (e) { /* mantem PERM_LEGACY */ }
     wire && wire(env);
     // CelerNet/Pack (API 26/27) so existem com env.__exposeMesh: os apps
     // antigos seguem vendo typeof CelerNet === "undefined" (placa sem BT)
@@ -1594,6 +1930,30 @@ function runApp(relPath, wire) {
 module.exports = { makeEnv: makeEnv, runApp: runApp, makeRequire: makeRequire };
 if (require.main !== module) return;
 
+// Porta de AppPerms.h parsePermissions: "permissions" fora de string e
+// seguida de ':'; array valido = so as capabilities listadas; ausente/mal
+// formado = PERM_LEGACY (tudo menos usb/input). A chave dentro de description
+// nao conta (o C checa o escape; aqui, o mesmo via regex de linha crua).
+var PERM_BITS = { fs: 1, net: 2, gpio: 4, system: 8, mic: 16, camera: 32, usb: 64, input: 128 };
+var PERM_LEGACY_MASK = 0xFFFFFFFF & ~(64 | 128);
+function parsePermissions(appJson) {
+    var idx = appJson.indexOf('"permissions"');
+    while (idx >= 0) {
+        var antes = appJson.charAt(idx - 1);
+        var c = idx + 13, ch;
+        while (c < appJson.length && ((ch = appJson.charAt(c)) === ' ' || ch === '\t' || ch === '\n' || ch === '\r')) c++;
+        if (antes !== '\\' && appJson.charAt(c) === ':') break;
+        idx = appJson.indexOf('"permissions"', idx + 13);
+    }
+    if (idx < 0) return PERM_LEGACY_MASK;
+    var open = appJson.indexOf('[', idx), close = appJson.indexOf(']', idx);
+    if (open < 0 || close < 0 || close < open) return PERM_LEGACY_MASK;
+    var arr = appJson.substring(open, close + 1);
+    var m = 0;
+    for (var k in PERM_BITS) if (arr.indexOf('"' + k + '"') >= 0) m |= PERM_BITS[k];
+    return m;
+}
+
 // ------------------------------------------------------------- testes -----
 var failures = 0;
 function check(name, cond, extra) {
@@ -1607,15 +1967,12 @@ function check(name, cond, extra) {
 
 function joinLog(log) { return log.join('\n'); }
 
-// Testes inline: monta o Function com o mesmo prelude/parametros do runApp
+// Testes inline: monta o Function com os MESMOS globais do runApp
+// (GLOBAL_NAMES — a lista fixa aqui embaixo tinha ficado para tras e
+// escondia WakeWord/CelerNet/Pack dos testes inline)
 function runInline(src, env) {
-    var fn = new Function('System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', '__harness',
-                      'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'UI', 'require',
-                      'USB', 'Input', 'Service',
-                      (env.__prelude || '') + '\n' + src);
-    fn(env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.__harness,
-       env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval, env.UI,
-       env.__require || makeRequire(null), env.USB, env.Input, env.Service);
+    var fn = Function.apply(null, GLOBAL_NAMES.concat([(env.__prelude || '') + '\n' + src]));
+    fn.apply(null, globalValues(env, env.__require || makeRequire(null)));
 }
 
 // --- Terminal ---------------------------------------------------------------
@@ -3969,6 +4326,11 @@ function holdFrames(x, y, n) {
 (function() {
     console.log('Plugins do watchface:');
     var r = runApp('data/apps/Watchface/main.js', function(env) {
+        // seed do fixture = papel do INSTALADOR (system): plugins moram em
+        // pastas de apps que o proprio app nao pode escrever; restaura a
+        // mascara do app antes de roda-lo
+        var permApp = env.__perm;
+        env.__perm = 0xFF;
         // plugin de app instalado (pasta) + copia no appData (dedup por id)
         env.FS.mkdir('/local/apps/celeros.previsao');
         env.FS.writeTextFile('/local/apps/celeros.previsao/watchface.js',
@@ -3980,6 +4342,7 @@ function holdFrames(x, y, n) {
         env.FS.mkdir('/local/apps/Quebrado');
         env.FS.writeTextFile('/local/apps/Quebrado/watchface.js',
             'return { id: "bad", line: function() { return nadaExiste(); } };');
+        env.__perm = permApp;
         env.__launched = '';
         env.System.launchApp = function(pkg) { env.__launched = pkg; };
         env.__harness.tap(120, 269);   // linha do plugin 1 (y 258..280)
@@ -4936,6 +5299,337 @@ function holdFrames(x, y, n) {
     var selfFirst = selfBeats.length ? JSON.parse(selfBeats[0].body) : { caps: {} };
     check('sem token o heartbeat nao declara loja privada',
           selfFirst.caps.private_hub === false, JSON.stringify(selfFirst.caps));
+})();
+
+// --- Paridade x firmware (R3 diferencial): cada teste prova o lado C e ------
+// espelha aqui. Spec: JsTimers.cpp, JsFsJail.h, JsFs.cpp, JsGfx.cpp,
+// JsModules.cpp, JsSystem.cpp (readAppTouch) e JsUi.cpp (pacing/slotes).
+
+// Timers: pool FIXO de 8 slots (JsTimers.cpp) — o tick varre na ORDEM dos
+// slots; um one-shot libera o slot e o proximo setTimeout o REUSA, entao o
+// timer novo (slot 0) dispara ANTES do mais velho (slot 1) no mesmo tick.
+(function() {
+    console.log('Paridade timers:');
+    var env = makeEnv();
+    runInline("setTimeout(function(){ __harness.log.push('A'); }, 10);" +
+              "setTimeout(function(){ __harness.log.push('B'); }, 30);", env);
+    env.System.delay(20);          // avanca o relogio a 1020
+    env.System.delay(0);           // A dispara (slot 0 livre); B ainda nao (1030)
+    runInline("setTimeout(function(){ __harness.log.push('C'); }, 10);", env);  // reusa o slot 0, at 1030
+    env.System.delay(10);          // relogio a 1030
+    env.System.delay(0);           // mesmo tick: C (slot 0) antes de B (slot 1)
+    var seq = env.__harness.log.filter(function(l) {
+        return l === 'A' || l === 'B' || l === 'C';
+    });
+    check('timers: ordem no mesmo tick segue o slot (C reusou o slot de A)',
+          seq.join(',') === 'A,C,B', seq.join(','));
+})();
+
+// Timers: validacao do timerStart — duk_require_callable/duk_require_uint
+// lancam TypeError; NaN/negativo caem no piso de 10ms; ms acima do teto
+// (2^31-1) satura: NAO dispara num delay curto (o `ms|0` do host velho dava
+// a volta em 3e9 e disparava em 10ms).
+(function() {
+    console.log('Paridade timers validacao:');
+    var env = makeEnv();
+    runInline("var e1 = ''; try { setTimeout(123, 10); } catch (e) { e1 = e.name; }" +
+              "var e2 = ''; try { setTimeout(function(){}, '50'); } catch (e) { e2 = e.name; }" +
+              "__harness.log.push('V1=' + e1 + '|' + e2);", env);
+    check('timers: callback nao-funcao e ms nao-number lancam TypeError',
+          joinLog(env.__harness.log).indexOf('V1=TypeError|TypeError') >= 0,
+          joinLog(env.__harness.log));
+    runInline("var id = setTimeout(function(){ __harness.log.push('CEDO'); }, 3e9);" +
+              "__harness.log.push('ID=' + (id >= 1 ? 1 : 0));", env);
+    env.System.delay(100);
+    var j = joinLog(env.__harness.log);
+    check('timers: ms 3e9 satura no teto (id valido, nao dispara cedo)',
+          j.indexOf('ID=1') >= 0 && j.indexOf('CEDO') < 0, j);
+    runInline("setTimeout(function(){ __harness.log.push('NAN'); }, NaN);" +
+              "setTimeout(function(){ __harness.log.push('NEG'); }, -50);", env);
+    env.System.delay(10);
+    env.System.delay(0);
+    var j2 = joinLog(env.__harness.log);
+    check('timers: NaN e negativo caem no piso de 10ms e disparam',
+          j2.indexOf('NAN') >= 0 && j2.indexOf('NEG') >= 0, j2);
+})();
+
+// Timers: present() DENTRO do callback e no-op (inTick do timersTick) — o
+// interval NAO redispita dentro do proprio callback, so no proximo yield.
+(function() {
+    console.log('Paridade timers aninhamento:');
+    var env = makeEnv();
+    runInline("setInterval(function(){ __harness.log.push('HIT' + System.millis()); System.delay(50); System.delay(0); }, 20);", env);
+    env.System.delay(20);   // armou em 1020
+    env.System.delay(0);    // dispara em 1020; callback avanca o relogio a 1070
+    env.System.delay(0);    // catch-up: dispara em 1070 (sem fire aninhado)
+    var hits = env.__harness.log.filter(function(l) { return l.indexOf('HIT') === 0; });
+    check('timers: callback que cede nao re-dispara dentro de si (inTick)',
+          hits.join(',') === 'HIT1020,HIT1070', hits.join(','));
+})();
+
+// UI slots: teto de 48 (kSlots do JsUi.cpp) — o 49o texto distinto despeja o
+// slot mais antigo; mudar esse texto num frame parcial REDESenha (slot novo,
+// sem bbox velha), o que com o teto 64 do host velho nao acontecia.
+(function() {
+    console.log('Paridade UI slots:');
+    var env = makeEnv();
+    runInline('' +
+        'function quadro() { UI.begin(); UI.end(30); }' +
+        'quadro();' +                       // frame 1 total (dummy)
+        'UI.begin();' +                     // frame 2 total
+        'for (var i = 0; i < 48; i++) UI.text("t" + i, 10, 30 + i * 5, {});' +
+        'UI.end(30);' +
+        'UI.begin();' +                     // frame 3 parcial: 49o slot despeja o 1o
+        'UI.text("novo", 10, 280, {});' +
+        'UI.end(30);' +
+        'UI.begin();' +                     // frame 4 parcial: texto 1 mudou
+        'UI.text("TROCADO", 10, 30, {});' +
+        'UI.end(30);', env);
+    var j = joinLog(env.__harness.log);
+    // drawString loga o CONTEUDO: 't0' so no frame 2; 'TROCADO' so desenha no
+    // frame parcial se o slot do texto 1 foi despejado (slot novo, drawn=false)
+    var n0 = j.split('\nt0\n').length - 1 + (j === 't0' ? 1 : 0);
+    var linhas = env.__harness.log;
+    var nT0 = linhas.filter(function(l) { return l === 't0'; }).length;
+    var nTroc = linhas.filter(function(l) { return l === 'TROCADO'; }).length;
+    check('UI: 49o texto despeja o slot 1 (teto 48 do JsUi.cpp) e mudanca redesenha',
+          nT0 === 1 && nTroc === 1, 't0=' + nT0 + ' TROCADO=' + nTroc);
+})();
+
+// UI.end: pacing ADAPTATIVO do js_uiEnd — o primeiro end nao espera
+// (s_lastEndMs = 0) e os seguintes esperam so o que falta do periodo.
+(function() {
+    console.log('Paridade UI pacing:');
+    var env = makeEnv();
+    runInline('' +
+        'UI.begin(); UI.end(30); __harness.log.push("C" + System.millis());' +  // 1000: sem espera
+        'UI.begin(); UI.end(30); __harness.log.push("C" + System.millis());' +  // 1033: 1000/30
+        'UI.begin(); UI.end(30); __harness.log.push("C" + System.millis());', env);
+    var clocks = env.__harness.log.filter(function(l) { return l.indexOf('C') === 0; });
+    check('UI.end: primeiro end nao espera e os demais esperam o que falta',
+          clocks.join(',') === 'C1000,C1033,C1066', clocks.join(','));
+})();
+
+// Sprites: pool de 16 (JsGfx.cpp, placa com PSRAM) com reciclagem do
+// CORRENTE quando cheio; slot liberado volta pelo menor id; useSprite
+// invalido falha e desbinda; createSprite fora da faixa fisica devolve 0.
+(function() {
+    console.log('Paridade sprites:');
+    var env = makeEnv();
+    env.__out = null;
+    runInline('' +
+        'var ids = [];' +
+        'for (var i = 0; i < 16; i++) ids.push(System.createSprite(8, 8));' +
+        'var id17 = System.createSprite(8, 8);' +        // recicla o corrente (16)
+        'System.deleteSprite(3);' +                       // slot 3 livre
+        'var id18 = System.createSprite(8, 8);' +         // menor livre = 3
+        'var uInv = System.useSprite(99);' +              // false e desbinda
+        'var u0 = System.useSprite(0);' +                 // true (quadro)
+        'var z1 = System.createSprite(0, 4);' +           // 0: pequeno demais
+        'var z2 = System.createSprite(2049, 4);' +        // 0: teto fisico
+        'var e1 = ""; try { System.createSprite("a", 4); } catch (e) { e1 = e.name; }' +
+        '__harness.log.push("SPR=" + JSON.stringify([ids.join(","), id17, id18, uInv, u0, z1, z2, e1, System.spriteSlots()]));', env);
+    var j = joinLog(env.__harness.log);
+    var m = j.match(/SPR=(\[.*\])/);
+    check('sprites: ids 1..16, 17o recicla o corrente e spriteSlots reporta 16',
+          !!m, 'log sem SPR: ' + joinLog(env.__harness.log).substring(0, 200));
+    if (m) {
+        var v = JSON.parse(m[1]);
+        var seqOk = v[0] === '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16';
+        check('sprites: createSprite devolve ids 1..16 e o 17o = corrente (16)',
+              seqOk && v[1] === 16, JSON.stringify(v[0]) + ' id17=' + v[1]);
+        check('sprites: slot liberado volta (menor id) e useSprite invalido falha',
+              v[2] === 3 && v[3] === false && v[4] === true,
+              'id18=' + v[2] + ' uInv=' + v[3] + ' u0=' + v[4]);
+        check('sprites: 0/teto/nao-number seguem o JsGfx.cpp (0 ou TypeError)',
+              v[5] === 0 && v[6] === 0 && v[7] === 'TypeError' && v[8] === 16,
+              JSON.stringify(v.slice(5)));
+    }
+})();
+
+// Jail do FS: matriz espelhando testFsJail (test/cpp/run_tests.cpp) e os
+// vereditos por operacao de JsFs.cpp/JSBindings.cpp — conteudo negado LANCA,
+// metadado negado responde "nao existe", forma nao canonica nega TODOS.
+(function() {
+    console.log('Paridade FS jail:');
+    var env = makeEnv();
+    env.__pkg = 'celeros.snake';
+    env.__perm = 1;   // PERM_FS, como no teste C
+    var F = env.FS;
+    var DENY = 'FS: acesso negado a ';
+    function msg(fn) {
+        try { fn(); return ''; } catch (e) { return String(e && e.message || e); }
+    }
+    function throwsMsg(name, fn, prefix) {
+        var m = msg(fn);
+        check('jail: ' + name, m.indexOf(prefix) === 0, m || 'nao lancou');
+    }
+    var DENY = 'FS: acesso negado a ';
+    function throwsDeny(name, fn) { throwsMsg(name, fn, DENY); }
+    // forma canonica (fsPathCanonical): variante nao canonica do MESMO
+    // arquivo nega para todas as perms
+    env.__perm = 0xFF;
+    F.writeTextFile('/local/x.txt', '1');
+    check('jail: canonical visivel; "//", "." e ".." negam TODOS (mesmo system)',
+          F.exists('/local/x.txt') === true && F.isDirectory('/sd') === true &&
+          F.isDirectory('/local') === true &&
+          F.exists('/local/./x.txt') === false && F.exists('/local//x.txt') === false &&
+          F.exists('/local/data/../x.txt') === false && F.exists('/sdcard/x') === false &&
+          F.exists('/dev/uart/0') === false);
+    env.__perm = 1;
+    // protegidos de /local: conteudo lanca, metadado "nao existe"
+    throwsDeny('readTextFile em wifi.txt nega', function() { F.readTextFile('/local/wifi.txt'); });
+    throwsDeny('writeTextFile em settings_pin2.bin nega', function() { F.writeTextFile('/local/settings_pin2.bin', 'x'); });
+    throwsDeny('deleteFile no .tmp da atomica nega', function() { F.deleteFile('/local/ota_url.txt.tmp'); });
+    throwsDeny('getFileMD5 em protegido nega', function() { F.getFileMD5('/local/wifi.txt'); });
+    throwsDeny('readFile em protegido nega', function() { F.readFile('/local/wifi.txt'); });
+    check('jail: protegido existe/isFile/getFileSize = "nao existe"',
+          F.exists('/local/wifi.txt') === false && F.isFile('/local/wifi.txt') === false &&
+          F.getFileSize('/local/wifi.txt') === 0);
+    check('jail: protegido listDir/exists sob barra final tambem nega',
+          F.listDir('/local/wifi.txt/').length === 0 && F.exists('/local/wifi.txt/') === false);
+    // leitura livre: resto de /local, /sd, pastas de apps e modulos
+    check('jail: leitura de /local/x.txt, apps e modules livre para fs',
+          F.readTextFile('/local/config_snake_hi.txt') === '17' &&
+          F.listDir('/local/apps').length >= 0 &&
+          F.exists('/local/modules/celeros.engine/1.0.0/celeros.engine.js') === false); // inexistente, mas NAO negado
+    // escrita: raizes, apps e modules so system
+    throwsDeny('mkdir em /local/apps nega', function() { F.mkdir('/local/apps/Outro'); });
+    throwsDeny('writeTextFile em /sd/apps nega', function() { F.writeTextFile('/sd/apps/a.js', 'x'); });
+    throwsDeny('writeTextFile em /local/modules nega', function() { F.writeTextFile('/local/modules/x.js', 'x'); });
+    throwsDeny('renameFile para pasta de apps nega', function() { F.renameFile('/local/a.js', '/local/apps/a.js'); });
+    throwsDeny('appendTextFile em modules nega', function() { F.appendTextFile('/local/modules/x', 'y'); });
+    check('jail: /sd/appsX (fora da pasta) e /local/modulesX podem escrever',
+          F.mkdir('/sd/appsX') === true && F.writeTextFile('/sd/appsX/a.txt', '1') === true &&
+          F.mkdir('/local/modulesX') === true &&
+          F.writeTextFile('/local/modulesX/a.txt', '1') === true);
+    // appData: so a do proprio pacote. A raiz /local/data o app fs nao cria
+    // (o C++ cria no FS.appData): sobe p/ system, cria a raiz e volta
+    throwsDeny('appData de OUTRO app nega', function() { F.writeTextFile('/local/data/celeros.outro/x.txt', 'x'); });
+    check('jail: raiz /local/data nao e alvo de escrita de app fs',
+          msg(function() { F.mkdir('/local/data'); }).indexOf(DENY) === 0);
+    env.__perm = 8;
+    F.mkdir('/local/data');
+    env.__perm = 1;
+    check('jail: appData proprio escreve e o de outro "nao existe"',
+          F.mkdir('/local/data/celeros.snake') === true &&
+          F.writeTextFile('/local/data/celeros.snake/s.txt', '1') === true &&
+          F.exists('/local/data/celeros.snak/x') === false);
+    // arvores (mensagens proprias de js_copyDirectory/js_removeDirectory)
+    throwsMsg('copyDirectory da raiz /local nega', function() { F.copyDirectory('/local', '/sd/bkp'); },
+              'FS: copiar /local requer permissao "system"');
+    throwsMsg('copyDirectory para a raiz /sd nega', function() { F.copyDirectory('/local/data/celeros.snake', '/sd'); },
+              'FS: copiar para /sd requer permissao "system"');
+    throwsMsg('removeDirectory em /local nega', function() { F.removeDirectory('/local'); },
+              'FS: remover /local requer permissao "system"');
+    throwsDeny('rmdir em /local/data nega', function() { F.rmdir('/local/data'); });
+    check('jail: arvores validas (sd/music) passam',
+          F.mkdir('/sd/music') === true && F.copyDirectory('/sd/music', '/sd/music2') === true);
+    // copia de arquivo: mensagens proprias do js_copyFile
+    var m1 = msg(function() { F.copyFile('/local/wifi.txt', '/local/data/celeros.snake/a'); });
+    var m2 = msg(function() { F.copyFile('/local/config_snake_hi.txt', '/local/apps/a'); });
+    check('jail: copyFile nega origem protegida e destino em apps com mensagem propia',
+          m1 === 'FS: /local/wifi.txt e arquivo do sistema' &&
+          m2 === 'FS: escrita negada em /local/apps/a', m1 + ' | ' + m2);
+    // teto de path e de writeFile
+    var longo = '/local/' + new Array(190).join('a');
+    var m3 = msg(function() { F.writeTextFile(longo, 'x'); });
+    var m4 = msg(function() { F.writeFile('/local/g.bin', new Array(64 * 1024 + 2).join('b')); });
+    check('jail: path acima de 192 e writeFile acima de 64KB lancam RangeError',
+          m3 === 'FS: caminho longo demais' && m4 === 'FS.writeFile: maximo 64KB',
+          m3 + ' | ' + m4);
+    // readFile satura maxLen em 64KB (e corta no pedido)
+    var cem = new Array(101).join('x');   // 100 chars
+    F.writeTextFile('/local/data/celeros.snake/grande.txt', cem);
+    check('jail: readFile corta no maxLen e satura o pedido grande em 64KB',
+          F.readFile('/local/data/celeros.snake/grande.txt', 10) === cem.substring(0, 10) &&
+          F.readFile('/local/data/celeros.snake/grande.txt', 1 << 20) === cem);
+    // "system" passa nas regras de dono, nunca na forma canonica
+    env.__perm = 8;
+    check('jail: system le protegido, escreve em apps e remove /local',
+          F.readTextFile('/local/wifi.txt') === null && F.exists('/local/wifi.txt') === false &&
+          F.mkdir('/local/apps/Outro2') === true && F.removeDirectory('/local/apps/Outro2') === true &&
+          F.exists('/local/./wifi.txt') === false);
+    env.__perm = 1;
+})();
+
+// require: profundidade maxima de 8 (kMaxRequireDepth do JsModules.cpp), dep
+// declarada ausente tem mensagem propria e o cache e POR PASTA.
+(function() {
+    console.log('Paridade require:');
+    var os = require('os');
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'reqpar-'));
+    try {
+        var d1 = path.join(tmp, 'app1'), d2 = path.join(tmp, 'app2');
+        fs.mkdirSync(d1); fs.mkdirSync(d2);
+        for (var i = 0; i <= 9; i++)
+            fs.writeFileSync(path.join(d1, 'a' + i + '.js'),
+                i < 9 ? "require('a" + (i + 1) + "'); module.exports = " + i + ';' : 'module.exports = 9;');
+        var r1 = makeRequire(d1, {});
+        var prof = '';
+        try { r1('a0'); } catch (e) { prof = String(e.message || e); }
+        check('require: cadeia sem caso base para na profundidade 8',
+              prof === 'require: profundidade maxima (ciclo sem caso base?)', prof);
+        // cache por pasta: mesmo nome, instancias distintas
+        fs.writeFileSync(path.join(d1, 'util.js'), 'module.exports = { v: 1 };');
+        fs.writeFileSync(path.join(d2, 'util.js'), 'module.exports = { v: 2 };');
+        var ra = makeRequire(d1, {}), rb = makeRequire(d2, {});
+        check('require: cache por pasta (dois apps, mesmo nome, instancias distintas)',
+              ra('util').v === 1 && rb('util').v === 2 && ra('util') === ra('util'));
+        // dep declarada ausente: mensagem do firmware (deps.json resolvido)
+        fs.writeFileSync(path.join(d2, 'deps.json'), JSON.stringify({ 'celeros.fantasma': '1.2.0' }));
+        var rc = makeRequire(d2, {});
+        var dep = '';
+        try { rc('celeros.fantasma'); } catch (e) { dep = String(e.message || e); }
+        check('require: dep declarada e ausente = "reinstale o app pela loja"',
+              dep === 'require: dependencia celeros.fantasma 1.2.0 ausente — reinstale o app pela loja', dep);
+    } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+})();
+
+// Input: readAppTouch/readAppTouches saturam o Y virtual em 0 (dedo na faixa
+// da topbar que o chrome nao consumiu) e preservam ordem/ids do primario.
+(function() {
+    console.log('Paridade input:');
+    var env = makeEnv();
+    env.__harness.pushTouch([
+        { touches: [{ id: 5, x: 10, y: -8 }, { id: 2, x: 20, y: 30 }] },
+        { x: 40, y: -3, touched: 1 }
+    ]);
+    var t1 = env.System.getTouches();
+    var t2 = env.System.getTouch();
+    check('input: getTouches preserva primario/ids e satura y em 0',
+          t1.length === 2 && t1[0].id === 5 && t1[0].y === 0 && t1[0].x === 10 &&
+          t1[1].id === 2 && t1[1].y === 30,
+          JSON.stringify(t1));
+    check('input: getTouch legado satura y em 0', t2.x === 40 && t2.y === 0 && t2.touched === 1,
+          JSON.stringify(t2));
+})();
+
+// Scroll clip (superficie JS do canvas do Kui): o viewport do scrollBegin
+// recorta o conteudo de fora — no firmware o recorte vale nas TRES estrategias
+// de composicao (Bands/FullFrame/Direct, Canvas::render recorta por faixa), no
+// host e o setClip do renderer. Saida pixel-identica.
+(function() {
+    console.log('Paridade scroll clip:');
+    var env = makeEnv();
+    var Renderer = require(path.join(ROOT, 'tools', 'sdk', 'lib', 'renderer.js')).Renderer;
+    var rend = new Renderer();
+    rend.wire(env);
+    var bg = env.System.theme().bg;
+    runInline('' +
+        'UI.begin(0);' +
+        'UI.scrollBegin("s", 10, 40, 100, 100, 200);' +
+        'System.fillRect(10, 40, 100, 100, 0xF800);' +    // dentro do viewport
+        'System.fillRect(10, 150, 100, 100, 0x07E0);' +   // FORA (recortado)
+        'UI.scrollEnd();' +
+        'UI.end(30);', env);
+    var dentro = rend.fb[45 * 240 + 20];
+    var fora = rend.fb[160 * 240 + 20];
+    check('scroll: conteudo dentro do viewport pinta e o de fora e recortado',
+          dentro === 0xF800 && fora !== 0x07E0,
+          'dentro=' + dentro.toString(16) + ' fora=' + fora.toString(16));
 })();
 
 // resume

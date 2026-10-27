@@ -11,9 +11,13 @@
 // Aproximacoes: papeis de fonte -> fontes numericas do emulador (caption 1,
 // body/title 2, display 4).
 
+// datum de texto LovyanGFX (coluna = d&3: 0 esq/1 centro/2 dir; linha = d&12:
+// 0 topo/4 meio/8 base) — mesmos valores do lgfx vendorado e do renderer
+const ML = 4, MC = 5, MR = 6;
 const SLOP = 18;
 const TAP_MAX_MS = 800;
 const HEADER_H = 40;
+const SLOTS_MAX = 48;   // kSlots do JsUi.cpp
 
 function makeUI(env) {
     const S = () => env.System;
@@ -28,6 +32,7 @@ function makeUI(env) {
     let bgStack = [];
     let scroll = null;   // {x,y,w,h,slot,contentH}
     let toastMsg = '', toastUntil = 0;
+    let lastEndMs = 0;   // pacing do UI.end (js_uiEnd: espera o que falta, nao o intervalo cheio)
 
     const inR = (px, py, x, y, w, h) => px >= x && px < x + w && py >= y && py < y + h;
     const startOk = () => !scroll || inR(t.sx, t.sy, scroll.x, scroll.y, scroll.w, scroll.h);
@@ -40,14 +45,15 @@ function makeUI(env) {
         return true;
     }
     // LRU: o acesso move o slot para o fim do Map; o despejo leva o mais
-    // antigo (slots de texto de quadros passados), nunca o da rolagem viva
+    // antigo (slots de texto de quadros passados), nunca o da rolagem viva.
+    // Mesmo teto do firmware: 48 slots (o 49o despeja o de quadro mais antigo)
     function slot(id) {
         let s = slots.get(id);
         if (s) {
             slots.delete(id);
         } else {
             s = { vis: null, drawn: false, scroll: 0, vel: 0, drag: false, lastMs: 0, box: null };
-            if (slots.size >= 64) slots.delete(slots.keys().next().value);
+            if (slots.size >= SLOTS_MAX) slots.delete(slots.keys().next().value);
         }
         slots.set(id, s);
         s.frame = frameNo;
@@ -64,7 +70,8 @@ function makeUI(env) {
     const str = (v) => (v === undefined || v === null) ? '' : String(v);
     const roleFont = (role) => role === 'caption' ? 1 : role === 'display' ? 4 : 2;
 
-    // texto com datum (TL=0 TC=1 TR=2 MC=4 ML=3 MR=5)
+    // texto com datum LovyanGFX (TL=0 TC=1 TR=2 ML=4 MC=5 MR=6 BL=8 — o
+    // renderer e o firmware decodificam coluna = d&3, linha = d&12)
     function text(s, x, y, font, color, datum) {
         const Sys = S();
         if (Sys.setTextDatum) Sys.setTextDatum(datum || 0);
@@ -112,7 +119,7 @@ function makeUI(env) {
         if (stroke !== null) Sys.drawRoundRect(x, y, w, h, 8, stroke);
         bgStack.push(fill);
         const f = font || 2;
-        text(ellipsize(label, f, w - 8), x + (w >> 1), y + (h >> 1), f, tc, 4);
+        text(ellipsize(label, f, w - 8), x + (w >> 1), y + (h >> 1), f, tc, MC);
         bgStack.pop();
     }
 
@@ -184,9 +191,9 @@ function makeUI(env) {
                 Sys.fillRoundRect(cx, cy, cw, ch, 12, th.card);
                 Sys.drawRoundRect(cx, cy, cw, ch, 12, th.stroke);
                 bgStack.push(th.card);
-                text(ellipsize(title, 2, cw - 24), cx + (cw >> 1), cy + 24, 2, th.text, 4);
+                text(ellipsize(title, 2, cw - 24), cx + (cw >> 1), cy + 24, 2, th.text, MC);
                 const lines = wrap(body, 2, cw - 20, 2);
-                for (let i = 0; i < lines.length; i++) text(lines[i], cx + (cw >> 1), cy + 56 + i * 12, 2, th.textDim, 4);
+                for (let i = 0; i < lines.length; i++) text(lines[i], cx + (cw >> 1), cy + 56 + i * 12, 2, th.textDim, MC);
                 bgStack.pop();
                 for (let i = 0; i < n; i++) { const b = btn(i); paintButton(b.x, b.y, b.w, b.h, labels[i], styles[i], i === pressed); }
             }
@@ -229,7 +236,7 @@ function makeUI(env) {
                     Sys.fillRoundRect((240 - tw) >> 1, 266, tw, 32, 16, th.raised);
                     Sys.drawRoundRect((240 - tw) >> 1, 266, tw, 32, 16, th.accent);
                     bgStack.push(th.raised);
-                    text(m, 120, 282, 2, th.text, 4);
+                    text(m, 120, 282, 2, th.text, MC);
                     bgStack.pop();
                 } else {
                     toastUntil = 0;
@@ -237,7 +244,14 @@ function makeUI(env) {
                 }
             }
             fps = typeof fps === 'number' ? Math.max(1, Math.min(60, fps | 0)) : 30;
-            S().delay(Math.floor(1000 / fps));
+            // js_uiEnd: espera so o QUE FALTA para o periodo (o quadro demorado
+            // nao adiciona drift) e o PRIMEIRO end nao espera (s_lastEndMs = 0)
+            const now = S().millis();
+            let wait = Math.floor(1000 / fps) - (now - lastEndMs);
+            if (wait < 0 || lastEndMs === 0) wait = 0;
+            if (wait > 1000) wait = 1000;
+            S().delay(wait);
+            lastEndMs = S().millis();
         },
         invalidate() { full = true; },
         toast(msg, ms) {
@@ -314,8 +328,8 @@ function makeUI(env) {
                     Sys.fillRoundRect(12, (HEADER_H - mh) >> 1, 4, mh, 2, th.accent);
                 }
                 let right = 228;
-                if (sub) { text(sub, right, HEADER_H >> 1, 1, th.textDim, 5); right -= Sys.textWidth(sub, 1) + 8; }
-                text(ellipsize(title, 2, right - tx), tx, HEADER_H >> 1, 2, th.text, 3);
+                if (sub) { text(sub, right, HEADER_H >> 1, 1, th.textDim, MR); right -= Sys.textWidth(sub, 1) + 8; }
+                text(ellipsize(title, 2, right - tx), tx, HEADER_H >> 1, 2, th.text, ML);
                 bgStack.pop();
             }
             return tapped;
@@ -338,7 +352,7 @@ function makeUI(env) {
                     S().fillRoundRect(x, y, w, h, 8, fill);
                     if (pressed) S().drawRoundRect(x, y, w, h, 8, T().accent);
                     bgStack.push(fill);
-                    text(ellipsize(label, roleFont(role), w - 8), x + (w >> 1), y + (h >> 1), roleFont(role), cText, 4);
+                    text(ellipsize(label, roleFont(role), w - 8), x + (w >> 1), y + (h >> 1), roleFont(role), cText, MC);
                     bgStack.pop();
                 } else {
                     paintButton(x, y, w, h, label, style, pressed, roleFont(role));
@@ -347,7 +361,7 @@ function makeUI(env) {
                     const th = T();
                     S().fillRoundRect(x + 1, y + 1, w - 2, h - 2, 8, th.card);
                     bgStack.push(th.card);
-                    text(ellipsize(label, 2, w - 8), x + (w >> 1), y + (h >> 1), 2, th.textDim, 4);
+                    text(ellipsize(label, 2, w - 8), x + (w >> 1), y + (h >> 1), 2, th.textDim, MC);
                     bgStack.pop();
                 }
             }
@@ -476,7 +490,7 @@ function makeUI(env) {
                         rx -= 26;
                     }
                     if (it.right) {
-                        text(it.right, rx, ry + (rowH >> 1), 1, it.rightColor !== null ? it.rightColor : th.textDim, 5);
+                        text(it.right, rx, ry + (rowH >> 1), 1, it.rightColor !== null ? it.rightColor : th.textDim, MR);
                         rx -= Sys.textWidth(it.right, 1) + 8;
                     }
                     const col = it.enabled ? th.text : th.textDim;
@@ -484,7 +498,7 @@ function makeUI(env) {
                         text(ellipsize(it.label, 2, rx - x - 12), x + 12, ry + (rowH >> 1) - 9, 2, col, 0);
                         text(ellipsize(it.sub, 1, rx - x - 12), x + 12, ry + (rowH >> 1) + 2, 1, th.textDim, 0);
                     } else {
-                        text(ellipsize(it.label, 2, rx - x - 12), x + 12, ry + (rowH >> 1), 2, col, 3);
+                        text(ellipsize(it.label, 2, rx - x - 12), x + 12, ry + (rowH >> 1), 2, col, ML);
                     }
                 }
                 if (Sys.clearClip) Sys.clearClip();
@@ -522,7 +536,7 @@ function makeUI(env) {
                     if (i === sel) { fill = th.accent; tc = th.onAccent; Sys.fillRoundRect(sx, sy, sw, sh, sh >> 1, fill); }
                     else if (i === pressed) { fill = th.raised; tc = th.text; Sys.fillRoundRect(sx, sy, sw, sh, sh >> 1, fill); }
                     bgStack.push(fill);
-                    text(ellipsize(labels[i], 2, sw - 6), sx + (sw >> 1), sy + (sh >> 1), 2, tc, 4);
+                    text(ellipsize(labels[i], 2, sw - 6), sx + (sw >> 1), sy + (sh >> 1), 2, tc, MC);
                     bgStack.pop();
                 }
             }
@@ -589,7 +603,7 @@ function makeUI(env) {
                 const h = Sys.fontHeight(1) + 6, w = Sys.textWidth(s, 1) + 14;
                 Sys.fillRoundRect(x, y, w, h, h >> 1, color);
                 bgStack.push(color);
-                text(s, x + (w >> 1), y + (h >> 1), 1, tc, 4);
+                text(s, x + (w >> 1), y + (h >> 1), 1, tc, MC);
                 bgStack.pop();
                 sl.box = { x, y, w, h };
             }

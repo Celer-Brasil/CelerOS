@@ -400,6 +400,36 @@ declare namespace E {
     /** PRNG deterministico (xorshift32). */
     function rng(seed: number): Rng;
 
+    // ------------------------------------------------------------- cor -----
+    interface ColorTokens {
+        bg: number; surface: number; surface2: number; surface3: number;
+        outline: number; text: number; textDim: number;
+        accent: number; accent2: number; onAccent: number;
+        ok: number; warn: number; err: number; glow: number;
+    }
+    const color: {
+        /** '#rgb' | '#rrggbb' -> RGB565 (memoizado) */
+        hex(s: string): number;
+        rgb(r: number, g: number, b: number): number;
+        /** h 0..360, s/v 0..1 */
+        hsv(h: number, s: number, v: number): number;
+        /** h 0..360, s/l 0..1 */
+        hsl(h: number, s: number, l: number): number;
+        mix(a: number, b: number, t: number): number;
+        /** k > 0 clareia; k < 0 escurece */
+        shade(c: number, k: number): number;
+        lighten(c: number, k: number): number;
+        darken(c: number, k: number): number;
+        /** composicao de c sobre bg com opacidade a (alpha SIMULADO) */
+        alpha(c: number, bg: number, a: number): number;
+        luma(c: number): number;
+        contrast(c: number): number;
+        /** n tons do preto ao branco passando por base */
+        ramp(base: number, n?: number): number[];
+        /** tokens de superficie/estado derivados do E.theme */
+        derive(theme?: CelerTheme | null): ColorTokens;
+    };
+
     // ---------------------------------------------------------- camera --
     const cam: {
         x: number;
@@ -429,7 +459,25 @@ declare namespace E {
     };
 
     // ------------------------------------------------------------ gfx --
-    interface DrawOpts { screen?: boolean; fill?: boolean; r?: number }
+    interface ShadowOpts {
+        r?: number; dy?: number; blur?: number; color?: number;
+        alpha?: number; layers?: number; bg?: number;
+    }
+    interface GradOpts {
+        a?: number; b?: number; dir?: 'x' | 'y'; via?: number; step?: number;
+        screen?: boolean; r?: number;
+    }
+    interface DrawOpts {
+        screen?: boolean; fill?: boolean; r?: number;
+        /** borda espessa (retangulo externo + interno recuado) e cor */
+        bw?: number; stroke?: number;
+        /** preenchimento por gradiente: [c1, c2] ou {a, b, dir, via, step} */
+        grad?: [number, number] | GradOpts;
+        /** sombra/elevacao em camadas (alpha SIMULADO sobre o bg) */
+        elev?: number; shadow?: ShadowOpts | false;
+        /** fan do centroide (poligonos concavos radiais: estrela) */
+        center?: boolean;
+    }
     interface TextOpts {
         color?: number; bg?: number;
         /** altura em pixels (escolhe fonte/size) */
@@ -441,8 +489,10 @@ declare namespace E {
         fit?: number;
         align?: 'left' | 'center' | 'right';
         valign?: 'top' | 'middle' | 'bottom'; screen?: boolean;
-        /** cor da sombra (1 px x U abaixo-direita) */
-        shadow?: number;
+        /** cor da sombra, true (preto) ou {dx, dy, color} */
+        shadow?: number | boolean | { dx?: number; dy?: number; color?: number };
+        /** contorno (4 copias em cruz antes do texto) */
+        outline?: number | boolean;
     }
     const gfx: {
         rect(x: number, y: number, w: number, h: number, color: number, o?: DrawOpts): void;
@@ -452,8 +502,20 @@ declare namespace E {
              o?: DrawOpts & { w?: number }): void;
         tri(x0: number, y0: number, x1: number, y1: number, x2: number, y2: number,
             color: number, o?: DrawOpts): void;
+        /** dir 'x' usa faixas de step px (o nativo so faz vertical); via = cor do meio */
         gradient(x: number, y: number, w: number, h: number, c1: number, c2: number,
-                 o?: DrawOpts & { dir?: 'x' | 'y' }): void;
+                 o?: DrawOpts & { dir?: 'x' | 'y'; via?: number; step?: number }): void;
+        /** sombra/elevacao em camadas concentricas (fundo conhecido) */
+        shadow(x: number, y: number, w: number, h: number, o?: DrawOpts & ShadowOpts): void;
+        /** veu de pct% de preto sobre o bg informado */
+        dim(x: number, y: number, w: number, h: number, pct?: number,
+            o?: DrawOpts & { bg?: number }): void;
+        /** linha divisoria (h default 1U) */
+        divider(x: number, y: number, w: number,
+                o?: { color?: number; h?: number; screen?: boolean }): void;
+        /** estrela de n pontas (r0 externo, r1 interno) */
+        star(cx: number, cy: number, r0: number, r1: number, n: number,
+             color: number, o?: DrawOpts): void;
         arc(x: number, y: number, r0: number, r1: number, a0: number, a1: number,
             color: number, o?: DrawOpts): void;
         text(str: any, x: number, y: number, o?: TextOpts): void;
@@ -464,18 +526,21 @@ declare namespace E {
         /** texto em varias linhas; devolve a altura usada */
         textBox(str: any, x: number, y: number, w: number,
                 o?: TextOpts & { lh?: number; max?: number }): number;
-        /** poligono convexo [x0, y0, x1, y1, ...] cheio ou contorno ({fill: false}) */
+        /** poligono [x0, y0, ...] cheio/contorno; o.center usa o centroide */
         poly(pts: number[], color: number, o?: DrawOpts): void;
         button(label: string, x: number, y: number, w: number, h: number, o?: {
             primary?: boolean; color?: number; bg?: number; r?: number; font?: number;
             px?: number; textColor?: number; stroke?: number | false; screen?: boolean;
+            grad?: [number, number] | GradOpts; elev?: number; shadow?: ShadowOpts | false;
         }): Rect;
         bar(x: number, y: number, w: number, h: number, frac: number, o?: {
-            fg?: number; bg?: number; r?: number; screen?: boolean;
+            fg?: number; fg2?: number; bg?: number; r?: number; screen?: boolean;
+            grad?: boolean; marker?: number; markerColor?: number;
         }): void;
-        panel(x: number, y: number, w: number, h: number, o?: {
-            bg?: number; stroke?: number; r?: number; screen?: boolean;
-        }): void;
+        /** painel com borda/gradiente/elevacao; devolve o CONTENT rect (com pad) */
+        panel(x: number, y: number, w: number, h: number, o?: DrawOpts & {
+            bg?: number; pad?: number;
+        }): Rect;
         /** vida em coracoes (hp .5 = meio); devolve a largura */
         hearts(hp: number, max: number, x: number, y: number, o?: {
             size?: number; gap?: number; color?: number; empty?: number; screen?: boolean;

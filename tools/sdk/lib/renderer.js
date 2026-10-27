@@ -20,6 +20,11 @@ const path = require('path');
 
 const W = 240, H = 320;
 const ADVANCE = { 1: 6, 2: 8, 4: 16 };   // px por caractere por tamanho de fonte
+// fallback para pontos de codigo FORA da cobertura do font8x8 (nao-Latin-1:
+// em dash, emoji...): bloco vazado 8x8. O glifo 0x7F do fonte e VAZIO (igual
+// ao device), e era ele o fallback — texto fora da cobertura sumia sem
+// acusar nada no preview.
+const HOLLOW = [0xFF, 0x81, 0x81, 0x81, 0x81, 0x81, 0x81, 0xFF];
 
 class Renderer {
     constructor() {
@@ -271,7 +276,7 @@ class Renderer {
         const cols = Math.min(8, Math.round(g / src));   // font1: 6 colunas
         for (let i = 0; i < s.length; i++) {
             const code = s.charCodeAt(i);
-            const bm = glyph(code) || glyph(0x7F);  // fora da cobertura: bloco
+            const bm = glyph(code) || HOLLOW;  // fora da cobertura: bloco vazado
             const gx = x + i * g;
             for (let row = 0; row < 8; row++) {
                 for (let col = 0; col < cols; col++) {
@@ -392,7 +397,12 @@ class Renderer {
         // volta ao quadro/display; pushSprite(x, y, key?) blita o sprite
         // corrente na TELA com cor-chave opcional)
         S.createSprite = (w, h) => {
-            w = Math.max(1, w | 0); h = Math.max(1, h | 0);
+            // JsGfx.cpp: duk_require_int (TypeError fora de numero) e teto
+            // fisico de 2048 por lado; fora da faixa devolve 0 (falha limpa)
+            if (typeof w !== 'number' || typeof h !== 'number')
+                throw new TypeError('createSprite: largura/altura (number) sao obrigatorias');
+            if (!(w >= 1 && h >= 1 && w <= 2048 && h <= 2048)) return 0;
+            w = w | 0; h = h | 0;
             let slot = -1;
             for (let i = 0; i < 16; i++) if (!r.sprites[i]) { slot = i; break; }
             if (slot < 0) {   // pool cheio: recicla o corrente (compat do firmware)
@@ -418,7 +428,10 @@ class Renderer {
         S.pushSprite = (x, y, key) => {
             const sp = r.sprite;
             if (!sp) return;
-            const chroma = key != null, kk = key & 0xFFFF;
+            const chroma = key != null;
+            if (chroma && typeof key !== 'number')
+                throw new TypeError('pushSprite: cor-chave (number) invalida');  // duk_require_uint
+            const kk = key & 0xFFFF;
             const wasBound = r.bound;
             r.bound = false;  // destino e sempre a tela (quadro/display no firmware)
             for (let j = 0; j < sp.h; j++) {
@@ -431,8 +444,10 @@ class Renderer {
             r.bound = wasBound;
         };
         S.deleteSprite = (id) => {
+            // JsGfx.cpp: so argumento NUMERICO seleciona por id; qualquer outra
+            // coisa (string, undefined) apaga o CORRENTE
             let victim = r.sprite;
-            if (id != null) {   // sem arg: apaga o corrente (compat)
+            if (typeof id === 'number') {
                 victim = (id | 0) >= 1 && (id | 0) <= 16 ? r.sprites[(id | 0) - 1] : null;
                 if (!victim) return;
             }

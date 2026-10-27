@@ -6,11 +6,11 @@
 
 | Dep | Stripped | What it gives you |
 |---|---|---|
-| **`celeros.game`** (core) | ~51 KB | loop with scenes + transitions, touch gestures, camera-aware drawing, math/RNG, tweens/timers/`E.seq`, groups/pools, dirty-rect layer, chiptune audio with beat clock, NVS saves, section profiler (`E.prof`), owned sprite pool (`E.slots`), anchored HUD (`E.ax/ay/anchor`) |
+| **`celeros.game`** (core) | ~65 KB | loop with scenes + transitions, touch gestures, camera-aware drawing, **`E.color` + gfx shadows/gradients/borders/outline**, math/RNG, tweens/timers/`E.seq`, groups/pools, dirty-rect layer, chiptune audio with beat clock, NVS saves, section profiler (`E.prof`), owned sprite pool (`E.slots`), anchored HUD (`E.ax/ay/anchor`) |
 | **`celeros.game.fx`** | ~13 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
-| **`celeros.game.spr`** | ~12 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
+| **`celeros.game.spr`** | ~16 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
 | **`celeros.game.tilemap`** | ~4 KB | grid of dirty cells for big procedural scenarios |
-| **`celeros.game.ui`** | ~12 KB | menus, scrollable lists, typewriter dialogs, ready title/pause/game-over screens |
+| **`celeros.game.ui`** | ~57 KB | **UI kit 1.3**: tokens + 4 presets, 24 vector icons, layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs with choices and the ready title/pause/game-over screens |
 | **`celeros.engine`** | shim (0.2 KB) | the **whole family assembled** — the pre-modularity API (1.2.x) in one `require`; existing games keep working unchanged |
 | **`celeros.physics`** (optional) | ~7 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | bomberman-style arenas + BFS chase flow, sfx melody tables, CelerNet boilerplate (same family, unrelated modules) |
@@ -18,7 +18,7 @@
 Sizes are **stripped** (jsstrip), measured 2026-10 — check with
 `node tools/sdk/lib/jsstrip.js tools/sdk/engine/<module>.js` before planning.
 
-Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is already over the 48 KB no-PSRAM ceiling** (51 KB since 1.5.0), so every app using the engine declares `"requires": ["psram"]`; the full family is ~171 KB.
+Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is already over the 48 KB no-PSRAM ceiling** (65 KB since 1.7.0; 51 KB in 1.5), so every app using the engine declares `"requires": ["psram"]`; core + UI kit are ~121 KB and the full family is ~230 KB.
 
 Everything is ES5 (Duktape) and feature-detects the firmware at runtime, so the same game runs on every board — and unchanged in the Node test harness and emulator.
 
@@ -431,6 +431,107 @@ if (E.ui.title({ game: "MEU JOGO", best: E.save.num("hi") }) === "start")
 var a = E.ui.pause({});            // 'resume' | 'restart' | 'quit'
 var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
 ```
+
+## 14b-2. UI kit 1.3: style, layout and widgets
+
+`celeros.game.ui` 1.3 turns the old menu/list/dialog module into a full immediate-mode kit. It is still ES5, draws with `screen: true`, and uses the firmware theme as the base. It builds on the core 1.7 primitives: `E.color`, `E.gfx.shadow/dim/divider/star`, thick borders (`bw`), gradients (`grad`) and text `outline`.
+
+### Tokens and presets
+
+```js
+E.ui.preset("neon");                            // soft (default) | flat | neon | paper
+E.ui.theme({ accent: "#ff5c8a", radius: 14 });  // patch: RGB565 or '#rrggbb'
+E.ui.tokens;                                    // live object the widgets read
+E.ui.resetTheme();
+```
+
+`E.ui.tokens` carries `bg/surface/surface2/surface3/outline/text/textDim/accent/accent2/onAccent/ok/warn/err/glow`, plus `radius/gap/pad` (project px) and the flags `shadow` (layers), `grad`, `bw` and `glowOn`. The presets are: **soft** (subtle shadow + gradient), **flat** (no shadow/gradient), **neon** (accent border/glow, dark surfaces) and **paper** (light, square corners). The theme is re-derived lazily when the app calls `E.init` again; an explicit preset/patch survives.
+
+### Icons
+
+`E.ui.icon(name, x, y, size, { color, w })` draws procedurally (no PNG/sprite): `play pause stop back close check plus minus chevronL/R/U/D gear heart star sound soundOff music home menu search clock lock trash edit info alert refresh download upload`.
+
+### Layout
+
+```js
+var c = E.ui.card(8, 40, 224, 140);       // draws the card, returns the content rect
+var col = E.ui.stack(c.x, c.y, c.w, { gap: 6 });
+var r = col.next(34);                    // next row rect (scratch: use it now)
+E.ui.button("Jogar", r.x, r.y, r.w, r.h);
+var grid = E.ui.grid(c.x, c.y, c.w, 3, { rowH: 32 });
+E.ui.divider(c.x, c.y, c.w);
+E.ui.section("OPCOES", c.x, c.y, c.w, { line: true });
+```
+
+`E.ui.card` returns the **content rect** (the card minus its padding). `stack.next`/`grid.cell` return a shared scratch rect, so use the values immediately. `section` returns the height it used.
+
+### Widgets
+
+All are immediate-mode and return the new state/value in the same frame:
+
+| Call | Returns |
+|---|---|
+| `E.ui.button(label, x, y, w, h, o)` | `true` on tap. `variant: primary/secondary/ghost/danger/success`, `icon`, `disabled`, `r`, `grad`, `elev` |
+| `E.ui.iconButton(icon, x, y, size, o)` | `true` on tap |
+| `E.ui.toggle(x, y, on, o)` | new `on` (switch) |
+| `E.ui.check(label, x, y, on, o)` / `E.ui.radio(...)` | new `on` |
+| `E.ui.slider(x, y, w, value, {min,max,step,id,label,fmt})` | dragged value (snapped by `step`) |
+| `E.ui.stepper(x, y, value, {min,max,step,w,h,fmt})` | new value |
+| `E.ui.segmented(x, y, w, labels, sel, o)` / `E.ui.tabs(x, y, w, h, labels, sel, o)` | selected index |
+| `E.ui.chip(label, x, y, {on,icon,w,h})` | new `on` |
+| `E.ui.badge(text, x, y, o)` | width drawn |
+| `E.ui.progress(x, y, w, h, frac, o)` / `E.ui.ring(cx, cy, r, frac, o)` | clamped fraction |
+
+### Rich list and generic scroll
+
+`E.ui.list(o)` keeps the 1.2 API (`items`, `row` = row height, `onPick`, `scroll`, `scrollTo`, `picked`) and adds:
+
+```js
+var lst = E.ui.list({
+  items: [
+    { section: "FASE 1" },                         // header: not selectable
+    { label: "Floresta", value: 1, icon: "play" },
+    { label: "Caverna", value: 2, sub: "3 estrelas", right: "1:20" },
+    { label: "Chefe", value: 3, badge: "NOVO", danger: true }
+  ],
+  row: 36, pad: 8, scrollbar: true,
+  paintRow: function (item, x, y, w, h, state) {  // custom row painter
+    // state = { pressed, disabled, selected }
+  }
+});
+var picked = lst.draw(16, 80, 208, 160);
+lst.scrollBy(24); lst.scrollTo(2); lst.index; lst.picked;
+```
+
+`E.ui.scroll(id, x, y, w, h, contentH, drawFn)` is the generic clipped/inertial scroll container; `drawFn(offset, x, y, w, h)` draws the content. `E.ui.scrollTo(id, y)` / `E.ui.resetScroll(id)` control it.
+
+### Modal, sheet, dialog, toast and HUD
+
+```js
+var act = E.ui.modal("confirm", {
+  title: "Apagar?", body: "O save sera perdido.",
+  buttons: [{ label: "Cancelar", value: 0 }, { label: "Apagar", value: 1, variant: "danger" }]
+});                                                   // value | 'dismiss' | null
+
+var close = E.ui.sheet("bag", { h: 180, title: "Inventario" }, function (c) {
+  // draw inside c (content rect)
+});                                                   // 'close' | null
+
+var d = E.ui.dialog(fala, { name: "NPC", choices: ["Sim", "Nao"], sound: true });
+d.choice;                                             // index of the chosen option
+
+E.ui.toast("Salvo!", { type: "ok" });                 // queue of 3, slide/fade
+E.ui.hud({ score: 1200, best: 3000, lives: 2, maxLives: 3, time: "1:20" });
+```
+
+`E.ui.hud` draws a top bar with shortcuts (`score/best/lives/coins/time/level`) and/or `left`/`right` arrays of `{ icon, text, color }`. It is **memoized**: on a dirty layer it draws muted and only repaints when the signature changes or something erases its box (the old `hudKey` pattern, built in). `E.ui.anim(key, target, ms, ease)` returns an eased 0..1 used by modal/sheet; `E.ui.animReset(key)` resets it.
+
+### Limitations
+
+- **No alpha channel**: shadows/veils/opacity are composited with `E.color.alpha(c, bg, a)` over a **known** background; on a busy scene pass the right `bg` or disable the shadow (`shadow: false`).
+- **Uniform corner radius**: `r` is one radius for all four corners.
+- **Horizontal gradients** (`dir: 'x'`) are drawn as `step`-px bands (`E.gfx.gradient`) — cheap for cards, not for a per-frame full-screen HUD.
+- **No text input** in the game UI (use `System.prompt`/`A.form.askText` from CelerKit), no z-order (draw order is call order), no custom fonts (firmware fonts 1/2/4 only).
 
 ## 14c. Modules for complex games (optional)
 

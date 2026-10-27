@@ -2,7 +2,7 @@
   "_doc": "Arestas de deps entre os modulos de tools/sdk/engine — a mesma coisa que o publish-dep declara com --dep e o hub serve em /store/deps.json. O harness (test/js_harness) e o celerctl (--deps-local) usam este indice para resolver o fecho transitivo das deps do app.json, como a loja faz no install.",
   "celeros.engine": {
     "deps": {
-      "celeros.game": "^1.6.0",
+      "celeros.game": "^1.7.0",
       "celeros.game.fx": "^1.0.0",
       "celeros.game.spr": "^1.7.0",
       "celeros.game.tilemap": "^1.0.0"
@@ -35,7 +35,7 @@
   },
   "celeros.game.ui": {
     "deps": {
-      "celeros.game": "^1.1.0"
+      "celeros.game": "^1.7.0"
     }
   },
   "celeros.game.fsm": {

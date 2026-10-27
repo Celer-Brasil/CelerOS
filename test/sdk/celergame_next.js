@@ -396,6 +396,7 @@ module.exports = function (check) {
     }
     var mapa = [
         [E, 'celeros.game', 'E.'], [E.m, 'celeros.game', 'E.m.'], [E.cam, 'celeros.game', 'E.cam.'],
+        [E.color, 'celeros.game', 'E.color.'],
         [E.input, 'celeros.game', 'E.input.'], [E.gfx, 'celeros.game', 'E.gfx.'],
         [E.dirty, 'celeros.game', 'E.dirty.'], [E.audio, 'celeros.game', 'E.audio.'],
         [E.save, 'celeros.game', 'E.save.'], [E.group(), 'celeros.game', 'group().'],
@@ -405,6 +406,7 @@ module.exports = function (check) {
         [E.anim([], 1), 'celeros.game.spr', 'anim().'],
         [E.tilemap({ cols: 1, rows: 1, cell: 1, paint: function () {} }), 'celeros.game.tilemap', 'tilemap().'],
         [E.ui, 'celeros.game.ui', 'E.ui.'],
+        [E.ui.tokens, 'celeros.game.ui', 'E.ui.tokens.'],
         [E.ui.list({ items: [] }), 'celeros.game.ui', 'list().'],
         [E.scene, 'celeros.game.scene', 'E.scene.'],
         [E.node, 'celeros.game.node', 'E.node.'],

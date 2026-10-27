@@ -112,8 +112,19 @@
 // um nome velho. E.slots.fit(w, h): orcamento advisory (bytes fisicos contra
 // maxAllocRAM/freePSRAM) para o jogo recusar antes de alocar; a mensagem de
 // falha do create passa a dizer o motivo do orcamento.
+// 1.6.2: matematica e estado sob entrada hostil — m.wrap(v,a,a) e
+// m.smoothstep(e,e,v) devolviam NaN (divisao por zero); release duplo do
+// slot derrubava o ledger do pool (sprite vivo contado como livre e o
+// create furava o teto); cam.follow com lerp NaN e cam.shake com dur/pow
+// NaN espremiam cam.x/ox NaN no quadro inteiro.
+// 1.7.0 (UI/estilo): E.color (hex/hsv/mix/shade/alpha/luma/ramp/derive);
+// gfx.gradient com dir x real, raio e 3 stops (via); gfx.shadow/elev, dim,
+// divider, star, borda espessa (bw) e outline de texto; panel devolve o
+// content rect. Tudo em JS (sem API nova): a ui 1.3 monta tokens/presets,
+// icones vetoriais, layout, widgets, modal/sheet, HUD e as telas prontas
+// em cima destas primitivas.
 
-var E = { version: '1.6.0' };
+var E = { version: '1.7.0' };
 var S = System;
 
 // opts compartilhado (so leitura): os wrappers gfx sem opts nao alocam —
@@ -218,16 +229,18 @@ E.slots = (function () {
             return id;
         },
         // devolve o slot ao pool (id 0 = nada a fazer). O dono vem do
-        // registro de quem alocou — o chamador nao precisa lembrar do nome
+        // registro de quem alocou — o chamador nao precisa lembrar do nome.
+        // Id sem dono (2o release, id de fora do ledger) NAO anda a
+        // contagem: o release duplo derrubava o ledger e o "usados" mentia
+        // (sprite vivo contado como livre — create furava o teto do pool)
         release: function (id) {
             if (!id) return;
             var dono = who[id];
             try { S.deleteSprite(id); } catch (e) {}
+            if (dono === undefined) return;
+            delete who[id];
+            if (own[dono] && --own[dono] <= 0) delete own[dono];
             set(get() - 1);
-            if (dono !== undefined) {
-                delete who[id];
-                if (own[dono] && --own[dono] <= 0) delete own[dono];
-            }
         },
         // snapshot para diagnostico (o E.debug mostra o n/cap)
         report: function () {
@@ -491,8 +504,10 @@ E.m = {
         return v - delta < target ? target : v - delta;
     },
     // v dentro de [a, b): o multiplo exato abaixo do intervalo cai em a
-    // (antes devolvia b — wrap(-10, 0, 10) era 10, fora do intervalo)
+    // (antes devolvia b — wrap(-10, 0, 10) era 10, fora do intervalo);
+    // intervalo vazio (a === b) devolve a, nao NaN (mesmo acordo do map)
     wrap: function (v, a, b) {
+        if (b === a) return a;
         if (v < a) {
             var r = (a - v) % (b - a);
             return r === 0 ? a : b - r;
@@ -510,8 +525,12 @@ E.m = {
     },
     // interpola angulos pelo caminho curto (torre girando ate a mira)
     lerpAngle: function (a, b, t) { return a + E.m.angDiff(a, b) * t; },
-    // arredonda ao multiplo de step (grade de 16 px, angulo de 45 graus)
-    snap: function (v, step) { return Math.round(v / step) * step; },
+    // arredonda ao multiplo de step (grade de 16 px, angulo de 45 graus);
+    // step 0/NaN devolve v (a divisao por zero virava NaN)
+    snap: function (v, step) {
+        if (!(step > 0)) return v;
+        return Math.round(v / step) * step;
+    },
     // ruido de valor suave 0..1 em 1D/2D (terreno, nuvem, tremor organico):
     // mesma entrada = mesma saida; seed muda o mundo
     noise: function (x, y, seed) {
@@ -524,9 +543,12 @@ E.m = {
         var c = hash2(xi, yi + 1, s), d = hash2(xi + 1, yi + 1, s);
         return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
     },
-    // 0 abaixo de e0, 1 acima de e1, curva S no meio
+    // 0 abaixo de e0, 1 acima de e1, curva S no meio; e0 === e1 = degrau
+    // (antes a divisao por zero devolvia NaN e o comparador do clamp
+    // deixava o NaN passar)
     smoothstep: function (e0, e1, v) {
-        var t = E.m.clamp((v - e0) / (e1 - e0), 0, 1);
+        var den = e1 - e0;
+        var t = den === 0 ? (v >= e1 ? 1 : 0) : E.m.clamp((v - e0) / den, 0, 1);
         return t * t * (3 - 2 * t);
     },
     // true com probabilidade p (0..1); rnd opcional (E.rng) p/ determinismo
@@ -826,6 +848,13 @@ E._pollInput = function (now) {
                 };
             }
         }
+    } else if (i.moved || i.holdDx || i.holdDy) {
+        // solto ha mais de um quadro: o estado do ULTIMO toque nao vaza
+        // (moved/holdDx so existem com um press em curso; no quadro da
+        // soltura eles ficam para o justUp consultar)
+        i.moved = false;
+        i.holdDx = 0;
+        i.holdDy = 0;
     }
     i.btn = E.caps.button ? S.button() : 0;
     return t;
@@ -1690,6 +1719,7 @@ E.group = function () {
         // mesmo objeto — 3 itens, C removendo o 1o: C rodava 3x, B nunca
         g._busy = true;
         for (var i = a.length - 1; i >= 0; i--) {
+            if (i >= a.length) continue;   // clear() no meio encolheu o array
             var o = a[i];
             if (!o.dead && o.update) o.update(dt);
             if (o.dead) {
@@ -1698,6 +1728,14 @@ E.group = function () {
             }
         }
         g._busy = false;
+        // sort() pedido durante o passe (z-order por y a cada quadro) fica
+        // pendente: reordenar sob o laco backward faz entidade pular o
+        // quadro ou rodar 2x
+        if (g._sortReq !== undefined) {
+            var ks = g._sortReq;
+            g._sortReq = undefined;
+            g.sort(ks);
+        }
         g.count = a.length;
     };
     // draw({cull, pad}): com cull, pula quem esta fora da camera (E.cull).
@@ -1759,6 +1797,9 @@ E.group = function () {
     // ordem de desenho: key = nome de prop (ex. 'y' — quem esta mais embaixo
     // desenha por cima) ou comparador; estavel (empate mantem a ordem)
     g.sort = function (key) {
+        // DURANTE o update fica pendente (o _busy flag) — reordenar o array
+        // sob o laco backward do update pula/relia entidades
+        if (g._busy) { g._sortReq = key; return; }
         var a = g.items;
         var cmp = typeof key === 'function' ? key :
                   function (p, q) { return p[key] - q[key]; };
@@ -1847,6 +1888,8 @@ E.pool = function (n, factory) {
 // (como o deki sem GetContentExtents) e objeto de tela (e.screen) nunca e'
 // cullado. A posicao e' _wx/_wy quando o celeros.game.node ja calculou o
 // mundo (filho de algo), senao x/y. pad = folga em px alem do extents.
+// O shake (ox/oy) entra na conta: o draw desloca pelo tremor e a borda
+// piscava (cullava quem o tremor trazia de volta)
 E.cull = function (e, o) {
     if (!e || e.screen) return true;
     var w = e.w, h = e.h;
@@ -1855,8 +1898,8 @@ E.cull = function (e, o) {
     var x = e._wx !== undefined ? e._wx : e.x;
     var y = e._wy !== undefined ? e._wy : e.y;
     var c = E.cam;
-    return (x + w + pad) >= c.x && (x - pad) <= (c.x + E.W) &&
-           (y + h + pad) >= c.y && (y - pad) <= (c.y + E.H);
+    return (x + w + pad) >= c.x - c.ox && (x - pad) <= (c.x + E.W - c.ox) &&
+           (y + h + pad) >= c.y - c.oy && (y - pad) <= (c.y + E.H - c.oy);
 };
 
 E.cam = {
@@ -1873,7 +1916,9 @@ E.cam = {
     // (plataforma: pulo curto nao sacode o cenario)
     follow: function (t, lerp, opts) {
         this._target = t;
-        this._lerp = lerp === undefined ? 1 : lerp;
+        // lerp NaN envenenava cam.x/y no 1o tick (uma chamada ruim prendia
+        // a camera inteira — todo desenho de mundo herda o NaN)
+        this._lerp = lerp === undefined ? 1 : (lerp >= 0 && lerp <= 1 ? lerp : 1);
         this._dz = opts && opts.deadzone ? opts.deadzone : null;
         // offset {x, y}: olha a frente do alvo (mude por quadro com a
         // direcao — o lerp suaviza a virada)
@@ -1902,9 +1947,11 @@ E.cam = {
         return E.tween(this, { x: tx, y: ty }, ms, { ease: o.ease, onDone: o.onDone });
     },
     shake: function (pow, dur) {
-        this._shPow = pow;
-        this._shDur = dur;
-        this._shT = dur;
+        // dur 0/NaN e pow NaN espremiam ox/oy NaN no quadro inteiro
+        // (_shT/_shDur entram em divisao no _tick)
+        this._shPow = pow > 0 ? pow : 0;
+        this._shDur = dur > 0 ? dur : 0;
+        this._shT = this._shDur;
     },
     center: function (x, y) {
         this.x = x - E.W / 2;
@@ -1969,6 +2016,134 @@ E.cam = {
     worldY: function (sy) { return sy + this.y - this.oy; }
 };
 
+// ------------------------------------------------------------ cor --------
+// Paleta/tokens do jogo. O firmware so fala RGB565; aqui ficam os helpers
+// que faltavam: hex do autor, HSV/HSL, mistura, sombra/claro, alpha
+// SIMULADO sobre um fundo conhecido (nao existe alpha nativo) e a
+// derivacao dos tokens de superficie que a ui 1.3 consome.
+E.color = (function () {
+    var _hex = Object.create(null);
+
+    function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+    // RGB888 -> RGB565 (mesma conta do System.color, sem depender do global)
+    function pack(r, g, b) {
+        r = r < 0 ? 0 : (r > 255 ? 255 : r | 0);
+        g = g < 0 ? 0 : (g > 255 ? 255 : g | 0);
+        b = b < 0 ? 0 : (b > 255 ? 255 : b | 0);
+        return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+    }
+
+    function hex(s) {
+        s = String(s);
+        var hit = _hex[s];
+        if (hit !== undefined) return hit;
+        var t = s.charAt(0) === '#' ? s.substring(1) : s;
+        var r = 0, g = 0, b = 0;
+        if (t.length === 3) {
+            r = parseInt(t.charAt(0) + t.charAt(0), 16);
+            g = parseInt(t.charAt(1) + t.charAt(1), 16);
+            b = parseInt(t.charAt(2) + t.charAt(2), 16);
+        } else if (t.length >= 6) {
+            r = parseInt(t.substring(0, 2), 16);
+            g = parseInt(t.substring(2, 4), 16);
+            b = parseInt(t.substring(4, 6), 16);
+        }
+        if (r !== r) r = 0;
+        if (g !== g) g = 0;
+        if (b !== b) b = 0;
+        hit = pack(r, g, b);
+        _hex[s] = hit;
+        return hit;
+    }
+
+    // h 0..360, s/v 0..1
+    function hsv(h, s, v) {
+        h = ((h % 360) + 360) % 360 / 60;
+        s = clamp01(s); v = clamp01(v);
+        var i = Math.floor(h), f = h - i;
+        var p = v * (1 - s), q = v * (1 - s * f), w = v * (1 - s * (1 - f));
+        var r, g, b;
+        if (i === 0) { r = v; g = w; b = p; }
+        else if (i === 1) { r = q; g = v; b = p; }
+        else if (i === 2) { r = p; g = v; b = w; }
+        else if (i === 3) { r = p; g = q; b = v; }
+        else if (i === 4) { r = w; g = p; b = v; }
+        else { r = v; g = p; b = q; }
+        return pack(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255));
+    }
+
+    // h 0..360, s/l 0..1
+    function hsl(h, s, l) {
+        s = clamp01(s); l = clamp01(l);
+        var v = l + s * Math.min(l, 1 - l);
+        var sv = v > 0 ? 2 * (1 - l / v) : 0;
+        return hsv(h, sv, v);
+    }
+
+    function mix(a, b, t) { return E.m.lerpColor(a, b, clamp01(t)); }
+    // k > 0 clareia (ate o branco), k < 0 escurece (ate o preto)
+    function shade(c, k) {
+        if (!(k > 0)) return k < 0 ? mix(c, 0x0000, -k) : c;
+        return mix(c, 0xFFFF, k);
+    }
+    // composicao de c sobre bg com opacidade a (0..1) — o "alpha" da engine
+    function alpha(c, bg, a) { return mix(bg, c, a); }
+    // luminancia 0..255 (expande o 565 para 888 antes do peso)
+    function luma(c) {
+        var r = (c >> 11) & 31, g = (c >> 5) & 63, b = c & 31;
+        r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); b = (b << 3) | (b >> 2);
+        return (r * 299 + g * 587 + b * 114) / 1000 | 0;
+    }
+    function contrast(c) { return luma(c) > 148 ? 0x0000 : 0xFFFF; }
+    // n tons do preto ao branco passando por base (escuro -> claro)
+    function ramp(base, n) {
+        n = n > 1 ? n | 0 : 5;
+        var out = new Array(n);
+        for (var i = 0; i < n; i++) {
+            var t = i / (n - 1);
+            out[i] = t < 0.5 ? mix(0x0000, base, t * 2) : mix(base, 0xFFFF, (t - 0.5) * 2);
+        }
+        return out;
+    }
+    // tokens de superficie/estado a partir do E.theme do firmware (ou
+    // defaults) — a ui 1.3 guarda isto e os widgets so leem
+    function derive(t) {
+        t = t || EMPTY;
+        var bg = t.bg === undefined ? 0x0000 : t.bg;
+        var card = t.card === undefined ? 0x2104 : t.card;
+        var raised = t.raised === undefined ? 0x3186 : t.raised;
+        var stroke = t.stroke === undefined ? 0x4208 : t.stroke;
+        var accent = t.accent === undefined ? 0x07FF : t.accent;
+        var text = t.text === undefined ? 0xFFFF : t.text;
+        var dim = t.textDim === undefined ? 0x8410 : t.textDim;
+        return {
+            bg: bg,
+            surface: card,
+            surface2: raised,
+            surface3: mix(raised, 0xFFFF, 0.07),
+            outline: stroke,
+            text: text,
+            textDim: dim,
+            accent: accent,
+            accent2: t.accentD === undefined ? mix(accent, 0x0000, 0.35) : t.accentD,
+            onAccent: t.onAccent === undefined ? 0x0000 : t.onAccent,
+            ok: t.ok === undefined ? 0x05E0 : t.ok,
+            warn: t.warn === undefined ? 0xFD20 : t.warn,
+            err: t.err === undefined ? 0xF800 : t.err,
+            glow: mix(accent, bg, 0.55)
+        };
+    }
+
+    return {
+        hex: hex, rgb: pack, hsv: hsv, hsl: hsl,
+        mix: mix, shade: shade,
+        lighten: function (c, k) { return shade(c, k); },
+        darken: function (c, k) { return shade(c, -k); },
+        alpha: alpha, luma: luma, contrast: contrast, ramp: ramp,
+        derive: derive
+    };
+})();
+
 // ------------------------------------------------------------ gfx --------
 
 // wrappers com camera: opts.screen = true desenha fora da camera (HUD).
@@ -2027,8 +2202,48 @@ E.gfx = (function () {
     // g.rect so le) — mesmo papel do EMPTY para os literais internos
     var _ro = { r: 0, screen: false };
     var _roS = { r: 0, fill: false, screen: false };
+    var _roB = { r: 0, screen: false, fill: true };
+    var _roP = { r: 0, screen: false, fill: true, bw: 0, stroke: undefined,
+                 grad: undefined, elev: 0, shadow: undefined };
+    var _grO = { screen: false, r: 0, dir: 'y', via: undefined, step: 4 };
+    var _shO = { r: 0, screen: false };
+    var _dmO = { r: 0, screen: false };
     var _btnLo = { color: 0, align: 'center', valign: 'middle', screen: false,
                    fit: 0, font: undefined, px: 12 };
+
+    // gradiente em coords FISICAS (quem chama ja aplicou a camera): rect,
+    // panel e gradient usam o mesmo caminho. dir 'x' vira faixas de step px
+    // (o nativo so faz vertical); 'via' divide em 2 faixas verticais (sem
+    // raio: o raio de cada faixa faria degrau no meio)
+    function gradientAt(X, Y, W2, H2, c1, c2, rad, dir, via, step) {
+        if (!(W2 > 0) || !(H2 > 0)) return;
+        if (!E.caps.gradient) {
+            if (rad && E.caps.round) S.fillSmoothRoundRect(X, Y, W2, H2, rad, c1);
+            else S.fillRect(X, Y, W2, H2, c1);
+            return;
+        }
+        if (dir === 'x') {
+            var st = step > 0 ? step | 0 : 4;
+            var n = Math.ceil(W2 / st);
+            for (var i = 0; i < n; i++) {
+                var xx = i * st;
+                var ww = Math.min(st + 1, W2 - xx);
+                var t = W2 > 1 ? (xx + ww / 2) / W2 : 0;
+                var cc = via === undefined ? E.m.lerpColor(c1, c2, t)
+                       : (t < 0.5 ? E.m.lerpColor(c1, via, t * 2)
+                                  : E.m.lerpColor(via, c2, (t - 0.5) * 2));
+                S.fillRect(X + xx, Y, ww, H2, cc);
+            }
+            return;
+        }
+        if (via !== undefined) {
+            var half = (H2 / 2) | 0;
+            S.fillGradient(X, Y, W2, half, c1, via, 0);
+            S.fillGradient(X, Y + half, W2, H2 - half, via, c2, 0);
+            return;
+        }
+        S.fillGradient(X, Y, W2, H2, c1, c2, rad || 0);
+    }
 
     // 1o definido entre a cor pedida, a do tema e o default (0 vale)
     function pick(a, b, c) { return a !== undefined && a !== null ? a : (b !== undefined && b !== null ? b : c); }
@@ -2046,7 +2261,9 @@ E.gfx = (function () {
     }
 
     var g = {
-        // rect(x,y,w,h,cor,{fill=true, r (cantos), screen})
+        // rect(x,y,w,h,cor,{fill=true, r (cantos), screen, bw (borda),
+        // stroke (cor da borda), grad ([c1,c2] ou {a,b,dir,via,step}),
+        // elev/shadow (sombra por camadas)})
         rect: function (x, y, w, h, color, o) {
             o = o || EMPTY;
             if (o.screen) { _cx = 0; _cy = 0; } else { _cx = CAM.ox - CAM.x; _cy = CAM.oy - CAM.y; }
@@ -2054,14 +2271,51 @@ E.gfx = (function () {
             X = X >= 0 ? (X + 0.5) | 0 : Math.round(X);
             Y = Y >= 0 ? (Y + 0.5) | 0 : Math.round(Y);
             var W2 = w >= 0 ? (w + 0.5) | 0 : Math.round(w), H2 = h >= 0 ? (h + 0.5) | 0 : Math.round(h);
-            if (o.r && E.caps.round) {
-                if (o.fill === false && typeof S.drawRoundRect === 'function') {
-                    S.drawRoundRect(X, Y, W2, H2, Math.round(o.r), color);
-                } else {
-                    S.fillSmoothRoundRect(X, Y, W2, H2, Math.round(o.r), color);
+            if (!(W2 > 0) || !(H2 > 0)) return;
+            var rad = o.r && E.caps.round ? Math.round(o.r) : 0;
+            var bw = o.bw > 0 ? Math.round(o.bw) : 0;
+            if (o.fill !== false && o.shadow !== false && (o.elev || o.shadow)) {
+                g.shadow(x, y, w, h, o);
+            }
+            if (o.fill === false) {
+                if (bw > 1) {
+                    for (var bi = 0; bi < bw; bi++) {
+                        var rr = rad > bi ? rad - bi : 0;
+                        if (rr) S.drawRoundRect(X + bi, Y + bi, W2 - bi * 2, H2 - bi * 2, rr, color);
+                        else S.drawRect(X + bi, Y + bi, W2 - bi * 2, H2 - bi * 2, color);
+                    }
+                } else if (rad) S.drawRoundRect(X, Y, W2, H2, rad, color);
+                else S.drawRect(X, Y, W2, H2, color);
+            } else if (bw > 0) {
+                // borda espessa: retangulo externo na cor da borda + interno
+                // recuado (mesmo raio - bw) na cor/gradiente de preenchimento
+                var sc = o.stroke === undefined ? color : o.stroke;
+                if (rad) S.fillSmoothRoundRect(X, Y, W2, H2, rad, sc);
+                else S.fillRect(X, Y, W2, H2, sc);
+                var ix = X + bw, iy = Y + bw, iw = W2 - bw * 2, ih = H2 - bw * 2;
+                if (iw > 0 && ih > 0) {
+                    var ir = rad > bw ? rad - bw : 0;
+                    var gr = o.grad;
+                    if (gr !== undefined) {
+                        gradientAt(ix, iy, iw, ih,
+                                   gr.length !== undefined ? gr[0] : gr.a,
+                                   gr.length !== undefined ? gr[1] : gr.b,
+                                   ir, gr.dir || o.dir || 'y',
+                                   gr.via !== undefined ? gr.via : o.via,
+                                   gr.step !== undefined ? gr.step : o.step);
+                    } else if (ir) S.fillSmoothRoundRect(ix, iy, iw, ih, ir, color);
+                    else S.fillRect(ix, iy, iw, ih, color);
                 }
-            } else if (o.fill === false) {
-                S.drawRect(X, Y, W2, H2, color);
+            } else if (o.grad !== undefined) {
+                var g2 = o.grad;
+                gradientAt(X, Y, W2, H2,
+                           g2.length !== undefined ? g2[0] : g2.a,
+                           g2.length !== undefined ? g2[1] : g2.b,
+                           rad, g2.dir || o.dir || 'y',
+                           g2.via !== undefined ? g2.via : o.via,
+                           g2.step !== undefined ? g2.step : o.step);
+            } else if (rad) {
+                S.fillSmoothRoundRect(X, Y, W2, H2, rad, color);
             } else {
                 S.fillRect(X, Y, W2, H2, color);
             }
@@ -2109,15 +2363,80 @@ E.gfx = (function () {
                 D.add(l, t, Math.max(ax, bx, cx) - l + 1, Math.max(ay, by, cy) - t + 1);
             }
         },
+        // gradiente: dir 'y' (default, nativo) ou 'x' (faixas de step px);
+        // r = raio real (antes o 7o arg do nativo recebia 0/1 e o raio morria);
+        // via = cor do meio (2 faixas verticais, sem raio)
         gradient: function (x, y, w, h, c1, c2, o) {
-            if (!E.caps.gradient) {
-                g.rect(x, y, w, h, c1, o);
-                return;
-            }
             o = o || EMPTY;
             var X = px(x, o.screen), Y = py(y, o.screen);
-            S.fillGradient(X, Y, Math.round(w), Math.round(h), c1, c2, o.dir === 'x' ? 1 : 0);
-            if (D.on) D.add(X, Y, w, h);
+            gradientAt(X, Y, Math.round(w), Math.round(h), c1, c2,
+                       o.r ? Math.round(o.r) : 0, o.dir, o.via, o.step);
+            if (D.on) D.add(X, Y, Math.round(w), Math.round(h));
+        },
+        // sombra/elevacao: N camadas concentricas de rect arredondado
+        // misturadas com o FUNDO CONHECIDO (nao ha alpha nativo). o.shadow
+        // pode ser {r,dy,blur,color,alpha,layers,bg}; o.glow usa o accent.
+        shadow: function (x, y, w, h, o) {
+            o = o || EMPTY;
+            var so = o.shadow !== undefined && typeof o.shadow === 'object' ? o.shadow : EMPTY;
+            var T = E.theme || EMPTY;
+            var layers = so.layers !== undefined ? so.layers
+                       : (o.elev === undefined ? 2 : o.elev);
+            if (o.shadow === false || !(layers > 0)) return;
+            var bg = so.bg !== undefined ? so.bg
+                   : (o.bg !== undefined ? o.bg
+                   : (T.bg === undefined ? 0x0000 : T.bg));
+            var col = so.color !== undefined ? so.color
+                    : (o.glow ? E.color.mix(pick(o.color, T.accent, 0x07FF), bg, 0.45)
+                              : 0x0000);
+            var rad = so.r !== undefined ? so.r
+                    : (o.r === undefined ? Math.round(10 * E.U) : o.r);
+            var dy = so.dy !== undefined ? so.dy : Math.round(2 * E.U);
+            var blur = so.blur !== undefined ? so.blur : Math.max(1, Math.round(2 * E.U));
+            var a0 = so.alpha !== undefined ? so.alpha : 0.38;
+            for (var i = layers; i >= 1; i--) {
+                var e = Math.round(blur * i / layers);
+                var a = a0 * (1 - (i - 1) / (layers + 1));
+                _shO.r = rad + e;
+                _shO.screen = o.screen;
+                g.rect(x - e, y - e + dy, w + e * 2, h + e * 2,
+                       E.color.alpha(col, bg, a), _shO);
+            }
+        },
+        // veu sobre um fundo conhecido (pct 0..100 de preto)
+        dim: function (x, y, w, h, pct, o) {
+            o = o || EMPTY;
+            var T = E.theme || EMPTY;
+            var bg = o.bg === undefined ? (T.bg === undefined ? 0x0000 : T.bg) : o.bg;
+            _dmO.r = o.r;
+            _dmO.screen = o.screen;
+            g.rect(x, y, w, h,
+                   E.color.alpha(0x0000, bg, (pct === undefined ? 60 : pct) / 100),
+                   _dmO);
+        },
+        // linha divisoria de 1..N px (cor default = stroke do tema)
+        divider: function (x, y, w, o) {
+            o = o || EMPTY;
+            var T = E.theme || EMPTY;
+            var th = o.h === undefined ? Math.max(1, Math.round(E.U)) : o.h;
+            _dmO.r = 0;
+            _dmO.screen = o.screen;
+            g.rect(x, y, w, th,
+                   o.color === undefined ? (T.stroke === undefined ? 0x4208 : T.stroke) : o.color,
+                   _dmO);
+        },
+        // estrela de n pontas (r0 externo, r1 interno) — rating/HUD
+        star: function (cx, cy, r0, r1, n, color, o) {
+            o = o || EMPTY;
+            n = n | 0;
+            if (n < 3) n = 5;
+            var pts = [];
+            for (var i = 0; i < n * 2; i++) {
+                var a = -Math.PI / 2 + i * Math.PI / n;
+                var r = (i & 1) ? r1 : r0;
+                pts.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+            }
+            g.poly(pts, color, { screen: o.screen, center: true, fill: o.fill });
         },
         arc: function (x, y, r0, r1, a0, a1, color, o) {
             if (!E.caps.arc) {
@@ -2165,12 +2484,36 @@ E.gfx = (function () {
             var datum = row + col;
             if (datum) S.setTextDatum(datum);
             if (st.size !== 1) S.setTextSize(st.size);
-            // sombra: o mesmo texto 1 px (x U) abaixo-direita na cor dada,
-            // ANTES do principal (legivel sobre cenario colorido)
-            if (o.shadow !== undefined) {
+            // sombra: cor fixa, true (preto) ou {dx, dy, color} em U; o
+            // outline desenha 4 copias em cruz ANTES do principal
+            var shDx = 0, shDy = 0, mudouCor = false;
+            if (o.shadow !== undefined && o.shadow !== null && o.shadow !== false) {
+                var shC = o.shadow;
+                if (typeof shC === 'object') {
+                    shDx = shC.dx === undefined ? 1 : shC.dx;
+                    shDy = shC.dy === undefined ? 1 : shC.dy;
+                    shC = shC.color === undefined ? 0x0000 : shC.color;
+                } else {
+                    if (shC === true) shC = 0x0000;
+                    shDx = 1; shDy = 1;
+                }
                 var sh = Math.max(1, Math.round(E.U));
-                S.setTextColor(o.shadow);
-                S.drawString(str, X + sh, Y + sh, st.font);
+                S.setTextColor(shC);
+                S.drawString(str, X + shDx * sh, Y + shDy * sh, st.font);
+                mudouCor = true;
+            }
+            var olD = 0;
+            if (o.outline !== undefined && o.outline !== null && o.outline !== false) {
+                var oc = o.outline === true ? 0x0000 : o.outline;
+                olD = Math.max(1, Math.round(E.U));
+                S.setTextColor(oc);
+                S.drawString(str, X - olD, Y, st.font);
+                S.drawString(str, X + olD, Y, st.font);
+                S.drawString(str, X, Y - olD, st.font);
+                S.drawString(str, X, Y + olD, st.font);
+                mudouCor = true;
+            }
+            if (mudouCor) {
                 S.setTextColor(o.color === undefined ? 0xFFFF : o.color);
             }
             S.drawString(str, X, Y, st.font);
@@ -2181,7 +2524,9 @@ E.gfx = (function () {
                 var th = st.h || (S.fontHeight(st.font) * st.size);
                 var lx = col === 1 ? X - tw / 2 : (col === 2 ? X - tw : X);
                 var ly = row === 4 ? Y - th / 2 : (row === 8 ? Y - th : Y);
-                D.add(lx - 1, ly - 1, tw + 3, th + 3);
+                var padD = olD > 0 ? olD
+                         : (o.shadow ? Math.max(1, Math.round(E.U)) : 1);
+                D.add(lx - padD, ly - padD, tw + padD * 2 + 1, th + padD * 2 + 1);
             }
         },
         // largura em pixels do texto com as mesmas opts do text()
@@ -2223,8 +2568,8 @@ E.gfx = (function () {
             for (var i = 0; i < n; i++) g.text(lines[i], ax, y + i * lh, o);
             return n * lh;
         },
-        // poligono convexo cheio (leque de triangulos) ou contorno:
-        // pts = [x0, y0, x1, y1, ...] em coords de mundo (o.screen p/ HUD)
+        // poligono: leque do 1o vertice (convexo, compat) ou do CENTROIDE
+        // (o.center, formas concavas radiais: estrela, engrenagem)
         poly: function (pts, color, o) {
             o = o || EMPTY;
             var n = pts.length >> 1;
@@ -2234,6 +2579,20 @@ E.gfx = (function () {
                     var j = (i + 1) % n;
                     if (n === 2 && i === 1) break;
                     g.line(pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1], color, o);
+                }
+                return;
+            }
+            if (o.center) {
+                var mx = 0, my = 0, ci;
+                for (ci = 0; ci < n; ci++) {
+                    mx += pts[ci * 2];
+                    my += pts[ci * 2 + 1];
+                }
+                mx /= n; my /= n;
+                for (ci = 0; ci < n; ci++) {
+                    var cj = (ci + 1) % n;
+                    g.tri(mx, my, pts[ci * 2], pts[ci * 2 + 1],
+                          pts[cj * 2], pts[cj * 2 + 1], color, o);
                 }
                 return;
             }
@@ -2255,11 +2614,18 @@ E.gfx = (function () {
             var on = E.press(r);
             var primary = o.primary !== false;
             var fill = primary ?
-                (on ? accent : (E.caps.wide ? S.mixColor(accent, 0x0000, 25) : accent)) :
+                (on ? (E.caps.wide ? S.mixColor(accent, 0x0000, 18) : accent) : accent) :
                 (on ? (E.caps.wide ? S.mixColor(pick(o.bg, T.card, 0x1082), 0xFFFF, 18) : accent)
                     : pick(o.bg, T.card, 0x1082));
             var rad = o.r === undefined ? Math.round(Math.min(h * 0.28, 12 * E.U)) : o.r;
-            _ro.r = rad; _ro.screen = o.screen;
+            _ro.r = rad;
+            _ro.screen = o.screen;
+            _ro.fill = true;
+            _ro.bw = 0;
+            _ro.stroke = undefined;
+            _ro.grad = o.grad;
+            _ro.elev = o.elev;
+            _ro.shadow = o.shadow;
             g.rect(x, y, w, h, fill, _ro);
             if (!primary && o.stroke !== false) {
                 _roS.r = rad; _roS.screen = o.screen;
@@ -2278,27 +2644,56 @@ E.gfx = (function () {
             E._btns.push(r);
             return r;
         },
-        // medidor de fracao: opts {fg, bg, r, screen}
+        // medidor de fracao: opts {fg, fg2, bg, r, grad, marker, screen}
         bar: function (x, y, w, h, frac, o) {
             o = o || EMPTY;
             var T = E.theme || EMPTY;
             var f = E.m.clamp(frac, 0, 1);
-            _ro.r = o.r; _ro.screen = o.screen;
-            g.rect(x, y, w, h, pick(o.bg, T.stroke, 0x3186), _ro);
+            _roB.r = o.r; _roB.screen = o.screen; _roB.fill = true;
+            g.rect(x, y, w, h, pick(o.bg, T.stroke, 0x3186), _roB);
             if (f > 0.01) {
-                g.rect(x + 1, y + 1, Math.max(1, (w - 2) * f), h - 2,
-                       pick(o.fg, T.accent, 0x07FF), _ro);
+                var fw = Math.max(1, (w - 2) * f);
+                var fg = pick(o.fg, T.accent, 0x07FF);
+                if (o.grad) {
+                    _grO.screen = o.screen;
+                    _grO.r = 0;
+                    _grO.dir = 'x';
+                    _grO.via = undefined;
+                    _grO.step = 3;
+                    g.gradient(x + 1, y + 1, fw, h - 2, fg,
+                               pick(o.fg2, fg, fg), _grO);
+                } else {
+                    g.rect(x + 1, y + 1, fw, h - 2, fg, _roB);
+                }
+            }
+            if (o.marker !== undefined) {
+                var mw = Math.max(2, Math.round(2 * E.U));
+                _roB.r = Math.round(mw / 2);
+                g.rect(x + 1 + (w - 2) * E.m.clamp(o.marker, 0, 1) - mw / 2,
+                       y - Math.round(2 * E.U), mw, h + Math.round(4 * E.U),
+                       pick(o.markerColor, T.text, 0xFFFF), _roB);
             }
         },
-        // painel/card com borda
+        // painel/card: bg + borda (bw) + gradiente/elevacao opcionais.
+        // Devolve o CONTENT rect (ja com o pad) para o layout encaixar.
         panel: function (x, y, w, h, o) {
             o = o || EMPTY;
             var T = E.theme || EMPTY;
             var rad = o.r === undefined ? Math.round(10 * E.U) : o.r;
-            _ro.r = rad; _ro.screen = o.screen;
-            g.rect(x, y, w, h, pick(o.bg, T.card, 0x1082), _ro);
-            _roS.r = rad; _roS.screen = o.screen;
-            g.rect(x, y, w, h, pick(o.stroke, T.stroke, 0x3186), _roS);
+            var bw = o.bw === undefined ? 1 : o.bw;
+            if (o.stroke === false) bw = 0;
+            var pad = o.pad === undefined ? Math.round(8 * E.U) : o.pad;
+            _roP.r = rad;
+            _roP.screen = o.screen;
+            _roP.fill = true;
+            _roP.bw = bw;
+            _roP.stroke = pick(o.stroke, T.stroke, 0x3186);
+            _roP.grad = o.grad;
+            _roP.elev = o.elev;
+            _roP.shadow = o.shadow;
+            _roP.bg = o.bg;
+            g.rect(x, y, w, h, pick(o.bg, T.card, 0x1082), _roP);
+            return { x: x + pad, y: y + pad, w: w - pad * 2, h: h - pad * 2 };
         },
         // vida em coracoes: hp de max (meio coracao = hp fracionario .5),
         // o {size (px, default 12*U), gap, color, empty, screen}. Desenho

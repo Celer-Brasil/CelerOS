@@ -1,0 +1,89 @@
+{
+  "format": 1,
+  "guid": "35caa2b39a8360f6b86144efe11a1ac6",
+  "importer": "sprite-sheet",
+  "settings": {
+    "w": 256,
+    "h": 192,
+    "fps": {
+      "bomba": 4,
+      "cacador": 6,
+      "explosao": 17,
+      "fantasma": 6,
+      "leste": 10,
+      "norte": 10,
+      "oeste": 10,
+      "slime": 6,
+      "sul": 10
+    },
+    "mode": "grid",
+    "cols": 8,
+    "rows": 6,
+    "tw": 32,
+    "th": 32,
+    "pivot": [
+      0.5,
+      0.5
+    ],
+    "key": "#ff00ff",
+    "prefix": "a",
+    "loop": {
+      "explosao": false
+    },
+    "anims": {
+      "bomba": [
+        28,
+        29
+      ],
+      "cacador": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "explosao": [
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "fantasma": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "leste": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "norte": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "oeste": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "slime": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "sul": [
+        0,
+        1,
+        2,
+        3
+      ]
+    }
+  }
+}

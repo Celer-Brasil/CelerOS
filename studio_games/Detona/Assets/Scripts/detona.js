@@ -65,15 +65,32 @@ var BOARD_H = ROWS * CELL;
 var JOY_R = 36, JOY_DEAD = 14;
 // opcoes reutilizadas: o draw roda todo quadro e alocar/escalar no Duktape
 // custa caro (o pulse da bomba virava caminho afim por bomba)
-var OPT_BOMB = { scale: 1, key: 0xF81F };
-var OPT_DROP = { scale: 0.5, key: 0xF81F };
+var OPT_ART = { key: 0xF81F };
+var OPT_HUD = { key: 0xF81F, screen: true };
+var OPT_BIG = { key: 0xF81F, scale: 3 };
 var JOY_RING = { fill: false, screen: true };
 var JOY_DOT = { fill: true, screen: true };
 var RED_DOT = { fill: true };
 var FLAME_BIG = { r: 8 };
 var FLAME_SMALL = { r: 6 };
-var DROP_TXT = { px: 13, align: 'center', valign: 'middle',
-                 color: C(0x101010), bg: 0xFFE0 };
+
+// arte.png: grade 8x6 de 32 px gerada com text2d (animate-set 4 direcoes,
+// items, vfx). Os nomes ficam prontos: concatenar por quadro pesa no Duktape
+var ART = [];
+for (var _a = 0; _a < 48; _a++) ART.push('arte#a' + _a);
+var FACE = { down: 0, up: 4, left: 8, right: 12 };
+var ENEMY_ART = { slime: 16, ghost: 20, hunter: 24 };
+var A_BOMB = 28, A_EXIT = 30, A_STAR = 31;
+var ITEM_ART = { range: 32, bomb: 33, speed: 34, remote: 35, shield: 36, life: 37 };
+var ITEM_NAME = { range: 'Alcance +1', bomb: 'Bomba +1', speed: 'Velocidade',
+                  remote: 'Detonador', shield: 'Escudo', life: 'Vida +1' };
+// explosao: faisca -> bola de fogo -> fumaca (quadros 41..45)
+var BOOM_SEQ = [41, 42, 42, 42, 43, 44];
+var BOSS_ART = ['chefe#c0', 'chefe#c1'];
+
+// paleta do kit de UI: arcade quente sobre o crepusculo do fundo
+var UI_THEME = { accent: '#ffb000', accent2: '#ff5a00', onAccent: 0x0000,
+                 radius: 14 };
 
 function center(c) { return c * CELL + CELL / 2; }
 function cellOf(v) { return Math.round((v - CELL / 2) / CELL); }
@@ -94,12 +111,21 @@ function starCount(timeLeft, time0, lives) {
     if (frac >= 0.3) return 2;
     return 1;
 }
-function drawPanel(E, x, y, w, h, bg, stroke) {
-    E.gfx.panel(x, y, w, h, { bg: bg, stroke: stroke, r: 10, screen: true });
+function hasArt(E, name) {
+    return !!(E.spr && E.spr.has && E.spr.has(name));
 }
-function drawButton(E, r, label, primary) {
-    return E.gfx.button(label, r.x, r.y, r.w, r.h,
-        { primary: !!primary, screen: true, px: r.px || 20 });
+function uiTheme(E) {
+    if (!E.ui) return;
+    E.ui.preset('neon');
+    E.ui.theme(UI_THEME);
+}
+// estrelas da fase: as ganhas em ouro, as faltantes em contorno escuro
+function drawStars(E, cx, cy, n, r) {
+    for (var i = 0; i < 3; i++) {
+        var x = cx + (i - 1) * r * 2.4;
+        E.gfx.star(x, cy, r, r * 0.45, 5, i < n ? C(0xFFC83C) : C(0x2A3350),
+                   { screen: true, fill: true });
+    }
 }
 
 // recorte do mundo: o apagar das caixas sujas e o desenho do jogo nao
@@ -189,16 +215,11 @@ exports.start = function (ctx) {
     s.pad = null;
     s.btnPause = null;
     s.btnBomb = null;
-    s.btnResume = null;
-    s.btnMapPause = null;
-    s.btnNext = null;
-    s.btnMapEnd = null;
-    s.btnRetry = null;
-    s.btnMapLost = null;
-    s.btnMapWin = null;
-    s.btnAgain = null;
+    s.act = null;
+    s.stars = 0;
 
     if (typeof __harness !== 'undefined') __harness.detona = s;
+    uiTheme(E);
 
     if (s.screen === 'title') {
         s.best = E.save.num('best', 0);
@@ -250,9 +271,12 @@ function startGame(s, ctx) {
     s.invuln = 0;
     s.bossDead = false;
     s.exitRevealed = false;
-    s.btnBomb = { x: 396, y: 420, w: 76, h: 52 };
-    s.btnPause = { x: 436, y: 6, w: 36, h: 30 };
+    s.btnBomb = { x: 392, y: 420, w: 80, h: 54 };
+    s.btnPause = { x: 340, y: 422, w: 44, h: 50 };
     s.hudKey = '';
+    s.face = 'down';
+    s.art = hasArt(E, ART[0]);
+    s.boomCols = [0, 0, 0xFFFF];
     s.animT = 0;           // relogio das folhas animadas novas
     s.joyOn = false;       // joystick flutuante: base assentada no toque
     s.joyX0 = 0;
@@ -289,42 +313,45 @@ exports.update = function (dt, ctx) {
     gameUpdate(s, E, ctx, dt);
 };
 
+// os widgets do kit de UI decidem no draw (immediate-mode) e deixam a acao
+// em s.act; o update do quadro seguinte a executa (troca de cena fora do draw)
+function takeAct(s) {
+    var a = s.act;
+    s.act = null;
+    return a;
+}
+
 function titleUpdate(s, E) {
-    if (s.how) {
-        if (E.input.tap) { s.how = false; E.redraw(); }
-        return;
-    }
-    if (s.btnPlay && E.hit(s.btnPlay)) {
+    var a = takeAct(s);
+    if (s.how) E.redraw();          // modal anima: a cena estatica repinta
+    if (a === 'play') {
         E.data.score = 0;
         s.ctx.go('Mapa');
-        return;
+    } else if (a === 'how') {
+        s.how = true;
+        E.redraw();
+    } else if (a === 'howClose') {
+        s.how = false;
+        E.redraw();
     }
-    if (s.btnHow && E.hit(s.btnHow)) { s.how = true; E.redraw(); }
 }
 
 function mapUpdate(s, E, ctx) {
-    if (!s.cards) return;
-    for (var i = 0; i < s.cards.length; i++) {
-        var c = s.cards[i];
-        if (!E.hit(c)) continue;
-        if (c.locked) {
-            s.msg = 'Fase bloqueada';
-            s.msgT = 1.2;
-            E.redraw();
-            return;
-        }
-        s.msg = '';
-        ctx.go(c.name);
+    var a = takeAct(s);
+    if (a === 'back') { ctx.go('Titulo'); return; }
+    if (a === 'locked') {
+        if (E.ui) E.ui.toast('Termine a fase anterior', { type: 'warn', icon: 'lock' });
         return;
     }
-    if (s.btnBack && E.hit(s.btnBack)) { ctx.go('Titulo'); }
+    if (a) ctx.go(a);
 }
 
 function winUpdate(s, E, ctx) {
-    if (s.btnAgain && E.hit(s.btnAgain)) {
+    var a = takeAct(s);
+    if (a === 'again') {
         E.data.score = 0;
         ctx.go('Mapa');
-    } else if (s.btnTitle && E.hit(s.btnTitle)) {
+    } else if (a === 'title') {
         ctx.go('Titulo');
     }
 }
@@ -347,6 +374,8 @@ function bombAt(s, c, r) {
 
 function step(s, dc, dr) {
     if (s.moving > 0 || s.done || s.lost || s.paused) return;
+    // vira para o lado pedido mesmo contra a parede (le a intencao)
+    s.face = dc < 0 ? 'left' : (dc > 0 ? 'right' : (dr < 0 ? 'up' : 'down'));
     var c = s.gx + dc, r = s.gy + dr;
     if (!canStep(s, c, r)) return;
     s.gx = c;
@@ -427,7 +456,13 @@ function explode(s, b) {
         }
     }
     var px = center(b.c), py = center(b.r);
-    if (E.fx) E.fx.burst(px, py, { n: 14, color: s.theme.flame, speed: 130, life: 0.45 });
+    if (E.fx) {
+        s.boomCols[0] = s.theme.flame;
+        s.boomCols[1] = s.theme.flame2;
+        E.fx.burst(px, py, { n: 16, colors: s.boomCols, speed: 150, life: 0.45,
+                             shape: 'spark' });
+        E.fx.ring(px, py, { speed: 260, color: s.theme.flame2 });
+    }
     if (E.audio) E.audio.sfx([50, 55, 60, 55], { gap: 40 });
     // dano imediato das celulas de fogo
     for (var i = 0; i < s.flames.length; i++) {
@@ -502,7 +537,8 @@ function moveEnemy(s, e, dc, dr) {
     var nc = c + dc, nr = r + dr;
     if (nc < 0 || nr < 0 || nc >= COLS || nr >= ROWS) return false;
     if (s.map && s.map.get(nc, nr) === 1) return false;
-    if (s.map && s.map.get(nc, nr) === 2) return false;
+    // fantasma atravessa caixa: so o fogo da caixa quebrando o pega la dentro
+    if (s.map && s.map.get(nc, nr) === 2 && e.data.type !== 'ghost') return false;
     if (bombAt(s, nc, nr)) return false;
     e.x = center(nc);
     e.y = center(nr);
@@ -514,8 +550,9 @@ function updateEnemies(s, dt) {
     for (var i = 0; i < s.enemies.length; i++) {
         var e = s.enemies[i];
         if (e.active === false) continue;
-        if (e.data.type !== 'boss') {
-            e.spr = 'slime_walk#slime' + (Math.floor(s.animT * 6 + i) % 4);
+        if (s.art) {
+            if (e.data.type === 'boss') e.spr = BOSS_ART[Math.floor(s.animT * 2) % 2];
+            else e.spr = ART[(ENEMY_ART[e.data.type] || 16) + (Math.floor(s.animT * 6 + i) % 4)];
         }
         if (cellOf(e.x) === pc && cellOf(e.y) === pr) {
             hurtPlayer(s);
@@ -560,7 +597,8 @@ function applyDrop(s, kind) {
     else if (kind === 'life') s.lives = clamp(s.lives + 1, 1, 5);
     s.score += 25;
     if (s.E.audio) s.E.audio.sfx([72, 76, 79, 84], { gap: 30 });
-    if (s.E.fx) s.E.fx.popText(center(s.gx), center(s.gy), kind, { color: 0xFFE0 });
+    if (s.E.fx) s.E.fx.popText(center(s.gx), center(s.gy) - 10, ITEM_NAME[kind] || kind,
+                               { color: 0xFFE0 });
 }
 
 function hurtPlayer(s) {
@@ -600,6 +638,7 @@ function checkExit(s) {
     s.done = true;
     s.won = true;
     var stars = starCount(s.timeLeft, s.time0, s.lives);
+    s.stars = stars;
     s.score += 100 + Math.floor(s.timeLeft) * 10;
     var unlocked = s.E.save.num('unlocked', 1);
     if (s.level + 1 > unlocked) s.E.save.set('unlocked', s.level + 1);
@@ -614,33 +653,25 @@ function checkExit(s) {
 }
 
 function gameUpdate(s, E, ctx, dt) {
+    var act = takeAct(s);
     if (s.done || s.lost) {
-        if (s.won) {
-            if (s.btnNext && E.hit(s.btnNext)) {
-                E.data.score = s.score;
-                if (s.level >= 6) ctx.go('Vitoria');
-                else ctx.go('Fase ' + (s.level + 1));
-            } else if (s.btnMapEnd && E.hit(s.btnMapEnd)) {
-                E.data.score = s.score;
-                ctx.go('Mapa');
-            }
-        } else {
-            if (s.btnRetry && E.hit(s.btnRetry)) {
-                E.data.score = s.score0;
-                ctx.go('Fase ' + s.level);
-            } else if (s.btnMapLost && E.hit(s.btnMapLost)) {
-                E.data.score = s.score0;
-                ctx.go('Mapa');
-            }
+        if (act === 'next') {
+            E.data.score = s.score;
+            ctx.go(s.level >= 6 ? 'Vitoria' : 'Fase ' + (s.level + 1));
+        } else if (act === 'retry') {
+            E.data.score = s.score0;
+            ctx.go('Fase ' + s.level);
+        } else if (act === 'map') {
+            E.data.score = s.won ? s.score : s.score0;
+            ctx.go('Mapa');
         }
         return;
     }
     if (s.paused) {
-        if (s.btnResume && E.hit(s.btnResume)) {
+        if (act === 'resume') {
             s.paused = false;
-            s.hudForce = true;   // a overlay de pausa cobriu a faixa do HUD
-        }
-        else if (s.btnMapPause && E.hit(s.btnMapPause)) ctx.go('Mapa');
+            s.hudForce = true;   // o modal cobriu a faixa do HUD
+        } else if (act === 'map') ctx.go('Mapa');
         return;
     }
     if (s.msgT > 0) { s.msgT -= dt; if (s.msgT <= 0) s.msg = ''; }
@@ -721,9 +752,9 @@ function gameUpdate(s, E, ctx, dt) {
     updateDrops(s);
     checkExit(s);
     s.animT = (s.animT || 0) + dt;
-    if (s.player) {
-        s.player.spr = 'player_walk#player' +
-            (s.moving > 0 ? Math.floor(s.animT * 8) % 4 : 0);
+    if (s.player && s.art) {
+        // parado = quadro de contato da direcao; andando = ciclo de 4
+        s.player.spr = ART[FACE[s.face] + (s.moving > 0 ? Math.floor(s.animT * 10) % 4 : 0)];
     }
     // um blit do tabuleiro inteiro custa menos no 4848 do que restaurar as
     // caixas sujas uma a uma (cada blitSprite percorre o sprite de fundo)
@@ -744,107 +775,167 @@ exports.draw = function (ctx) {
     drawGame(s, E);
 };
 
+// ---------------------------------------------------------------- menus
+// o fundo (parallax da fabrica, text2d) e a entidade Fundo da cena; aqui so
+// o que fica por cima. Titulo/Mapa/Vitoria sao cenas estaticas: repintam no
+// toque (E._btns) ou num E.redraw()
+
+var LOGO_TXT = { px: 72, align: 'center', valign: 'middle', color: 0xFFE0,
+                 outline: C(0x3A0A00), screen: true };
+var SUB_TXT = { px: 16, align: 'center', valign: 'middle', color: C(0xFFE6B0),
+                outline: C(0x1A0A20), screen: true };
+var HEAD_TXT = { px: 30, align: 'center', valign: 'middle', color: 0xFFE0,
+                 outline: C(0x1A0A20), screen: true };
+var BTN_BIG = { variant: 'primary', icon: 'play', ts: 'big' };
+var BTN_SEC = { variant: 'secondary', icon: 'info' };
+var BTN_BACK = { variant: 'secondary', icon: 'back' };
+var BTN_HOME = { variant: 'secondary', icon: 'home' };
+var BTN_AGAIN = { variant: 'primary', icon: 'refresh' };
+var CARD_T = { px: 18, color: 0xFFE0, screen: true };
+var CARD_S = { px: 14, color: C(0xB8C4DC), screen: true };
+var LOCK_T = { px: 14, color: C(0x5A6A84), screen: true };
+var WORLD_COLOR = [C(0x3DDC84), C(0x3DDC84), C(0xFF7A1A), C(0xFF7A1A),
+                   C(0xE040FB), C(0xFF3355)];
+var PHASE_NAME = ['Jardim 1', 'Jardim 2', 'Forno 1', 'Forno 2', 'Nucleo', 'Chefe'];
+// rosto de cada fase no mapa: o inimigo que manda nela
+var PHASE_FACE = [16, 16, 24, 20, 24, -1];
+var HOW_BODY = 'Arraste: anda. Toque: bomba. Segure: detona as remotas. ' +
+               'Quebre caixas e ache a saida.';
+var HOW_BTNS = [{ label: 'Entendi', value: 1, icon: 'check' }];
+var BOSS_SMALL = { key: 0xF81F, scale: 0.5 };
+
+function totalStars(E) {
+    var n = 0;
+    for (var i = 1; i <= 6; i++) n += E.save.num('stars.' + i, 0);
+    return n;
+}
+
 function drawTitle(s, E) {
-    var W = s.W, H = s.H;
-    drawPanel(E, 50, 110, W - 100, 300, C(0x0A1320), C(0x2A3A5A));
-    E.gfx.text('DETONA!', W / 2, 160, { px: 56, align: 'center', valign: 'middle',
-        color: 0xFFE0, shadow: 0x0000 });
-    E.gfx.text('3 mundos  ·  6 fases', W / 2, 206,
-        { px: 16, align: 'center', color: C(0x9FB0CC) });
-    E.gfx.text('fase ' + clamp(s.unlocked, 1, 6) + '  ·  recorde ' + s.best,
-        W / 2, 238, { px: 15, align: 'center', color: C(0x7EE2A8) });
-    s.btnPlay = E.gfx.button('JOGAR', W / 2 - 110, 270, 220, 54,
-        { primary: true, screen: true, px: 24 });
-    s.btnHow = E.gfx.button('COMO JOGAR', W / 2 - 110, 336, 220, 44,
-        { primary: false, screen: true, px: 18 });
+    var W = s.W;
+    E.gfx.text('DETONA!', W / 2, 74, LOGO_TXT);
+    E.gfx.text('3 mundos  ·  ' + totalStars(E) + '/18 estrelas', W / 2, 124, SUB_TXT);
+    // elenco em escala 3 (cena estatica: o afim so roda no repaint)
+    if (hasArt(E, ART[0])) {
+        E.spr.stamp(ART[0], 92, 200, OPT_BIG);
+        E.spr.stamp(ART[ITEM_ART.bomb], 388, 204, OPT_BIG);
+    }
+    var c = E.ui.card(40, 256, W - 80, 200);
+    var bx = c.x;
+    bx += E.ui.badge('RECORDE ' + s.best, bx, c.y, { color: C(0xFFC83C), textColor: 0x0000 }) + 8;
+    E.ui.badge('FASE ' + clamp(s.unlocked, 1, 6) + '/6', bx, c.y);
+    if (E.ui.button('JOGAR', c.x, c.y + 40, c.w, 60, BTN_BIG)) s.act = 'play';
+    if (E.ui.button('COMO JOGAR', c.x, c.y + 112, c.w, 44, BTN_SEC)) s.act = 'how';
     if (s.how) {
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        drawPanel(E, 36, 90, W - 72, 300, C(0x101A2A), C(0x38BCF8));
-        E.gfx.text('COMO JOGAR', W / 2, 126, { px: 28, align: 'center', color: C(0x38BCF8) });
-        E.gfx.text('arraste no tabuleiro: andar', W / 2, 172, { px: 16, align: 'center', color: C(0xE8EEFC) });
-        E.gfx.text('toque no tabuleiro ou BOMBA: plantar', W / 2, 204, { px: 16, align: 'center', color: C(0xE8EEFC) });
-        E.gfx.text('segure: detonar bombas remotas', W / 2, 236, { px: 16, align: 'center', color: C(0xE8EEFC) });
-        E.gfx.text('destrua caixas, pegue powerups e ache a saida', W / 2, 268,
-            { px: 14, align: 'center', color: C(0x9FB0CC), fit: W - 100 });
-        E.gfx.text('toque para voltar', W / 2, 330, { px: 14, align: 'center', color: C(0xFFD479) });
+        var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY,
+                                    buttons: HOW_BTNS });
+        if (r !== null) s.act = 'howClose';
     }
 }
 
 function drawMap(s, E) {
     var W = s.W, H = s.H;
-    E.gfx.rect(0, 0, W, H, C(0x080C16), { screen: true });
-    E.gfx.text('ESCOLHA A FASE', W / 2, 26, { px: 28, align: 'center', color: 0xFFE0 });
+    E.gfx.text('ESCOLHA A FASE', W / 2, 34, HEAD_TXT);
     var unlocked = clamp(s.unlocked, 1, 6);
-    var stars = 0;
-    for (var i = 1; i <= 6; i++) stars += E.save.num('stars.' + i, 0);
-    E.gfx.text(unlocked + '/6 liberadas', W / 2, 64,
-        { px: 17, align: 'center', color: C(0x9FB0CC) });
-    E.gfx.text(stars + ' estrelas  ·  ' + s.score + ' pts', W / 2, 84,
-        { px: 14, align: 'center', color: C(0x9FB0CC) });
+    E.gfx.text(unlocked + '/6 liberadas  ·  ' + totalStars(E) + '/18', W / 2, 70, SUB_TXT);
 
-    var CW = 204, CH = 96, GX = 16, GY = 16;
-    var x0 = (W - (CW * 2 + GX)) / 2, y0 = 110;
-    s.cards = [];
+    var CW = 212, CH = 96, GX = 12, GY = 12;
+    var x0 = (W - (CW * 2 + GX)) / 2, y0 = 100;
     for (var n = 1; n <= 6; n++) {
         var col = (n - 1) % 2, row = Math.floor((n - 1) / 2);
         var x = x0 + col * (CW + GX), y = y0 + row * (CH + GY);
         var locked = n > unlocked;
-        drawPanel(E, x, y, CW, CH, locked ? C(0x10141E) : C(0x162338), locked ? C(0x222B3D) : C(0x38BCF8));
-        E.gfx.text('FASE ' + n, x + 14, y + 12, { px: 18, color: locked ? C(0x5A6A84) : 0xFFE0 });
-        var names = ['Jardim 1', 'Jardim 2', 'Forno 1', 'Forno 2', 'Nucleo', 'Chefe'];
-        E.gfx.text(locked ? 'bloqueada' : names[n - 1], x + 14, y + 40,
-            { px: 13, color: locked ? C(0x5A6A84) : C(0x9FB0CC) });
-        if (!locked) {
-            var st = E.save.num('stars.' + n, 0);
-            E.gfx.text(st > 0 ? new Array(st + 1).join('*') : '---', x + 14, y + 64,
-                { px: 15, color: C(0xFFD479) });
+        E.ui.card(x, y, CW, CH, { pad: 0, stroke: locked ? C(0x222B3D) : WORLD_COLOR[n - 1],
+                                  bg: locked ? C(0x0C1018) : C(0x141C2C) });
+        E.gfx.rect(x + 6, y + 10, 5, CH - 20, locked ? C(0x222B3D) : WORLD_COLOR[n - 1],
+                   { r: 2, screen: true });
+        E.gfx.text('FASE ' + n, x + 20, y + 12, locked ? LOCK_T : CARD_T);
+        E.gfx.text(PHASE_NAME[n - 1], x + 20, y + 38, locked ? LOCK_T : CARD_S);
+        if (locked) {
+            E.ui.icon('lock', x + CW - 46, y + 30, 32, { color: C(0x5A6A84) });
+        } else {
+            drawStars(E, x + 52, y + 74, E.save.num('stars.' + n, 0), 9);
+            var face = PHASE_FACE[n - 1];
+            if (face < 0 && hasArt(E, BOSS_ART[0])) E.spr.stamp(BOSS_ART[0], x + CW - 34, y + 48, BOSS_SMALL);
+            else if (face >= 0 && hasArt(E, ART[face])) E.spr.stamp(ART[face], x + CW - 34, y + 48, OPT_ART);
         }
-        s.cards.push({ x: x, y: y, w: CW, h: CH, name: 'Fase ' + n, locked: locked });
+        // o card inteiro e o alvo do toque (registra no E._btns da cena estatica)
+        var hit = { x: x, y: y, w: CW, h: CH };
+        E._btns.push(hit);
+        if (E.input.tap && E.hit(hit)) s.act = locked ? 'locked' : 'Fase ' + n;
     }
-    s.btnBack = E.gfx.button('VOLTAR', W / 2 - 90, H - 58, 180, 40,
-        { primary: false, screen: true, px: 17 });
-    if (s.msg) E.gfx.text(s.msg, W / 2, H - 18, { px: 14, align: 'center', color: C(0xFF8B8B) });
+    if (E.ui.button('VOLTAR', W / 2 - 90, H - 62, 180, 46, BTN_BACK)) s.act = 'back';
 }
 
 function drawWin(s, E) {
-    var W = s.W, H = s.H;
-    E.gfx.rect(0, 0, W, H, C(0x080C16), { screen: true });
-    drawPanel(E, 44, 100, W - 88, 300, C(0x101A2A), 0xFFE0);
-    E.gfx.text('DETONA! COMPLETO', W / 2, 150, { px: 30, align: 'center', color: 0xFFE0 });
-    E.gfx.text('voce limpou os 3 mundos e derrubou o chefe', W / 2, 196,
-        { px: 16, align: 'center', color: C(0xE8EEFC), fit: W - 120 });
-    E.gfx.text('pontuacao final: ' + s.score, W / 2, 236,
-        { px: 22, align: 'center', color: C(0x7EE2A8) });
-    E.gfx.text('recorde: ' + s.best, W / 2, 270,
-        { px: 13, align: 'center', color: C(0x9FB0CC), fit: W - 30 });
-    s.btnAgain = E.gfx.button('JOGAR DE NOVO', W / 2 - 120, 310, 240, 46,
-        { primary: true, screen: true, px: 18 });
-    s.btnTitle = E.gfx.button('TITULO', W / 2 - 90, 364, 180, 38,
-        { primary: false, screen: true, px: 15 });
+    var W = s.W;
+    E.gfx.text('VENCEU!', W / 2, 54, LOGO_TXT);
+    E.gfx.text('o Rei Slime caiu', W / 2, 104, SUB_TXT);
+    if (hasArt(E, ART[0])) E.spr.stamp(ART[0], 120, 196, OPT_BIG);
+    if (hasArt(E, BOSS_ART[0])) E.spr.stamp(BOSS_ART[1], 360, 196, OPT_ART);
+    var c = E.ui.card(40, 236, W - 80, 232);
+    var stars = totalStars(E);
+    E.ui.ring(c.x + 52, c.y + 50, 42, stars / 18, { th: 9, label: stars + '/18' });
+    E.gfx.text('PONTUACAO', c.x + 116, c.y + 14, CARD_S);
+    E.gfx.text('' + s.score, c.x + 116, c.y + 34, { px: 28, color: C(0x7EE2A8), screen: true });
+    E.gfx.text('recorde ' + s.best, c.x + 116, c.y + 72, CARD_S);
+    if (E.ui.button('JOGAR DE NOVO', c.x, c.y + 100, c.w, 50, BTN_AGAIN)) s.act = 'again';
+    if (E.ui.button('TITULO', c.x + c.w / 2 - 90, c.y + 158, 180, 40, BTN_HOME)) s.act = 'title';
 }
 
+// ---------------------------------------------------------------- jogo
+
+var END_WIN_BTNS = [{ label: 'Mapa', value: 'map', icon: 'menu' },
+                    { label: 'Proxima', value: 'next' }];
+var END_LAST_BTNS = [{ label: 'Mapa', value: 'map', icon: 'menu' },
+                     { label: 'Final', value: 'next' }];
+var END_LOST_BTNS = [{ label: 'Mapa', value: 'map', icon: 'menu' },
+                     { label: 'De novo', value: 'retry' }];
+var PAUSE_BTNS = [{ label: 'Mapa', value: 'map', icon: 'menu' },
+                  { label: 'Continuar', value: 'resume' }];
+var BOSS_BAR = { fg: 0xF800, bg: C(0x300808) };
+var BOSS_TXT = { px: 11, align: 'center', color: 0xFFE0, outline: 0x0000, screen: true };
+var MSG_TXT = { px: 15, align: 'center', color: C(0x101010), bg: 0xFFE0 };
+var EXIT_RING = { fill: false };
+
 function drawGame(s, E) {
-    var W = s.W, H = s.H, i;
+    var i;
     var th = s.theme;
-    // bombas (o jogador/inimigos sao entidades do runtime); sem pulse afim:
-    // cada drawSprite custa ~1,25 ms no 4848, o aviso fica pelo circulo
+    var art = s.art;
+    // saida aberta e sem inimigos: anel pulsando chama o jogador
+    if (s.exitRevealed && !s.done && aliveEnemies(s).length === 0) {
+        var pr = 10 + Math.floor(s.animT * 16) % 6;
+        E.gfx.circle(center(s.exit[0]), center(s.exit[1]), pr, th.accent, EXIT_RING);
+    }
+    // bombas: pavio pisca mais rapido perto do estouro (2 quadros, sem afim)
     for (i = 0; i < s.bombs.length; i++) {
         var b = s.bombs[i];
-        E.spr.stamp('ai_atlas#ai2', center(b.c), center(b.r), OPT_BOMB);
-        if (b.t < 0.5) E.gfx.circle(center(b.c), center(b.r), 5, 0xF800, RED_DOT);
+        var bx = center(b.c), by = center(b.r);
+        if (art) {
+            var blink = Math.floor(s.animT * (b.t < 0.6 ? 14 : 4)) % 2;
+            E.spr.stamp(ART[A_BOMB + blink], bx, by, OPT_ART);
+        } else {
+            E.gfx.circle(bx, by, 11, 0x0000, RED_DOT);
+        }
+        if (b.t < 0.5) E.gfx.circle(bx, by - 12, 4, 0xF800, RED_DOT);
     }
-    // chamas
+    // chamas: faisca -> bola de fogo -> fumaca pela idade da celula
     for (i = 0; i < s.flames.length; i++) {
         var f = s.flames[i];
         var x = center(f.c), y = center(f.r);
-        E.gfx.rect(x - 14, y - 14, 28, 28, th.flame, FLAME_BIG);
-        E.gfx.rect(x - 8, y - 8, 16, 16, th.flame2, FLAME_SMALL);
+        if (art) {
+            var k = Math.floor((1 - f.t / 0.35) * 6);
+            E.spr.stamp(ART[BOOM_SEQ[k < 0 ? 0 : (k > 5 ? 5 : k)]], x, y, OPT_ART);
+        } else {
+            E.gfx.rect(x - 14, y - 14, 28, 28, th.flame, FLAME_BIG);
+            E.gfx.rect(x - 8, y - 8, 16, 16, th.flame2, FLAME_SMALL);
+        }
     }
-    // drops
+    // itens: icone do pack text2d, quicando 1 px
     for (i = 0; i < s.drops.length; i++) {
         var d = s.drops[i];
-        E.spr.stamp('ai_atlas#ai3', center(d.c), center(d.r), OPT_DROP);
-        E.gfx.text(d.kind.charAt(0).toUpperCase(), center(d.c), center(d.r), DROP_TXT);
+        var bob = Math.floor(s.animT * 4 + d.c) % 2;
+        if (art) E.spr.stamp(ART[ITEM_ART[d.kind]], center(d.c), center(d.r) - bob, OPT_ART);
+        else E.gfx.circle(center(d.c), center(d.r), 9, 0xFFE0, RED_DOT);
     }
     // joystick
     if (s.joyOn && E.input.down) {
@@ -857,65 +948,68 @@ function drawGame(s, E) {
         }
         E.gfx.circle(s.joyX0 + kx, s.joyY0 + ky, 6, 0xFFE0, JOY_DOT);
     }
-    // HUD e botoes: memoizados fora da camada suja
-    drawHud(s, E);
-
-    // boss hp
+    // barra do chefe
     var boss = null;
     for (i = 0; i < s.enemies.length; i++) {
         if (s.enemies[i].active !== false && s.enemies[i].data.type === 'boss') boss = s.enemies[i];
     }
-    if (boss) {
+    if (boss && E.ui) {
         var maxhp = boss.data.hp || 8;
         var hp = boss.hp === undefined ? maxhp : boss.hp;
-        E.gfx.rect(140, 8, 200, 12, C(0x300808), { screen: true });
-        E.gfx.rect(140, 8, 200 * clamp(hp / maxhp, 0, 1), 12, 0xF800, { screen: true });
-        E.gfx.text('CHEFE', 240, 24, { px: 11, align: 'center', color: 0xFFE0, screen: true });
+        E.ui.progress(140, 8, 200, 12, hp / maxhp, BOSS_BAR);
+        E.gfx.text('REI SLIME', 240, 24, BOSS_TXT);
     }
-    if (s.msg) {
-        E.gfx.text(s.msg, W / 2, BOARD_H - 20, { px: 15, align: 'center',
-            color: C(0x101010), bg: 0xFFE0 });
-    }
-    if (s.paused) {
-        if (E.dirty.unclip) E.dirty.unclip();   // a overlay cobre tambem o HUD
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        drawPanel(E, 60, 150, W - 120, 190, C(0x101A2A), C(0x38BCF8));
-        E.gfx.text('PAUSA', W / 2, 186, { px: 32, align: 'center', color: C(0x38BCF8) });
-        s.btnResume = E.gfx.button('CONTINUAR', W / 2 - 100, 228, 200, 42,
-            { primary: true, screen: true, px: 17 });
-        s.btnMapPause = E.gfx.button('MAPA', W / 2 - 70, 282, 140, 34,
-            { primary: false, screen: true, px: 14 });
-        applyGameClip(s, E);
-    }
-    if (s.done) {
-        if (E.dirty.unclip) E.dirty.unclip();
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        drawPanel(E, 50, 120, W - 100, 250, C(0x101A2A), s.won ? 0xFFE0 : C(0xFF8B8B));
-        if (s.won) {
-            E.gfx.text('FASE LIMPA!', W / 2, 160, { px: 32, align: 'center', color: C(0x7EE2A8) });
-            E.gfx.text(s.score + ' pts  ·  ' + Math.ceil(s.timeLeft) + ' s',
-                W / 2, 200, { px: 18, align: 'center', color: C(0xE8EEFC) });
-            s.btnNext = E.gfx.button(s.level < 6 ? 'PROXIMA' : 'FINAL', W / 2 - 110, 232, 220, 44,
-                { primary: true, screen: true, px: 18 });
-            s.btnMapEnd = E.gfx.button('MAPA', W / 2 - 70, 288, 140, 34,
-                { primary: false, screen: true, px: 14 });
+    if (s.msg) E.gfx.text(s.msg, s.W / 2, BOARD_H - 20, MSG_TXT);
+
+    // HUD e botoes: memoizados fora da camada suja
+    drawHud(s, E);
+
+    if (s.paused || s.done) {
+        if (E.dirty.unclip) E.dirty.unclip();   // o modal cobre tambem o HUD
+        var r = null;
+        if (s.paused) {
+            r = E.ui.modal('pausa', { title: 'PAUSA', body: s.levelName + '  ·  ' +
+                                      Math.ceil(s.timeLeft) + ' s restantes',
+                                      buttons: PAUSE_BTNS,
+                                      // o release do toque que pausou cai fora do card
+                                      dismiss: false });
+        } else if (s.won) {
+            r = E.ui.modal('fim', { title: 'FASE LIMPA!', body: s.score + ' pts  ·  ' +
+                                    Math.ceil(s.timeLeft) + ' s de sobra',
+                                    contentH: 44, dismiss: false,
+                                    buttons: s.level < 6 ? END_WIN_BTNS : END_LAST_BTNS },
+                           function (cr) {
+                               drawStars(E, cr.x + cr.w / 2, cr.y + 22, s.stars, 16);
+                           });
         } else {
-            E.gfx.text('FIM DE JOGO', W / 2, 160, { px: 32, align: 'center', color: C(0xFF8B8B) });
-            E.gfx.text('pontos ' + s.score, W / 2, 200,
-                { px: 16, align: 'center', color: C(0xE8EEFC) });
-            s.btnRetry = E.gfx.button('TENTAR DE NOVO', W / 2 - 130, 232, 260, 42,
-                { primary: true, screen: true, px: 16 });
-            s.btnMapLost = E.gfx.button('MAPA', W / 2 - 70, 286, 140, 34,
-                { primary: false, screen: true, px: 14 });
+            r = E.ui.modal('fim', { title: 'FIM DE JOGO', body: 'pontos ' + s.score,
+                                    dismiss: false, buttons: END_LOST_BTNS });
         }
+        if (r !== null) s.act = r;
         applyGameClip(s, E);
     }
 }
 
 function hudKey(s) {
-    return s.level + '|' + s.levelName + '|' + s.lives + '|' + s.maxBombs +
-        '|' + s.range + '|' + (s.shield ? 1 : 0) + '|' + (s.remote ? 1 : 0) +
+    return s.level + '|' + s.lives + '|' + s.maxBombs + '|' + s.range + '|' +
+        (s.speed > 1 ? 1 : 0) + '|' + (s.shield ? 1 : 0) + '|' + (s.remote ? 1 : 0) +
         '|' + s.score + '|' + Math.ceil(s.timeLeft);
+}
+
+var HUD_T = { px: 14, screen: true, color: 0xFFFF };
+var HUD_N = { px: 15, screen: true, valign: 'middle', color: 0xFFFF };
+var HUD_R = { px: 14, align: 'right', screen: true, color: 0xFFFF };
+var BTN_LBL = { px: 11, align: 'center', screen: true, color: 0xFFE0 };
+
+// um icone do pack + numero; devolve o x seguinte
+function hudStat(E, x, y, art, text, color) {
+    E.spr.stamp(ART[art], x + 16, y, OPT_HUD);
+    if (text) {
+        HUD_N.color = color;
+        E.gfx.text(text, x + 32, y, HUD_N);
+        return x + 32 + 10 * text.length + 12;
+    }
+    return x + 36;
 }
 
 // HUD fora da camada suja: o mundo nao o apaga (recorte proprio), entao nao
@@ -928,27 +1022,39 @@ function drawHud(s, E) {
     s.hudForce = false;
     E.dirty._mute++;
     if (E.dirty.unclip) E.dirty.unclip();
-    var W = s.W, th = s.theme;
-    E.gfx.rect(0, BOARD_H, W, s.H - BOARD_H, th.hud, { screen: true });
-    E.gfx.rect(0, BOARD_H, W, 2, th.accent, { screen: true });
-    E.gfx.text('FASE ' + s.level + '  ' + s.levelName, 12, BOARD_H + 8,
-        { px: 14, color: th.hudTxt, screen: true });
-    E.gfx.text('VIDAS ' + s.lives + '   B ' + s.maxBombs + '/R ' + s.range +
-               (s.shield ? '  ESCUDO' : '') + (s.remote ? '  REMOTO' : ''),
-        12, BOARD_H + 27, { px: 13, color: th.hudTxt, screen: true });
-    E.gfx.text('PONTOS ' + s.score, 380, BOARD_H + 8,
-        { px: 14, align: 'right', color: th.hudTxt, screen: true });
-    E.gfx.text('TEMPO ' + Math.ceil(s.timeLeft), 380, BOARD_H + 27,
-        { px: 13, align: 'right', color: s.timeLeft < 20 ? C(0xFF8B8B) : th.hudTxt,
-          screen: true });
-    var br = s.btnBomb;
-    E.gfx.rect(br.x, br.y, br.w, br.h, C(0x8A2A1A), { r: 10, screen: true });
-    E.gfx.text('BOMBA', br.x + br.w / 2, br.y + br.h / 2,
-        { px: 15, align: 'center', valign: 'middle', color: 0xFFE0, screen: true });
+    var W = s.W, th = s.theme, y0 = BOARD_H;
+    E.gfx.gradient(0, y0, W, s.H - y0, th.hud, C(0x05070C), { screen: true, dir: 'y', step: 8 });
+    E.gfx.rect(0, y0, W, 2, th.accent, { screen: true });
+    HUD_T.color = th.hudTxt;
+    E.gfx.text('FASE ' + s.level + '  ' + s.levelName, 10, y0 + 7, HUD_T);
+    HUD_R.color = th.hudTxt;
+    E.gfx.text(s.score + ' pts', 330, y0 + 7, HUD_R);
+    HUD_R.color = s.timeLeft < 20 ? C(0xFF8B8B) : th.hudTxt;
+    E.gfx.text(Math.ceil(s.timeLeft) + ' s', 236, y0 + 7, HUD_R);
+    E.ui.icon('clock', 168, y0 + 6, 16, { color: HUD_R.color });
+    var cy = y0 + 46, x = 4;
+    if (s.art) {
+        x = hudStat(E, x, cy, ITEM_ART.life, 'x' + s.lives, C(0xFF8B8B));
+        x = hudStat(E, x, cy, ITEM_ART.bomb, '' + s.maxBombs, th.hudTxt);
+        x = hudStat(E, x, cy, ITEM_ART.range, '' + s.range, th.hudTxt);
+        if (s.speed > 1) x = hudStat(E, x, cy, ITEM_ART.speed, '', 0);
+        if (s.shield) x = hudStat(E, x, cy, ITEM_ART.shield, '', 0);
+        if (s.remote) x = hudStat(E, x, cy, ITEM_ART.remote, '', 0);
+    } else {
+        HUD_T.color = th.hudTxt;
+        E.gfx.text('VIDAS ' + s.lives + '   B ' + s.maxBombs + '/R ' + s.range,
+                   10, cy - 8, HUD_T);
+    }
+    // pausa e bomba: o toque e por press (inRect no update), aqui so a arte
     var pr = s.btnPause;
-    E.gfx.rect(pr.x, pr.y, pr.w, pr.h, C(0x101A2A), { r: 6, screen: true });
-    E.gfx.text('II', pr.x + pr.w / 2, pr.y + pr.h / 2,
-        { px: 15, align: 'center', valign: 'middle', color: C(0xE8EEFC), screen: true });
+    E.gfx.rect(pr.x, pr.y, pr.w, pr.h, C(0x101A2A), { r: 10, screen: true, bw: 2,
+                                                     stroke: th.accent });
+    E.ui.icon('pause', pr.x + 10, pr.y + 13, 24, { color: C(0xE8EEFC) });
+    var br = s.btnBomb;
+    E.gfx.rect(br.x, br.y, br.w, br.h, C(0x8A2A1A), { r: 12, screen: true, bw: 2,
+                                                     stroke: C(0xFFB000) });
+    if (s.art) E.spr.stamp(ART[A_BOMB], br.x + br.w / 2, br.y + 20, OPT_HUD);
+    E.gfx.text(s.remote ? 'BOMBA*' : 'BOMBA', br.x + br.w / 2, br.y + 38, BTN_LBL);
     E.dirty._mute--;
     applyGameClip(s, E);
 }

@@ -1,0 +1,29 @@
+{
+  "format": 1,
+  "guid": "c381045483f59ceb469bf5be5e4ab0d1",
+  "importer": "sprite-sheet",
+  "settings": {
+    "w": 128,
+    "h": 64,
+    "fps": {
+      "idle": 2
+    },
+    "mode": "grid",
+    "cols": 2,
+    "rows": 1,
+    "tw": 64,
+    "th": 64,
+    "pivot": [
+      0.5,
+      0.5
+    ],
+    "key": "#ff00ff",
+    "prefix": "c",
+    "anims": {
+      "idle": [
+        0,
+        1
+      ]
+    }
+  }
+}

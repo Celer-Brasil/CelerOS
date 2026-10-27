@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fase 3",
   "guid": "5e79f66454d263dcc672fbb4156b1d23",
   "settings": {
@@ -17,7 +17,10 @@
       "time": 180
     },
     "bg": "#160a08",
-    "static": false
+    "static": false,
+    "assets": [
+      "35caa2b39a8360f6b86144efe11a1ac6"
+    ]
   },
   "entities": [
     {
@@ -29,8 +32,8 @@
         "x": 48,
         "y": 48,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -40,7 +43,7 @@
           "id": "c_b8140421",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d220ef94ff507d018a812c6512f8d712#player0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a0"
           }
         },
         {
@@ -87,8 +90,8 @@
         "x": 368,
         "y": 48,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -98,7 +101,7 @@
           "id": "c_b92ab14c",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a24"
           }
         },
         {
@@ -123,8 +126,8 @@
         "x": 48,
         "y": 368,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -134,7 +137,7 @@
           "id": "c_3ba06613",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a16"
           }
         },
         {
@@ -159,8 +162,8 @@
         "x": 368,
         "y": 368,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -170,7 +173,7 @@
           "id": "c_dff8e977",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a16"
           }
         },
         {

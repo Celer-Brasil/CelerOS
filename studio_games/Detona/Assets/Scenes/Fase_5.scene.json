@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fase 5",
   "guid": "b2f58f3ddec7f9ad66b70db0ea30363e",
   "settings": {
@@ -17,7 +17,10 @@
       "time": 210
     },
     "bg": "#060a14",
-    "static": false
+    "static": false,
+    "assets": [
+      "35caa2b39a8360f6b86144efe11a1ac6"
+    ]
   },
   "entities": [
     {
@@ -29,8 +32,8 @@
         "x": 48,
         "y": 48,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -40,7 +43,7 @@
           "id": "c_df03dbf3",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d220ef94ff507d018a812c6512f8d712#player0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a0"
           }
         },
         {
@@ -87,8 +90,8 @@
         "x": 368,
         "y": 48,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -98,7 +101,7 @@
           "id": "c_52dc655e",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a24"
           }
         },
         {
@@ -123,8 +126,8 @@
         "x": 48,
         "y": 368,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -134,7 +137,7 @@
           "id": "c_9f8b4fec",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a24"
           }
         },
         {
@@ -159,8 +162,8 @@
         "x": 176,
         "y": 304,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -170,7 +173,7 @@
           "id": "c_3e1ac092",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a20"
           }
         },
         {
@@ -195,8 +198,8 @@
         "x": 304,
         "y": 176,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -206,7 +209,7 @@
           "id": "c_dc451a12",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a20"
           }
         },
         {
@@ -231,8 +234,8 @@
         "x": 368,
         "y": 368,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -242,7 +245,7 @@
           "id": "c_b21a4863",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a16"
           }
         },
         {
@@ -267,8 +270,8 @@
         "x": 240,
         "y": 304,
         "rot": 0,
-        "sx": 0.5,
-        "sy": 0.5,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -278,7 +281,7 @@
           "id": "c_252b9f47",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
+            "sprite": "35caa2b39a8360f6b86144efe11a1ac6#a24"
           }
         },
         {

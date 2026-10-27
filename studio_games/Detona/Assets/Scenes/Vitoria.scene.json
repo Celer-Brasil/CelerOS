@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Vitoria",
   "guid": "d011cf3f699a9f267c2812bd9954cf1c",
   "settings": {
@@ -8,8 +8,12 @@
     "data": {
       "screen": "win"
     },
-    "bg": "#080c16",
-    "static": true
+    "bg": "#04040d",
+    "static": true,
+    "assets": [
+      "35caa2b39a8360f6b86144efe11a1ac6",
+      "c381045483f59ceb469bf5be5e4ab0d1"
+    ]
   },
   "entities": [
     {
@@ -32,6 +36,30 @@
           "id": "c_55bd98ef",
           "fields": {
             "script": "52378124decf85728bb70f1163844877"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Fundo",
+      "fid": "e_6b5e7d18",
+      "active": true,
+      "z": -10,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "fields": {
+            "key": "#000000",
+            "sprite": "d5d367907db8eb54c7a0cec20bc42c17"
           }
         }
       ]

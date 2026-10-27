@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Titulo",
   "guid": "44b601a248e72ea59a5d7a5012e83b21",
   "settings": {
@@ -8,8 +8,12 @@
     "data": {
       "screen": "title"
     },
-    "bg": "#0b1020",
-    "static": true
+    "bg": "#04040d",
+    "static": true,
+    "assets": [
+      "35caa2b39a8360f6b86144efe11a1ac6",
+      "c381045483f59ceb469bf5be5e4ab0d1"
+    ]
   },
   "entities": [
     {
@@ -21,8 +25,8 @@
         "x": 0,
         "y": 0,
         "rot": 0,
-        "sx": 1.875,
-        "sy": 1.875,
+        "sx": 1,
+        "sy": 1,
         "ax": 0,
         "ay": 0
       },
@@ -32,7 +36,7 @@
           "id": "c_588c6a52",
           "fields": {
             "key": "#000000",
-            "sprite": "08500ac4f56573a93701a9ad74dbf39a"
+            "sprite": "d5d367907db8eb54c7a0cec20bc42c17"
           }
         }
       ]

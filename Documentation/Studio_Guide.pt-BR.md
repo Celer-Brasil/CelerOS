@@ -220,7 +220,7 @@ script do projeto. Os apps originais em `hub_apps/` não foram alterados.
 
 | Projeto | Original | Versão nativa | Cenas | Extras | JS | Assets |
 |---------|----------|---------------|-------|--------|----|--------|
-| `studio_games/Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 7 | 57,9 KB | 132,2 KB |
+| `studio_games/Detona` | `hub_apps/Detona` | 1.0.3 | 9 | 8 | 59,5 KB | 132,2 KB |
 | `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88,3 KB | 78,9 KB |
 | `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.5 | 23 | 9 | 115,1 KB | 206,7 KB |
 | `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36,9 KB | 110,8 KB |
@@ -236,10 +236,12 @@ node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 
 O que cada remontagem ganhou:
 
-- **Detona 1.0.2** — seis fases de campanha como tilemaps 15x13 editáveis, três
+- **Detona 1.0.3** — seis fases de campanha como tilemaps 15x13 editáveis, três
   tilesets (jardim/forno/núcleo), saída escondida sob caixa, powerups (alcance,
   bomba, velocidade, remoto, escudo, vida), chefe de 12 HP com barra,
-  estrelas, mapa de fases, pausa, d-pad + swipe e progresso salvo.
+  estrelas, mapa de fases, pausa e progresso salvo. A 1.0.3 troca o toque por
+  joystick flutuante de arraste (segurar anda casa a casa; toque seco planta),
+  memoiza o HUD fora da camada suja e tira o pulso afim das bombas.
 - **Arrasa 2.0.1** — as dez fases originais como cenas; cada caixa/goblin/rei é
   uma entidade com textura/rotação sincronizada a um corpo `P.rigid`.
   Estilingue, sete poderes de pedra, TNT em cadeia, dano por impacto, estrelas

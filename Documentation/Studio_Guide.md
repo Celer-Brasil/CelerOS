@@ -220,7 +220,7 @@ changed.
 
 | Project | Original | Native version | Scenes | Extras | JS | Assets |
 |---------|----------|----------------|--------|--------|----|--------|
-| `studio_games/Detona` | `hub_apps/Detona` | 1.0.2 | 9 | 7 | 57.9 KB | 132.2 KB |
+| `studio_games/Detona` | `hub_apps/Detona` | 1.0.3 | 9 | 8 | 59.5 KB | 132.2 KB |
 | `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88.3 KB | 78.9 KB |
 | `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.5 | 23 | 9 | 115.1 KB | 206.7 KB |
 | `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36.9 KB | 110.8 KB |
@@ -236,10 +236,12 @@ node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 
 What each remount added:
 
-- **Detona 1.0.2** — six campaign levels as editable 15x13 tilemaps with three
+- **Detona 1.0.3** — six campaign levels as editable 15x13 tilemaps with three
   tilesets (garden/forge/core), hidden exit under a crate, powerups (range,
   bomb, speed, remote, shield, life), a 12 HP boss with an HP bar, stars,
-  level map, pause, d-pad + swipe and saved progress.
+  level map, pause and saved progress. 1.0.3 moves touch to a floating drag
+  joystick (hold to walk cell by cell; dry tap plants), memoizes the HUD
+  outside the dirty layer, and removes the affine bomb pulse.
 - **Arrasa 2.0.1** — the original ten stages as scenes; each box/goblin/king is
   an entity with its texture/rotation synced to a `P.rigid` body. Sling aim,
   seven projectile powers, TNT chains, impact damage, stars, saved progress.

@@ -518,6 +518,53 @@ let built = null;
         'wrapped=' + wrapped + ' paused=' + pausedOk + ' resumed=' + resumedOk);
     check('Lenda: HUD memoizado (coracoes nao redesenham por quadro)', hearts <= 4,
         'hearts=' + hearts);
+
+    // Detona: HUD memoizado e joystick de arraste. Antes, 10 textos/quadro
+    // eram so o HUD e o d-pad de 20 px so reagia a tap.
+    const detonaDir = path.join(ROOT, 'studio_games', 'Detona');
+    const detona = buildProject(detonaDir, {});
+    let texts = 0, dWrapped = false, dStage = 0, dGoMs = 0, gx0 = 1, gx1 = 1;
+    runAppFolder(detona.dir, {
+        render: false, stopAtMs: 2600, microsBias: 1,
+        events: (env) => {
+            const origDelay = env.System.delay;
+            env.System.delay = function (ms) {
+                const s = env.__harness.detona;
+                const now = env.System.millis();
+                if (dStage === 0 && s && s.ctx && s.E) {
+                    dStage = 1;
+                    dGoMs = now;
+                    s.ctx.go('Fase 1');
+                } else if (dStage === 1 && now - dGoMs > 400 && s && s.E) {
+                    dStage = 2;
+                    const origText = s.E.gfx.text;
+                    s.E.gfx.text = function () {
+                        texts++;
+                        return origText.apply(this, arguments);
+                    };
+                    dWrapped = true;
+                } else if (dStage === 2 && now - dGoMs > 900 && s && s.player) {
+                    dStage = 3;
+                    gx0 = s.gx;
+                    const x = Math.round(s.player.x), y = Math.round(s.player.y);
+                    const q = [{ x: x, y: y, touched: 1 }];
+                    for (let i = 1; i <= 50; i++) {
+                        q.push({ x: x + Math.min(40, i * 4), y: y, touched: 1 });
+                    }
+                    for (let i = 0; i < 10; i++) q.push({ x: x + 40, y: y, touched: 1 });
+                    env.__harness.pushTouch(q);
+                } else if (dStage === 3 && now - dGoMs > 2200 && s) {
+                    dStage = 4;
+                    gx1 = s.gx;
+                }
+                return origDelay.call(env.System, ms);
+            };
+        },
+    });
+    check('Detona: HUD memoizado (textos nao redesenham por quadro)',
+        dWrapped && texts <= 24, 'wrapped=' + dWrapped + ' texts=' + texts);
+    check('Detona: joystick de arraste anda', dWrapped && gx1 > gx0,
+        'gx=' + gx0 + '->' + gx1);
 })();
 
 // --------------------------------------------------------- CLI x HTTP ------

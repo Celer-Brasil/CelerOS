@@ -44,6 +44,8 @@ var WORLD_DOT = { fill: true };
 var ACT_RECT = { r: 8, screen: true };
 var JOY_RING = { fill: false, screen: true };
 var JOY_DOT = { fill: true, screen: true };
+// joystick flutuante: raio visivel/limite do botao e zona morta antes de andar
+var JOY_R = 36, JOY_DEAD = 12;
 var MSG_TXT = { px: 16, align: 'center', color: 0x101010, bg: 0xFFE0, screen: true };
 var ACT_TXT = { px: 10, align: 'center', valign: 'middle', color: OURO, screen: true };
 
@@ -96,7 +98,9 @@ exports.start = function (ctx) {
     s.msgT = 0;
     s.how = false;
     s.buttons = null;
-    s.joy = null;
+    s.joyOn = false;       // joystick flutuante: base assentada no toque
+    s.joyX0 = 0;
+    s.joyY0 = 0;
     s.enemies = [];
     s.rocks = [];
     s.bombs = [];
@@ -347,17 +351,25 @@ function updateGame(s, E, ctx, dt) {
     if (s.invuln > 0) s.invuln -= dt;
     if (s.attackT > 0) s.attackT -= dt;
 
-    // movimento: o dedo puxa a heroina na direcao do toque (funciona tambem
-    // quando o down chega no mesmo quadro de um move do roteiro de teste)
+    // movimento: JOYSTICK FLUTUANTE. O toque so ASSENTA a base (nao anda) e o
+    // diferencial desde ela da a direcao. Antes a heroina andava NA DIRECAO DO
+    // DEDO (vetor heroina->toque): o toque inicial ja a colocava em movimento
+    // e a direcao mudava sozinha conforme ela se aproximava. A gesto que comeca
+    // num botao nao pega o stick; um que comecou fora continua valendo mesmo se
+    // passar por cima do botao.
     var r0 = s.buttons;
     var overUi = inRect(r0 && r0.a, E.input.x, E.input.y) ||
                  inRect(r0 && r0.b, E.input.x, E.input.y) ||
                  inRect(r0 && r0.pause, E.input.x, E.input.y);
-    if (E.input.down && !overUi) {
-        var dx = E.input.x - s.hx, dy = E.input.y - s.hy;
+    if (E.input.down && (s.joyOn || !overUi)) {
+        if (!s.joyOn) {
+            s.joyOn = true;
+            s.joyX0 = E.input.x;
+            s.joyY0 = E.input.y;
+        }
+        var dx = E.input.x - s.joyX0, dy = E.input.y - s.joyY0;
         var d = Math.sqrt(dx * dx + dy * dy);
-        s.joy = { x: E.input.x, y: E.input.y };
-        if (d > 14) {
+        if (d > JOY_DEAD) {
             var speed = CELL * 3.4 * dt;
             moveHero(s, dx / d * speed, dy / d * speed);
             if (Math.abs(dx) > Math.abs(dy)) s.dir = dx > 0 ? 'right' : 'left';
@@ -366,7 +378,7 @@ function updateGame(s, E, ctx, dt) {
             s.frame = Math.floor(s.walkT * 7) % 2;
         }
     } else {
-        s.joy = null;
+        s.joyOn = false;
     }
 
     var bt = E.input.tap;
@@ -920,10 +932,17 @@ function drawGame(s, E) {
     drawSword(s, E);
     // HUD e botoes: memoizados fora da camada suja
     drawHud(s, E);
-    // joystick
-    if (s.joy && E.input.down) {
-        E.gfx.circle(s.joy.x, s.joy.y, 20, C(0x2A3A5A), JOY_RING);
-        E.gfx.circle(s.joy.x, s.joy.y, 4, OURO, JOY_DOT);
+    // joystick: base assentada no toque + botao deslocado pelo diferencial
+    // (limitado ao raio). So aparece com o dedo na tela.
+    if (s.joyOn) {
+        E.gfx.circle(s.joyX0, s.joyY0, JOY_R, C(0x2A3A5A), JOY_RING);
+        var kx = E.input.x - s.joyX0, ky = E.input.y - s.joyY0;
+        var kd = Math.sqrt(kx * kx + ky * ky);
+        if (kd > JOY_R) {
+            kx = kx / kd * JOY_R;
+            ky = ky / kd * JOY_R;
+        }
+        E.gfx.circle(s.joyX0 + kx, s.joyY0 + ky, 6, OURO, JOY_DOT);
     }
     if (s.msg) {
         E.gfx.text(s.msg, W / 2, H - 70, MSG_TXT);

@@ -15,6 +15,7 @@
 #include <Arduino.h>
 #include <algorithm>
 #include <ctime>
+#include <new>  // std::nothrow (telas/teclados sem abortar no heap cheio)
 
 using namespace kui;
 
@@ -93,6 +94,12 @@ bool LauncherScreen::partialFrame(kui::Rect& out) {
     // miolo muda) e sem arrasto nao ha o que reaproveitar do quadro anterior.
     if (listMode() || m_dragDx == 0 || m_dragPushed == 0) return false;
     if (m_needClear) return false;  // vidro pode ter conteudo de outra tela
+    // Borda (primeira/ultima pagina): nao ha pagina que entre, a atual
+    // desliza com resistencia (elastico) e a tela INTEIRA muda — quadro
+    // cheio. Passada parcial aqui pintaria a faixa de fundo sobre a pagina
+    // parada: a "faixa preta" que crescia do lado do dedo (bancada
+    // 2026-10-26).
+    if (dragPage() < 0 || dragPage() >= LauncherUI::gridTotalPages()) return false;
     // Trocou de lado no meio do gesto (raro): as duas faixas mudam — quadro
     // inteiro e mais barato que compor as duas.
     if ((m_dragDx < 0) != (m_dragPushed < 0)) return false;
@@ -290,12 +297,13 @@ void LauncherScreen::draw(kui::Canvas& c) {
                    iconY + Icon::SIZE + labelGap, labelFont, THEME_TEXT, TC_DATUM);
         }
     };
-    // Passada PARCIAL do arrasto: o buffer/vidro ja tem a pagina atual; so a
-    // faixa que mudou desde a ultima passada e refeita. Crescendo a capa, a
-    // faixa nova mostra a pagina que entra; encolhendo, volta a pagina atual.
+    // Passada PARCIAL do arrasto (so com pagina vizinha): o buffer/vidro ja
+    // tem a pagina atual; so a faixa que mudou desde a ultima passada e
+    // refeita. Crescendo a capa, a faixa nova mostra a pagina que entra;
+    // encolhendo, volta a pagina atual.
     if (c.partial()) {
         kui::Rect ch{};
-        if (!partialFrame(ch)) { ch = {0, gridTop(), UI::W, gridAreaH()}; }
+        partialFrame(ch);
         const int prevW = m_dragPushed < 0 ? -m_dragPushed : m_dragPushed;
         const int curW = m_dragDx < 0 ? -m_dragDx : m_dragDx;
         cull = ch;
@@ -309,14 +317,20 @@ void LauncherScreen::draw(kui::Canvas& c) {
     }
 
     c.setClip({0, gridHeaderH(), UI::W, UI::H - gridHeaderH()});
-    drawPage(page, 0);
-    if (m_dragDx != 0) {
-        // capa: preenche a faixa e desenha por cima a pagina que entra
-        const int xOff = dragXOff();
-        c.fillRect({xOff < 0 ? 0 : xOff, gridTop(),
-                    (m_dragDx < 0 ? -m_dragDx : m_dragDx), gridAreaH()},
-                   THEME_BG);
-        drawPage(dragPage(), xOff);
+    if (m_dragDx != 0 && (dragPage() < 0 || dragPage() >= LauncherUI::gridTotalPages())) {
+        // Borda: elastico — a pagina desliza com resistencia e o fundo aparece
+        // atras dela (quadro cheio; partialFrame() devolve false aqui).
+        drawPage(page, m_dragDx);
+    } else {
+        drawPage(page, 0);
+        if (m_dragDx != 0) {
+            // capa: preenche a faixa e desenha por cima a pagina que entra
+            const int xOff = dragXOff();
+            c.fillRect({xOff < 0 ? 0 : xOff, gridTop(),
+                        (m_dragDx < 0 ? -m_dragDx : m_dragDx), gridAreaH()},
+                       THEME_BG);
+            drawPage(dragPage(), xOff);
+        }
     }
     c.clearClip();
     m_dragPushed = m_dragDx;
@@ -355,6 +369,9 @@ int LauncherScreen::entryAt(int x, int y) const {
 
 void LauncherScreen::openAppActions(int entry) {
     const std::string name = LauncherUI::appEntryName(entry);
+    // Identidade estavel (caminho): a lista pode ser reescaneada com o
+    // dialogo aberto e o INDICE antigo passaria a apontar para outro app
+    const std::string id = LauncherUI::appEntryPath(entry);
     m_dlg.buttons.clear();
     m_dlg.tickUnder = false;  // m_dlg e reaproveitado: o consentimento liga estes
     m_dlg.timeoutMs = 0;
@@ -376,9 +393,14 @@ void LauncherScreen::openAppActions(int entry) {
         kui::Button rm;
         rm.label = "Remover";
         rm.style = kui::Button::Danger;
-        rm.onTap = [this, entry] {
+        rm.onTap = [this, id] {
             Navigator::closeDialog();
-            uninstall(entry);
+            const int idx = LauncherUI::findEntry(id);  // indice pode ter mudado
+            if (idx < 0) {
+                Navigator::toast("App nao encontrado", THEME_ERR);
+                return;
+            }
+            uninstall(idx);
         };
         m_dlg.buttons.push_back(rm);
     }
@@ -401,10 +423,19 @@ void LauncherScreen::launchEntry(int entry) {
     m_dlg.buttons.push_back(cancel);
     kui::Button allow;
     allow.label = "Permitir";
-    allow.onTap = [entry] {
+    const std::string grantPath = LauncherUI::appEntryPath(entry);
+    allow.onTap = [grantPath] {
         Navigator::closeDialog();
-        LauncherUI::grantEntry(entry);
-        Navigator::push(AppHostScreen::instance(entry));
+        // Re-resolve pelo caminho: o rescan (celerctl install) com o
+        // consentimento aberto desloca os indices e o "Permitir" concedia as
+        // permissoes de OUTRO app (e abria ele).
+        const int idx = LauncherUI::findEntry(grantPath);
+        if (idx < 0) {
+            Navigator::toast("App nao encontrado", THEME_ERR);
+            return;
+        }
+        LauncherUI::grantEntry(idx);
+        Navigator::push(AppHostScreen::instance(idx));
     };
     m_dlg.buttons.push_back(allow);
     // O launcher segue atendendo "run" remoto com o dialogo aberto (o shell
@@ -489,7 +520,10 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
             int dx = ev.dx();
             if (dx > UI::W) dx = UI::W;      // a capa nunca passa da largura
             if (dx < -UI::W) dx = -UI::W;
-            if ((page == 0 && dx > 0) || (page == tp - 1 && dx < 0)) dx /= 3;  // resistencia nas pontas
+            // Sem pagina vizinha daquele lado NAO ha capa: seguir o dedo ali
+            // pintava uma faixa de FUNDO no lugar da pagina atual (as colunas
+            // do canto sumiam ao arrastar para fora da primeira/ultima).
+            if ((page == 0 && dx > 0) || (page == tp - 1 && dx < 0)) dx = 0;
             if (dx != m_dragDx) {
                 m_dragDx = dx;
                 return true;
@@ -569,12 +603,19 @@ void LauncherScreen::onTick(uint32_t dtMs) {
 
     // pressionar e segurar (600 ms, sem arrastar) num app: acoes do app
     const kui::TouchState& ts = kui::touchState();
+    // A grade pode ter encolhido (rescan com o dedo na tela): o indice do
+    // press deixa de existir e os appEntry*/openAppActions leriam fora da
+    // lista (string de memoria alheia).
+    if (m_pressEntry >= LauncherUI::appEntryCount()) m_pressEntry = -1;
     if (m_pressEntry >= 0 && !m_longFired) {
         if (!ts.down || ts.moved || m_dragDx != 0) {
             if (!ts.down) m_pressEntry = -1;
         } else if (millis() - m_pressMs >= 600) {
             m_longFired = true;
-            openAppActions(m_pressEntry);
+            // m_dlg e o MESMO objeto que o Navigator pode estar mostrando
+            // (consentimento pendente): abre-las por cima trocava o dialogo
+            // vivo (botoes/onTimeout do outro) por "Remover app?"
+            if (!kui::Navigator::dialogOpen()) openAppActions(m_pressEntry);
         }
     }
 
@@ -601,7 +642,11 @@ AppHostScreen* s_appHost[50] = {};
 
 AppHostScreen* AppHostScreen::instance(int appIndex) {
     if (appIndex < 0 || appIndex >= 50) return nullptr;
-    if (s_appHost[appIndex] == nullptr) s_appHost[appIndex] = new AppHostScreen(appIndex);
+    if (s_appHost[appIndex] == nullptr) {
+        // nothrow: sem excecoes um new que falha aborta o aparelho (mesmo
+        // padrao dos teclados/ConnJob); push(nullptr) e no-op seguro
+        s_appHost[appIndex] = new (std::nothrow) AppHostScreen(appIndex);
+    }
     return s_appHost[appIndex];
 }
 
@@ -612,7 +657,12 @@ void AppHostScreen::draw(kui::Canvas& c) {
     c.text("Carregando app...", c.width() / 2, c.height() / 2, UI::font(2), THEME_TEXT_DIM, MC_DATUM);
 }
 
-void AppHostScreen::onEnter() { m_started = false; }
+void AppHostScreen::onEnter() {
+    // App em task propria AINDA rodando (painel de borda/alerta empilhado por
+    // cima e saiu): nao zera m_started — o onTick relancaria uma SEGUNDA
+    // instancia por cima da primeira. Reset so quando nada esta rodando.
+    if (!AppRunner::running()) m_started = false;
+}
 
 bool AppHostScreen::suppressRedraw() const {
     // app em task propria (CELEROS_APP_TASK): enquanto roda, o app e dono do
@@ -680,7 +730,10 @@ int rssiLevel(int32_t rssi) {
 
 WifiSetupScreen* WifiSetupScreen::instance() {
     if (s_wifiSetup == nullptr) {
-        s_wifiSetup = new WifiSetupScreen();
+        // nothrow: sem excecoes um new que falha aborta o aparelho (mesmo
+        // padrao dos teclados/ConnJob); o chamador trata nullptr (push no-op)
+        s_wifiSetup = new (std::nothrow) WifiSetupScreen();
+        if (s_wifiSetup == nullptr) return nullptr;
         s_wifiSetup->m_btnBack.onTap = [] { Navigator::pop(); };
         s_wifiSetup->m_btnScan.onTap = [s = s_wifiSetup] { s->startScan(); };
         s_wifiSetup->m_btnWeb.onTap = [s = s_wifiSetup] { s->enterWebPortal(); };
@@ -699,19 +752,27 @@ WifiSetupScreen* WifiSetupScreen::instance() {
 }
 
 void WifiSetupScreen::startScan() {
+    if (s_scanMutex == nullptr) s_scanMutex = xSemaphoreCreateMutex();
     if (!s_scanHandlerBound) {
         s_scanHandlerBound = true;
-        if (s_scanMutex == nullptr) s_scanMutex = xSemaphoreCreateMutex();
         NetworkManager::instance().onScanCompleted.addHandler(
             [](const std::vector<ScannedNetwork>& nets) {
-                if (xSemaphoreTake(s_scanMutex, portMAX_DELAY) == pdTRUE) {
+                if (s_scanMutex != nullptr && xSemaphoreTake(s_scanMutex, portMAX_DELAY) == pdTRUE) {
                     s_scanResults.assign(nets.begin(), nets.end());
                     s_scanDelivered = true;
                     xSemaphoreGive(s_scanMutex);
                 }
             });
     }
-    s_scanDelivered = false;
+    // Zera a flag SOB O MUX: um resultado entregue agora pelo handler nao
+    // pode ser descartado por esta limpeza (a tela ficaria 20 s em
+    // "Buscando redes..." ate o guarda de scan perdido).
+    if (s_scanMutex != nullptr && xSemaphoreTake(s_scanMutex, portMAX_DELAY) == pdTRUE) {
+        s_scanDelivered = false;
+        xSemaphoreGive(s_scanMutex);
+    } else {
+        s_scanDelivered = false;
+    }
     m_scanning = WebManager::startScanAsync();
     m_scanStartMs = millis();
     m_scanStarted = true;
@@ -771,7 +832,11 @@ void WifiSetupScreen::updateStatus() {
 }
 
 void WifiSetupScreen::askPassword(const std::string& ssid) {
-    KeyboardScreen* kb = new KeyboardScreen("Senha: " + ssid, "", 64);
+    auto* kb = new (std::nothrow) KeyboardScreen("Senha: " + ssid, "", 64);
+    if (kb == nullptr) {
+        Navigator::toast("Sem memória para o teclado", THEME_ERR);
+        return;
+    }
     kb->setMask(true);  // campo em bullets com botao ver/ocu no cabecalho
     m_kbTrash = m_kb;  // teclado anterior sai fora da cadeia de chamadas dele
     m_kb = kb;
@@ -784,7 +849,11 @@ void WifiSetupScreen::askPassword(const std::string& ssid) {
 }
 
 void WifiSetupScreen::askHiddenSsid() {
-    KeyboardScreen* kb = new KeyboardScreen("Nome da rede (SSID)", "", 32);
+    auto* kb = new (std::nothrow) KeyboardScreen("Nome da rede (SSID)", "", 32);
+    if (kb == nullptr) {
+        Navigator::toast("Sem memória para o teclado", THEME_ERR);
+        return;
+    }
     m_kbTrash = m_kb;
     m_kb = kb;
     kb->onResult = [this](const std::string& text, bool ok) {
@@ -819,7 +888,12 @@ void WifiSetupScreen::tryConnect(const std::string& ssid, const std::string& pas
     m_connSsid = ssid;
     m_connSecure = secure;
     s_connResult = -1;
-    ConnJob* job = new ConnJob{ssid, password};
+    // nothrow: sem excecoes um new que falha aborta o aparelho
+    ConnJob* job = new (std::nothrow) ConnJob{ssid, password};
+    if (job == nullptr) {
+        Navigator::toast("Sem memória para conectar", THEME_ERR);
+        return;
+    }
     if (xTaskCreate(connectTask, "wifi_conn", 6144, job, 5, nullptr) != pdPASS) {
         delete job;
         Navigator::toast("Sem memória para conectar", THEME_ERR);

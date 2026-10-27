@@ -104,8 +104,7 @@ bool LauncherScreen::partialFrame(kui::Rect& out) {
     // inteiro e mais barato que compor as duas.
     if ((m_dragDx < 0) != (m_dragPushed < 0)) return false;
     const int a = m_dragPushed, b = m_dragDx;
-    const int lo = a < b ? a : b, hi = a < b ? b : a;
-    if (hi == lo) {
+    if (a == b) {
         // Sem movimento desde a ultima passada: nao ha faixa para recompor.
         // Devolver retangulo vazio (e nao false) evita o QUADRO CHEIO que o
         // relogio (dirty 1x/s) dispararia no meio do gesto — 105 ms de
@@ -114,9 +113,15 @@ bool LauncherScreen::partialFrame(kui::Rect& out) {
         out = {0, 0, 0, 0};
         return true;
     }
-    // dx < 0: a faixa e a da direita (largura |dx|); dx > 0: a da esquerda.
-    const int x = (b < 0 ? UI::W : 0) + lo;
-    out = {x, gridTop(), hi - lo, gridAreaH()};
+    // A capa DESLIZA com o dedo: a area inteira dela muda, nao so a faixa
+    // |dx_novo - dx_anterior| (so a faixa deixava o resto da capa com a
+    // borda esquerda da pagina repetida e fundo escuro — a "faixa preta" do
+    // meio do arrasto, bancada 2026-10-27). A regiao e a uniao das duas
+    // capas; o draw desloca os pixels ja compostos (shiftX) e so desenha a
+    // faixa exposta, entao o custo de compor continua o da faixa.
+    const int aw = a < 0 ? -a : a, bw = b < 0 ? -b : b;
+    const int mw = aw > bw ? aw : bw;
+    out = {b < 0 ? UI::W - mw : 0, gridTop(), mw, gridAreaH()};
     return true;
 }
 
@@ -261,9 +266,10 @@ void LauncherScreen::draw(kui::Canvas& c) {
     // acompanhando o dedo (transicao de capa). Antes as duas paginas andavam
     // juntas — bonito, mas cada evento do arrasto mudava a tela INTEIRA, e
     // no 4848 um quadro completo custa ~76 ms (compor 47 + push 30): o gesto
-    // rodava a 13 fps e "agarrava" (bancada 2026-10-26). Com a capa o que
-    // muda entre dois eventos e so a faixa |dx_novo - dx_anterior|, que a
-    // passada PARCIAL compoe e empurra sozinha (renderRegion).
+    // rodava a 13 fps e "agarrava" (bancada 2026-10-26). Com a capa so ela
+    // muda entre dois eventos: a passada PARCIAL desloca os pixels dela no
+    // buffer, compoe so a faixa |dx_novo - dx_anterior| e empurra a capa
+    // (renderRegion) — ~25 ms contra 74 do quadro cheio (bancada 2026-10-27).
     const lgfx::IFont* labelFont = kui::type::caption();
     const int labelGap = UI::big ? 8 : 4;
     kui::Rect cull{0, 0, UI::W, UI::H};  // passada parcial: so as celulas da faixa
@@ -298,19 +304,35 @@ void LauncherScreen::draw(kui::Canvas& c) {
         }
     };
     // Passada PARCIAL do arrasto (so com pagina vizinha): o buffer/vidro ja
-    // tem a pagina atual; so a faixa que mudou desde a ultima passada e
-    // refeita. Crescendo a capa, a faixa nova mostra a pagina que entra;
-    // encolhendo, volta a pagina atual.
+    // tem a pagina atual e a capa da passada anterior. A capa e deslocada no
+    // buffer e so a faixa exposta e desenhada: crescendo, a borda de fora
+    // mostra mais da pagina que entra; encolhendo, volta a pagina atual.
     if (c.partial()) {
         kui::Rect ch{};
         partialFrame(ch);
-        const int prevW = m_dragPushed < 0 ? -m_dragPushed : m_dragPushed;
-        const int curW = m_dragDx < 0 ? -m_dragDx : m_dragDx;
-        cull = ch;
-        c.setClip(ch);
-        c.fillRect(ch, THEME_BG);
-        if (curW > prevW) drawPage(dragPage(), dragXOff());
-        else drawPage(page, 0);
+        const int a = m_dragPushed, b = m_dragDx;
+        const int aw = a < 0 ? -a : a, bw = b < 0 ? -b : b;
+        // a capa anterior anda b - a junto com o dedo
+        const kui::Rect oldCov{b < 0 ? UI::W - aw : 0, gridTop(), aw, gridAreaH()};
+        const int d = bw - aw;
+        if (ch.w > 0 && c.shiftX(oldCov, b - a)) {
+            kui::Rect strip = d > 0 ? kui::Rect{b < 0 ? UI::W - d : 0, gridTop(), d, gridAreaH()}
+                                    : kui::Rect{b < 0 ? UI::W - aw : bw, gridTop(), -d, gridAreaH()};
+            cull = strip;
+            c.setClip(strip);
+            c.fillRect(strip, THEME_BG);
+            if (d > 0) drawPage(dragPage(), dragXOff());
+            else drawPage(page, 0);
+        } else if (ch.w > 0) {
+            // sem buffer para deslocar: recompoe a regiao inteira
+            cull = ch;
+            c.setClip(ch);
+            c.fillRect(ch, THEME_BG);
+            drawPage(page, 0);
+            const int xOff = dragXOff();
+            c.fillRect({xOff < 0 ? 0 : xOff, gridTop(), bw, gridAreaH()}, THEME_BG);
+            drawPage(dragPage(), xOff);
+        }
         c.clearClip();
         m_dragPushed = m_dragDx;
         return;

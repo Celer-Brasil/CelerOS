@@ -9,6 +9,7 @@
 #include <LovyanGFX.hpp>
 #include <cmath>
 #include <new>
+#include <cstring>  // memmove do shiftX
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -344,6 +345,27 @@ void Canvas::dim(const Rect& keep) {
     // Direto: sem leitura do fundo, cobre a tela. O card e desenhado opaco
     // depois, entao o fillScreen por baixo dele nao altera o resultado.
     m_target->fillScreen((uint32_t)0x04060C);
+}
+
+bool Canvas::shiftX(const Rect& r, int dx) {
+    if (!m_partial || m_mode != FullFrame || m_target != s_buf) return false;
+    auto* spr = static_cast<CelerSprite*>(m_target);
+    uint16_t* p = (uint16_t*)spr->getBuffer();
+    const int w = spr->width(), h = spr->height();
+    if (p == nullptr || dx == 0) return p != nullptr;
+    // origem recortada a tela e destino recortado a tela
+    int sx0 = r.x < 0 ? 0 : r.x, sx1 = r.x + r.w > w ? w : r.x + r.w;
+    if (sx0 + dx < 0) sx0 = -dx;
+    if (sx1 + dx > w) sx1 = w - dx;
+    const int y0 = r.y < 0 ? 0 : r.y, y1 = r.y + r.h > h ? h : r.y + r.h;
+    if (sx1 <= sx0 || y1 <= y0) return true;
+    m_dev.waitDMA();  // o push anterior pode ainda estar lendo o buffer
+    const size_t n = (size_t)(sx1 - sx0) * sizeof(uint16_t);
+    for (int y = y0; y < y1; y++) {
+        uint16_t* row = p + (size_t)y * w;
+        memmove(row + sx0 + dx, row + sx0, n);
+    }
+    return true;
 }
 
 void Canvas::setClip(const Rect& r) {

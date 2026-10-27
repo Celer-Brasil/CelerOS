@@ -159,6 +159,10 @@ public:
     // card do dialogo e desenhado opaco por cima, entao pular seus pixels
     // economiza ~30% do loop sem mudar o resultado.
     void dim(const Rect& keep = {0, 0, 0, 0});
+    // Passada parcial (buffer full-frame): desloca os pixels de r em dx na
+    // horizontal dentro do buffer (o que sai da tela e descartado; a faixa
+    // que fica para tras NAO e limpa). false fora do buffer full-frame.
+    bool shiftX(const Rect& r, int dx);
     // Recorte (coordenadas fisicas); clearClip restaura a tela inteira
     void setClip(const Rect& r);
     void clearClip();

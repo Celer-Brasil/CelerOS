@@ -113,6 +113,56 @@ function applyGameClip(s, E) {
     }
 }
 
+// tabuleiro assado: as dezenas de stamps por quadro viram 1 blitSprite por
+// caixa suja. map.set rebakea so a celula alterada (caixa quebrada/saida).
+function rebakeCell(s, E, c, r) {
+    if (!s.bg || !s.map || !s.map.paint) return;
+    E.dirty._mute++;
+    System.useSprite(s.bg);
+    if (E.spr) E.spr.alvo = s.bg;
+    System.setClip(c * CELL, r * CELL, CELL, CELL);
+    s.map.paint(c, r, c * CELL, r * CELL);
+    System.clearClip();
+    if (E.spr) E.spr.alvo = 0;
+    System.useSprite(0);
+    E.dirty._mute--;
+}
+
+function bakeBoard(s, E) {
+    s.bg = 0;
+    // no host os alvos de sprite sao stubs (blit nao pinta); preview segue
+    // pelo caminho de celulas, a bancada e quem valida o bake
+    if (typeof __harness !== 'undefined') return;
+    if (!s.map || !s.map.paint || !E.caps || !E.caps.sprites || !E.caps.clip ||
+        typeof System === 'undefined' || typeof System.blitSprite !== 'function' ||
+        typeof System.copySprite !== 'function' || !E.slots || !E.slots.create) return;
+    var slot = E.slots.create('detona:fundo', s.W, BOARD_H);
+    if (!slot) return;
+    E.dirty._mute++;
+    System.useSprite(slot);
+    if (E.spr) E.spr.alvo = slot;
+    System.fillScreen(0);
+    for (var r = 0; r < ROWS; r++) {
+        for (var c = 0; c < COLS; c++) s.map.paint(c, r, c * CELL, r * CELL);
+    }
+    if (E.spr) E.spr.alvo = 0;
+    System.useSprite(0);
+    E.dirty._mute--;
+    s.bg = slot;
+    // toda quebra/porta abre passa pelo set: rebakea a celula no fundo
+    var mapSet = s.map.set;
+    s.map.set = function (c, r, v) {
+        var ok = mapSet.call(this, c, r, v);
+        if (ok) rebakeCell(s, E, c, r);
+        return ok;
+    };
+    // o apagar das caixas sujas restaura o fundo do sprite em uma chamada
+    E.dirty.enable(function (x, y, w, h) {
+        System.fillRect(x, y, w, h, 0);
+        System.blitSprite(s.bg, x, y, w, h);
+    });
+}
+
 exports.create = function (ctx) {
     return { ctx: ctx };
 };
@@ -208,6 +258,8 @@ function startGame(s, ctx) {
     s.joyY0 = 0;
     s.joyMoved = false;
     s.uiTouch = null;      // toque que comecou num botao nao vira joystick
+    s.hudForce = true;     // primeiro HUD da cena (o mundo fica em outro clip)
+    bakeBoard(s, E);
     applyGameClip(s, E);
     s.gx = s.player ? cellOf(s.player.x) : 1;
     s.gy = s.player ? cellOf(s.player.y) : 1;
@@ -580,7 +632,10 @@ function gameUpdate(s, E, ctx, dt) {
         return;
     }
     if (s.paused) {
-        if (s.btnResume && E.hit(s.btnResume)) s.paused = false;
+        if (s.btnResume && E.hit(s.btnResume)) {
+            s.paused = false;
+            s.hudForce = true;   // a overlay de pausa cobriu a faixa do HUD
+        }
         else if (s.btnMapPause && E.hit(s.btnMapPause)) ctx.go('Mapa');
         return;
     }
@@ -661,7 +716,16 @@ function gameUpdate(s, E, ctx, dt) {
     updateEnemies(s, dt);
     updateDrops(s);
     checkExit(s);
+    // um blit do tabuleiro inteiro custa menos no 4848 do que restaurar as
+    // caixas sujas uma a uma (cada blitSprite percorre o sprite de fundo)
+    if (E.dirty && E.dirty.full) E.dirty.full();
 }
+
+exports.destroy = function () {
+    var s = this, E = s.E;
+    if (s && s.bg && E && E.slots) E.slots.release(s.bg);
+    if (s) s.bg = 0;
+};
 
 exports.draw = function (ctx) {
     var s = this, E = s.E;
@@ -804,6 +868,7 @@ function drawGame(s, E) {
             color: C(0x101010), bg: 0xFFE0 });
     }
     if (s.paused) {
+        if (E.dirty.unclip) E.dirty.unclip();   // a overlay cobre tambem o HUD
         E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
         drawPanel(E, 60, 150, W - 120, 190, C(0x101A2A), C(0x38BCF8));
         E.gfx.text('PAUSA', W / 2, 186, { px: 32, align: 'center', color: C(0x38BCF8) });
@@ -811,8 +876,10 @@ function drawGame(s, E) {
             { primary: true, screen: true, px: 17 });
         s.btnMapPause = E.gfx.button('MAPA', W / 2 - 70, 282, 140, 34,
             { primary: false, screen: true, px: 14 });
+        applyGameClip(s, E);
     }
     if (s.done) {
+        if (E.dirty.unclip) E.dirty.unclip();
         E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
         drawPanel(E, 50, 120, W - 100, 250, C(0x101A2A), s.won ? 0xFFE0 : C(0xFF8B8B));
         if (s.won) {
@@ -832,6 +899,7 @@ function drawGame(s, E) {
             s.btnMapLost = E.gfx.button('MAPA', W / 2 - 70, 286, 140, 34,
                 { primary: false, screen: true, px: 14 });
         }
+        applyGameClip(s, E);
     }
 }
 
@@ -841,18 +909,14 @@ function hudKey(s) {
         '|' + s.score + '|' + Math.ceil(s.timeLeft);
 }
 
-function hudTouched(s, E) {
-    if (!E.dirty || !E.dirty.touches) return true;
-    return E.dirty.touches(0, BOARD_H, s.W, s.H - BOARD_H);
-}
-
-// HUD fora da camada suja: parado ele nao entra no apaga-redesenha do mundo.
-// O recorte nativo e solto so durante o HUD e devolvido depois.
+// HUD fora da camada suja: o mundo nao o apaga (recorte proprio), entao nao
+// usa touches — um full do tabuleiro nao precisa redesenhar a faixa de baixo.
 function drawHud(s, E) {
     if (!s.theme || s.paused || s.done) return;
     var key = hudKey(s);
-    if (s.hudKey === key && !hudTouched(s, E)) return;
+    if (s.hudKey === key && !s.hudForce) return;
     s.hudKey = key;
+    s.hudForce = false;
     E.dirty._mute++;
     if (E.dirty.unclip) E.dirty.unclip();
     var W = s.W, th = s.theme;

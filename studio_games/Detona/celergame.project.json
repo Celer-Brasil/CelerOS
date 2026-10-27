@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "rev": 9,
+  "rev": 10,
   "studio": "0.1.0",
   "name": "Detona!",
   "packageName": "celeros.detona",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": "CelerOS",
   "description": "Remake NATIVO do Detona no Celer Studio: 3 mundos, 6 fases montadas em tilemaps editaveis, 3 tilesets, chefe com barra de vida, powerups, bombas remotas, joystick de arraste, HUD e progressao salva. Sem bridge legado: cada fase e uma cena do editor.",
   "type": "Game",
@@ -21,7 +21,7 @@
     "celeros.game.spr": "^1.6.0",
     "celeros.game.tilemap": "^1.3.0"
   },
-  "changelog": "1.0.3: desempenho e controles. O HUD memoiza fora da camada suja e o mundo fica recortado na area do tabuleiro; bomba sai do caminho afim (o pulso virava drawSprite caro por bomba) e o aviso e o circulo vermelho. O d-pad de 20 px sai: arraste no tabuleiro assenta um joystick flutuante e anda casa a casa enquanto segura; BOMBA e pausa respondem no press e um toque seco no tabuleiro planta.\n1.0.2: tilemap desenha a celula pelo canto (ax/ay 0) em vez do pivot 0.5 do tileset; corrige tiles deslocados/buracos pretos nas bordas.\n1.0.1: bases de asset incluem a pasta celeros_detona criada pelo celerctl; ai_bg/ai_atlas/tiles voltam a carregar no 4848.\n1.0.0: remake nativo no Celer Studio. As 6 fases agora sao cenas editaveis (tilemap 15x13 + solidos + entidades), com 3 tilesets (Jardim/Forno/Nucleo), saida escondida sob caixa, powerups (alcance, bomba, velocidade, remoto, escudo, vida), chefe com 12 HP e barra, 3 estrelas por fase, mapa de fases, pausa, tela final e progresso salvo. Controlador unico em ES5, sem modo legado.",
+  "changelog": "1.0.4: o tabuleiro assa num sprite na entrada e as caixas sujas voltam com um blitSprite; quebrar caixa/abrir saida rebakea so a celula. Isso tira as dezenas de stamps por quadro que mantinham o jogo a ~4 fps no 4848.\n1.0.3: desempenho e controles. O HUD memoiza fora da camada suja e o mundo fica recortado na area do tabuleiro; bomba sai do caminho afim (o pulso virava drawSprite caro por bomba) e o aviso e o circulo vermelho. O d-pad de 20 px sai: arraste no tabuleiro assenta um joystick flutuante e anda casa a casa enquanto segura; BOMBA e pausa respondem no press e um toque seco no tabuleiro planta.\n1.0.2: tilemap desenha a celula pelo canto (ax/ay 0) em vez do pivot 0.5 do tileset; corrige tiles deslocados/buracos pretos nas bordas.\n1.0.1: bases de asset incluem a pasta celeros_detona criada pelo celerctl; ai_bg/ai_atlas/tiles voltam a carregar no 4848.\n1.0.0: remake nativo no Celer Studio. As 6 fases agora sao cenas editaveis (tilemap 15x13 + solidos + entidades), com 3 tilesets (Jardim/Forno/Nucleo), saida escondida sob caixa, powerups (alcance, bomba, velocidade, remoto, escudo, vida), chefe com 12 HP e barra, 3 estrelas por fase, mapa de fases, pausa, tela final e progresso salvo. Controlador unico em ES5, sem modo legado.",
   "canvas": {
     "w": 480,
     "h": 480,

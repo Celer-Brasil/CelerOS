@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 51
+### Nível de API: 52
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -2135,6 +2135,21 @@ evita o pisca de redesenhar a tela inteira a cada toque. Regras práticas:
 
 #### `UI.resetScroll(id)` (API 22)
 - **Descrição:** Volta ao topo a lista/área `id` (troca de tela).
+
+#### `UI.extras` (API 52)
+- **Retorna:** Boolean — `true` quando o firmware foi compilado com os extras de UI (`CONFIG_CELEROS_UI_EXTRAS`, padrão nas placas S3). Na CYD é `false` e `UI.custom`/`UI.clip` não existem.
+- **Descrição:** Capacidade para o app (ou kit) escolher o caminho nativo sem `typeof`: com os extras, áreas pintadas em JS usam `UI.custom` (redesenho parcial); sem eles, o app redesenha no frame total. O `A.style.full`/`A.style.custom` do CelerKit já escolhem por você.
+
+#### `UI.custom(id, x, y, w, h, sig, draw, [opts])` (API 52)
+- **Parâmetros:** `id` (slot; dois custom na mesma geometria precisam de ids diferentes), `sig` (assinatura: string, número ou booleano — quando muda, redesenha), `draw(x, y, w, h)` pinta **toda** a área, `opts`: `bg` (fundo do clear, padrão o bg corrente do card/tela) e `clear` (padrão `true`).
+- **Retorna:** Boolean — `true` quando desenhou neste frame (frame total ou assinatura nova).
+- **Descrição:** Área pintada pelo app com o slot e o recorte do firmware: no frame parcial limpa o retângulo e chama o callback só quando a assinatura muda. **Não consome tap** — o `draw` lê `UI.touch()` e o app gerencia o próprio consumo. Não use `UI.text`/`UI.card` dentro do callback: os slots deles pulariam no parcial e o clear apagaria o texto. Só existe quando `UI.extras` é `true` (S3).
+
+#### `UI.clip(x, y, w, h)` (API 52)
+- **Descrição:** Empilha o recorte corrente e restringe ao retângulo virtual (interseção). Par com `UI.unclip()`; um `throw` entre os dois é curado no próximo `UI.begin` (o recorte volta ao do último frame bom). Só existe quando `UI.extras` é `true` (S3).
+
+#### `UI.unclip()` (API 52)
+- **Descrição:** Volta ao recorte anterior (pilha de até 8). Sem par aberto, não faz nada.
 
 #### `UI.badge(text, x, y, [opts])` (API 22)
 - **Parâmetros:** `opts`: `color`, `textColor`.

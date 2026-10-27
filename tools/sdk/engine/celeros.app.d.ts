@@ -24,6 +24,16 @@ declare namespace A {
     /** Layout virtual: seguro pelo inset do vidro; no retangular x=8, w=224,
      *  top=48, bottom=312 (no relogio redondo x/w/bottom encolhem). */
     const L: Layout | null;
+    /** frame corrente e total (o A.run atualiza a cada begin) */
+    const full: boolean;
+    /** Area PINTADA PELO APP: usa UI.custom quando a placa tem os extras
+     *  (S3); senao o mesmo contrato no caminho base (frame total via A.full
+     *  ou assinatura nova). draw(x,y,w,h) pinta TUDO — nao use UI.text/UI.card
+     *  dentro. Devolve true quando desenhou neste frame. */
+    function custom(id: string, x: number, y: number, w: number, h: number,
+                    sig: number | string | boolean,
+                    draw: (x: number, y: number, w: number, h: number) => void,
+                    o?: { bg?: number; clear?: boolean }): boolean;
     /** Ctx que o run() passa a cada tela. */
     interface Ctx {
         /** frame e de redesenho total (UI.begin devolveu true) */

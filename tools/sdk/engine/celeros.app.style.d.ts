@@ -43,6 +43,8 @@ declare namespace A {
         version: string;
         /** tokens vivos (leia/mute direto; prefira preset/reset) */
         T: StyleTokens;
+        /** UI.extras && UI.custom (S3): caminho nativo de redesenho parcial */
+        full: boolean;
         preset(name: 'soft' | 'flat' | 'neon' | 'paper'): StyleTokens;
         reset(): StyleTokens;
         /** margem segura do vidro em px virtuais (0 no retangular) */
@@ -57,6 +59,13 @@ declare namespace A {
         /** card: chame TODO frame; o UI.card empilha o bg */
         card(x: number, y: number, w: number, h: number, o?: StyleCardOpts): StyleContent;
         cardEnd(): void;
+        /** area pintada pelo app: UI.custom nativo nas S3; na CYD redesena
+         *  no frame total (A.full) ou quando a assinatura muda. draw pinta
+         *  TUDO — nao use UI.text/UI.card dentro. */
+        custom(id: string, x: number, y: number, w: number, h: number,
+               sig: number | string | boolean,
+               draw: (x: number, y: number, w: number, h: number) => void,
+               o?: { bg?: number; clear?: boolean }): boolean;
         divider(x: number, y: number, w: number,
                 o?: { h?: number; color?: number }): void;
         /** botao texto (UI.button nativo); com icone usa widgets se adotado */

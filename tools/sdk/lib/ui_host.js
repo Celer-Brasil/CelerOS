@@ -6,7 +6,11 @@
 //   - widgets SEMPRE fazem hit-test e so desenham no frame total ou quando a
 //     propria assinatura visual muda (limpando o proprio retangulo);
 //   - estado por widget em slots (id = geometria ou id explicito).
-// O desenho sai pelas primitivas de env.System resolvidas NA HORA da chamada:
+// `opts.extras` espelha CONFIG_CELEROS_UI_EXTRAS (API 52): com ele o objeto
+// ganha UI.custom (area pintada pelo app, limpa/recortada e redesenhada so
+// no frame total ou quando a assinatura muda) e UI.clip/UI.unclip (pilha de
+// recorte). Sem ele, UI.extras=false e os tres ficam undefined — igual ao
+// firmware da CYD. O desenho sai pelas primitivas de env.System resolvidas NA HORA da chamada:
 // no harness viram no-op/log (drawString), no emulador pintam o framebuffer.
 // Aproximacoes: papeis de fonte -> fontes numericas do emulador (caption 1,
 // body/title 2, display 4).
@@ -19,7 +23,8 @@ const TAP_MAX_MS = 800;
 const HEADER_H = 40;
 const SLOTS_MAX = 48;   // kSlots do JsUi.cpp
 
-function makeUI(env) {
+function makeUI(env, opts) {
+    const extras = !!(opts && opts.extras);
     const S = () => env.System;
     const T = () => S().theme();
 
@@ -33,6 +38,25 @@ function makeUI(env) {
     let scroll = null;   // {x,y,w,h,slot,contentH}
     let toastMsg = '', toastUntil = 0;
     let lastEndMs = 0;   // pacing do UI.end (js_uiEnd: espera o que falta, nao o intervalo cheio)
+    let clipStack = [];  // pilha de UI.clip (recortes anteriores; null = sem clip)
+    let curClip = null;  // {x,y,w,h} do recorte corrente setado por nos
+
+    // intersecao de dois retangulos (recorte de UI.clip/custom)
+    function isect(a, b) {
+        const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
+        const x1 = Math.min(a.x + a.w, b.x + b.w), y1 = Math.min(a.y + a.h, b.y + b.h);
+        return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
+    }
+    function setClipRect(r) {
+        curClip = r;
+        const Sys = S();
+        if (Sys.setClip) Sys.setClip(r.x, r.y, r.w, r.h);
+    }
+    function clearClipRect() {
+        curClip = null;
+        const Sys = S();
+        if (Sys.clearClip) Sys.clearClip();
+    }
 
     const inR = (px, py, x, y, w, h) => px >= x && px < x + w && py >= y && py < y + h;
     const startOk = () => !scroll || inR(t.sx, t.sy, scroll.x, scroll.y, scroll.w, scroll.h);
@@ -202,6 +226,7 @@ function makeUI(env) {
     }
 
     const UI = {
+        extras: extras,
         begin(bgc) {
             const p = S().getTouch();
             const now = S().millis();
@@ -224,6 +249,8 @@ function makeUI(env) {
             full = false;
             bgStack = [typeof bgc === 'number' ? bgc : T().bg];
             scroll = null;
+            // frame novo: clip deixado aberto por um throw nao vale mais
+            if (clipStack.length || curClip) { clipStack = []; clearClipRect(); }
             if (drawFull) S().fillScreen(bgStack[0]);
             return drawFull;
         },
@@ -561,15 +588,15 @@ function makeUI(env) {
             scrollPhysics(sl, x, y, w, h, contentH | 0);
             const off = Math.floor(sl.scroll);
             if (off !== before) full = true;
-            scroll = { x, y, w, h, slot: sl, contentH: contentH | 0 };
-            if (S().setClip) S().setClip(x, y, w, h);
+            scroll = { x, y, w, h, slot: sl, contentH: contentH | 0, prevClip: curClip };
+            setClipRect(curClip ? isect(curClip, { x, y, w, h }) : { x, y, w, h });
             return off;
         },
         scrollEnd() {
             if (!scroll) return;
             const sc = scroll;
             scroll = null;
-            if (S().clearClip) S().clearClip();
+            if (sc.prevClip) setClipRect(sc.prevClip); else clearClipRect();
             if (drawFull && sc.contentH > sc.h) {
                 const barH = Math.max(16, Math.round(sc.h * sc.h / sc.contentH));
                 const maxS = sc.contentH - sc.h;
@@ -619,6 +646,44 @@ function makeUI(env) {
             runDialog(str(title), str(body), [typeof ok === 'string' ? ok : 'OK'], ['primary']);
         },
     };
+
+    if (extras) {
+        // UI.custom: area PINTADA PELO APP. O slot limpa o retangulo no frame
+        // parcial, recorta e chama draw(x, y, w, h) quando o frame e' total ou
+        // a assinatura muda. O callback pinta TUDO com System.* (nao use
+        // UI.text/UI.card dentro: os slots deles pulariam no parcial e o
+        // clear apagaria o que ficou do quadro anterior). Nao consome tap.
+        UI.custom = function (id, x, y, w, h, sig, draw, o) {
+            if (typeof draw !== 'function') return false;
+            const sl = slot('custom:' + str(id) + ':' + x + ':' + y + ':' + w + ':' + h);
+            const d = needDraw(sl, sig);
+            if (!d) return false;
+            const Sys = S();
+            const bgc = opt(o, 'bg', bg());
+            const paint = opt(o, 'clear', true) !== false;
+            const saved = curClip;
+            const r = saved ? isect(saved, { x, y, w, h }) : { x, y, w, h };
+            if (d.clear && paint) Sys.fillRect(x, y, w, h, bgc);
+            setClipRect(r);
+            try {
+                draw(x, y, w, h);
+            } finally {
+                if (saved) setClipRect(saved); else clearClipRect();
+            }
+            return true;
+        };
+        // UI.clip/unclip: pilha de recortes (coords virtuais), par com o
+        // begin que cura um clip deixado aberto.
+        UI.clip = function (x, y, w, h) {
+            clipStack.push(curClip);
+            setClipRect(curClip ? isect(curClip, { x, y, w, h }) : { x, y, w, h });
+        };
+        UI.unclip = function () {
+            if (!clipStack.length) return;
+            const prev = clipStack.pop();
+            if (prev) setClipRect(prev); else clearClipRect();
+        };
+    }
     return UI;
 }
 

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 51 — 364 funcoes.
+// API level 52 — 367 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -404,6 +404,14 @@ declare const UI: {
     confirm(title: string, body?: string, opts?: { yes?: string; no?: string; danger?: boolean }): boolean;
     /** Aviso modal bloqueante com um botão. (API 22) */
     alert(title: string, body?: string, ok?: string): void;
+    /** Área pintada pelo app com o slot e o recorte do firmware: no frame parcial limpa o retângulo e chama o callback só quando a assinatura muda. (API 52) */
+    custom(id: string, x: number, y: number, w: number, h: number, sig?: number | string, draw: (x: number, y: number, w: number, h: number) => void, opts?: Record<string, any>): boolean;
+    /** Empilha o recorte corrente e restringe ao retângulo virtual (interseção). Par com UI.unclip(); um throw entre os dois é curado no próximo UI (API 52) */
+    clip(x: number, y: number, w: number, h: number): void;
+    /** Volta ao recorte anterior (pilha de até 8). Sem par aberto, não faz nada. (API 52) */
+    unclip(): void;
+    /** constante */
+    extras: boolean;
 };
 
 declare const Net: {

@@ -262,6 +262,12 @@ public:
     static duk_ret_t js_uiBadge(duk_context *ctx);
     static duk_ret_t js_uiConfirm(duk_context *ctx);
     static duk_ret_t js_uiAlert(duk_context *ctx);
+    // Extras de UI (API 52, so nas placas S3 com CONFIG_CELEROS_UI_EXTRAS):
+    // o registro na tabela e a implementacao vivem sob o #if; na CYD o objeto
+    // UI expoe so UI.extras=false. Declaracoes sempre presentes (sem custo).
+    static duk_ret_t js_uiCustom(duk_context *ctx);
+    static duk_ret_t js_uiClip(duk_context *ctx);
+    static duk_ret_t js_uiUnclip(duk_context *ctx);
     static void uiReset();  // reset por app (init)
 
     // System Utilities

@@ -227,6 +227,9 @@ function parseBindingsCpp(text) {
         const vm = /duk_push_(?:int|uint)\s*\(\s*ctx\s*,\s*([^,)]+)/.exec(line);
         stack[stack.length - 1].consts.push({
           name: m[1], value: vm ? vm[1].trim() : '?',
+          // tipo importa no d.ts: UI.extras e' booleano (push_boolean), o
+          // resto das constantes da API e' numero (GPIO.OUTPUT, etc.)
+          type: /duk_push_boolean\s*\(/.test(line) ? 'boolean' : 'number',
           perm: stack[stack.length - 1].perm, kcfg: activeKcfg(),
         });
         continue;
@@ -1162,7 +1165,14 @@ function runCheck() {
         if (objPath !== ns && !objPath.startsWith(ns + '.')) continue;
         const holder = objPath === ns ? stub : stub[objPath.slice(ns.length + 1)];
         if (!holder) { lines.push('  aviso: harness sem ' + objPath + ' (apps que usam falham no teste)'); continue; }
-        const missing = obj.fns.filter((f) => typeof holder[f.name] !== 'function').map((f) => objPath + '.' + f.name);
+        // UI.extras=false: o harness espelha a build base (CYD) — as fns
+        // gated por CONFIG_CELEROS_UI_EXTRAS existem no harness com
+        // makeUI(env, {extras:true}) e sao testadas no test/sdk/ui_extras.js
+        const semExtras = objPath === 'UI' && holder.extras === false;
+        const missing = obj.fns.filter((f) =>
+          typeof holder[f.name] !== 'function' &&
+          !(semExtras && (f.kcfg || []).indexOf('CONFIG_CELEROS_UI_EXTRAS') >= 0))
+          .map((f) => objPath + '.' + f.name);
         if (missing.length) lines.push('  aviso: ' + missing.length + ' fns sem stub em ' + objPath + ': ' + missing.join(', '));
       }
     }

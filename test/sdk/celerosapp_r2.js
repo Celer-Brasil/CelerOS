@@ -54,7 +54,7 @@ module.exports = function (check) {
 
     // ================================================================ style
     var c = fresh(['style']);
-    check('style: version e tokens vivos', c.A.style.version === '1.0.1' &&
+    check('style: version e tokens vivos', c.A.style.version === '1.1.0' &&
           c.A.style.T.radius === 10 && c.A.style.T.card !== undefined);
     c.A.style.preset('flat');
     check('style: preset flat (raio 6, sem sombra/gradiente)',

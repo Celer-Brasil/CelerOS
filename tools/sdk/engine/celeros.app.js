@@ -36,8 +36,10 @@
 // 1.1.0: A.L respeita o inset/shape do vidro (relogio redondo): x/w/bottom
 // encolhem pela margem segura; em tela retangular (inset 0) os valores sao
 // os de sempre (x=8,w=224,top=48,bottom=312).
+// 1.1.1: A.full espelha o frame corrente (UI.begin) para o A.style.custom
+// cair no caminho base (sem UI.custom nativo na CYD) sem mudar a API.
 
-var A = { version: '1.1.0' };
+var A = { version: '1.1.1' };
 
 // sentinelas de roteamento (strings/chars: nada de Symbol no ES5)
 A.BACK = '..';
@@ -46,6 +48,7 @@ A.EXIT = '\u0001';
 A._mods = [];       // nomes dos modulos da familia adotados (diagnostico)
 A._stack = [];      // pilha de telas do A.run
 A._marks = {};      // marcas do A.every, por chave
+A._cs = {};         // assinaturas do A.custom no caminho base (CYD)
 A._ctx = { full: false, now: 0, entered: false };   // ctx reciclado por frame
 
 // pilha com teto: apps reais navegam poco; estourar e bug de roteamento
@@ -56,6 +59,7 @@ var MAX_STACK = 8;
 // para re-ler o tema (ex.: o app de Ajustes mudou o esquema de cores).
 A.T = null;
 A.L = null;
+A.full = false;     // frame corrente e total (o A.style.custom usa no fallback)
 A.init = function () {
     A.T = System.theme();
     // margem segura do vidro redondo em coords virtuais (0 no retangular)
@@ -70,6 +74,31 @@ A.init = function () {
 };
 
 // ---- loop de telas ---------------------------------------------------------
+// ---- area pintada pelo app ------------------------------------------------
+// A.custom(id, x, y, w, h, sig, draw, [opts]) -> desenhou neste frame?
+// Usa o UI.custom nativo quando a placa tem os extras (S3): o slot limpa,
+// recorta e so chama draw no frame total ou quando a assinatura muda. Sem
+// eles (CYD), o MESMO contrato no caminho base: frame total (A.full, setado
+// pelo A.run) ou assinatura nova. draw(x,y,w,h) pinta TUDO — nao chame
+// UI.text/UI.card dentro (os slots deles pulariam no parcial e o clear
+// apagaria o texto). o = { bg, clear:false }.
+A.custom = function (id, x, y, w, h, sig, draw, o) {
+    if (typeof draw !== 'function') return false;
+    if (UI.extras && typeof UI.custom === 'function') {
+        return UI.custom(id, x, y, w, h, sig, draw, o);
+    }
+    var key = 'c' + id;
+    if (!A.full && A._cs[key] === sig) return false;
+    A._cs[key] = sig;
+    o = o || {};
+    if (!A.full && o.clear !== false) {
+        System.fillRect(x, y, w, h,
+                        o.bg === undefined ? (A.T || System.theme()).card : o.bg);
+    }
+    draw(x, y, w, h);
+    return true;
+};
+
 A.run = function (screens, first, opts) {
     if (!A.T) A.init();
     opts = opts || {};
@@ -93,6 +122,7 @@ A.run = function (screens, first, opts) {
         }
         c.now = System.millis();
         c.full = UI.begin(A.T.bg);
+        A.full = c.full;
         var r = fn(c);
         UI.end(typeof opts.fps === 'number' ? opts.fps : (fn.fps || 20));
         if (r === A.EXIT) { System.exitApp(); return; }

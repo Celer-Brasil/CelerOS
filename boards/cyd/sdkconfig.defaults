@@ -133,3 +133,8 @@ CONFIG_CELEROS_APP_SERVICES=y
 # placas. O REGISTRO continua inteiro (RAM RTC + /local/log/crash.txt, que o
 # agente de frota reporta); so a tela/QR nao entra.
 # CONFIG_CELEROS_CRASH_SCREEN is not set
+# Extras de UI (UI.custom com callback JS + UI.clip) ficam fora do perfil
+# lite: ~1 KB de imagem que o slot OTA nao tem, e sem PSRAM o redesenho
+# parcial nao paga. O kit JS cai no caminho base com a MESMA API
+# (UI.extras=false; apps feature-detectam).
+# CONFIG_CELEROS_UI_EXTRAS is not set

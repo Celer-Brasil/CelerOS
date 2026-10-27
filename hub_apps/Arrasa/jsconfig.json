@@ -1,9 +1,0 @@
-{
-  "compilerOptions": {
-    "checkJs": false
-  },
-  "include": [
-    "*.js",
-    "*.d.ts"
-  ]
-}

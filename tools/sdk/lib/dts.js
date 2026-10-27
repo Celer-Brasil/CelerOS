@@ -37,6 +37,7 @@ const RETURNS = {
     'UI.tabs': 'number',
     'UI.scrollBegin': 'number',
     'UI.badge': 'number',
+    'UI.custom': 'boolean',   // API 52: desenhou neste frame?
     // CelerNet (API 26): malha BLE por flood de advertising
     'CelerNet.start': 'boolean',
     'CelerNet.stop': 'boolean',
@@ -132,7 +133,16 @@ const PARAM_TYPES = {
     // USB (API 48): payloads sao arrays de bytes, nao um numero
     'USB.controlOut.data': 'number[]',
     'USB.out.data': 'number[]',
+    // API 52 (S3): area desenhada pelo app — id string, assinatura
+    // numero/string e o callback recebe o retangulo
+    'UI.custom.id': 'string',
+    'UI.custom.sig': 'number | string',
+    'UI.custom.draw': '(x: number, y: number, w: number, h: number) => void',
 };
+
+// Args que o guia documenta como obrigatorios mesmo quando o binding tolera
+// a ausencia (UI.custom sem draw devolve false em vez de lancar)
+const REQUIRED_PARAMS = new Set(['UI.custom.draw']);
 
 // Nomes de argumento que indicam string (o restante e number: a API e
 // majoritariamente numerica — coordenadas, cores, tamanhos, ids). Compostos
@@ -215,7 +225,7 @@ function fnSignature(objPath, fn, guide) {
         // nome que nao e identificador (heading com desestruturacao ou
         // reticencias) virava d.ts INVALIDO e o editor perdia o arquivo todo
         if (!/^[A-Za-z_$][\w$]*$/.test(nm)) nm = 'arg' + i;
-        names.push({ name: nm, optional: i >= (fn.min || 0) });
+        names.push({ name: nm, optional: i >= (fn.min || 0) && !REQUIRED_PARAMS.has(objPath + '.' + fn.name + '.' + nm) });
     }
     const params = names.map((n) => n.name + (n.optional ? '?' : '') + ': ' +
         (PARAM_TYPES[objPath + '.' + fn.name + '.' + n.name] || argType(n.name)));
@@ -235,7 +245,7 @@ function renderObject(objPath, obj, guide, indent) {
     }
     for (const c of obj.consts || []) {
         lines.push(pad + '/** constante */');
-        lines.push(pad + c.name + ': number;');
+        lines.push(pad + c.name + ': ' + (c.type === 'boolean' ? 'boolean' : 'number') + ';');
     }
     return lines;
 }

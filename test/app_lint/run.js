@@ -97,6 +97,33 @@ for (const c of CASES) {
   check(c.name, pass, 'esperado ' + fmt(c.expect) + ', obtido ' + fmt(got));
 }
 
+// API 52: UI.extras e' const BOOLEAN do manifest e UI.custom/clip so existem
+// com CONFIG_CELEROS_UI_EXTRAS (o d.ts preciso do tipo; apps feature-detectam)
+{
+  const manifest = linter.buildManifest();
+  const ui = manifest.objects.UI;
+  const extras = ui.consts.find((c) => c.name === 'extras');
+  const custom = ui.fns.find((f) => f.name === 'custom');
+  const clip = ui.fns.find((f) => f.name === 'clip');
+  const unclip = ui.fns.find((f) => f.name === 'unclip');
+  check('API 52: UI.extras booleano e UI.custom/clip gated no manifest',
+    !!extras && extras.type === 'boolean' &&
+    !!custom && custom.nargs === 8 &&
+    !!clip && clip.nargs === 4 && !!unclip && unclip.nargs === 0 &&
+    custom.kcfg.indexOf('CONFIG_CELEROS_UI_EXTRAS') >= 0 &&
+    clip.kcfg.indexOf('CONFIG_CELEROS_UI_EXTRAS') >= 0,
+    JSON.stringify({ extras, custom, clip, unclip }));
+}
+{
+  const src = 'UI.begin();\n' +
+    'if (UI.extras) UI.custom("g", 0, 0, 10, 10, 1, function () {});\n' +
+    'UI.end();\n';
+  const got = ruleCounts(linter.lintSource(linter.buildManifest(), src,
+    { api: 52, permissions: [] }));
+  check('API 52: app com UI.extras/UI.custom passa no lint',
+    fmt(got) === '{}', fmt(got));
+}
+
 // Sugestao de nome parecido no erro de API
 {
   const diags = lintFixture('api_inexistente.js');

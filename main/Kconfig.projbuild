@@ -232,6 +232,23 @@ config CELEROS_UI
       painel stub que jogava tudo fora). O catalogo de apps (scan/launch/
       autostart) e o shell seguem de pe: a interface e o celerctl/web.
 
+config CELEROS_UI_EXTRAS
+    bool "Extras de UI para apps (UI.custom com callback JS + pilha de clip)"
+    depends on CELEROS_UI
+    default y if IDF_TARGET_ESP32S3
+    default n
+    help
+      API 52: UI.custom(id,x,y,w,h,sig,draw) entrega ao JS uma area que o
+      firmware limpa/recorta e so redesenha no frame total ou quando a
+      assinatura muda (o callback pinta tudo com System.*), e UI.clip/
+      UI.unclip empilham recortes para scroll/sheet aninhados. O kit JS
+      (celeros.app.style) liga A.style.full e usa o caminho nativo; na CYD,
+      sem estes extras, usa o caminho base (frame cheio + assinatura) com a
+      MESMA API. Ligado por padrao so nas placas S3: na CYD o slot OTA e a
+      flash sao o limite (o codigo custa ~1 KB de imagem e nao tem PSRAM
+      para o slot extra). Desligado, UI.extras=false e UI.custom/clip
+      ficam undefined (apps feature-detectam por UI.extras).
+
 config CELEROS_CRASH_SCREEN
     bool "Tela de crash com QR no boot seguinte a um panic"
     depends on CELEROS_UI

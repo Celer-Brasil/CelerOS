@@ -3285,3 +3285,4 @@ if (failures) {
     process.exit(1);
 }
 console.log('OK: todos os testes do SDK passaram');
+require('./ui_extras.js')(check);

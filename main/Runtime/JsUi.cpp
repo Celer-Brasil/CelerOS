@@ -1088,3 +1088,116 @@ duk_ret_t JSBindings::js_mixColor(duk_context* ctx) {
     duk_push_uint(ctx, ch(11, 0x1F) | ch(5, 0x3F) | ch(0, 0x1F));
     return 1;
 }
+#if CONFIG_CELEROS_UI_EXTRAS
+// Pilha de recorte (UI.clip/unclip): cada entrada guarda o recorte ANTERIOR.
+// s_clipBase e' o recorte de um frame que fechou sem clip aberto — o begin
+// seguinte volta para ele se o app quebrou no meio de um clip (mesma cura do
+// scroll). Sem isso, um throw entre clip/unclip deixaria o vidro recortado.
+constexpr int kClipDepth = 8;
+int32_t s_clipStack[kClipDepth][4];
+int s_clipDepth = 0;
+int32_t s_clipBase[4] = {0, 0, 0, 0};
+bool s_clipBaseOk = false;
+#endif
+
+#if CONFIG_CELEROS_UI_EXTRAS
+    s_clipDepth = 0;
+    s_clipBaseOk = false;
+#endif
+#if CONFIG_CELEROS_UI_EXTRAS
+    // clip aberto de um frame que quebrou: volta ao recorte do ultimo frame
+    // bom ANTES de guardar o novo (o present acima pode ter mexido nele)
+    if (s_clipDepth > 0) {
+        s_clipDepth = 0;
+        if (tftInstance && s_clipBaseOk) {
+            gfx()->setClipRect(s_clipBase[0], s_clipBase[1], s_clipBase[2], s_clipBase[3]);
+        }
+    }
+    if (tftInstance) {
+        gfx()->getClipRect(&s_clipBase[0], &s_clipBase[1], &s_clipBase[2], &s_clipBase[3]);
+        s_clipBaseOk = true;
+    }
+#endif
+#if CONFIG_CELEROS_UI_EXTRAS
+// ============================================================ extras =======
+
+// UI.custom(id, x, y, w, h, sig, draw, [opts]) -> desenhou neste frame?
+// Area PINTADA PELO APP (JS): o slot limpa o retangulo no frame parcial,
+// recorta e chama draw(x, y, w, h). O callback tem que pintar TUDO (nao use
+// UI.text/UI.card la dentro: os slots deles pularao no parcial e o clear do
+// custom apagaria o texto). Nao consome tap. opts: {bg, clear}.
+duk_ret_t JSBindings::js_uiCustom(duk_context* ctx) {
+    const char* id = requireText(ctx, 0);
+    int x = duk_require_int(ctx, 1), y = duk_require_int(ctx, 2);
+    int w = duk_require_int(ctx, 3), h = duk_require_int(ctx, 4);
+    if (!duk_is_function(ctx, 6)) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    if (!tftInstance) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    // assinatura: string (hash), numero ou booleano; undefined = desenha 1x
+    int32_t vis = 0;
+    if (duk_is_string(ctx, 5)) vis = (int32_t)fnv(duk_get_string(ctx, 5));
+    else if (duk_is_number(ctx, 5)) vis = (int32_t)duk_get_int(ctx, 5);
+    else if (duk_is_boolean(ctx, 5)) vis = duk_get_boolean(ctx, 5) ? 1 : 0;
+    Slot& s = slot((rectId("custom", x, y, w, h) ^ fnv(id)) | 1u);
+    bool clear = false;
+    if (!needDraw(s, vis, &clear)) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    uint32_t bgc = optColor(ctx, 7, "bg", bg());
+    bool paint = optBool(ctx, 7, "clear", true);
+    lgfx::LGFXBase* g = gfx();
+    kui::Rect r = pr(x, y, w, h);
+    duk_int_t rc;
+    {
+        UiGuard guard(*g);
+        kui::Canvas c(*tftInstance, g);
+        if (clear && paint) c.fillRect(r, bgc);
+        guard.clip(r);
+        duk_dup(ctx, 6);  // funcao
+        duk_push_int(ctx, x);
+        duk_push_int(ctx, y);
+        duk_push_int(ctx, w);
+        duk_push_int(ctx, h);
+        rc = duk_pcall(ctx, 4);
+    }  // guard: restaura fonte/estilo/recorte ANTES de propagar o erro
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
+    duk_push_boolean(ctx, 1);
+    return 1;
+}
+
+// UI.clip(x, y, w, h): empilha o recorte corrente e restringe ao retangulo
+// (coords virtuais). Par com UI.unclip(); o app que quebrar no meio e' curado
+// no proximo UI.begin.
+duk_ret_t JSBindings::js_uiClip(duk_context* ctx) {
+    int x = duk_require_int(ctx, 0), y = duk_require_int(ctx, 1);
+    int w = duk_require_int(ctx, 2), h = duk_require_int(ctx, 3);
+    if (!tftInstance || s_clipDepth >= kClipDepth) return 0;
+    lgfx::LGFXBase* g = gfx();
+    int32_t* saved = s_clipStack[s_clipDepth];
+    g->getClipRect(&saved[0], &saved[1], &saved[2], &saved[3]);
+    s_clipDepth++;
+    kui::Rect r = pr(x, y, w, h);
+    int x0 = r.x > saved[0] ? r.x : saved[0];
+    int y0 = r.y > saved[1] ? r.y : saved[1];
+    int x1 = (r.x + r.w) < (saved[0] + saved[2]) ? (r.x + r.w) : (saved[0] + saved[2]);
+    int y1 = (r.y + r.h) < (saved[1] + saved[3]) ? (r.y + r.h) : (saved[1] + saved[3]);
+    g->setClipRect(x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0);
+    return 0;
+}
+
+duk_ret_t JSBindings::js_uiUnclip(duk_context* ctx) {
+    (void)ctx;
+    if (!tftInstance || s_clipDepth <= 0) return 0;
+    s_clipDepth--;
+    int32_t* saved = s_clipStack[s_clipDepth];
+    gfx()->setClipRect(saved[0], saved[1], saved[2], saved[3]);
+    return 0;
+}
+#endif  // CONFIG_CELEROS_UI_EXTRAS
+

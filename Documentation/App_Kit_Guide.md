@@ -14,7 +14,7 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 
 | dep | stripped | what it gives the app |
 |-----|---------:|-----------------------|
-| `celeros.app` (core) | 3.5 KB | theme/layout cache, screen loop with a stack (`A.run`), overlays (busy/progress/result/wifi-wait), polling ticker |
+| `celeros.app` (core) | 4.1 KB | theme/layout cache, screen loop with a stack (`A.run`), overlays (busy/progress/result/wifi-wait), polling ticker |
 | `celeros.app.fmt` | 1.4 KB | bytes/uptime/duration/date formatting in the system's exact formats |
 | `celeros.app.path` | 0.9 KB | base/dir/ext/stem/join/safeName |
 | `celeros.app.semver` | 2.2 KB | version compare, `^` ranges, transitive dep resolution (same algorithm as the store) |
@@ -27,7 +27,7 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 | `celeros.app.input` | 2.0 KB | docked keyboard session + the input line (caret, tail, placeholder, topbar chips) |
 | `celeros.app.form` | 4.8 KB | settings screen from row builders (info/toggle/choice/picker/action/gauge/stepper/card), picker, validated askNum; rich rows when `A.rows` is adopted |
 | `celeros.app.list` | 4.7 KB | stamp-cached lists, pre-keyed stable sort, badge colors, RSSI bars, **`view()` rich rows** (icons/sections/badges/painter/widget) |
-| `celeros.app.style` | 5.9 KB | **design tokens + 4 presets**, safe-area content, stack, card (gradient/shadow), divider, button |
+| `celeros.app.style` | 6.1 KB | **design tokens + 4 presets**, safe-area content, stack, card (gradient/shadow), divider, button |
 | `celeros.app.icons` | 0.2 KB | thin shim over the shared icon table below (`A.icons`, same 12 + `dot`) |
 | `celeros.ui.icons` | 3.5 KB | **shared vector icon table** (dot + 12 common), used by apps **and** `celeros.game.ui`; depends only on `System.*` |
 | `celeros.app.widgets` | 5.8 KB | **header with actions**, icon button, ring/gauge, bottom sheet, segmented |
@@ -48,7 +48,7 @@ module declares its own `version` and registers a unique name in `A._mods`.
 
 Four optional modules give apps the same control the games got, with **no firmware change**. They compose the native `UI.*` (frame/touch/topbar/pacing) with `System.*` surfaces and vector icons:
 
-- `celeros.app.style`: live tokens + 4 presets (`soft/flat/neon/paper`), safe-area `content()`, `stack()`, `card()` (native `UI.card` + gradient/shadow on full frames), `divider()`, `button()`.
+- `celeros.app.style`: live tokens + 4 presets (`soft/flat/neon/paper`), safe-area `content()`, `stack()`, `card()` (native `UI.card` + gradient/shadow on full frames), `divider()`, `button()`, `full` (capability) and `custom()` (app-painted area with partial redraw on S3).
 - `celeros.app.icons`: `A.icons.draw(name, x, y, size, { color })` with back/close/check/gear/wifi/star/play/search/menu/heart/info/alert. The geometry lives in `celeros.ui.icons` (same table the games use, so a fix lands once); the app shim only re-exports it.
 - `celeros.app.widgets`: `header(title, { back, sub, actions, full })`, `button` with icon, `iconButton`, `ring`, `sheet` (non-blocking bottom sheet), `segmented`.
 - `celeros.app.rows`: `A.rows.formRow` for `A.form.run` with `A.list.view` (gauge/stepper/toggle rows).
@@ -72,7 +72,9 @@ var cr = A.style.card(8, 48, 224, 120, { full: c.full, draw: function (r) {
 
 The rich list (`A.list.view`) supports `{label, sub, icon, right, badge, bars, disabled, section}`, `paintRow`, and a per-row `widget` (embed `UI.toggle`/`UI.button`); the native `UI.list` remains for simple rows.
 
-Budgets: each module is ≤6 KB; the kit closure stays ~19 KB. `style/icons/widgets/rows` are **outside** `celeros.app.kit` (the kit is already 8 deps): apps add what they need. The CYD App Store has ~6.4 KB free, so it can adopt at most `style`; the other apps have room. Native `UI.custom`/`UI.clip`/`UI.style` extras for S3 boards are a separate compile-time round (`CELEROS_UI_EXTRAS`), keeping the CYD on the base UI. The 4 presets and the shared icons are kept equal to the game side by `test/sdk/ui_parity.js` (the two families had already drifted once: shadow, paper radius and neon colors).
+Budgets: each module is ≤6 KB; the kit closure stays ~19.6 KB. `style/icons/widgets/rows` are **outside** `celeros.app.kit` (the kit is already 8 deps): apps add what they need. The CYD App Store has ~6.4 KB free, so it can adopt at most `style`; the other apps have room. Native `UI.custom`/`UI.clip`/`UI.style` extras for S3 boards are a separate compile-time round (`CELEROS_UI_EXTRAS`), keeping the CYD on the base UI. The 4 presets and the shared icons are kept equal to the game side by `test/sdk/ui_parity.js` (the two families had already drifted once: shadow, paper radius and neon colors).
+
+**Native extras (API 52, S3):** `CONFIG_CELEROS_UI_EXTRAS` (default `y` on S3) enables `UI.extras`, `UI.custom` and `UI.clip`/`UI.unclip`. The kit exposes them as `A.style.full` (capability) and `A.style.custom(id, x, y, w, h, sig, draw, { bg, clear })`: on S3 the firmware clears/clips the area and only redraws on a full frame or when the signature changes; on the CYD the same helper uses `A.full` from `A.run` plus the signature. Use `A.style.custom` for areas the app paints **entirely** with `System.*` (charts, icons, gauges) — not for areas containing `UI.text`/`UI.card`. The API is identical on both boards; only the internal path changes. The CYD App Store stays on the base UI.
 
 ## The core contract (`celeros.app`)
 

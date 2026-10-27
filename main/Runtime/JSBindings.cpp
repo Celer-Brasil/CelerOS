@@ -2,6 +2,13 @@
 #include <stdio.h>
 #include <algorithm>
 #include <new>
+// Capacidade dos extras de UI (API 52): constante de arquivo para o parser do
+// app_lint (que varre so o corpo do init) nao ver um #else la dentro.
+#if CONFIG_CELEROS_UI_EXTRAS
+static constexpr bool kUiExtras = true;
+#else
+static constexpr bool kUiExtras = false;
+#endif
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Kernel/Services.h"
 #include "../Kernel/DeviceStats.h"
@@ -1505,6 +1512,19 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"alert", js_uiAlert, 3},            // (title, body, [ok]) (bloqueia)
     };
     putFns(ctx, kFnsUi);
+    // capacidade: o kit JS escolhe o caminho nativo (custom/clip) ou o base
+    duk_push_boolean(ctx, kUiExtras); duk_put_prop_string(ctx, -2, "extras");
+#if CONFIG_CELEROS_UI_EXTRAS
+    // Extras (API 52, so nas S3): area desenhada pelo app com redesenho
+    // parcial e pilha de recorte. Mantenha a tabela DENTRO deste objeto
+    // (o parser do app_lint acompanha a pilha do Duktape).
+    static const JsFn kFnsUiExtra[] = {
+        {"custom", js_uiCustom, 8},  // (id, x, y, w, h, sig, draw, [opts]) -> desenhou?
+        {"clip", js_uiClip, 4},      // (x, y, w, h) empilha o recorte (virtual)
+        {"unclip", js_uiUnclip, 0},  // volta ao recorte anterior
+    };
+    putFns(ctx, kFnsUiExtra);
+#endif
     duk_put_prop_string(ctx, -2, "UI");
 #endif  // CONFIG_CELEROS_UI
 

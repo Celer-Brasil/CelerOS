@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 51
+### API Level: 52
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -1828,6 +1828,21 @@ thumb:
 
 #### `UI.resetScroll(id)` (API 22)
 - **Description:** Scrolls list/area `id` back to the top (screen change).
+
+#### `UI.extras` (API 52)
+- **Returns:** Boolean — `true` when the firmware was built with the UI extras (`CONFIG_CELEROS_UI_EXTRAS`, default on S3 boards). On the CYD it is `false` and `UI.custom`/`UI.clip` do not exist.
+- **Description:** Capability flag so an app (or kit) can pick the native path without `typeof`: with the extras, JS-painted areas use `UI.custom` (partial redraw); without them, the app redraws on full frames. The CelerKit's `A.style.full`/`A.style.custom` already choose for you.
+
+#### `UI.custom(id, x, y, w, h, sig, draw, [opts])` (API 52)
+- **Parameters:** `id` (slot; two custom areas with the same geometry need different ids), `sig` (signature: string, number or boolean — redraws when it changes), `draw(x, y, w, h)` paints the **whole** area, `opts`: `bg` (clear color, defaults to the current card/screen bg) and `clear` (default `true`).
+- **Returns:** Boolean — `true` when it painted this frame (full frame or new signature).
+- **Description:** App-painted area using the firmware slot and clip: on a partial frame it clears the rectangle and only calls the callback when the signature changes. It **does not consume taps** — `draw` reads `UI.touch()` and the app manages its own consumption. Do not use `UI.text`/`UI.card` inside the callback: their slots would skip on partial frames and the clear would erase the text. Only exists when `UI.extras` is `true` (S3).
+
+#### `UI.clip(x, y, w, h)` (API 52)
+- **Description:** Pushes the current clip and restricts it to the virtual rectangle (intersection). Pair with `UI.unclip()`; a `throw` between the two is healed on the next `UI.begin` (the clip returns to the last good frame's). Only exists when `UI.extras` is `true` (S3).
+
+#### `UI.unclip()` (API 52)
+- **Description:** Restores the previous clip (stack of up to 8). Does nothing when unbalanced.
 
 #### `UI.badge(text, x, y, [opts])` (API 22)
 - **Parameters:** `opts`: `color`, `textColor`.

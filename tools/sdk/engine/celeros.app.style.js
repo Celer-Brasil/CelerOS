@@ -18,6 +18,9 @@
 // 1.0.1: presets alinhados ao CelerGame UI 1.3 (soft/neon shadow 2, paper
 // raio 2, neon com bg/card/raised/outline/accent2 do game); o teste
 // test/sdk/ui_parity.js impede nova deriva.
+// 1.1.0: A.style.full e A.style.custom (API 52): nas S3 o UI.custom nativo
+// redesenha so a area/assinatura que mudou; na CYD o caminho base usa o
+// A.full do A.run. A API e' a mesma nas duas placas.
 
 var A = require('celeros.app');
 var S = System;
@@ -105,8 +108,11 @@ function shadow(x, y, w, h, r, n, bg) {
 
 // ----------------------------------------------------------- A.style ------
 A.style = {
-    version: '1.0.1',
+    version: '1.1.0',
     T: T,
+    // capacidade: UI.custom/clip nativos (S3, API 52). Na CYD fica false e
+    // o A.style.custom usa o caminho base (frame total + assinatura).
+    full: !!(UI.extras && UI.custom),
 
     preset: function (name) {
         apply(name || 'soft', A.T || S.theme(), true);
@@ -186,6 +192,16 @@ A.style = {
         return cr;
     },
     cardEnd: function () { UI.cardEnd(); },
+
+    // Atalho do core com o bg dos tokens como padrao. Nas S3 usa o UI.custom
+    // nativo (redesenho parcial); na CYD cai no A.full + assinatura. draw
+    // precisa pintar TUDO — nada de UI.text/UI.card dentro.
+    custom: function (id, x, y, w, h, sig, draw, o) {
+        ensure();
+        o = o || {};
+        return A.custom(id, x, y, w, h, sig, draw,
+                        { bg: o.bg === undefined ? T.card : o.bg, clear: o.clear });
+    },
 
     divider: function (x, y, w, o) {
         ensure();

@@ -21,8 +21,24 @@
 // A.form.run e BLOQUEANTE (volta quando o usuario toca o voltar). As rows
 // sao RECONSTRUIDAS depois de cada acao (o cb pode mudar tudo); toggle e
 // choice aplicam sozinhos. Linhas cruas do UI.list passam direto.
+//
+// 1.1.0: gauge/stepper/card; A.form.run usa A.list.view quando presente
+// (precisa do pintor celeros.app.rows para as linhas ricas) e cai no
+// UI.list nativo se nao houver. A dependencia nova e celeros.app.list.
 
 var A = require('celeros.app');
+require('celeros.app.list');
+
+// achata um nivel (A.form.card devolve [secao, ...rows])
+function flat(rows) {
+    var out = [], i, j;
+    for (i = 0; i < rows.length; i++) {
+        if (rows[i] instanceof Array) {
+            for (j = 0; j < rows[i].length; j++) out.push(rows[i][j]);
+        } else out.push(rows[i]);
+    }
+    return out;
+}
 
 function rowsOf(rows) {
     var T = A.T || System.theme();
@@ -42,6 +58,10 @@ function rowsOf(rows) {
             out.push({ label: r.label, right: r.opts[v % r.opts.length] });
         } else if (r.k === 'picker') {
             out.push({ label: r.label, right: r.items[r.get()] || '', sub: r.sub });
+        } else if (r.k === 'gauge' || r.k === 'stepper') {
+            var gv = r.get();
+            out.push({ label: r.label, right: String(r.fmt ? r.fmt(gv) : gv),
+                       enabled: false });
         } else {   // action
             out.push({ label: r.label, sub: r.sub });
         }
@@ -50,7 +70,7 @@ function rowsOf(rows) {
 }
 
 A.form = {
-    version: '1.0.1',
+    version: '1.1.0',
 
     // ---- construtores de linha ---------------------------------------------
     info: function (label, value, color) {
@@ -72,6 +92,28 @@ A.form = {
     },
     secao: function (title) { return { k: 'secao', label: title }; },
 
+    /** medidor inline (barra); o pintor rico fica em celeros.app.rows */
+    gauge: function (label, get, o) {
+        o = o || {};
+        return { k: 'gauge', label: label, get: get,
+                 min: o.min === undefined ? 0 : o.min,
+                 max: o.max === undefined ? 100 : o.max,
+                 fmt: o.fmt, color: o.color };
+    },
+    /** - valor + (botoes nativos no pintor rico); get()/set(n) */
+    stepper: function (label, get, set, o) {
+        o = o || {};
+        return { k: 'stepper', label: label, get: get, set: set,
+                 min: o.min === undefined ? 0 : o.min,
+                 max: o.max === undefined ? 100 : o.max,
+                 step: o.step === undefined ? 1 : o.step,
+                 fmt: o.fmt };
+    },
+    /** agrupa rows num bloco com titulo (devolve [secao, ...rows]) */
+    card: function (title, rows) {
+        return [A.form.secao(title)].concat(rows || []);
+    },
+
     // ---- tela de ajustes (bloqueante) --------------------------------------
     // build() devolve as linhas; reconstruido na entrada e apos cada acao.
     // Um action cujo cb devolve false NAO reconstrói (raro: so desenho).
@@ -82,13 +124,26 @@ A.form = {
         for (;;) {
             UI.begin(T.bg);
             if (UI.header(title, { back: true })) return;
-            if (!rows) rows = build();
-            var i = UI.list('kit:form', A.L.x, A.L.top, A.L.w, 320 - A.L.top - 4, rowsOf(rows));
+            if (!rows) rows = flat(build());
+            var i;
+            if (A.list && A.list.view && A.rows && A.rows.formRow) {
+                i = A.list.view('kit:form', A.L.x, A.L.top, A.L.w,
+                                320 - A.L.top - 4, rows,
+                                { row: 36, paintRow: A.rows.formRow });
+            } else {
+                i = UI.list('kit:form', A.L.x, A.L.top, A.L.w,
+                            320 - A.L.top - 4, rowsOf(rows));
+            }
             if (i >= 0) {
                 var r = rows[i];
                 var refresh = false;
                 if (r && r.k === 'toggle') { r.set(!r.get()); refresh = true; }
-                else if (r && r.k === 'choice') {
+                else if (r && r.k === 'stepper') {
+                    var sv = r.get() + r.step;
+                    if (sv > r.max) sv = r.max;
+                    if (sv < r.min) sv = r.min;
+                    r.set(sv);
+                } else if (r && r.k === 'choice') {
                     r.set(((r.get() | 0) + 1) % r.opts.length);
                     refresh = true;
                 } else if (r && r.k === 'picker') {
@@ -97,7 +152,7 @@ A.form = {
                 } else if (r && r.k === 'action' && r.cb) {
                     refresh = r.cb() !== false;
                 }
-                if (refresh) rows = null;    // reconstrói no proximo frame
+                if (refresh) rows = null;    // reconstroi no proximo frame
                 UI.invalidate();
             }
             UI.end(20);

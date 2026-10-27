@@ -33,8 +33,11 @@
 // fps por tela: propriedade .fps na propria funcao da tela.
 //
 // 1.0.0: primeira versao (core, pilha de telas, overlays, ticker)
+// 1.1.0: A.L respeita o inset/shape do vidro (relogio redondo): x/w/bottom
+// encolhem pela margem segura; em tela retangular (inset 0) os valores sao
+// os de sempre (x=8,w=224,top=48,bottom=312).
 
-var A = { version: '1.0.0' };
+var A = { version: '1.1.0' };
 
 // sentinelas de roteamento (strings/chars: nada de Symbol no ES5)
 A.BACK = '..';
@@ -55,8 +58,14 @@ A.T = null;
 A.L = null;
 A.init = function () {
     A.T = System.theme();
-    // espaco virtual fixo (header de 40px + folga; conteudo entre 8 e 232)
-    A.L = { x: 8, y: 48, w: 224, top: 48, bottom: 312, cx: 120 };
+    // margem segura do vidro redondo em coords virtuais (0 no retangular)
+    var ins = 0;
+    try { ins = (System.getInfo() || {}).inset || 0; } catch (e) { ins = 0; }
+    var m = Math.round(ins / 2);
+    // espaco virtual fixo (header de 40px + folga); no redondo o conteudo
+    // encolhe pela margem segura e nao encosta na borda
+    A.L = { x: 8 + m, y: 48, w: 224 - 2 * m, top: 48,
+            bottom: 312 - m, cx: 120 };
     return A;
 };
 

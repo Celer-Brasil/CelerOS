@@ -25,8 +25,12 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 | `celeros.app.events` | 1.9 KB | event bus (on/once/off/emit, wildcard, priorities) |
 | `celeros.app.text` | 0.8 KB | Latin-1 sanitizer and a ready scrollable text reader |
 | `celeros.app.input` | 2.0 KB | docked keyboard session + the input line (caret, tail, placeholder, topbar chips) |
-| `celeros.app.form` | 3.3 KB | settings screen from row builders (info/toggle/choice/picker/action), picker, validated askNum |
-| `celeros.app.list` | 1.2 KB | stamp-cached lists, pre-keyed stable sort, badge colors, RSSI bars |
+| `celeros.app.form` | 4.8 KB | settings screen from row builders (info/toggle/choice/picker/action/gauge/stepper/card), picker, validated askNum; rich rows when `A.rows` is adopted |
+| `celeros.app.list` | 4.7 KB | stamp-cached lists, pre-keyed stable sort, badge colors, RSSI bars, **`view()` rich rows** (icons/sections/badges/painter/widget) |
+| `celeros.app.style` | 5.9 KB | **design tokens + 4 presets**, safe-area content, stack, card (gradient/shadow), divider, button |
+| `celeros.app.icons` | 3.6 KB | **12 vector icons** (back/close/check/gear/wifi/star/play/search/menu/heart/info/alert), no PNG |
+| `celeros.app.widgets` | 5.8 KB | **header with actions**, icon button, ring/gauge, bottom sheet, segmented |
+| `celeros.app.rows` | 2.4 KB | rich form row painter for `A.list.view` (toggle/gauge/stepper/choice/picker/info) |
 | `celeros.app.launch` | 2.1 KB | installed-app scan (first seen wins), state rows against a hub catalog, open app |
 | `celeros.app.ai` | 2.8 KB | AI.chat client: transient retry (502/504/429), busy flag, persisted history, Latin-1 output |
 | `celeros.app.chat` | 2.2 KB | chat transcript: measured bubbles, inertial scroll following the tail, thinking bubble |
@@ -36,8 +40,38 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 | `celeros.app.mesh` | 2.2 KB | app protocol over CelerNet: family prefix, req/resp with nonce, replay dedup, TTL cache |
 | `celeros.app.kit` | 0.3 KB | bundle of the 8 common modules (sidesteps the hub's 8-dep ceiling) |
 
-The whole family is ~38 KB stripped; the `kit` closure is ~14 KB. Every
+The whole family is ~63 KB stripped; the `kit` closure is ~19 KB. Every
 module declares its own `version` and registers a unique name in `A._mods`.
+
+## UI kit 2.0 (`celeros.app.style`, `.icons`, `.widgets`, `.rows`)
+
+Four optional modules give apps the same control the games got, with **no firmware change**. They compose the native `UI.*` (frame/touch/topbar/pacing) with `System.*` surfaces and vector icons:
+
+- `celeros.app.style`: live tokens + 4 presets (`soft/flat/neon/paper`), safe-area `content()`, `stack()`, `card()` (native `UI.card` + gradient/shadow on full frames), `divider()`, `button()`.
+- `celeros.app.icons`: `A.icons.draw(name, x, y, size, { color })` with back/close/check/gear/wifi/star/play/search/menu/heart/info/alert.
+- `celeros.app.widgets`: `header(title, { back, sub, actions, full })`, `button` with icon, `iconButton`, `ring`, `sheet` (non-blocking bottom sheet), `segmented`.
+- `celeros.app.rows`: `A.rows.formRow` for `A.form.run` with `A.list.view` (gauge/stepper/toggle rows).
+
+```js
+var A = require("celeros.app");
+require("celeros.app.style");
+require("celeros.app.icons");
+require("celeros.app.widgets");
+A.style.preset("neon");
+var h = A.widgets.header("Rede", { full: c.full,
+  actions: [{ icon: "wifi", id: "wifi" }] });
+if (h.back) return A.BACK;
+if (h.action === "wifi") abrirWifi();
+var cr = A.style.card(8, 48, 224, 120, { full: c.full, draw: function (r) {
+  UI.text("Conteudo", r.x, r.y);
+}});
+```
+
+**Redraw rule:** `UI.card` pushes the background **every frame** and paints only on a full frame. Call `A.style.card`/`A.style.header` every frame and pass `{ full: c.full }`; never repaint an opaque surface every frame over slot-cached `UI.text` (it would cover text the slot skipped). `UI.text` inside a card uses the pushed bg; a preset change calls `UI.invalidate()`.
+
+The rich list (`A.list.view`) supports `{label, sub, icon, right, badge, bars, disabled, section}`, `paintRow`, and a per-row `widget` (embed `UI.toggle`/`UI.button`); the native `UI.list` remains for simple rows.
+
+Budgets: each module is ≤6 KB; the kit closure stays ~19 KB. `style/icons/widgets/rows` are **outside** `celeros.app.kit` (the kit is already 8 deps): apps add what they need. The CYD App Store has ~6.4 KB free, so it can adopt at most `style`; the other apps have room. Native `UI.custom`/`UI.clip`/`UI.style` extras for S3 boards are a separate compile-time round (`CELEROS_UI_EXTRAS`), keeping the CYD on the base UI.
 
 ## The core contract (`celeros.app`)
 

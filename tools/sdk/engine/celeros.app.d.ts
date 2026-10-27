@@ -21,7 +21,8 @@ declare namespace A {
         bottom: number;
         cx: number;
     }
-    /** Layout virtual fixo (240x320): x=8, w=224, top=48, bottom=312. */
+    /** Layout virtual: seguro pelo inset do vidro; no retangular x=8, w=224,
+     *  top=48, bottom=312 (no relogio redondo x/w/bottom encolhem). */
     const L: Layout | null;
     /** Ctx que o run() passa a cada tela. */
     interface Ctx {
@@ -43,7 +44,7 @@ declare namespace A {
      * A.EXIT = encerra.
      */
     function run(screens: { [nome: string]: Screen }, first: string, opts?: RunOpts): void;
-    /** Cacheia tema+layout; chame de novo para re-ler o tema. */
+    /** Cacheia tema+layout (e o inset do vidro redondo); re-chame apos mudar. */
     function init(): void;
     /** Header com voltar; true = toque no voltar (a tela devolve A.BACK). */
     function header(title: string, o?: { back?: boolean; sub?: string }): boolean;

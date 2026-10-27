@@ -183,12 +183,35 @@
   },
   "celeros.app.form": {
     "deps": {
-      "celeros.app": "^1.0.0"
+      "celeros.app": "^1.0.0",
+      "celeros.app.list": "^1.1.0"
     }
   },
   "celeros.app.list": {
     "deps": {
       "celeros.app": "^1.0.0"
+    }
+  },
+  "celeros.app.style": {
+    "deps": {
+      "celeros.app": "^1.1.0"
+    }
+  },
+  "celeros.app.icons": {
+    "deps": {
+      "celeros.app": "^1.1.0"
+    }
+  },
+  "celeros.app.widgets": {
+    "deps": {
+      "celeros.app": "^1.1.0",
+      "celeros.app.style": "^1.0.0",
+      "celeros.app.icons": "^1.0.0"
+    }
+  },
+  "celeros.app.rows": {
+    "deps": {
+      "celeros.app": "^1.1.0"
     }
   },
   "celeros.app.launch": {

@@ -15,6 +15,9 @@
 //   if (A.style.button("Salvar", 20, 240, 200, 40)) salvar();
 //
 // 1.0.0: primeira versao (tokens/presets, safe area, card, divider, button).
+// 1.0.1: presets alinhados ao CelerGame UI 1.3 (soft/neon shadow 2, paper
+// raio 2, neon com bg/card/raised/outline/accent2 do game); o teste
+// test/sdk/ui_parity.js impede nova deriva.
 
 var A = require('celeros.app');
 var S = System;
@@ -64,15 +67,16 @@ function apply(name, th, notify) {
     if (name === 'flat') {
         T.radius = 6; T.shadow = 0; T.grad = false;
     } else if (name === 'neon') {
-        T.radius = 12; T.shadow = 1; T.grad = true;
-        T.card = mix(T.bg, 0xFFFF, 0.07);
-        T.raised = mix(T.bg, 0xFFFF, 0.13);
-        T.stroke = T.accentD;
+        T.radius = 12; T.shadow = 2; T.grad = true;
+        T.bg = 0x0000;
+        T.card = 0x0841;
+        T.raised = 0x10A2;
+        T.stroke = T.accent;
         T.text = 0xFFFF;
-        T.textDim = mix(T.text, T.bg, 0.45);
-        T.onAccent = 0x0000;
+        T.textDim = 0x8410;
+        T.accentD = mix(T.accent, 0x0000, 0.45);
     } else if (name === 'paper') {
-        T.radius = 3; T.shadow = 1; T.grad = false;
+        T.radius = 2; T.shadow = 1; T.grad = false;
         T.bg = col(242, 238, 228); T.card = col(255, 253, 247);
         T.raised = col(232, 226, 212); T.stroke = col(185, 176, 156);
         T.text = col(28, 27, 24); T.textDim = col(107, 100, 89);
@@ -80,7 +84,7 @@ function apply(name, th, notify) {
         T.onAccent = 0xFFFF; T.ok = col(46, 158, 91);
         T.warn = col(217, 138, 0); T.err = col(198, 53, 47);
     } else {
-        T.radius = 10; T.shadow = 1; T.grad = true;
+        T.radius = 10; T.shadow = 2; T.grad = true;
     }
     T._src = th;
     if (notify) UI.invalidate();
@@ -101,7 +105,7 @@ function shadow(x, y, w, h, r, n, bg) {
 
 // ----------------------------------------------------------- A.style ------
 A.style = {
-    version: '1.0.0',
+    version: '1.0.1',
     T: T,
 
     preset: function (name) {

@@ -3276,6 +3276,7 @@ require('./celergame_r7.js')(check);
 // CelerKit rodada 1: familia celeros.app.* (apps gerais) + gates de familia
 require('./celerosapp_r1.js')(check);
 require('./celerosapp_r2.js')(check);
+require('./ui_parity.js')(check);
 
 // resumo
 console.log('');

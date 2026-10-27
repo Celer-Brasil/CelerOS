@@ -35,7 +35,8 @@
   },
   "celeros.game.ui": {
     "deps": {
-      "celeros.game": "^1.7.0"
+      "celeros.game": "^1.7.0",
+      "celeros.ui.icons": "^1.0.0"
     }
   },
   "celeros.game.fsm": {
@@ -199,8 +200,12 @@
   },
   "celeros.app.icons": {
     "deps": {
-      "celeros.app": "^1.1.0"
+      "celeros.app": "^1.1.0",
+      "celeros.ui.icons": "^1.0.0"
     }
+  },
+  "celeros.ui.icons": {
+    "deps": {}
   },
   "celeros.app.widgets": {
     "deps": {

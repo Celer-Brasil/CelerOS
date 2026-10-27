@@ -10,7 +10,7 @@ A **CelerGame** é a game engine 2D do CelerOS, entregue como uma **família de 
 | **`celeros.game.fx`** | ~13 KB | partículas, bursts/ondas, texto flutuante, flash, campo de estrelas, **emissores contínuos, rastros, parallax** |
 | **`celeros.game.spr`** | ~16 KB | sprites PNG em slots nativos com painter de fallback, flipbooks, **spritesheet (1 PNG, N regiões nomeadas)**, metadados de arte (`E.spr.meta`) |
 | **`celeros.game.tilemap`** | ~4 KB | grade de células sujas p/ cenários procedurais grandes |
-| **`celeros.game.ui`** | ~57 KB | **kit de UI 1.3**: tokens + 4 presets, 24 ícones vetoriais, layout (stack/grid/card), 12+ widgets, listas ricas, scroll genérico, modal/sheet, toasts em fila, HUD memoizado, diálogos com escolhas e as telas de título/pausa/fim prontas |
+| **`celeros.game.ui`** | ~55 KB | **kit de UI 1.3**: tokens + 4 presets, 24 ícones vetoriais (os 12 comuns vêm do `celeros.ui.icons`, compartilhado com os apps), layout (stack/grid/card), 12+ widgets, listas ricas, scroll genérico, modal/sheet, toasts em fila, HUD memoizado, diálogos com escolhas e as telas de título/pausa/fim prontas |
 | **`celeros.engine`** | shim (0,2 KB) | a **família inteira montada** — a API pré-modularidade (1.2.x) num `require` só; jogos existentes seguem funcionando sem mudança |
 | **`celeros.physics`** (opcional) | ~7 KB | corda/pano por Verlet nativo (`P.verletFast`, API 31) e corpos rígidos (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | arenas estilo bomberman + BFS de perseguição, tabelas de melodias sfx, boilerplate CelerNet (mesma família, módulos à parte) |
@@ -18,7 +18,7 @@ A **CelerGame** é a game engine 2D do CelerOS, entregue como uma **família de 
 Os tamanhos são os **enxutos** (jsstrip), medidos em 2026-10 — confira com
 `node tools/sdk/lib/jsstrip.js tools/sdk/engine/<modulo>.js` antes de planejar.
 
-Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho já passa do teto de 48 KB sem PSRAM** (65 KB desde a 1.7.0; 51 KB na 1.5), então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~121 KB e a família inteira ~230 KB.
+Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho já passa do teto de 48 KB sem PSRAM** (65 KB desde a 1.7.0; 51 KB na 1.5), então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~119 KB e a família inteira ~255 KB.
 
 Tudo é ES5 (Duktape) e detecta os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
 
@@ -434,7 +434,7 @@ var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
 
 ## 14b-2. Kit de UI 1.3: estilo, layout e widgets
 
-O `celeros.game.ui` 1.3 vira o antigo módulo de menu/lista/diálogo em um kit immediate-mode completo. Continua ES5, desenha com `screen: true` e usa o tema do firmware como base. Ele monta em cima das primitivas do core 1.7: `E.color`, `E.gfx.shadow/dim/divider/star`, borda espessa (`bw`), gradientes (`grad`) e `outline` de texto.
+O `celeros.game.ui` 1.3 vira o antigo módulo de menu/lista/diálogo em um kit immediate-mode completo. Continua ES5, desenha com `screen: true` e usa o tema do firmware como base. Ele monta em cima das primitivas do core 1.7: `E.color`, `E.gfx.shadow/dim/divider/star`, borda espessa (`bw`), gradientes (`grad`) e `outline` de texto. Desde a 1.3.1 os 12 ícones comuns (`dot play back close check gear wifi star search menu heart info alert`) vêm do `celeros.ui.icons` 1.0.0 — a mesma tabela sem dependências que o `celeros.app.icons` usa nos apps — e os 12 extras (`pause stop plus minus chevron* sound* music home clock lock trash edit refresh download upload`) ficam no kit de jogo. O `test/sdk/ui_parity.js` trava presets e ícones compartilhados iguais entre as duas famílias.
 
 ### Tokens e presets
 
@@ -449,7 +449,7 @@ E.ui.resetTheme();
 
 ### Ícones
 
-`E.ui.icon(name, x, y, size, { color, w })` desenha proceduralmente (sem PNG/sprite): `play pause stop back close check plus minus chevronL/R/U/D gear heart star sound soundOff music home menu search clock lock trash edit info alert refresh download upload`.
+`E.ui.icon(name, x, y, size, { color, w })` desenha proceduralmente (sem PNG/sprite): `play pause stop back close check plus minus chevronL/R/U/D gear heart star sound soundOff music home menu search clock lock trash edit info alert refresh download upload`. Os nomes `dot play back close check gear wifi star search menu heart info alert` saem da tabela compartilhada `celeros.ui.icons` (saída idêntica nos apps); nome desconhecido cai no `dot`.
 
 ### Layout
 

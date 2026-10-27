@@ -10,7 +10,7 @@
 | **`celeros.game.fx`** | ~13 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
 | **`celeros.game.spr`** | ~16 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
 | **`celeros.game.tilemap`** | ~4 KB | grid of dirty cells for big procedural scenarios |
-| **`celeros.game.ui`** | ~57 KB | **UI kit 1.3**: tokens + 4 presets, 24 vector icons, layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs with choices and the ready title/pause/game-over screens |
+| **`celeros.game.ui`** | ~55 KB | **UI kit 1.3**: tokens + 4 presets, 24 vector icons (the 12 common ones shared with apps via `celeros.ui.icons`), layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs with choices and the ready title/pause/game-over screens |
 | **`celeros.engine`** | shim (0.2 KB) | the **whole family assembled** — the pre-modularity API (1.2.x) in one `require`; existing games keep working unchanged |
 | **`celeros.physics`** (optional) | ~7 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | bomberman-style arenas + BFS chase flow, sfx melody tables, CelerNet boilerplate (same family, unrelated modules) |
@@ -18,7 +18,7 @@
 Sizes are **stripped** (jsstrip), measured 2026-10 — check with
 `node tools/sdk/lib/jsstrip.js tools/sdk/engine/<module>.js` before planning.
 
-Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is already over the 48 KB no-PSRAM ceiling** (65 KB since 1.7.0; 51 KB in 1.5), so every app using the engine declares `"requires": ["psram"]`; core + UI kit are ~121 KB and the full family is ~230 KB.
+Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is already over the 48 KB no-PSRAM ceiling** (65 KB since 1.7.0; 51 KB in 1.5), so every app using the engine declares `"requires": ["psram"]`; core + UI kit are ~119 KB and the full family is ~255 KB.
 
 Everything is ES5 (Duktape) and feature-detects the firmware at runtime, so the same game runs on every board — and unchanged in the Node test harness and emulator.
 
@@ -434,7 +434,7 @@ var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
 
 ## 14b-2. UI kit 1.3: style, layout and widgets
 
-`celeros.game.ui` 1.3 turns the old menu/list/dialog module into a full immediate-mode kit. It is still ES5, draws with `screen: true`, and uses the firmware theme as the base. It builds on the core 1.7 primitives: `E.color`, `E.gfx.shadow/dim/divider/star`, thick borders (`bw`), gradients (`grad`) and text `outline`.
+`celeros.game.ui` 1.3 turns the old menu/list/dialog module into a full immediate-mode kit. It is still ES5, draws with `screen: true`, and uses the firmware theme as the base. It builds on the core 1.7 primitives: `E.color`, `E.gfx.shadow/dim/divider/star`, thick borders (`bw`), gradients (`grad`) and text `outline`. Since 1.3.1 the 12 common icons (`dot play back close check gear wifi star search menu heart info alert`) come from `celeros.ui.icons` 1.0.0 — the same dependency-free table `celeros.app.icons` uses for apps — while the 12 extras (`pause stop plus minus chevron* sound* music home clock lock trash edit refresh download upload`) stay in the game kit. `test/sdk/ui_parity.js` locks the presets and shared icons equal between the two families.
 
 ### Tokens and presets
 
@@ -449,7 +449,7 @@ E.ui.resetTheme();
 
 ### Icons
 
-`E.ui.icon(name, x, y, size, { color, w })` draws procedurally (no PNG/sprite): `play pause stop back close check plus minus chevronL/R/U/D gear heart star sound soundOff music home menu search clock lock trash edit info alert refresh download upload`.
+`E.ui.icon(name, x, y, size, { color, w })` draws procedurally (no PNG/sprite): `play pause stop back close check plus minus chevronL/R/U/D gear heart star sound soundOff music home menu search clock lock trash edit info alert refresh download upload`. The names `dot play back close check gear wifi star search menu heart info alert` render from the shared `celeros.ui.icons` table (identical output in apps); unknown names fall back to `dot`.
 
 ### Layout
 

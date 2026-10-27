@@ -16,6 +16,10 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme) por baixo dos tokens.
 //
+// 1.3.1: os 12 icones comuns (back/close/check/gear/wifi/star/play/
+// search/menu/heart/info/alert) saem para o modulo compartilhado
+// celeros.ui.icons (mesma tabela do CelerKit); a UI mantem os extras
+// (pause/stop/chevrons/sound/music/home/clock/...).
 // 1.3.0: tokens + E.ui.preset (soft/flat/neon/paper); E.ui.icon (24 icones
 // vetoriais); layout (stack/grid/card/section/divider); widgets (button,
 // iconButton, toggle, check, radio, slider, stepper, segmented, tabs,
@@ -39,6 +43,7 @@
 var E = require('celeros.game');
 var S = System;
 var C = E.color;
+var I = require('celeros.ui.icons');
 var EMPTY = {};
 
 // ------------------------------------------------------------ tokens ------
@@ -176,7 +181,8 @@ function textW(s, ts) {
 }
 
 // ------------------------------------------------------------ icones ------
-// Desenho procedural (sem PNG/sprite): 24 nomes. s = lado, c = cor,
+// Desenho procedural (sem PNG/sprite): 12 comuns em celeros.ui.icons
+// e os extras desta UI. s = lado, c = cor,
 // w = espessura. Sempre em coords de TELA (HUD/menu).
 var _il = { w: 1, screen: true };
 var _ir = { r: 0, screen: true };
@@ -190,30 +196,12 @@ function iC(cx, cy, r, c, fill) { _ici.fill = fill !== false; E.gfx.circle(cx, c
 function iA(cx, cy, r0, r1, a0, a1, c) { E.gfx.arc(cx, cy, r0, r1, a0, a1, c, _ia); }
 
 var ICONS = {
-    dot: function (x, y, s, c) { iC(x + s / 2, y + s / 2, s * 0.18, c); },
-    play: function (x, y, s, c) {
-        iT(x + s * 0.30, y + s * 0.16, x + s * 0.30, y + s * 0.84,
-           x + s * 0.84, y + s * 0.50, c);
-    },
     pause: function (x, y, s, c) {
         iR(x + s * 0.28, y + s * 0.18, s * 0.14, s * 0.64, s * 0.03, c);
         iR(x + s * 0.58, y + s * 0.18, s * 0.14, s * 0.64, s * 0.03, c);
     },
     stop: function (x, y, s, c) {
         iR(x + s * 0.27, y + s * 0.27, s * 0.46, s * 0.46, s * 0.08, c);
-    },
-    back: function (x, y, s, c, w) {
-        iL(x + s * 0.60, y + s * 0.20, x + s * 0.32, y + s * 0.50, c, w);
-        iL(x + s * 0.32, y + s * 0.50, x + s * 0.60, y + s * 0.80, c, w);
-        iL(x + s * 0.32, y + s * 0.50, x + s * 0.82, y + s * 0.50, c, w);
-    },
-    close: function (x, y, s, c, w) {
-        iL(x + s * 0.28, y + s * 0.28, x + s * 0.72, y + s * 0.72, c, w);
-        iL(x + s * 0.72, y + s * 0.28, x + s * 0.28, y + s * 0.72, c, w);
-    },
-    check: function (x, y, s, c, w) {
-        iL(x + s * 0.22, y + s * 0.52, x + s * 0.43, y + s * 0.72, c, w);
-        iL(x + s * 0.43, y + s * 0.72, x + s * 0.78, y + s * 0.28, c, w);
     },
     plus: function (x, y, s, c, w) {
         iL(x + s * 0.22, y + s * 0.50, x + s * 0.78, y + s * 0.50, c, w);
@@ -237,22 +225,6 @@ var ICONS = {
     chevronD: function (x, y, s, c, w) {
         iL(x + s * 0.24, y + s * 0.38, x + s * 0.50, y + s * 0.62, c, w);
         iL(x + s * 0.50, y + s * 0.62, x + s * 0.76, y + s * 0.38, c, w);
-    },
-    gear: function (x, y, s, c, w) {
-        var cx = x + s / 2, cy = y + s / 2, r0 = s * 0.20, r1 = s * 0.42, k;
-        iC(cx, cy, r0, c, false);
-        for (k = 0; k < 8; k++) {
-            var a = k * Math.PI / 4;
-            iL(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0,
-               cx + Math.cos(a) * r1, cy + Math.sin(a) * r1, c, w);
-        }
-    },
-    heart: function (x, y, s, c) {
-        E.gfx.hearts(1, 1, x + s * 0.10, y + s * 0.12,
-                     { size: s * 0.80, color: c, screen: true });
-    },
-    star: function (x, y, s, c) {
-        E.gfx.star(x + s / 2, y + s / 2, s * 0.46, s * 0.20, 5, c, { screen: true });
     },
     sound: function (x, y, s, c, w) {
         iT(x + s * 0.12, y + s * 0.38, x + s * 0.12, y + s * 0.62,
@@ -284,15 +256,6 @@ var ICONS = {
         iL(x + s * 0.78, y + s * 0.48, x + s * 0.78, y + s * 0.84, c, w);
         iL(x + s * 0.22, y + s * 0.84, x + s * 0.78, y + s * 0.84, c, w);
     },
-    menu: function (x, y, s, c, w) {
-        iL(x + s * 0.22, y + s * 0.32, x + s * 0.78, y + s * 0.32, c, w);
-        iL(x + s * 0.22, y + s * 0.50, x + s * 0.78, y + s * 0.50, c, w);
-        iL(x + s * 0.22, y + s * 0.68, x + s * 0.78, y + s * 0.68, c, w);
-    },
-    search: function (x, y, s, c, w) {
-        iC(x + s * 0.44, y + s * 0.42, s * 0.22, c, false);
-        iL(x + s * 0.60, y + s * 0.60, x + s * 0.82, y + s * 0.82, c, w);
-    },
     clock: function (x, y, s, c, w) {
         iC(x + s * 0.50, y + s * 0.50, s * 0.36, c, false);
         iL(x + s * 0.50, y + s * 0.50, x + s * 0.50, y + s * 0.28, c, w);
@@ -314,17 +277,6 @@ var ICONS = {
         iL(x + s * 0.20, y + s * 0.80, x + s * 0.66, y + s * 0.22, c, w);
         iL(x + s * 0.60, y + s * 0.16, x + s * 0.78, y + s * 0.28, c, w);
         iL(x + s * 0.20, y + s * 0.80, x + s * 0.34, y + s * 0.76, c, w);
-    },
-    info: function (x, y, s, c, w) {
-        iC(x + s * 0.50, y + s * 0.50, s * 0.36, c, false);
-        iL(x + s * 0.50, y + s * 0.46, x + s * 0.50, y + s * 0.68, c, w);
-        iC(x + s * 0.50, y + s * 0.34, Math.max(1, s * 0.045), c);
-    },
-    alert: function (x, y, s, c, w) {
-        iT(x + s * 0.50, y + s * 0.12, x + s * 0.12, y + s * 0.86,
-           x + s * 0.88, y + s * 0.86, c);
-        iL(x + s * 0.50, y + s * 0.38, x + s * 0.50, y + s * 0.62, c, w);
-        iC(x + s * 0.50, y + s * 0.72, Math.max(1, s * 0.045), c);
     },
     refresh: function (x, y, s, c, w) {
         iA(x + s * 0.50, y + s * 0.50, s * 0.28, s * 0.36, -60, 240, c);
@@ -493,7 +445,7 @@ function dialogInput(d, o, x, y, w, h) {
 // ------------------------------------------------------------ E.ui ---------
 
 E.ui = {
-    version: '1.3.0',
+    version: '1.3.1',
     tokens: TK,
 
     // patch de tokens (aceita '#rrggbb'); guarda para reaplicar se o E.theme
@@ -522,14 +474,15 @@ E.ui = {
         return TK;
     },
 
-    // icone vetorial (24 nomes); devolve o rect em scratch (nao guarde)
+    // icone vetorial: 12 comuns em celeros.ui.icons + os extras da UI;
+    // devolve o rect em scratch (nao guarde)
     icon: function (name, x, y, size, o) {
         ensure();
         o = o || EMPTY;
         var s = size === undefined ? Math.round(16 * E.U) : size;
         var c = o.color === undefined ? TK.text : o.color;
         var w = o.w === undefined ? Math.max(1, Math.round(s * 0.12)) : o.w;
-        (ICONS[name] || ICONS.dot)(x, y, s, c, w);
+        (I.map[name] || ICONS[name] || I.map.dot)(x, y, s, c, w);
         _icr.x = x; _icr.y = y; _icr.w = s; _icr.h = s;
         return _icr;
     },

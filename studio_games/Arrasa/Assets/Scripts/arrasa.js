@@ -69,6 +69,22 @@ var BERCO = { x: 51.3, y: 239 }, GARFO = [{ x: 38, y: 234.7 }, { x: 64, y: 234.7
 var PUXAO_MAX = 42, K_LANCE = 9.2, CARENCIA = 1.0;
 var NS = 6, SX = 0, SY = 1, SA = 2, SHIT = 3, SVEL = 4, SFL = 5;
 
+// arte.png: grade 8x3 de 32 px (text2d animate-set/items/vfx) em tamanho
+// de desenho (escala 1). Projetil que gira (flecha, bumerangue, galinha,
+// bomba) e sprite solto: regiao de folha nao gira
+var ART = [];
+for (var _a = 0; _a < 24; _a++) ART.push('arte#a' + _a);
+var A_GOB = 0, A_REI = 4, A_PUFF = 16;
+var SHOT_ART = { pedra: 8, pedrao: 9, tripla: 10, bomba: 11, flecha: 12,
+                 bumerangue: 13, chocadeira: 14, ovo: 15 };
+var SHOT_ROT = { bomba: 'bomba', flecha: 'flecha', bumerangue: 'bumerangue',
+                 chocadeira: 'chocadeira' };
+var BOOM = ['boom#b0', 'boom#b1', 'boom#b2', 'boom#b3', 'boom#b4', 'boom#b5'];
+var FX_T = 0.06;            // segundos por quadro de vfx (6 quadros)
+var OPT_ART = { key: 0xF81F };
+var OPT_ROT = { key: 0xF81F, angle: 0 };
+var UI_THEME = { accent: '#ffc21a', accent2: '#ff7a00', onAccent: 0x0000, radius: 14 };
+
 var OURO = 0xFFE0, BRANCO = 0xFFFF, VERDE = 0x07E0, VERMELHO = 0xF800;
 var TEXT = 0xE71C, TEXT2 = 0x9CF3, PAINEL = 0x10C3, ESCURO = 0x0861;
 
@@ -106,6 +122,12 @@ exports.start = function (ctx) {
     }
 
     if (typeof __harness !== 'undefined') __harness.arrasa = s;
+    if (E.ui) {
+        E.ui.preset('soft');
+        E.ui.theme(UI_THEME);
+    }
+    s.act = null;
+    s.art = !!(E.spr && E.spr.has && E.spr.has(ART[0]));
 
     if (s.screen === 'title') {
         if (E.audio) E.audio.music(SONG);
@@ -149,6 +171,9 @@ function startGame(s, ctx) {
     s.aim = [];
     s.animT = 0;       // relogio do ciclo novo dos goblins
     s.entPieces = [];
+    s.vfx = [];        // explosoes e fumacas (quadros do text2d)
+    s.art = !!(E.spr && E.spr.has && E.spr.has(ART[0]));
+    setupBackground(s, E, ctx);
     if (!s.world) {
         s.msg = 'SEM CORPO RIGIDO';
         s.msgT = 99;
@@ -165,6 +190,7 @@ function startGame(s, ctx) {
     }
     nextShot(s);
     s.state = s.world.state();
+    s.shotsTotal = s.shotsQueue.length + 1;
     s.metas = starGoals(s);
     if (E.audio) E.audio.music(SONG);
     if (E.fx) E.fx.clear();
@@ -201,6 +227,37 @@ function addPiece(s, e) {
     s.pieces.push(c);
     e.active = true;
     s.entPieces.push(c);
+}
+
+function addFx(s, x, y, kind) {
+    if (!s.vfx) return;
+    if (s.vfx.length >= 10) s.vfx.shift();
+    s.vfx.push({ x: x, y: y, t: 0, kind: kind });
+}
+
+function updateFx(s, dt) {
+    for (var i = s.vfx.length - 1; i >= 0; i--) {
+        s.vfx[i].t += dt;
+        if (s.vfx[i].t >= FX_T * 6) s.vfx.splice(i, 1);
+    }
+}
+
+// fundo de 480 px em escala 1: no device a camada suja restaura cada caixa
+// com um blitSprite do slot do proprio asset (antes a entidade Fundo era
+// carimbada inteira todo quadro). O host nao pinta blit: la a entidade fica
+function setupBackground(s, E, ctx) {
+    s.bgEnt = ctx.scene.find('Fundo');
+    if (typeof __harness !== 'undefined') return;
+    var sl = E.spr && E.spr._slots && E.spr._slots.fundo;
+    if (!sl || !sl.id || typeof System === 'undefined' ||
+        typeof System.blitSprite !== 'function' || !E.dirty || !E.dirty.enable) return;
+    var id = sl.id;
+    if (s.bgEnt) s.bgEnt.active = false;
+    E.dirty.enable(function (x, y, w, h) {
+        System.fillRect(x, y, w, h, 0);
+        System.blitSprite(id, x, y, w, h);
+    });
+    E.redraw();
 }
 
 function nextShot(s) {
@@ -356,6 +413,7 @@ function removeBody(s, i, semPontos) {
     if (!semPontos) s.score += c.pts || 0;
     if (c.k === 'goblin') {
         s.goblins--;
+        addFx(s, x * s.ESC, y * s.ESC, 'puff');
         if (s.E.fx) s.E.fx.burst(x * s.ESC, y * s.ESC,
             { n: 14, color: c.tipo === 'rei' ? OURO : VERDE, speed: 140, life: 0.5 });
         if (s.E.audio) s.E.audio.sfx(c.tipo === 'rei' ? 'rei' : 'goblin', { gap: 0 });
@@ -368,6 +426,7 @@ function removeBody(s, i, semPontos) {
 }
 
 function explode(s, x, y, R, dvMax) {
+    addFx(s, x * s.ESC, y * s.ESC, 'boom');
     if (s.E.fx) {
         s.E.fx.burst(x * s.ESC, y * s.ESC, { n: 26, color: 0xFD20, speed: 220, life: 0.6 });
         s.E.fx.flash(0xFD20, 160);
@@ -594,8 +653,9 @@ function syncPieces(s) {
         var x = st[o + SX], y = st[o + SY];
         e.x = x * s.ESC;
         e.y = y * s.ESC;
-        if (c.k === 'goblin' && c.tipo !== 'rei') {
-            e.spr = 'goblin_walk#goblin' + (Math.floor(s.animT * 6 + c.semente) % 4);
+        if (c.k === 'goblin' && s.art) {
+            e.spr = ART[(c.tipo === 'rei' ? A_REI : A_GOB) +
+                        (Math.floor(s.animT * 6 + c.semente) % 4)];
         }
         if (c.k === 'box') e.rot = st[o + SA] * 180 / Math.PI;
     }
@@ -611,49 +671,54 @@ exports.update = function (dt, ctx) {
     updateGame(s, E, ctx, dt);
 };
 
+// os widgets do kit de UI decidem no draw e deixam a acao em s.act; o
+// update do quadro seguinte a executa (troca de cena fora do draw)
+function takeAct(s) {
+    var a = s.act;
+    s.act = null;
+    return a;
+}
+
 function updateTitle(s, E, ctx) {
-    if (s.how) {
-        if (E.input.tap) { s.how = false; E.redraw(); }
-        return;
-    }
-    if (s.btnPlay && E.hit(s.btnPlay)) {
+    var a = takeAct(s);
+    if (s.how) E.redraw();          // modal anima: a cena estatica repinta
+    if (a === 'play') {
         E.audio && E.audio.sfx('ok');
         ctx.go('Mapa');
-    } else if (s.btnHow && E.hit(s.btnHow)) {
+    } else if (a === 'how') {
         s.how = true;
+        E.redraw();
+    } else if (a === 'howClose') {
+        s.how = false;
         E.redraw();
     }
 }
 
 function updateMap(s, E, ctx) {
-    if (!s.cards) return;
-    for (var i = 0; i < s.cards.length; i++) {
-        var c = s.cards[i];
-        if (!E.hit(c)) continue;
-        if (c.locked) {
-            s.msg = 'FASE BLOQUEADA';
-            s.msgT = 1.2;
-            E.redraw();
-            return;
-        }
-        E.audio && E.audio.sfx('ok');
-        ctx.go('Fase ' + c.n);
+    var a = takeAct(s);
+    if (a === 'back') { ctx.go('Titulo'); return; }
+    if (a === 'locked') {
+        if (E.ui) E.ui.toast('Termine a fase anterior', { type: 'warn', icon: 'lock' });
         return;
     }
-    if (s.btnBack && E.hit(s.btnBack)) ctx.go('Titulo');
+    if (a) {
+        E.audio && E.audio.sfx('ok');
+        ctx.go(a);
+    }
 }
 
 function updateEnd(s, E, ctx) {
-    if (s.btnNext && E.hit(s.btnNext)) {
-        E.data.result = null;
-        ctx.go('Fase ' + (s.result.level + 1));
-    } else if (s.btnRetry && E.hit(s.btnRetry)) {
-        E.data.result = null;
-        ctx.go('Fase ' + s.result.level);
-    } else if (s.btnMap && E.hit(s.btnMap)) {
-        E.data.result = null;
-        ctx.go('Mapa');
-    }
+    var a = takeAct(s);
+    if (!a) return;
+    var lv = s.result.level;
+    E.data.result = null;
+    if (a === 'next') ctx.go('Fase ' + (lv + 1));
+    else if (a === 'retry') ctx.go('Fase ' + lv);
+    else if (a === 'map') ctx.go('Mapa');
+}
+
+function inRect(r, x, y) {
+    return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 }
 
 function updateGame(s, E, ctx, dt) {
@@ -666,12 +731,16 @@ function updateGame(s, E, ctx, dt) {
         }
         return;
     }
+    var act = takeAct(s);
     if (s.paused) {
-        if (s.btnResume && E.hit(s.btnResume)) s.paused = false;
-        else if (s.btnMapPause && E.hit(s.btnMapPause)) ctx.go('Mapa');
+        if (act === 'resume') { s.paused = false; E.redraw(); }
+        else if (act === 'map') ctx.go('Mapa');
         return;
     }
-    if (s.btnPause && E.hit(s.btnPause)) { s.paused = true; return; }
+    if (E.input.justDown && inRect(BTN_PAUSE, E.input.x, E.input.y)) {
+        s.paused = true;
+        return;
+    }
     if (s.msgT > 0) { s.msgT -= dt; if (s.msgT <= 0) s.msg = ''; }
 
     var t = s.tiro;
@@ -691,6 +760,7 @@ function updateGame(s, E, ctx, dt) {
 
     if (!s.world) return;
     step(s, dt);
+    updateFx(s, dt);
     if (t && t.estado === 'mirando') {
         s.aim = predicted(s, 10, 0.055);
     } else {
@@ -708,34 +778,51 @@ exports.draw = function (ctx) {
     drawGame(s, E);
 };
 
+var LOGO_TXT = { px: 56, align: 'center', valign: 'middle', color: OURO,
+                 outline: C(0x4A2A10), screen: true };
+var SUB_TXT = { px: 16, align: 'center', valign: 'middle', color: BRANCO,
+                outline: C(0x1A3020), screen: true };
+var HEAD_TXT = { px: 30, align: 'center', valign: 'middle', color: OURO,
+                 outline: C(0x4A2A10), screen: true };
+var CARD_T = { px: 14, color: BRANCO, screen: true };
+var CARD_S = { px: 13, color: TEXT2, screen: true };
+var LOCK_T = { px: 13, color: C(0x5A6A84), screen: true };
+var BTN_PLAY = { variant: 'primary', icon: 'play', ts: 'big' };
+var BTN_HOW = { variant: 'secondary', icon: 'info' };
+var BTN_BACK = { variant: 'secondary', icon: 'back' };
+var BIG2 = { key: 0xF81F, scale: 2.5 };
+var HOW_BODY = 'Puxe a pedra no estilingue e solte. Toque no voo: poder da ' +
+               'pedra. Derrube todos os goblins.';
+var HOW_BTNS = [{ label: 'Entendi', value: 1, icon: 'check' }];
+var NAMES = ['Primeiro estrago', 'Casinha', 'Vidracaria', 'Torre de pedra',
+             'Polvora', 'Fortaleza', 'Penhasco', 'Linha de frente',
+             'Atras do muro', 'Castelo do Rei'];
+
+function drawStars(E, cx, cy, n, r) {
+    for (var i = 0; i < 3; i++) {
+        E.gfx.star(cx + (i - 1) * r * 2.4, cy, r, r * 0.45, 5,
+                   i < n ? C(0xFFC83C) : C(0x2A3350), { screen: true, fill: true });
+    }
+}
+
 function drawTitle(s, E) {
-    var W = s.W, H = s.H;
-    E.gfx.rect(0, 180, W, H - 180, C(0x0A1A12), { screen: true });
-    E.gfx.text('ARRASA!', W / 2, 226, { px: 48, align: 'center', valign: 'middle',
-        color: 0xFFE0, shadow: 0x0000 });
-    E.gfx.text('derrube a fortaleza', W / 2, 272,
-        { px: 18, align: 'center', color: TEXT });
-    E.gfx.text('10 fases  ·  ' + totalStars(s) + ' estrelas', W / 2, 300,
-        { px: 14, align: 'center', color: VERDE });
-    s.btnPlay = E.gfx.button('JOGAR', W / 2 - 105, 332, 210, 50,
-        { primary: true, screen: true, px: 21 });
-    s.btnHow = E.gfx.button('COMO JOGAR', W / 2 - 105, 396, 210, 38,
-        { primary: false, screen: true, px: 14 });
+    var W = s.W;
+    E.gfx.text('ARRASA!', W / 2, 70, LOGO_TXT);
+    E.gfx.text('derrube a fortaleza', W / 2, 118, SUB_TXT);
+    if (s.art) {
+        E.spr.stamp(ART[A_REI], 330, 200, BIG2);
+        E.spr.stamp(ART[A_GOB], 400, 214, BIG2);
+        E.spr.stamp(ART[SHOT_ART.pedra], 120, 214, BIG2);
+    }
+    var c = E.ui.card(40, 270, W - 80, 190);
+    var bx = c.x;
+    bx += E.ui.badge('10 FASES', bx, c.y) + 8;
+    E.ui.badge(totalStars(s) + '/30', bx, c.y, { color: C(0xFFC83C), textColor: 0x0000 });
+    if (E.ui.button('JOGAR', c.x, c.y + 44, c.w, 58, BTN_PLAY)) s.act = 'play';
+    if (E.ui.button('COMO JOGAR', c.x, c.y + 112, c.w, 42, BTN_HOW)) s.act = 'how';
     if (s.how) {
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        s.btnPlay = null;
-        s.btnHow = null;
-        E.gfx.panel(30, 80, W - 60, 330, { bg: PAINEL, stroke: OURO, r: 12, screen: true });
-        E.gfx.text('COMO JOGAR', W / 2, 114, { px: 28, align: 'center', color: OURO });
-        E.gfx.text('puxe a pedra no estilingue e solte', W / 2, 158,
-            { px: 15, align: 'center', color: BRANCO });
-        E.gfx.text('toque durante o voo: poder da pedra', W / 2, 188,
-            { px: 15, align: 'center', color: BRANCO });
-        E.gfx.text('derrube todos os goblins e o rei', W / 2, 218,
-            { px: 15, align: 'center', color: BRANCO });
-        E.gfx.text('TNT, vidro, madeira e pedra reagem diferente', W / 2, 248,
-            { px: 13, align: 'center', color: TEXT2 });
-        E.gfx.text('toque para voltar', W / 2, 340, { px: 14, align: 'center', color: OURO });
+        var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY, buttons: HOW_BTNS });
+        if (r !== null) s.act = 'howClose';
     }
 }
 
@@ -751,98 +838,108 @@ function starsOf(s, i) {
 
 function drawMap(s, E) {
     var W = s.W, H = s.H;
-    E.gfx.rect(0, 0, W, H, C(0x0A1A12), { screen: true });
-    E.gfx.text('ESCOLHA A FASE', W / 2, 28, { px: 28, align: 'center', color: OURO });
-    E.gfx.text(s.unlocked + 1 + '/10 liberadas  ·  ' + totalStars(s) + ' estrelas',
-        W / 2, 62, { px: 14, align: 'center', color: TEXT2 });
-    var names = ['Primeiro estrago', 'Casinha', 'Vidracaria', 'Torre de pedra',
-                 'Polvora', 'Fortaleza', 'Penhasco', 'Linha de frente',
-                 'Atras do muro', 'Castelo do Rei'];
-    var CW = 208, CH = 60, GX = 12, GY = 8;
-    var x0 = (W - (CW * 2 + GX)) / 2, y0 = 86;
-    s.cards = [];
+    E.gfx.text('ESCOLHA A FASE', W / 2, 26, HEAD_TXT);
+    E.gfx.text((s.unlocked + 1) + '/10 liberadas  ·  ' + totalStars(s) + '/30', W / 2, 58, SUB_TXT);
+    var CW = 214, CH = 64, GX = 12, GY = 8;
+    var x0 = (W - (CW * 2 + GX)) / 2, y0 = 78;
     for (var n = 1; n <= 10; n++) {
         var col = (n - 1) % 2, row = Math.floor((n - 1) / 2);
         var x = x0 + col * (CW + GX), y = y0 + row * (CH + GY);
         var locked = n > s.unlocked + 1;
-        E.gfx.panel(x, y, CW, CH, { bg: locked ? C(0x10141E) : C(0x162338),
-            stroke: locked ? C(0x222B3D) : OURO, r: 8, screen: true });
-        E.gfx.text((locked ? 'X ' : '') + n + '  ' + names[n - 1], x + 10, y + 8,
-            { px: 13, color: locked ? C(0x5A6A84) : (n - 1 === s.unlocked ? OURO : BRANCO) });
-        var st = starsOf(s, n - 1);
-        var txt = '';
-        for (var k = 0; k < 3; k++) txt += k < st ? '*' : '-';
-        E.gfx.text(txt + '   ' + s.E.save.num('pts' + (n - 1), 0) + ' pts',
-            x + 10, y + 30, { px: 12, color: locked ? C(0x5A6A84) : TEXT2 });
-        s.cards.push({ x: x, y: y, w: CW, h: CH, n: n, locked: locked });
+        var cur = n - 1 === s.unlocked;
+        E.ui.card(x, y, CW, CH, { pad: 0, stroke: locked ? C(0x222B3D) : (cur ? OURO : C(0x3DDC84)),
+                                  bg: locked ? C(0x0C1018) : C(0x14241C) });
+        E.gfx.text(n + '  ' + NAMES[n - 1], x + 12, y + 10, locked ? LOCK_T : CARD_T);
+        if (locked) {
+            E.ui.icon('lock', x + CW - 40, y + 18, 26, { color: C(0x5A6A84) });
+        } else {
+            drawStars(E, x + 36, y + 44, starsOf(s, n - 1), 8);
+            E.gfx.text(s.E.save.num('pts' + (n - 1), 0) + ' pts', x + CW - 12, y + 38,
+                       { px: 13, align: 'right', color: TEXT2, screen: true });
+        }
+        var hit = { x: x, y: y, w: CW, h: CH };
+        E._btns.push(hit);
+        if (E.input.tap && E.hit(hit)) s.act = locked ? 'locked' : 'Fase ' + n;
     }
-    s.btnBack = E.gfx.button('VOLTAR', W / 2 - 80, H - 50, 160, 34,
-        { primary: false, screen: true, px: 14 });
-    if (s.msg) E.gfx.text(s.msg, W / 2, H - 14,
-        { px: 12, align: 'center', color: C(0xFF8B8B) });
+    if (E.ui.button('VOLTAR', W / 2 - 90, H - 50, 180, 42, BTN_BACK)) s.act = 'back';
 }
 
+var END_NEXT = { variant: 'primary', icon: 'play' };
+var END_SEC = { variant: 'secondary', icon: 'refresh' };
+var END_MAP = { variant: 'ghost', icon: 'menu' };
+
 function drawEnd(s, E) {
-    var W = s.W, H = s.H;
-    var r = s.result;
-    E.gfx.rect(0, 0, W, H, C(0x0A1A12), { screen: true });
-    E.gfx.panel(40, 100, W - 80, 300, { bg: PAINEL,
-        stroke: r.won ? OURO : VERMELHO, r: 12, screen: true });
-    E.gfx.text(r.won ? 'ARRASOU!' : 'SEM PEDRAS',
-        W / 2, 142, { px: 36, align: 'center', color: r.won ? OURO : VERMELHO });
-    E.gfx.text('fase ' + r.level + '  ·  ' + r.score + ' pts',
-        W / 2, 190, { px: 18, align: 'center', color: BRANCO });
-    if (r.won) {
-        var st = '';
-        for (var k = 0; k < 3; k++) st += k < r.stars ? '*' : '-';
-        E.gfx.text(st, W / 2, 222, { px: 22, align: 'center', color: C(0xFFD479) });
-    }
+    var W = s.W, r = s.result;
+    E.gfx.text(r.won ? 'ARRASOU!' : 'SEM PEDRAS', W / 2, 74,
+               { px: r.won ? 56 : 40, align: 'center', valign: 'middle', color: r.won ? OURO : VERMELHO,
+                 outline: 0x0000, screen: true });
+    var c = E.ui.card(40, 140, W - 80, 320);
+    E.gfx.text('FASE ' + r.level + '  ·  ' + NAMES[r.level - 1], c.x + c.w / 2, c.y + 6,
+               { px: 14, align: 'center', color: TEXT2, screen: true });
+    E.gfx.text(r.score + ' pts', c.x + c.w / 2, c.y + 40,
+               { px: 30, align: 'center', valign: 'middle', color: BRANCO, screen: true });
+    if (r.won) drawStars(E, c.x + c.w / 2, c.y + 92, r.stars, 18);
+    else if (s.art) E.spr.stamp(ART[A_REI], c.x + c.w / 2, c.y + 92, BIG2);
+    var y = c.y + 134;
     if (r.won && r.level < 10) {
-        s.btnNext = E.gfx.button('PROXIMA', W / 2 - 100, 250, 200, 44,
-            { primary: true, screen: true, px: 17 });
-        s.btnRetry = E.gfx.button('DE NOVO', W / 2 - 80, 302, 160, 32,
-            { primary: false, screen: true, px: 13 });
-        s.btnMap = E.gfx.button('FASES', W / 2 - 55, 344, 110, 30,
-            { primary: false, screen: true, px: 12 });
-    } else if (r.won) {
-        s.btnRetry = E.gfx.button('DE NOVO', W / 2 - 100, 268, 200, 42,
-            { primary: true, screen: true, px: 16 });
-        s.btnMap = E.gfx.button('FASES', W / 2 - 70, 322, 140, 32,
-            { primary: false, screen: true, px: 13 });
+        if (E.ui.button('PROXIMA', c.x, y, c.w, 50, END_NEXT)) s.act = 'next';
+        y += 60;
+    }
+    if (E.ui.button(r.won ? 'DE NOVO' : 'TENTAR DE NOVO', c.x, y, c.w, 44, r.won && r.level < 10 ? END_SEC : END_NEXT)) s.act = 'retry';
+    if (E.ui.button('FASES', c.x + c.w / 2 - 80, y + 54, 160, 40, END_MAP)) s.act = 'map';
+}
+
+// ---------------------------------------------------------------- jogo
+
+var PAUSE_BTNS = [{ label: 'Mapa', value: 'map', icon: 'menu' },
+                  { label: 'Continuar', value: 'resume' }];
+var BTN_PAUSE = { x: 428, y: 438, w: 44, h: 36 };
+var AIM_O = { fill: true, screen: true };
+var TRAIL_O = { fill: true, screen: true };
+var SLING_O = { w: 3 };
+var BAND_O = { w: 2 };
+var MSG_TXT = { px: 20, align: 'center', valign: 'middle', color: OURO,
+                outline: 0x0000, screen: true };
+var END_TXT = { px: 34, align: 'center', valign: 'middle', color: OURO,
+                outline: 0x0000, screen: true };
+var Q_TXT = { px: 13, valign: 'middle', color: BRANCO, outline: 0x0000, screen: true };
+var PANEL_O = { r: 10, screen: true, bw: 2, stroke: C(0xFFC21A) };
+
+function drawShot(s, E, tipo, x, y, ang) {
+    if (!s.art) {
+        E.gfx.circle(x, y, (TIRO[tipo] ? TIRO[tipo].r : 6) * s.ESC, C(0x808080), AIM_O);
+        return;
+    }
+    var rot = SHOT_ROT[tipo];
+    if (rot && ang && E.spr.has(rot)) {
+        OPT_ROT.angle = ang;
+        E.spr.stamp(rot, x, y, OPT_ROT);
     } else {
-        s.btnRetry = E.gfx.button('TENTAR DE NOVO', W / 2 - 130, 252, 260, 42,
-            { primary: true, screen: true, px: 15 });
-        s.btnMap = E.gfx.button('FASES', W / 2 - 70, 306, 140, 32,
-            { primary: false, screen: true, px: 13 });
+        E.spr.stamp(ART[SHOT_ART[tipo] || SHOT_ART.pedra], x, y, OPT_ART);
     }
 }
 
 function drawGame(s, E) {
     var W = s.W, H = s.H, ESC = s.ESC, i;
-    var groundY = GROUND * ESC;
-    // chao
-    E.gfx.rect(0, groundY, W, 3, 0x05E0, { screen: true });
-    E.gfx.rect(0, groundY + 3, W, 6, 0x02A0, { screen: true });
     // estilingue
     var bx = BERCO.x * ESC, by = BERCO.y * ESC;
-    E.gfx.line(GARFO[0].x * ESC, GARFO[0].y * ESC, bx, by, C((0x7A4A20)), { w: 3 });
-    E.gfx.line(GARFO[1].x * ESC, GARFO[1].y * ESC, bx, by, C((0x7A4A20)), { w: 3 });
     var px = bx + (s.pullX || 0) * ESC, py = by + (s.pullY || 0) * ESC;
-    E.gfx.line(GARFO[0].x * ESC, GARFO[0].y * ESC, px, py, C((0x4A2A10)), { w: 2 });
-    E.gfx.line(GARFO[1].x * ESC, GARFO[1].y * ESC, px, py, C((0x4A2A10)), { w: 2 });
+    E.gfx.line(GARFO[0].x * ESC, GARFO[0].y * ESC, px, py, C(0x4A2A10), BAND_O);
     // pedra no berco
-    if (s.tiro && (s.tiro.estado === 'pronto' || s.tiro.estado === 'carregando' || s.tiro.estado === 'mirando')) {
-        E.spr.stamp('ai_atlas#ai3', px, py, { scale: 0.34, key: 0xF81F });
+    if (s.tiro && (s.tiro.estado === 'pronto' || s.tiro.estado === 'carregando' ||
+                   s.tiro.estado === 'mirando')) {
+        drawShot(s, E, s.tiro.tipo, px, py, 0);
     }
-    // mira
+    E.gfx.line(GARFO[1].x * ESC, GARFO[1].y * ESC, px, py, C(0x4A2A10), BAND_O);
+    // mira: pontos que encolhem
     var aim = s.aim || [];
     for (i = 0; i + 1 < aim.length; i += 2) {
-        E.gfx.circle(aim[i] * ESC, aim[i + 1] * ESC, 2.2, OURO, { fill: true, screen: true });
+        E.gfx.circle(aim[i] * ESC, aim[i + 1] * ESC, 3.4 - i * 0.12, OURO, AIM_O);
     }
     // rastro
     var tr = s.trail || [];
     for (i = 0; i + 1 < tr.length; i += 2) {
-        E.gfx.circle(tr[i] * ESC, tr[i + 1] * ESC, 2, 0xCE79, { fill: true, screen: true });
+        E.gfx.circle(tr[i] * ESC, tr[i + 1] * ESC, 2, 0xCE79, TRAIL_O);
     }
     // projeteis
     for (i = 0; i < s.corpos.length; i++) {
@@ -850,59 +947,52 @@ function drawGame(s, E) {
         if (!c || c.k !== 'tiro' || c.morto) continue;
         var o = i * NS, st = s.state;
         if (!st || !(st[o + SFL] & 1)) continue;
-        var x = st[o + SX] * ESC, y = st[o + SY] * ESC;
-        var name = c.tipo === 'ovo' ? 'bomba' :
-            (c.tipo === 'pedra' || c.tipo === 'pedrao' ? 'ai_atlas#ai3' : c.tipo);
-        var sc = c.r * 2 * ESC / 64;
-        if (name === 'ai_atlas#ai3') {
-            E.spr.stamp(name, x, y, { scale: sc, key: 0xF81F });
-        } else {
-            E.spr.stamp(name, x, y, { scale: sc, key: 0xF81F,
-                angle: st[o + SA] * 180 / Math.PI });
-        }
+        drawShot(s, E, c.tipo, st[o + SX] * ESC, st[o + SY] * ESC,
+                 st[o + SA] * 180 / Math.PI);
     }
-    // HUD
+    // explosoes e fumacas (vfx text2d)
+    for (i = 0; i < s.vfx.length; i++) {
+        var v = s.vfx[i];
+        var f = Math.floor(v.t / FX_T);
+        if (f > 5) continue;
+        if (v.kind === 'boom') { if (E.spr.has(BOOM[f])) E.spr.stamp(BOOM[f], v.x, v.y, OPT_ART); }
+        else if (s.art) E.spr.stamp(ART[A_PUFF + f], v.x, v.y, OPT_ART);
+    }
     drawHud(s, E);
-    if (s.msg) {
-        E.gfx.text(s.msg, W / 2, 92, { px: 20, align: 'center', valign: 'middle',
-            color: OURO, bg: C(0x0A1A12), screen: true });
-    }
+    if (s.msg) E.gfx.text(s.msg, W / 2, 100, MSG_TXT);
     if (s.paused) {
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        E.gfx.panel(60, 150, W - 120, 190, { bg: PAINEL, stroke: OURO, r: 12, screen: true });
-        E.gfx.text('PAUSA', W / 2, 186, { px: 32, align: 'center', color: OURO });
-        s.btnResume = E.gfx.button('CONTINUAR', W / 2 - 100, 228, 200, 42,
-            { primary: true, screen: true, px: 17 });
-        s.btnMapPause = E.gfx.button('MAPA', W / 2 - 60, 282, 120, 32,
-            { primary: false, screen: true, px: 13 });
+        var r = E.ui.modal('pausa', { title: 'PAUSA', dismiss: false,
+                                      body: 'fase ' + s.level + '  ·  ' + s.score + ' pts',
+                                      buttons: PAUSE_BTNS });
+        if (r !== null) s.act = r;
     }
     if (s.ended) {
-        E.gfx.text(s.won ? 'FASE LIMPA!' : 'SEM PEDRAS',
-            W / 2, H / 2 - 10, { px: 34, align: 'center', valign: 'middle',
-                color: s.won ? OURO : VERMELHO, bg: C(0x0A1A12), screen: true });
-        E.gfx.text('fase ' + s.level + '  ·  ' + s.score + ' pts',
-            W / 2, H / 2 + 28, { px: 16, align: 'center', color: BRANCO,
-                bg: C(0x0A1A12), screen: true });
+        END_TXT.color = s.won ? OURO : VERMELHO;
+        E.gfx.text(s.won ? 'FASE LIMPA!' : 'SEM PEDRAS', W / 2, H / 2 - 20, END_TXT);
     }
 }
 
+// HUD de topo pelo E.ui.hud; a fila de pedras e a pausa ficam na faixa do
+// chao (embaixo), longe da mira
+var HUD_O = { h: 0, level: '', score: 0, left: null, bg: C(0x14241C) };
+var HUD_L = [{ icon: 'alert', text: '', color: VERDE }];
+
 function drawHud(s, E) {
     var W = s.W, H = s.H;
-    s.btnPause = { x: 6, y: 6, w: 36, h: 28 };
-    E.gfx.rect(s.btnPause.x, s.btnPause.y, s.btnPause.w, s.btnPause.h,
-        PAINEL, { r: 6, screen: true });
-    E.gfx.text('II', s.btnPause.x + s.btnPause.w / 2, s.btnPause.y + s.btnPause.h / 2,
-        { px: 14, align: 'center', valign: 'middle', color: BRANCO, screen: true });
-    E.gfx.text('PONTOS ' + s.score, W - 10, 8,
-        { px: 16, align: 'right', color: BRANCO, screen: true });
-    E.gfx.text('FASE ' + s.level + '  ' + s.levelName, 54, 8,
-        { px: 13, color: TEXT, screen: true });
-    E.gfx.text('GOBLINS ' + s.goblins + '   TIROS ' +
-        (s.shotsQueue ? s.shotsQueue.length : 0), 54, 28,
-        { px: 12, color: TEXT2, screen: true });
-    var t = s.tiro;
-    if (t) {
-        E.gfx.text(t.tipo.toUpperCase() + (t.estado === 'pronto' ? '  PRONTA' : ''),
-            W / 2, H - 24, { px: 14, align: 'center', color: OURO, screen: true });
+    HUD_O.h = Math.round(20 * E.U);
+    HUD_O.level = 'FASE ' + s.level;
+    HUD_O.score = s.score;
+    HUD_L[0].text = s.goblins + (s.goblins === 1 ? ' goblin' : ' goblins');
+    HUD_O.left = HUD_L;
+    E.ui.hud(HUD_O);
+    // fila: a pedra da vez some do berco quando voa; aqui as que faltam
+    var q = s.shotsQueue || [];
+    var x = 16, y = H - 22;
+    E.gfx.text(q.length ? 'PROXIMAS' : 'ULTIMA PEDRA', x, y, Q_TXT);
+    x += q.length ? 84 : 0;
+    for (var i = 0; i < q.length && i < 6; i++) {
+        drawShot(s, E, q[i], x + i * 30 + 14, y, 0);
     }
+    E.gfx.rect(BTN_PAUSE.x, BTN_PAUSE.y, BTN_PAUSE.w, BTN_PAUSE.h, C(0x14241C), PANEL_O);
+    E.ui.icon('pause', BTN_PAUSE.x + 11, BTN_PAUSE.y + 7, 22, { color: BRANCO });
 }

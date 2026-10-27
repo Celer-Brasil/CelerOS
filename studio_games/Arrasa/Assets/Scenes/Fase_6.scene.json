@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fase 6",
   "guid": "dfa29581e62fec3393dd2e3a1c5bcc7b",
   "settings": {
@@ -20,11 +20,12 @@
     "bg": "#0a1a12",
     "static": false,
     "assets": [
-      "dbfcc2ac2d56ee1292c0dfe968bae915",
-      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "8c464d357c3c3a6b27a5ff3e4827318f",
+      "803f8779b737f0a3c6b907e6b83f874a",
       "b008a784ee0ce873595510ff5b75f349",
-      "f3e8953166f83e96637b5346b48e4157",
-      "e3b697d07bd0213ad78d38dae91b808b"
+      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "e3b697d07bd0213ad78d38dae91b808b",
+      "f3e8953166f83e96637b5346b48e4157"
     ]
   },
   "entities": [
@@ -428,8 +429,8 @@
         "x": 309,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -439,7 +440,7 @@
           "id": "c_db55ea46",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -464,8 +465,8 @@
         "x": 381,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -475,7 +476,7 @@
           "id": "c_b48b9b4f",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -500,8 +501,8 @@
         "x": 444,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -511,7 +512,7 @@
           "id": "c_a6b43206",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -650,8 +651,8 @@
         "x": 321,
         "y": 370.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -661,7 +662,7 @@
           "id": "c_a256382b",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -686,8 +687,8 @@
         "x": 372,
         "y": 370.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 1.75,
+        "sx": 0.656,
+        "sy": 0.656,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -697,7 +698,7 @@
           "id": "c_5ee5ba50",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "efd19956a30fbb689f04e08f459c7691"
+            "sprite": "8ba173f91328b4779e5f1c02c0b10b1a"
           }
         },
         {
@@ -849,8 +850,8 @@
         "x": 345,
         "y": 276,
         "rot": 0,
-        "sx": 0.46875,
-        "sy": 0.46875,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -860,7 +861,7 @@
           "id": "c_34080b6c",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai1"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a4"
           }
         },
         {

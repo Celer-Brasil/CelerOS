@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fim",
   "guid": "63c0d958767b3a01a20e261405b741bb",
   "settings": {
@@ -9,7 +9,10 @@
       "screen": "end"
     },
     "bg": "#0a1a12",
-    "static": true
+    "static": true,
+    "assets": [
+      "8c464d357c3c3a6b27a5ff3e4827318f"
+    ]
   },
   "entities": [
     {
@@ -32,6 +35,30 @@
           "id": "c_07480f2e",
           "fields": {
             "script": "f6a2036e97941b7efbd8bb8031edf59b"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Fundo",
+      "fid": "e_a73142d4",
+      "active": true,
+      "z": -10,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1,
+        "ax": 0,
+        "ay": 0
+      },
+      "components": [
+        {
+          "type": "sprite",
+          "fields": {
+            "key": "#ff00ff",
+            "sprite": "6c22d9b75fc2ebe9d4ef5e24a3172749"
           }
         }
       ]

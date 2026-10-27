@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fase 10",
   "guid": "1b9724f2d2f0c7064629cc923b2a4647",
   "settings": {
@@ -21,11 +21,12 @@
     "bg": "#0a1a12",
     "static": false,
     "assets": [
-      "dbfcc2ac2d56ee1292c0dfe968bae915",
-      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "8c464d357c3c3a6b27a5ff3e4827318f",
+      "803f8779b737f0a3c6b907e6b83f874a",
       "b008a784ee0ce873595510ff5b75f349",
-      "f3e8953166f83e96637b5346b48e4157",
-      "e3b697d07bd0213ad78d38dae91b808b"
+      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "e3b697d07bd0213ad78d38dae91b808b",
+      "f3e8953166f83e96637b5346b48e4157"
     ]
   },
   "entities": [
@@ -163,8 +164,8 @@
         "x": 294,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -174,7 +175,7 @@
           "id": "c_a036e7b3",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -541,8 +542,8 @@
         "x": 333,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -552,7 +553,7 @@
           "id": "c_da5e9131",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -577,8 +578,8 @@
         "x": 393,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 1.75,
+        "sx": 0.656,
+        "sy": 0.656,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -588,7 +589,7 @@
           "id": "c_40197036",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "efd19956a30fbb689f04e08f459c7691"
+            "sprite": "8ba173f91328b4779e5f1c02c0b10b1a"
           }
         },
         {
@@ -626,8 +627,8 @@
         "x": 450,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -637,7 +638,7 @@
           "id": "c_bf1c34b1",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -776,8 +777,8 @@
         "x": 342,
         "y": 367.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -787,7 +788,7 @@
           "id": "c_a55242c9",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -812,8 +813,8 @@
         "x": 387,
         "y": 367.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -823,7 +824,7 @@
           "id": "c_2dfde614",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -962,8 +963,8 @@
         "x": 363,
         "y": 316.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -973,7 +974,7 @@
           "id": "c_b54bac91",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -998,8 +999,8 @@
         "x": 363,
         "y": 264,
         "rot": 0,
-        "sx": 0.46875,
-        "sy": 0.46875,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -1009,7 +1010,7 @@
           "id": "c_030186d3",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai1"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a4"
           }
         },
         {

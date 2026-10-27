@@ -1,20 +1,20 @@
 {
   "format": 1,
-  "guid": "914e1473e714e427ba27bb66362a8d3f",
+  "guid": "8c464d357c3c3a6b27a5ff3e4827318f",
   "importer": "sprite-sheet",
   "settings": {
     "w": 256,
-    "h": 256,
+    "h": 96,
     "mode": "grid",
-    "cols": 4,
-    "rows": 4,
-    "tw": 64,
-    "th": 64,
+    "cols": 8,
+    "rows": 3,
+    "tw": 32,
+    "th": 32,
     "pivot": [
       0.5,
       0.5
     ],
     "key": "#ff00ff",
-    "prefix": "ai"
+    "prefix": "a"
   }
 }

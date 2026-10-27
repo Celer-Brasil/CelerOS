@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fase 2",
   "guid": "4a98b07a4f49b338b85b75572e90a0ff",
   "settings": {
@@ -19,11 +19,12 @@
     "bg": "#0a1a12",
     "static": false,
     "assets": [
-      "dbfcc2ac2d56ee1292c0dfe968bae915",
-      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "8c464d357c3c3a6b27a5ff3e4827318f",
+      "803f8779b737f0a3c6b907e6b83f874a",
       "b008a784ee0ce873595510ff5b75f349",
-      "f3e8953166f83e96637b5346b48e4157",
-      "e3b697d07bd0213ad78d38dae91b808b"
+      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "e3b697d07bd0213ad78d38dae91b808b",
+      "f3e8953166f83e96637b5346b48e4157"
     ]
   },
   "entities": [
@@ -199,8 +200,8 @@
         "x": 336,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -210,7 +211,7 @@
           "id": "c_2b815c47",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -349,8 +350,8 @@
         "x": 336,
         "y": 373.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -360,7 +361,7 @@
           "id": "c_6ff195d9",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -385,8 +386,8 @@
         "x": 336,
         "y": 322.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -396,7 +397,7 @@
           "id": "c_f9a659ba",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -459,8 +460,8 @@
         "x": 423,
         "y": 400.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -470,7 +471,7 @@
           "id": "c_210f7643",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {

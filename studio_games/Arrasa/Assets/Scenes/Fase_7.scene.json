@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 6,
   "name": "Fase 7",
   "guid": "3cdfae4a705b7f08a19fe57414f4607c",
   "settings": {
@@ -20,11 +20,12 @@
     "bg": "#0a1a12",
     "static": false,
     "assets": [
-      "dbfcc2ac2d56ee1292c0dfe968bae915",
-      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "8c464d357c3c3a6b27a5ff3e4827318f",
+      "803f8779b737f0a3c6b907e6b83f874a",
       "b008a784ee0ce873595510ff5b75f349",
-      "f3e8953166f83e96637b5346b48e4157",
-      "e3b697d07bd0213ad78d38dae91b808b"
+      "d7e5198df8b8f1f29d659066ac56b9ce",
+      "e3b697d07bd0213ad78d38dae91b808b",
+      "f3e8953166f83e96637b5346b48e4157"
     ]
   },
   "entities": [
@@ -124,8 +125,8 @@
         "x": 300,
         "y": 424.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -135,7 +136,7 @@
           "id": "c_7a3f1078",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -388,8 +389,8 @@
         "x": 402,
         "y": 355.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -399,7 +400,7 @@
           "id": "c_55a86458",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -538,8 +539,8 @@
         "x": 402,
         "y": 301.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 0.328125,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -549,7 +550,7 @@
           "id": "c_2800ca6a",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a0"
           }
         },
         {
@@ -574,8 +575,8 @@
         "x": 402,
         "y": 252,
         "rot": 0,
-        "sx": 0.46875,
-        "sy": 0.46875,
+        "sx": 1,
+        "sy": 1,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -585,7 +586,7 @@
           "id": "c_c6362f98",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai1"
+            "sprite": "8c464d357c3c3a6b27a5ff3e4827318f#a4"
           }
         },
         {
@@ -610,8 +611,8 @@
         "x": 456,
         "y": 355.5,
         "rot": 0,
-        "sx": 0.328125,
-        "sy": 1.75,
+        "sx": 0.656,
+        "sy": 0.656,
         "ax": 0.5,
         "ay": 0.5
       },
@@ -621,7 +622,7 @@
           "id": "c_3c483593",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "efd19956a30fbb689f04e08f459c7691"
+            "sprite": "8ba173f91328b4779e5f1c02c0b10b1a"
           }
         },
         {

@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 5,
   "name": "Fase 1",
   "guid": "00ecf8bd6df3d80f81820aa63756c836",
   "settings": {
@@ -95,7 +95,7 @@
           "id": "c_2c7e1c12",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -245,7 +245,7 @@
           "id": "c_7b2e3012",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {

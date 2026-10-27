@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 5,
   "name": "Fase 8",
   "guid": "667a05cc373a5c8ac823e3e3066919f0",
   "settings": {
@@ -134,7 +134,7 @@
           "id": "c_beed5ae7",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -246,7 +246,7 @@
           "id": "c_393c41c5",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -358,7 +358,7 @@
           "id": "c_5975be97",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -470,7 +470,7 @@
           "id": "c_4302d66c",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -582,7 +582,7 @@
           "id": "c_6362a1b7",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -694,7 +694,7 @@
           "id": "c_a550a72b",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -730,7 +730,7 @@
           "id": "c_ce1c8e71",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {

@@ -147,6 +147,7 @@ function startGame(s, ctx) {
     s.msg = '';
     s.msgT = 0;
     s.aim = [];
+    s.animT = 0;       // relogio do ciclo novo dos goblins
     s.entPieces = [];
     if (!s.world) {
         s.msg = 'SEM CORPO RIGIDO';
@@ -393,6 +394,7 @@ function step(s, dt) {
     if (!s.world || !s.tiro) return;
     if (dt > 0.05) dt = 0.05;
     s.t += dt;
+    s.animT = (s.animT || 0) + dt;
     var t = s.tiro;
     if (t.estado === 'carregando') {
         t.t += dt;
@@ -592,6 +594,9 @@ function syncPieces(s) {
         var x = st[o + SX], y = st[o + SY];
         e.x = x * s.ESC;
         e.y = y * s.ESC;
+        if (c.k === 'goblin' && c.tipo !== 'rei') {
+            e.spr = 'goblin_walk#goblin' + (Math.floor(s.animT * 6 + c.semente) % 4);
+        }
         if (c.k === 'box') e.rot = st[o + SA] * 180 / Math.PI;
     }
 }

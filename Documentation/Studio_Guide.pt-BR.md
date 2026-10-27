@@ -220,10 +220,10 @@ script do projeto. Os apps originais em `hub_apps/` não foram alterados.
 
 | Projeto | Original | Versão nativa | Cenas | Extras | JS | Assets |
 |---------|----------|---------------|-------|--------|----|--------|
-| `studio_games/Detona` | `hub_apps/Detona` | 1.0.4 | 9 | 8 | 60,9 KB | 132,2 KB |
-| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88,3 KB | 78,9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.5 | 23 | 9 | 115,1 KB | 206,7 KB |
-| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36,9 KB | 110,8 KB |
+| `studio_games/Detona` | `hub_apps/Detona` | 1.0.5 | 9 | 9 | 63.4 KB | 133.1 KB |
+| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.2 | 13 | 14 | 91.8 KB | 90.5 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.7 | 23 | 9 | 118.6 KB | 204.4 KB |
+| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.2 | 5 | 8 | 38.5 KB | 120.2 KB |
 
 Abra, edite e jogue como qualquer projeto:
 
@@ -236,22 +236,24 @@ node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 
 O que cada remontagem ganhou:
 
-- **Detona 1.0.4** — seis fases de campanha como tilemaps 15x13 editáveis, três
+- **Detona 1.0.5** — seis fases de campanha como tilemaps 15x13 editáveis, três
   tilesets (jardim/forno/núcleo), saída escondida sob caixa, powerups (alcance,
   bomba, velocidade, remoto, escudo, vida), chefe de 12 HP com barra,
   estrelas, mapa de fases, pausa e progresso salvo. O toque é joystick
   flutuante de arraste (segurar anda casa a casa; toque seco planta); o HUD é
   memoizado fora da camada suja, o tabuleiro é assado num sprite e cada
-  quadro volta com um blit do tabuleiro.
-- **Arrasa 2.0.1** — as dez fases originais como cenas; cada caixa/goblin/rei é
+  quadro volta com um blit do tabuleiro. A 1.0.5 adiciona ciclos de caminhada
+  16-bit gerados por `text2d` para o soldado e o slime.
+- **Arrasa 2.0.2** — as dez fases originais como cenas; cada caixa/goblin/rei é
   uma entidade com textura/rotação sincronizada a um corpo `P.rigid`.
   Estilingue, sete poderes de pedra, TNT em cadeia, dano por impacto, estrelas
-  e progresso salvo.
-- **Lenda de Celer 2.0.5** — as 20 salas ASCII originais como cenas (Campo,
+  e progresso salvo. A 2.0.2 anima os goblins comuns com ciclo gerado por
+  `text2d` (o rei permanece na folha antiga).
+- **Lenda de Celer 2.0.7** — as 20 salas ASCII originais como cenas (Campo,
   Gruta e Templo), sólidos por tile, portais de borda/porta/escada/caverna/
   rachadura, espada/bomba/bumerangue, baús, Sábio, loja de cristais, Guardião
   em três fases, save automático, continuar, vitória e fim. Os botões A/B usam ícones de espada/bomba/bumerangue; a espada é um overlay separado (o corpo não some) e os tilemaps desenham a célula pelo canto. A 2.0.4 também leva o `deps.json` resolvido dentro do pacote, então a instalação direta acha os módulos compartilhados da engine. A 2.0.5 memoiza o HUD fora da camada suja, recorta a repintura do mundo na faixa do HUD (sem 12 círculos de coração, ícones de botão e textos por quadro) e reutiliza opções de sprite e nomes de frames.
-- **Supernova 3.0.1** — campanha de 10 ondas com chefe a cada cinco e modo
+- **Supernova 3.0.2** — campanha de 10 ondas com chefe a cada cinco e modo
   infinito, chefe em três fases, combo x1..x5, orbes, SUPERNOVA, tiro triplo,
   hitbox de graze, pausa, recorde e cenas nativas de título/vitória/derrota.
 

@@ -651,7 +651,9 @@ function drawGame(s, E) {
         if (e.boss) {
             E.spr.stamp('ai_atlas#ai2', e.x, e.y, { scale: 2.06, key: 0xF81F });
         } else {
-            E.spr.stamp('ai_atlas#ai1', e.x, e.y, { scale: e.r * 2 / 64, key: 0xF81F });
+            E.spr.stamp('inimigo#inimigo', e.x, e.y,
+                { scale: (e.r * 2 / 64) * (1 + 0.04 * Math.sin(s.t * 8 + e.x)),
+                  key: 0xF81F });
         }
         if (e.flash > 0) {
             if (e.boss) {

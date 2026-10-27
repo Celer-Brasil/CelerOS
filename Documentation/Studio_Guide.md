@@ -220,10 +220,10 @@ changed.
 
 | Project | Original | Native version | Scenes | Extras | JS | Assets |
 |---------|----------|----------------|--------|--------|----|--------|
-| `studio_games/Detona` | `hub_apps/Detona` | 1.0.4 | 9 | 8 | 60.9 KB | 132.2 KB |
-| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.1 | 13 | 12 | 88.3 KB | 78.9 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.5 | 23 | 9 | 115.1 KB | 206.7 KB |
-| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.1 | 5 | 5 | 36.9 KB | 110.8 KB |
+| `studio_games/Detona` | `hub_apps/Detona` | 1.0.5 | 9 | 9 | 63.4 KB | 133.1 KB |
+| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.2 | 13 | 14 | 91.8 KB | 90.5 KB |
+| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.7 | 23 | 9 | 118.6 KB | 204.4 KB |
+| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.2 | 5 | 8 | 38.5 KB | 120.2 KB |
 
 Open, edit and play like any project:
 
@@ -236,17 +236,20 @@ node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 
 What each remount added:
 
-- **Detona 1.0.4** — six campaign levels as editable 15x13 tilemaps with three
+- **Detona 1.0.5** — six campaign levels as editable 15x13 tilemaps with three
   tilesets (garden/forge/core), hidden exit under a crate, powerups (range,
   bomb, speed, remote, shield, life), a 12 HP boss with an HP bar, stars,
   level map, pause and saved progress. Touch is a floating drag joystick
   (hold to walk cell by cell; dry tap plants); the HUD is memoized outside
   the dirty layer, the board is baked into one sprite and each
-  frame restores it with one board blit.
-- **Arrasa 2.0.1** — the original ten stages as scenes; each box/goblin/king is
+  frame restores it with one board blit. 1.0.5 adds `text2d`-generated 16-bit
+  walk cycles for the soldier and slime.
+- **Arrasa 2.0.2** — the original ten stages as scenes; each box/goblin/king is
   an entity with its texture/rotation synced to a `P.rigid` body. Sling aim,
   seven projectile powers, TNT chains, impact damage, stars, saved progress.
-- **Lenda de Celer 2.0.5** — all 20 original ASCII rooms as scenes (Campo,
+  2.0.2 animates ordinary goblins with a `text2d`-generated cycle; the king
+  stays on the old sheet.
+- **Lenda de Celer 2.0.7** — all 20 original ASCII rooms as scenes (Campo,
   Gruta and Templo), tile solids per tile, portals for edges/doors/stairs/
   caves/cracked walls, sword/bomb/boomerang, chests, Sage, crystal shop, a
   three-phase Guardian, automatic save, continue, victory and game over. The A/B
@@ -255,10 +258,14 @@ What each remount added:
   ships the resolved `deps.json` inside the package, so a direct install finds
   the shared engine modules. 2.0.5 memoizes the HUD outside the dirty layer,
   clips the world repaint at the HUD band (no more 12 heart circles, button
-  icons and texts per frame) and reuses sprite options/frame names.
-- **Supernova 3.0.1** — a 10-wave campaign with a boss every five waves plus an
+  icons and texts per frame) and reuses sprite options/frame names. 2.0.7 swaps
+  the heroine to a `text2d`-generated cycle (the sword remains an overlay on
+  the old sheet).
+- **Supernova 3.0.2** — a 10-wave campaign with a boss every five waves plus an
   endless mode, three-phase boss, combo x1..x5, orbs, SUPERNOVA blast, triple
-  shot, graze hitbox, pause, record and native title/victory/loss scenes.
+  shot, graze hitbox, pause, record and native title/victory/loss scenes. 3.0.2
+  regenerates the scout ship and enemy drone with `text2d`; the enemy pulses in
+  flight.
 
 ### Scene data and the controller API
 

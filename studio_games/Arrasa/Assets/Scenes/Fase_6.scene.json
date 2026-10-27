@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 5,
   "name": "Fase 6",
   "guid": "dfa29581e62fec3393dd2e3a1c5bcc7b",
   "settings": {
@@ -439,7 +439,7 @@
           "id": "c_db55ea46",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -475,7 +475,7 @@
           "id": "c_b48b9b4f",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -511,7 +511,7 @@
           "id": "c_a6b43206",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {
@@ -661,7 +661,7 @@
           "id": "c_a256382b",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "914e1473e714e427ba27bb66362a8d3f#ai0"
+            "sprite": "7aa5f4a1b2928cf7015ac2cb143f5edb#goblin0"
           }
         },
         {

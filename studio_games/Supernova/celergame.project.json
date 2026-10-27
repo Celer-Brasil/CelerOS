@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "rev": 7,
+  "rev": 14,
   "studio": "0.1.0",
   "name": "Supernova",
   "packageName": "celeros.supernova",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "author": "CelerOS",
   "description": "Shooter vertical NATIVO do Celer Studio: campanha de 10 ondas com chefe a cada 5, modo infinito, tres vidas com nucleo de graze, combo x1..x5, orbes que carregam a SUPERNOVA (limpa a tela e causa 15 de dano), rajadas radiais com janela de escape, triplo apos chefes, pausa, recorde e cenas editaveis.",
   "type": "Game",
@@ -21,7 +21,7 @@
     "celeros.game.spr": "^1.7.0",
     "celeros.game.tilemap": "^1.3.0"
   },
-  "changelog": "3.0.1: bases de asset incluem a pasta celeros_supernova criada pelo celerctl; atlas/fundo/titulo voltam a carregar no 4848.\n3.0.0: remake nativo no Celer Studio. Cenas Titulo/Campanha/Infinito/Vitoria/Fim; nave como entidade da cena; ondas, chefes com 3 fases, combo, orbes, supernova, triplo, graze hitbox, pausa, recorde salvo e modo infinito. Sem bridge legado e sem pools de inimigos na cena principal.",
+  "changelog": "3.0.2: nave e drone inimigo refeitos com text2d a partir dos sprites antigos; inimigo ganha pulso de escala no draw e o chefe/orbe continuam no atlas antigo.\\n3.0.1: bases de asset incluem a pasta celeros_supernova criada pelo celerctl; atlas/fundo/titulo voltam a carregar no 4848.\n3.0.0: remake nativo no Celer Studio. Cenas Titulo/Campanha/Infinito/Vitoria/Fim; nave como entidade da cena; ondas, chefes com 3 fases, combo, orbes, supernova, triplo, graze hitbox, pausa, recorde salvo e modo infinito. Sem bridge legado e sem pools de inimigos na cena principal.",
   "canvas": {
     "w": 480,
     "h": 480,

@@ -253,6 +253,7 @@ function startGame(s, ctx) {
     s.btnBomb = { x: 396, y: 420, w: 76, h: 52 };
     s.btnPause = { x: 436, y: 6, w: 36, h: 30 };
     s.hudKey = '';
+    s.animT = 0;           // relogio das folhas animadas novas
     s.joyOn = false;       // joystick flutuante: base assentada no toque
     s.joyX0 = 0;
     s.joyY0 = 0;
@@ -513,6 +514,9 @@ function updateEnemies(s, dt) {
     for (var i = 0; i < s.enemies.length; i++) {
         var e = s.enemies[i];
         if (e.active === false) continue;
+        if (e.data.type !== 'boss') {
+            e.spr = 'slime_walk#slime' + (Math.floor(s.animT * 6 + i) % 4);
+        }
         if (cellOf(e.x) === pc && cellOf(e.y) === pr) {
             hurtPlayer(s);
             continue;
@@ -716,6 +720,11 @@ function gameUpdate(s, E, ctx, dt) {
     updateEnemies(s, dt);
     updateDrops(s);
     checkExit(s);
+    s.animT = (s.animT || 0) + dt;
+    if (s.player) {
+        s.player.spr = 'player_walk#player' +
+            (s.moving > 0 ? Math.floor(s.animT * 8) % 4 : 0);
+    }
     // um blit do tabuleiro inteiro custa menos no 4848 do que restaurar as
     // caixas sujas uma a uma (cada blitSprite percorre o sprite de fundo)
     if (E.dirty && E.dirty.full) E.dirty.full();

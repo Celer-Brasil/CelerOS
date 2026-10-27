@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 5,
   "name": "Fase 5",
   "guid": "b2f58f3ddec7f9ad66b70db0ea30363e",
   "settings": {
@@ -40,7 +40,7 @@
           "id": "c_df03dbf3",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai0"
+            "sprite": "d220ef94ff507d018a812c6512f8d712#player0"
           }
         },
         {
@@ -98,7 +98,7 @@
           "id": "c_52dc655e",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai1"
+            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
           }
         },
         {
@@ -134,7 +134,7 @@
           "id": "c_9f8b4fec",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai1"
+            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
           }
         },
         {
@@ -170,7 +170,7 @@
           "id": "c_3e1ac092",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai1"
+            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
           }
         },
         {
@@ -206,7 +206,7 @@
           "id": "c_dc451a12",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai1"
+            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
           }
         },
         {
@@ -242,7 +242,7 @@
           "id": "c_b21a4863",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai1"
+            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
           }
         },
         {
@@ -278,7 +278,7 @@
           "id": "c_252b9f47",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "84b5cfb0428a251dede8d7fa6d37a008#ai1"
+            "sprite": "d792ea517772c606a56a7096f1c60978#slime0"
           }
         },
         {

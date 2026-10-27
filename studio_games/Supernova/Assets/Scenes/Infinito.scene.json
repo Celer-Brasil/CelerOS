@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 5,
+  "rev": 10,
   "name": "Infinito",
   "guid": "379f658b5fd10e572cc69af0c4384277",
   "settings": {
@@ -11,7 +11,11 @@
       "screen": "game"
     },
     "bg": "#05060a",
-    "static": false
+    "static": false,
+    "assets": [
+      "90c050a63fc8a40683c1aa02b05a436f",
+      "6efdfc9f74c1f5439993836bbb1ccd2c"
+    ]
   },
   "entities": [
     {
@@ -59,7 +63,7 @@
           "id": "c_e043d2aa",
           "fields": {
             "key": "#ff00ff",
-            "sprite": "6efdfc9f74c1f5439993836bbb1ccd2c#ai0"
+            "sprite": "5faba82efb8c3cc40951d972805eb63f#nave"
           }
         }
       ]

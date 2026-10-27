@@ -49,9 +49,23 @@ var JOY_R = 36, JOY_DEAD = 12;
 var MSG_TXT = { px: 16, align: 'center', color: 0x101010, bg: 0xFFE0, screen: true };
 var ACT_TXT = { px: 10, align: 'center', valign: 'middle', color: OURO, screen: true };
 
-var HERO_FRAME = ['heroi#heroi0', 'heroi#heroi1', 'heroi#heroi2', 'heroi#heroi3',
-                  'heroi#heroi4', 'heroi#heroi5', 'heroi#heroi6', 'heroi#heroi7',
-                  'heroi#heroi8', 'heroi#heroi9'];
+// heroina.png: 4x4 de 40 px (text2d animate-set): linhas baixo, cima,
+// esquerda, direita; 4 quadros de caminhada cada. Nomes prontos
+var HERO_FRAME = [];
+for (var _h = 0; _h < 16; _h++) HERO_FRAME.push('heroina#h' + _h);
+var HERO_ROW = { down: 0, up: 4, left: 8, right: 12 };
+// efeitos.png: 6x6 de 48 px (text2d vfx). Corte pre-girado nas 4 direcoes
+// (regiao de folha nao gira), fumaca e cura; explosao em boom.png (96 px)
+var FX = [];
+for (var _f = 0; _f < 36; _f++) FX.push('efeitos#e' + _f);
+var SLASH_ROW = { right: 0, down: 6, left: 12, up: 18 };
+var FX_POOF = 24, FX_HEAL = 30;
+var BOOM = ['boom#b0', 'boom#b1', 'boom#b2', 'boom#b3', 'boom#b4', 'boom#b5'];
+var FX_T = 0.06;
+var OPT_FX = { key: 0xF81F };
+var OPT_ICON = { key: 0x0000 };
+var UI_THEME = { accent: '#ffd23f', accent2: '#e08a00', onAccent: 0x0000, radius: 12 };
+var HERO_SWORD = ['heroi#heroi6', 'heroi#heroi7', 'heroi#heroi8', 'heroi#heroi9'];
 var ENEMY_FRAME = {
     polvo: ['inimigos#inimigos0', 'inimigos#inimigos1'],
     morcego: ['inimigos#inimigos2', 'inimigos#inimigos3'],
@@ -113,6 +127,14 @@ exports.start = function (ctx) {
     s.hero = null;
 
     if (typeof __harness !== 'undefined') __harness.lenda = s;
+    s.vfx = [];
+    s.act = null;
+    s.walking = false;
+    s.art = !!(E.spr && E.spr.has && E.spr.has(FX[0]));
+    if (E.ui) {
+        E.ui.preset('soft');
+        E.ui.theme(UI_THEME);
+    }
 
     if (s.screen === 'title') {
         s.hasSave = !!E.save.obj('lenda', null);
@@ -170,7 +192,7 @@ function startRoom(s, ctx) {
         s.hero.x = cx(at[0]);
         s.hero.y = cy(at[1]);
         s.hero.active = true;
-        s.hero.spr = 'heroi#heroi0';
+        s.hero.spr = HERO_FRAME[0];
     }
     s.hx = cx(at[0]);
     s.hy = cy(at[1]);
@@ -273,48 +295,52 @@ exports.update = function (dt, ctx) {
     }
 };
 
+// os widgets do kit de UI decidem no draw e deixam a acao em s.act; o
+// update do quadro seguinte a executa (troca de cena fora do draw)
+function takeAct(s) {
+    var a = s.act;
+    s.act = null;
+    return a;
+}
+
+function goSaved(ctx, st) {
+    ctx.go(sceneName(st.area, parseInt(st.room.split(',')[0], 10),
+                     parseInt(st.room.split(',')[1], 10)), { at: st.at });
+}
+
+function newGame(E, ctx) {
+    var st = newState();
+    E.data.lenda = st;
+    saveState({ E: E, st: st });
+    ctx.go('Campo 1,1');
+}
+
 function updateTitle(s, E, ctx) {
-    if (s.how) {
-        if (E.input.tap) { s.how = false; E.redraw(); }
-        return;
-    }
-    if (s.btnNew && E.hit(s.btnNew)) {
-        var st = newState();
-        E.data.lenda = st;
-        saveState({ E: E, st: st });
-        ctx.go('Campo 1,1');
-    } else if (s.btnCont && E.hit(s.btnCont)) {
+    var a = takeAct(s);
+    if (s.how) E.redraw();          // modal anima: a cena estatica repinta
+    if (a === 'new') newGame(E, ctx);
+    else if (a === 'cont') {
         var st2 = E.save.obj('lenda', null) || newState();
         E.data.lenda = st2;
-        ctx.go(sceneName(st2.area, parseInt(st2.room.split(',')[0], 10),
-                         parseInt(st2.room.split(',')[1], 10)), { at: st2.at });
-    } else if (s.btnHow && E.hit(s.btnHow)) {
-        s.how = true;
-        E.redraw();
-    }
+        goSaved(ctx, st2);
+    } else if (a === 'how') { s.how = true; E.redraw(); }
+    else if (a === 'howClose') { s.how = false; E.redraw(); }
 }
 
 function updateWin(s, E, ctx) {
-    if (s.btnNew && E.hit(s.btnNew)) {
-        var st = newState();
-        E.data.lenda = st;
-        saveState({ E: E, st: st });
-        ctx.go('Campo 1,1');
-    } else if (s.btnMenu && E.hit(s.btnMenu)) {
-        ctx.go('Titulo');
-    }
+    var a = takeAct(s);
+    if (a === 'new') newGame(E, ctx);
+    else if (a === 'menu') ctx.go('Titulo');
 }
 
 function updateLose(s, E, ctx) {
-    if (s.btnCont && E.hit(s.btnCont)) {
+    var a = takeAct(s);
+    if (a === 'cont') {
         s.st.hp = s.st.hpMax;
         saveState(s);
         E.data.lenda = s.st;
-        ctx.go(sceneName(s.st.area, parseInt(s.st.room.split(',')[0], 10),
-                         parseInt(s.st.room.split(',')[1], 10)), { at: s.st.at });
-    } else if (s.btnMenu && E.hit(s.btnMenu)) {
-        ctx.go('Titulo');
-    }
+        goSaved(ctx, s.st);
+    } else if (a === 'menu') ctx.go('Titulo');
 }
 
 function updateGame(s, E, ctx, dt) {
@@ -340,12 +366,13 @@ function updateGame(s, E, ctx, dt) {
         }
         return;
     }
+    var act = takeAct(s);
     if (s.paused) {
-        if (s.btnResume && E.hit(s.btnResume)) s.paused = false;
-        else if (s.btnMenuPause && E.hit(s.btnMenuPause)) ctx.go('Titulo');
+        if (act === 'resume') { s.paused = false; s.hudKey = ''; E.redraw(); }
+        else if (act === 'menu') ctx.go('Titulo');
         return;
     }
-    if (s.btnPause && E.hit(s.btnPause)) { s.paused = true; return; }
+    if (E.input.justDown && inRect(s.btnPause, E.input.x, E.input.y)) { s.paused = true; return; }
     if (s.msgT > 0) { s.msgT -= dt; if (s.msgT <= 0) s.msg = ''; }
     if (s.portalCd > 0) s.portalCd -= dt;
     if (s.invuln > 0) s.invuln -= dt;
@@ -357,6 +384,7 @@ function updateGame(s, E, ctx, dt) {
     // e a direcao mudava sozinha conforme ela se aproximava. A gesto que comeca
     // num botao nao pega o stick; um que comecou fora continua valendo mesmo se
     // passar por cima do botao.
+    s.walking = false;
     var r0 = s.buttons;
     var overUi = inRect(r0 && r0.a, E.input.x, E.input.y) ||
                  inRect(r0 && r0.b, E.input.x, E.input.y) ||
@@ -375,6 +403,7 @@ function updateGame(s, E, ctx, dt) {
             if (Math.abs(dx) > Math.abs(dy)) s.dir = dx > 0 ? 'right' : 'left';
             else s.dir = dy > 0 ? 'down' : 'up';
             s.walkT += dt;
+            s.walking = true;
             s.frame = Math.floor(s.walkT * 7) % 2;
         }
     } else {
@@ -391,12 +420,36 @@ function updateGame(s, E, ctx, dt) {
     }
 
     updateHeroAnim(s);
+    if (s.art) updateFx(s, dt);
     updateEnemies(s, E, dt);
     updateRocks(s, E, dt);
     updateBombs(s, E, dt);
     updateBoomerang(s, E, dt);
     updateItems(s, E);
     checkPortals(s, E, ctx);
+}
+
+function addFx(s, x, y, kind) {
+    if (!s.vfx) return;
+    if (s.vfx.length >= 8) s.vfx.shift();
+    s.vfx.push({ x: x, y: y, t: 0, kind: kind });
+}
+
+function updateFx(s, dt) {
+    for (var i = s.vfx.length - 1; i >= 0; i--) {
+        s.vfx[i].t += dt;
+        if (s.vfx[i].t >= FX_T * 6) s.vfx.splice(i, 1);
+    }
+}
+
+function drawFx(s, E) {
+    for (var i = 0; i < s.vfx.length; i++) {
+        var v = s.vfx[i];
+        var f = Math.floor(v.t / FX_T);
+        if (f > 5) continue;
+        if (v.kind === 'boom') E.spr.stamp(BOOM[f], v.x, v.y, OPT_FX);
+        else E.spr.stamp(FX[(v.kind === 'heal' ? FX_HEAL : FX_POOF) + f], v.x, v.y, OPT_FX);
+    }
 }
 
 function inRect(r, x, y) {
@@ -414,13 +467,9 @@ function moveHero(s, dx, dy) {
 
 function updateHeroAnim(s) {
     if (!s.hero) return;
-    // o corpo continua visivel durante o golpe; a espada e um overlay
-    // desenhado por drawSword() (os quadros 6..9 da folha sao so a lamina)
-    var f;
-    if (s.dir === 'down') f = s.frame;
-    else if (s.dir === 'up') f = 2 + s.frame;
-    else if (s.dir === 'right') f = 4;
-    else f = 5;
+    // linha da direcao; parada = quadro de contato. A espada continua
+    // overlay da folha antiga (quadros 6..9, desenhada por drawSword)
+    var f = (HERO_ROW[s.dir] || 0) + (s.walking ? Math.floor(s.walkT * 8) % 4 : 0);
     var active = !(s.invuln > 0 && Math.floor(s.invuln * 12) % 2 === 0);
     if (s.hero.active !== active) s.hero.active = active;
     var spr = HERO_FRAME[f];
@@ -435,9 +484,13 @@ function drawSword(s, E) {
     else if (s.dir === 'left') x -= CELL * 0.85;
     else if (s.dir === 'down') y += CELL * 0.8;
     else { x += CELL * 0.18; y -= CELL * 0.8; }
-    if (E.spr && E.spr.has && E.spr.has('heroi#heroi' + f)) {
-        E.spr.stamp('heroi#heroi' + f, x, y, OPT_SWORD);
-        E.gfx.circle(x, y, 3, 0xFFE0, WORLD_DOT);
+    if (E.spr && E.spr.has && E.spr.has(HERO_SWORD[(f - 6 + HERO_SWORD.length) % HERO_SWORD.length])) {
+        E.spr.stamp(HERO_SWORD[(f - 6 + HERO_SWORD.length) % HERO_SWORD.length], x, y, OPT_SWORD);
+    }
+    // arco do golpe (vfx slash): 4 quadros ao longo dos 0,18 s
+    if (s.art) {
+        var k = Math.floor((0.18 - s.attackT) / 0.045);
+        E.spr.stamp(FX[(SLASH_ROW[s.dir] || 0) + (k < 0 ? 0 : (k > 3 ? 3 : k))], x, y, OPT_FX);
     }
 }
 
@@ -672,6 +725,7 @@ function hitEnemy(s, E, e, dmg) {
     if (E.audio) E.audio.sfx('hit', { gap: 30 });
     if (e.hp <= 0) {
         e.ent.active = false;
+        addFx(s, e.x, e.y, 'poof');
         if (E.fx) E.fx.burst(e.x, e.y, { n: 12, color: e.type === 'chefe' ? OURO : VERDE,
             speed: 120, life: 0.4 });
         if (e.type === 'chefe') {
@@ -710,6 +764,7 @@ function updateBombs(s, E, dt) {
 }
 
 function boom(s, E, x, y) {
+    addFx(s, x, y, 'boom');
     if (E.fx) {
         E.fx.burst(x, y, { n: 26, color: 0xFD20, speed: 190, life: 0.6 });
         E.fx.flash(0xFD20, 150);
@@ -777,7 +832,10 @@ function updateItems(s, E) {
 function pickup(s, E, it) {
     it.ent.active = false;
     s.st.got[it.key] = 1;
-    if (it.item === 'coracao') s.st.hp = clamp(s.st.hp + 1, 0, s.st.hpMax);
+    if (it.item === 'coracao') {
+        s.st.hp = clamp(s.st.hp + 1, 0, s.st.hpMax);
+        addFx(s, s.hx, s.hy - 8, 'heal');
+    }
     else if (it.item === 'cristal') s.st.crystals++;
     else if (it.item === 'chave') s.st.keys++;
     saveState(s);
@@ -845,65 +903,66 @@ exports.draw = function (ctx) {
     drawGame(s, E);
 };
 
+var LOGO_TXT = { px: 40, align: 'center', valign: 'middle', color: OURO,
+                 outline: C(0x2A1A00), screen: true };
+var SUB_TXT = { px: 14, align: 'center', valign: 'middle', color: TEXT2, screen: true };
+var BTN_NEW = { variant: 'primary', icon: 'play' };
+var BTN_CONT = { variant: 'secondary', icon: 'refresh' };
+var BTN_HOW = { variant: 'ghost', icon: 'info' };
+var BTN_MENU = { variant: 'secondary', icon: 'home' };
+var HOW_BODY = 'Arraste para andar. A: espada, falar, abrir bau. ' +
+               'B: bomba ou bumerangue. Fale com o Sabio.';
+var HOW_BTNS = [{ label: 'Entendi', value: 1, icon: 'check' }];
+var BIG2 = { key: 0xF81F, scale: 2 };
+
 function drawTitle(s, E) {
-    var W = s.W, H = s.H;
-    E.gfx.rect(0, 220, W, H - 220, C(0x0B1020), { screen: true });
-    E.gfx.text('LENDA DE CELER', W / 2, 250, { px: 32, align: 'center', color: OURO });
-    E.gfx.text('a pedra do templo despertou', W / 2, 284,
-        { px: 14, align: 'center', color: TEXT2 });
-    var y = 314;
-    s.btnNew = E.gfx.button('NOVO JOGO', W / 2 - 110, y, 220, 44,
-        { primary: true, screen: true, px: 18 });
+    var W = s.W;
+    // a arte do titulo e a entidade; a faixa de baixo dela traz uma barra de
+    // UI assada na imagem: o painel escuro comeca antes dela
+    E.gfx.rect(0, 186, W, s.H - 186, C(0x0B1020), { screen: true });
+    E.gfx.text('LENDA DE CELER', W / 2, 266, LOGO_TXT);
+    E.gfx.text('a pedra do templo despertou', W / 2, 300, SUB_TXT);
+    var c = E.ui.card(40, 318, W - 80, s.hasSave ? 152 : 112);
     if (s.hasSave) {
-        s.btnCont = E.gfx.button('CONTINUAR', W / 2 - 110, y + 54, 220, 38,
-            { primary: false, screen: true, px: 15 });
-        s.btnHow = E.gfx.button('COMO JOGAR', W / 2 - 90, y + 100, 180, 32,
-            { primary: false, screen: true, px: 12 });
+        if (E.ui.button('CONTINUAR', c.x, c.y, c.w, 46, BTN_NEW)) s.act = 'cont';
+        if (E.ui.button('NOVO JOGO', c.x, c.y + 54, c.w - 120, 40, BTN_CONT)) s.act = 'new';
+        if (E.ui.button('AJUDA', c.x + c.w - 110, c.y + 54, 110, 40, BTN_HOW)) s.act = 'how';
     } else {
-        s.btnCont = null;
-        s.btnHow = E.gfx.button('COMO JOGAR', W / 2 - 90, y + 54, 180, 34,
-            { primary: false, screen: true, px: 12 });
+        if (E.ui.button('NOVO JOGO', c.x, c.y, c.w, 46, BTN_NEW)) s.act = 'new';
+        if (E.ui.button('COMO JOGAR', c.x, c.y + 54, c.w, 32, BTN_HOW)) s.act = 'how';
     }
     if (s.how) {
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        s.btnNew = null; s.btnCont = null; s.btnHow = null;
-        E.gfx.panel(28, 80, W - 56, 330, { bg: PAINEL, stroke: OURO, r: 12, screen: true });
-        E.gfx.text('COMO JOGAR', W / 2, 112, { px: 26, align: 'center', color: OURO });
-        E.gfx.text('arraste para andar', W / 2, 154, { px: 16, align: 'center', color: BRANCO });
-        E.gfx.text('A: espada / falar / abrir bau', W / 2, 184, { px: 15, align: 'center', color: BRANCO });
-        E.gfx.text('B: bomba ou bumerangue', W / 2, 214, { px: 15, align: 'center', color: BRANCO });
-        E.gfx.text('fale com o Sabio para ganhar a espada', W / 2, 250,
-            { px: 13, align: 'center', color: TEXT2 });
-        E.gfx.text('toque para voltar', W / 2, 350, { px: 14, align: 'center', color: OURO });
+        var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY, buttons: HOW_BTNS });
+        if (r !== null) s.act = 'howClose';
     }
+}
+
+function endCard(s, E, title, color, sub) {
+    var W = s.W;
+    E.gfx.rect(0, 0, W, s.H, C(0x0B1020), { screen: true });
+    E.gfx.text(title, W / 2, 70, { px: 30, align: 'center', valign: 'middle', color: color,
+                                   outline: 0x0000, screen: true });
+    E.gfx.text(sub, W / 2, 108, SUB_TXT);
+    if (E.spr.has(HERO_FRAME[0])) E.spr.stamp(HERO_FRAME[0], W / 2, 186, BIG2);
+    var c = E.ui.card(40, 250, W - 80, 210);
+    E.gfx.hearts(s.st.hp > 0 ? s.st.hp : s.st.hpMax, s.st.hpMax, c.x, c.y,
+                 { size: 22, color: VERM, empty: 0x3008, screen: true });
+    if (E.spr.has('itens#itens1')) E.spr.stamp('itens#itens1', c.x + c.w - 70, c.y + 11, OPT_ICON);
+    E.gfx.text('x' + s.st.crystals, c.x + c.w, c.y + 11,
+               { px: 15, align: 'right', valign: 'middle', color: BRANCO, screen: true });
+    return c;
 }
 
 function drawWin(s, E) {
-    var W = s.W, H = s.H;
-    E.gfx.rect(0, 0, W, H, C(0x0B1020), { screen: true });
-    E.gfx.panel(40, 100, W - 80, 300, { bg: PAINEL, stroke: OURO, r: 12, screen: true });
-    E.gfx.text('A LENDA CONTINUA', W / 2, 142, { px: 28, align: 'center', color: OURO });
-    E.gfx.text('o Guardiao caiu e o cristal e seu', W / 2, 184,
-        { px: 14, align: 'center', color: TEXT2 });
-    E.gfx.text('vida ' + s.st.hpMax + '  ·  cristais ' + s.st.crystals,
-        W / 2, 222, { px: 16, align: 'center', color: BRANCO });
-    s.btnNew = E.gfx.button('NOVO JOGO', W / 2 - 110, 264, 220, 44,
-        { primary: true, screen: true, px: 17 });
-    s.btnMenu = E.gfx.button('MENU', W / 2 - 70, 320, 140, 32,
-        { primary: false, screen: true, px: 13 });
+    var c = endCard(s, E, 'LENDA VIVA!', OURO, 'o Guardiao caiu e o cristal e seu');
+    if (E.ui.button('NOVO JOGO', c.x, c.y + 54, c.w, 48, BTN_NEW)) s.act = 'new';
+    if (E.ui.button('MENU', c.x + c.w / 2 - 80, c.y + 112, 160, 40, BTN_MENU)) s.act = 'menu';
 }
 
 function drawLose(s, E) {
-    var W = s.W, H = s.H;
-    E.gfx.rect(0, 0, W, H, C(0x0B1020), { screen: true });
-    E.gfx.panel(40, 100, W - 80, 300, { bg: PAINEL, stroke: VERM, r: 12, screen: true });
-    E.gfx.text('VOCE CAIU', W / 2, 150, { px: 34, align: 'center', color: VERM });
-    E.gfx.text('o Sabio ainda espera na gruta', W / 2, 196,
-        { px: 14, align: 'center', color: TEXT2 });
-    s.btnCont = E.gfx.button('CONTINUAR', W / 2 - 110, 240, 220, 44,
-        { primary: true, screen: true, px: 17 });
-    s.btnMenu = E.gfx.button('MENU', W / 2 - 70, 296, 140, 32,
-        { primary: false, screen: true, px: 13 });
+    var c = endCard(s, E, 'VOCE CAIU', VERM, 'o Sabio ainda espera na gruta');
+    if (E.ui.button('CONTINUAR', c.x, c.y + 54, c.w, 48, BTN_NEW)) s.act = 'cont';
+    if (E.ui.button('MENU', c.x + c.w / 2 - 80, c.y + 112, 160, 40, BTN_MENU)) s.act = 'menu';
 }
 
 function drawGame(s, E) {
@@ -930,6 +989,7 @@ function drawGame(s, E) {
         }
     }
     drawSword(s, E);
+    if (s.art) drawFx(s, E);
     // HUD e botoes: memoizados fora da camada suja
     drawHud(s, E);
     // joystick: base assentada no toque + botao deslocado pelo diferencial
@@ -947,24 +1007,12 @@ function drawGame(s, E) {
     if (s.msg) {
         E.gfx.text(s.msg, W / 2, H - 70, MSG_TXT);
     }
-    if (s.dialog) {
-        var dlg = s.dialog;
-        E.gfx.rect(0, H - 146, W, 146, C(0x05080E), { screen: true });
-        E.gfx.rect(10, H - 140, W - 20, 132, C(0x101A2A), { screen: true });
-        E.gfx.text(dlg.lines[dlg.i], W / 2, H - 104,
-            { px: 15, align: 'center', color: BRANCO, fit: W - 44 });
-        E.gfx.text('toque para continuar', W / 2, H - 42,
-            { px: 11, align: 'center', color: TEXT2 });
-    }
+    if (s.dialog) drawDialog(s, E);
     if (s.paused) {
         if (E.dirty.unclip) E.dirty.unclip();   // a pausa cobre tambem o HUD
-        E.gfx.rect(0, 0, W, H, C(0x05080E), { screen: true });
-        E.gfx.panel(60, 150, W - 120, 190, { bg: PAINEL, stroke: OURO, r: 12, screen: true });
-        E.gfx.text('PAUSA', W / 2, 186, { px: 32, align: 'center', color: OURO });
-        s.btnResume = E.gfx.button('CONTINUAR', W / 2 - 100, 228, 200, 42,
-            { primary: true, screen: true, px: 17 });
-        s.btnMenuPause = E.gfx.button('MENU', W / 2 - 60, 282, 120, 32,
-            { primary: false, screen: true, px: 13 });
+        var pr = E.ui.modal('pausa', { title: 'PAUSA', dismiss: false,
+                                       body: s.roomName, buttons: PAUSE_BTNS });
+        if (pr !== null) s.act = pr;
         applyGameClip(s, E);
     }
     if (s.dead || s.win) {
@@ -974,6 +1022,32 @@ function drawGame(s, E) {
     }
 }
 
+var PAUSE_BTNS = [{ label: 'Menu', value: 'menu', icon: 'home' },
+                  { label: 'Continuar', value: 'resume' }];
+var DLG_TXT = { px: 15, color: BRANCO, screen: true };
+var DLG_HINT = { px: 11, align: 'right', color: TEXT2, screen: true };
+var DLG_LINE = [];
+
+// fala: card com retrato (Sabio = inimigos#8, lojista = bau) e o nome num
+// badge; a linha quebra pelo E.gfx.wrap
+function drawDialog(s, E) {
+    var dlg = s.dialog, W = s.W, H = s.H;
+    var line = dlg.lines[dlg.i];
+    var sep = line.indexOf(': ');
+    var who = sep > 0 ? line.substring(0, sep) : '';
+    var txt = sep > 0 ? line.substring(sep + 2) : line;
+    var c = E.ui.card(10, H - 150, W - 20, 140);
+    E.gfx.rect(c.x, c.y, 44, 44, C(0x1B2740), { r: 8, screen: true });
+    var face = who === 'LOJA' ? 'tileset#14' : 'inimigos#inimigos8';
+    if (E.spr.has(face)) E.spr.stamp(face, c.x + 22, c.y + 22, OPT_ICON);
+    if (who) E.ui.badge(who, c.x + 54, c.y + 4, { color: OURO, textColor: 0x0000 });
+    var lines = E.gfx.wrap ? E.gfx.wrap(txt, c.w - 54, DLG_TXT) : [txt];
+    for (var i = 0; i < lines.length && i < 3; i++) {
+        E.gfx.text(lines[i], c.x + 54, c.y + 44 + i * 22, DLG_TXT);
+    }
+    E.gfx.text((dlg.i + 1) + '/' + dlg.lines.length + '  toque', c.x + c.w, c.y + c.h - 12, DLG_HINT);
+}
+
 function drawAction(E, r, key, icon) {
     E.gfx.rect(r.x, r.y, r.w, r.h, C(0x1B2740), ACT_RECT);
     if (E.spr && E.spr.has && E.spr.has(icon)) {
@@ -981,6 +1055,9 @@ function drawAction(E, r, key, icon) {
     }
     E.gfx.text(key, r.x + 8, r.y + 7, ACT_TXT);
 }
+
+var HUD_INV = ['itens#itens1', 'itens#itens4', 'itens#itens3', 'itens#itens9'];
+var HUD_N = { px: 14, valign: 'middle', color: BRANCO, screen: true };
 
 function hudKey(s) {
     return s.st.hp + '|' + s.st.hpMax + '|' + s.st.crystals + '|' + s.st.bombs +
@@ -1017,12 +1094,16 @@ function drawHud(s, E) {
     E.gfx.text('VIDA', 8, 30, { px: 9, color: TEXT2, screen: true });
     E.gfx.hearts(s.st.hp, s.st.hpMax, 40, 26, { size: 10, color: VERM,
         empty: 0x3008, screen: true });
-    var info = 'CRISTAIS ' + s.st.crystals + '   BOMBAS ' + s.st.bombs +
-        '   CHAVES ' + s.st.keys + '   ESPADA ' + (s.st.sword || 1);
-    E.gfx.text(info, W / 2, 48, { px: 11, align: 'center', color: TEXT2,
-        fit: W - 80, screen: true });
-    E.gfx.text('II', W - 22, 18, { px: 13, align: 'center', valign: 'middle',
-        color: BRANCO, screen: true });
+    // inventario em icones da folha de itens (cristal, bomba, chave, espada)
+    var ix = 200;
+    for (var ii = 0; ii < HUD_INV.length; ii++) {
+        var n = ii === 0 ? s.st.crystals : (ii === 1 ? s.st.bombs :
+                (ii === 2 ? s.st.keys : (s.st.sword || 1)));
+        E.spr.stamp(HUD_INV[ii], ix + 16, 40, OPT_ICON);
+        E.gfx.text('' + n, ix + 32, 40, HUD_N);
+        ix += 58;
+    }
+    E.ui.icon('pause', W - 32, 8, 22, { color: BRANCO });
     if (!s.dialog) {
         drawAction(E, s.buttons.a, 'A', 'itens#itens9');
         drawAction(E, s.buttons.b, 'B',

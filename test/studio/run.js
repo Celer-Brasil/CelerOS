@@ -505,7 +505,7 @@ let built = null;
                 } else if (stage === 2 && now > 1900) {
                     pausedOk = !!s.paused;
                     stage = 3;
-                    env.__harness.tap(240, 249);  // continuar
+                    env.__harness.tap(337, 296);  // continuar (botao direito do modal)
                 } else if (stage === 3 && now > 2300) {
                     resumedOk = !s.paused;
                     stage = 4;

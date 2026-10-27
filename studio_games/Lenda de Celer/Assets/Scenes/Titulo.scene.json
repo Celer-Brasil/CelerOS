@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 8,
   "name": "Titulo",
   "guid": "21cad2170397329f66c2d6b87d490a39",
   "settings": {
@@ -9,7 +9,11 @@
       "screen": "title"
     },
     "bg": "#0b1020",
-    "static": true
+    "static": true,
+    "assets": [
+      "9f6a2f6a81d96c8f9c1aff063e7914d9",
+      "188539848446b129911ef98181d69bf7"
+    ]
   },
   "entities": [
     {

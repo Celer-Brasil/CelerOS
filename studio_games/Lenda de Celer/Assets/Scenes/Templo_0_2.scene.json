@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 3,
+  "rev": 9,
   "name": "Templo 0,2",
   "guid": "5928cc029f93e26c3c607d19e314c067",
   "settings": {
@@ -27,7 +27,11 @@
     "bg": "#0b1020",
     "static": false,
     "assets": [
-      "188539848446b129911ef98181d69bf7"
+      "188539848446b129911ef98181d69bf7",
+      "64a9c4c5cb3b42331c727887902eb02f",
+      "69d15b259f7d6221161f2fb9b3e7a68f",
+      "b90e46eda215549ba7b397acff34267b",
+      "4919eb5e972456b506e1a4bfe997e47d"
     ]
   },
   "entities": [
@@ -74,8 +78,8 @@
           "type": "sprite",
           "id": "c_f0eb2d1f",
           "fields": {
-            "key": "#000000",
-            "sprite": "heroi#heroi0"
+            "key": "#ff00ff",
+            "sprite": "9f6a2f6a81d96c8f9c1aff063e7914d9#h0"
           }
         }
       ]

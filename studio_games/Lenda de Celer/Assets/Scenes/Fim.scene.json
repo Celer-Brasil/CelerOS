@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "rev": 2,
+  "rev": 8,
   "name": "Fim",
   "guid": "356b91e3d0bb90fd7779e05b40fb38b9",
   "settings": {
@@ -9,7 +9,11 @@
       "screen": "lose"
     },
     "bg": "#0b1020",
-    "static": true
+    "static": true,
+    "assets": [
+      "9f6a2f6a81d96c8f9c1aff063e7914d9",
+      "188539848446b129911ef98181d69bf7"
+    ]
   },
   "entities": [
     {

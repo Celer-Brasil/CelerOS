@@ -192,40 +192,66 @@ static constexpr int kMaxVars = 16;
 static ShVar* s_vars = nullptr;
 static int s_varCount = 0;
 static int s_lastRc = 0;  // $?: ultimo codigo devolvido por um comando
+// O console CDC/UART e o EXEC do HostLink rodam em tasks diferentes e podem
+// disparar da mesma vez: sem a guarda, set/unset concorrentes corrompiam a
+// contagem (duplicata, leitura de slot parcial). Mesmo padrao do s_cwd.
+static portMUX_TYPE s_varMux = portMUX_INITIALIZER_UNLOCKED;
 
 static const char* shVarGet(const char* name) {
+    const char* found = nullptr;
+    taskENTER_CRITICAL(&s_varMux);
     for (int i = 0; i < s_varCount; i++) {
-        if (strcmp(s_vars[i].name, name) == 0) return s_vars[i].val;
+        if (strcmp(s_vars[i].name, name) == 0) {
+            found = s_vars[i].val;  // ponteiro estavel (buf fixo); valor pode
+            break;                  // mudar em seguida, igual ao shell real
+        }
     }
-    return nullptr;
+    taskEXIT_CRITICAL(&s_varMux);
+    return found;
 }
 
 static bool shVarSet(const char* name, const char* val) {
     if (s_vars == nullptr) {
-        s_vars = (ShVar*)malloc(sizeof(ShVar) * kMaxVars);
-        if (s_vars == nullptr) return false;
+        // malloc FORA da secao critica (pode demorar); dupla checagem dentro
+        ShVar* t = (ShVar*)malloc(sizeof(ShVar) * kMaxVars);
+        if (t == nullptr) return false;
+        taskENTER_CRITICAL(&s_varMux);
+        if (s_vars == nullptr) {
+            s_vars = t;
+            t = nullptr;
+        }
+        taskEXIT_CRITICAL(&s_varMux);
+        if (t != nullptr) free(t);  // outra task alocou antes
     }
+    taskENTER_CRITICAL(&s_varMux);
     for (int i = 0; i < s_varCount; i++) {
         if (strcmp(s_vars[i].name, name) == 0) {
             snprintf(s_vars[i].val, sizeof(ShVar::val), "%s", val);
+            taskEXIT_CRITICAL(&s_varMux);
             return true;
         }
     }
-    if (s_varCount >= kMaxVars) return false;
-    snprintf(s_vars[s_varCount].name, sizeof(ShVar::name), "%s", name);
-    snprintf(s_vars[s_varCount].val, sizeof(ShVar::val), "%s", val);
-    s_varCount++;
-    return true;
+    bool ok = false;
+    if (s_varCount < kMaxVars) {
+        snprintf(s_vars[s_varCount].name, sizeof(ShVar::name), "%s", name);
+        snprintf(s_vars[s_varCount].val, sizeof(ShVar::val), "%s", val);
+        s_varCount++;
+        ok = true;
+    }
+    taskEXIT_CRITICAL(&s_varMux);
+    return ok;
 }
 
 static void shVarUnset(const char* name) {
+    taskENTER_CRITICAL(&s_varMux);
     for (int i = 0; i < s_varCount; i++) {
         if (strcmp(s_vars[i].name, name) == 0) {
             memmove(&s_vars[i], &s_vars[i + 1], (s_varCount - i - 1) * sizeof(ShVar));
             s_varCount--;
-            return;
+            break;
         }
     }
+    taskEXIT_CRITICAL(&s_varMux);
 }
 
 // Expande $NOME, ${NOME} e $? (algoritmo puro no Utils/ShellLogic.h).
@@ -372,6 +398,12 @@ int cmdCat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
             print(ctx, "%.*s", (int)n, buf);
         }
+        if (ferror(f)) {
+            // erro de leitura (cartao puxado no meio) nao e EOF: saida parcial
+            // com exit 0 enganava o script que encadeava no cat
+            print(ctx, "cat: erro lendo %s\n", path.c_str());
+            rc = 1;
+        }
         fclose(f);
     }
     print(ctx, "\r\n");
@@ -495,13 +527,20 @@ int cmdSd(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         print(ctx, "SD: formato agendado — o aparelho vai REINICIAR e "
                    "formatar o cartao em FAT32 no boot (APAGA TUDO)...\r\n");
         vTaskDelay(pdMS_TO_TICKS(600));   // descarrega a resposta antes de cair
-        esp_restart();
+        CelerShell::requestRestart();
     }
     if (argc >= 2 && strcmp(argv[1], "apps") == 0) {
         // cria /sd/apps no cartao ja formatado (o store do celular escaneia)
-        print(ctx, FileSystem::exists("/sd/apps") ? "SD: /sd/apps existe\r\n"
-                                                  : "SD: /sd/apps criado\r\n");
-        return 0;
+        if (FileSystem::exists("/sd/apps")) {
+            print(ctx, "SD: /sd/apps existe\r\n");
+            return 0;
+        }
+        if (FileSystem::mkdir("/sd/apps")) {
+            print(ctx, "SD: /sd/apps criado\r\n");
+            return 0;
+        }
+        print(ctx, "SD: falhou ao criar /sd/apps (cartao montado?)\r\n");
+        return 1;
     }
     if (!FileSystem::sdMounted()) {
         print(ctx, "SD: nao montado. Cartao exFAT/virgem formata com `sd format`"
@@ -626,7 +665,12 @@ int cmdTop(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         return 1;
     }
     vTaskDelay(pdMS_TO_TICKS(windowMs));
-    DeviceStats::take(*b);
+    if (!DeviceStats::take(*b)) {  // sem a 2a foto o delta seria lixo
+        free(a);
+        free(b);
+        print(ctx, "sem memoria\r\n");
+        return 1;
+    }
 
     const uint64_t dTotalRt = b->totalRunTimeUs - a->totalRunTimeUs;
     const uint32_t secs = (uint32_t)(b->uptimeUs / 1000000ULL);
@@ -1230,7 +1274,10 @@ int cmdGrant(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
         std::string json = FileSystem::readTextFile((dir + "/app.json").c_str());
         if (json.empty()) continue;
         size_t k = json.find("\"packageName\"");
-        size_t q1 = k == std::string::npos ? k : json.find('"', json.find(':', k) + 1);
+        // O ':' tem que ser procurado DEPOIS da chave: npos+1 dava 0 e o q1
+        // caia na primeira aspas do app.json — grant saia para o pacote lixo
+        size_t colon = k == std::string::npos ? std::string::npos : json.find(':', k);
+        size_t q1 = colon == std::string::npos ? colon : json.find('"', colon + 1);
         size_t q2 = q1 == std::string::npos ? q1 : json.find('"', q1 + 1);
         if (q1 == std::string::npos || q2 == std::string::npos) continue;
         std::string pkg = json.substr(q1 + 1, q2 - q1 - 1);
@@ -1279,18 +1326,19 @@ int cmdReboot(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
     if (argc > 1 && strcmp(argv[1], "msc") == 0) {
 #if CONFIG_CELEROS_USB_MSC
         // Flag one-shot consumida no boot (main.cpp/usbMscMode): o proximo
-        // boot desanexa o /sd e expoe o cartao ao PC ate o reboot de saida.
+        // boot desanexa o /sd e expoe o cartao ao PC ate o reboot.
         FileSystem::usbMscFlagSet(true);
         print(ctx, "reiniciando em modo pen drive (SD exposto ao PC)...\r\n");
         vTaskDelay(pdMS_TO_TICKS(300));
-        esp_restart();
+        CelerShell::requestRestart();
 #else
         print(ctx, "reboot msc: sem suporte nesta placa (CELEROS_USB_MSC)\r\n");
+        return 1;  // sem isto o fluxo caia no reboot geral logo abaixo
 #endif
     }
     print(ctx, "reiniciando...\r\n");
     vTaskDelay(pdMS_TO_TICKS(300));
-    esp_restart();
+    CelerShell::requestRestart();
     return 0;
 }
 
@@ -2447,6 +2495,20 @@ const ShellCmd kCommands[] = {
 static char s_rRootA[96] = {0};
 static char s_rRootB[96] = {0};
 
+// Reinicio armado por "reboot"/"sd format" (ver CelerShell.h): o comando
+// arma em vez de chamar esp_restart dentro do execute() — o KL_EXEC do
+// HostLink precisa responder ANTES de o aparelho cair (o celerctl pendurava
+// ate o timeout: DEFERRED antigo "EXEC reboot nunca responde").
+static volatile bool s_restartArmed = false;
+
+void CelerShell::requestRestart() { s_restartArmed = true; }
+
+void CelerShell::pumpRestart() {
+    if (!s_restartArmed) return;
+    vTaskDelay(pdMS_TO_TICKS(20));  // ultimo print drena no canal
+    esp_restart();
+}
+
 void CelerShell::setRestrictedRoots(const char* a, const char* b) {
     if (a != nullptr) {
         strncpy(s_rRootA, a, sizeof(s_rRootA) - 1);
@@ -2559,7 +2621,9 @@ static int runSegment(char* seg, CelerShell::PrintFn print, void* ctx) {
         }
         if (!okCmd) {
             print(ctx, "%s: comando indisponivel no install.sh (restrito)\r\n", argv[0]);
+            taskENTER_CRITICAL(&s_varMux);
             s_lastRc = 126;
+            taskEXIT_CRITICAL(&s_varMux);
             return 1;
         }
     }
@@ -2614,7 +2678,9 @@ static int runSegment(char* seg, CelerShell::PrintFn print, void* ctx) {
     if (code < 0) {
         print(ctx, "%s: comando nao encontrado (help para lista)\r\n", argv[0]);
     }
+    taskENTER_CRITICAL(&s_varMux);
     s_lastRc = (code >= 0) ? code : 127;  // $?: 127 = nao encontrado, como no sh
+    taskEXIT_CRITICAL(&s_varMux);
     if (redir != nullptr) fclose(redir);
     return code;
 }
@@ -2624,7 +2690,10 @@ int CelerShell::execute(const char* line, PrintFn print, void* ctx) {
     // dollar vale em qualquer posicao. 2x MAX_LINE da folga para a
     // expansao (valores sao curtos, teto de 63 chars cada)
     char buf[MAX_LINE * 2];
-    shl::expandVars(line, buf, sizeof(buf), shellVarLookup, nullptr, s_lastRc);
+    taskENTER_CRITICAL(&s_varMux);
+    const int lastRc = s_lastRc;
+    taskEXIT_CRITICAL(&s_varMux);
+    shl::expandVars(line, buf, sizeof(buf), shellVarLookup, nullptr, lastRc);
 
     // ';' encadeia comandos (a saida do anterior NAO alimenta o proximo —
     // nao ha pipes); o codigo devolvido e o do ultimo

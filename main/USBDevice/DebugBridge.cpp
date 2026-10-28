@@ -57,13 +57,24 @@ int64_t s_authDeadline = 0;
 uint8_t s_authFails = 0;
 char s_authLine[96];
 size_t s_authLen = 0;
+// Ultima atividade do cliente TCP (segundos, boot-relative; escrita atomica
+// 32-bit). Um host que morre sem FIN (laptop em suspend) nunca acorda o
+// select: sem isto a sessao ficava presa para sempre — os leases do PC
+// (Resources::usbSession) nao venciam e o auto-off de rele/gpio nunca vinha.
+volatile uint32_t s_lastActSec = 0;
+constexpr uint32_t K_IDLE_TIMEOUT_S = 60;  // UART usa 8 s; TX/RX contam como vida
 
 SemaphoreHandle_t s_writeMutex = nullptr;
 
+static void noteActivity() {
+    s_lastActSec = (uint32_t)(esp_timer_get_time() / 1000000LL);
+}
+
 // ------------------------------------------------ token (NVS celer/*)
-// Mesmo formato do WebAuth: 8 chars do alfabeto sem ambiguos (0/O, 1/l/I).
+// Mesmo formato do WebAuth: 8 chars do alfabeto sem ambiguos (0/O, 1/l/I)
+// gerados; tokenSet aceita 6..31 (o teto do contrato no DebugBridge.h).
 // Carregado no begin() (boot, single-threaded): shell/info/auth so leem.
-char s_token[16] = "";
+char s_token[32] = "";
 constexpr const char* kAlphabet = "abcdefghjkmnpqrstuvwxyz23456789";
 constexpr size_t kTokenLen = 8;
 
@@ -112,11 +123,19 @@ bool tokenEq(const char* attempt, size_t alen) {
 // intercalam: 1 mutex + send() continuo por frame. O SO_SNDTIMEO do socket
 // garante que um host parado nao segura a task (nem o mutex) para sempre.
 bool tcpWrite(const uint8_t* data, size_t len) {
-    int fd = s_clientFd;
-    if (fd < 0 || !s_authOk) return false;
+    if (!s_authOk) return false;
+    // fd capturado DENTRO do mutex: capturar fora corria com o closeClient
+    // (close sem o mutex) e o reaccept devolvendo o MESMO numero de fd — o
+    // frame de log/debug saia no cliente NOVO (banner/auth corrompidos).
     if (s_writeMutex != nullptr && xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
         return false;
     }
+    int fd = s_clientFd;
+    if (fd < 0 || !s_authOk) {
+        if (s_writeMutex != nullptr) xSemaphoreGive(s_writeMutex);
+        return false;
+    }
+    noteActivity();  // TX do device conta como vida da sessao
     size_t off = 0;
     bool ok = true;
     while (off < len) {
@@ -135,8 +154,14 @@ bool tcpWrite(const uint8_t* data, size_t len) {
 
 void closeClient() {
     if (s_clientFd >= 0) {
-        close(s_clientFd);
+        // Fecha sob o mutex de escrita: um send() em voo (logcat/debug de
+        // outra task) nao pode ver o fd sumir no meio (nem reutilizado por
+        // um cliente novo logo depois — frames cruzando sessoes).
+        if (s_writeMutex != nullptr) xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(2000));
+        const int fd = s_clientFd;
         s_clientFd = -1;
+        if (fd >= 0) close(fd);
+        if (s_writeMutex != nullptr) xSemaphoreGive(s_writeMutex);
     }
     if (s_roamPaused) {
         // radio de volta ao dono normal (scan de roaming da task de fundo)
@@ -226,6 +251,10 @@ void handleProbe() {
     char out[112];
     int m = snprintf(out, sizeof(out), "CELEROS %s|%s|api %d|proto 2|tcp %u|id %s", CELEROS_VERSION,
                      Board::profile().id, CELEROS_API_LEVEL, (unsigned)kPort, id);
+    // snprintf truncado devolve o tamanho QUE TERIA: sem o clamp o sendto
+    // leria alem do fim do buffer (versao/board id anormais estouram o 112)
+    if (m < 0) return;
+    if (m >= (int)sizeof(out)) m = (int)sizeof(out) - 1;
     sendto(s_udpFd, out, (size_t)m, 0, (struct sockaddr*)&from, flen);
 }
 
@@ -253,6 +282,9 @@ void handleAccept() {
     // do cache mesmo com o IP mudado
     int m = snprintf(banner, sizeof(banner), "CELERBRIDGE 1 %s %s %u %s\n", Board::profile().id,
                      ip[0] ? ip : "?", (unsigned)kPort, id);
+    // mesmo clamp do handleProbe: retorno de snprintf truncado nao e comprimento
+    if (m < 0) m = 0;
+    if (m >= (int)sizeof(banner)) m = (int)sizeof(banner) - 1;
     if (send(fd, banner, (size_t)m, 0) != m) {
         close(fd);
         return;
@@ -264,6 +296,7 @@ void handleAccept() {
     s_authLen = 0;
     s_authLine[0] = '\0';
     s_authDeadline = esp_timer_get_time() + K_AUTH_TIMEOUT_US;
+    noteActivity();
 }
 
 // Linha acumulada ate o \n: "AUTH <token>". NO = tenta de novo (ate 3),
@@ -274,8 +307,6 @@ void handleAuthLine() {
     }
     if (s_authLen > 5 && strncmp(s_authLine, "AUTH ", 5) == 0 &&
         tokenEq(s_authLine + 5, s_authLen - 5)) {
-        s_authOk = true;
-        s_clientOn = true;
         // Cliente com sessao = radio dedicado ao bridge: o scan de roaming da
         // task de fundo tira o radio do canal por ~3,5 s a cada ~30 s e o
         // ota push rastejava nos ACKs (SmartDisplay, bancada 2026-10-05).
@@ -284,7 +315,12 @@ void handleAuthLine() {
             NetworkManager::instance().setRoamingEnabled(false);
             s_roamPaused = true;
         }
+        // O "OK\n" tem que ser o PRIMEIRO byte depois do AUTH: s_authOk antes
+        // do send deixava um log frame (tcpWrite de outra task) entrar na
+        // frente e o cliente lia lixo no lugar do OK do handshake.
         send(s_clientFd, "OK\n", 3, 0);
+        s_authOk = true;
+        s_clientOn = true;
         ESP_LOGI(TAG, "cliente bridge autenticado");
         return;
     }
@@ -305,6 +341,13 @@ void handleClientRx() {
             return;
         }
         for (int i = 0; i < n; i++) {
+            if (s_authOk) {
+                // O AUTH e os primeiros frames podem chegar no MESMO segmento
+                // TCP: engolir o resto do buffer pendurava o cliente (frames
+                // perdidos antes do parser) — alimenta a partir daqui.
+                s_link->feed((uint8_t)buf[i]);
+                continue;
+            }
             char c = buf[i];
             if (c == '\n') {
                 handleAuthLine();
@@ -324,6 +367,7 @@ void handleClientRx() {
         closeClient();
         return;
     }
+    noteActivity();  // RX do host conta como vida da sessao
     // Maquina byte a byte (mesma alimentacao da UART): o dispatch roda aqui,
     // serializado pelo mutex global do HostLink com os canais UART/CDC.
     for (int i = 0; i < n; i++) s_link->feed(buf[i]);
@@ -384,6 +428,15 @@ void bridgeTask(void*) {
         if (s_clientFd >= 0 && !s_authOk && esp_timer_get_time() > s_authDeadline) {
             closeClient();
         }
+        // Cliente autenticado que sumiu sem FIN (laptop em suspend, cabo WiFi
+        // morto): o select nunca acorda e a sessao (unica!) ficava presa para
+        // sempre — os leases do PC nao venciam (auto-off de rele/gpio). Espelho
+        // do idle de 8 s da UART, com folga para logcast calado e OTA lento.
+        if (s_clientFd >= 0 && s_authOk &&
+            (uint32_t)(esp_timer_get_time() / 1000000LL) - s_lastActSec > K_IDLE_TIMEOUT_S) {
+            ESP_LOGI(TAG, "cliente bridge ocioso ha %u s: encerrando", (unsigned)K_IDLE_TIMEOUT_S);
+            closeClient();
+        }
     }
 }
 
@@ -406,14 +459,27 @@ void DebugBridge::begin() {
 void DebugBridge::tick(bool) {
     if (!s_netUp || s_task != nullptr) return;
     // Nasce na 1a rede de verdade: placa sem WiFi nunca paga a stack da task.
-    // (Com CELEROS_APP_TASK os dois pumps podem chamar tick juntos — a flag
-    // estreita a janela e o create duplicado e inofensivo: so uma vence.)
+    // Os DOIS pumps (loop e present) podem chamar tick juntos: a checagem
+    // virou secao critica — sem ela, dois ticks passavam no "creating" e
+    // nasciam duas bridgeTask brigando pelo listener/s_clientFd (a perdedora
+    // do bind fechava o listener da vencedora no closeListener).
+    static portMUX_TYPE s_tickMux = portMUX_INITIALIZER_UNLOCKED;
     static volatile bool creating = false;
     static TickType_t failAt = 0;
-    if (creating) return;
-    TickType_t now = xTaskGetTickCount();
-    if (failAt != 0 && now - failAt < pdMS_TO_TICKS(5000)) return;
+    taskENTER_CRITICAL(&s_tickMux);
+    if (creating || s_task != nullptr) {
+        taskEXIT_CRITICAL(&s_tickMux);
+        return;
+    }
     creating = true;
+    taskEXIT_CRITICAL(&s_tickMux);
+    TickType_t now = xTaskGetTickCount();
+    if (failAt != 0 && now - failAt < pdMS_TO_TICKS(5000)) {
+        taskENTER_CRITICAL(&s_tickMux);
+        creating = false;
+        taskEXIT_CRITICAL(&s_tickMux);
+        return;
+    }
     // Stack em RAM INTERNA, sem excecao: o dispatch roda na propria task e
     // os handlers tocam flash (esp_ota_*, LittleFS) — na janela de cache
     // desativado da operacao SPI, stack na PSRAM derruba o device (bancada
@@ -431,7 +497,9 @@ void DebugBridge::tick(bool) {
         failAt = now;
         ESP_LOGE(TAG, "sem RAM interna para a task do bridge (tento em 5s)");
     }
+    taskENTER_CRITICAL(&s_tickMux);
     creating = false;
+    taskEXIT_CRITICAL(&s_tickMux);
 }
 
 bool DebugBridge::sessionActive() { return s_clientOn; }

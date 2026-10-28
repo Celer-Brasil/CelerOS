@@ -78,6 +78,9 @@ HostLink* s_link = nullptr;
 
 void cdcWrite(tinyusb_cdcacm_itf_t itf, const uint8_t* data, size_t len) {
     if (!tud_ready()) return;
+    // O take em handle nulo panica o FreeRTOS: callbacks de CDC ficam
+    // registrados antes dos buffers/mutex existirem (janela do init).
+    if (s_writeMutex == nullptr) return;
     if (xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(1000)) != pdTRUE) return;
     size_t sent = 0;
     while (sent < len) {
@@ -121,7 +124,13 @@ void usbShellTask(void*) {
     static LineEditor editor(shellPrint, nullptr);
     char line[CelerShell::MAX_LINE];
 
-    vTaskDelay(pdMS_TO_TICKS(100));  // deixa o terminal do host subir
+    // Espera o host configurar o CDC (ate 30 s): o banner de boot saia antes
+    // do SET_CONFIG, o cdcWrite descartava (tud_ready()=false) e o terminal
+    // aberto depois ficava mudo ate o primeiro Enter (bancada MSC: recuperacao
+    // sem nenhuma saida visivel).
+    for (int i = 0; i < 300 && !tud_ready(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
     shellPrint(nullptr, "\r\nCelerOS shell (digite help)\r\nceler> ");
 
     for (;;) {
@@ -130,6 +139,9 @@ void usbShellTask(void*) {
         if (editor.feed(byte, line, sizeof(line))) {
             shellPrint(nullptr, "\r\n");
             if (line[0] != '\0') CelerShell::execute(line, shellPrint, nullptr);
+            // "reboot"/"sd format" do teclado: o armamento precisa do restart
+            // aqui (mesmo contrato do KL_EXEC no HostLink)
+            CelerShell::pumpRestart();
             shellPrint(nullptr, "celer> ");
         }
     }

@@ -24,6 +24,18 @@ public:
     // allowlist. nullptr/no-arg = modo livre (console da bancada).
     static void setRestrictedRoots(const char* a, const char* b);
 
+    // Reinicio ADIADO: comandos que derrubam o aparelho ("reboot", "sd
+    // format") nao chamam esp_restart dentro do execute() — o KL_EXEC do
+    // HostLink respondia DEPOIS do reboot (o celerctl pendurava ate o
+    // timeout esperando a resposta que nunca vinha). O comando ARMA; quem
+    // executou (canal EXEC/CDC/UART) responde o que deve e chama
+    // pumpRestart(). Armar e seguro em qualquer task: leitura/escrita de
+    // bool volatile; o restart em si nunca e perdido (todo consumidor
+    // bombeia logo apos o execute).
+    static void requestRestart();
+    // Executa o reinicio armado (esp_restart; nao retorna). No-op sem armamento.
+    static void pumpRestart();
+
     static constexpr int MAX_LINE = 256;
 };
 

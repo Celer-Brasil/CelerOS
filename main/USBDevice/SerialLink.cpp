@@ -179,6 +179,9 @@ void feedConsole(uint8_t byte) {
     if (s_editor->feed(byte, line, sizeof(line))) {
         consolePrint(nullptr, "\r\n");
         if (line[0] != '\0') CelerShell::execute(line, consolePrint, nullptr);
+        // "reboot"/"sd format" do teclado: o armamento precisa do restart
+        // aqui (mesmo contrato do KL_EXEC no HostLink)
+        CelerShell::pumpRestart();
         consolePrint(nullptr, "celer> ");
     }
 }
@@ -344,14 +347,20 @@ void celer_log_vprintf(const char* fmt, va_list args) {
     }
 
     if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
-    if (s_logcat) {
-        // KL_LOG_DATA sai pelo canal ATIVO da sessao (UART0 ou CDC1 nativa)
-        HostLink::sendLogFrame(line, (size_t)n);
-    } else {
+    bool toLogcat = s_logcat;
+    if (!toLogcat) {
         ringPush(line, (size_t)n);
     }
     LogPersist::kern(line, (size_t)n);  // /log/kern.log (dedup + rotacao)
     if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
+    // O envio (frame de rede/CDC lento: ate 2 s por chunk) fica FORA do
+    // mutex do ring: com ele na mao, todo logger do sistema ficava
+    // bloqueado atras do host. O s_logFrameMutex do sendLogFrame preserva
+    // frames atomicos; a ordem entre tasks pode trocar, o conteudo nao.
+    if (toLogcat) {
+        // KL_LOG_DATA sai pelo canal ATIVO da sessao (UART0 ou CDC1 nativa)
+        HostLink::sendLogFrame(line, (size_t)n);
+    }
 
     if (s_mode != MODE_LINK) printf("%.*s", n, line);
 }
@@ -379,12 +388,15 @@ void celer_log_app(const char* pkg, const char* msg) {
     if ((size_t)n >= sizeof(line)) n = (int)sizeof(line) - 1;
 
     if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
-    if (s_logcat) {
-        HostLink::sendLogFrame(line, (size_t)n);
-    } else {
+    const bool toLogcat = s_logcat;
+    if (!toLogcat) {
         ringPush(line, (size_t)n);
     }
     if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
+    // Envio fora do mutex (mesma razao do celer_log_vprintf)
+    if (toLogcat) {
+        HostLink::sendLogFrame(line, (size_t)n);
+    }
 
     if (s_mode != MODE_LINK) printf("%.*s", n, line);
     LogPersist::app(base, msg != nullptr ? msg : "");  // /log/apps.log
@@ -394,15 +406,21 @@ void celer_logcat_set(bool on) {
     if (s_logMutex == nullptr) return;
     xSemaphoreTake(s_logMutex, portMAX_DELAY);
     if (on) {
-        // drena o ring acumulado antes de ligar o stream ao vivo
-        while (s_logTail != s_logHead) {
+        // drena o ring acumulado antes de ligar o stream ao vivo. O envio
+        // (rede/CDC lenta: ate 2 s por chunk) NAO pode acontecer com o mutex
+        // na mao — todo logger do sistema ficava bloqueado nele e o TWDT
+        // derrubava a task. Copia sob o mutex, envia fora, retoma.
+        for (;;) {
             char chunk[512];  // = kLogChunk do HostLink: um frame por bloco
             size_t n = 0;
             while (s_logTail != s_logHead && n < sizeof(chunk) - 1) {
                 chunk[n++] = s_logRing[s_logTail];
                 s_logTail = (s_logTail + 1) % K_LOG_RING;
             }
+            if (n == 0) break;
+            xSemaphoreGive(s_logMutex);
             HostLink::sendLogFrame(chunk, n);
+            xSemaphoreTake(s_logMutex, portMAX_DELAY);
         }
     }
     s_logcat = on;
@@ -427,20 +445,24 @@ size_t celer_log_ring_size(void) {
 }
 
 // Copia o conteudo do ring SEM consumir (dump repetivel): chama emit por
-// bloco de ate 512 B segurando o mutex — logs de outras tasks esperam a
-// copia acabar (mesmo custo do drain do LOG_ON, so que nao apaga nada).
+// bloco de ate 512 B. O emit (envio pela rede/CDC) roda FORA do mutex — com
+// ele na mao um host lento segurava todo logger do sistema pelo dump inteiro.
 void celer_log_ring_forEach(void (*emit)(const char* chunk, size_t n)) {
     if (emit == nullptr) return;
-    if (s_logMutex != nullptr) xSemaphoreTake(s_logMutex, portMAX_DELAY);
+    if (s_logMutex == nullptr) return;
+    xSemaphoreTake(s_logMutex, portMAX_DELAY);
     size_t tail = s_logTail;
-    while (tail != s_logHead) {
+    for (;;) {
         char chunk[512];  // = kLogChunk do HostLink: um frame por bloco
         size_t n = 0;
         while (tail != s_logHead && n < sizeof(chunk)) {
             chunk[n++] = s_logRing[tail];
             tail = (tail + 1) % K_LOG_RING;
         }
+        if (n == 0) break;
+        xSemaphoreGive(s_logMutex);
         emit(chunk, n);
+        xSemaphoreTake(s_logMutex, portMAX_DELAY);
     }
-    if (s_logMutex != nullptr) xSemaphoreGive(s_logMutex);
+    xSemaphoreGive(s_logMutex);
 }

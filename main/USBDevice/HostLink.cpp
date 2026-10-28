@@ -169,19 +169,27 @@ uint32_t s_wrTotal = 0;
 uint16_t s_wrSeq = 0;
 uint32_t s_wrCrc = 0;
 
-void closeWrite(bool keep) {
+// Fecha a escrita em curso. Devolve true so quando o .part virou o destino
+// (fclose + rename ok): o WRITE_END precisa saber — fclose e onde o disco
+// cheio aparece (flush), e responder OK com o arquivo DELETADO enganava o
+// host (push "concluido" que nao existe).
+bool closeWrite(bool keep) {
+    bool ok = true;
     if (s_wrFile != nullptr) {
         const bool closed = fclose(s_wrFile) == 0;  // flush: disco cheio aqui
         s_wrFile = nullptr;
         if (!keep || !closed) {
             if (s_wrTmp[0]) remove(s_wrTmp);  // nao deixa parcial
+            ok = false;
         } else if (!FileSystem::renameFile(s_wrTmp, s_wrPath)) {
             remove(s_wrTmp);
+            ok = false;
         }
     }
     s_wrPath[0] = '\0';
     s_wrTmp[0] = '\0';
     s_wrTotal = 0;
+    return ok;
 }
 
 // cria diretorios pais do caminho (mesmo comportamento do upload web)
@@ -384,59 +392,65 @@ void handleLs(const uint8_t* payload, uint16_t len) {
         respondError(KL_LS, "nao e diretorio");
         return;
     }
-    std::string out;
+    if (s_txFrame == nullptr) {
+        closedir(dir);
+        respondError(KL_LS, "sessao sem buffer");
+        return;
+    }
+    // Entradas montadas DIRETO no frame de resposta (mesma casa do READ):
+    // antes eram ~8 KB de std::string crescendo por realloc no heap (o CYD,
+    // sem PSRAM, ABORTA quando o malloc falha — padrao do projeto para
+    // caminhos de dados). Layout: [u32 next (so paginado)][u16 n][entradas].
+    uint8_t* body = txData();
+    const size_t cap = HostLink::MAX_PAYLOAD;  // txData() tem MAX_PAYLOAD uteis
+    size_t off = paged ? 6 : 2;                // cabecalho preenchido no fim
     uint16_t count = 0;
-    struct dirent* ent;
     uint32_t served = 0;  // entradas validas ja vistas (cursor conta estas)
     bool eof = true;
-    const size_t room = HostLink::MAX_PAYLOAD - 1 - (paged ? 6 : 2);
+    struct dirent* ent;
     while ((ent = readdir(dir)) != nullptr) {
         if (ent->d_name[0] == '.') continue;  // ocultos fora (como sempre)
         if (served++ < cursor) continue;      // paginacao: pula o ja servido
-        std::string full = std::string(path) + "/" + ent->d_name;
+        char full[512];
+        snprintf(full, sizeof(full), "%s/%s", path, ent->d_name);
         struct stat st;
         memset(&st, 0, sizeof(st));
         bool isDir = false;
         uint32_t size = 0, mtime = 0;
-        if (stat(full.c_str(), &st) == 0) {
+        if (stat(full, &st) == 0) {
             isDir = S_ISDIR(st.st_mode);
             size = (uint32_t)st.st_size;
             mtime = (uint32_t)st.st_mtime;
         }
-        uint8_t rec[10 + 256];
-        rec[0] = isDir ? 1 : 0;
-        le32(rec + 1, size);
-        le32(rec + 5, mtime);
         size_t nameLen = strlen(ent->d_name);
-        rec[9] = (uint8_t)nameLen;
-        memcpy(rec + 10, ent->d_name, nameLen);
-        if (out.size() + 10 + nameLen > room) {
+        if (nameLen > 255) nameLen = 255;  // teto do campo u8 do registro
+        if (off + 10 + nameLen > cap) {
             eof = false;  // encheu o frame: o resto fica para o proximo cursor
             break;
         }
-        out.append((const char*)rec, 10 + nameLen);
+        uint8_t* rec = body + off;
+        rec[0] = isDir ? 1 : 0;
+        le32(rec + 1, size);
+        le32(rec + 5, mtime);
+        rec[9] = (uint8_t)nameLen;
+        memcpy(rec + 10, ent->d_name, nameLen);
+        off += 10 + nameLen;
         count++;
     }
     closedir(dir);
 
     // resposta: [u32 next (0 = fim, so no modo paginado)] + u16 n + entradas
-    std::string body;
     if (paged) {
-        // cursor + count = indice da entrada que NAO coube (served ja a
-        // contou antes do break). O +1 antigo pulava 1 arquivo por pagina.
-        uint32_t next = eof ? 0 : (cursor + count);
-        body.resize(4 + 2 + out.size());
-        le32((uint8_t*)body.data(), next);
-        body[4] = (char)(uint8_t)count;
-        body[5] = (char)(uint8_t)(count >> 8);
-        memcpy(body.data() + 6, out.data(), out.size());
+        // next = indice da entrada que NAO coube (served ja a contou antes do
+        // break). O +1 antigo pulava 1 arquivo por pagina.
+        le32(body, eof ? 0 : (cursor + count));
+        body[4] = (uint8_t)count;
+        body[5] = (uint8_t)(count >> 8);
     } else {
-        body.resize(2 + out.size());
-        body[0] = (char)(uint8_t)count;
-        body[1] = (char)(uint8_t)(count >> 8);
-        memcpy(body.data() + 2, out.data(), out.size());
+        body[0] = (uint8_t)count;
+        body[1] = (uint8_t)(count >> 8);
     }
-    respond(KL_LS, 0, body.data(), (uint16_t)body.size());
+    respond(KL_LS, 0, body, (uint16_t)off);
 }
 
 void handleStat(const uint8_t* payload, uint16_t len) {
@@ -576,7 +590,10 @@ void handleWriteEnd(const uint8_t* payload, uint16_t len) {
             return;
         }
         uint32_t total = s_wrTotal, crc = s_wrCrc;
-        closeWrite(true);
+        if (!closeWrite(true)) {
+            respondError(KL_WRITE_END, "falha ao fechar (disco cheio?)");
+            return;
+        }
         uint8_t rec[8];
         le32(rec, total);
         le32(rec + 4, crc);
@@ -584,7 +601,10 @@ void handleWriteEnd(const uint8_t* payload, uint16_t len) {
         return;
     }
     uint32_t total = s_wrTotal;
-    closeWrite(true);
+    if (!closeWrite(true)) {
+        respondError(KL_WRITE_END, "falha ao fechar (disco cheio?)");
+        return;
+    }
     uint8_t rec[4];
     le32(rec, total);
     respond(KL_WRITE_END, 0, rec, sizeof(rec));
@@ -686,6 +706,9 @@ void handleExec(const uint8_t* payload, uint16_t len) {
         }
     }
     free(ctx.p);
+    // "reboot"/"sd format" passaram por aqui: a resposta ja saiu (o
+    // celerctl nao pendura mais esperando o EXEC que nunca vinha)
+    CelerShell::pumpRestart();
 }
 
 void handleReboot() {
@@ -1215,6 +1238,17 @@ bool HostLink::endSession() {
         // isto o fd ficava preso ate o proximo WRITE_BEGIN. O destino antigo
         // segue intacto porque a escrita foi para <destino>.part.
         if (s_wrFile != nullptr) closeWrite(false);
+        // OTA interrompida no meio (cabo puxado, cliente WiFi sumiu, idle
+        // do canal): aborta a gravacao e devolve o slot — sem isto o
+        // OtaGuard ficava preso e o upload web / hub recebiam "outra
+        // gravacao OTA em curso" ATE O REBOOT (o proximo OTA_BEGIN aborta,
+        // mas quem nao e celerctl nao tem como abrir esse caminho).
+        if (s_ota != 0) {
+            esp_ota_abort(s_ota);
+            s_ota = 0;
+            OtaGuard::release();
+            celer_log_println("[HL] OTA interrompida: gravacao abortada e slot liberado");
+        }
         // host sumiu sem DEBUG_CTL 0 (proxy morto a forca, cabo): um app
         // pausado no debugger ficaria esperando comando para sempre
         JsDebugger::setClient(false);

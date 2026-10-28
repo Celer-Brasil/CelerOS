@@ -64,7 +64,7 @@ char* s_flush = nullptr;
 size_t s_flushCap = 0;
 SemaphoreHandle_t s_mux = nullptr;
 bool s_ok = true;        // fopen/fwrite falhou: desiste ate o reboot (ring segue)
-bool s_dirTried = false;
+char s_dirMade[16] = {0};  // base cujo diretorio de log ja foi criado
 bool s_bootMark = false;
 
 void stageLine(Stage& st, const char* line, size_t len) {
@@ -108,9 +108,13 @@ void writeOut(const char* name, const char* data, size_t n) {
     // aqui na task main — task WDT e crash-loop (esp32-cam, 2026-10-10).
     const bool sd = FileSystem::sdMounted();
     const char* base = sd ? "/sd/log" : "/local/log";
-    if (!s_dirTried) {
+    // O diretorio tem que acompanhar a base VIGENTE: criava so uma vez no
+    // primeiro flush (sem cartao = /local/log); o SD montado depois nunca
+    // ganhava /sd/log, o fopen falhava e s_ok=false matava os logs ate o
+    // reboot. strcmp e o gate: mkdir idempotente so na troca de montagem.
+    if (strncmp(s_dirMade, base, sizeof(s_dirMade) - 1) != 0) {
         FileSystem::mkdir(base);  // idempotente
-        s_dirTried = true;
+        snprintf(s_dirMade, sizeof(s_dirMade), "%s", base);
     }
     char path[40];
     snprintf(path, sizeof(path), "%s/%s.log", base, name);

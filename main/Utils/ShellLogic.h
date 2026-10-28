@@ -206,6 +206,13 @@ inline Arith arithEval(const char* val, long* out) {
         case '/':
         case '%':
             if (rhs == 0) return Arith::DivZero;
+            if (rhs == -1) {
+                // LONG_MIN / -1 transborda (UB: SIGFPE no host, excecao no
+                // xtensa): em complemento de dois o quociente e o proprio
+                // LONG_MIN e o resto e 0 — via unsigned, sem UB
+                *out = (op == '/') ? (long)(0u - (unsigned long)lhs) : 0;
+                return Arith::Ok;
+            }
             *out = (op == '/') ? lhs / rhs : lhs % rhs;
             return Arith::Ok;
         default:
@@ -258,8 +265,27 @@ inline int runScript(FILE* f, const ScriptOpts& opts, ExecFn lineExec, ExecFn co
 
     while (fgets(line, sizeof(line), f) != nullptr) {
         lineno++;
-        size_t len = strlen(line);
+        const size_t rawLen = strlen(line);
+        // Linha maior que o buffer: o fgets devolve o pedaco sem '\n' e o
+        // RESTO seria executado como o proximo comando ("cp a b" cortado no
+        // meio virava outra ordem valida). Recusa a linha inteira.
+        bool truncated = rawLen == sizeof(line) - 1 && line[rawLen - 1] != '\n';
+        if (truncated) {
+            // Ultima linha do arquivo pode ter exatamente kMaxLine-1 B sem
+            // '\n' (sem newline final) e ser valida: um fgets a mais separa
+            // EOF (linha completa, executa) de continuacao (truncada de fato).
+            char probe[2];
+            truncated = fgets(probe, sizeof(probe), f) != nullptr;
+        }
+        size_t len = rawLen;
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+        // antes do '#'/vazio: o resto de um COMENTARIO cortado chegaria ao
+        // fgets seguinte sem o '#' e viraria comando
+        if (truncated) {
+            print(printCtx, "sh: linha %ld longa demais (max %d B)\r\n", lineno, kMaxLine - 1);
+            bad = true;
+            break;
+        }
         char* s = line;
         while (*s == ' ' || *s == '\t') s++;
         if (*s == '\0' || *s == '#') continue;

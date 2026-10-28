@@ -92,6 +92,286 @@ var BOSS_ART = ['chefe#c0', 'chefe#c1'];
 var UI_THEME = { accent: '#ffb000', accent2: '#ff5a00', onAccent: 0x0000,
                  radius: 14 };
 
+// ---------------------------------------------------------------- malha ---
+// Estado do duelo em nivel de MODULO: as cenas entram e saem, o script e o
+// mesmo modulo (cache do require), entao a sessao sobrevive a troca de fase.
+// Protocolo do Detona 0.10.x portado para o refactor: mensagens curtas 'd*'
+// pela malha CelerNet (dep celeros.mesh), sem ACK — cada evento leva um
+// numero de sequencia e o receptor descarta o que ja viu.
+var SEQMOD = 100000;
+var NET = {
+    fase: 'off',        // off|lobby|convidei|convite|aguarda|jogando|round|fim
+    me: null, rival: null, convide: null,
+    host: false, round: 0, seed: 0,
+    ganhos: 0, perdidos: 0,
+    res: null,          // venci|perdi|empate|saiu|desisti
+    seq: 1, lastSeq: -1, ack: -1,
+    hbAte: 0, presAte: 0, vistos: {},
+    envioMsg: '', envioAte: 0, envioN: 0,
+    ultC: -1, ultR: -1,
+    pendIr: null,       // {level, round} — a cena que esta rodando navega
+    tx: []              // sem radio (harness): o que seria enviado
+};
+
+function logDuelo(t) { if (typeof System !== 'undefined' && System.print) System.print('duelo: ' + t); }
+
+function netRadio() {
+    return typeof CelerNet !== 'undefined' && !!CelerNet.status && !!CelerNet.status().active;
+}
+
+function netSend(msg, broadcast, para) {
+    NET.tx.push(msg);
+    if (NET.tx.length > 24) NET.tx.shift();
+    if (!netRadio()) return;
+    if (broadcast) {
+        CelerNet.broadcast(msg, 4);
+    } else {
+        var dst = para || (NET.rival ? NET.rival.id : null);
+        if (dst) CelerNet.send(dst, msg, { urgent: true });
+    }
+}
+
+function netSeq() { NET.seq = (NET.seq + 1) % SEQMOD; return NET.seq; }
+
+function netNovo(seq) {
+    var d = (seq - NET.lastSeq + SEQMOD) % SEQMOD;
+    if (d === 0 || d >= SEQMOD / 2) return false;
+    NET.lastSeq = seq;
+    return true;
+}
+
+function netReset() {
+    NET.fase = 'off'; NET.rival = null; NET.convide = null;
+    NET.round = 0; NET.ganhos = 0; NET.perdidos = 0; NET.res = null;
+    NET.envioMsg = ''; NET.vistos = {}; NET.pendIr = null;
+    NET.ultC = -1; NET.ultR = -1; NET.lastSeq = -1; NET.ack = -1;
+}
+
+function netConvidar(id) {
+    NET.convide = { id: id, nome: (NET.vistos[id] || {}).nome || id };
+    NET.fase = 'convidei';
+    NET.envioMsg = 'di';
+    NET.envioAte = (typeof System !== 'undefined' ? System.millis() : 0) + 2200;
+    NET.envioN = 1;
+    netSend('di', false, NET.convide.id);
+    logDuelo('convite para ' + NET.convide.nome);
+}
+
+function netAceitar(sim) {
+    if (!NET.convide) return;
+    if (sim) {
+        NET.rival = NET.convide;
+        NET.convide = null;
+        NET.host = false;
+        NET.fase = 'aguarda';
+        netSend('da1');
+        logDuelo('duelo contra ' + NET.rival.nome + ' (convidado)');
+    } else {
+        netSend('da0');
+        NET.convide = null;
+    }
+}
+
+function netInicioRound() {
+    NET.round++;
+    NET.seed = 1000 + Math.floor(Math.random() * 89000);
+    NET.res = null;
+    NET.ack = -1;
+    NET.seq = 1;
+    NET.lastSeq = -1;
+    NET.fase = 'jogando';
+    NET.envioMsg = 'ds' + NET.seed + ',' + NET.round;
+    NET.envioAte = (typeof System !== 'undefined' ? System.millis() : 0) + 2200;
+    NET.envioN = 1;
+    netSend(NET.envioMsg);
+    logDuelo('round ' + NET.round + ' (seed ' + NET.seed + ')');
+    netIrArena();
+}
+
+// a fase do duelo sai do seed: mesma arena nos dois aparelhos
+function netIrArena() {
+    NET.pendIr = { level: 1 + (NET.seed % 6), round: NET.round };
+}
+
+function netEncerra(res) {
+    if (NET.fase === 'off' || NET.fase === 'fim') return;
+    if (!NET.res) NET.res = res;
+    NET.fase = 'round';
+    NET.envioMsg = '';
+    if (res === 'venci') NET.ganhos++;
+    else if (res === 'perdi') NET.perdidos++;
+}
+
+function netFim() {
+    if (NET.ganhos >= 2 || NET.perdidos >= 2) { NET.fase = 'fim'; return true; }
+    return false;
+}
+
+// fundo: heartbeat no lobby, reenvio sem ACK e presenca do rival
+function netPump(now) {
+    if (!netRadio()) return 0;
+    if (NET.fase === 'lobby' && now >= NET.hbAte) {
+        NET.hbAte = now + 3000;
+        netSend('dhl', true);
+    }
+    if (NET.envioMsg && now >= NET.envioAte) {
+        var done = NET.envioMsg.charAt(1) === 's' && NET.ack >= NET.round;
+        if (done) {
+            NET.envioMsg = '';
+        } else if (NET.envioMsg === 'di' && NET.fase !== 'convidei') {
+            NET.envioMsg = '';
+        } else if (++NET.envioN > 8) {
+            NET.envioMsg = '';
+            if (NET.fase === 'convidei') { NET.fase = 'lobby'; NET.convide = null; }
+            else netEncerra('saiu');
+        } else {
+            netSend(NET.envioMsg, false,
+                    NET.envioMsg === 'di' && NET.convide ? NET.convide.id : null);
+            NET.envioAte = now + 2200;
+        }
+    }
+    if (NET.rival && (NET.fase === 'jogando' || NET.fase === 'round') && now >= NET.presAte) {
+        NET.presAte = now + 2500;
+        var ns = CelerNet.nodes ? CelerNet.nodes() : [], vivo = false;
+        for (var i = 0; i < ns.length; i++) {
+            if (ns[i].id === NET.rival.id && ns[i].lastSeen < 12) vivo = true;
+        }
+        if (!vivo) { netEncerra('saiu'); logDuelo('rival saiu (presenca)'); }
+    }
+    return 0;
+}
+
+// uma mensagem da malha
+function netMsg(m) {
+    var msg = m.msg;
+    if (typeof msg !== 'string' || msg.length < 2 || msg.charAt(0) !== 'd') return;
+    var op = msg.charAt(1);
+    var now = (typeof System !== 'undefined' ? System.millis() : 0);
+    if (op === 'h') {
+        if (NET.fase === 'lobby' || NET.fase === 'convidei')
+            NET.vistos[m.from] = { nome: m.fromName || m.from, at: now };
+        return;
+    }
+    if (op === 'i') {
+        if (NET.fase === 'lobby' && (!NET.convide || NET.convide.id !== m.from))
+            NET.convide = { id: m.from, nome: m.fromName || m.from, at: now };
+        return;
+    }
+    if (op === 'a') {
+        if (NET.fase === 'convidei' && NET.convide && m.from === NET.convide.id) {
+            if (msg.charAt(2) === '1') {
+                NET.rival = NET.convide;
+                NET.convide = null;
+                NET.host = true;
+                logDuelo('duelo contra ' + NET.rival.nome + ' (host)');
+                netInicioRound();
+            } else {
+                NET.fase = 'lobby';
+                NET.convide = null;
+            }
+        }
+        return;
+    }
+    if (!NET.rival || m.from !== NET.rival.id) return;
+    if (op === 'q') { netEncerra('saiu'); logDuelo('rival desistiu'); return; }
+    if (op === 's') {
+        var vs = msg.substring(2).split(',');
+        var round = parseInt(vs[1], 10);
+        if (round > NET.round) {
+            NET.round = round;
+            NET.seed = parseInt(vs[0], 10);
+            NET.fase = 'jogando';
+            NET.seq = 1;
+            NET.lastSeq = -1;
+            netSend('dy' + round);
+            logDuelo('round ' + round + ' (seed ' + NET.seed + ')');
+            netIrArena();
+        } else {
+            netSend('dy' + round);
+        }
+        return;
+    }
+    if (op === 'y') { NET.ack = parseInt(msg.substring(2), 10); return; }
+    if (NET.fase !== 'jogando' && NET.fase !== 'round') return;
+    var p = msg.substring(2).split(',');
+    var seq = parseInt(p[0], 10);
+    if (op === 'm') {              // o rival morreu
+        if (!netNovo(seq)) return;
+        if (NET.res === 'perdi') { NET.res = 'empate'; netEncerra('empate'); return; }
+        netEncerra('venci');
+        logDuelo('rival morreu');
+        return;
+    }
+    if (!netNovo(seq)) return;
+    if (op === 'p') NET.rivalPos = { c: parseInt(p[1], 10), r: parseInt(p[2], 10) };
+    else if (op === 'b') NET.rivalBomba = { c: parseInt(p[1], 10), r: parseInt(p[2], 10),
+                                            range: parseInt(p[3], 10) };
+    else if (op === 'd') NET.rivalDetona = true;
+    else if (op === 'g') NET.rivalDrop = { c: parseInt(p[1], 10), r: parseInt(p[2], 10) };
+}
+
+// ------------------------------------------------------------ sobrevivencia
+// Ondas infinitas na arena da Fase 1: a cada onda limpa entram mais bichos,
+// com tipos liberados por onda e o chefe a cada 5. Recorde em sobre.hi.
+function spawnEnemy(s, type, c, r) {
+    s.enemies.push({ x: center(c), y: center(r), active: true,
+                     data: { kind: 'enemy', type: type, hp: type === 'boss' ? 8 : 1 },
+                     spr: ART[ENEMY_ART[type] || 16] });
+}
+
+function freeCell(s, minDist) {
+    for (var n = 0; n < 60; n++) {
+        var c = 1 + Math.floor(Math.random() * (COLS - 2));
+        var r = 1 + Math.floor(Math.random() * (ROWS - 2));
+        if (s.map && s.map.get(c, r) !== 0) continue;
+        if (bombAt(s, c, r)) continue;
+        if (Math.abs(c - s.gx) + Math.abs(r - s.gy) < minDist) continue;
+        return { c: c, r: r };
+    }
+    return null;
+}
+
+function waveType(onda) {
+    if (onda % 5 === 0) return 'boss';
+    var pool = ['slime'];
+    if (onda >= 2) pool.push('hunter');
+    if (onda >= 4) pool.push('ghost');
+    return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function startWave(s, onda) {
+    s.onda = onda;
+    // a onda 1 e a populacao da propria fase (as caixas ainda fecham a
+    // arena); das seguintes em diante o spawner enche os corredores abertos
+    var n = onda === 1 ? 0 : clamp(2 + Math.floor(onda / 2), 2, 8);
+    var placed = 0;
+    for (var i = 0; i < n; i++) {
+        var cell = freeCell(s, 4);
+        if (!cell) break;
+        spawnEnemy(s, waveType(onda), cell.c, cell.r);
+        placed++;
+    }
+    s.msg = 'ONDA ' + onda;
+    s.msgT = 1.6;
+    if (s.E.audio) s.E.audio.sfx([72, 76, 79], { gap: 70 });
+    if (placed === 0) s.waveGap = 0.6;   // arena cheia: tenta de novo
+}
+
+function updateWaves(s, dt) {
+    if (aliveEnemies(s).length) return;
+    s.waveGap = (s.waveGap === undefined ? 1.4 : s.waveGap) - dt;
+    if (s.waveGap > 0) return;
+    s.waveGap = 1.4;
+    startWave(s, (s.onda || 0) + 1);
+}
+
+function saveSurviveRecord(s) {
+    var hi = s.E.save.num('sobre.hi', 0);
+    if (s.score > hi) s.E.save.set('sobre.hi', s.score);
+    var hiOnda = s.E.save.num('sobre.onda', 0);
+    if ((s.onda || 0) > hiOnda) s.E.save.set('sobre.onda', s.onda);
+}
+
 function center(c) { return c * CELL + CELL / 2; }
 function cellOf(v) { return Math.round((v - CELL / 2) / CELL); }
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
@@ -201,6 +481,12 @@ exports.start = function (ctx) {
     s.W = E.W;
     s.H = E.H;
     s.screen = (ctx.scene.data && ctx.scene.data.screen) || 'title';
+    s.mode = 'campaign';
+    s.onda = 0;
+    s.waveGap = undefined;
+    s.morteT = 0;
+    s.roundT = 0;
+    s.rival = null;
     s.how = false;
     s.msg = '';
     s.msgT = 0;
@@ -218,7 +504,11 @@ exports.start = function (ctx) {
     s.act = null;
     s.stars = 0;
 
-    if (typeof __harness !== 'undefined') __harness.detona = s;
+    if (typeof __harness !== 'undefined') {
+        __harness.detona = s;
+        __harness.detona.net = NET;
+        __harness.detona.netIn = netMsg;   // test injeta mensagens da malha
+    }
     uiTheme(E);
 
     if (s.screen === 'title') {
@@ -233,6 +523,14 @@ exports.start = function (ctx) {
         s.score = E.data.score || 0;
         s.best = E.save.num('best', 0);
         if (E.audio) E.audio.music(MENU_SONG);
+    } else if (s.screen === 'duel') {
+        // lobby: sessao viva volta pro lobby; partida em andamento e abortada
+        if (NET.fase === 'jogando' || NET.fase === 'round' || NET.fase === 'fim') netReset();
+        if (NET.fase === 'off') netReset();
+        NET.fase = (NET.fase === 'convidei' || NET.fase === 'aguarda') ? NET.fase : 'lobby';
+        NET.hbAte = 0;
+        s.onda = 0;
+        if (E.audio) E.audio.music(MENU_SONG);
     } else {
         startGame(s, ctx);
     }
@@ -245,10 +543,19 @@ function startGame(s, ctx) {
     s.scene = ctx.scene;
     s.level = d.level || 1;
     s.levelName = d.name || ('Fase ' + s.level);
+    s.mode = (E.data && E.data.mode) || 'campaign';
     s.themeName = d.theme || 'garden';
     s.theme = themeOf(s.themeName);
     s.time0 = d.time || 120;
     s.timeLeft = s.time0;
+    if (s.mode !== 'campaign') {
+        // sobrevivencia/duelo nao tem relogio: o round acaba na morte (duelo)
+        // ou na onda (sobrevivencia)
+        s.time0 = 0;
+        s.timeLeft = 0;
+    }
+    if (s.mode === 'survive') s.levelName = 'SOBREVIVENCIA';
+    if (s.mode === 'duel') s.levelName = 'DUELO';
     s.map = ctx.scene.tm('mapa');
     s.player = ctx.scene.find('Jogador');
     s.enemies = [];
@@ -257,6 +564,7 @@ function startGame(s, ctx) {
         if (ents[i].data && ents[i].data.kind === 'enemy') s.enemies.push(ents[i]);
     }
     s.exit = d.exit || [13, 11];
+    if (s.mode !== 'campaign') { s.exit = [-1, -1]; s.exitRevealed = false; }
     s.score0 = E.data.score || 0;
     s.score = s.score0;
     s.lives = 3;
@@ -298,10 +606,22 @@ function startGame(s, ctx) {
     s.msg = '';
     s.msgT = 0;
     if (E.audio) E.audio.music(BATTLE_SONG);
-    if (s.map) {
+    if (s.map && s.mode === 'campaign') {
         var v = s.map.get(s.exit[0], s.exit[1]);
         if (v === 2) s.exitRevealed = false;
         else s.exitRevealed = true;
+    }
+    if (s.mode === 'survive') startWave(s, 1);
+    if (s.mode === 'duel') {
+        // arena limpa: no duelo os unicos perigos sao as bombas
+        for (var di = 0; di < s.enemies.length; di++) s.enemies[di].active = false;
+        s.enemies = [];
+        s.rival = { c: COLS - 2, r: ROWS - 2, face: 'down', dead: false };
+        NET.ultC = s.gx;
+        NET.ultR = s.gy;
+        // nao pisa no estado do protocolo: se o round ja fechou (dm chegou
+        // antes da cena entrar) ou a partida acabou, o valor manda
+        if (NET.fase === 'off' || NET.fase === 'aguarda') NET.fase = 'jogando';
     }
 };
 
@@ -310,6 +630,7 @@ exports.update = function (dt, ctx) {
     if (s.screen === 'title') return titleUpdate(s, E);
     if (s.screen === 'map') return mapUpdate(s, E, ctx);
     if (s.screen === 'win') return winUpdate(s, E, ctx);
+    if (s.screen === 'duel') return duelUpdate(s, E, ctx, dt);
     gameUpdate(s, E, ctx, dt);
 };
 
@@ -326,7 +647,17 @@ function titleUpdate(s, E) {
     if (s.how) E.redraw();          // modal anima: a cena estatica repinta
     if (a === 'play') {
         E.data.score = 0;
+        E.data.mode = 'campaign';
         s.ctx.go('Mapa');
+    } else if (a === 'survive') {
+        E.data.score = 0;
+        E.data.mode = 'survive';
+        s.ctx.go('Fase 1');
+    } else if (a === 'duel') {
+        netReset();
+        NET.fase = 'lobby';
+        E.data.mode = 'campaign';
+        s.ctx.go('Duelo');
     } else if (a === 'how') {
         s.how = true;
         E.redraw();
@@ -338,6 +669,7 @@ function titleUpdate(s, E) {
 
 function mapUpdate(s, E, ctx) {
     var a = takeAct(s);
+    E.data.mode = 'campaign';
     if (a === 'back') { ctx.go('Titulo'); return; }
     if (a === 'locked') {
         if (E.ui) E.ui.toast('Termine a fase anterior', { type: 'warn', icon: 'lock' });
@@ -402,13 +734,18 @@ function placeBomb(s) {
     if (bombAt(s, s.gx, s.gy)) return;
     s.bombs.push({ c: s.gx, r: s.gy, t: 1.6, range: s.range,
                    remote: s.remote, owner: 'player' });
+    if (s.mode === 'duel') {
+        netSend('db' + netSeq() + ',' + s.gx + ',' + s.gy + ',' + s.range);
+    }
     if (s.E.audio) s.E.audio.sfx([62, 55], { gap: 30 });
 }
 
 function detonateRemote(s) {
+    var any = false;
     for (var i = 0; i < s.bombs.length; i++) {
-        if (s.bombs[i].remote) s.bombs[i].t = 0;
+        if (s.bombs[i].remote && s.bombs[i].owner === 'player') { s.bombs[i].t = 0; any = true; }
     }
+    if (any && s.mode === 'duel') netSend('dd' + netSeq());
 }
 
 function addFlame(s, c, r, owner) {
@@ -618,6 +955,13 @@ function hurtPlayer(s) {
         s.lost = true;
         s.done = true;
         if (s.E.audio) s.E.audio.stop();
+        if (s.mode === 'duel') {
+            // morri: aviso o rival e espero 0.9 s (os dois mortos = empate)
+            netSend('dm' + netSeq());
+            s.morteT = 0.9;
+        } else if (s.mode === 'survive') {
+            saveSurviveRecord(s);
+        }
         return;
     }
     // volta ao canto seguro (1,1)
@@ -631,6 +975,7 @@ function hurtPlayer(s) {
 }
 
 function checkExit(s) {
+    if (s.mode !== 'campaign') return;   // sobrevivencia e duelo nao tem saida
     if (s.done || s.lost) return;
     if (s.gx !== s.exit[0] || s.gy !== s.exit[1]) return;
     if (!s.exitRevealed) return;
@@ -654,7 +999,25 @@ function checkExit(s) {
 
 function gameUpdate(s, E, ctx, dt) {
     var act = takeAct(s);
+    if (s.mode === 'duel') {
+        netPump(System.millis());
+        if (NET.pendIr) {           // host/guest mandou comecar o round
+            var pi = NET.pendIr;
+            NET.pendIr = null;
+            E.data.mode = 'duel';
+            ctx.go('Fase ' + pi.level);
+            return;
+        }
+        // round encerrado (rival morreu, saiu ou empate): congela a arena
+        if (NET.fase !== 'jogando') return duelRoundTick(s, E, ctx, dt, act);
+    }
     if (s.done || s.lost) {
+        if (s.mode === 'duel') return duelRoundTick(s, E, ctx, dt, act);
+        if (s.mode === 'survive') {
+            if (act === 'retry') { E.data.mode = 'survive'; ctx.go('Fase 1'); }
+            else if (act === 'map') { E.data.mode = 'campaign'; ctx.go('Mapa'); }
+            return;
+        }
         if (act === 'next') {
             E.data.score = s.score;
             ctx.go(s.level >= 6 ? 'Vitoria' : 'Fase ' + (s.level + 1));
@@ -719,12 +1082,16 @@ function gameUpdate(s, E, ctx, dt) {
         E.input.tap.y < BOARD_H - 4) placeBomb(s);
     if (E.input.longpress && !s.joyMoved) detonateRemote(s);
 
-    s.timeLeft -= dt;
-    if (s.timeLeft <= 0) {
-        s.timeLeft = 0;
-        hurtPlayer(s);
-        if (!s.lost) s.timeLeft = s.time0 * 0.5;
+    if (s.time0 > 0) {
+        s.timeLeft -= dt;
+        if (s.timeLeft <= 0) {
+            s.timeLeft = 0;
+            hurtPlayer(s);
+            if (!s.lost) s.timeLeft = s.time0 * 0.5;
+        }
     }
+    if (s.mode === 'survive') updateWaves(s, dt);
+    if (s.mode === 'duel') updateDuel(s, E, ctx, dt);
     if (s.invuln > 0) {
         s.invuln -= dt;
         if (s.player) {
@@ -761,6 +1128,152 @@ function gameUpdate(s, E, ctx, dt) {
     if (E.dirty && E.dirty.full) E.dirty.full();
 }
 
+// ---------------------------------------------------------------- duelo ---
+// Roda dentro da cena de jogo: manda minha celula (quando muda), aplica os
+// eventos do rival e cuida do fim de round (host comanda o proximo).
+function updateDuel(s, E, ctx, dt) {
+    netPump(System.millis());
+    if (s.gx !== NET.ultC || s.gy !== NET.ultR) {
+        NET.ultC = s.gx;
+        NET.ultR = s.gy;
+        netSend('dp' + netSeq() + ',' + s.gx + ',' + s.gy);
+    }
+    if (NET.rivalPos) {
+        var rp = NET.rivalPos;
+        NET.rivalPos = null;
+        if (!s.rival) s.rival = { c: rp.c, r: rp.r, face: 'down', dead: false };
+        s.rival.c = rp.c;
+        s.rival.r = rp.r;
+    }
+    if (NET.rivalBomba) {
+        var rb = NET.rivalBomba;
+        NET.rivalBomba = null;
+        if (!bombAt(s, rb.c, rb.r)) {
+            s.bombs.push({ c: rb.c, r: rb.r, t: 1.6, range: rb.range || 1,
+                           remote: false, owner: 'rival' });
+        }
+    }
+    if (NET.rivalDetona) {
+        NET.rivalDetona = null;
+        for (var i = 0; i < s.bombs.length; i++) {
+            if (s.bombs[i].owner === 'rival') s.bombs[i].t = 0;
+        }
+    }
+    NET.rivalDrop = null;          // itens sao locais; o rival recolhe os dele
+    if (s.morteT > 0) {
+        s.morteT -= dt;
+        if (s.morteT <= 0) {
+            s.morteT = 0;
+            if (!NET.res) netEncerra('perdi');
+        }
+    }
+}
+
+// Round encerrado: o host fecha o proximo (ou o fim da partida) sozinho;
+// o convidado espera o 'ds'. O modal de resultado e desenhado no drawGame.
+function duelRoundTick(s, E, ctx, dt, act) {
+    netPump(System.millis());
+    if (NET.pendIr) {
+        var pi = NET.pendIr;
+        NET.pendIr = null;
+        E.data.mode = 'duel';
+        ctx.go('Fase ' + pi.level);
+        return;
+    }
+    if (NET.fase === 'fim') {
+        if (act === 'lobby') ctx.go('Duelo');
+        return;
+    }
+    s.roundT = (s.roundT || 0) + dt;
+    if (NET.host && s.roundT > 2.0) {
+        s.roundT = 0;
+        if (netFim()) return;
+        netInicioRound();
+    }
+}
+
+function duelTitle(res) {
+    if (res === 'venci') return 'ROUND VENCIDO';
+    if (res === 'perdi') return 'ROUND PERDIDO';
+    if (res === 'empate') return 'EMPATE';
+    if (res === 'desisti') return 'VOCE SAIU';
+    return 'RIVAL SAIU';
+}
+
+function drawDuelOverlay(s, E) {
+    if (s.mode !== 'duel') return;
+    if (NET.fase !== 'round' && NET.fase !== 'fim') return;
+    if (E.dirty.unclip) E.dirty.unclip();
+    var btns = NET.fase === 'fim'
+        ? [{ label: 'Lobby', value: 'lobby', icon: 'menu' }] : null;
+    var body = NET.ganhos + ' x ' + NET.perdidos +
+        (NET.rival ? '  ·  ' + NET.rival.nome : '') +
+        (NET.fase === 'fim' ? '' : (NET.host ? '  ·  proximo round...' : '  ·  aguardando o host'));
+    var r = E.ui.modal('duelround', {
+        title: NET.fase === 'fim' ? (NET.ganhos > NET.perdidos ? 'VENCEU O DUELO!' : 'PERDEU O DUELO') : duelTitle(NET.res),
+        body: body, dismiss: false, buttons: btns,
+    });
+    if (r !== null) s.act = r;
+    applyGameClip(s, E);
+}
+
+// ------------------------------------------------------------ lobby duelo --
+function duelUpdate(s, E, ctx, dt) {
+    var a = takeAct(s);
+    netPump(System.millis());
+    // presenca velha sai da lista
+    var now = System.millis();
+    var mudou = false;
+    for (var id in NET.vistos) {
+        if (now - NET.vistos[id].at > 10000) { delete NET.vistos[id]; mudou = true; }
+    }
+    if (mudou) E.redraw();
+    if (NET.pendIr) {
+        var pi = NET.pendIr;
+        NET.pendIr = null;
+        E.data.mode = 'duel';
+        ctx.go('Fase ' + pi.level);
+        return;
+    }
+    if (a === 'back') { netReset(); E.data.mode = 'campaign'; ctx.go('Titulo'); return; }
+    if (a && a.indexOf('convite:') === 0) netConvidar(a.substring(8));
+    else if (a === 'aceitar') netAceitar(true);
+    else if (a === 'recusar') netAceitar(false);
+}
+
+function drawDuel(s, E) {
+    var W = s.W, H = s.H;
+    E.gfx.text('DUELO', W / 2, 36, HEAD_TXT);
+    E.gfx.text('melhor de 3  ·  mesma fase para os dois', W / 2, 72, SUB_TXT);
+    var stt;
+    if (!netRadio()) stt = 'sem radio: a malha CelerNet nao esta ativa';
+    else if (NET.fase === 'convidei') stt = 'aguardando ' + (NET.convide ? NET.convide.nome : '?') + '...';
+    else if (NET.fase === 'aguarda') stt = 'chamando ' + (NET.rival ? NET.rival.nome : '?') + '...';
+    else stt = Object.keys(NET.vistos).length ? 'toque num nome para convidar' : 'procurando Detonas na malha...';
+    E.gfx.text(stt, W / 2, 104, SUB_TXT);
+    var c = E.ui.card(40, 136, W - 80, 236);
+    var ids = Object.keys(NET.vistos);
+    if (!ids.length) {
+        E.gfx.text('nenhum outro Detona por perto', W / 2, c.y + 46, SUB_TXT);
+        E.gfx.text('abra o Detona em outro aparelho com a malha ligada', W / 2, c.y + 70, SUB_TXT);
+    }
+    for (var i = 0; i < ids.length && i < 4; i++) {
+        var v = NET.vistos[ids[i]];
+        if (E.ui.button(v.nome, c.x + 8, c.y + 8 + i * 54, c.w - 16, 46, BTN_SEC)) {
+            s.act = 'convite:' + ids[i];
+        }
+    }
+    if (NET.convide && NET.fase === 'lobby') {
+        var r = E.ui.modal('convite', {
+            title: 'CONVITE', body: NET.convide.nome + ' chamou para um duelo.',
+            buttons: [{ label: 'Recusar', value: 'nao' },
+                      { label: 'Aceitar', value: 'sim', icon: 'check' }],
+        });
+        if (r !== null) s.act = (r === 'sim' ? 'aceitar' : 'recusar');
+    }
+    if (E.ui.button('VOLTAR', W / 2 - 90, H - 62, 180, 46, BTN_BACK)) s.act = 'back';
+}
+
 exports.destroy = function () {
     var s = this, E = s.E;
     if (s && s.bg && E && E.slots) E.slots.release(s.bg);
@@ -772,6 +1285,7 @@ exports.draw = function (ctx) {
     if (s.screen === 'title') return drawTitle(s, E);
     if (s.screen === 'map') return drawMap(s, E);
     if (s.screen === 'win') return drawWin(s, E);
+    if (s.screen === 'duel') return drawDuel(s, E);
     drawGame(s, E);
 };
 
@@ -799,8 +1313,10 @@ var WORLD_COLOR = [C(0x3DDC84), C(0x3DDC84), C(0xFF7A1A), C(0xFF7A1A),
 var PHASE_NAME = ['Jardim 1', 'Jardim 2', 'Forno 1', 'Forno 2', 'Nucleo', 'Chefe'];
 // rosto de cada fase no mapa: o inimigo que manda nela
 var PHASE_FACE = [16, 16, 24, 20, 24, -1];
-var HOW_BODY = 'Arraste: anda. Toque: bomba. Segure: detona as remotas. ' +
-               'Quebre caixas e ache a saida.';
+var HOW_BODY = 'Arraste: anda. Toque: bomba. Segure: detona as remotas.\n\n' +
+               'CAMPANHA: quebre caixas, ache a saida e limpe a fase.\n' +
+               'SOBREVIVENCIA: ondas infinitas, sem saida nem relogio.\n' +
+               'DUELO: melhor de 3 pela malha, mesma fase para os dois.';
 var HOW_BTNS = [{ label: 'Entendi', value: 1, icon: 'check' }];
 var BOSS_SMALL = { key: 0xF81F, scale: 0.5 };
 
@@ -813,18 +1329,21 @@ function totalStars(E) {
 function drawTitle(s, E) {
     var W = s.W;
     E.gfx.text('DETONA!', W / 2, 74, LOGO_TXT);
-    E.gfx.text('3 mundos  ·  ' + totalStars(E) + '/18 estrelas', W / 2, 124, SUB_TXT);
+    E.gfx.text('3 mundos  ·  ' + totalStars(E) + '/18 estrelas  ·  onda ' +
+               E.save.num('sobre.onda', 0), W / 2, 124, SUB_TXT);
     // elenco em escala 3 (cena estatica: o afim so roda no repaint)
     if (hasArt(E, ART[0])) {
         E.spr.stamp(ART[0], 92, 200, OPT_BIG);
         E.spr.stamp(ART[ITEM_ART.bomb], 388, 204, OPT_BIG);
     }
-    var c = E.ui.card(40, 256, W - 80, 200);
+    var c = E.ui.card(40, 206, W - 80, 250);
     var bx = c.x;
     bx += E.ui.badge('RECORDE ' + s.best, bx, c.y, { color: C(0xFFC83C), textColor: 0x0000 }) + 8;
     E.ui.badge('FASE ' + clamp(s.unlocked, 1, 6) + '/6', bx, c.y);
-    if (E.ui.button('JOGAR', c.x, c.y + 40, c.w, 60, BTN_BIG)) s.act = 'play';
-    if (E.ui.button('COMO JOGAR', c.x, c.y + 112, c.w, 44, BTN_SEC)) s.act = 'how';
+    if (E.ui.button('JOGAR', c.x, c.y + 36, c.w, 56, BTN_BIG)) s.act = 'play';
+    if (E.ui.button('SOBREVIVENCIA', c.x, c.y + 102, c.w, 44, BTN_SEC)) s.act = 'survive';
+    if (E.ui.button('DUELO', c.x, c.y + 152, c.w, 44, BTN_SEC)) s.act = 'duel';
+    if (E.ui.button('COMO JOGAR', c.x, c.y + 202, c.w, 40, BTN_SEC)) s.act = 'how';
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY,
                                     buttons: HOW_BTNS });
@@ -896,6 +1415,7 @@ var BOSS_BAR = { fg: 0xF800, bg: C(0x300808) };
 var BOSS_TXT = { px: 11, align: 'center', color: 0xFFE0, outline: 0x0000, screen: true };
 var MSG_TXT = { px: 15, align: 'center', color: C(0x101010), bg: 0xFFE0 };
 var EXIT_RING = { fill: false };
+var RIVAL_T = { px: 11, align: 'center', color: 0xFFE0, outline: 0x0000, screen: true };
 
 function drawGame(s, E) {
     var i;
@@ -930,6 +1450,13 @@ function drawGame(s, E) {
             E.gfx.rect(x - 8, y - 8, 16, 16, th.flame2, FLAME_SMALL);
         }
     }
+    // rival do duelo: mesmo elenco, nome em cima (so existe no modo duelo)
+    if (s.mode === 'duel' && s.rival && NET.fase === 'jogando') {
+        var rx = center(s.rival.c), ry = center(s.rival.r);
+        if (art) E.spr.stamp(ART[FACE.down + (Math.floor(s.animT * 4) % 4)], rx, ry, OPT_ART);
+        else E.gfx.circle(rx, ry, 12, th.accent, RED_DOT);
+        if (NET.rival) E.gfx.text(NET.rival.nome, rx, ry - 24, RIVAL_T);
+    }
     // itens: icone do pack text2d, quicando 1 px
     for (i = 0; i < s.drops.length; i++) {
         var d = s.drops[i];
@@ -963,6 +1490,7 @@ function drawGame(s, E) {
 
     // HUD e botoes: memoizados fora da camada suja
     drawHud(s, E);
+    drawDuelOverlay(s, E);
 
     if (s.paused || s.done) {
         if (E.dirty.unclip) E.dirty.unclip();   // o modal cobre tambem o HUD
@@ -973,6 +1501,10 @@ function drawGame(s, E) {
                                       buttons: PAUSE_BTNS,
                                       // o release do toque que pausou cai fora do card
                                       dismiss: false });
+        } else if (s.mode === 'survive') {
+            r = E.ui.modal('fim', { title: 'FIM DA SOBREVIVENCIA',
+                                    body: 'onda ' + (s.onda || 0) + '  ·  ' + s.score + ' pts',
+                                    dismiss: false, buttons: END_LOST_BTNS });
         } else if (s.won) {
             r = E.ui.modal('fim', { title: 'FASE LIMPA!', body: s.score + ' pts  ·  ' +
                                     Math.ceil(s.timeLeft) + ' s de sobra',
@@ -991,7 +1523,9 @@ function drawGame(s, E) {
 }
 
 function hudKey(s) {
-    return s.level + '|' + s.lives + '|' + s.maxBombs + '|' + s.range + '|' +
+    return s.mode + '|' + (s.mode === 'survive' ? s.onda : 0) + '|' +
+        (s.mode === 'duel' ? (NET.round + '|' + NET.ganhos + '|' + NET.perdidos) : '') + '|' +
+        s.level + '|' + s.lives + '|' + s.maxBombs + '|' + s.range + '|' +
         (s.speed > 1 ? 1 : 0) + '|' + (s.shield ? 1 : 0) + '|' + (s.remote ? 1 : 0) +
         '|' + s.score + '|' + Math.ceil(s.timeLeft);
 }
@@ -1026,12 +1560,17 @@ function drawHud(s, E) {
     E.gfx.gradient(0, y0, W, s.H - y0, th.hud, C(0x05070C), { screen: true, dir: 'y', step: 8 });
     E.gfx.rect(0, y0, W, 2, th.accent, { screen: true });
     HUD_T.color = th.hudTxt;
-    E.gfx.text('FASE ' + s.level + '  ' + s.levelName, 10, y0 + 7, HUD_T);
+    var rotulo = s.mode === 'survive' ? ('ONDA ' + (s.onda || 0))
+        : (s.mode === 'duel' ? ('DUELO  round ' + NET.round + '  ' + NET.ganhos + 'x' + NET.perdidos)
+                             : ('FASE ' + s.level + '  ' + s.levelName));
+    E.gfx.text(rotulo, 10, y0 + 7, HUD_T);
     HUD_R.color = th.hudTxt;
     E.gfx.text(s.score + ' pts', 330, y0 + 7, HUD_R);
-    HUD_R.color = s.timeLeft < 20 ? C(0xFF8B8B) : th.hudTxt;
-    E.gfx.text(Math.ceil(s.timeLeft) + ' s', 236, y0 + 7, HUD_R);
-    E.ui.icon('clock', 168, y0 + 6, 16, { color: HUD_R.color });
+    if (s.time0 > 0) {
+        HUD_R.color = s.timeLeft < 20 ? C(0xFF8B8B) : th.hudTxt;
+        E.gfx.text(Math.ceil(s.timeLeft) + ' s', 236, y0 + 7, HUD_R);
+        E.ui.icon('clock', 168, y0 + 6, 16, { color: HUD_R.color });
+    }
     var cy = y0 + 46, x = 4;
     if (s.art) {
         x = hudStat(E, x, cy, ITEM_ART.life, 'x' + s.lives, C(0xFF8B8B));

@@ -97,10 +97,14 @@ function check(name, ok, detail) {
           'fb=0x' + rP.fb[W + 1].toString(16));
     check('drawPNG arquivo inexistente devolve false', envP.System.drawPNG('/x/y/z.png', 0, 0) === false);
     var { decodePng } = require('../../tools/sdk/lib/png.js');
-    var fundo = decodePng(fs.readFileSync(path.join(ROOT, 'hub_apps/Arrasa/fundo.png')));
-    check('decodePng le PNG de PALETA real (fundo 480x480, ceu no px0)',
-          fundo.w === 480 && fundo.h === 480 && fundo.rgba[0] === 61 && fundo.rgba[1] === 169,
-          fundo.w + 'x' + fundo.h + ' px0=' + fundo.rgba[0] + ',' + fundo.rgba[1]);
+    // fundo do Arrasa do Studio: PNG de PALETA 480x480 (antes vinha do
+    // hub_apps/Arrasa, removido na consolidacao dos jogos)
+    var fundo = decodePng(fs.readFileSync(path.join(ROOT, 'studio_games/Arrasa/Assets/Sprites/fundo.png')));
+    var coresFundo = new Set();
+    for (var pc = 0; pc < fundo.rgba.length; pc += 4) coresFundo.add(fundo.rgba[pc] + ',' + fundo.rgba[pc + 1] + ',' + fundo.rgba[pc + 2]);
+    check('decodePng le PNG de PALETA real (fundo 480x480, varias cores)',
+          fundo.w === 480 && fundo.h === 480 && coresFundo.size > 8,
+          fundo.w + 'x' + fundo.h + ' cores=' + coresFundo.size);
 
     // sprite: cria, bind, desenha NELE, push para a tela
     var env = { System: { fillRect: function () {}, drawPNG: function () { return true; } } };
@@ -224,17 +228,10 @@ function check(name, ok, detail) {
         if (r3.frames[0].fb[i] !== r3.frames[1].fb[i]) d01++;
     check('diff detecta o relogio andando (frame 0 -> 1100)', d01 > 0, 'pixels=' + d01);
 
-    // Supernova 2.0 (engine do SDK + fisica): roda o smoke completo dele
-    // (titulo -> morte -> fim -> de novo -> detonacao -> pausa) headless;
-    // o watchdog e do proprio test.js do app
-    var r4 = runAppFolder(path.join(ROOT, 'hub_apps', 'Supernova'));
-    check('Supernova roda limpo no harness (smoke completo)', r4.err === null, r4.err);
-
-    // Detona! (bomberman de grade): smoke completo no canvas nativo do
-    // stub (titulo -> jogar -> bomba no beat -> explosao abre macio ->
-    // morte por labareda -> fim) — watchdog do proprio test.js do app
-    var r5 = runAppFolder(path.join(ROOT, 'hub_apps', 'Detona'));
-    check('Detona roda limpo no harness (smoke completo)', r5.err === null, r5.err);
+    // Supernova e Detona: o smoke agora roda do PROJETO do Studio (as copias
+    // planas de hub_apps/ sairam na consolidacao). O build+run dos quatro
+    // jogos vive em test/studio/run.js, que cobre quadros, HUD e joystick —
+    // aqui fica so o caminho do SDK (engine + fisica) sem app de jogo.
 
     // Ferramentas 2026-10-10: 9o timer do pool de 8 agora e VISIVEL, a
     // retomada da musica honra startMs e o runner tem profile de quadros
@@ -583,340 +580,12 @@ function check(name, ok, detail) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
-// ------------------------------------------------------- Detona: sim ----
-// A simulacao do Detona direto (sem cenas): movimento de grade, bomba
-// atravessavel so ate sair dela, quina assistida, deslize ao soltar,
-// fuzz do invariante "o corpo nunca entra em parede", i-frames do chefe,
-// acerto no meio do passo, respiro do Forno e teleporte do Nucleo.
-(function () {
-    console.log('Detona (arena.js/ia.js):');
-    var harness = require('../../test/js_harness/run.js');
-    var DIR = path.join(ROOT, 'hub_apps', 'Detona');
-    function nova(mundo, nivel, ajusta) {
-        var env = harness.makeEnv();
-        var req = harness.makeRequire(DIR, env);
-        // os modulos leem System/Storage como globais do app
-        global.System = env.System; global.Storage = env.Storage;
-        var out = {};
-        new Function('System', 'Storage', 'require', '__out',
-            'var NV = require("niveis"), A = require("arena"), IA = require("ia");' +
-            '__out.NV = NV; __out.A = A; __out.IA = IA;')(env.System, env.Storage, req, out);
-        var plano = out.NV.gerar(mundo, nivel);
-        if (ajusta) ajusta(plano);
-        out.A.iniciar(mundo, nivel, plano);
-        out.A.layout(32, 0, 0);
-        out.A.state().intro = 0;
-        out.env = env;
-        return out;
-    }
-    var dd0 = nova(1, 1);
-    var HALF = 0.4;
-    function invadiu(A) {
-        var st = A.state(), u = st.player.x / 32, v = st.player.y / 32;
-        for (var r = Math.floor(v - HALF + 1e-6); r <= Math.floor(v + HALF - 1e-6); r++) {
-            for (var c = Math.floor(u - HALF + 1e-6); c <= Math.floor(u + HALF - 1e-6); c++) {
-                var ch = A.em(c, r);
-                if (ch === '#' || ch === '%') return ch + '@' + c + ',' + r;
-                if (ch === 'B' && A.bloqueado(c, r)) return 'B@' + c + ',' + r;
-            }
-        }
-        return null;
-    }
-    function anda(A, ax, ay, quadros) {
-        var ruim = null;
-        for (var i = 0; i < quadros && !ruim; i++) { A.mover(ax, ay, 1 / 30); ruim = invadiu(A); }
-        return ruim;
-    }
-    function limpaCanto(plano) {
-        // corredor (1..5, 1) livre e (1..1, 1..5) livre: cenario conhecido
-        for (var c = 1; c <= 5; c++) plano.grid[1][c] = '.';
-        for (var r = 1; r <= 5; r++) plano.grid[r][1] = '.';
-        plano.spawns = [];
-    }
-
-    // 1) o bug relatado: planta e anda — nunca entra na parede, sai da bomba
-    var d = nova(1, 1, limpaCanto), A = d.A, st = A.state();
-    check('planta no canto (1,1)', A.plantar() === true && A.em(1, 1) === 'B');
-    var ruim = anda(A, 1, 0, 40);
-    check('planta e anda pra direita: corpo nunca invade bloco/parede', ruim === null, ruim);
-    check('saiu da propria bomba e seguiu o corredor', A.celulaPlayer().c >= 3, 'c=' + A.celulaPlayer().c);
-    ruim = anda(A, -1, 0, 60);
-    var u = st.player.x / 32;
-    check('depois de sair, a bomba vira parede (nao volta pra dentro)', ruim === null && u >= 2.5 - 1e-6,
-          'u=' + u.toFixed(3) + ' ' + ruim);
-    // plantar e sair pra BAIXO/CIMA tambem (eixo y)
-    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
-    A.plantar();
-    ruim = anda(A, 0, 1, 40);
-    check('planta e desce: corpo nunca invade', ruim === null && A.celulaPlayer().r >= 3, ruim);
-    // tentar entrar na parede de cima/esquerda a partir do canto com a bomba no pe
-    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
-    A.plantar();
-    ruim = anda(A, -1, 0, 20) || anda(A, 0, -1, 20);
-    check('com a bomba no pe, empurrar contra a borda nao atravessa', ruim === null &&
-          Math.abs(st.player.x - 48) < 1e-6 && Math.abs(st.player.y - 48) < 1e-6, ruim);
-
-    // 2) quina assistida: deslocado 0.3 para a trilha de baixo, empurrando
-    // contra o pilar (2,2) a partir de (1,2)... usa (3,1)->(3,2) livres
-    d = nova(1, 1, function (pl) {
-        limpaCanto(pl);
-        for (var rr = 1; rr <= 3; rr++) { pl.grid[rr][3] = '.'; }
-        pl.grid[1][4] = '.'; pl.grid[3][4] = '.';   // (4,2) segue pilar
-    });
-    A = d.A; st = A.state();
-    st.player.x = 3.5 * 32; st.player.y = 1.5 * 32;
-    anda(A, 1, 0, 1);   // fica em (3,1)
-    st.player.x = 3.5 * 32; st.player.y = 1.5 * 32;
-    // pilar em (4,2): de (3,1) andando pra baixo deslocado ok; testa ao contrario:
-    // no corredor vertical x=3, deslocado +0.3 em x, empurra pra cima ate o topo
-    st.player.x = 3.8 * 32; st.player.y = 3.5 * 32;
-    ruim = anda(A, 0, -1, 30);
-    check('deslocado na trilha, anda alinhando sem invadir o pilar', ruim === null &&
-          Math.abs(st.player.x / 32 - 3.5) < 1e-3, 'x=' + (st.player.x / 32).toFixed(3) + ' ' + ruim);
-
-    // 3) soltar o dedo: termina o passo no centro da celula
-    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
-    anda(A, 1, 0, 4);
-    var antes = st.player.x / 32;
-    anda(A, 0, 0, 20);
-    var depois = st.player.x / 32;
-    check('soltar o dedo: desliza ate o centro da proxima celula', depois > antes &&
-          Math.abs(depois - (Math.floor(depois) + 0.5)) < 1e-6, antes.toFixed(3) + ' -> ' + depois.toFixed(3));
-
-    // 4) fuzz: 3000 quadros aleatorios com bombas — o invariante nunca quebra
-    var seeds = [[1, 2], [2, 3], [3, 5]], falhou = null, quadros = 0;
-    seeds.forEach(function (sd) {
-        var dd = nova(sd[0], sd[1], function (pl) { pl.spawns = []; pl.ventos = []; });
-        var AA = dd.A, ss = AA.state(), rng = dd.NV.rng(sd[0] * 31 + sd[1]);
-        ss.stats.bombs = 3; ss.stats.inv = 1e9;
-        var dir = [0, 0];
-        for (var i = 0; i < 1000 && !falhou; i++) {
-            if (rng() < 0.08) dir = [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]][Math.floor(rng() * 5)];
-            AA.mover(dir[0], dir[1], 1 / 30);
-            if (rng() < 0.04) AA.plantar();
-            dd.env.System.delay(33);
-            AA.update(1 / 30);
-            if (!AA.state()) break;
-            ss.stats.vidas = 9;
-            var r2 = invadiu(AA);
-            if (r2) falhou = 'mundo ' + sd[0] + '-' + sd[1] + ' quadro ' + i + ': ' + r2;
-            quadros++;
-        }
-    });
-    check('fuzz 3000 quadros (andar + plantar + explodir): corpo nunca invade', falhou === null && quadros > 2500,
-          falhou || ('quadros=' + quadros));
-
-    // 5) ia: labareda acerta o bicho no MEIO do passo e o chefe tem i-frames
-    d = nova(1, 1, limpaCanto); A = d.A; st = A.state();
-    d.IA.ligar();
-    var e = d.IA.colocar('balao', 3, 3);
-    e.tc = 4; e.tr = 3; e.fx = 4.3; e.fy = 3.5;   // 80% dentro da (4,3)
-    d.IA.ferirNa(4, 3, 'p');
-    check('labareda na celula de destino mata o bicho no meio do passo', e.morto === true);
-    var ch = d.IA.colocar('chefe', 6, 5);
-    var hp0 = ch.hp;
-    for (var k = 0; k < 8; k++) d.IA.ferirNa(6, 5, 'p');   // 8 quadros de labareda
-    check('chefe: uma labareda (8 quadros) tira 1 hp so', ch.hp === hp0 - 1, 'hp ' + hp0 + ' -> ' + ch.hp);
-    d.IA.ferirNa(6, 5, 'x');
-    check('bomba do chefe nao fere o chefe', ch.hp === hp0 - 1);
-    var dv = d.IA.colocar('divisor', 9, 9);
-    var antesN = st.enemies.length;
-    d.IA.ferirNa(9, 9, 'p');
-    var minis = st.enemies.filter(function (x) { return x.kind === 'mini' && !x.morto; }).length;
-    check('divisor se parte em 2 mini ao morrer', dv.morto && minis === 2, 'minis=' + minis + ' antes=' + antesN);
-
-    // 6) Forno: o respiro entra em erupcao na batida (e fere o jogador)
-    d = nova(2, 1, function (pl) { limpaCanto(pl); pl.ventos = [{ c: 1, r: 3, aviso: false }]; });
-    A = d.A; st = A.state();
-    st.player.x = 1.5 * 32; st.player.y = 2.5 * 32;   // vizinho do respiro
-    var vidas0 = st.stats.vidas, viuFogo = false;
-    for (var q = 0; q < 200 && st.stats.vidas === vidas0; q++) {
-        d.env.System.delay(33);
-        A.update(1 / 30);
-        if (st.flames.length) viuFogo = true;
-    }
-    check('Forno: respiro erupciona na batida e fere quem esta do lado', viuFogo && st.stats.vidas === vidas0 - 1,
-          'fogo=' + viuFogo + ' vidas ' + vidas0 + '->' + st.stats.vidas);
-
-    // 8) as 24 fases + sobrevivencia rodam 900 quadros de jogo aleatorio
-    // (ia, bombas, perigos, chefe) sem excecao e sem o corpo invadir
-    var falhaFase = null, fases = 0;
-    for (var mu = 1; mu <= 3 && !falhaFase; mu++) {
-        for (var nv = 1; nv <= 8 && !falhaFase; nv++) {
-            [false, true].forEach(function (sobre) {
-                if (falhaFase || (sobre && (mu > 1 || nv > 1))) return;
-                try {
-                    var dd = nova(mu, nv, sobre ? function (pl) {
-                        var g = dd0.NV.gerar(1, 1, { sobrevivencia: true });
-                        for (var k in g) pl[k] = g[k];
-                    } : null);
-                    var AA = dd.A, ss = AA.state(), rr = dd.NV.rng(mu * 97 + nv);
-                    dd.IA.ligar();
-                    if (sobre) dd.IA.onda();
-                    var dir = [0, 0];
-                    for (var i = 0; i < 900; i++) {
-                        var s2 = AA.state();
-                        if (!s2) break;
-                        s2.stats.inv = 1e9; s2.stats.vidas = 9; s2.tLeft = 500;
-                        if (rr() < 0.08) dir = [[1, 0], [-1, 0], [0, 1], [0, -1], [0, 0]][Math.floor(rr() * 5)];
-                        AA.mover(dir[0], dir[1], 1 / 30);
-                        if (rr() < 0.05) AA.plantar();
-                        dd.env.System.delay(33);
-                        AA.update(1 / 30);
-                        var inv2 = invadiu(AA);
-                        if (inv2) { falhaFase = mu + '-' + nv + ' quadro ' + i + ': ' + inv2; break; }
-                    }
-                    fases++;
-                } catch (ex) {
-                    falhaFase = mu + '-' + nv + (sobre ? ' (sobre)' : '') + ': ' + (ex && ex.stack || ex);
-                }
-            });
-        }
-    }
-    check('24 fases + sobrevivencia: 900 quadros de jogo cada sem excecao nem invasao',
-          falhaFase === null && fases === 25, falhaFase || ('fases=' + fases));
-
-    // 7) Nucleo: o teleporte leva ao par e nao volta em ping-pong
-    d = nova(3, 1, function (pl) { limpaCanto(pl); pl.teles = [{ c: 3, r: 1 }, { c: 1, r: 5 }]; });
-    A = d.A; st = A.state();
-    for (var tq = 0; tq < 25 && A.celulaPlayer().r === 1; tq++) { A.mover(1, 0, 1 / 30); A.update(1 / 30); }
-    var cel = A.celulaPlayer();
-    check('Nucleo: entrar no portal leva ao par', cel.c === 1 && cel.r === 5, cel.c + ',' + cel.r);
-    A.update(1 / 30); A.update(1 / 30);
-    cel = A.celulaPlayer();
-    check('Nucleo: parado no pad de chegada nao volta (sem ping-pong)', cel.c === 1 && cel.r === 5);
-})();
-
-// ------------------------------------------------------ Arrasa: mundo ----
-// A fisica de jogo do Arrasa direto (mundo.js/niveis.js sobre o P.rigid do
-// espelho JS): contratos que o app consome por indice — metas de estrela
-// alcancaveis, ciclo de mundo entre recargas, indices estaveis depois de
-// remocoes (TNT em cadeia) e a massa do app batendo com a do solver
-// (impulso J = dv * m tem que mudar a velocidade em dv).
-(function () {
-    console.log('SDK Arrasa (hub_apps/Arrasa/mundo.js):');
-    var harness = require('../../test/js_harness/run.js');
-    var DIR = path.join(ROOT, 'hub_apps', 'Arrasa');
-    var env = harness.makeEnv();
-    var req = harness.makeRequire(DIR, env);
-    var out = {};
-    new Function('System', 'Storage', 'require', '__out',
-        'var M = require("mundo"), NIV = require("niveis");' +
-        '__out.M = M; __out.NIV = NIV;')(env.System, env.Storage, req, out);
-    var M = out.M, NIV = out.NIV;
-
-    // pontos teoricos da fase (g = goblins, bl = quebraveis) pelo MAT do app
-    function pontuacao(n) {
-        var pecas = NIV.montar(n), g = 0, bl = 0;
-        for (var p = 0; p < pecas.length; p++) {
-            var c = pecas[p];
-            var m = M.MAT[c.k === 'goblin' ? c.tipo : c.mat];
-            if (c.k === 'goblin') g += m.pts;
-            else if (!m.estatico) bl += m.pts;
-        }
-        return { g: g, bl: bl, tiros: NIV.fase(n).tiros.length };
-    }
-
-    // 1) metas de estrela: ordenadas e ALCANCAVEIS em todas as fases. O maximo
-    // teorico e g + bl + 1000*(tiros-1); a formula antiga pedia +2000 de
-    // bonus e a fase 1 (2 tiros, max 2300) tinha meta-3 de 3200 — impossivel
-    var pior = null;
-    for (var n = 0; n < NIV.total; n++) {
-        var pt = pontuacao(n), metas = M.metas(n);
-        var max = pt.g + pt.bl + 1000 * (pt.tiros - 1);
-        if (!(metas[0] === pt.g && metas[0] < metas[1] && metas[1] < metas[2] &&
-              metas[1] <= pt.g + pt.bl && metas[2] <= max)) {
-            pior = 'fase ' + (n + 1) + ': metas ' + JSON.stringify(metas) +
-                   ' vs g=' + pt.g + ' bl=' + pt.bl + ' max=' + max;
-        }
-    }
-    check('metas de estrela ordenadas e alcancaveis nas 10 fases (3* <= maximo)', pior === null, pior);
-    var pt1 = pontuacao(0), m1 = M.metas(0);
-    check('fase 1: 3 estrelas cabem no maximo (2300) — regressao da meta impossivel',
-          m1[2] <= pt1.g + pt1.bl + 1000 * (pt1.tiros - 1),
-          'meta3=' + m1[2] + ' max=' + (pt1.g + pt1.bl + 1000 * (pt1.tiros - 1)));
-
-    // 2) ciclo de mundo: recarregar a fase N vezes nao vaza corpo (o count
-    // volta exato) nem mundo (id valido, M.sem false)
-    M.carregar(9);
-    var base = M.w.count(), ok = true;
-    for (var vez = 0; vez < 5; vez++) {
-        if (!M.carregar(9) || M.w.id <= 0 || M.w.count() !== base) ok = false;
-    }
-    check('recarregar a fase 5x: mesmo numero de corpos, mundo novo a cada vez', ok,
-          'count=' + M.w.count() + ' esperado=' + base);
-    check('estado do quadro: 6 numeros por corpo, todo corpo vivo', 
-          M.s.length === M.w.count() * M.NS && (M.s[5] & 1) === 1);
-
-    // 3) indices estaveis depois de remocoes: TNT em cadeia tira pecas e a
-    // tripla cria corpos que reaproveitam slot — todo slot VIVO tem
-    // descritor com .i === i (slot morto no meio da marca d'agua pode
-    // existir: o remove so encolhe a marca pelo fim)
-    function invariante() {
-        var cnt = M.w.count(), st = M.w.state();
-        for (var i = 0; i < cnt; i++) {
-            var vivo = (st[i * M.NS + 5] & 1) !== 0;
-            var c = M.corpos[i];
-            if (vivo !== !!c) return 'slot ' + i + (vivo ? ' vivo sem descritor' : ' morto com descritor');
-            if (c && c.i !== i) return 'slot ' + i + ' com descritor de outro indice';
-        }
-        for (var j = 0; j < M.corpos.length; j++) {
-            if (M.corpos[j] && j >= cnt) return 'descritor ' + j + ' alem da marca d\'agua';
-        }
-        return null;
-    }
-    M.carregar(9);
-    for (var s4 = 0; s4 < 40; s4++) M.step(1 / 30);
-    var g0 = M.goblins, tnt = -1;
-    for (var i4 = 0; i4 < M.corpos.length; i4++)
-        if (M.corpos[i4] && M.corpos[i4].mat === 'tnt') tnt = i4;
-    M.corpos[tnt].morto = true;
-    for (s4 = 0; s4 < 90; s4++) M.step(1 / 30);
-    var inv = invariante();
-    check('TNT em cadeia: remocoes mantem M.corpos coerente com os slots', inv === null, inv);
-    check('a explosao derrubou goblins (mundo vivo)', M.goblins < g0, 'goblins ' + g0 + ' -> ' + M.goblins);
-
-    // tripla: racha cria corpos REAPROVEITANDO slots livres do castelo quebrado
-    M.carregar(2);
-    for (s4 = 0; s4 < 40; s4++) M.step(1 / 30);
-    M.tiro.tipo = 'tripla'; M.tiro.estado = 'mirando';
-    M.pull.x = -36; M.pull.y = 14;
-    M.soltar();
-    for (s4 = 0; s4 < 8; s4++) M.step(1 / 30);
-    var evt = [];
-    var partiu = M.habilidade(evt);
-    inv = invariante();
-    check('tripla racha em 3 e os novos corpos entram em slots coerentes',
-          partiu && M.tiro.extras.length === 2 && inv === null,
-          'extras=' + (M.tiro && M.tiro.extras.length) + ' ' + inv);
-
-    // 4) massa do app = massa do solver: impulso J = dv*m muda v em ~dv
-    // (M.explodir e o dano por hit dependem disso — dv = J/m)
-    M.carregar(0);
-    for (s4 = 0; s4 < 40; s4++) M.step(1 / 30);
-    var alvo = -1;
-    for (var i5 = 0; i5 < M.corpos.length; i5++)
-        if (M.corpos[i5] && M.corpos[i5].k === 'box') alvo = i5;
-    var c5 = M.corpos[alvo];
-    M.w.set(alvo, 100, 100, 0, 0, 0, 0);
-    var dv = 240;
-    M.w.impulse(alvo, dv * c5.m, 0);
-    M.w.step(0.001, { gravity: { x: 0, y: 0 } });
-    var s5 = M.w.state();
-    var medido = (s5[alvo * M.NS] - 100) / 0.001;
-    check('massa() do app bate com a do solver (impulso dv*m move dv)',
-          Math.abs(medido - dv) < dv * 0.05, 'dv pedido=' + dv + ' medido=' + medido.toFixed(1));
-
-    // 5) o castelo assenta e DORME (a carencia segura o dano de montagem)
-    M.carregar(3);
-    for (s4 = 0; s4 < 60; s4++) M.step(1 / 30);
-    var acordados = 0;
-    for (var i6 = 0; i6 < M.corpos.length; i6++)
-        if (M.corpos[i6] && !M.corpos[i6].fixo && (M.s[i6 * M.NS + 5] & 2)) acordados++;
-    check('torre de pedra dorme parada depois de assentar (sem colapso espontaneo)',
-          acordados === 0 && M.goblins === 3 && M.pontos === 0,
-          'acordados=' + acordados + ' goblins=' + M.goblins);
-})();
+// --- Detona (arena/ia/niveis) e Arrasa (mundo/niveis) ---------------------
+// As simulacoes destes dois blocos rodavam os modulos das copias PLANAS de
+// hub_apps/, removidas na consolidacao (os jogos vivem so em studio_games/,
+// como projeto do Studio). O invariante que importava — "o corpo nunca entra
+// em parede" — virou verificacao por quadro em test/studio/run.js, rodando o
+// jogo de verdade; os contratos do P.rigid seguem cobertos logo abaixo.
 
 // ---------------------------------------------------------------- physics --
 (function () {
@@ -2814,7 +2483,7 @@ function depsSize(nomes) {
                      JSON.stringify({ deps: { 'celeros.physics': '^2.0.0' } }));
     var env = harness.makeEnv();
     var P = harness.makeRequire(tmp, env)('celeros.physics');
-    check('physics 2.1.1 exporta rigid', typeof P.rigid === 'function' && P.version === '2.1.1');
+    check('physics 2.1.2 exporta rigid', typeof P.rigid === 'function' && P.version === '2.1.2');
     var w = P.rigid({ iterations: 10 });
     check('rigid usa o binding (stub do harness = espelho do Rigid2D.h)', w !== null && w.id > 0);
     var chao = w.box(160, 270, 400, 20, { static: true });
@@ -3069,14 +2738,16 @@ function depsSize(nomes) {
                depsSize(Object.keys(mf.deps));
     check('soma dos .js (pacote + deps, transitivas incluidas) cabe no teto psram (1 MB)', size < TETO,
           (size / 1024).toFixed(1) + ' KB');
-    // os dois jogos grandes da loja tambem (pacote + deps do app.json)
+    // os dois jogos grandes da loja tambem (pacote + deps do app.json). Eles
+    // vivem como PROJETO do Studio: builda e mede o pacote gerado.
+    var buildProject = require('../../tools/studio/lib/build').buildProject;
     ['Supernova', 'Detona'].forEach(function (nome) {
-        var dir = path.join(ROOT, 'hub_apps', nome);
+        var b = buildProject(path.join(ROOT, 'studio_games', nome), {});
         var total = 0;
-        fs.readdirSync(dir).forEach(function (f) {
-            if (/\.js$/.test(f) && f !== 'test.js') total += JSSTRIP.strip(fs.readFileSync(path.join(dir, f))).length;
+        fs.readdirSync(b.dir).forEach(function (f) {
+            if (/\.js$/.test(f)) total += JSSTRIP.strip(fs.readFileSync(path.join(b.dir, f))).length;
         });
-        var deps = JSON.parse(fs.readFileSync(path.join(dir, 'app.json'), 'utf8')).deps || {};
+        var deps = JSON.parse(fs.readFileSync(path.join(b.dir, 'app.json'), 'utf8')).deps || {};
         total += depsSize(Object.keys(deps));
         check(nome + ': pacote + deps enxutos cabem no teto do hub (1 MB)', total < TETO,
               (total / 1024).toFixed(1) + ' KB');
@@ -3277,6 +2948,9 @@ require('./celergame_r7.js')(check);
 require('./celerosapp_r1.js')(check);
 require('./celerosapp_r2.js')(check);
 require('./ui_parity.js')(check);
+require('./ui_extras.js')(check);
+// jsmin: minificador do publish/deploy (mangle de locais + espaco minimo)
+require('./jsmin.js')(check);
 
 // resumo
 console.log('');
@@ -3285,4 +2959,3 @@ if (failures) {
     process.exit(1);
 }
 console.log('OK: todos os testes do SDK passaram');
-require('./ui_extras.js')(check);

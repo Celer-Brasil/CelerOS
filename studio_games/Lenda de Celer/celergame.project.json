@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "rev": 26,
+  "rev": 27,
   "studio": "0.1.0",
   "name": "Lenda de Celer",
   "packageName": "celeros.lenda",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "CelerOS",
   "description": "Remake NATIVO da Lenda de Celer no Celer Studio: as 20 salas ASCII (Campo, Gruta do Sabio e Templo) viram cenas com tilemap editavel e spawns como entidades. Espada, bomba, bumerangue, baus, Sabio, loja de cristais, paredes rachadas, guardiao com fases, save automatico, HUD e controles de toque.",
   "type": "Game",
@@ -22,7 +22,7 @@
     "celeros.game.tilemap": "^1.3.0",
     "celeros.game.ui": "^1.3.0"
   },
-  "changelog": "2.1.0: refeito com o kit de UI 1.3 e a arte nova do text2d. Heroina com caminhada nas 4 direcoes (animate-set; costas numa 2a tentativa) em 40 px nativos, parada no quadro de contato da direcao; o golpe ganha o arco vfx pre-girado nas 4 direcoes por cima da lamina; inimigo derrotado some em fumaca, bomba explode em vfx de 3x3 celulas e o coracao solta brilho de cura. Fala do Sabio/loja num card com retrato e nome; HUD com icones de cristal/bomba/chave/espada; titulo, pausa, vitoria e queda com card, button e modal. As salas declaram heroi/inimigos/itens/efeitos em settings.assets (a lamina e o retrato vem de folhas que nenhuma entidade da sala referencia).\n2.0.6: controle de toque virou joystick flutuante: o toque so assenta a base (nao anda mais na direcao do dedo) e o diferencial desde ela move, com zona morta de 12 px e botao limitado ao raio; a base assentada e o botao deslocado aparecem no vidro.\n2.0.5: desempenho: HUD memoizado fora da camada suja e recorte do mundo na faixa do jogo (corta a maior parte dos stamps/textos/repinturas por quadro), opcoes de sprite e nomes de frames reaproveitados no tilemap/heroina/inimigos, e o botao de pausa do HUD ganhou hitbox de verdade.\n2.0.4: o app.zip passa a levar o deps.json resolvido (celeros.game 1.6.0, fx 1.4.2, spr 1.7.0, tilemap 1.3.0); instalar o pacote direto nao deixa mais o require sem o cache e o jogo abre sem o erro \"modulo nao encontrado: celeros.game.js\".\n2.0.3: corpo da heroina permanece visivel durante o golpe; a espada (frames 6..9) virou overlay separado na direcao do ataque, com brilho na ponta, e inimigos atingidos ganham um anel branco.\n2.0.2: tilemap ancora no canto (corrige portas deslocadas e quadrados pretos), portas do Templo compostas com a parede e botoes A/B com icones de espada/bomba/bumerangue; itens carregados em todas as salas.\n2.0.1: bases de asset incluem a pasta celeros_lenda criada pelo celerctl; tileset/heroi/inimigos/itens/titulo voltam a carregar no 4848.\n2.0.0: remake nativo no Celer Studio. 20 salas como cenas (tilemap 15x13 + solidos por tile + spawns entidades), portais de borda/porta/escada/caverna/rachadura, heroina com andar/espada/bomba/bumerangue, polvo/morcego/esqueleto/geleia, Guardiao com fases, baus, Sabio, loja, save automatico, titulo/continuar, vitoria e fim. Sem bridge legado.",
+  "changelog": "2.2.0: 3 slots de save com seletor (sala, cristais, minutos e quedas), troca do item B no menu de pausa e contagem de jornada/quedas; migra o save unico antigo para o slot 1",
   "canvas": {
     "w": 480,
     "h": 480,

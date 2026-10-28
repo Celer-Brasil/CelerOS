@@ -15,8 +15,10 @@
 | **`celeros.physics`** (optional) | ~7 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | bomberman-style arenas + BFS chase flow, sfx melody tables, CelerNet boilerplate (same family, unrelated modules) |
 
-Sizes are **stripped** (jsstrip), measured 2026-10 — check with
-`node tools/sdk/lib/jsstrip.js tools/sdk/engine/<module>.js` before planning.
+Sizes are **minified** (jsstrip + jsmin, what the hub publishes and the device
+compiles), measured 2026-10 — check with
+`node tools/sdk/lib/jsstrip.js tools/sdk/engine/<module>.js --min --top` before
+planning. Line breaks are preserved, so device error lines still match the repo.
 
 Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is already over the 48 KB no-PSRAM ceiling** (65 KB since 1.7.0; 51 KB in 1.5), so every app using the engine declares `"requires": ["psram"]`; core + UI kit are ~119 KB and the full family is ~255 KB.
 
@@ -936,7 +938,7 @@ more than the rest of the loop body.
 `System.drawSprite` (also API 33) draws a sprite rotated and scaled around
 its centre — the natural pair for rotating bodies; with `smooth` it also
 resizes art once at load time to the board's screen. Full example:
-`hub_apps/Arrasa` (slingshot vs. goblin fortresses).
+`studio_games/Arrasa` (slingshot vs. goblin fortresses).
 
 ### Static overlap: `P.hit`
 
@@ -977,7 +979,7 @@ The frame is **persistent** and the firmware pushes to the glass only the boxes 
 - **Action on a plain background:** `E.dirty.enable(bgColor)` in `enter`. Every engine draw (`E.gfx.*`, `E.spr.blit`, `E.fx`, text) records its screen box; next frame the engine repaints just those boxes with the background before calling your `draw`. No `fillScreen`. Direct `System.*` draws register with `E.dirty.add(x, y, w, h)`. `E.fx.stars` erases its own old pixels and only touches stars that moved (a star covered by something drawn over it heals on its next stride tick).
 - **HUD:** `E.dirty.clip(x, y, w, h)` keeps erase and world drawing inside the arena; call `E.dirty.unclip()` and redraw the HUD only when its values change (keep a key string).
 - **Tile worlds:** `E.tilemap({ cols, rows, cell, ox, oy, paint(c, r, x, y, w, h) })` keeps the scenery in the frame; `E.dirty.enable(function (x, y, w, h) { map.markRect(x, y, w, h); })` marks the cells under whatever moved, `map.mark(c, r)` the ones that changed (block broken), and `map.flush()` at the top of `draw` repaints only those. What `paint` draws is background — it never enters the dirty layer.
-- **Still things stay out of the layer:** a body that did not move (asleep in the physics, same pose as last frame) is drawn only when `E.dirty.touches(box)` says the eraser hit it, and records nothing — a sleeping castle costs no erase, no redraw and no push. When it starts moving again its old picture has no box to be erased by, so call `E.dirty.erase(x, y, w, h)` (1.2.4) on its last box at the **top** of `draw`: it repaints the background now and records the box, so whatever is drawn after sees the touch and redraws itself. `hub_apps/Arrasa` does this for the castle, the slingshot and the level banner.
+- **Still things stay out of the layer:** a body that did not move (asleep in the physics, same pose as last frame) is drawn only when `E.dirty.touches(box)` says the eraser hit it, and records nothing — a sleeping castle costs no erase, no redraw and no push. When it starts moving again its old picture has no box to be erased by, so call `E.dirty.erase(x, y, w, h)` (1.2.4) on its last box at the **top** of `draw`: it repaints the background now and records the box, so whatever is drawn after sees the touch and redraws itself. `studio_games/Arrasa` does this for the castle, the slingshot and the level banner.
 - **Sprite background:** with a full-screen background sprite, the painter is `System.blitSprite(bg, x, y, w, h)` (API 34, S3 boards: one call instead of `setClip` + `useSprite` + `pushSprite` + `useSprite(0)` + `clearClip` per box); feature-detect and keep the 5-call path for older firmware.
 - `E.dirty.full()` repaints the whole background next frame (scene change, fullscreen flash do it for you); the layer turns itself off on every scene switch.
 
@@ -1040,7 +1042,7 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 
 ## 18. Size and performance
 
-- Deps count toward the app ceiling (each game compiles them in its own heap) — **adopt only what you use**: core ~51 KB stripped, fx ~13, ui ~12, spr ~12, tilemap ~4 (full family ~171 KB). Since the core alone is past 48 KB, apps using the engine declare `"requires": ["psram"]` (1 MB ceiling). The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js` (1:1 port of the firmware's JsStripper — comments/indentation out, line breaks kept, so error lines still match the source), which is exactly what the device compiles.
+- Deps count toward the app ceiling (each game compiles them in its own heap) — **adopt only what you use**: core ~51 KB minified, fx ~10, ui ~41, spr ~12, tilemap ~3 (full family ~131 KB). Since the core alone is past 48 KB, apps using the engine declare `"requires": ["psram"]` (1 MB ceiling). The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: comments/indentation out, local names mangled, line breaks kept so error lines still match the source), which is exactly what the device compiles — the firmware's JsStripper is idempotent on that output.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses. Since engine 1.2.3 the wrappers themselves don't allocate: opts-less `E.gfx.*` calls share one read-only object, `E.font` lookups are memoized and each string's `textWidth` is measured once per style — repeated HUD/score/button text costs no extra firmware calls.
 - If you call `System.setTextDatum` directly, restore `0` when done: engine 1.2.3 only touches the datum when a text asks for a non-default origin, so `E.gfx.text` relies on apps leaving it at `0` (every app in this repo already does).
 - Avoid full-screen `fillScreen` + redraw everything per frame: on the SmartDisplay's RGB panel (framebuffer scanned from PSRAM) it starves the LCD DMA and the image jitters. Use `static` scenes, `E.dirty` and `E.tilemap` (§16b).

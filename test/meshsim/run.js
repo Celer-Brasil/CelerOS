@@ -1283,82 +1283,10 @@ scenario('CelerNet: no sumido sai no teto 4xTTL mesmo sob fila cheia', function(
 });
 
 // ---------------------------------------------------------------------------
-// Detona!: duelo 1x1 completo — lobby por heartbeat, convite/aceite, round
-// com a MESMA arena por seed, bomba remota aplicada, morte anunciada ('dm'),
-// placar e o round 2 comandado pelo host. O wire da Bia planta UMA bomba no
-// pe dela (quando o round 1 esta valendo) e a labareda encerra o round.
-(function () {
-    var APP = 'hub_apps/Detona/main.js';
-    var NOTE = 'sim.at(23000, function(e) { var n = e.__harness.detona && e.__harness.detona.net;' +
-               '  sim.note("round=" + (n ? n.round : "?") + " placar=" +' +
-               '           (n ? n.ganhos + "x" + n.perdidos : "?")); });';
-    function detonaHost() {
-        return 'function(env, sim) {' +
-            'sim.at(3000, function(e) { e.__harness.tap(240, 339); });' +    // DUELO no titulo
-            'sim.at(8200, function(e) { e.__harness.tap(240, 143); });' +    // DESAFIAR Celer-B
-            NOTE + '}';
-    }
-    function detonaConvidado() {
-        return 'function(env, sim) {' +
-            'sim.at(3000, function(e) { e.__harness.tap(240, 339); });' +    // DUELO no titulo
-            'sim.at(10000, function(e) { e.__harness.tap(240, 142); });' +   // ACEITAR (1a linha da lista)
-            'for (var t = 13000; t <= 17500; t += 350) (function(t) {' +     // planta 1 bomba no pe
-            '  sim.at(t, function(e) {' +
-            '    var d = e.__harness.detona;' +
-            '    if (!d || !d.net || d.net.round !== 1 || d.E.sceneName !== "jogando") return;' +
-            '    var s = d.arena.state();' +
-            '    if (!s || !s.duelo) return;' +
-            '    if (s.intro > 0) { s.intro = 0; return; }' +
-            '    if (e.__harness._planta) return;' +
-            '    var tem = false;' +
-            '    for (var i = 0; i < s.bombs.length; i++) if (s.bombs[i].dono === "p") tem = true;' +
-            '    if (!tem) { e.__harness._planta = true; e.__harness.tap(432, 368); }' +  // (13,11)
-            '  });' +
-            '})(t);' +
-            NOTE + '}';
-    }
-    scenario('Detona: duelo 1x1 pela malha (convite, arena irma, morte, round 2)', function() {
-        return sim.runMesh({
-            durationMs: 26000, seed: 77,
-            nodes: [
-                { name: 'Celer-A', id: 'A001', app: APP, wire: detonaHost() },
-                { name: 'Celer-B', id: 'B002', app: APP, wire: detonaConvidado() }
-            ],
-            links: [['Celer-A', 'Celer-B', -55]]
-        }).then(function(res) {
-            noErr(res);
-            if (process.env.DEBUG_LOG) { dump(res, 'Celer-A'); dump(res, 'Celer-B'); }
-            // sessao: lobby -> convite unicast -> aceite -> host
-            check('convite foi ao ar (unicast di)', airTx(res, 'Celer-A', /^di$/).length >= 1);
-            check('host abriu o duelo', has(res, 'Celer-A', 'duelo: duelo contra Celer-B (host)'));
-            check('convidado aceitou', has(res, 'Celer-B', 'duelo: duelo contra Celer-A (convidado)'));
-            // round 1: mesma arena por seed nos dois aparelhos
-            check('host iniciou o round 1 (ds)', airTx(res, 'Celer-A', /^ds\d+,\d+$/).length >= 1);
-            var sa = (last(res, 'Celer-A', /round 1 \(seed \d+\)/) || '').match(/seed (\d+)/);
-            var sb = (last(res, 'Celer-B', /round 1 \(seed \d+\)/) || '').match(/seed (\d+)/);
-            check('round 1 com a mesma seed nos dois', sa && sb && sa[1] === sb[1],
-                  (sa && sa[1]) + ' vs ' + (sb && sb[1]));
-            // eventos de jogo: bomba replicada, morte autoritativa, placar
-            check('bomba do convidado aplicada no host', has(res, 'Celer-A', 'duelo: bomba do rival em'));
-            check('morte anunciada foi ao ar (dm)',
-                  res.air.some(function(a) { return a.kind === 'tx' && a.from === 'Celer-B' && /^dm/.test(a.data); }));
-            check('host fechou o round com rwin', has(res, 'Celer-A', 'duelo: fim do round: rwin'));
-            check('convidado fechou com dead', has(res, 'Celer-B', 'duelo: fim do round: dead'));
-            check('host consolidou 1x0', has(res, 'Celer-A', 'duelo: round 1: venci (1x0)'));
-            check('convidado consolidou 0x1', has(res, 'Celer-B', 'duelo: round 1: perdi (0x1)'));
-            // round 2 comandado pelo host
-            check('round 2 chegou nos dois', has(res, 'Celer-A', '[sim] round=2') && has(res, 'Celer-B', '[sim] round=2'));
-            check('placar certo nos dois', has(res, 'Celer-A', '[sim] round=2 placar=1x0') &&
-                                          has(res, 'Celer-B', '[sim] round=2 placar=0x1'));
-            check('round 2 com seed nova e igual',
-                  (function() {
-                      var a2 = (last(res, 'Celer-A', /round 2 \(seed \d+\)/) || '').match(/seed (\d+)/);
-                      var b2 = (last(res, 'Celer-B', /round 2 \(seed \d+\)/) || '').match(/seed (\d+)/);
-                      return !!(a2 && b2 && sa && a2[1] === b2[1] && a2[1] !== sa[1]);
-                  })());
-        });
-    });
-})();
+// Detona!: o cenario do DUELO 1x1 saiu aqui junto com a copia plana do jogo
+// (hub_apps/Detona): o Detona do Studio nao tem o modo duelo por CelerNet.
+// Se o duelo voltar como feature, o cenario esta no git (commit 7918405) e o
+// protocolo (dhl/dinv/.../rwin) segue descrito no README da versao 0.10.x.
 
 // ---------------------------------------------------------------------------
 var filter = process.argv[2] || '';

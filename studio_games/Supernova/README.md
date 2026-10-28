@@ -1,6 +1,7 @@
 # Supernova - Celer Studio (nativo)
 
-App original: `hub_apps/Supernova` (intocado). Esta é a versão nativa:
+Fonte única (3.1.0): o hub publica o build deste projeto desde a consolidação
+de 2026-10-27 — a antiga cópia plana em `hub_apps/` foi removida.
 `Titulo` -> `Campanha`/`Infinito` -> `Vitoria`/`Fim`, controlador em
 `Assets/Scripts/supernova.js`.
 

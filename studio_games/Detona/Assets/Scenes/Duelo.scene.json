@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "rev": 3,
+  "name": "Duelo",
+  "guid": "94063181e65098f0959f4e7a971d1a2a",
+  "settings": {
+    "fps": 30,
+    "data": {
+      "screen": "duel"
+    },
+    "bg": "#04040d",
+    "static": false
+  },
+  "entities": [
+    {
+      "name": "Controle",
+      "fid": "e_62a70e05",
+      "active": true,
+      "z": 100,
+      "transform": {
+        "x": 0,
+        "y": 0,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1
+      },
+      "components": [
+        {
+          "type": "script",
+          "id": "c_duel001",
+          "fields": {
+            "script": "52378124decf85728bb70f1163844877"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

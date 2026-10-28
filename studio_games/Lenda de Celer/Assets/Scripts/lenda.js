@@ -88,9 +88,46 @@ function dist2(ax, ay, bx, by) { var dx = ax - bx, dy = ay - by; return dx * dx 
 function newState() {
     return {
         hpMax: 6, hp: 6, sword: 1, bombs: 0, keys: 0, crystals: 0,
-        itemB: 'bomba', sage: false, relic: false, bossDead: false,
+        itemB: 'bomba', boom: false, sage: false, relic: false, bossDead: false,
+        ms: 0, falls: 0,          // minutos de jornada e quedas (tela de save)
         opened: {}, got: {}, area: 'campo', room: '1,1', at: [7, 6]
     };
+}
+
+// ------------------------------------------------------- slots de save ----
+// A 0.x guardava uma jornada so ('lenda'). A 1.x tem 3 slots; o save antigo
+// migra para o slot 1 na primeira vez que o titulo abre.
+var SLOTS = ['lenda.1', 'lenda.2', 'lenda.3'];
+
+function slotState(E, n) {
+    if (n < 1 || n > 3) return null;
+    return E.save.obj(SLOTS[n - 1], null);
+}
+
+function slotSave(E, n, st) {
+    if (n < 1 || n > 3) return;
+    E.save.setObj(SLOTS[n - 1], st);
+}
+
+function slotDelete(E, n) {
+    if (n < 1 || n > 3) return;
+    E.save.setObj(SLOTS[n - 1], null);
+}
+
+function migrateSlots(E) {
+    var antigo = E.save.obj('lenda', null);
+    if (!antigo) return;
+    var tem = slotState(E, 1) || slotState(E, 2) || slotState(E, 3);
+    if (!tem) slotSave(E, 1, antigo);
+    E.save.setObj('lenda', null);   // consome o formato antigo
+}
+
+function slotLine(st) {
+    if (!st) return 'vazio';
+    var min = Math.floor((st.ms || 0) / 60000);
+    return (AREA_TITLE[st.area] || '?') + ' ' + st.room + '  ·  ' +
+        (st.crystals || 0) + ' cristais  ·  ' + min + ' min  ·  ' +
+        (st.falls || 0) + ' queda(s)';
 }
 
 exports.create = function (ctx) { return { ctx: ctx }; };
@@ -137,14 +174,19 @@ exports.start = function (ctx) {
     }
 
     if (s.screen === 'title') {
-        s.hasSave = !!E.save.obj('lenda', null);
-        s.save = s.hasSave ? E.save.obj('lenda', null) : null;
+        migrateSlots(E);
+        s.pick = false;            // seletor de save aberto?
+        s.pickDlg = null;
+        s.slot = E.save.num('lenda.slot', 1);
+        if (s.slot < 1 || s.slot > 3) s.slot = 1;
+        s.hasSave = !!slotState(E, s.slot);
+        if (s.hasSave) E.data.lenda = null;
         if (E.audio) E.audio.music(SONG);
     } else if (s.screen === 'win') {
-        s.st = E.data.lenda || E.save.obj('lenda', null) || newState();
+        s.st = E.data.lenda || slotState(s.E, s.slot) || newState();
         if (E.audio) E.audio.music(SONG);
     } else if (s.screen === 'lose') {
-        s.st = E.data.lenda || E.save.obj('lenda', null) || newState();
+        s.st = E.data.lenda || slotState(s.E, s.slot) || newState();
         if (E.audio) E.audio.music(SONG);
     } else {
         startRoom(s, ctx);
@@ -264,7 +306,8 @@ function saveState(s) {
     s.st.area = s.st.area || 'campo';
     s.st.room = s.st.room || '1,1';
     s.st.at = s.st.at || [7, 6];
-    s.E.save.setObj('lenda', s.st);
+    var n = s.E.data.lendaSlot || s.E.save.num('lenda.slot', 1);
+    slotSave(s.E, n, s.st);
 }
 
 // ------------------------------------------------------------ update -----
@@ -310,6 +353,7 @@ function goSaved(ctx, st) {
 
 function newGame(E, ctx) {
     var st = newState();
+    var n = E.data.lendaSlot || E.save.num('lenda.slot', 1);
     E.data.lenda = st;
     saveState({ E: E, st: st });
     ctx.go('Campo 1,1');
@@ -317,10 +361,31 @@ function newGame(E, ctx) {
 
 function updateTitle(s, E, ctx) {
     var a = takeAct(s);
-    if (s.how) E.redraw();          // modal anima: a cena estatica repinta
+    if (s.how || s.pick || s.delSlot) E.redraw();   // modal/card animam
+    if (a === 'exit') { if (s.ctx && s.ctx.exit) s.ctx.exit(); return; }
+    if (a === 'pick') { s.pick = true; E.redraw(); return; }
+    if (a === 'pickClose') { s.pick = false; E.redraw(); return; }
+    if (a && a.indexOf('slot:') === 0) {
+        var n = parseInt(a.substring(5), 10);
+        s.slot = n;
+        E.data.lendaSlot = n;
+        E.save.set('lenda.slot', n);
+        var st = slotState(E, n);
+        if (st) { E.data.lenda = st; goSaved(ctx, st); }
+        else { E.data.lenda = null; newGame(E, ctx); }
+        return;
+    }
+    if (a && a.indexOf('del:') === 0) { s.delSlot = parseInt(a.substring(4), 10); E.redraw(); return; }
+    if (a === 'delYes') {
+        slotDelete(E, s.delSlot || 1);
+        s.delSlot = null;
+        E.redraw();
+        return;
+    }
+    if (a === 'delNo') { s.delSlot = null; E.redraw(); return; }
     if (a === 'new') newGame(E, ctx);
     else if (a === 'cont') {
-        var st2 = E.save.obj('lenda', null) || newState();
+        var st2 = slotState(E, s.slot) || newState();
         E.data.lenda = st2;
         goSaved(ctx, st2);
     } else if (a === 'how') { s.how = true; E.redraw(); }
@@ -369,9 +434,14 @@ function updateGame(s, E, ctx, dt) {
     var act = takeAct(s);
     if (s.paused) {
         if (act === 'resume') { s.paused = false; s.hudKey = ''; E.redraw(); }
-        else if (act === 'menu') ctx.go('Titulo');
+        else if (act === 'swap') {        // troca o item B (bomba <-> bumerangue)
+            s.st.itemB = s.st.itemB === 'bumerangue' ? 'bomba' : 'bumerangue';
+            saveState(s);
+            E.redraw();
+        } else if (act === 'menu') ctx.go('Titulo');
         return;
     }
+    if (s.st) s.st.ms = (s.st.ms || 0) + dt * 1000;   // jornada em ms
     if (E.input.justDown && inRect(s.btnPause, E.input.x, E.input.y)) { s.paused = true; return; }
     if (s.msgT > 0) { s.msgT -= dt; if (s.msgT <= 0) s.msg = ''; }
     if (s.portalCd > 0) s.portalCd -= dt;
@@ -614,7 +684,7 @@ function openChest(s, E, chest) {
     else if (loot === 'conteiner') { s.st.hpMax += 2; s.st.hp += 2; }
     else if (loot === 'chave') s.st.keys += 1;
     else if (loot === 'mapa') s.st.hasMap = true;
-    else if (loot === 'bumerangue') s.st.itemB = 'bumerangue';
+    else if (loot === 'bumerangue') { s.st.itemB = 'bumerangue'; s.st.boom = true; }
     else s.st.bombs += 4;
     saveState(s);
     s.msg = loot === 'bumerangue' ? 'BUMERANGUE!' : (loot === 'conteiner' ? 'VIDA MAXIMA!' : 'BAU ABERTO');
@@ -853,6 +923,7 @@ function hurtHero(s, E, dmg) {
     if (E.fx) E.fx.flash(VERM, 180);
     if (s.st.hp <= 0) {
         s.st.hp = 0;
+        s.st.falls = (s.st.falls || 0) + 1;
         s.dead = true;
         s.msgT = 1.4;
         s.msg = 'VOCE CAIU';
@@ -922,18 +993,53 @@ function drawTitle(s, E) {
     E.gfx.rect(0, 186, W, s.H - 186, C(0x0B1020), { screen: true });
     E.gfx.text('LENDA DE CELER', W / 2, 266, LOGO_TXT);
     E.gfx.text('a pedra do templo despertou', W / 2, 300, SUB_TXT);
-    var c = E.ui.card(40, 318, W - 80, s.hasSave ? 152 : 112);
-    if (s.hasSave) {
-        if (E.ui.button('CONTINUAR', c.x, c.y, c.w, 46, BTN_NEW)) s.act = 'cont';
-        if (E.ui.button('NOVO JOGO', c.x, c.y + 54, c.w - 120, 40, BTN_CONT)) s.act = 'new';
-        if (E.ui.button('AJUDA', c.x + c.w - 110, c.y + 54, 110, 40, BTN_HOW)) s.act = 'how';
-    } else {
-        if (E.ui.button('NOVO JOGO', c.x, c.y, c.w, 46, BTN_NEW)) s.act = 'new';
-        if (E.ui.button('COMO JOGAR', c.x, c.y + 54, c.w, 32, BTN_HOW)) s.act = 'how';
-    }
+    if (s.pick) { drawSlots(s, E); return; }
+    var c = E.ui.card(40, 318, W - 80, 152);
+    if (E.ui.button('JOGAR', c.x, c.y, c.w, 46, BTN_NEW)) s.act = 'pick';
+    if (E.ui.button('AJUDA', c.x, c.y + 54, c.w, 40, BTN_HOW)) s.act = 'how';
+    if (E.ui.button('SAIR', c.x, c.y + 102, c.w, 40, BTN_CONT)) s.act = 'exit';
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY, buttons: HOW_BTNS });
         if (r !== null) s.act = 'howClose';
+    }
+}
+
+// Seletor de save: 3 slots com nome da sala, cristais, minutos e quedas.
+// Alvo do toque e o card inteiro (E.hit), como o mapa do Detona; o X apaga.
+var SLOT_T = { px: 15, screen: true, color: 0xFFFF };
+var SLOT_S = { px: 11, screen: true, color: 0x8894A8 };
+var SLOT_X = { px: 16, screen: true, align: 'center', color: 0xF04848 };
+
+function drawSlots(s, E) {
+    var W = s.W, H = s.H;
+    E.gfx.rect(0, 186, W, H - 186, C(0x0B1020), { screen: true });
+    E.gfx.text('ESCOLHA O SAVE', W / 2, 210, LOGO_TXT);
+    var c = E.ui.card(40, 246, W - 80, 200);
+    for (var n = 1; n <= 3; n++) {
+        var st = slotState(E, n);
+        var y = c.y + 8 + (n - 1) * 58;
+        var sel = n === s.slot;
+        E.ui.card(c.x + 6, y, c.w - 12, 50,
+                  { pad: 0, stroke: sel ? C(0xFFC83C) : C(0x22304A),
+                    bg: sel ? C(0x1C2436) : C(0x121A2C) });
+        SLOT_T.color = st ? C(0xFFFFFF) : C(0x6A7A94);
+        E.gfx.text('SLOT ' + n, c.x + 16, y + 6, SLOT_T);
+        E.gfx.text(slotLine(st), c.x + 16, y + 28, SLOT_S);
+        E.gfx.text('x', c.x + c.w - 26, y + 14, SLOT_X);
+        var hit = { x: c.x + 6, y: y, w: c.w - 60, h: 50 };
+        var del = { x: c.x + c.w - 52, y: y, w: 46, h: 50 };
+        E._btns.push(hit);
+        E._btns.push(del);
+        if (E.input.tap && E.hit(del) && st) { s.act = 'del:' + n; return; }
+        if (E.input.tap && E.hit(hit)) { s.act = 'slot:' + n; return; }
+    }
+    if (E.ui.button('VOLTAR', W / 2 - 80, c.y + c.h + 12, 160, 40, BTN_CONT)) s.act = 'pickClose';
+    if (s.delSlot) {
+        var r = E.ui.modal('del', { title: 'APAGAR SAVE',
+                                    body: 'slot ' + s.delSlot + ' sera perdido.',
+                                    buttons: [{ label: 'Nao', value: 'delNo' },
+                                              { label: 'Apagar', value: 'delYes' }] });
+        if (r !== null) s.act = r;
     }
 }
 
@@ -1011,7 +1117,8 @@ function drawGame(s, E) {
     if (s.paused) {
         if (E.dirty.unclip) E.dirty.unclip();   // a pausa cobre tambem o HUD
         var pr = E.ui.modal('pausa', { title: 'PAUSA', dismiss: false,
-                                       body: s.roomName, buttons: PAUSE_BTNS });
+                                       body: s.roomName + (s.st && s.st.boom ? ('  ·  B: ' + s.st.itemB) : ''),
+                                       buttons: (s.st && s.st.boom) ? PAUSE_BTNS_ITEM : PAUSE_BTNS });
         if (pr !== null) s.act = pr;
         applyGameClip(s, E);
     }
@@ -1022,8 +1129,12 @@ function drawGame(s, E) {
     }
 }
 
+var PAUSE_ITEM = { label: 'Item', value: 'swap', icon: 'swap' };
 var PAUSE_BTNS = [{ label: 'Menu', value: 'menu', icon: 'home' },
                   { label: 'Continuar', value: 'resume' }];
+var PAUSE_BTNS_ITEM = [{ label: 'Menu', value: 'menu', icon: 'home' },
+                       PAUSE_ITEM,
+                       { label: 'Continuar', value: 'resume' }];
 var DLG_TXT = { px: 15, color: BRANCO, screen: true };
 var DLG_HINT = { px: 11, align: 'right', color: TEXT2, screen: true };
 var DLG_LINE = [];

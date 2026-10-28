@@ -15,8 +15,11 @@ A **CelerGame** é a game engine 2D do CelerOS, entregue como uma **família de 
 | **`celeros.physics`** (opcional) | ~7 KB | corda/pano por Verlet nativo (`P.verletFast`, API 31) e corpos rígidos (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | arenas estilo bomberman + BFS de perseguição, tabelas de melodias sfx, boilerplate CelerNet (mesma família, módulos à parte) |
 
-Os tamanhos são os **enxutos** (jsstrip), medidos em 2026-10 — confira com
-`node tools/sdk/lib/jsstrip.js tools/sdk/engine/<modulo>.js` antes de planejar.
+Os tamanhos são os **minificados** (jsstrip + jsmin, como o hub publica e o
+aparelho compila), medidos em 2026-10 — confira com
+`node tools/sdk/lib/jsstrip.js tools/sdk/engine/<modulo>.js --min --top` antes
+de planejar. As quebras de linha são preservadas, então a linha do erro no
+device continua batendo com o repo.
 
 Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho já passa do teto de 48 KB sem PSRAM** (65 KB desde a 1.7.0; 51 KB na 1.5), então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~119 KB e a família inteira ~255 KB.
 
@@ -937,7 +940,7 @@ Duktape uma chamada custa mais que o resto do corpo do laço.
 O `System.drawSprite` (também API 33) desenha um sprite girado e escalado
 em torno do centro — o par natural dos corpos que giram; com `smooth` ele
 também redimensiona a arte uma vez no load para a tela da placa. Exemplo
-completo: `hub_apps/Arrasa` (estilingue contra fortalezas de goblins).
+completo: `studio_games/Arrasa` (estilingue contra fortalezas de goblins).
 
 ### Sobreposição estática: `P.hit`
 
@@ -972,7 +975,7 @@ O quadro é **persistente** e o firmware só empurra ao vidro as caixas que voc�
 - **Ação em fundo liso:** `E.dirty.enable(corDeFundo)` no `enter`. Todo desenho da engine (`E.gfx.*`, `E.spr.blit`, `E.fx`, texto) registra sua caixa de tela; no quadro seguinte a engine repinta só essas caixas com o fundo antes do seu `draw`. Sem `fillScreen`. Desenho direto via `System.*` registra com `E.dirty.add(x, y, w, h)`. O `E.fx.stars` apaga os próprios pixels antigos e só repinta estrela que moveu (a que foi coberta por algo desenhado por cima cura no próximo tick dela).
 - **HUD:** `E.dirty.clip(x, y, w, h)` mantém o apagar e o mundo dentro da arena; chame `E.dirty.unclip()` e redesenhe o HUD só quando os valores mudam (guarde uma string-chave).
 - **Mundos de tiles:** `E.tilemap({ cols, rows, cell, ox, oy, paint(c, r, x, y, w, h) })` mantém o cenário no quadro; `E.dirty.enable(function (x, y, w, h) { mapa.markRect(x, y, w, h); })` marca as células sob o que se moveu, `mapa.mark(c, r)` as que mudaram (bloco quebrado), e `mapa.flush()` no topo do `draw` repinta só elas. O que o `paint` desenha é fundo — nunca entra na camada suja.
-- **O que está parado fica fora da camada:** corpo que não se mexeu (dormindo na física, mesma pose do quadro anterior) só é desenhado quando `E.dirty.touches(caixa)` diz que a borracha o tocou, e não registra nada — castelo dormindo não custa apagar, redesenhar nem push. Quando ele volta a se mexer, o desenho velho não tem caixa para a borracha apagar: chame `E.dirty.erase(x, y, w, h)` (1.2.4) na última caixa dele no **topo** do `draw` — repinta o fundo na hora e registra a caixa, e o que for desenhado depois vê o toque e se redesenha. O `hub_apps/Arrasa` faz isso com o castelo, o estilingue e o nome da fase.
+- **O que está parado fica fora da camada:** corpo que não se mexeu (dormindo na física, mesma pose do quadro anterior) só é desenhado quando `E.dirty.touches(caixa)` diz que a borracha o tocou, e não registra nada — castelo dormindo não custa apagar, redesenhar nem push. Quando ele volta a se mexer, o desenho velho não tem caixa para a borracha apagar: chame `E.dirty.erase(x, y, w, h)` (1.2.4) na última caixa dele no **topo** do `draw` — repinta o fundo na hora e registra a caixa, e o que for desenhado depois vê o toque e se redesenha. O `studio_games/Arrasa` faz isso com o castelo, o estilingue e o nome da fase.
 - **Fundo em sprite:** com um sprite de fundo de tela inteira, o painter é `System.blitSprite(fundo, x, y, w, h)` (API 34, placas S3: uma chamada no lugar de `setClip` + `useSprite` + `pushSprite` + `useSprite(0)` + `clearClip` por caixa); detecte e mantenha o caminho de 5 chamadas para firmware antigo.
 - `E.dirty.full()` repinta o fundo inteiro no próximo quadro (troca de cena e flash de tela cheia fazem por você); a camada desliga sozinha a cada troca de cena.
 
@@ -1035,7 +1038,7 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 
 ## 18. Tamanho e performance
 
-- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~51 KB enxutos, fx ~13, ui ~12, spr ~12, tilemap ~4 (família inteira ~171 KB). Como o core sozinho já passa de 48 KB, app com a engine declara `"requires": ["psram"]` (teto de 1 MB). O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js` (porte 1:1 do JsStripper do firmware — sem comentários/indentação, quebras mantidas, então a linha do erro bate com o fonte), que é exatamente o que o aparelho compila.
+- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~51 KB minificados, fx ~10, ui ~41, spr ~12, tilemap ~3 (família inteira ~131 KB). Como o core sozinho já passa de 48 KB, app com a engine declara `"requires": ["psram"]` (teto de 1 MB). O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: sem comentários/indentação, nomes locais encurtados, quebras mantidas — a linha do erro continua batendo com o fonte), que é exatamente o que o aparelho compila; o JsStripper do firmware é idempotente nessa saída.
 - **Zero alocação por frame**: use `E.pool`, remoção swap-pop e reúso de objetos. Um `new`/`[...]` por frame por entidade é o que dispara pausa de GC. Desde a engine 1.2.3 os wrappers também não alocam: chamadas de `E.gfx.*` sem opts compartilham um objeto só de leitura, a busca do `E.font` é memoizada e a largura de cada string (`textWidth`) é medida uma vez por estilo — HUD/placar/botão repetidos não custam chamadas de firmware.
 - Se você chama `System.setTextDatum` direto, devolva o `0` ao terminar: a engine 1.2.3 só toca no datum quando o texto pede origem diferente do default, então o `E.gfx.text` confia que o app o deixou em `0` (todos os apps do repo já fazem).
 - Evite `fillScreen` + redesenho total por frame: no painel RGB do SmartDisplay (framebuffer varrido da PSRAM) isso estrangula o DMA do LCD e a imagem treme. Use cenas `static`, `E.dirty` e `E.tilemap` (§16b).

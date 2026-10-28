@@ -30,7 +30,7 @@ Host utilities: device control over serial (`celerctl`), the JS app linter (`app
 ```bash
 pip install -r tools/requirements.txt                        # pyserial only; make_icons also needs Pillow (not listed)
 python3 tools/celerctl.py apps install "data/apps/Settings"  # push one app without reflashing littlefs (linta antes)
-python3 tools/celerctl.py apps install hub_apps/Arrasa --deps-local  # deps do repo antes do publish-dep
+python3 tools/celerctl.py apps install "hub_apps/Batata Quente" --deps-local  # deps do repo antes do publish-dep
 python3 tools/celerctl.py ota push build/CelerOS.bin         # firmware over serial, no esptool
 python3 tools/celerctl.py pair 192.168.0.50                  # WiFi bridge: token uma vez (device shell: bridge)
 python3 tools/celerctl.py -p 192.168.0.50 ota push build-x/CelerOS.bin  # OTA over the air
@@ -40,7 +40,7 @@ python3 tools/celerctl.py apps pull Breakout                 # backup de um app 
 python3 tools/celerctl.py apps deps --upgrade                # re-resolve as deps de cada app instalado contra o hub (pub upgrade)
 python3 tools/celerhub.py list                               # local vs hub versions
 python3 tools/celerhub.py deps-status                        # drift tools/sdk/engine x hub (exit 1) — GATE de push
-node tools/sdk/celer.js deps hub_apps/Arrasa --verify        # exit 1 se algum range do app.json nao resolve no hub
+node tools/sdk/celer.js deps "hub_apps/Batata Quente" --verify   # exit 1 se algum range do app.json nao resolve no hub
 node tools/sdk/celer.js new MeuApp                           # scaffold (app.json + main.js + icon + celer.d.ts p/ IDE)
 node tools/sdk/celer.js emu hub_apps/Snake                   # emulador headless: roda e salva tela PNG 240x320
 node tools/sdk/celer.js emu hub_apps/Snake --serve --open     # preview ao vivo no navegador (toque/teclado/hot reload)

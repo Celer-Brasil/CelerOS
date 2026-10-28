@@ -1,6 +1,7 @@
 # Lenda de Celer - Celer Studio (nativo)
 
-App original: `hub_apps/Lenda de Celer` (intocado). Esta é a versão nativa:
+Fonte única (2.2.0): o hub publica o build deste projeto desde a consolidação
+de 2026-10-27 — a antiga cópia plana em `hub_apps/` foi removida.
 `Titulo` -> 20 salas (`Campo x,y`, `Casa 0,0`, `Templo x,y`) -> `Vitoria`/`Fim`,
 controlador em `Assets/Scripts/lenda.js`.
 

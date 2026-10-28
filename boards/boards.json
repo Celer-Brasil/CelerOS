@@ -30,7 +30,7 @@
       "ota_channel": "esp32",
       "build_dir": "build-cyd-vspi",
       "data_overlay": false,
-      "data_exclude": false
+      "data_exclude": true
     },
     "spotpear-dog": {
       "target": "esp32s3",

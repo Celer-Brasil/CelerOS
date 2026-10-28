@@ -42,7 +42,10 @@ function startLive(opts) {
 
     const ctlSAB = new SharedArrayBuffer(8 * 4);
     const ctl = new Int32Array(ctlSAB);
-    const ptrSAB = new SharedArrayBuffer((PTR_BASE + RING * 3) * 4);
+    // cada evento do ring ocupa 4 inteiros [down,x,y,finger] (o worker anda
+    // de 4 em 4): RING*3 alocava 1/4 a menos e o 193o toque estourava o
+    // RangeError calado do readBody — o live ficava surdo a input pra sempre
+    const ptrSAB = new SharedArrayBuffer((PTR_BASE + RING * 4) * 4);
     const ptr = new Int32Array(ptrSAB);
     ctl[3] = 100;   // velocidade 1x
 

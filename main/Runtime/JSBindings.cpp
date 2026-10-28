@@ -1387,6 +1387,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"present", js_present, 0},
         {"isBuffered", js_isBuffered, 0},
         {"wifiStatus", js_wifiStatus, 0},
+        {"wifiWake", js_wifiWake, 1},   // API 53: janela de rede com tela apagada
         {"md5", js_md5, 1},
         {"pinState", js_pinState, 0},
         {"rescanApps", js_rescanApps, 0},

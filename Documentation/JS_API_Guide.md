@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 52
+### API Level: 53
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -604,6 +604,11 @@ Automatic brightness from the board's light sensor: the user's level becomes the
 
 #### `System.wifiStatus()`
 - **Returns:** `{connected, ip, webServer, savedNetworks}` (Booleans/String).
+
+#### `System.wifiWake(minutes)` (API 53)
+- **Returns:** Boolean — `true` when the radio was enabled (the connection itself is asynchronous: poll `Net.isConnected()` / `System.wifiStatus()`), `false` when the user turned WiFi off (`nowifi`) or there is no saved network.
+
+Brings the WiFi radio back with the saved credentials and **holds it on for `minutes`** (1–30, default 5) even with the screen off, beating the idle WiFi timeout (`wifi_sleep_min`). It is the maintenance window of a background service: the App Store's `service.js` applies the nightly app updates at 02:00 on a watch whose radio drops 10 minutes after the screen goes off. The window also ends as soon as the screen comes on; after it expires the idle countdown starts over, so the radio is not cut on the next tick. Feature-detect with `typeof System.wifiWake === "function"` — firmware before API 53 has no call, and a service then simply runs when the network is already up.
 
 #### `System.webActive()` / `System.webSetActive(bool)`
 Web server (file manager + web upload) state and toggle — live, no reboot.

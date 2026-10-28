@@ -1,6 +1,8 @@
 #ifndef CELER_HARDWARE_POWERPOLICY_H
 #define CELER_HARDWARE_POWERPOLICY_H
 
+#include <cstdint>
+
 // Politica de energia (API 15, watch): DFS + light sleep automatico do
 // ESP-IDF (CONFIG_PM_ENABLE + tickless idle) guiados pelo estado da tela.
 //
@@ -30,6 +32,14 @@ void reloadSettings();  // rele wifi_sleep_min (System.setting)
 // Intervalo do loop da UI: curto com a tela acesa, longo apagada/AOD
 // (deixa o tickless idle dormir de verdade).
 int loopDelayMs();
+
+// Janela de manutencao de rede (API 53): segura o radio ligado por ms mesmo
+// com a tela apagada, vencendo o idle-off acima. Quem usa: o service.js da
+// App Store, que aplica o lote de updates as 02:00 no watch (o radio cai
+// 10 min depois da tela apagar). Quando a janela expira o contador do idle
+// recomeca do zero (o radio nao cai no segundo seguinte). Placa sem a
+// politica (wifi_sleep_min=0) nao precisa: nada muda.
+void holdRadio(uint32_t ms);
 
 // Audio em curso (playWav, PcmFeed, tom, musica, gravacao) segura o
 // NO_LIGHT_SLEEP: o driver do I2S so pede ESP_PM_APB_FREQ_MAX, que NAO

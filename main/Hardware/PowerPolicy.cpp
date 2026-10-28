@@ -24,6 +24,7 @@ uint32_t s_checkAt = 0;
 uint32_t s_offSince = 0;      // tela apagada desde (0 = acesa)
 bool s_wifiAutoOff = false;   // nos desligamos (religa ao acender)
 int s_wifiSleepMin = 0;
+uint32_t s_holdUntil = 0;     // janela de manutencao de rede (holdRadio, API 53)
 #if CONFIG_PM_ENABLE
 esp_pm_lock_handle_t s_cpuLock = nullptr;   // CPU_FREQ_MAX com a tela acesa
 esp_pm_lock_handle_t s_litLock = nullptr;   // NO_LIGHT_SLEEP com a tela acesa (UI sem latencia de wake)
@@ -86,6 +87,16 @@ void reloadSettings() {
     s_wifiSleepMin = v.empty() ? Board::profile().wifiSleepMin : atoi(v.c_str());
 }
 
+void holdRadio(uint32_t ms) {
+    // 0 = solta a janela (quem chama pode encurtar); senao vale deste agora.
+    if (ms == 0) {
+        s_holdUntil = 0;
+        return;
+    }
+    const uint32_t until = millis() + ms;
+    s_holdUntil = until == 0 ? 1 : until;  // 0 e o sentinela de "sem janela"
+}
+
 void audioBusy(bool on) {
 #if CONFIG_PM_ENABLE
     // O contador vale mesmo antes do lock existir (som de boot): o init ve
@@ -134,6 +145,7 @@ void tick() {
     // WiFi ocioso com a tela apagada
     if (lit) {
         s_offSince = 0;
+        s_holdUntil = 0;  // janela de manutencao morre com a tela acesa
         if (s_wifiAutoOff) {
             s_wifiAutoOff = false;
             if (WebManager::wifiEnabled()) WebManager::enableAsync();
@@ -141,7 +153,14 @@ void tick() {
         }
     } else if (st == 0) {
         if (s_offSince == 0) s_offSince = now;
-        if (s_wifiSleepMin > 0 && !s_wifiAutoOff && WebManager::isActive() &&
+        // Janela de manutencao de rede (API 53): com o radio segurado o
+        // idle-off nao roda; quando ela expira o contador recomeca, entao o
+        // radio ganha outro wifi_sleep_min inteiro (nao cai no tick seguinte).
+        if (s_holdUntil != 0 && (int32_t)(now - s_holdUntil) >= 0) {
+            s_holdUntil = 0;
+            s_offSince = now;
+        }
+        if (s_holdUntil == 0 && s_wifiSleepMin > 0 && !s_wifiAutoOff && WebManager::isActive() &&
             !DebugBridge::sessionActive() &&  // celerctl por WiFi em uso: radio fica
             now - s_offSince >= (uint32_t)s_wifiSleepMin * 60000UL) {
             s_wifiAutoOff = true;

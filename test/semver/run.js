@@ -8,7 +8,8 @@
 //
 //   python3 tools/celerhub.py    range_satisfies / resolve_dep_ranges
 //                                (o celerctl e o hub importam daqui)
-//   data/apps/App Store/main.js  depRangeOk / resolveDeps (device)
+//   data/apps/App Store/store.js depRangeOk / resolveDeps (device; o main.js
+//                                e o service.js carregam o MESMO arquivo)
 //   test/js_harness/run.js       satisfiesRange (host)
 //   tools/sdk/engine/celeros.app.semver.js  rangeOk / resolve (CelerKit)
 //
@@ -176,7 +177,10 @@ function grabFn(src, name) {
     throw new Error('chaves desbalanceadas em ' + name);
 }
 
-const lojaSrc = fs.readFileSync(path.join(ROOT, 'data', 'apps', 'App Store', 'main.js'), 'utf8');
+// Desde a Loja 3.1.0 o motor mora no store.js (o main.js e o service.js da
+// madrugada carregam o MESMO arquivo): extrair do main.js testaria uma copia
+// morta.
+const lojaSrc = fs.readFileSync(path.join(ROOT, 'data', 'apps', 'App Store', 'store.js'), 'utf8');
 const reDep = lojaSrc.match(/var RE_VER_DEP = [^;]+;/);
 if (!reDep) throw new Error('RE_VER_DEP nao achada na Loja');
 const loja = new Function(

@@ -2562,6 +2562,186 @@ function runInline(src, env) {
     check('falha nao limpa arquivos validos', env.FS.exists('/local/apps/celeros.multi4/som.wav'));
 })();
 
+// --- App Store v5: atualizacao automatica (02:00) e trava de versao ---------
+// O service.js da madrugada nao roda no harness (nao ha svchost); o que ele
+// usa e testado aqui pelo store.js: agenda (hourOf/dueNow), plano por
+// /store/all.txt, updateOne pelo app.zip e a trava de versao (pins).
+(function() {
+    console.log('App Store v5 (automatico + trava de versao):');
+    var api = null;
+    var dl = [], zips = [];
+    var r = runApp('data/apps/App Store/main.js', function(env) {
+        env.Net.isConnected = function() { return true; };
+        env.Net.get = function(url) {
+            var u = String(url);
+            if (u.indexOf('/store/all.txt') >= 0) {
+                return '#pkg\tname\tversion\tapi\tcategory\tsize\tmd5\trequires\tdeps\tzip_md5\tzip_size\ticon\tnfiles\tchangelog\n' +
+                       'celeros.a\tA\t2.0.0\t3\tApps\t1000\taaa\t\t\tza\t900\t0\t0\tnota A\n' +
+                       'celeros.b\tB\t2.0.0\t3\tApps\t1000\tbbb\t\t\tzb\t900\t0\t0\tnota B\n' +
+                       'celeros.c\tC\t2.0.0\t3\tApps\t1000\tccc\tpsram\t\tzc\t900\t0\t0\tnota C\n' +
+                       'celeros.d\tD\t9.0.0\t99\tApps\t1000\tddd\t\t\tzd\t900\t0\t0\tnota D\n' +
+                       '#end\t4';
+            }
+            if (u.indexOf('/app.json') >= 0) {
+                var m = u.match(/celeros\.[a-z]/);
+                var pkg = m ? m[0] : 'celeros.x';
+                return JSON.stringify({ packageName: pkg, name: pkg.toUpperCase(),
+                                        version: pkg === 'celeros.a' ? '2.1.0' : '2.0.0' });
+            }
+            return null;
+        };
+        env.Net.getJSON = function(url) {
+            var u = String(url);
+            if (u.indexOf('celeros.a/app.json') >= 0) return { packageName: 'celeros.a', name: 'A',
+                version: '2.0.0', api: 3, zip: { url: 'h/celeros.a/app.zip', md5: 'za', size: 900 } };
+            if (u.indexOf('celeros.b/app.json') >= 0) return { packageName: 'celeros.b', name: 'B',
+                version: '2.0.0', api: 3, zip: { url: 'h/celeros.b/app.zip', md5: 'zb', size: 900 } };
+            return null;
+        };
+        env.Net.download = function(url, p, cb) {
+            dl.push(String(url));
+            if (!env.FS.writeTextFile(p, 'BLOB')) return false;
+            if (cb) cb(10, 10);
+            return true;
+        };
+        // o md5 do zip vem do catalogo; os .new do caminho por arquivo usam o
+        // md5 do item do catalogo ('aaa'/'bbb')
+        env.FS.getFileMD5 = function(p) {
+            p = String(p);
+            if (p.indexOf('appstore_update.zip') >= 0) return 'za';
+            if (p.indexOf('.new') >= 0) return 'aaa';
+            return 'deadbeef';
+        };
+        env.System.installZip = function(zip, folder) {
+            zips.push(folder);
+            var dir = '/local/apps/' + folder;
+            env.FS.mkdir(dir);
+            env.FS.writeTextFile(dir + '/app.json', JSON.stringify({ packageName: folder,
+                name: folder.toUpperCase(), version: '2.0.0' }));
+            env.FS.writeTextFile(dir + '/main.js', 'NOVO-ZIP');
+            return { ok: true, files: 2, bytes: 10 };
+        };
+        env.__harness.storeTest = function(a) { api = a; };
+    });
+    check('v5 roda sem erro', r.err === null, r.err || '');
+    if (!api) { check('v5 harness recebeu a loja', false); return; }
+    var env = r.env;
+
+    function instalado(pkg, ver) {
+        env.FS.mkdir('/local/apps/' + pkg);
+        env.FS.writeTextFile('/local/apps/' + pkg + '/app.json',
+            JSON.stringify({ packageName: pkg, name: pkg.toUpperCase(), version: ver }));
+        env.FS.writeTextFile('/local/apps/' + pkg + '/main.js', pkg.toUpperCase() + '-ANTIGO');
+    }
+    instalado('celeros.a', '1.0.0');
+    instalado('celeros.b', '1.0.0');
+    instalado('celeros.c', '1.0.0');   // exige PSRAM (a placa do harness nao tem)
+    instalado('celeros.d', '1.0.0');   // exige API 99
+    instalado('celeros.e', '1.0.0');   // fora do catalogo (app de fabrica)
+    // app no cartao SD: installZip escreve so em /local/apps
+    env.FS.mkdir('/sd/apps/celeros.f');
+    env.FS.writeTextFile('/sd/apps/celeros.f/app.json',
+        JSON.stringify({ packageName: 'celeros.f', name: 'F', version: '1.0.0' }));
+    env.FS.writeTextFile('/sd/apps/celeros.f/main.js', 'F-ANTIGO');
+    api.scanLocalApps();
+    api.setPin('celeros.b', true);     // versao travada pelo usuario
+
+    // ---- agenda: 02:00 local, uma vez por dia, catch-up no dia ------------
+    check('hourOf 24h', api.hourOf('02:05') === 2 && api.hourOf('23:59') === 23);
+    check('hourOf 12h', api.hourOf('12:00 AM') === 0 && api.hourOf('12:30 PM') === 12 &&
+                        api.hourOf('11:30 PM') === 23 && api.hourOf('02:00 AM') === 2);
+    var cfg = api.cfg();
+    check('auto ligado por padrao e as 02:00', cfg.auto === true && cfg.hour === 2 &&
+          api.auto() === true);
+    check('dueNow antes das 02:00 nao roda', api.dueNow(cfg, '', '01:59', '28/10/2026') === false);
+    check('dueNow as 02:00 roda', api.dueNow(cfg, '', '02:00', '28/10/2026') === true);
+    check('dueNow uma vez por dia', api.dueNow(cfg, '28/10/2026', '02:00', '28/10/2026') === false);
+    check('dueNow dia seguinte roda de novo',
+          api.dueNow(cfg, '28/10/2026', '02:00', '29/10/2026') === true);
+    check('dueNow catch-up no meio do dia',
+          api.dueNow(cfg, '27/10/2026', '15:40', '28/10/2026') === true);
+    check('dueNow 12h respeita a janela',
+          api.dueNow(cfg, '', '12:00 AM', '28/10/2026') === false);
+    api.setAuto(false);
+    check('rotina desligada nao roda', api.cfg().auto === false &&
+          api.dueNow(api.cfg(), '', '02:00', '28/10/2026') === false);
+    check('auto gravado no arquivo', env.FS.readTextFile('/local/appstore_auto.json').indexOf('"auto":false') >= 0);
+    api.setAuto(true);
+    check('trava gravada no arquivo', env.FS.readTextFile('/local/appstore_auto.json').indexOf('"celeros.b":1') >= 0);
+
+    // ---- plano: so o que da para trocar por zip nesta placa --------------
+    var plano = api.planUpdates(api.cfg(), 20);
+    check('plano existe', !!plano);
+    var pkgs = (plano || []).map(function(x) { return x.pkg; }).join(',');
+    check('plano: update compativel entra, travado/psram/api/SD/fabrica ficam fora',
+          pkgs === 'celeros.a', pkgs);
+    check('plano: de/para do app', plano[0].from === '1.0.0' && plano[0].to === '2.0.0');
+
+    // ---- updateOne: zip com MD5, installZip e deps.json -------------------
+    dl = []; zips = [];
+    var res = api.updateOne(plano[0]);
+    check('updateOne instala', res.ok === true && res.version === '2.0.0', JSON.stringify(res));
+    check('updateOne baixa o app.zip', dl.length === 1 && dl[0].indexOf('/app.zip') >= 0, dl.join(','));
+    check('updateOne usa a pasta existente', zips.length === 1 && zips[0] === 'celeros.a', zips.join(','));
+    check('updateOne grava a versao nova', env.FS.readTextFile('/local/apps/celeros.a/main.js') === 'NOVO-ZIP');
+
+    // MD5 divergente: nada instalado
+    env.FS.getFileMD5 = function() { return 'md5-errado'; };
+    dl = []; zips = [];
+    var res2 = api.updateOne({ pkg: 'celeros.b', name: 'B', from: '1.0.0', to: '2.0.0',
+                               dir: '/local/apps/celeros.b', meta: { packageName: 'celeros.b', version: '2.0.0',
+                               api: 3, zip: { url: 'h/celeros.b/app.zip', md5: 'zb', size: 900 } } });
+    check('updateOne rejeita md5 divergente', res2.ok === false && res2.err === 'MD5 divergente');
+    check('updateOne nao chama installZip com md5 errado', zips.length === 0);
+    check('versao antiga intacta', env.FS.readTextFile('/local/apps/celeros.b/main.js') === 'CELEROS.B-ANTIGO');
+
+    // sem app.zip no hub: erro claro (o caminho por arquivo e da loja, nao da rotina)
+    env.FS.getFileMD5 = function() { return 'deadbeef'; };
+    var res3 = api.updateOne({ pkg: 'celeros.e', name: 'E', from: '1.0.0', to: '2.0.0',
+                               dir: '/local/apps/celeros.e', meta: { packageName: 'celeros.e', version: '2.0.0', api: 3 } });
+    check('updateOne sem app.zip falha', res3.ok === false && res3.err === 'hub sem app.zip');
+
+    // ---- trava de versao na UI: badge, contador e lote --------------------
+    // (md5 do caminho por arquivo da loja: 'aaa' = o do item do catalogo)
+    env.FS.getFileMD5 = function(p) { p = String(p);
+        if (p.indexOf('.new') >= 0) return 'aaa'; return 'deadbeef'; };
+    api.setCatalog([
+        { pkg: 'celeros.a', metaUrl: 'h/celeros.a/app.json', appUrl: 'h/celeros.a/main.js',
+          name: 'A', ver: '2.1.0', api: 3, md5: 'aaa', size: 1000 },
+        { pkg: 'celeros.b', metaUrl: 'h/celeros.b/app.json', appUrl: 'h/celeros.b/main.js',
+          name: 'B', ver: '2.0.0', api: 3, md5: 'aaa', size: 1000 }
+    ]);
+    var itB = api.catalog().filter(function(x) { return x.pkg === 'celeros.b'; })[0];
+    check('travado tem badge proprio', api.stateInfo(itB).code === 'pin' &&
+          api.stateInfo(itB).bd === 'Travado');
+    check('travado nao conta como atualizacao', api.updCount() === 1);  // so o A
+    dl = [];
+    api.updateAll();
+    check('Atualizar tudo nao toca no travado', api.batchStats().ok === 1 &&
+          dl.join(',').indexOf('celeros.b') < 0, dl.join(','));
+
+    // destravar volta a contar
+    api.setPin('celeros.b', false);
+    api.refresh();
+    check('destravado volta a contar', api.updCount() === 1 &&
+          api.stateInfo(itB).code === 'upd', 'uc=' + api.updCount() + ' code=' + api.stateInfo(itB).code);
+    check('destravar limpa o arquivo',
+          env.FS.readTextFile('/local/appstore_auto.json').indexOf('celeros.b') < 0);
+
+    // desinstalar nao deixa pin fantasma
+    api.setPin('celeros.b', true);
+    check('pin antes de desinstalar', api.pinned('celeros.b') === true);
+    api.uninstallApp('celeros.b');
+    check('pin some com o app', api.pinned('celeros.b') === false);
+
+    // sem /store/all.txt e sem app.json: plano indeterminado (nao marca o dia)
+    env.Net.get = function() { return null; };
+    env.Net.getJSON = function() { return null; };
+    check('plano sem hub = null (o dia nao e marcado)',
+          api.planUpdates(api.cfg(), 20) === null);
+})();
+
+
 // --- Celer Link (API 9) ------------------------------------------------------
 (function() {
     console.log('CelerLink:');

@@ -89,6 +89,7 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
         {"getOSVersion", JSBindings::js_getOSVersion, 0},
         {"getAPILevel", JSBindings::js_getAPILevel, 0},
         {"wifiStatus", JSBindings::js_wifiStatus, 0},
+        {"wifiWake", JSBindings::js_wifiWake, 1},          // API 53: janela de rede
         {"battery", JSBindings::js_battery, 0},
         {"batteryInfo", JSBindings::js_batteryInfo, 0},
         {"setting", JSBindings::js_setting, 2},

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 52
+### Nível de API: 53
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -835,6 +835,21 @@ configuração `auto_brightness`.
 
 #### `System.wifiStatus()`
 - **Retorna:** `{connected, ip, webServer, savedNetworks}` (Booleans/String).
+
+#### `System.wifiWake(minutos)` (API 53)
+- **Retorna:** Boolean — `true` quando o rádio foi religado (a conexão em si é
+  assíncrona: consulte `Net.isConnected()` / `System.wifiStatus()`), `false`
+  quando o usuário desligou o WiFi (`nowifi`) ou não há rede salva.
+
+Religa o rádio com as credenciais salvas e **segura o WiFi ligado por
+`minutos`** (1–30, padrão 5) mesmo com a tela apagada, vencendo o timeout de
+WiFi ocioso (`wifi_sleep_min`). É a janela de manutenção de um serviço de
+fundo: o `service.js` da App Store aplica o lote de updates noturno às 02:00
+no watch, cujo rádio cai 10 minutos depois de a tela apagar. A janela também
+termina quando a tela acende; quando expira, o contador do idle recomeça do
+zero (o rádio não cai no tick seguinte). Faça feature-detect com
+`typeof System.wifiWake === "function"` — firmware antes da API 53 não tem a
+chamada, e um serviço então só roda quando a rede já está de pé.
 
 #### `System.webActive()` / `System.webSetActive(bool)`
 Estado e toggle do servidor web (file manager + upload web) — ao vivo, sem

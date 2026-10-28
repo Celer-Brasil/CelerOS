@@ -1,4 +1,4 @@
-// CelerOS App Store 3.0 — loja de apps do CelerOS Hub (os.celer.tec.br).
+// CelerOS App Store 3.1 — loja de apps do CelerOS Hub (os.celer.tec.br).
 // Refeita no CelerKit UI 2.0 (celeros.app/style/icons/list/caps): abas e
 // categorias segmentadas, linhas ricas (icone, versao, badge de estado,
 // barras de tamanho), detalhe em folha com descricao/changelog/permissoes e
@@ -20,13 +20,27 @@
 // catalogo: gravar os arquivos basta, o main.js e relido do disco.
 //
 // Estados: carregando, Wi-Fi fora, erro de rede, catalogo vazio/parcial,
-// progresso, sucesso, conflito de versao (local mais nova que o hub) e app
-// incompativel (API/PSRAM). O app.json do pacote e a fonte de
-// files/requires/permissoes no install; permissoes novas pedem consentimento.
+// progresso, sucesso, conflito de versao (local mais nova que o hub), app
+// incompativel (API/PSRAM) e versao travada (badge "Travado"). O app.json do
+// pacote e a fonte de files/requires/permissoes no install; permissoes novas
+// pedem consentimento.
+//
+// 3.1: o MOTOR (semver/range, fecho de deps, cache /local/modules, leitura
+// dos instalados, token do hub e as travas) mora no store.js - o MESMO
+// arquivo que o service.js carrega na rodada automatica da madrugada; este
+// main.js e o vidro. Cada app tem a TRAVA DE VERSAO no detalhe ("Atualizar
+// automaticamente"): travado, ele nao entra no "Atualizar tudo" nem na rotina
+// das 02:00 (o botao manual continua valendo). A rotina e LIGADA por padrao
+// (/local/appstore_auto.json: {auto, hour, pins}).
 
 var IU = "https://os.celer.tec.br/store/index.json";
 var HB = IU.substring(0, IU.indexOf("/store/")); var CA = "/local/appstore_cache.json"; var SP = "celeros.appstore"; var FL = "/local/config_install_sd.txt";
-var TP = "/local/hub_token.txt";
+var U = require("store");
+// Apelidos para o store.js: nada de duas gramaticas de versao nem de duas
+// tabelas de deps (test/semver/run.js cobra a paridade das copias).
+var bn = U.bn, fk = U.fk, K = U.K, D = U.D, M = U.M, N = U.N;
+var HT = U.hubToken, HU = U.hubUrl, gt = U.fetchText, gj = U.fetchJson, gd = U.depsIndex;
+var cmpV = U.cmpV, depRangeOk = U.depRangeOk, resolveDeps = U.resolveDeps;
 
 // ---- CelerKit UI 2.0 -------------------------------------------------------
 var A = require("celeros.app"); require("celeros.app.style"); require("celeros.app.icons"); require("celeros.app.list"); require("celeros.app.caps"); A.init();
@@ -39,68 +53,11 @@ var HI = System.getInfo ? System.getInfo() : null; var PM = !NP ? Infinity
     : HI && HI.appRAM ? Math.max(4096, Math.floor((HI.appRAM - 60000) * 0.4)) : Math.max(4096, Math.floor(((HI && HI.freeRAM || 0) - 52000) / 1.7));
 function NPS(j) { return (j.req && j.req.indexOf("psram") >= 0) || (j.size || 0) > PM; }
 
-// ---- utilitarios -----------------------------------------------------------
-function bn(p) { var i = p.lastIndexOf("/"); return i >= 0 ? p.substring(i + 1) : p; } function fk(n) { if (!n || n <= 0) return ""; if (n < 1024) return n + " B";
-    var k = Math.round(n / 102.4) / 10; return (k % 1 ? k : k.toFixed(0)) + " KB"; }
-function K(o) { var n = 0, k; for (k in (o || {})) if (o.hasOwnProperty(k)) n++; return n; }
-function D(p) { try { FS.deleteFile(p); } catch (e) {} } function M(p) { var m = ""; try { m = FS.getFileMD5(p); } catch (e) { m = ""; } return m; } function N(u, p, cb) { var ok = false; try { ok = Net.download(HU(u), p, cb); } catch (e) { ok = false; } return ok; } function MK(p) { if (FS.isDirectory(p)) return true; return FS.mkdir(p); }
-
-// ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
-// Token de leitura do hub (apps/deps privados) em TP; so URLs do NOSSO hub
-// (host exato) recebem ?token= — prefixo vazaria para os.celer.tec.br.evil.com.
-var _T = null; function HT() { if (_T === null) { _T = ""; try { if (FS.exists(TP)) {
-                var t = (FS.readTextFile(TP) || "").replace(/^\s+/, "").replace(/\s+$/, ""); if (t) _T = t; } } catch (e) { _T = ""; } } return _T; }
-function HU(u) { var t = HT(); if (!t || !u || String(u).indexOf(HB + "/") !== 0) return u;
-    return u + (String(u).indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(t); }
-function gj(u) { try { return Net.getJSON(HU(u)); } catch (e) { return null; } } function gt(u) { try { return Net.get(HU(u)); } catch (e) { return null; } }
-// indice de deps: Net.get em TODAS as placas (16 KB < teto de 32 KB); sem
-// ele a loja usa o snapshot do load (di). Nada de download streaming sem PSRAM.
-function gd() { var b = gt(HB + "/store/deps.json"); if (!b) return null;
-    var t = String(b).replace(/\s+$/, ""); if (t.charAt(t.length - 1) !== "}") return null; var d = null;
-    try { d = JSON.parse(t); } catch (e) { d = null; } return (d && d.deps) ? d.deps : null; }
-
-// ---- semver (gramatica normativa; test/semver/run.js extrai daqui) ---------
-// "^X.Y.Z" = mesma major e >= base (major = breaking; minor/patch sobem
-// sozinhos) ou "X.Y.Z" exata. Malformada ("1.2", "v1.0.0", "") nao satisfaz.
-var RE_VER_DEP = /^(\d+)\.(\d+)\.(\d+)$/; function cmpV(v1, v2) { v1 = v1 || ""; v2 = v2 || ""; var p1 = 0, p2 = 0; while (p1 < v1.length || p2 < v2.length) {
-        var n1 = 0, n2 = 0; while (p1 < v1.length && v1.charAt(p1) != ".") { n1 = n1 * 10 + (v1.charCodeAt(p1) - 48); p1++; }
-        while (p2 < v2.length && v2.charAt(p2) != ".") { n2 = n2 * 10 + (v2.charCodeAt(p2) - 48); p2++; } if (n1 > n2) return 1; if (n1 < n2) return -1; p1++; p2++; }
-    return 0; } function depRangeOk(rng, ver) { rng = String(rng); var c = rng.charAt(0) === "^"; var R = RE_VER_DEP.exec(c ? rng.substring(1) : rng);
-    var V = RE_VER_DEP.exec(String(ver)); if (!R || !V) return false; if (!c) return rng === String(ver);
-    return +V[1] === +R[1] && (+V[2] > +R[2] || (+V[2] === +R[2] && +V[3] >= +R[3])); } function depPick(nm, ranges, index) { var vs = index[nm], best = null;
-    if (!vs) return null; for (var v in vs) if (vs.hasOwnProperty(v)) { var ok = true;
-        for (var i = 0; i < ranges.length; i++) if (!depRangeOk(ranges[i], v)) { ok = false; break; } if (ok && (best === null || cmpV(v, best) > 0)) best = v; }
-    return best; } function _passadaDeps(sementes, index) { var want = {}, seen = {}, q = [], k, i; for (k in sementes) if (sementes.hasOwnProperty(k))
-        for (i = 0; i < sementes[k].length; i++) q.push([k, sementes[k][i]]); while (q.length) {
-        var pr = q.shift(), nm = pr[0], rng = String(pr[1]), key = nm + "|" + rng; if (seen[key]) continue; seen[key] = 1; if (!want[nm]) want[nm] = [];
-        want[nm].push(rng); var es = depPick(nm, want[nm], index); if (!es) return null; var sub = (index[nm][es] && index[nm][es].deps) || {};
-        for (k in sub) if (sub.hasOwnProperty(k)) q.push([k, String(sub[k])]); } var picks = {}; for (k in want) if (want.hasOwnProperty(k)) {
-        var p = depPick(k, want[k], index); if (!p) return null; picks[k] = p; } return { wanted: want, picks: picks }; }
-// fecho de ponto fixo: uma passada pode SUBIR o pick no meio e as arestas
-// do pick velho vazavam (sobrava pino e faltava modulo do pick novo).
-function resolveDeps(want, index) { var dir = {}, k, n2; for (k in want) if (want.hasOwnProperty(k)) dir[k] = String(want[k]); var sem = {};
-    for (k in dir) if (dir.hasOwnProperty(k)) sem[k] = [dir[k]]; for (var pa = 0; pa < 32; pa++) { var r = _passadaDeps(sem, index); if (!r) return null;
-        var ex = {}, prox = {}, exato = true; for (k in r.picks) if (r.picks.hasOwnProperty(k)) { var v = r.picks[k];
-            var sub = (index[k] && index[k][v] && index[k][v].deps) || {}; for (var d in sub) if (sub.hasOwnProperty(d)) { d = String(d); if (!ex[d]) ex[d] = [];
-                if (!prox[d]) prox[d] = []; if (ex[d].indexOf(String(sub[d])) < 0) ex[d].push(String(sub[d]));
-                if (prox[d].indexOf(String(sub[d])) < 0) prox[d].push(String(sub[d])); } } var nomes = {};
-        for (n2 in r.wanted) if (r.wanted.hasOwnProperty(n2)) nomes[n2] = 1; for (n2 in ex) if (ex.hasOwnProperty(n2)) nomes[n2] = 1;
-        for (n2 in nomes) if (nomes.hasOwnProperty(n2)) { var base = (ex[n2] || []).slice(); if (dir[n2] && base.indexOf(dir[n2]) < 0) base.push(dir[n2]);
-            if (base.sort().join("|") !== (r.wanted[n2] || []).slice().sort().join("|")) { exato = false; break; } } if (exato) return r.picks; sem = prox;
-        for (k in dir) if (dir.hasOwnProperty(k)) { if (!sem[k]) sem[k] = []; if (sem[k].indexOf(dir[k]) < 0) sem[k].push(dir[k]); } } return null; }
-
-// ---- deps compartilhadas: cache /local/modules/<nome>/<versao> -------------
-function idp(j, resolved, index) { for (var nm in resolved) if (resolved.hasOwnProperty(nm)) { var ver = resolved[nm], d = index[nm][ver];
-        var d2 = "/local/modules/" + nm + "/" + ver, dst = d2 + "/" + nm + ".js"; if (FS.exists(dst)) { var sz = -1;
-            try { sz = FS.getFileSize(dst); } catch (e0) { sz = -1; } if (!d.size || sz === d.size) continue;   // modulo sao
-        } if (d.minApi && d.minApi > API) return nm + " exige API " + d.minApi;
-        if (!MK("/local/modules")) return "Erro no disco";
-        if (!MK("/local/modules/" + nm)) return "Erro no disco";
-        if (!MK(d2)) return "Erro no disco"; dl(j.name, nm + " " + ver); System.delay(30); var tmp = dst + ".new", ok = false;
-        ok = N(d.url, tmp, function (g, t) { pg(g, t); });
-        if (!ok) { D(tmp); return "Erro ao baixar " + nm; } var md = M(tmp);
-        if (d.md5 && md !== d.md5) { D(tmp); return "Verificação falhou (" + nm + ")"; }
-        if (!FS.renameFile(tmp, dst)) { D(tmp); return "Erro ao gravar " + nm; } } return ""; }
+// ---- utilitarios / rede / semver / deps ------------------------------------
+// Tudo isso mora no store.js (apelidado no topo): o servico da madrugada tem
+// que ver a MESMA versao, o MESMO fecho de deps e o MESMO token. Aqui fica
+// so o que e do vidro.
+function idp(j, res, ix) { return U.installModules(j, res, ix, { step: dl, progress: pg }); }
 
 // ---- estado ----------------------------------------------------------------
 var ap = [], ct = ["Todos"], cc = "Todos", tb = 0, si = null, lm2 = {}; var uc = 0, em = "", eh = "", rm = ""; var wu = false, su = false, bo = 0, bf = [];
@@ -113,23 +70,34 @@ function SIO(v) { var wrote = false; if (System.setting) { try { wrote = System.
 function PSD() { sf = -1; try { sf = FS.getFreeSpace("/sd"); } catch (e) { sf = -1; } }
 
 // ---- disco: instalados -----------------------------------------------------
-// mesma regra do launcher: PRIMEIRO visto ganha (ordem do listDir igual).
-function W(cb) { var roots = ["/local/apps", "/sd/apps"]; for (var r = 0; r < 2; r++) { var ro = roots[r]; if (!FS.isDirectory(ro)) continue; var l2 = FS.listDir(ro);
-        for (var i = 0; i < l2.length; i++) { var d = l2[i]; if (!FS.isDirectory(d)) continue; var b = FS.readTextFile(d + "/app.json"); if (!b) continue; var j = null;
-            try { j = JSON.parse(b); } catch (e) { j = null; } if (j) cb(d, j, ro); } } } function SCA() { lm2 = {}; W(function (d, j, ro) {
-        var pk = j.packageName || bn(d); if (lm2[pk]) return; lm2[pk] = { ver: j.version || "", dir: d, RT: ro,
-                    name: j.name || pk, system: j.system === true, sd: ro === "/sd/apps" }; }); } function RID(pkg) { var out = null;
-    W(function (d, j) { if (!out && (j.packageName || bn(d)) === pkg) out = d; }); return out; } function RSH(pkg, keep) { W(function (d, j) {
-        if (d !== keep && j.packageName === pkg) FS.removeDirectory(d); }); } function CBP(pkg) {
-    for (var i = 0; i < ap.length; i++) if (ap[i].pkg === pkg) return ap[i]; return null; } function SI(j) { var lo = lm2[j.pkg];
+// store.js faz o scan (mesma regra do launcher: PRIMEIRO visto ganha, ordem
+// do listDir igual) - o servico da madrugada le a MESMA tabela.
+function SCA() { lm2 = U.scanInstalled(); } function RID(pkg) { return U.dirOf(pkg); }
+function RSH(pkg, keep) { U.removeShadows(pkg, keep); } function CBP(pkg) {
+    for (var i = 0; i < ap.length; i++) if (ap[i].pkg === pkg) return ap[i]; return null; }
+// ---- trava de versao / rotina automatica -----------------------------------
+// /local/appstore_auto.json (o MESMO arquivo que o service.js le): os pins por
+// pacote e o liga/desliga da rotina das 02:00. Em memoria ate um toggle.
+var AC = null;
+function CFG() { if (!AC) AC = U.cfgLoad(); return AC; }
+function PIN(pkg) { return U.pinned(CFG(), pkg); }
+function SETPIN(pkg, on) { var c = CFG(); U.setPin(c, pkg, on); RFS(); UI.invalidate(); }
+function SETAUTO(on) { var c = CFG(); c.auto = !!on; U.cfgSave(c); UI.invalidate(); }
+function SI(j) { var lo = lm2[j.pkg];
     if ((j.api || 1) > API) return { code: "api", bd: "API " + j.api, col: T.warn };
     if (NP && NPS(j)) return { code: "hw", bd: "PSRAM", col: T.warn };
     if (!lo) return { code: "new", bd: "Novo", col: T.ok };
+    // versao travada: nao entra no lote (nem no manual "Atualizar tudo") nem
+    // na rotina da madrugada; o botao do detalhe continua atualizando na mao.
+    if (PIN(j.pkg)) { if (cmpV(j.ver, lo.ver) > 0 || du[j.pkg]) return { code: "pin", bd: "Travado", col: T.textDim };
+        return { code: "inst", bd: "Instalado", col: T.textDim }; }
     // local a frente do hub nao vira "Atualizar" (downgrade)
     if (cmpV(j.ver, lo.ver) <= 0) { if (du[j.pkg]) return { code: "dep", bd: "Engine", col: T.warn };
         return { code: "inst", bd: "Instalado", col: T.textDim }; }
-    return { code: "upd", bd: "Atualizar", col: T.warn }; } function RFS() { SCA(); SDU(); PSD(); uc = 0; for (var i = 0; i < ap.length; i++) {
+    return { code: "upd", bd: "Atualizar", col: T.warn }; } function RFS() { CFG(); SCA(); SDU(); PSD(); uc = 0; for (var i = 0; i < ap.length; i++) {
         var c = SI(ap[i]).code; if (c === "upd" || c === "dep") uc++; }
+    // pin de app desinstalado nao volta a valer num install futuro
+    U.prunePins(CFG(), lm2);
     // chaves pre-computadas: o sort nativo do Duktape e preventyield
     A.list.sort(ap, function (j) { var c = SI(j).code; return (c === "upd" || c === "dep" ? "0" : "1") + String(j.name || "?").toLowerCase(); }); var seen = {}, k;
     ct = ["Todos"]; for (k = 0; k < ap.length; k++) { var ctg = ap[k].cat || "Apps"; if (!seen[ctg]) { seen[ctg] = 1; ct.push(ctg); } } ct = ["Todos"].concat(ct.slice(1).sort()); ds++; BVW(); }
@@ -150,17 +118,9 @@ function FIM(j) { var m = gj(j.metaUrl); if (!m) return null; j.desc = m.descrip
                   String(ap[i].desc || "").toLowerCase().indexOf(s) < 0)) continue; out.push(ap[i]); } return out; }
 
 // Catalogo compacto: 14 campos TSV e rodape "#end N" (truncamento do
-// Net.get). O hub de hoje responde 404 e o load cai no JSON.
-function PDF(s) { if (!s) return null; var o = {}, p = String(s).split(";"), i, k; for (i = 0; i < p.length; i++) { k = p[i].split("=");
-        if (k[1]) o[k[0]] = k[1]; } return o; } function PCC(b) { if (!b) return null; var l = String(b).split("\n"), i, f, e, o = [];
-    if (l.length < 3 || l[0].indexOf("#pkg\tname\tversion\tapi\tcategory")) return null; var z = l[l.length - 1];
-    if (z.indexOf("#end\t")) return null; var n = parseInt(z.substring(5), 10); if (!(n >= 0)) return null;
-    for (i = 1; i < l.length - 1; i++) { f = l[i].split("\t"); if (f.length < 14 || !f[0] || f[0].charAt(0) === "#") continue;
-        e = { meta: HB + "/store/apps/" + f[0] + "/app.json", app: HB + "/store/apps/" + f[0] + "/main.js", name: f[1], version: f[2],
-              api: +f[3] || 1, category: f[4] || "Apps", size: +f[5] || 0, md5: f[6], requires: f[7] ? f[7].split(",") : [], deps: PDF(f[8]), changelog: f[13] || "" };
-        if (f[9]) e.zip = { url: HB + "/store/apps/" + f[0] + "/app.zip", md5: f[9], size: +f[10] || 0 };
-        if (f[11] === "1") e.icon = HB + "/store/apps/" + f[0] + "/icon.png"; if (+f[12] > 0) e.nfiles = +f[12]; o.push({ pkg: f[0], e: e }); }
-    return o.length === n ? o : null; }
+// get/request). O parser mora no store.js (o service usa o mesmo para o
+// plano da madrugada); aqui so os apelidos que o harness conhece.
+var PDF = U.parseDepsField, PCC = U.parseCompactCatalog;
 // cache compacto: a lista/estado nao precisam de changelog/permissoes; o
 // detalhe busca o app.json quando abre (1 request por app visto). Na CYD o
 // texto encurta e o changelog nem entra (cache pequeno no /local apertado).
@@ -201,7 +161,8 @@ var IC = { Arcade: "play", Jogos: "play", System: "gear", Utilidades: "star", Au
 function SZB(n) { if (!n || n <= 0) return 0; return n <= 8192 ? 1 : n <= 16384 ? 2 : n <= 32768 ? 3 : 4; }
 function ROF(j) { var st = SI(j), lo = lm2[j.pkg], sub; if (tb === 1) { var d = du[j.pkg]; if (d) sub = "engine " + d.names[0] + " " + (d.have[d.names[0]] || "?") + " > " +
                       d.resolved[d.names[0]] + (d.names.length > 1 ? "  (+" + (d.names.length - 1) + ")" : ""); else sub = "v" + (lo ? lo.ver : "?") + " > v" + j.ver;
-    } else if (tb === 2) { sub = "v" + (lo ? lo.ver : j.ver) + (lo && lo.sd ? " · SD" : "") + (lo && lo.system ? " · sistema" : ""); } else {
+    } else if (tb === 2) { sub = "v" + (lo ? lo.ver : j.ver) + (lo && lo.sd ? " · SD" : "") + (lo && lo.system ? " · sistema" : "") +
+                      (PIN(j.pkg) ? " · travado" : ""); } else {
         sub = "v" + j.ver + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""); }
     return { label: j.name, sub: sub, icon: IC[j.cat] || "dot", j: j, bars: SZB(j.size), st: st }; }
 // linhas ricas: icone + nome/versao + badge de estado + barras de tamanho.
@@ -216,7 +177,8 @@ function PRW(it, x, y, w, h, s) { var j = it.j, st = it.st, t = String(st.bd), b
 var rl = A.list.make(function () { return vs; }, function () {
     var it = CLS(), out = []; for (var i = 0; i < it.length; i++) out.push(ROF(it[i])); return out; }); function UN(pkg) {
     var d = RID(pkg); if (!d) return false; if (typeof Storage !== "undefined" && Storage.clearFor) { try { Storage.clearFor(pkg); } catch (e) {} }
-    if (!FS.removeDirectory(d)) return false; System.rescanApps(); RFS(); return true; } function uf(j) { var lo = lm2[j.pkg]; if (!lo) return false;
+    if (!FS.removeDirectory(d)) return false; if (PIN(pkg)) SETPIN(pkg, false);
+    System.rescanApps(); RFS(); return true; } function uf(j) { var lo = lm2[j.pkg]; if (!lo) return false;
     var ok = UI.confirm("Desinstalar", "Remover " + j.name + "?", { yes: "Remover", danger: true });
     if (ok && lo.system) ok = UI.confirm("App do sistema", "Confirma remover " + j.name + " definitivamente?", { yes: "Remover", danger: true });
     if (ok && UN(j.pkg)) { UI.toast(j.name + " removido"); si = null; return true; } return false; }
@@ -270,13 +232,18 @@ function HM(c) { var act = hd("App Store", false, [{ icon: q2 ? "close" : "searc
         else if (q2) { tx("Busca: " + q2, L.x, top, T.textDim, "caption", L.w, 1); top += 16; }
         if (CTB(top)) return; top += 26; } else if (tb === 2) { var n = K(lm2);
         tx(n + (n === 1 ? " app instalado" : " apps instalados"), L.x, top, T.textDim, "caption", L.w, 1); top += 16; lb = fy - 4; }
-    else if (uc > 0) lb = fy - 4;
+    else { // Atualiz.: a rotina automatica mora aqui (padrao ligada, 02:00)
+        var au = CFG(), hh = (au.hour === undefined || au.hour === null) ? 2 : au.hour;
+        tx("Automático às " + (hh < 10 ? "0" : "") + hh + ":00", L.x, top + 6, T.textDim, "caption", L.w - 56, 1);
+        if (UI.toggle(L.x + L.w - 44, top, au.auto !== false, { id: "auto" }) !== (au.auto !== false)) SETAUTO(au.auto === false);
+        top += 30; if (uc > 0) lb = fy - 4; }
     var ly = top + 2, lh = lb - ly;
     if (items.length && lh > 24) { var i = A.list.view("store" + tb, L.x, ly, L.w, lh, rl.rows(), { row: 46, paintRow: PRW });
         if (i >= 0) { si = items[i]; return "detail"; }
-    } else if (!items.length) { var cy = (L.top + L.bottom) / 2;
-        tx(tb === 1 ? "Tudo em dia!" : tb === 2 ? "Nenhum app instalado" : (q2 ? "Nenhum resultado" : "Catálogo vazio"),
-           120, cy, T.text, "title", L.w, 1, T.bg, "center"); tx(tb === 1 ? "Volte depois." : tb === 2 ? "Instale um app na aba Loja."
+    } else if (!items.length) { var cy = (L.top + L.bottom) / 2, autoOn = CFG().auto !== false;
+        tx(tb === 1 ? (autoOn ? "Tudo em dia!" : "Automático desligado") : tb === 2 ? "Nenhum app instalado" : (q2 ? "Nenhum resultado" : "Catálogo vazio"),
+           120, cy, T.text, "title", L.w, 1, T.bg, "center"); tx(tb === 1 ? (autoOn ? "A rotina confere todo dia às 02:00." : "Ligue o automático acima.")
+           : tb === 2 ? "Instale um app na aba Loja."
            : (cw ? "Catálogo parcial." : "Toque no check para recarregar."), 120, cy + 22, T.textDim, "caption", L.w, 2, T.bg, "center"); }
     if (tb === 1 && uc > 0) { if (A.style.button("Atualizar tudo", L.x, fy, L.w, 30, { variant: "primary" })) return "batch"; }
     else if (tb === 2) { var sd = ios(), noSd = sd && sf === 0;
@@ -303,6 +270,15 @@ function DT(c) { var j = si; if (!j) return RT("home");
         UI.badge(st.bd, q.x + q.w - bw, yy + 2, { color: st.col, textColor: T.bg });
         var sy = yy + IS + 8, sh = top + bh - 16 - sy;
         var off = UI.scrollBegin("det:" + j.pkg, q.x, sy, q.w, sh, 420), x = q.x, w = q.w, y = sy - off + 2;
+        // trava de versao (so faz sentido com o app instalado): desligada, o
+        // app nao entra na rotina das 02:00 nem no "Atualizar tudo"; o botao
+        // Atualizar abaixo continua valendo.
+        if (lo) { var pn = PIN(j.pkg);
+            UI.text("Atualizar automaticamente", x, y + 6, { role: "caption", color: pn ? T.textDim : T.text, w: w - 56, lines: 1, bg: T.card });
+            if (UI.toggle(x + w - 44, y, pn, { id: "pin" }) !== pn) { SETPIN(j.pkg, !pn); pn = !pn; }
+            y += 28;
+            if (!pn) { y += UI.text("Versão travada em v" + lo.ver + " (o lote e a madrugada não trocam sozinhos).",
+                                    x, y, { role: "caption", color: T.textDim, w: w, lines: 2, bg: T.card }) + 4; } }
         tx("Permissões", x, y, T.textDim, "caption", 100, 1, T.card); tx(pmt(j.perms), x + w - 10, y, T.text, "caption", w - 110, 1, T.card, "right"); y += 27;
         tx("Descrição", x, y, T.accent, "caption", 0, 1, T.card); y += 15;
         y += UI.text(String(j.desc || "Sem descrição.").replace(/\n/g, " "), x, y, { role: "caption", color: T.textDim, w: w, lines: 4, bg: T.card }) + 6;
@@ -314,7 +290,7 @@ function DT(c) { var j = si; if (!j) return RT("home");
         UI.scrollEnd(); } });
 
     var can = !!j.appUrl && st.code !== "api" && st.code !== "hw";
-    if (can) { var lbl = st.code === "upd" ? "Atualizar" : st.code === "dep" ? "Atualizar engine" : st.code === "inst" ? "Reinstalar" : "Instalar";
+    if (can) { var lbl = (st.code === "upd" || st.code === "pin") ? "Atualizar" : st.code === "dep" ? "Atualizar engine" : st.code === "inst" ? "Reinstalar" : "Instalar";
         if (A.style.button(lbl, L.x, fy, lo ? 108 : L.w, 30, { variant: "primary" })) {
             if (conf && st.code === "inst" && !UI.confirm("Versão", "Local v" + lo.ver + " > hub v" + j.ver + ". Reinstalar a do hub?", { yes: "Reinstalar" })) return;
             if (!lo && !CNS(j)) return; return st.code === "dep" ? "deps" : "install"; }
@@ -394,7 +370,7 @@ function IA() { var j = si; if (!j) return "err"; if (SI(j).code === "hw") { em 
     if (!fail) { var fs2 = PKF(j), fi, fe, tm, ok, md; for (fi = 0; fi < fs2.length && !fail; fi++) { fe = fs2[fi]; tm = d + "/" + fe.name + ".new";
             dl(j.name, fe.name); System.delay(30); ok = false;
             ok = N(fe.url, tm, function (g, t) { pg(g, t); });
-            if (!ok) { fail = "Erro ao baixar " + fe.name; break; } if (fe.md5) { md = M(tm);
+            if (!ok) { D(tm); fail = "Erro ao baixar " + fe.name; break; } /* .new parcial sai (igual ao md5) */ if (fe.md5) { md = M(tm);
                 if (md !== fe.md5) { D(tm); fail = "MD5 falhou"; break; } } st.push([tm, d + "/" + fe.name]); }
         // app.json entra no MESMO lote: a versao nova so aparece com os arquivos
         if (!fail && json) { var jt = d + "/app.json.new"; if (!FS.writeTextFile(jt, json)) fail = "Erro ao gravar app.json"; else st.push([jt, d + "/app.json"]); }
@@ -435,12 +411,16 @@ function DPS(c) { if (UD() !== "done") return "err"; A.ok("Engine atualizada", [
 // No harness nao entra no A.run: expoe as funcoes puras e de instalacao para
 // os checks de update/self-update/deps (test/js_harness/run.js).
 if (typeof __harness !== "undefined" && __harness.storeTest) { __harness.storeTest({ cmpV: cmpV, depRangeOk: depRangeOk, resolveDeps: resolveDeps,
-        hubUrl: HU, hubToken: HT, resetToken: function () { _T = null; }, fetchText: gt, stateInfo: SI, scanLocalApps: SCA,
+        hubUrl: HU, hubToken: HT, resetToken: U.resetToken, fetchText: gt, stateInfo: SI, scanLocalApps: SCA,
         resolveInstalledDir: RID, uninstallApp: UN, updateAll: UA, setDepIndex: function (x) { di = x; },
         depUpdates: function () { return du; }, updateDepsFlow: UD, updCount: function () { return uc; }, refresh: RFS,
         setCatalog: function (a) { ap = a; si = a.length ? a[0] : null; RFS(); }, catalog: function () { return ap; }, installApp: IA, fmtKB: fk,
         parseCompactCatalog: PCC, parseDepsField: PDF, cats: function () { return ct; }, setCat: function (c) { cc = c; BVW(); },
         filtered: FAP, installed: IIS, selfUpdatedFlag: function () { return su; }, batchStats: function () { return { ok: bo, fails: bf }; },
+        // rotina automatica e trava de versao (o mesmo motor do service.js)
+        cfg: function () { return CFG(); }, pinned: PIN, setPin: SETPIN, setAuto: SETAUTO, auto: function () { return CFG().auto !== false; },
+        planUpdates: function (c, n) { return U.planUpdates(lm2, c, n); }, dueNow: U.dueNow, hourOf: U.hourOf,
+        updateOne: function (c) { return U.updateOne(c, null); }, engine: U,
         select: function (pkg) { var j = CBP(pkg); if (j) si = j; return j; } }); } else { var f0; if (FS.exists(CA)) { A.busy("Abrindo catálogo...");
         f0 = LCC() ? "home" : (Net.isConnected() ? "load" : "wifi"); } else f0 = Net.isConnected() ? "load" : "wifi";
     A.run({ home: HM, load: LDS, wifi: WFS, err: ERS, detail: DT, install: INS, deps: DPS, batch: BTS },

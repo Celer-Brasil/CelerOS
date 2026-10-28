@@ -371,6 +371,7 @@ public:
     static duk_ret_t js_clearClip(duk_context *ctx);
     static duk_ret_t js_isBuffered(duk_context *ctx);
     static duk_ret_t js_wifiStatus(duk_context *ctx);
+    static duk_ret_t js_wifiWake(duk_context *ctx);  // API 53
     static duk_ret_t js_md5(duk_context *ctx);
     static duk_ret_t js_setPin(duk_context *ctx);
     static duk_ret_t js_verifyPin(duk_context *ctx);

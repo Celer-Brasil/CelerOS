@@ -10,6 +10,7 @@
 #include "../Kernel/Notifications.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Hardware/MusicSynth.h"
+#include "../Hardware/PowerPolicy.h"
 #include "../USBDevice/LogSink.h"
 #include "../Display/Layout.h"
 #include "../FileSystem/FileSystem.h"
@@ -222,6 +223,27 @@ duk_ret_t JSBindings::js_wifiStatus(duk_context *ctx) {
     putStr(ctx, "ip", WebManager::getIPAddress().c_str());
     putBool(ctx, "webServer", WebManager::isServerRunning());
     putBool(ctx, "savedNetworks", WebManager::hasSavedNetworks());
+    return 1;
+}
+
+// wifiWake(min) (API 53) -> Boolean. Liga o radio com as credenciais salvas e
+// segura o WiFi por "min" minutos MESMO com a tela apagada (PowerPolicy: a
+// janela vence o idle-off do wifi_sleep_min). E a janela de manutencao de um
+// servico de rede na madrugada — o service.js da App Store atualiza os apps
+// as 02:00 no watch, cujo radio cai 10 min depois de a tela apagar. false =
+// o usuario desligou o WiFi (nowifi) ou nao ha rede salva: nada muda. A
+// conexao e assincrona: quem chama consulta Net.isConnected()/wifiStatus.
+duk_ret_t JSBindings::js_wifiWake(duk_context *ctx) {
+    int min = duk_is_number(ctx, 0) ? (int)duk_get_number(ctx, 0) : 5;
+    if (min < 1) min = 1;
+    if (min > 30) min = 30;  // teto: meia hora de radio fora da politica
+    if (!WebManager::wifiEnabled() || !WebManager::hasSavedNetworks()) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    PowerPolicy::holdRadio((uint32_t)min * 60000UL);
+    const bool ok = WebManager::enableAsync();  // nowifi ja e falso: nao persiste
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 

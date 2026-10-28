@@ -24,6 +24,7 @@ static constexpr bool kUiExtras = false;
 #include "../Utils/PinStore.h"
 #include "HttpClient.h"
 #include "SystemInfo.h"
+#include "esp_heap_caps.h"
 #include "esp_rom_md5.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -823,6 +824,18 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
     int x = duk_require_int(ctx, 1);
     int y = duk_require_int(ctx, 2);
     if (!imagePathOk(path)) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    // O pngle do LovyanGFX aloca a linha de saida (4 B/px da largura do
+    // alvo) com heap_alloc_dma — RAM INTERNA — e NAO confere o retorno:
+    // sem bloco livre ele escreve em nullptr e derruba o aparelho (2D Runner
+    // no 4848 com a interna a ~100 B, bancada 2026-10-28). O submodulo nao
+    // e patchado aqui: sem folga o desenho falha limpo (false) e o app cai
+    // no fallback dele (painter do celeros.game.spr).
+    const size_t lineNeed = (size_t)gfx()->width() * 4 + 64;
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DMA) < lineNeed) {
+        printf("[gfx] drawPNG: sem %u B de RAM interna (DMA) p/ a linha: %s\n", (unsigned)lineNeed, path);
         duk_push_boolean(ctx, 0);
         return 1;
     }

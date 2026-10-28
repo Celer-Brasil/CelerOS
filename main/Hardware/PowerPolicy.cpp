@@ -97,8 +97,14 @@ void audioBusy(bool on) {
         }
     } else {
         const int antes = s_audioUsers.fetch_sub(1);
-        if (antes <= 0) {          // false sem o true correspondente: nao
-            s_audioUsers.store(0); // desce de zero nem solta lock alheio
+        if (antes <= 0) {
+            // false sem o true correspondente COM o contador em zero: nao
+            // desce de zero. Com contador >= 1 o false so tem um dono legitimo
+            // (todo chamador e pareado por construcao: acquireOutput/
+            // releaseOutput, playWav, PcmFeed begin/end via _held, micRec via
+            // pmHeld) — credito roubado por um false solto indicaria chamador
+            // quebrado, e o tick() de 1 s religa o lock pela rede de seguranca.
+            s_audioUsers.fetch_add(1);
             return;
         }
         if (antes == 1 && s_audioLock != nullptr) esp_pm_lock_release(s_audioLock);

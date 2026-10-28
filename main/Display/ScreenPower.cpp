@@ -283,6 +283,15 @@ void tick(bool inApp) {
         }
     }
 
+    // keepAwake segura o timeout do Backlight no nivel corrente: jogo com
+    // keepAwake(true)/keepAwakeFor (lanterna, alarme, alerta) apagava por
+    // inatividade em screen_off_min — a lanterna virava tela preta em 3 min
+    // sem toque. Se o vidro JA esta off (tecla PWR, sleepNow), NAO acorda:
+    // keepAwake nunca re-acende por conta propria — a re-entrada e so por
+    // toque/config/alarme. (Renovar lastActivity tambem segura o dim/AOD,
+    // que os cases 3/2 ja travam por awakeHeld.)
+    if (awakeHeld() && !Backlight::isOff()) Backlight::noteActivity();
+
     switch (s_state) {
         case 3:
             if (awakeHeld()) break;  // jogo/prazo segurando a tela

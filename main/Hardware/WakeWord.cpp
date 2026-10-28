@@ -297,7 +297,10 @@ bool start() {
         return false;
     }
     const TfLiteTensor* in = s_interp->input(0);
-    if (in->dims->size != 3 || in->dims->data[0] != 1 ||
+    // data[1] (slices por invoke) tambem entra na validacao: o inferSlice faz
+    // `s_strideStep %= data[1]` — 0 aqui e divisao por zero na 1a fatia de
+    // audio (modelo quebrado/placeholder derrubava a task e o aparelho).
+    if (in->dims->size != 3 || in->dims->data[0] != 1 || in->dims->data[1] < 1 ||
         in->dims->data[2] != kFeatureSize || in->type != kTfLiteInt8) {
         celer_log_printf("[wakeword] ERRO tensor de entrada inesperado\n");
         dropInterp();

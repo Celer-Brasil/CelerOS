@@ -52,7 +52,9 @@ struct Song {
 struct Ev { uint32_t start, end; uint8_t midi; };
 
 struct TrackEv {
-    uint8_t vol = 80;    // 0..256 (vol% escalado)
+    // 0..256 (vol% escalado). uint16_t de proposito: com uint8_t o volume
+    // 100% (100*256/100 = 256) estourava para 0 e a trilha saia MUDA.
+    uint16_t vol = 80;
     bool drum = false;
     uint8_t wave = kWaveSq;
     uint16_t count = 0;
@@ -84,7 +86,7 @@ inline bool compile(const Song& in, uint32_t rate, Compiled& out) {
         dst.drum = src.drum;
         dst.wave = src.wave > kWaveSaw ? (uint8_t)kWaveSq : src.wave;
         dst.vol = src.vol > 100 ? 100 : src.vol;
-        dst.vol = (uint8_t)(dst.vol * 256 / 100);
+        dst.vol = (uint16_t)(dst.vol * 256 / 100);
         uint32_t at = 0;
         for (int i = 0; i < src.count && i < kMaxNotes; i++) {
             uint32_t len = src.notes[i].len16;

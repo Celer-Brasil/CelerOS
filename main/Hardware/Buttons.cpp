@@ -206,6 +206,12 @@ void init() {
     s_btnEvent = 0;  // estado novo por boot (regra do runtime: reset no init)
     if (s_b1.pin >= 0) pinMode(s_b1.pin, INPUT_PULLUP);
     if (s_b2.pin >= 0) pinMode(s_b2.pin, INPUT_PULLUP);
+    // Semeia o nivel REAL: sem isto, ligar com o botao pressionado (BOOT
+    // segurado, devkit buttonToApp) nascia com raw=solto/down=solto e a 1a
+    // SOLTA era tomada por "apertou" — a maquina invertia (o 1o toque real
+    // disparava curto fantasma e o longo morria) ate o proximo ciclo completo.
+    if (s_b1.pin >= 0) s_b1.raw = s_b1.down = digitalRead(s_b1.pin) == LOW;
+    if (s_b2.pin >= 0) s_b2.raw = s_b2.down = digitalRead(s_b2.pin) == LOW;
     s_inited = s_b1.pin >= 0 || s_b2.pin >= 0;
     if (s_inited) {
         // Diagnostico de bancada: nivel crudo dos botoes com pull-up

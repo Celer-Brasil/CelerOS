@@ -1125,6 +1125,7 @@ void speakerWarmup() {
 }
 
 void speakerChannelDown() {
+    if (AudioPlayer::active()) return;  // som em curso (tom/musica/wav): apagar o canal sob o writer e use-after-free
     if (s_spk == nullptr) return;
     if (s_spkOn) i2s_channel_disable(s_spk);
     i2s_del_channel(s_spk);

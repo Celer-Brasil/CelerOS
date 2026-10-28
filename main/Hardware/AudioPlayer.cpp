@@ -295,7 +295,11 @@ WavError playQoaStream(FILE* f) {
         const uint32_t rate = ((uint32_t)h[1] << 16) | ((uint32_t)h[2] << 8) | h[3];
         const uint32_t samples = ((uint32_t)h[4] << 8) | h[5];
         const uint32_t frameSize = ((uint32_t)h[6] << 8) | h[7];
+        // samples > QOA_FRAME_LEN passaria pelo qoa_decode_frame (que so confere
+        // num_slices <= 256) e gravaria ate 256*20*2 amostras no pcm de 512 —
+        // corrupcao de heap com arquivo hostil (arquivo remato/compartilhado).
         if (channels < 1 || channels > 2 || rate < 8000 || rate > 48000 || samples == 0 ||
+            samples > QOA_FRAME_LEN ||
             frameSize < 8 + 16 * channels || frameSize > kFrameMax) break;
         fseek(f, -8, SEEK_CUR);  // qoa_decode_frame le o frame INTEIRO (header incluso)
         if (fread(fbuf, 1, frameSize, f) != frameSize) break;

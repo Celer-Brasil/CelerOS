@@ -1974,7 +1974,7 @@ class TestAppsStore(unittest.TestCase):
 class TestInstallAtomico(unittest.TestCase):
     """app.json e o ULTIMO arquivo do install: um push perdido no meio nao
     pode deixar o device anunciando a versao nova com o modulo velho — foi
-    o que aconteceu no totem CelerPark (app.json 1.2.0 no disco e
+    o que aconteceu num totem de bancada (app.json novo no disco e
     celeros.usb 1.0.0, o bug que a versao nova corrigia)."""
 
     def _app(self):

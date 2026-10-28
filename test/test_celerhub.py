@@ -582,7 +582,8 @@ class TestPublishHostil(unittest.TestCase):
 class TestIconAviso(unittest.TestCase):
     """App que declara `icon` usa o icone do SISTEMA (data/icons/<id>.png):
     nao ter icon.png no pacote e o contrato, nao um aviso. O WiFi e os
-    CelerPark caiam no aviso "sem icon.png" a cada publish."""
+    apps que apontam para o icone do sistema caiam no aviso a cada
+    publish."""
 
     def _app(self, extra=None):
         td = tempfile.mkdtemp()

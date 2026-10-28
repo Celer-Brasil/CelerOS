@@ -622,7 +622,7 @@ def validate(folder: Path, strip=True, snapshot=None):
     elif not str(meta.get("icon") or "").strip():
         # app que declara `icon` usa o icone do sistema (data/icons/<id>.png):
         # nao ter icon.png no pacote e o esperado, nao um aviso (WiFi e os
-        # CelerPark caiam aqui e o aviso dizia o contrario do contrato)
+        # apps assim caiam aqui e o aviso dizia o contrario do contrato)
         avisos.append("sem icon.png (o launcher usa gradiente+inicial)")
     return meta, avisos, js_sum, extras
 

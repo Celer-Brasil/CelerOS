@@ -3454,7 +3454,7 @@ def _hub_token(args, link=None):
 
     Ordem: --hub-token, CELER_HUB_TOKEN e por fim o /local/hub_token.txt do
     PROPRIO device (o mesmo arquivo que a loja do aparelho usa). Sem ele o PC
-    so enxerga o catalogo publico: `apps store celeros.park.*` dizia "nao
+    so enxerga o catalogo publico: `apps store celeros.<vertical>.*` dizia "nao
     esta no hub" com o app publicado, so que privado."""
     tok = (getattr(args, "hub_token", None) or
            os.environ.get("CELER_HUB_TOKEN") or "").strip()
@@ -3624,8 +3624,8 @@ def _installed_apps(link):
 
 def _resolve_installed(link, name):
     """Acha o app instalado por pasta, sufixo do packageName, nome de
-    exibicao ou packageName INTEIRO ("celeros.park.entrada" funcionava so
-    depois de virar a pasta — `apps run celeros.park.entrada` dizia "nao
+    exibicao ou packageName INTEIRO ("celeros.vertical.app" funcionava so
+    depois de virar a pasta — `apps run celeros.vertical.app` dizia "nao
     encontrado" com o app instalado). Devolve (base, pasta, meta) ou None."""
     want = _norm_app_name(name)
     if not want:

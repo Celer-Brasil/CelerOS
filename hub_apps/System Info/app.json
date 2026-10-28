@@ -1,7 +1,7 @@
 {
   "name": "System Info",
   "packageName": "celeros.sysinfo",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "api": 30,
   "author": "CelerOS",
   "type": "App",
@@ -13,6 +13,6 @@
     "celeros.app.fmt": "^1.0.0",
     "celeros.app.style": "^1.0.0"
   },
-  "changelog": "2.0.0 - UI 2.0 democrática (CYD-first): anéis ao vivo de RAM, PSRAM (ou espaço livre) e bateria (ou rede) por cima do tema, cada um com o valor no próprio slot e repintados só quando o valor muda; cards do A.style com sombra/gradiente no frame cheio e tokens (nada de cor fixa), com a linha de flash no bg do card (sem mancha em frame parcial); placa sem PSRAM/bateria/sensores degrada com o cartão certo (flash livre, rede, \"sem sensores\") e nunca estoura; bytes/uptime no formato do celeros.app.fmt; layout pelo A.L (o watch redondo encolhe); 8 fps porque o painel é estático\n1.4.0 - migrado para o CelerKit (deps celeros.app.*, API 30): placa/capacidades pela sonda unica do celeros.app.caps (nova linha \"placa\" no cartao Dispositivo) e bytes/uptime no formato do sistema (celeros.app.fmt); polling ao vivo via A.every e /local livre consultado 1x a cada 5 s\n1.3.0 - cards e barra de RAM com o toolkit UI (API 22); valores ao vivo sem piscar\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS em cards, PT-BR, valores ao vivo (uptime/RAM/rede), bateria e sensores quando a placa tem",
+  "changelog": "2.0.1 - rotulo do armazenamento interno sem o \"livre\": o texto passava da largura em telas de 240 px e cortava o valor. 2.0.0 - UI 2.0 democrática (CYD-first): anéis ao vivo de RAM, PSRAM (ou espaço livre) e bateria (ou rede) por cima do tema, cada um com o valor no próprio slot e repintados só quando o valor muda; cards do A.style com sombra/gradiente no frame cheio e tokens (nada de cor fixa), com a linha de flash no bg do card (sem mancha em frame parcial); placa sem PSRAM/bateria/sensores degrada com o cartão certo (flash livre, rede, \"sem sensores\") e nunca estoura; bytes/uptime no formato do celeros.app.fmt; layout pelo A.L (o watch redondo encolhe); 8 fps porque o painel é estático\n1.4.0 - migrado para o CelerKit (deps celeros.app.*, API 30): placa/capacidades pela sonda unica do celeros.app.caps (nova linha \"placa\" no cartao Dispositivo) e bytes/uptime no formato do sistema (celeros.app.fmt); polling ao vivo via A.every e /local livre consultado 1x a cada 5 s\n1.3.0 - cards e barra de RAM com o toolkit UI (API 22); valores ao vivo sem piscar\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS em cards, PT-BR, valores ao vivo (uptime/RAM/rede), bateria e sensores quando a placa tem",
   "permissions": ["fs"]
 }

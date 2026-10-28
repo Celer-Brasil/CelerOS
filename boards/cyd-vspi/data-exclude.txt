@@ -1,0 +1,47 @@
+# cyd-vspi (ESP32 4MB): mesma imagem 4MB da CYD (partitions_4MB.csv).
+# A CYD tem SD e leva o Installer; aqui CELEROS_SD_CARD=n, entao o
+# Installer e o fecho fsx/path saem. O resto espelha boards/cyd.
+apps/Chat IA
+apps/Help
+apps/HTTP Demo
+apps/Matilha
+apps/Qwen
+apps/Regras
+apps/Snake
+apps/Web Server
+apps/Watchface
+apps/Touch Test
+AGENTS.md
+icons/2048.png
+icons/about.png
+icons/app.png
+icons/breakout.png
+icons/calculator.png
+icons/celernet.png
+icons/clockapp.png
+icons/cronometro.png
+icons/cube.png
+icons/help.png
+icons/httpdemo.png
+icons/led.png
+icons/physics.png
+icons/qwen.png
+icons/remote.png
+icons/runner.png
+icons/snake.png
+icons/sysinfo.png
+icons/tictactoe.png
+icons/time.png
+icons/touchtest.png
+icons/web.png
+modules/celeros.app.ai
+modules/celeros.app.chat
+modules/celeros.app.mesh
+modules/celeros.app.net
+modules/celeros.mesh
+modules/celeros.app.fmt
+modules/celeros.usb
+modules/celeros.usb.escpos
+apps/Installer
+modules/celeros.app.fsx
+modules/celeros.app.path

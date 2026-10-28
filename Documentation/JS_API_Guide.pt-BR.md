@@ -930,7 +930,7 @@ fuso vazio, maior que 48 caracteres ou com `|`/caracteres de controle;
 ### 12.4b Portal do setup de WiFi (`System.wifiPortal*`, API 52)
 
 A tela de WiFi agora é o app `WiFi` (`packageName: celeros.wifi`, em
-`data/apps/Wifi`) — ela saiu do firmware na API 52. Nas placas com vidro o app
+`data/apps/WiFi`) — ela saiu do firmware na API 52. Nas placas com vidro o app
 dirige o mesmo AP + captive portal que a tela nativa usava:
 
 - `System.wifiPortalStart()` → Boolean — sobe o AP + portal (não bloqueia).
@@ -2696,7 +2696,7 @@ uma única cópia por versão no dispositivo, compartilhada pelos apps. O
   API 43 lia só 8 e o resto do fecho falhava no `require`. App cujo fecho
   passa de 8 módulos declara `"api": 44`.
 - O hub valida no publish: as deps existem no repositório, a soma dos `.js`
-  do pacote **+ deps resolvidas** conta no teto de 48/128 KB (a dep segue
+  do pacote **+ deps resolvidas** conta no teto de 64 KB / 1 MB (a dep segue
   compilando no heap de cada app) e `api` do app ≥ `minApi` da dep.
 - **O provisionamento é automático em todo caminho**: `celerctl apps
   install`/`apps store`, a loja, `celerctl dev` (abertura + mudança de
@@ -3737,7 +3737,7 @@ o publicador e é o gate para usar `os_update` em frota de cliente.
 ## 51. Nível de API 52 — o setup de WiFi virou app
 
 A `WifiSetupScreen` nativa saiu do firmware: o setup de WiFi agora é o app
-`WiFi` (`data/apps/Wifi`, `packageName: celeros.wifi`), escrito em JS sobre
+`WiFi` (`data/apps/WiFi`, `packageName: celeros.wifi`), escrito em JS sobre
 `Net.wifiScan`/`Net.wifiConnect` e as novas chamadas `System.wifiPortal*`
 (seção 12.4b). `System.openWifiSetup()` continua funcionando e abre esse app.
 

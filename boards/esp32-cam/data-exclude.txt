@@ -2,9 +2,9 @@
 # (tools/flash_data.sh). Um caminho por linha, relativo a data/.
 # Perfil CELEROS_UI=n: as bindings de desenho nao existem no firmware
 # (System.draw*, UI, Keypad, prompt) — apps que desenham (grade, teclado,
-# icones) quebrariam no 1o draw. A fabrica leva so o Barebone (referencia
-# headless/autostart); os apps da rodada da camera (sensor, barcode,
-# retransmissao) vem pelo SD ou pelo celerctl.
+# icones) quebrariam no 1o draw. A fabrica leva Barebone (referencia
+# headless/autostart) e o Celer Agent (frota, headless); os apps da rodada
+# da camera (sensor, barcode, retransmissao) vem pelo SD ou pelo celerctl.
 apps/App Store
 apps/Settings
 apps/Snake
@@ -20,5 +20,30 @@ apps/Matilha
 apps/HTTP Demo
 apps/Nucleo
 apps/Regras
+apps/WiFi
 # Sem launcher visual nao ha grade: os 204KB de icones nao servem de nada.
 icons
+# A fabrica leva Barebone + Celer Agent (headless): so os modulos do fecho
+# desses dois (celeros.app + celeros.cloud) precisam estar na imagem.
+modules/celeros.app.ai
+modules/celeros.app.caps
+modules/celeros.app.chat
+modules/celeros.app.data
+modules/celeros.app.fmt
+modules/celeros.app.form
+modules/celeros.app.fsx
+modules/celeros.app.history
+modules/celeros.app.icons
+modules/celeros.app.input
+modules/celeros.app.list
+modules/celeros.app.mesh
+modules/celeros.app.net
+modules/celeros.app.path
+modules/celeros.app.rows
+modules/celeros.app.style
+modules/celeros.app.text
+modules/celeros.app.widgets
+modules/celeros.mesh
+modules/celeros.ui.icons
+modules/celeros.usb
+modules/celeros.usb.escpos

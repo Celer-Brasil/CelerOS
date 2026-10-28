@@ -665,7 +665,7 @@ Time configuration (persisted by TimeManager). The setters **require `"system"`*
 ### 12.4b WiFi setup portal (`System.wifiPortal*`, API 52)
 
 The WiFi setup screen is now the `WiFi` app (`packageName: celeros.wifi`, in
-`data/apps/Wifi`) — it left the firmware in API 52. On boards with a display it
+`data/apps/WiFi`) — it left the firmware in API 52. On boards with a display it
 drives the same AP + captive portal the native screen used:
 
 - `System.wifiPortalStart()` → Boolean — brings up the AP + captive portal
@@ -2392,7 +2392,7 @@ resolves the fallback.
   API 43 it read only 8 and the rest of the closure failed to `require`.
   An app whose closure has more than 8 modules declares `"api": 44`.
 - The hub validates at publish: deps exist in the repository, the package's
-  `.js` sum **+ resolved deps** counts toward the 48/128 KB ceiling (the dep
+  `.js` sum **+ resolved deps** counts toward the 64 KB / 1 MB ceiling (the dep
   still compiles inside each app's heap) and the app's `api` ≥ the dep's
   `minApi`.
 - **Provisioning is automatic on every path**: `celerctl apps install`/
@@ -3436,7 +3436,7 @@ publisher and is the gate for `os_update` on a customer fleet.
 ## 51. API Level 52 — WiFi setup is an app
 
 The native `WifiSetupScreen` left the firmware: WiFi setup is now the `WiFi`
-app (`data/apps/Wifi`, `packageName: celeros.wifi`), written in JS over
+app (`data/apps/WiFi`, `packageName: celeros.wifi`), written in JS over
 `Net.wifiScan`/`Net.wifiConnect` plus the new `System.wifiPortal*` calls
 (section 12.4b). `System.openWifiSetup()` still works and launches that app.
 

@@ -45,3 +45,7 @@ modules/celeros.app.chat
 modules/celeros.app.mesh
 modules/celeros.app.net
 modules/celeros.mesh
+
+modules/celeros.app.fmt
+modules/celeros.usb
+modules/celeros.usb.escpos

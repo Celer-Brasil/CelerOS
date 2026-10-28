@@ -19,5 +19,6 @@ apps/Matilha
 apps/HTTP Demo
 apps/Nucleo
 apps/Regras
+apps/WiFi
 # Sem launcher visual nao ha grade: icones nao servem de nada.
 icons

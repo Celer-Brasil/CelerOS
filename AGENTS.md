@@ -109,6 +109,12 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 # "ESP-IDF ativo: ESP-IDF v6.1". In the ZCode sandbox shell `command -v idf.py` may stay empty even
 # after export — call `python3 $IDF_PATH/tools/idf.py ...` directly there.
 # Existing bench build dirs (build*, build-dog, build-cyd*) were all configured under 6.1.
+# PITFALL 2 (hit in 2026-10-28): the cached CMake wants the interpreter it was configured with —
+#   "configured with .../bin/python while .../bin/python3 is active. Run 'idf.py fullclean'".
+#   Do NOT fullclean (it throws away the bench build dirs): call idf.py with that exact python, e.g.
+#   PY=$HOME/.espressif/python_env/idf6.1_py3.14_env/bin/python; $PY $IDF_PATH/tools/idf.py -B build ...
+#   (in a fresh shell also `source $IDF_PATH/export.sh` first, or idf.py dies with
+#   "expected string or bytes-like object" on a missing ESP_IDF_VERSION).
 
 # SmartDisplay (ESP32-S3)
 idf.py -B build -DSDKCONFIG=build/sdkconfig \

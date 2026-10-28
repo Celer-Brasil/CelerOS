@@ -153,8 +153,10 @@ bool WebAuth::check(httpd_req_t* req) {
 
     char auth[128];
     bool ok = false;
+    bool attempted = false;  // veio mesmo um "Basic ..." na requisicao?
     if (httpd_req_get_hdr_value_str(req, "Authorization", auth, sizeof(auth)) == ESP_OK &&
         strncmp(auth, "Basic ", 6) == 0) {
+        attempted = true;
         uint8_t dec[80];
         size_t dlen = sizeof(dec);
         if (mbedtls_base64_decode(dec, dlen, &dlen, (const uint8_t*)auth + 6,
@@ -176,6 +178,13 @@ bool WebAuth::check(httpd_req_t* req) {
         return true;
     }
 
+    // So a senha ERRADA consome o lockout: sondas sem credencial (scanner de
+    // porta, <img> de outro site, a primeira visita anonima) respondiam 401 e
+    // AINDA somavam falha — 5 requisicoes anonimas travavam o dono por 30 s.
+    if (!attempted) {
+        sendDenied(req, false);
+        return false;
+    }
     lock();
     bool tripLock = (++s_fails >= 5);
     if (tripLock) {

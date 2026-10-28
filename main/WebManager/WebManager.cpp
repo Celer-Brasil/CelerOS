@@ -49,6 +49,10 @@ extern const uint8_t screen_gz_end[] asm("_binary_screen_html_gz_end");
 static esp_err_t sendGzipHtml(httpd_req_t* req, const uint8_t* start, const uint8_t* end) {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    // Paginas de administracao (file manager, /update): sem isto o navegador
+    // cacheava heuristically e exibia UI velha depois de um OTA; e a pagina
+    // autenticada nao deve persistir em cache compartilhado.
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, (const char*)start, end - start);
 }
 #endif
@@ -241,6 +245,14 @@ void WebManager::disable() {
     s_disablePending = false;
     nm().setAutoReconnect(false);  // silencia a background task
     stopWebServer();
+    // O stop pode ter sido ADIADO de novo (uma requisicao entrou entre o
+    // check acima e o stop): desconectar agora derrubaria o radio no meio do
+    // handler. O tick retoma quando o httpd esvaziar.
+    if (s_server != nullptr) {
+        s_disablePending = true;
+        celer_log_println("WiFi disable adiado (requisicao web em curso)");
+        return;
+    }
     nm().disconnect();
     celer_log_println("WiFi disabled at runtime");
 }
@@ -461,6 +473,12 @@ struct ActiveReq {
 };
 
 static esp_err_t routeGuard(httpd_req_t* req) {
+    // Conta a requisicao ANTES de qualquer guarda: o stop/disable da main task
+    // le este contador para saber se pode derrubar o httpd. Incrementar
+    // depois do check deixava uma janela em que a requisicao ja entrou mas o
+    // contador ainda lia 0 — o httpd_stop entao ESPERAVA o handler (upload
+    // de minutos) e a main task morria no TWDT.
+    ActiveReq active;
     // Servidor em parada: nao deixa um upload NOVO entrar e prolongar o
     // httpd_stop que a main task esta esperando.
     if (s_stopPending.load(std::memory_order_relaxed)) {
@@ -469,7 +487,6 @@ static esp_err_t routeGuard(httpd_req_t* req) {
         httpd_resp_sendstr(req, "Server stopping");
         return ESP_OK;
     }
-    ActiveReq active;
     if (!WebAuth::check(req)) return ESP_OK;  // 401/429 ja enviados
 
     RouteCtx* c = (RouteCtx*)req->user_ctx;
@@ -554,8 +571,9 @@ static int readBody(httpd_req_t* req, BodyBuf& out, size_t limit = 8192) {
 // decodifica %XX/'+' direto no destino (decodificado nunca e maior que o
 // cru — a escrita corre atras da leitura, entao out pode ser o PROPRIO
 // buffer do corpo: decodificacao in place, sem copia). false = ausente,
-// nao cabe no destino ou valor vazio.
-static bool bodyParam(const BodyBuf& body, const char* key, char* out, size_t cap) {
+// nao cabe no destino ou valor vazio (allowEmpty: valor vazio vale).
+static bool bodyParam(const BodyBuf& body, const char* key, char* out, size_t cap,
+                      bool allowEmpty = false) {
     size_t keyLen = strlen(key);
     if (body.data == nullptr || keyLen == 0 || cap == 0) return false;
 
@@ -599,7 +617,7 @@ static bool bodyParam(const BodyBuf& body, const char* key, char* out, size_t ca
         p += (size_t)(step - 1);
     }
     out[o] = '\0';
-    return o > 0;
+    return allowEmpty || o > 0;
 }
 
 // Variante para os campos pequenos (path/type/oldPath/newPath): teto de 300
@@ -793,7 +811,9 @@ static esp_err_t handler_edit_post(httpd_req_t* req) {
     // Conteudo decodificado DENTRO do buffer do corpo (nunca cresce) e
     // gravado como const char*: nenhum std::string grande no caminho —
     // o post de 8 KB do editor nao aposta o device num malloc falho.
-    if (!bodyParam(body, "content", body.data, body.len + 1)) {
+    // allowEmpty: salvar o editor VAZIO (limpar um arquivo) e legitimo — sem
+    // isso o campo vazio virava "Missing parameters" e o arquivo nao limpava.
+    if (!bodyParam(body, "content", body.data, body.len + 1, true)) {
         sendText(req, 400, "Missing parameters");
         return ESP_OK;
     }
@@ -932,7 +952,9 @@ struct MultipartCtx {
 
         // Upload de arquivo comum: filename do form e o caminho absoluto
         filePath = normalizePath(fname);
-        if (!pathAllowed(filePath)) { fail("invalid path " + filePath); return; }
+        // Mesma defesa das rotas query/body (safePath): segmento ".." sai do
+        // diretorio no FATFS do SD ("../x" sobe da pasta de destino)
+        if (!pathAllowed(filePath) || hasDotDot(filePath)) { fail("invalid path " + filePath); return; }
 
         // Intercepta apps e respeita o local padrao de instalacao
         if (kstr::startsWith(filePath, "/local/apps/") || kstr::startsWith(filePath, "/sd/apps/")) {
@@ -1004,6 +1026,12 @@ struct MultipartCtx {
 // Processa um chunk do corpo multipart
 static void multipartFeed(MultipartCtx& ctx, const char* data, size_t len) {
     if (ctx.errored) return;
+    // Corpo depois do "--boundary--" final: o parser nao tem mais trabalho;
+    // sem este retorno o tail acumulava TUDO que o cliente seguiu mandando
+    // (Content-Length maior que o corpo real) ate esgotar o heap — com
+    // -fno-exceptions o abort derruba o aparelho (DoS com um POST /api/upload
+    // ou /update seguido de lixo infinito).
+    if (ctx.state == MultipartCtx::DONE) return;
     ctx.tail.append(data, len);
 
     // Limite de seguranca do buffer de headers
@@ -1126,11 +1154,20 @@ static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg, bool firmw
 
     size_t remaining = req->content_len;
     char buf[2048];
+    size_t drained = 0;  // descarte apos o fim do multipart (teto igual ao readBody)
     while (remaining > 0 && !ctx.errored) {
         size_t want = remaining > sizeof(buf) ? sizeof(buf) : remaining;
         int got = httpd_req_recv(req, buf, want);
         if (got <= 0) { ctx.fail("connection lost"); break; }
         remaining -= (size_t)got;
+        if (ctx.state == MultipartCtx::DONE) {
+            // excedente do Content-Length: drena (cliente legitimo recebe a
+            // resposta limpa sem envenenar o keep-alive) com o mesmo teto de
+            // 64 KB do readBody — acima disso o httpd fecha a sessao sozinho
+            drained += (size_t)got;
+            if (drained > 65536) break;
+            continue;
+        }
         multipartFeed(ctx, buf, (size_t)got);
     }
 

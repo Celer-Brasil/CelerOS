@@ -65,6 +65,18 @@ std::string OtaManager::getUpdateJsonUrl() {
     // com auth), lido no momento do check — NVS exigiria reboot para trocar
     if (FileSystem::exists("/local/ota_url.txt")) {
         std::string url_Override = kstr::trim(FileSystem::readTextFile("/local/ota_url.txt"));
+        // BOM UTF-8 (arquivo salvo no Bloco de Notas do Windows): sem remover,
+        // a URL comeca com EF BB BF e nem https:// nem http:// casam — o OTA
+        // morre com o erro enganoso de "http:// requer ota_allow_http.txt".
+        if (url_Override.size() >= 3 &&
+            (unsigned char)url_Override[0] == 0xEF &&
+            (unsigned char)url_Override[1] == 0xBB &&
+            (unsigned char)url_Override[2] == 0xBF) {
+            url_Override.erase(0, 3);
+            // BOM + espaco ("\xEF\xBB\xBF http://..."): re-trimar depois do
+            // erase, senao o branco inicial segue na frente do scheme.
+            url_Override = kstr::trim(url_Override);
+        }
         if (url_Override.length() > 0) {
             if (!kstr::endsWith(url_Override, ".json")) {
                 if (!kstr::endsWith(url_Override, "/")) url_Override += "/";
@@ -164,6 +176,7 @@ bool OtaManager::checkForUpdates() {
 
 bool OtaManager::runCheck() {
     info = OtaUpdateInfo();
+    lastError = "";  // erro de um performUpdate anterior nao pode vazar no check novo
     std::string url = getUpdateJsonUrl();
     if (!urlSchemeAllowed(url)) {
         info.fetchFailed = true;
@@ -517,12 +530,26 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
         err = esp_http_client_open(cli, 0);
         int64_t len = err == ESP_OK ? esp_http_client_fetch_headers(cli) : -1;
         const int status = err == ESP_OK ? esp_http_client_get_status_code(cli) : 0;
+        // 416 "Range Not Satisfiable" com o corpo inteiro ja gravado: a conexao
+        // caiu entre o ultimo byte e o EOF e a retomada pediu bytes=%u- alem do
+        // fim. O firmware esta completo (e o SHA confere adiante): tratar como
+        // fim de corpo em vez de queimar as 6 retentativas e descartar o slot.
+        const bool rangeDone = status == 416 && total > 0 && (int64_t)written >= total;
         size_t skip = 0;  // 200 apos Range: o servidor mandou do inicio
-        if (err != ESP_OK || (status != 200 && status != 206)) {
+        if (err != ESP_OK || (status != 200 && status != 206 && !rangeDone)) {
             if (err == ESP_OK) err = ESP_ERR_INVALID_RESPONSE;
             esp_http_client_cleanup(cli);
             fails++;
             continue;
+        }
+        if (rangeDone) {
+            // Fecha ANTES do loop de leitura: sem isto o CORPO do 416 (pagina
+            // de erro do servidor) era lido como firmware, hasheado e gravado
+            // alem do total — o SHA "nao conferia" e um download ja completo
+            // era jogado fora. written == total e o stream esta inteiro.
+            esp_http_client_cleanup(cli);
+            done = true;
+            break;
         }
         if (status == 200) {
             skip = written;
@@ -570,6 +597,7 @@ bool OtaManager::runUpdate(const std::string& firmwareUrl, void (*onProgress)(in
             progressed = true;
             if (total > 0 && onProgress != nullptr) {
                 int pct = (int)((int64_t)written * 100 / total);
+                if (pct > 100) pct = 100;  // servidor que manda a mais nao passa de 100%
                 if (pct != lastPct) {
                     lastPct = pct;
                     onProgress(pct);

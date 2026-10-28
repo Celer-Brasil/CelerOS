@@ -182,6 +182,22 @@
 // Anti-CSRF: toda requisicao desta pagina leva X-Celer-Request (o servidor
 // recusa POST/DELETE sem ele — sites de fora nao conseguem mandar o header)
 (function(){const H='X-Celer-Request';const f=window.fetch;window.fetch=function(u,o){o=o||{};const h=new Headers(o.headers||{});h.set(H,'1');o.headers=h;return f(u,o);};const op=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(){op.apply(this,arguments);this.setRequestHeader(H,'1');};})();
+        // Escape para conteudo de texto: um nome de arquivo vindo do
+        // APARELHO (app com PERM_FS cria "<img onerror=...>.js") nao pode
+        // virar HTML/JS na pagina de administracao (XSS armazenado: o
+        // navegador do dono tem o Basic Auth em cache e reusaria as
+        // credenciais em pedidos do atacante, /update incluso).
+        function escHtml(s) {
+            return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+        // Escape para string JS dentro de atributo onclick="fn('...')":
+        // primeiro a camada JS (barra e aspas simples), depois a HTML
+        // (& e aspas duplas do atributo). A ordem importa: & antes de
+        // gerar &quot;, barra antes de gerar \'.
+        function escAttr(s) {
+            return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")
+                            .replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+        }
         // Global State variables
         let currentStorage = '/littlefs'; // Base mount root
         let currentPath = '/';            // Current directory track relative to root
@@ -212,21 +228,29 @@
         async function loadDirectory() {
             const fullTargetUrl = `/api/list?dir=${encodeURIComponent(currentStorage + currentPath)}`.replace(/\/+/g, '/');
             updateBreadcrumbs();
-            
+
             try {
                 const response = await fetch(fullTargetUrl);
-                if (!response.ok) throw new Error("Failed to fetch folder directory listings.");
+                if (!response.ok) throw new Error("HTTP " + response.status);
                 const items = await response.json();
                 renderItems(items);
             } catch (err) {
                 console.error(err);
-                // Mock layout populated if file is executed locally without active ESP32 server environment
-                renderItems([
-                    {name: "system_config.json", type: "file", size: 512},
-                    {name: "web_assets", type: "dir", size: 0},
-                    {name: "sensor_log.csv", type: "file", size: 4096}
-                ]);
+                // Sem conteudo FALSO no erro: a lista demo parecia real (e o
+                // dono podia "abrir"/apagar arquivos que nao existiam).
+                renderError("Could not load directory (" + err.message + ").");
             }
+        }
+
+        function renderError(message) {
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 3;
+            td.textContent = message;
+            tr.appendChild(td);
+            tbody.appendChild(tr);
         }
 
         function renderItems(items) {
@@ -249,15 +273,15 @@
                 const itemAbsPath = getAbsolutePath(item.name);
 
                 tr.innerHTML = `
-                    <td class="${isDir ? 'clickable-row' : ''}" onclick="${isDir ? `clickDir('${item.name}')` : ''}">
-                        <span class="file-icon">${icon}</span>${item.name}
+                    <td class="${isDir ? 'clickable-row' : ''}" onclick="${isDir ? `clickDir('${escAttr(item.name)}')` : ''}">
+                        <span class="file-icon">${icon}</span>${escHtml(item.name)}
                     </td>
                     <td>${isDir ? '-' : formatBytes(item.size)}</td>
                     <td class="row-actions">
-                        ${!isDir ? `<button class="btn btn-secondary" onclick="editFile('${itemAbsPath}')">✏️ Edit</button>` : ''}
-                        ${!isDir ? `<button class="btn btn-secondary" onclick="downloadFile('${itemAbsPath}')">📥 Get</button>` : ''}
-                        <button class="btn btn-secondary" onclick="openRenameModal('${item.name}')">✏️ Rename</button>
-                        <button class="btn btn-danger" onclick="deleteItem('${itemAbsPath}')">🗑️ Del</button>
+                        ${!isDir ? `<button class="btn btn-secondary" onclick="editFile('${escAttr(itemAbsPath)}')">✏️ Edit</button>` : ''}
+                        ${!isDir ? `<button class="btn btn-secondary" onclick="downloadFile('${escAttr(itemAbsPath)}')">📥 Get</button>` : ''}
+                        <button class="btn btn-secondary" onclick="openRenameModal('${escAttr(item.name)}')">✏️ Rename</button>
+                        <button class="btn btn-danger" onclick="deleteItem('${escAttr(itemAbsPath)}')">🗑️ Del</button>
                     </td>
                 `;
                 tbody.appendChild(tr);
@@ -287,15 +311,15 @@
 
         function updateBreadcrumbs() {
             const container = document.getElementById('breadcrumb-container');
-            container.innerHTML = `Storage Root: <span onclick="navigateTo('/')">${currentStorage}</span>`;
-            
+            container.innerHTML = `Storage Root: <span onclick="navigateTo('/')">${escHtml(currentStorage)}</span>`;
+
             let accumulativePath = '';
             const parts = currentPath.split('/').filter(p => p);
-            
+
             parts.forEach(part => {
                 accumulativePath += '/' + part;
                 const freezePath = accumulativePath;
-                container.innerHTML += ` / <span onclick="navigateTo('${freezePath}')">${part}</span>`;
+                container.innerHTML += ` / <span onclick="navigateTo('${escAttr(freezePath)}')">${escHtml(part)}</span>`;
             });
         }
 
@@ -313,14 +337,22 @@
                     const text = await response.text();
                     document.getElementById('editor-textarea').value = text;
                 } else {
-                    alert("Error extracting target file data payload details.");
+                    throw new Error("HTTP " + response.status);
                 }
             } catch (err) {
-                document.getElementById('editor-textarea').value = "// Local UI Demo Mode\n{\n  \"status\": \"offline\"\n}";
+                // Bloqueia o Save: sem isto o textarea ficava com a mensagem
+                // de erro e o dono gravava por cima do arquivo real com lixo.
+                activeEditingPath = '';
+                document.getElementById('editor-textarea').value =
+                    `Could not load ${absoluteFilePath} (${err.message}). Editing disabled — close and retry.`;
             }
         }
 
         async function saveFileContent() {
+            if (!activeEditingPath) {
+                alert("No file loaded — cannot save (load failed or editor closed).");
+                return;
+            }
             const textData = document.getElementById('editor-textarea').value;
             try {
                 const response = await fetch(`/api/edit`, {
@@ -335,8 +367,7 @@
                     alert("Failed to successfully execute modification changes to storage chip.");
                 }
             } catch(e) {
-                alert("Simulated save success on offline mockup layout dashboard config.");
-                closeModal('editor-modal');
+                alert("Network error while saving — the file was NOT saved.");
             }
         }
 
@@ -346,12 +377,14 @@
 
         async function deleteItem(absoluteFilePath) {
             if(!confirm(`Are you certain you wish to delete: ${absoluteFilePath}?`)) return;
-            
+
             try {
-                const response = await fetch(`/api/delete`, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: `path=${encodeURIComponent(absoluteFilePath)}`
+                // O handler /api/delete le o caminho da QUERY STRING (como
+                // /api/download), nao do corpo: o DELETE com body "path=..."
+                // levava 400 "Missing path parameter" sempre — o botao Del
+                // nunca apagou nada pela pagina.
+                const response = await fetch(`/api/delete?path=${encodeURIComponent(absoluteFilePath)}`, {
+                    method: 'DELETE'
                 });
                 if(response.ok) {
                     loadDirectory();
@@ -359,7 +392,9 @@
                     alert("Failed to delete target entry.");
                 }
             } catch(e) {
-                alert("Deleted (Mock Action Sandbox mode active).");
+                // Sem "Deleted" falso: erro de rede aqui significa que NADA
+                // foi apagado no aparelho.
+                alert("Network error — the item was NOT deleted.");
             }
         }
 

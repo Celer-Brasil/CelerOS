@@ -16,6 +16,7 @@ CelerOS/
 ├── data/            # LittleFS image contents: system JS apps + icons (flashed separately)
 ├── hub_apps/        # App Store apps, same layout as data/apps (covered by data/AGENTS.md)
 ├── studio_games/    # 4 maiores jogos remontados NATIVOS no Celer Studio (own README)
+├── studio_apps/     # exemplos do modo PROGRAMA (runtime app, widgets Kui) + IA
 ├── boards/<b>/      # per-board sdkconfig.defaults (+ data/ overlay & data-exclude.txt on the watch)
 ├── tools/           # celerctl, app_lint, sdk, studio (editor), flash_data.sh, ota_server, celerhub, generators
 │   └── studio/      # Celer Studio: projeto/cena/prefab/meta + GUI + build ES5 (own AGENTS.md)
@@ -42,7 +43,7 @@ CelerOS/
 | Firmware size / what costs flash | `python3 tools/size_report.py` | CYD OTA slot is the binding constraint |
 | System apps, app.json rules | `data/AGENTS.md` | ES5 only |
 | Device CLI, data flashing, local OTA server | `tools/AGENTS.md` | |
-| Game editor (Celer Studio): project/scene/prefab formats, GUI, headless build/deploy, native remounts | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` + `studio_games/README.md` | file-first; GUI/CLI/HTTP share one op bus; build emits a flat ES5 app with the runtime inlined; Detona/Arrasa/Lenda/Supernova are native scenes (controllers in `Assets/Scripts`) |
+| Editor (Celer Studio): games AND programs, GUI, headless build/deploy, copiloto de IA | `tools/studio/AGENTS.md` + `Documentation/Studio_Guide*.md` + `studio_games/README.md` + `studio_apps/README.md` | file-first; GUI/CLI/HTTP/copilot share one op bus; `runtime:"studio"` = scenes+engine, `runtime:"app"` = telas Kui sem deps; Detona/Arrasa/Lenda/Supernova are native scenes |
 | JS API docs for app authors | `Documentation/JS_API_Guide*.md` | keep EN and pt-BR in sync |
 
 ## CODE MAP
@@ -122,17 +123,21 @@ python3 tools/celerctl.py top -w                                             # p
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool (the watch's path)
 python3 tools/celerctl.py debug MyApp                                       # JS debugger REPL (S3 boards: CELEROS_JS_DEBUGGER)
 
-# Celer Studio (game editor; project is NOT an app until `build`)
+# Celer Studio (game AND program editor; project is NOT an app until `build`)
 node tools/sdk/celer.js studio init ~/Jogo --name "Meu Jogo"   # project + starter scene
 node tools/sdk/celer.js studio ~/Jogo serve --open            # Unity-style GUI (127.0.0.1:8421)
 node tools/sdk/celer.js studio ~/Jogo describe --json         # discovery for humans/AI
 node tools/sdk/celer.js studio ~/Jogo apply ops.json         # atomic op batch
 node tools/sdk/celer.js studio ~/Jogo build                   # flat ES5 app in .studio/build
 node tools/sdk/celer.js studio ~/Jogo run --frames 0,600      # host harness + PNGs
-node tools/sdk/celer.js studio import-game hub_apps/Detona /tmp/Detona-legado  # bridge legada (app ainda nao portado)
+node tools/sdk/celer.js studio import-game hub_apps/Sentinela /tmp/Sentinela-legado  # bridge legada (app ainda nao portado)
 node tools/sdk/celer.js studio "studio_games/Detona" serve --open  # jogo nativo no editor
 node tools/sdk/celer.js studio "studio_games/Detona" run --frames 0,1200
 node tools/sdk/celer.js studio "studio_games/Detona" deploy   # app.zip enxuto
+node tools/sdk/lib/jsstrip.js data/apps/Snake/main.js --min --top --stats   # mede minificado
+node tools/sdk/celer.js studio init ~/Painel --app --name "Painel"  # programa (telas Kui, zero deps)
+node tools/sdk/celer.js studio studio_apps/Painel run --frames 0,900
+node tools/sdk/celer.js studio studio_apps/Painel ai "adicione um cartao de temperatura"  # copiloto
 
 # Validation battery (run before any push; CI runs the same)
 node test/js_harness/run.js
@@ -148,6 +153,8 @@ g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tes
 python3 test/duk/run.py                  # require() no Duktape real (gcc)
 
 python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-library deltas (needs IDF env)
+python3 tools/size_report.py --board cyd --per-object 20   # maiores objetos de main/libmain.a (flash+RAM)
+python3 tools/size_report.py --board cyd --check-ledger tools/size_ledger.json   # orcamento POR OBJETO (gate do CI)
 ```
 
 ## NOTES
@@ -155,9 +162,12 @@ python3 tools/size_report.py --baseline f.json    # image vs OTA slot, per-libra
 - `components/duktape` and LovyanGFX are vendored third-party code. Do not edit or document them.
 - **SmartDisplay screen shaking/scrambling**: read `boards/AGENTS.md` "SMARTDISPLAY RGB PANEL" first (display init pinned to core 1, never the 64 B data cache line, `lcddma` shell diagnostic). The fix took a day of bench time.
 - CI: `build.yml` (tests above + firmware for all 8 boards with an OTA-slot size gate; hardware validation is manual), `wiki.yml` (publishes the wiki from `wiki/`), `release.yml` (tag `v*` -> factory zips + Flasher).
+- **Orcamento de flash POR OBJETO:** `tools/size_ledger.json` guarda o tamanho (**codigo + RAM**, fora rodata) de cada objeto de `main/libmain.a` por placa. O CI falha se um objeto crescer mais de 512 B sem o ledger ser atualizado no MESMO commit (`python3 tools/size_report.py --board <b> --save-ledger tools/size_ledger.json`); placa fora do ledger e ignorada ate ser medida com build fresco. Existe porque a CYD vive perto do piso do CI: crescimento precisa aparecer no objeto, nao so na imagem. **Nao use o tamanho de rodata por objeto do mapa**: o linker atribui ao primeiro objeto de um grupo o vao inteiro (o `stdio_vfs.c.obj` aparece com 91 KB de rodata e tem 76 B de verdade), entao o ledger conta so `.text`/IRAM/DRAM; dados grandes ficam com o gate da imagem.
+- **Tamanho de JS e medido MINIFICADO:** `tools/sdk/lib/jsstrip.js --min` (jsstrip + `jsmin`: comentarios/indentacao fora, nomes locais encurtados por escopo, espaco minimo entre tokens) e o que o publish/deploy sobe e o que o aparelho compila — as quebras de linha sao preservadas, entao o "line N" do Duktape continua igual ao fonte. Modulos (`any .js != main.js`) tem o topo manglado (o loader embrulha em `function(module,exports,require)`); o `main.js` so mangla o topo quando se passa `--reserved` com os globais que os irmaos leem (`--free-names`). Medir: `node tools/sdk/lib/jsstrip.js <arq>.js --min --top --stats`. Ganho tipico: 12-33% por app, 22% na engine.
+- **Doutrina C++ x JS (migracao em curso):** logica de app, politica (retry/formato) e driver de protocolo sobre API crua vao para deps JS em `tools/sdk/engine/`, que vivem na LittleFS e **nao gastam o slot OTA**. Ficam em C++ driver/tempo real/seguranca/boot **e o substrato que todo app usa** (`UI.*`/Kui, gfx, fs, transporte de rede): em JS viraria custo de heap por app. Na CYD (sem PSRAM) a dep e recompilada no heap de cada app (teto de 48 KB somando app+deps) e o svchost e suspenso com app em foreground — **nada que desenhe por cima de um app pode ser JS**.
 - TLS validates certificates (bundle: FULL on SmartDisplay, CMN on CYD). Hub/Google TLS needs `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y`.
 - `sdkconfig.defaults` changes only reach an existing build dir after deleting `build*/sdkconfig` (it is regenerated). `python3 tools/sdkconfig_check.py` lists every bench build dir whose sdkconfig drifted from its board's defaults (in 2026-10 the watch and dog bench builds still ran a 32 KB main stack the defaults had cut to 24 KB). `dependencies.lock` flip-flops with the last-built target; don't commit build churn of it.
 - OTA: device reads update.json v2 (`version`, `api_version`, `firmware_url`, `firmware_sha256`, `firmware_signature`, `changelog`) from the hub, or from the URL in `/local/ota_url.txt` when set. HTTPS requires a valid ECDSA P-256 signature (public key in `main/OTA/OtaPublicKey.h`; private key OUTSIDE the repo in `CelerOS-Server/env/ota_signing_private.pem`; `publish_firmware.py` signs automatically). HTTP local with `/local/ota_allow_http.txt` may omit it for the bench. The web UI `/update` also accepts uploads.
-- **Celer Studio projects are file-first**: `celergame.project.json` + `Assets/**` (`*.meta` sidecars with stable GUIDs) + `*.scene.json`/`*.prefab.json`. `studio build` emits a flat ES5 app with the scene runtime inlined into `main.js` (no new hub dep) and uses the current engine (`E.spr.meta/animOf/box`, `E.anchor`, `E.prof`); `.studio/` is cache. GUI, CLI and `POST /api/command` share `tools/studio/lib/ops.js`, so an agent can build a game without the browser. Docs: `Documentation/Studio_Guide.md` (+ `.pt-BR`).
+- **Celer Studio projects are file-first**: `celergame.project.json` + `Assets/**` (`*.meta` sidecars with stable GUIDs) + `*.scene.json`/`*.prefab.json`. `studio build` emits a flat ES5 app with the runtime inlined into `main.js` (no new hub dep); `.studio/` is cache. `runtime:"studio"` (game) uses the engine (`E.spr.meta/animOf/box`, `E.anchor`, `E.prof`) and `game.data.js`; `runtime:"app"` (program) emits **telas Kui** with zero engine deps (`app.data.js`, no psram, fits the CYD). GUI, CLI, `POST /api/command` and the built-in copilot (`studio ai`, env keys only) share `tools/studio/lib/ops.js`, so an agent can build an app without the browser. Docs: `Documentation/Studio_Guide.md` (+ `.pt-BR`).
 - `test/README`, `include/`, `lib/` are stale PlatformIO leftovers.
 - **Build env reality check (2026-10-18):** the firmware targets ESP-IDF **6.1** (`~/esp/v6.1/esp-idf`, python 3.14), but `~/.bashrc` has REGRESSED to v6.0/py3.13 — `get_idf` activates 6.0 today even though it was fixed once on 2026-10-17. Verify `idf.py --version` after activating; if it prints 6.0, activate manually: `export IDF_PATH=$HOME/esp/v6.1/esp-idf IDF_TOOLS_PATH=$HOME/.espressif && source $IDF_PATH/export.sh`. Every bench build dir is configured under 6.1: the wrong env fails with a fullclean request — do NOT fullclean, fix the env instead.

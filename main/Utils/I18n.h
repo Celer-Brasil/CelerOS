@@ -21,6 +21,9 @@ inline const char* lang() {
     if (!done) {
         done = true;
         cached = strdup(CelerSettings::get("lang", "pt").c_str());
+        // strdup sem RAM volta nullptr e o strcmp do TR derrubaria o aparelho:
+        // literal estatico, sem alocacao
+        if (cached == nullptr) cached = "pt";
     }
     return cached;
 }

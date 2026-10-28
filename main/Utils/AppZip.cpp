@@ -184,6 +184,7 @@ bool Reader::open(const char* path) {
         uint32_t p = 0;
         for (int i = 0; ok && i < entries; i++) {
             if (p + kCdLen > cdSize || rd32(cd + p) != kCdSig) { ok = false; break; }
+            uint16_t flags = rd16(cd + p + 8);
             uint16_t method = rd16(cd + p + 10);
             uint32_t crc = rd32(cd + p + 16);
             uint32_t comp = rd32(cd + p + 20);
@@ -195,12 +196,23 @@ bool Reader::open(const char* path) {
             if (p + kCdLen + (uint32_t)nameLen + extraLen + commLen > cdSize) { ok = false; break; }
             if (nameLen == 0 || nameLen >= kMaxName) { ok = false; break; }
             if (method != 0 && method != 8) { ok = false; break; }
+            // bit 0 do general purpose = entrada cifrada: o pacote nunca e
+            // (o hub nao cifra) e o deflate de bytes cifrados so falharia
+            // depois de escrever o destino — recusa na abertura, como o
+            // header promete
+            if ((flags & 0x0001) != 0) { ok = false; break; }
 
             Cd& c = m_cd[m_n];
             memcpy(c.name, cd + p + kCdLen, nameLen);
             c.name[nameLen] = '\0';
             bool isDir = false;
             if (!nameSafe(c.name, &isDir)) { ok = false; break; }
+            // nome repetido: a 2a entrada sobrescreveria a 1a na extracao —
+            // o conteudo publicado nao seria o que o pacote valida (e o
+            // tamanho declarado de cada copia escapava da conta do total)
+            bool dup = false;
+            for (int k = 0; k < m_n && !dup; k++) dup = strcmp(m_cd[k].name, c.name) == 0;
+            if (dup) { ok = false; break; }
             if ((uint64_t)localOff + kLocalLen > fileSize) { ok = false; break; }
             c.localOff = localOff;
             c.compSize = comp;

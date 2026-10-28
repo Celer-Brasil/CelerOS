@@ -106,7 +106,10 @@ bool PinStore::set(const char* pin) {
 }
 
 bool PinStore::verify(const char* pin) {
-    if (pin == nullptr) return false;
+    // Mesmo formato do set(): sem isto um PIN de 7+ digitos autenticava com
+    // os 6 primeiros (computeHash trunca em 6) e caracteres fora de 0-9
+    // entravam no hash
+    if (!validPin(pin)) return false;
 
     FILE* f = fopen(PIN_FILE, "rb");
     if (f != nullptr) {
@@ -142,7 +145,10 @@ bool PinStore::verify(const char* pin) {
 }
 
 bool PinStore::clear() {
-    bool ok = FileSystem::deleteFile(PIN_FILE);
+    // O arquivo AUSENTE nao e falha: o objetivo e "nao ha PIN" — devolver
+    // false quando nada havia fazia o shell/Settings reportar erro de limpeza
+    bool ok = true;
+    if (FileSystem::exists(PIN_FILE)) ok = FileSystem::deleteFile(PIN_FILE);
     FileSystem::deleteFile(PIN_LEGACY);
     setNvsFlag(false);
     return ok;

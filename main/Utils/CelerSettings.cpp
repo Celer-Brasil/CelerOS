@@ -77,13 +77,19 @@ void CelerSettings::migrateLegacy() {
     for (const auto& l : legacy) {
         if (!get(l.key).empty()) continue;      // NVS ja tem: arquivo e lixo
         if (!FileSystem::exists(l.file)) continue;
+        bool saved = true;
         if (l.isFlag) {
-            set(l.key, "1");
+            saved = set(l.key, "1");
         } else {
             std::string v = FileSystem::readTextFile(l.file);
             while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' ')) v.pop_back();
-            if (!v.empty()) set(l.key, v.c_str());
+            // conteudo vazio e lixo: nada a importar, o arquivo pode sair
+            saved = v.empty() || set(l.key, v.c_str());
         }
+        // O arquivo so sai DEPOIS de o valor estar no NVS: apagar com o set
+        // falho (NVS cheia) perdia a configuracao para sempre (brightness,
+        // nowifi...) — na proxima migracao nao ha de onde importar
+        if (!saved) continue;
         FileSystem::deleteFile(l.file);
         ESP_LOGI(CS_TAG, "%s migrado para NVS (%s)", l.file, l.key);
     }

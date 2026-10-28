@@ -167,8 +167,11 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
 
     // 2. Extracao em <dest>.new
     if (ok) {
-        rmRf(newDir);
-        ok = mkdirP(newDir);
+        // Staging limpo: se o .new de uma tentativa anterior nao pode ser
+        // removido, seguir em frente publicaria arquivos velhos misturados
+        // com o pacote novo (mkdirP devolve true so por a pasta existir)
+        if (existsPath(newDir.c_str()) && !rmRf(newDir)) ok = false;
+        if (ok) ok = mkdirP(newDir);
     }
     std::string appJsonPath;
     for (int i = 0; ok && i < n; i++) {

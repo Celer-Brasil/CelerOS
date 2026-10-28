@@ -739,8 +739,24 @@ bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*p
 }
 
 std::string FileSystem::parseJsonValue(const std::string& json, const char* key) {
+    if (key == nullptr) return "";
     std::string searchKey = std::string("\"") + key + "\"";
-    int keyIdx = kstr::indexOf(json, searchKey);
+    // A chave tem que estar FORA de string: dentro de um valor ela so pode
+    // aparecer escapada (\"chave\"). Sem este filtro um changelog que cita
+    // "firmware_url" (ou "version") era lido como o campo e o manifesto do
+    // OTA vinha com o valor errado.
+    int keyIdx = -1;
+    for (int from = 0;;) {
+        const int k = kstr::indexOf(json, searchKey, from);
+        if (k < 0) break;
+        size_t esc = 0;
+        for (int q = k - 1; q >= 0 && json[(size_t)q] == '\\'; q--) esc++;
+        if ((esc & 1) == 0) {
+            keyIdx = k;
+            break;
+        }
+        from = k + 1;
+    }
     if (keyIdx == -1) return "";
 
     int colonIdx = kstr::indexOf(json, ':', keyIdx + (int)searchKey.length());
@@ -762,8 +778,9 @@ std::string FileSystem::parseJsonValue(const std::string& json, const char* key)
             if (c == '"') { valEnd = i; break; }
         }
         if (valEnd == -1) return "";
-        // Destranspila o basico do JSON (suficiente para manifests:
-        // version/firmware_url/changelog nao carregam \uXXXX)
+        // Destranspila o JSON (manifest: version/firmware_url/changelog).
+        // \uXXXX vira UTF-8: o json.dumps do ota_server publica acentos
+        // escapados e eles apareciam como "u00e9" na tela.
         std::string out;
         out.reserve(valEnd - valStart);
         for (int i = valStart + 1; i < valEnd; ++i) {
@@ -776,6 +793,32 @@ std::string FileSystem::parseJsonValue(const std::string& json, const char* key)
                 case 'b': out += '\b'; break;
                 case 'f': out += '\f'; break;
                 case '/': out += '/';  break;
+                case 'u': {
+                    unsigned cp = 0;
+                    bool hexOk = i + 4 < valEnd;
+                    for (int k = 1; k <= 4 && hexOk; k++) {
+                        const char h = json[i + k];
+                        int d;
+                        if (h >= '0' && h <= '9') d = h - '0';
+                        else if (h >= 'a' && h <= 'f') d = h - 'a' + 10;
+                        else if (h >= 'A' && h <= 'F') d = h - 'A' + 10;
+                        else { hexOk = false; break; }
+                        cp = (cp << 4) | (unsigned)d;
+                    }
+                    if (!hexOk) { out += 'u'; break; }  // \u ilegivel: literal
+                    i += 4;
+                    if (cp < 0x80) {
+                        out += (char)cp;
+                    } else if (cp < 0x800) {
+                        out += (char)(0xC0 | (cp >> 6));
+                        out += (char)(0x80 | (cp & 0x3F));
+                    } else {
+                        out += (char)(0xE0 | (cp >> 12));
+                        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+                        out += (char)(0x80 | (cp & 0x3F));
+                    }
+                    break;
+                }
                 default: out += e;     break;  // \\ e \" (e \x literal)
             }
         }
@@ -783,8 +826,9 @@ std::string FileSystem::parseJsonValue(const std::string& json, const char* key)
     } else {
         int valEnd = valStart;
         while (valEnd < (int)json.length() && json[valEnd] != ',' && json[valEnd] != '}' && json[valEnd] != '\n') valEnd++;
-        std::string val = json.substr(valStart, valEnd - valStart);
-        return kstr::trim(val);
+        std::string val = kstr::trim(json.substr(valStart, valEnd - valStart));
+        if (val == "null") return "";  // campo explicitamente vazio
+        return val;
     }
 }
 
@@ -831,8 +875,15 @@ bool FileSystem::rmdir(const char* path) {
     return ::rmdir(path) == 0;
 }
 
-bool FileSystem::removeTree(const char* path) {
+namespace {
+// Teto de profundidade do removeTree: cada nivel e um frame com vetor+strings
+// na pilha do chamador (shell 6 KB); uma arvore adversarial profunda
+// (sideload no SD com LFN longo) estourava a pilha antes de terminar
+constexpr int kRemoveTreeMaxDepth = 24;
+
+bool removeTreeDepth(const char* path, int depth) {
     if (!pathOk(path)) return false;
+    if (depth > kRemoveTreeMaxDepth) return false;
     DIR* dir = opendir(path);
     if (dir == nullptr) return false;
     bool ok = true;
@@ -851,10 +902,15 @@ bool FileSystem::removeTree(const char* path) {
     }
     closedir(dir);
     for (const auto& it : items) {
-        ok = it.second ? removeTree(it.first.c_str()) : (unlink(it.first.c_str()) == 0);
+        ok = it.second ? removeTreeDepth(it.first.c_str(), depth + 1) : (unlink(it.first.c_str()) == 0);
         if (!ok) return false;
     }
     return ::rmdir(path) == 0;
+}
+}  // namespace
+
+bool FileSystem::removeTree(const char* path) {
+    return removeTreeDepth(path, 0);
 }
 
 bool FileSystem::isDirectory(const char* path) {
@@ -990,6 +1046,13 @@ std::string FileSystem::getFileMD5(const char* path) {
     if (!pathOk(path)) return "";
     FILE* f = fopen(path, "rb");
     if (f == nullptr) return "";
+    // pasta aberta: o fread falha e o MD5 sairia o de um arquivo VAZIO
+    // (d41d8...) como se a "copia" tivesse integridade
+    struct stat st;
+    if (fstat(fileno(f), &st) != 0 || S_ISDIR(st.st_mode)) {
+        fclose(f);
+        return "";
+    }
 
     md5_context_t ctx;
     esp_rom_md5_init(&ctx);

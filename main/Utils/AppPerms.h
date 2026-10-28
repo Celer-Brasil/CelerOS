@@ -9,6 +9,7 @@
 
 #include <string>
 #include <cstdint>
+#include <cstring>
 
 namespace celer {
 
@@ -36,7 +37,26 @@ constexpr uint32_t PERM_LEGACY = PERM_ALL & ~(PERM_USB | PERM_INPUT);
 // capability conhecida ("[]") = nenhuma: e o que o autor quis dizer — antes
 // virava PERM_ALL.
 inline uint32_t parsePermissions(const std::string& appJson) {
-    size_t key = appJson.find("\"permissions\"");
+    // A chave tem que estar FORA de string e seguida de ':': um app.json com
+    // "description": "...\"permissions\":[\"system\"]..." casava a chave de
+    // DENTRO do texto e ganhava permissoes nunca declaradas
+    size_t key = std::string::npos;
+    const char* kLit = "\"permissions\"";
+    for (size_t p = appJson.find(kLit); p != std::string::npos;
+         p = appJson.find(kLit, p + 1)) {
+        size_t esc = 0;
+        for (size_t q = p; q > 0 && appJson[q - 1] == '\\'; q--) esc++;
+        if (esc & 1) continue;  // escapada: esta dentro de um valor string
+        size_t c = p + strlen(kLit);
+        while (c < appJson.size() &&
+               (appJson[c] == ' ' || appJson[c] == '\t' || appJson[c] == '\n' || appJson[c] == '\r')) {
+            c++;
+        }
+        if (c < appJson.size() && appJson[c] == ':') {
+            key = p;
+            break;
+        }
+    }
     if (key == std::string::npos) return PERM_LEGACY;
     size_t open = appJson.find('[', key);
     size_t close = appJson.find(']', key);

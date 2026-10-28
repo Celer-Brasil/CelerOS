@@ -54,7 +54,14 @@ inline int parseJsonStringMap(const std::string& json, JsonStringPair* out, int 
             const char c = json[i];
             if (c == '{' || c == '[') depth++;
             else if (c == '}' || c == ']') {
-                if (depth == 0) return;
+                if (depth == 0) {
+                    // fecha solto sem '['/'{' aberto: ']' e lixo e PRECISA sair
+                    // (nao avancar aqui travava o parser para sempre em
+                    // {"a":"b"] — um app.json/deps.json assim pendurava o
+                    // installZip com o mutex de instalacao tomado)
+                    if (c == ']') i++;
+                    return;
+                }
                 depth--;
             } else if (c == ',' && depth == 0) return;
             i++;
@@ -63,14 +70,21 @@ inline int parseJsonStringMap(const std::string& json, JsonStringPair* out, int 
     while (count < maxPairs && out != nullptr) {
         skipSep();
         if (i >= n || json[i] == '}') break;
+        // guarda de progresso: nenhum caminho abaixo pode terminar sem
+        // consumir ao menos um byte (laco infinito no parser de pacote)
+        const size_t before = i;
         std::string key;
         if (!readString(&key)) {  // lixo fora de string: pula ate o proximo par
             skipValue();
             if (i < n && json[i] == '}') break;
+            if (i == before) i++;
             continue;
         }
         skipWs();
-        if (i >= n || json[i] != ':') continue;  // string solta: procura o proximo par
+        if (i >= n || json[i] != ':') {  // string solta: procura o proximo par
+            if (i == before) i++;
+            continue;
+        }
         i++;
         skipWs();
         std::string value;

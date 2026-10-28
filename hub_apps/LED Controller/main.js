@@ -1,34 +1,35 @@
-// CelerOS LED Controller — controla um LED/fita por GPIO direto.
-// Migrado para o CelerKit: o core celeros.app fica com o laco (A.run) e o
-// tema; celeros.app.form traz o pedido validado do numero do pino (digitado
-// no teclado do OS, sem caminhar de 2 a 48 no toque). Pino escolhivel,
-// liga/desliga, brilho PWM (analogWrite) e modo piscar. Requer permissao
-// gpio no app.json. ES5 (Duktape).
+// CelerOS LED Controller — LED/fita por GPIO com o CelerKit UI 2.0.
+// Formulario do A.form (pino, ligado, brilho PWM, modo) numa lista do
+// A.list.view com pintor proprio (o A.rows inteiro custa 1.9K e o teto
+// deste app e 14K), com preview ao vivo (circulo que acende no brilho e
+// pisca no ritmo do modo). Tocar na linha do pino digita o numero validado
+// pelo A.form.askNum (sem caminhar de 2 a 48). Placa sem GPIO ou sem LED
+// onboard abre e explica, nunca estoura. ES5 (Duktape).
 
 var A = require("celeros.app");
-require("celeros.app.form");
+require("celeros.app.form");      // rows + pedido validado do pino
 A.init();
 
+var T = A.T || System.theme();
+var LX = A.L.x, LW = A.L.w;
+
 var G = (typeof System.gpio === "object" && System.gpio) ? System.gpio : null;
+var HAS_LED = false;
+try { HAS_LED = !!System.getInfo().hasLed; } catch (e0) { HAS_LED = false; }
 
 var PIN_MIN = 2, PIN_MAX = 48;
 var pin = 2;                    // LED onboard classico do ESP32
 var on = false;
 var duty = 100;                 // 0..100 (PWM quando < 100)
 var mode = 0;                   // 0 fixo | 1 pisca lento | 2 pisca rapido
-var MODES = [["Fixo", 0], ["Pisca", 700], ["Rápido", 220]];
 var MODE_LABELS = ["Fixo", "Pisca", "Rápido"];
+var MODE_MS = [0, 700, 220];
 
 function apply(level) {         // level 0..100 no pino
-    if (level <= 0) {
-        G.digitalWrite(pin, G.LOW);
-    } else if (level >= 100) {
-        G.digitalWrite(pin, G.HIGH);
-    } else if (G.analogWrite) {
+    if (!G) return;
+    if (level > 0 && level < 100 && G.analogWrite)
         G.analogWrite(pin, Math.round(level * 255 / 100));
-    } else {
-        G.digitalWrite(pin, G.HIGH);
-    }
+    else G.digitalWrite(pin, level > 0 ? G.HIGH : G.LOW);
 }
 
 function setupPin() {
@@ -45,63 +46,107 @@ function selectPin(p) {
     setupPin();
 }
 
-var blinkOn = true;
-var lastBlink = 0;
+var blinkOn = true, lastBlink = 0, pvSig = "";
 
-A.run({
-    main: function (c) {
-        var T = A.T;
-        if (c.entered && !G) {
-            // sem gpio (permissao negada ou binding ausente): avisa e sai
-            A.error("GPIO indisponível", "O aparelho não liberou o uso de GPIO para este app.");
-            return A.EXIT;
-        }
-        if (c.entered) { setupPin(); lastBlink = System.millis(); }
-
-        // seletor de pino (- / digitar / +)
-        UI.card(A.L.x, 8, A.L.w, 48);
-        if (UI.button("-", A.L.x + 8, 16, 40, 32,
-                      { style: "ghost", role: "title", disabled: pin <= PIN_MIN })) selectPin(pin - 1);
-        if (UI.button("GPIO " + pin, A.L.x + 48, 16, A.L.w - 96, 32,
-                      { style: "ghost", role: "title", color: T.card })) {
-            var p = A.form.askNum("Pino GPIO", { min: PIN_MIN, max: PIN_MAX, hint: "número do pino (2 a 48)" });
-            if (p !== null) selectPin(p);
-        }
-        if (UI.button("+", A.L.x + A.L.w - 48, 16, 40, 32,
-                      { style: "ghost", role: "title", disabled: pin >= PIN_MAX })) selectPin(pin + 1);
-        UI.cardEnd();
-
-        // botao grande liga/desliga
-        if (UI.button(on ? "LIGADO" : "DESLIGADO", A.L.x + 16, 68, A.L.w - 32, 92,
-                      { color: on ? T.ok : T.raised, textColor: on ? T.onAccent : T.textDim, role: "title" })) {
-            on = !on;
-            apply(on ? duty : 0);
-        }
-
-        // brilho (PWM): aplica ao vivo no modo fixo
-        UI.card(A.L.x, 172, A.L.w, 74);
-        UI.text("Brilho", A.L.x + 12, 182);
-        UI.text(duty + "%", A.L.x + A.L.w - 12, 182, { align: "right", color: T.accent });
-        var d = UI.slider(A.L.x + 16, 208, A.L.w - 32, duty);
-        if (d !== duty) {
-            duty = d;
-            if (on && mode === 0) apply(duty);
-        }
-        UI.cardEnd();
-
-        // modo
-        var m = UI.tabs(A.L.x, 256, A.L.w, 32, MODE_LABELS, mode);
-        if (m !== mode) {
-            mode = m;
-            if (mode === 0) apply(on ? duty : 0);
-        }
-        UI.text("confira o pino antes de ligar", A.L.cx, 300, { role: "caption", align: "center", color: T.textDim });
-
-        // modo piscar: alterna o nivel no ritmo do modo
-        if (on && mode > 0 && System.millis() - lastBlink >= MODES[mode][1]) {
-            lastBlink = System.millis();
-            blinkOn = !blinkOn;
-            apply(blinkOn ? duty : 0);
-        }
+// --- preview ao vivo -------------------------------------------------------
+// Circulo que acende com o brilho (mistura com o fundo do card) e apaga no
+// ritmo do modo piscar. So repinta quando a assinatura muda (ou frame total).
+function preview(c) {
+    var lit = on && (mode === 0 || blinkOn);
+    var f = (lit ? duty : 0) / 100;
+    var sig = Math.round(f * 50) + "|" + (lit ? 1 : 0);
+    if (c.full || sig !== pvSig) {
+        pvSig = sig;
+        var col = lit ? System.mixColor(T.accent, T.card, Math.round((1 - f) * 75)) : T.raised;
+        System.fillSmoothCircle(64, 88, 30, col);
+        System.drawCircle(64, 88, 30, lit ? T.accent : T.stroke);
     }
-}, "main", { fps: 30 });
+    UI.text(on ? "LIGADO" : "DESLIGADO", 108, 54,
+            { role: "title", color: on ? T.ok : T.textDim, bg: T.card, id: 11 });
+    UI.text("GPIO " + pin, 108, 76, { role: "body", color: T.text, bg: T.card, id: 12 });
+    UI.text(MODE_LABELS[mode] + " · " + duty + "%", 108, 94,
+            { role: "caption", color: T.textDim, w: 118, bg: T.card, id: 13 });
+    if (!HAS_LED) {
+        UI.text("sem LED onboard (use um externo)", LX + 10, 116,
+                { role: "caption", color: T.textDim, w: LW - 20, lines: 1, id: "noled" });
+    }
+}
+
+// --- formulario (rows do A.form, pintor local) -----------------------------
+function buildRows() {
+    return [
+        A.form.stepper("Pino GPIO", function () { return pin; }, selectPin,
+                       { min: PIN_MIN, max: PIN_MAX, step: 1 }),
+        A.form.stepper("Brilho PWM", function () { return duty; },
+                       function (v) { duty = v; if (on && mode === 0) apply(duty); },
+                       { min: 5, max: 100, step: 5, fmt: function (v) { return v + "%"; } }),
+        A.form.choice("Modo", function () { return mode; }, function (v) {
+            mode = v;
+            blinkOn = true;
+            if (mode === 0) apply(on ? duty : 0);
+            UI.invalidate();
+        }, MODE_LABELS),
+        A.form.toggle("Ligado", function () { return on; }, function (v) {
+            on = v;
+            apply(on ? duty : 0);
+            UI.invalidate();
+        })
+    ];
+}
+var rows = buildRows();
+
+// pintor das linhas do A.form (so os 4 tipos que a tela usa; o A.rows
+// completo custaria 1.9K e este app tem teto de 14K)
+function formRow(r, x, y, w, h) {
+    var lh = UI.lineHeight("body"), cap = UI.lineHeight("caption");
+    var kind = r.k, rw = kind === "stepper" ? 92 : kind === "choice" ? 92 : kind === "toggle" ? 50 : 4;
+    UI.text(r.label, x, y + ((h - lh) >> 1),
+            { role: "body", color: T.text, w: w - rw - 6, lines: 1 });
+    if (kind === "toggle") {
+        var v = UI.toggle(x + w - 44, y + ((h - 24) >> 1), !!r.get());
+        if (v !== r.get()) r.set(v);
+    } else if (kind === "stepper") {
+        var sv = r.get();
+        if (UI.button("-", x + w - 92, y + 2, 26, h - 4, { style: "ghost" }))
+            r.set(Math.max(r.min, sv - r.step));
+        if (UI.button("+", x + w - 30, y + 2, 26, h - 4, { style: "ghost" }))
+            r.set(Math.min(r.max, sv + r.step));
+        // 34 px cabe "100%" (4 glifos de 8) e ainda deixa 2 px ate o "+"
+        UI.text(r.fmt ? r.fmt(sv) : sv, x + w - 66, y + ((h - lh) >> 1),
+                { role: "body", align: "center", color: T.text, w: 34, lines: 1 });
+    } else if (kind === "choice") {
+        UI.text(String(r.opts[r.get() % r.opts.length]), x + w - 8,
+                y + ((h - cap) >> 1), { role: "caption", align: "right",
+                color: T.textDim, w: 84, lines: 1 });
+    }
+}
+
+function tela(c) {
+    if (c.entered) { setupPin(); lastBlink = System.millis(); pvSig = ""; }
+
+    UI.header("LED");
+    UI.card(LX, 44, LW, 92);
+    preview(c);
+    UI.cardEnd();
+
+    // tocar na linha do pino (fora dos botoes) digita o numero validado
+    var i = A.list.view("led", LX, 142, LW, 168, rows, { row: 40, paintRow: formRow });
+    if (i === 0) {
+        var p = A.form.askNum("Pino GPIO", { min: PIN_MIN, max: PIN_MAX,
+            initial: pin, hint: "pino (2 a 48)", int: 1 });
+        if (p !== null) selectPin(p);
+    } else if (i === 2) rows[2].set(((mode | 0) + 1) % MODE_LABELS.length);
+
+    // modo piscar: alterna o nivel no ritmo do modo (o preview acompanha)
+    if (on && mode > 0 && System.millis() - lastBlink >= MODE_MS[mode]) {
+        lastBlink = System.millis();
+        blinkOn = !blinkOn;
+        apply(blinkOn ? duty : 0);
+    }
+}
+
+if (!G) {
+    A.error("GPIO indisponível", "Este aparelho não libera GPIO.");
+    System.exitApp();
+}
+A.run({ main: tela }, "main", { fps: 30 });

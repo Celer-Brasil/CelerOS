@@ -1,183 +1,299 @@
-// CelerOS Calculator — calculadora de toque no tema do OS.
-// Migrada para o CelerKit: o core celeros.app fica com o laco (A.run), o
-// tema cacheado e o layout; o visor e o teclado de toque sao conteudo
-// especifico do app e continuam desenhados aqui. Previa ao vivo enquanto
-// digita, historico das ultimas contas e ANS reutiliza o ultimo resultado
-// (persistido no FS do app). ES5 (Duktape).
+// CelerOS Calculator — calculadora de toque no tema do OS (CelerKit UI 2.0).
+// Visor em card com previa ao vivo e chip do ANS (tocar insere o ultimo
+// resultado), teclado grande no A.style (tokens + press nativo), historico
+// em sheet (tocar numa conta reaproveita o resultado) e seletor de tema
+// salvo no aparelho. O ANS e o historico persistem no FS do app. Sem cor
+// fixa: tudo sai de A.style.T (segue o tema do sistema). ES5 (Duktape).
 
 var A = require("celeros.app");
+require("celeros.app.style");
+require("celeros.app.icons");
+require("celeros.app.widgets");
 A.init();
 
-var expression = "";
+// ---- tema: "" segue o sistema; o resto e um preset do A.style ---------------
+var PRESETS = ["soft", "flat", "neon", "paper"];
+var PNAMES = ["Sistema", "Suave", "Plano", "Neon", "Papel"];
+var preset = "";
+try { preset = Storage.get("preset", "") || ""; } catch (e) { preset = ""; }
+if (preset) A.style.preset(preset);
+var T = A.style.T;
+
+// layout na area segura (no watch redondo A.L encolhe a largura/rodape)
+var LX = A.L.x, LW = A.L.w, BOT = A.L.bottom;
+var CARD_Y = A.L.top - 4, CARD_H = 88;          // 44/88 no retangular
+var HIW = LW - 96;                             // linha do historico
+var CHIP_W = 66, CHIP_X = LX + LW - CHIP_W - 8;
+var KEY_Y = CARD_Y + CARD_H + 6;
+var KEY_GAP = 5;
+var KEY_W = Math.floor((LW - 3 * KEY_GAP) / 4);
+var KEY_H = Math.floor((BOT - KEY_Y - 4 * KEY_GAP) / 5);
+
+// ---- estado ----------------------------------------------------------------
+var expr = "";
 var result = "";
-var prevVal = null;            // previa ao vivo (recalcula so quando a conta muda)
-var history = [];              // ultimas contas resolvidas (na memoria)
-var MAXHIST = 3;
-var ANS = 0;
+var prevVal = null;      // previa ao vivo (recalcula so quando a conta muda)
+var ans = 0;
+var hist = [];           // {e: conta, r: resultado}, mais nova primeiro
+var MAXH = 9;
+var SHOWH = 4;           // linhas visiveis no sheet
 
-// ---- persistencia leve: ultimo resultado sobrevive ao app --------------------
-var ANS_FILE = (FS.appData ? FS.appData() : "/local/") + "ans.txt";
-(function () {
-    var raw = FS.readTextFile(ANS_FILE);
-    if (raw) {
-        var v = parseFloat(raw);
-        if (!isNaN(v)) ANS = v;
-    }
+var DIR = "/local/";
+try { DIR = FS.appData() || "/local/"; } catch (e) { DIR = "/local/"; }
+var ANSF = DIR + "ans.txt";
+var HISTF = DIR + "hist.txt";
+
+(function load() {
+    try {
+        var v = parseFloat(FS.readTextFile(ANSF));
+        if (!isNaN(v)) ans = v;
+    } catch (e) { /* sem arquivo: ANS 0 */ }
+    try {
+        var h = JSON.parse(FS.readTextFile(HISTF));
+        if (h && h.length) hist = h.slice(0, MAXH);
+    } catch (e) { /* sem historico salvo */ }
 })();
-function saveAns() {
-    FS.writeTextFile(ANS_FILE, String(ANS));
-}
+function saveAns() { try { FS.writeTextFile(ANSF, String(ans)); } catch (e) { /* sem fs */ } }
+function saveHist() { try { FS.writeTextFile(HISTF, JSON.stringify(hist)); } catch (e) { /* sem fs */ } }
 
-// ---- botoes -------------------------------------------------------------------
-var buttons = [
-    { l: "C",   r: 0, c: 0, type: "clear" },
-    { l: "(",   r: 0, c: 1, type: "op" },
-    { l: ")",   r: 0, c: 2, type: "op" },
-    { l: "/",   r: 0, c: 3, type: "op" },
-
-    { l: "7",   r: 1, c: 0, type: "num" },
-    { l: "8",   r: 1, c: 1, type: "num" },
-    { l: "9",   r: 1, c: 2, type: "num" },
-    { l: "*",   r: 1, c: 3, type: "op" },
-
-    { l: "4",   r: 2, c: 0, type: "num" },
-    { l: "5",   r: 2, c: 1, type: "num" },
-    { l: "6",   r: 2, c: 2, type: "num" },
-    { l: "-",   r: 2, c: 3, type: "op" },
-
-    { l: "1",   r: 3, c: 0, type: "num" },
-    { l: "2",   r: 3, c: 1, type: "num" },
-    { l: "3",   r: 3, c: 2, type: "num" },
-    { l: "+",   r: 3, c: 3, type: "op" },
-
-    { l: "DEL", r: 4, c: 0, type: "del" },
-    { l: "0",   r: 4, c: 1, type: "num" },
-    { l: ".",   r: 4, c: 2, type: "num" },
-    { l: "=",   r: 4, c: 3, type: "eq" }
-];
-
-var btnW = 52;
-var btnH = 38;
-var spacing = 4;
-var startX = A.L.x + 2;    // (240 - 4*52 - 3*4)/2
-var startY = 110;          // 5*38 + 4*4 = 206: ultima linha termina em 316 (< 320)
-
-function fmtNum(v) {
+function fmt(v) {
     if (typeof v !== "number" || isNaN(v) || !isFinite(v)) return String(v);
     var s = String(Math.round(v * 1e8) / 1e8);
-    if (s.length > 14) s = v.toExponential(6);
-    return s;
+    return s.length > 14 ? v.toExponential(6) : s;
 }
-
-function btnRect(b) {
-    return {
-        x: startX + b.c * (btnW + spacing),
-        y: startY + b.r * (btnH + spacing)
-    };
-}
-
+function pretty(s) { return String(s).replace(/\*/g, "×").replace(/\//g, "÷"); }
 // cauda que cabe na largura (o fim da conta e o que importa)
 function tail(s, role, maxW) {
+    s = String(s);
     while (s.length > 0 && UI.measure(s, role) > maxW) s = s.substring(1);
     return s;
 }
 
-// ---- previa ao vivo (so avaliada quando a expressao muda) --------------------
-// so previa se a expressao fecha: par balanceado e sem operador no fim
+// ---- previa ao vivo (so avalia quando a expressao fecha ---------------------
 function recompute() {
     prevVal = null;
-    if (expression === "") return;
+    if (!expr) return;
     var bal = 0, lastCh = "";
-    for (var i = 0; i < expression.length; i++) {
-        var ch = expression.charAt(i);
+    for (var i = 0; i < expr.length; i++) {
+        var ch = expr.charAt(i);
         if (ch === "(") bal++;
-        if (ch === ")") bal--;
+        else if (ch === ")") bal--;
         lastCh = ch;
     }
     if (bal !== 0 || "+-*/.".indexOf(lastCh) >= 0) return;
+    if (!/^[0-9+\-*/(). ]+$/.test(expr)) return;
     try {
-        var v = eval(expression);
+        var v = eval(expr);
         if (typeof v === "number" && !isNaN(v) && isFinite(v)) prevVal = v;
     } catch (e) { prevVal = null; }
 }
 
-// ---- visor em card -------------------------------------------------------------
-function drawDisplay() {
-    var T = A.T;
-    var tx = A.L.x + 8;
-    var tw = A.L.w - 24;
-    UI.card(A.L.x, 8, A.L.w, 96);
-    // historico: ultimas contas em cima, apagando
-    var hs = history.slice(Math.max(0, history.length - MAXHIST));
-    for (var i = 0; i < MAXHIST; i++) {
-        UI.text(hs[i] || "", tx, 14 + i * 12, { role: "caption", color: T.textDim, w: tw, id: i });
-    }
-    // expressao corrente (cauda visivel)
-    UI.text(tail(expression || "0", "body", tw), tx, 52, { w: tw });
-    // resultado: fechado (accent, grande) ou previa viva (dim)
-    var big = "", col = T.accent;
-    if (result !== "") {
-        big = tail(result, "display", tw);
-        col = result === "erro" ? T.err : T.accent;
-    } else if (prevVal !== null && expression !== "") {
-        big = tail("= " + fmtNum(prevVal), "display", tw);
-        col = T.textDim;
-    }
-    UI.text(big, A.L.x + A.L.w - 12, 70, { role: "display", color: col, align: "right" });
-    UI.cardEnd();
-}
-
-// ---- logica --------------------------------------------------------------------
-function handleButton(b) {
-    if (b.type === "num" || b.type === "op") {
-        // comecar por operador encadeia no resultado anterior (ex.: "+5")
-        if (b.type === "op" && expression === "" && ANS !== 0) {
-            expression = fmtNum(ANS) + b.l;
-        } else {
-            expression += b.l;
-        }
+// ---- acoes ------------------------------------------------------------------
+// t: "d" digito, "o"/"i" operador/abre-fecha, "c" limpa, "x" apaga, "=" resolve
+function press(ins, t) {
+    if (t === "c") {
+        expr = "";
         result = "";
-    } else if (b.type === "clear") {
-        expression = "";
+    } else if (t === "x") {
+        if (expr) expr = expr.substring(0, expr.length - 1);
         result = "";
-    } else if (b.type === "del") {
-        if (expression.length > 0) expression = expression.substring(0, expression.length - 1);
-        result = "";
-    } else if (b.type === "eq") {
+    } else if (t === "=") {
         if (prevVal !== null) {
-            result = fmtNum(prevVal);
-            ANS = prevVal;
+            result = fmt(prevVal);
+            ans = prevVal;
             saveAns();
-            history.push(expression + " = " + result);
-            if (history.length > 9) history.shift();
-            expression = "";    // conta nova: digito comeca do zero, operador encadeia o ANS
-        } else if (expression === "") {
-            result = fmtNum(ANS);       // "=" vazio mostra o ultimo resultado
+            hist.unshift({ e: pretty(expr), r: result });
+            if (hist.length > MAXH) hist.pop();
+            saveHist();
+            expr = "";   // conta nova: digito comeca do zero, operador encadeia o ANS
+        } else if (!expr) {
+            result = fmt(ans);   // "=" vazio devolve o ultimo resultado
         } else {
             result = "erro";
         }
+    } else {
+        // comecar por operador encadeia no resultado anterior (ex.: "+5"):
+        // a conta recem-fechada no "=" manda (0 tambem encadeia); sem ela o
+        // ANS responde, e ANS 0 (primeira conta) nao encadeia nada
+        if (t === "o" && !expr) {
+            var base = result !== "" && result !== "erro" ? result
+                     : (ans !== 0 ? fmt(ans) : "");
+            if (base) expr = base + ins;
+        } else {
+            expr += ins;
+        }
+        result = "";
     }
     recompute();
 }
 
-// ---- laco: o A.run fica com o frame; tap no botao chama a logica ---------------
-function keyColors(b) {
-    var T = A.T;
-    if (b.type === "eq") return { color: T.accent, textColor: T.onAccent };
-    if (b.type === "op") return { color: T.raised, textColor: T.accent };
-    if (b.type === "clear" || b.type === "del") return { color: T.raised, textColor: T.warn };
-    return { color: T.card, textColor: T.text };
+function useVal(v) {
+    if (/[0-9)]$/.test(expr)) expr += "*";   // nao cola dois numeros
+    expr += String(v);
+    result = "";
+    recompute();
+    UI.invalidate();
+}
+
+// ---- sheets: 1 historico, 2 tema ---------------------------------------------
+var shKind = 0, shOpen = false, shUntil = 0;
+function openSheet(k) { shKind = k; shOpen = true; UI.invalidate(); }
+function closeSheet() { shOpen = false; shUntil = System.millis() + 260; UI.invalidate(); }
+
+function histSheet(c) {
+    return A.widgets.sheet("calc-hist",
+        { open: shOpen, full: c.full && shOpen, h: 228, title: "Histórico" },
+        function (r) {
+            var bg = r.bg, tp = UI.touch();
+            if (!hist.length) {
+                UI.text("Nenhuma conta ainda.", r.x, r.y + 8,
+                        { role: "caption", color: T.textDim, bg: bg, w: r.w });
+            }
+            var n = Math.min(hist.length, SHOWH);
+            for (var i = 0; i < n; i++) {
+                var y = r.y + 2 + i * 32, h = hist[i];
+                A.style.divider(r.x, y + 29, r.w);
+                UI.text(tail(h.e, "body", r.w - 88), r.x, y + 2,
+                        { role: "body", color: T.text, bg: bg, w: r.w - 88, lines: 1 });
+                UI.text(tail(h.r, "title", 78), r.x + r.w, y + 2,
+                        { role: "title", align: "right", color: T.accent, bg: bg, w: 78 });
+                // a linha so age com o sheet aberto (na saida ele so desliza)
+                if (shOpen && tp.tap && tp.y >= y && tp.y <= y + 30 &&
+                    tp.x >= r.x && tp.x <= r.x + r.w) {
+                    useVal(h.r);
+                    closeSheet();
+                }
+            }
+            var clr = A.style.button("Limpar histórico", r.x, r.y + 136, r.w, 34,
+                                     { variant: "secondary", textColor: T.warn });
+            if (shOpen && clr) {
+                hist = [];
+                saveHist();
+                UI.invalidate();
+            }
+        });
+}
+
+function themeSheet(c) {
+    return A.widgets.sheet("calc-theme",
+        { open: shOpen, full: c.full && shOpen, h: 224, title: "Tema" },
+        function (r) {
+            for (var i = 0; i < 5; i++) {
+                var on = i === 0 ? preset === "" : preset === PRESETS[i - 1];
+                var hit = A.style.button(PNAMES[i] + (on ? "  ·  atual" : ""),
+                                         r.x, r.y + i * 34, r.w, 30,
+                                         { variant: on ? "primary" : "secondary" });
+                if (shOpen && hit) {
+                    preset = i === 0 ? "" : PRESETS[i - 1];
+                    A.style.preset(preset || "soft");
+                    try { Storage.set("preset", preset); } catch (e) { /* sem nvs */ }
+                    closeSheet();
+                }
+            }
+        });
+}
+
+// ---- teclado ----------------------------------------------------------------
+// [rotulo, tipo, o que insere]
+var KEYS = [
+    ["C", "c", ""],   ["(", "i", "("], [")", "i", ")"], ["÷", "o", "/"],
+    ["7", "d", "7"],  ["8", "d", "8"], ["9", "d", "9"], ["×", "o", "*"],
+    ["4", "d", "4"],  ["5", "d", "5"], ["6", "d", "6"], ["-", "o", "-"],
+    ["1", "d", "1"],  ["2", "d", "2"], ["3", "d", "3"], ["+", "o", "+"],
+    ["DEL", "x", ""], ["0", "d", "0"], [".", "d", "."], ["=", "=", ""]
+];
+
+function keyOpt(k) {
+    var t = k[1];
+    if (t === "=") return { variant: "primary", role: "title" };
+    if (t === "d") return { variant: "secondary", role: "title" };
+    if (t === "o" || t === "i")
+        return { variant: "secondary", role: "title", textColor: T.accent };
+    return { variant: "secondary", role: t === "x" ? "body" : "title",
+             textColor: T.warn };
+}
+
+// ---- visor ------------------------------------------------------------------
+function visor(c) {
+    A.style.card(LX, CARD_Y, LW, CARD_H, { full: c.full, draw: function (r) {
+        var bg = r.bg;
+        // chip do ANS (desenhado no frame cheio; o texto tem slot proprio)
+        if (c.full) {
+            System.fillRoundRect(CHIP_X, r.y - 2, CHIP_W, 20, 10, T.raised);
+            System.drawRoundRect(CHIP_X, r.y - 2, CHIP_W, 20, 10, T.stroke);
+        }
+        // ultimas contas
+        UI.text(hist.length ? tail(hist[0].e, "caption", HIW) : "pronto",
+                r.x, r.y, { role: "caption", color: T.textDim, bg: bg, w: HIW, id: "h0" });
+        if (hist.length > 1) {
+            UI.text(tail(hist[1].e, "caption", HIW), r.x, r.y + 11,
+                    { role: "caption", color: T.textDim, bg: bg, w: HIW, id: "h1" });
+        }
+        UI.text("ANS " + fmt(ans), CHIP_X + CHIP_W / 2, r.y + 1,
+                { role: "caption", align: "center", color: T.accent, bg: T.raised,
+                  w: CHIP_W - 4, id: "ans" });
+        // expressao corrente (cauda visivel)
+        UI.text(tail(pretty(expr) || "0", "body", r.w), r.x, r.y + 24,
+                { role: "body", color: T.text, bg: bg, w: r.w, id: "expr" });
+        // resultado fechado (accent) ou previa viva (dim)
+        var big = "", col = T.accent;
+        if (result !== "") {
+            big = result;
+            col = result === "erro" ? T.err : T.accent;
+        } else if (prevVal !== null && expr) {
+            big = "= " + fmt(prevVal);
+            col = T.textDim;
+        }
+        UI.text(tail(big, "display", r.w), r.x + r.w, r.y + 44,
+                { role: "display", align: "right", color: col, bg: bg, w: r.w, id: "big" });
+    }});
+}
+
+// ---- tela -------------------------------------------------------------------
+function tela(c) {
+    // durante a saida do sheet a base e redesenhada sob o veu (senao o
+    // quadro fica limpo e a tela "pisca" preta); sem aceitar toque
+    var dead = shKind !== 0 && !shOpen;
+    var h = A.widgets.header("Calculadora", {
+        full: c.full,
+        actions: [{ icon: "menu", id: "hist" }, { icon: "gear", id: "theme" }]
+    });
+    if (!dead && h.back) return A.BACK;
+    if (!dead && h.action === "hist") { openSheet(1); return; }
+    if (!dead && h.action === "theme") { openSheet(2); return; }
+
+    visor(c);
+
+    // toque no chip do ANS insere o ultimo resultado
+    var tp = UI.touch();
+    if (!dead && tp.tap && tp.x >= CHIP_X && tp.x <= CHIP_X + CHIP_W &&
+        tp.y >= CARD_Y + 8 && tp.y <= CARD_Y + 28) {
+        useVal(fmt(ans));
+    }
+
+    for (var i = 0; i < KEYS.length; i++) {
+        var k = KEYS[i], col = i % 4, row = (i / 4) | 0;
+        if (A.style.button(k[0], LX + col * (KEY_W + KEY_GAP),
+                           KEY_Y + row * (KEY_H + KEY_GAP),
+                           KEY_W, KEY_H, keyOpt(k))) {
+            if (!dead) press(k[2], k[1]);
+        }
+    }
 }
 
 A.run({
-    main: function () {
-        drawDisplay();
-        for (var i = 0; i < buttons.length; i++) {
-            var b = buttons[i];
-            var p = btnRect(b);
-            var o = keyColors(b);
-            o.role = b.l.length > 1 ? "body" : "title";
-            if (UI.button(b.l, p.x, p.y, btnW, btnH, o)) handleButton(b);
+    main: function (c) {
+        // sheet e modal: desenha so ele (o veu cobre o resto)
+        if (shKind) {
+            if (!shOpen) tela(c);      // base sob a animacao de saida
+            var r = shKind === 1 ? histSheet(c) : themeSheet(c);
+            if (r === "close") closeSheet();
+            if (!shOpen && System.millis() > shUntil) {
+                shKind = 0;
+                UI.invalidate();
+            }
+            return;
         }
+        return tela(c);
     }
 }, "main", { fps: 30 });

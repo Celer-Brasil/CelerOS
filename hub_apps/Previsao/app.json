@@ -1,21 +1,22 @@
 {
   "name": "Previsao",
   "packageName": "celeros.previsao",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "author": "CelerOS",
   "description": "Previsão do tempo (Open-Meteo): temperatura e umidade agora, 4 dias à frente, cidades prontas ou lat/lon própria. Instala um plugin no watchface com o resumo do clima — toque na linha do relógio abre este app.",
   "type": "Utility",
   "category": "Utility",
   "api": 30,
-  "permissions": ["net", "fs"],
+  "permissions": [
+    "net",
+    "fs"
+  ],
   "deps": {
     "celeros.app": "^1.0.0",
     "celeros.app.net": "^1.0.0",
     "celeros.app.data": "^1.0.0",
-    "celeros.app.form": "^1.0.0",
-    "celeros.app.list": "^1.0.0",
     "celeros.app.text": "^1.0.0",
     "celeros.app.style": "^1.0.0"
   },
-  "changelog": "1.3.0 - UI kit 2.0: hero card no A.style.card (sombra no frame cheio, gradiente accentD->card preservado) e botoes no A.style.button; lista dos dias segue nativa. 1.2.0 - migrado para o CelerKit (deps celeros.app.*, API 30): busca com retry e sem try/catch espalhado (celeros.app.net), cache do clima e cidade no NVS via celeros.app.data, seletor de cidade com lat/lon validados no celeros.app.form, linhas dos dias cacheadas (celeros.app.list) e textos remotos saneados (celeros.app.text); acentos na UI (amanhã, SÁB, conexão), temperatura com °C e cidade escolhida no formato antigo preservada\n1.1.0 - visual novo com o toolkit UI (API 22): cartao com gradiente, lista dos proximos dias e seletor de cidade\n1.0.0 - primeira versao: Open-Meteo (current + 4 dias), cidades preset e lat/lon custom, cache no appData, fallback para o clima do celular (Gadgetbridge) e plugin de watchface auto-instalado (API 16)"
+  "changelog": "2.0.0 - UI 2.0 democrática (CYD-first): hero card recomposto (temperatura, condição, umidade, máx/mín) e tiles dos 4 dias com glifo do tempo desenhado (sol/chuva/neve/raio/nublado/nevoeiro); seletor de cidade em sheet inferior animado (8 cidades com acento + \"Outra\" com lat/lon validado), sem depender do form/list; refresh com A.net.retry e estados explícitos (sem Wi-Fi, sem resposta, cache de outro dia); quando o clima vem do celular (sem dias) o espaço dos tiles explica a origem; plugin do watchface mantido (appData/watchface.js, toque na linha abre o app) e em PT acentuado\n1.3.0 - UI kit 2.0: hero card no A.style.card (sombra no frame cheio, gradiente accentD->card preservado) e botoes no A.style.button; lista dos dias segue nativa. 1.2.0 - migrado para o CelerKit (deps celeros.app.*, API 30): busca com retry e sem try/catch espalhado (celeros.app.net), cache do clima e cidade no NVS via celeros.app.data, seletor de cidade com lat/lon validados no celeros.app.form, linhas dos dias cacheadas (celeros.app.list) e textos remotos saneados (celeros.app.text); acentos na UI (amanhã, SÁB, conexão), temperatura com °C e cidade escolhida no formato antigo preservada\n1.1.0 - visual novo com o toolkit UI (API 22): cartao com gradiente, lista dos proximos dias e seletor de cidade\n1.0.0 - primeira versao: Open-Meteo (current + 4 dias), cidades preset e lat/lon custom, cache no appData, fallback para o clima do celular (Gadgetbridge) e plugin de watchface auto-instalado (API 16)"
 }

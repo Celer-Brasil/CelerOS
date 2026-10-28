@@ -1,16 +1,18 @@
 {
   "name": "LED Controller",
   "packageName": "celeros.led",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "api": 30,
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
-  "description": "Controla LED/fita por GPIO: pino escolhivel, liga/desliga, brilho PWM e modo piscar. Requer permissao GPIO.",
+  "description": "Controla LED/fita por GPIO: pino escolhivel, liga/desliga, brilho PWM e modo piscar, com preview ao vivo. Requer permissao GPIO.",
   "deps": {
     "celeros.app": "^1.0.0",
     "celeros.app.form": "^1.0.0"
   },
-  "changelog": "1.4.0 - migrado para o CelerKit (deps celeros.app.*): o core fica com o laco e o tema, o form com o pedido validado do pino; tocar no GPIO digita o numero (sem caminhar de 2 a 48) e trocar de pino desliga o anterior\n1.3.0 - visual novo com o toolkit UI (API 22): seletor de pino, botao grande, slider de brilho e abas de modo\n1.2.1 - permissoes declaradas (gpio): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, pino escolhivel, brilho PWM e tres modos (fixo/pisca/rapido)",
-  "permissions": ["gpio"]
+  "changelog": "2.0.0 - UI 2.0 democrática (CYD-first): preview ao vivo (círculo que acende na proporção do brilho e pisca no ritmo do modo) e o formulário do A.form pintado pelo A.rows (pino, brilho, modo e liga/desliga sem sliders gigantes), com o valor do stepper cabendo no espaço (100% não encosta no +); tocar na linha do pino abre o teclado com número validado (2 a 48); placa sem GPIO abre e explica em vez de estourar, e sem LED onboard avisa que use um LED externo; textos do preview com slot próprio e bg do card; cores só do tema\n1.4.0 - migrado para o CelerKit (deps celeros.app.*): o core fica com o laco e o tema, o form com o pedido validado do pino; tocar no GPIO digita o numero (sem caminhar de 2 a 48) e trocar de pino desliga o anterior\n1.3.0 - visual novo com o toolkit UI (API 22): seletor de pino, botao grande, slider de brilho e abas de modo\n1.2.1 - permissoes declaradas (gpio): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, pino escolhivel, brilho PWM e tres modos (fixo/pisca/rapido)",
+  "permissions": [
+    "gpio"
+  ]
 }

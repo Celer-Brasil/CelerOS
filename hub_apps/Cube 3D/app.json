@@ -1,15 +1,17 @@
 {
   "name": "Cube 3D",
   "packageName": "celeros.cube3d",
-  "version": "1.4.0",
-  "api": 30,
+  "version": "2.0.0",
+  "api": 43,
   "permissions": [],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
-  "description": "Cubo 3D interativo: arraste para girar, modo solido ou so arestas e contador de FPS. Renderizador por fatias sem flicker.",
+  "description": "Cubo 3D interativo: arraste para girar, pinca para aproximar, modo solido ou so arestas e contador de FPS. Canvas em A.custom com cores do tema.",
   "deps": {
-    "celeros.app": "^1.0.0"
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0"
   },
-  "changelog": "1.4.0 - casco migrado para o CelerKit (dep celeros.app, API 30): menu e cubo viram telas do A.run (a pilha de telas substitui o laco manual e os estados); o render didatico (vertices/faces/projecao/sprites) segue intacto\n1.3.0 - menu novo com o toolkit UI (API 22): abas solido/arestas e botao nativo\n1.2.1 - permissoes declaradas (nenhuma): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR"
+  "changelog": "2.0.0 - UI kit 2.0 e multitoque: arraste gira, pinca aproxima (System.getTouches, uma leitura por quadro), toque no cubo ou no chip troca solido/arestas, FPS no header e canvas desenhado em A.custom (so o retangulo do cubo repinta; UI.custom nativo nas S3); cores e chip no tema; o menu de duas telas virou uma tela so; segue sem PSRAM\n1.4.0 - casco migrado para o CelerKit (dep celeros.app, API 30): menu e cubo viram telas do A.run (a pilha de telas substitui o laco manual e os estados); o render didatico (vertices/faces/projecao/sprites) segue intacto\n1.3.0 - menu novo com o toolkit UI (API 22): abas solido/arestas e botao nativo\n1.2.1 - permissoes declaradas (nenhuma): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo arestas, FPS ao vivo e menu PT-BR"
 }

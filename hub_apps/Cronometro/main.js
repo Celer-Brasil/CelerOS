@@ -1,72 +1,67 @@
-// Cronometro — centesimos, voltas e intervalos. ES5 puro (Duktape).
-// Migrado para o CelerKit: o core celeros.app fica dono do frame (A.run)
-// e cacheia tema/layout; celeros.app.fmt empresta o pad2 do sistema. O
-// formato de relogio com centesimos (MM:SS.CC) e especifico do cronometro —
-// o A.fmt.dur do kit nao tem essa precisao, entao se monta aqui com o pad2.
+// CelerOS Cronometro — centesimos, voltas e total de cada intervalo no
+// CelerKit UI 2.0: status em pill, tempo grande com anel de progresso no
+// A.widgets.ring, voltas em lista rica (parcial + total, melhor/pior
+// destacadas) e botoes grandes no A.style. Tudo no tema; sem PSRAM.
+// ES5 (Duktape).
 
 var A = require("celeros.app");
-require("celeros.app.fmt");
+require("celeros.app.style");
+require("celeros.app.icons");
+require("celeros.app.widgets");
+A.init();
 
-// base de tempo: System.millis() acumulado; o tempo e as voltas sao
-// UI.text — so o que muda vai ao vidro
+var T = A.style.T;
+
+// layout na area segura (watch redondo encolhe a largura/rodape); no
+// retangular os valores sao os mesmos de sempre (8/84/160, y=252)
+var LX = A.L.x, LW = A.L.w, TOP = A.L.top, BOT = A.L.bottom;
+var BW = Math.floor((LW - 12) / 3);
+var BX0 = LX, BX1 = LX + BW + 6, BX2 = LX + 2 * (BW + 6);
+var BY = BOT - 60;
+
+// ---- estado ----------------------------------------------------------------
 var running = false;
 var accMs = 0;          // tempo acumulado dos intervalos parados
-var startMs = 0;        // System.millis() do ultimo start
-var laps = [];          // totais no momento de cada volta
+var startMs = 0;        // millis do ultimo start
+var laps = [];          // total no momento de cada volta
+var ringKey = -999;
 
-function elapsed() {
-    return accMs + (running ? (System.millis() - startMs) : 0);
-}
+function elapsed() { return accMs + (running ? System.millis() - startMs : 0); }
 
-// cronometro com centesimos: "MM:SS.CC"
+function pad2(n) { return (n < 10 ? "0" : "") + n; }
+// "MM:SS.CC" — centesimos que o A.fmt.dur nao tem
 function swFmt(ms) {
-    var cs = Math.floor(ms / 10) % 100;
-    var s = Math.floor(ms / 1000) % 60;
-    var m = Math.floor(ms / 60000);
-    return A.fmt.pad2(m) + ":" + A.fmt.pad2(s) + "." + A.fmt.pad2(cs);
+    return pad2(Math.floor(ms / 60000)) + ":" + pad2(Math.floor(ms / 1000) % 60) +
+           "." + pad2(Math.floor(ms / 10) % 100);
 }
 
-// Volta | Iniciar | Zerar (coordenadas fixas: o teste do js_harness toca aqui)
-var BTN_Y = 252, BTN_H = 48, BTN_W = 70, BTN_GAP = 6;
-var BX = [8, 8 + BTN_W + BTN_GAP, 8 + 2 * (BTN_W + BTN_GAP)];
-
-// ------------------------------------------------------------- desenho -----
-function drawLaps() {
-    var T = A.T;
-    UI.card(A.L.x, 122, A.L.w, BTN_Y - 130);
-    // melhor/pior split (so faz sentido com 3+ voltas)
-    var bestI = -1, worstI = -1, best = 1e15, worst = -1;
+// ---- voltas (lista nativa; reconstroi so quando muda) -----------------------
+var lapRows = null, lapStamp = -1;
+function buildLaps() {
+    if (lapStamp === laps.length && lapRows) return lapRows;
+    lapStamp = laps.length;
+    var rows = [], bestI = -1, worstI = -1, best = 1e15, worst = -1;
     for (var k = 1; k < laps.length; k++) {
         var sp = laps[k] - laps[k - 1];
         if (sp < best) { best = sp; bestI = k; }
         if (sp > worst) { worst = sp; worstI = k; }
     }
-    var vazio = !laps.length;
-    var start = Math.max(0, laps.length - 4);
-    var rx = A.L.x + A.L.w - 12;
-    for (var row = 0; row < 4; row++) {
-        var i = laps.length - 1 - row;
-        var y = 132 + row * 28;
-        if (i < start) {
-            UI.text(vazio ? "as voltas aparecem aqui" : "",
-                    vazio ? A.L.cx : A.L.x + 12, y + 4,
-                    { role: "caption", align: vazio ? "center" : "left",
-                      color: T.textDim, id: 10 + row });
-            UI.text("", rx, y, { align: "right", id: 20 + row });
-            continue;
-        }
+    for (var i = laps.length - 1; i >= 0; i--) {
         var total = laps[i];
         var split = total - (i > 0 ? laps[i - 1] : 0);
-        var col = T.text;
-        if (laps.length >= 3 && i === bestI && i > 0) col = T.ok;
-        else if (laps.length >= 3 && i === worstI && i > 0) col = T.err;
-        UI.text("V" + (i + 1) + "  +" + swFmt(split), A.L.x + 12, y, { color: col, id: 10 + row });
-        UI.text(swFmt(total), rx, y, { align: "right", color: T.textDim, id: 20 + row });
+        var col = T.textDim;
+        if (laps.length >= 3 && i > 0) {
+            if (i === bestI) col = T.ok;
+            else if (i === worstI) col = T.err;
+        }
+        rows.push({ label: "V" + (i + 1), sub: "+" + swFmt(split),
+                    right: swFmt(total), rightColor: col });
     }
-    UI.cardEnd();
+    lapRows = rows;
+    return rows;
 }
 
-// -------------------------------------------------------------- acoes ------
+// ---- acoes -----------------------------------------------------------------
 function toggleRun() {
     if (running) {
         accMs = elapsed();
@@ -75,39 +70,76 @@ function toggleRun() {
         startMs = System.millis();
         running = true;
     }
+    UI.invalidate();
 }
-
-function lap() {
+function addLap() {
     if (!running) return;
     laps.push(elapsed());
+    UI.invalidate();
 }
-
 function resetAll() {
     running = false;
     accMs = 0;
     laps = [];
+    UI.invalidate();
 }
 
-// ------------------------------------------------------------------ main ---
+// ---- tela ------------------------------------------------------------------
 A.run({
-    main: function () {
-        var T = A.T;
-        // estado + tempo grande (centesimos ao vivo: so o texto muda)
-        UI.badge(running ? "rodando" : "parado", 12, 14,
+    main: function (c) {
+        var ms = elapsed();
+
+        var h = A.widgets.header("Cronômetro", { full: c.full });
+        if (h.back) return A.BACK;
+
+        UI.badge(running ? "rodando" : "parado", LX + 4, TOP - 2,
                  { color: running ? T.ok : T.raised,
                    textColor: running ? T.onAccent : T.textDim });
-        UI.text("voltas: " + laps.length, A.L.x + A.L.w - 12, 16,
-                { role: "caption", align: "right", color: T.textDim });
-        UI.text(swFmt(elapsed()), A.L.cx, 56, { role: "display", align: "center" });
-        // split da volta em curso (so quando ha cronometro andando e volta aberta)
-        if (running && laps.length > 0) {
-            UI.text("volta +" + swFmt(elapsed() - laps[laps.length - 1]), A.L.cx, 92,
-                    { role: "caption", align: "center", color: T.textDim });
-        }
-        drawLaps();
+        UI.text("voltas: " + laps.length, LX + LW - 12, 49,
+                { role: "caption", align: "right", color: T.textDim, id: "nl" });
 
-        if (UI.button("Volta", BX[0], BTN_Y, BTN_W, BTN_H, { style: "ghost", disabled: !running })) lap();
-        if (UI.button(running ? "Pausar" : "Iniciar", BX[1], BTN_Y, BTN_W, BTN_H)) toggleRun();
-        if (UI.button("Zerar", BX[2], BTN_Y, BTN_W, BTN_H, { style: "ghost" })) resetAll();
+        // tempo grande + anel do minuto corrente
+        A.style.card(LX, TOP + 22, LW, 78, { full: c.full, r: 12, draw: function () {
+            var key = Math.floor((ms % 60000) / 50) + (running ? 100000 : 0);
+            if (c.full || key !== ringKey) {
+                ringKey = key;
+                A.widgets.ring(LX + 44, TOP + 61, 27, (ms % 60000) / 60000,
+                               { th: 4, color: running ? T.ok : T.raised });
+            }
+            UI.text(pad2(Math.floor(ms / 60000)) + ":" +
+                    pad2(Math.floor(ms / 1000) % 60), LX + 82, 86,
+                    { role: "display", color: T.text, id: "t" });
+            UI.text("." + pad2(Math.floor(ms / 10) % 100), LX + 82, 106,
+                    { role: "title", color: T.accent, id: "cs" });
+            if (running && laps.length) {
+                // "parcial" curto: "volta em curso +MM:SS.CC" nao cabia nos
+                // 132px ao lado do anel e o UI.text cortava para ".."
+                UI.text("parcial +" + swFmt(ms - laps[laps.length - 1]),
+                        LX + 82, 123, { role: "caption", color: T.textDim,
+                                       w: LW - 92, lines: 1, id: "cur" });
+            }
+        }});
+
+        // voltas
+        var rows = buildLaps();
+        if (!rows.length) {
+            A.style.card(LX, TOP + 106, LW, BY - 6 - (TOP + 106), { full: c.full, r: 12, draw: function (r) {
+                UI.text("as voltas aparecem aqui", r.x + r.w / 2, r.y + 34,
+                        { role: "caption", align: "center", color: T.textDim,
+                          w: r.w, id: "vaz" });
+            }});
+        } else {
+            UI.list("crono-voltas", LX, TOP + 106, LW, BY - 6 - (TOP + 106), rows, { rowH: 30 });
+        }
+
+        // Volta | Iniciar/Pausar | Zerar (coordenadas do teste do js_harness)
+        if (A.style.button("Volta", BX0, BY, BW, 48, { variant: "ghost", disabled: !running }))
+            addLap();
+        if (A.style.button(running ? "Pausar" : "Iniciar", BX1, BY, BW, 48,
+                           { color: running ? T.warn : T.accent,
+                             textColor: T.onAccent }))
+            toggleRun();
+        if (A.style.button("Zerar", BX2, BY, BW, 48, { variant: "ghost" }))
+            resetAll();
     }
 }, "main", { fps: 30 });

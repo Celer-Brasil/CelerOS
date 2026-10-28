@@ -1,22 +1,20 @@
 {
   "name": "Tic Tac Toe",
   "packageName": "celeros.tictactoe",
-  "version": "1.6.1",
+  "version": "2.0.0",
   "api": 30,
+  "topbar": false,
   "permissions": [],
-  "requires": [
-    "psram"
-  ],
   "author": "CelerOS",
   "type": "Game",
   "category": "Arcade",
   "description": "Jogo da velha: 1 jogador com tres niveis (minimax no impossivel) ou 2 jogadores no mesmo aparelho. Placar salvo e linha de vitoria riscada.",
-  "changelog": "1.6.1 - range do celeros.game atualizado para ^1.4.2 (versao exigida pelo resto da familia; nenhum codigo mudou)\n1.6.0 - fluxo e turno em maquinas de estado (celeros.game.fsm 1.1): titulo, ajuda, menu, jogo, anuncio e fim com enter/update/draw/after, pausa empilhada por cima com o tabuleiro visivel e turno jogador/bot separado; som e efeitos agora ouvem os eventos mark/win/draw/score (celeros.game.events 1.1) em vez de ficarem soldados no fluxo, e vitoria que melhora o placar mostra o toast \"NOVO RECORDE!\" (celeros.game.ui 1.2); o bot continua jogando pelo E.after, o placar segue no NVS e o score.txt antigo segue como migracao opcional\n1.5.0 - adota a familia CelerGame completa com celeros.game.ui 1.0.1: tela de titulo com recorde de vitorias e \"Como jogar\" em dialogo datilografado, menu vertical para modo (1 jogador / 2 jogadores) e dificuldade, botao de pausa durante a partida com Continuar/Recomecar/Sair, fim de jogo com o tabuleiro visivel e menu \"De novo\"/\"Menu\", anuncio de VITORIA/DERROTA/EMPATE com flash, anel e texto na linha vencedora, e sons de marca/vitoria/derrota/empate na sfxTable do core; bot segue jogando pelo E.after e placar segue no NVS; pede psram (pacote + dep ui passa do teto de 48 KB da CYD)\n1.4.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.4.0 - portado para a familia CelerGame COM melhorias: estouro nas celulas da linha vencedora + flash no empate/derrota, fim de jogo com tela propria (transicao iris) no lugar do dialogo nativo, bot joga pelo E.after (o loop nao bloqueia mais 250 ms \"pensando\"), abas do menu viram seletor segmentado da engine, placar migrado do txt para o NVS\n1.3.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.3.0 - visual novo com o toolkit UI (API 22): menu com abas de modo/nivel, marcas suavizadas e dialogo de fim de jogo\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons",
+  "changelog": "2.0.0 - sem engine, roda na CYD (sem PSRAM): reescrito sem a CelerGame; tabuleiro pintado com System.* sobre A.custom (ou frame total por assinatura), menu com cards e seletor segmentado do CelerKit UI 2.0, placar no Storage pelo A.data, bot por tempo (millis, sem timer extra), linha de vitoria, anel e particulas no fim; mantem 1 jogador com minimax no Impossivel, 2 jogadores, placar salvo e pausa\n1.6.1 - range do celeros.game atualizado para ^1.4.2 (versao exigida pelo resto da familia; nenhum codigo mudou)\n1.6.0 - fluxo e turno em maquinas de estado (celeros.game.fsm 1.1): titulo, ajuda, menu, jogo, anuncio e fim com enter/update/draw/after, pausa empilhada por cima com o tabuleiro visivel e turno jogador/bot separado; som e efeitos agora ouvem os eventos mark/win/draw/score (celeros.game.events 1.1) em vez de ficarem soldados no fluxo, e vitoria que melhora o placar mostra o toast \"NOVO RECORDE!\" (celeros.game.ui 1.2); o bot continua jogando pelo E.after, o placar segue no NVS e o score.txt antigo segue como migracao opcional\n1.5.0 - adota a familia CelerGame completa com celeros.game.ui 1.0.1: tela de titulo com recorde de vitorias e \"Como jogar\" em dialogo datilografado, menu vertical para modo (1 jogador / 2 jogadores) e dificuldade, botao de pausa durante a partida com Continuar/Recomecar/Sair, fim de jogo com o tabuleiro visivel e menu \"De novo\"/\"Menu\", anuncio de VITORIA/DERROTA/EMPATE com flash, anel e texto na linha vencedora, e sons de marca/vitoria/derrota/empate na sfxTable do core; bot segue jogando pelo E.after e placar segue no NVS; pede psram (pacote + dep ui passa do teto de 48 KB da CYD)\n1.4.1 - sem permissao \"fs\": o placar vive no NVS do core desde o porte CelerGame e o FS so entrava na migracao 1x do arquivo da versao anterior (agora opcional); primeiro toque abre o jogo direto, sem o dialogo de consentimento do launcher\n1.4.0 - portado para a familia CelerGame COM melhorias: estouro nas celulas da linha vencedora + flash no empate/derrota, fim de jogo com tela propria (transicao iris) no lugar do dialogo nativo, bot joga pelo E.after (o loop nao bloqueia mais 250 ms \"pensando\"), abas do menu viram seletor segmentado da engine, placar migrado do txt para o NVS\n1.3.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.3.0 - visual novo com o toolkit UI (API 22): menu com abas de modo/nivel, marcas suavizadas e dialogo de fim de jogo\n1.2.1 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.0 - tema CelerOS, modo 2 jogadores, placar persistido, linha de vitoria e sons",
   "deps": {
-    "celeros.game": "^1.4.0",
-    "celeros.game.fx": "^1.4.0",
-    "celeros.game.ui": "^1.2.0",
-    "celeros.game.fsm": "^1.1.0",
-    "celeros.game.events": "^1.1.0"
+    "celeros.app": "^1.1.0",
+    "celeros.app.style": "^1.0.1",
+    "celeros.app.icons": "^1.1.0",
+    "celeros.app.widgets": "^1.0.0",
+    "celeros.app.data": "^1.0.0"
   }
 }

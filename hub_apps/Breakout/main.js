@@ -1,127 +1,107 @@
-// Breakout — quebre os tijolos, arraste a raquete. Porte CelerGame:
-// a bola x tijolos/raquete usa E.collide (sweep anti-tunel + rect + push,
-// normal em E.collide.normal), o fluxo vive numa E.fsm
-// (serve/play/levelup/over) e o jogo avisa por E.events
-// ("brick"/"score"/"life"/"level"), com E.ui.toast para nivel/recorde.
-// A camada suja E.dirty continua dona do campo: o painter repinta a caixa
-// e o fundo AI (ai_bg.png) entra por blitSprite, so na caixa pedida.
+// Breakout — arraste a raquete, quebre os tijolos, avance de nivel. Sem a
+// engine CelerGame: CelerKit (app/style/icons/widgets/data) + o campo pintado
+// com System.* (fundo/tijolos numa area do app e bola/raquete/estouros
+// desenhados por cima com apagamento local), entao roda tambem na CYD (sem
+// PSRAM). Colisao propria com subpassos (sem tunel), vidas, vida extra a
+// cada 500 pontos, recorde no Storage (A.data) e overlays do A.style.
 // ES5 puro (Duktape).
 
-var E = require("celeros.game");       // familia CelerGame: core + modulos
-require("celeros.game.spr");
-require("celeros.game.fx");
-require("celeros.game.ui");
-require("celeros.game.collide");
-require("celeros.game.fsm");
-require("celeros.game.events");
+var A = require("celeros.app");
+require("celeros.app.style");
+require("celeros.app.icons");
+require("celeros.app.widgets");
+require("celeros.app.data");
 
-E.init({ dir: "Breakout", fps: 60, save: "breakout.",
-         bases: ["/local/apps/Breakout/", "/sd/apps/Breakout/"] });
-var T = E.theme, W = E.W, H = E.H;
-var C = E.collide;
+A.init();
+var T = A.style.preset("soft");
+var S = System;
+var L = A.L;
 
-var FX = 4, FY = 44;                 // canto do campo
-var FW = W - 2 * FX, FH = H - FY - 2;
-var BRICK_COLS = 8, BRICK_ROWS = 5;
-var BRICK_W = (FW - 16) / BRICK_COLS;   // 27
-var BRICK_H = 12;
-var BRICK_TOP = FY + 10;
-var PADDLE_W = 48, PADDLE_H = 8, PADDLE_Y = H - 22;
+var FX = L.x, FW = L.w, FY = 42;
+var PADDLE_W = 48, PADDLE_H = 8;
+var PADDLE_Y = L.bottom - 20;
 var BALL_R = 3;
-
+var BRICK_COLS = 8, BRICK_ROWS = 5;
+var BRICK_W = Math.floor((FW - 16) / BRICK_COLS);
+var BRICK_H = 12;
+var BRICK_X = FX + 8;
+var BRICK_Y = FY + 10;
 var ROW_COLORS = [T.err, T.warn, T.ok, T.accent, T.accentD];
-// tom escuro do gradiente de cada linha (o painter repinta tijolos a cada
-// caixa suja: mixColor por tijolo por caixa era chamada nativa a toa)
 var ROW_DARK = [];
-for (var rd = 0; rd < ROW_COLORS.length; rd++) ROW_DARK.push(System.mixColor(ROW_COLORS[rd], 0, 35));
 var ROW_POINTS = [50, 40, 30, 20, 10];
+for (var ri = 0; ri < ROW_COLORS.length; ri++) {
+    ROW_DARK.push(S.mixColor(ROW_COLORS[ri], 0x0000, 35));
+}
 
-// ------------------------------------------------------------- fundo AI ----
-// ai_bg.png (256x256, piso arcade) vive num slot de sheet; o stamp escala
-// uma unica vez para um sprite 240x240, e o painter blita SO a caixa suja.
-// Sem slot/clip/blitSprite (firmware velho) fica o fundo chapado de antes.
-var BG_S = E.W / 256;
-var BG = null;
+var hi = 0;
 (function () {
-    if (!E.spr || typeof E.spr.sheet !== "function") return;
-    try {
-        var slots = E.spr.sheet("aibg", {
-            file: "ai_bg", w: 256, h: 256,
-            regions: { bg: [0, 0, 256, 256] }
-        });
-        if (!slots || !slots.bg || !slots.bg.id) return;
-        if (!E.caps.sprites || !E.caps.clip ||
-            typeof System.createSprite !== "function" ||
-            typeof System.blitSprite !== "function") return;
-        var sz = Math.round(256 * BG_S);
-        var id = System.createSprite(sz, sz);
-        if (!id) return;
-        System.useSprite(id);
-        System.fillScreen(0x0000);
-        var ok = E.spr.stamp("bg", 0, 0, { scale: BG_S, key: null });
-        System.useSprite(0);
-        if (!ok) { System.deleteSprite(id); return; }
-        BG = { id: id, w: sz, h: sz };
-    } catch (e) {
-        BG = null;
+    var h = A.data.loadState("hi", 0);
+    hi = (typeof h === "number" && h > 0) ? Math.floor(h) : 0;
+    // migracao 1x do recorde da versao CelerGame
+    if (!hi) {
+        var oldHi = A.data.loadState("breakout.hi", 0);
+        if (typeof oldHi === "number" && oldHi > 0) {
+            hi = Math.floor(oldHi);
+            A.data.saveState("hi", hi);
+        }
     }
 })();
 
-// sons do jogo na tabela do core: paddle/brick/lose/win/record
-// (E.audio.sfx escolhe a tabela; caps.speaker falso = no-op em placa muda)
-E.audio.sfxTable.paddle = [240, 45];
-E.audio.sfxTable.brick = [[740, 30], [990, 45]];
-E.audio.sfxTable.lose = [[320, 90], [200, 160]];
-E.audio.sfxTable.win = [[523, 80], [659, 80], [784, 150]];
-E.audio.sfxTable.record = [[659, 60], [784, 60], [988, 60], [1319, 180]];
+var bricks = [], pops = [];
+var score = 0, lives = 3, level = 1, speed = 130, nextLife = 500;
+var paddleX = 0;
+var ball = { x: 0, y: 0, vx: 0, vy: 0 };
+var serving = true, over = false, paused = false, showResult = false;
+var overAt = 0, flashAt = 0, levelAt = 0, novoRec = false, hiBase = 0;
+var fieldVer = 1, nowMs = 0, fullFrame = false;
+var lastNow = 0, wantNew = false;
+var prevBall = { x: -1, y: -1 }, prevPad = -1;
+var sigs = {};
 
-// recorde: NVS do core — o valor do arquivo da 1.2 entra como migacao 1x
-// (opcional: sem a perm "fs" o runtime nao registra o objeto FS)
-var hi = E.save.num("hi", 0);
-var FSx = typeof FS !== "undefined" ? FS : null;
-if (FSx) {
-    try {
-        var raw = FSx.readTextFile("/local/config_breakout_hi.txt");
-        var old = raw ? parseInt(raw, 10) : 0;
-        if (!isNaN(old) && old > hi) { hi = old; E.save.set("hi", old); }
-    } catch (e) {}
+function sfx(mel) {
+    if (typeof System.sfx === "function") System.sfx(mel);
 }
 
-// ------------------------------------------------------------- estado ------
-var bricks, score, lives, level, speed;
-var paddleX, ball;
-var nextLife = 500;                       // vida extra a cada 500 pts (max 5)
-var novoRec = false;
-var paused = false;                       // pausa empilhada por cima (E.push)
-var overAct = null;                       // menu de fim (acao do draw)
-var PB = { x: W - 28, y: 3, w: 22, h: 18 };   // botao de pausa no HUD
-var help = null;                          // dialogo retido do "Como jogar"
-var HELP_TXT = "Arraste o dedo para mover a raquete. Toque para lançar a bola. " +
-               "Quebre todos os tijolos para subir de nível. A cada 500 pontos " +
-               "você ganha uma vida. Não deixe a bola cair!";
+// ---------------------------------------------------------- area pintada ----
+function paint(id, x, y, w, h, sig, draw, bg) {
+    if (bg === undefined) bg = T.bg;
+    if (A.custom) return A.custom(id, x, y, w, h, sig, draw, { bg: bg });
+    var k = "p" + id;
+    if (!fullFrame && sigs[k] === sig) return false;
+    sigs[k] = sig;
+    if (!fullFrame) S.fillRect(x, y, w, h, bg);
+    draw(x, y, w, h);
+    return true;
+}
 
-var game;                                 // E.fsm do fluxo do jogo
-
-// rastro curto da bola: parado/serve/pausa nao semeia (follow devolve null)
-var trail = E.fx.trail(function () {
-    if (!game || !game.is("play") || paused) return null;
-    return { x: ball.x, y: ball.y };
-}, { rate: 30, life: 0.35, size: 2, color: T.textDim });
-trail.stop();
-
-// ------------------------------------------------------------- mundo -------
+// ------------------------------------------------------------------ estado ---
 function buildBricks() {
-    bricks = [];
+    bricks.length = 0;
     for (var r = 0; r < BRICK_ROWS; r++) {
         for (var c = 0; c < BRICK_COLS; c++) {
-            bricks.push({ x: FX + 8 + c * BRICK_W, y: BRICK_TOP + r * (BRICK_H + 3),
-                          r: r, alive: true });
+            bricks.push({
+                x: BRICK_X + c * BRICK_W,
+                y: BRICK_Y + r * (BRICK_H + 3),
+                r: r, alive: true
+            });
         }
     }
+    fieldVer++;
 }
 
 function resetBall() {
-    ball = { x: paddleX + PADDLE_W / 2, y: PADDLE_Y - BALL_R - 1, dx: 0, dy: 0 };
+    serving = true;
+    ball.x = paddleX + PADDLE_W / 2;
+    ball.y = PADDLE_Y - BALL_R - 1;
+    ball.vx = 0;
+    ball.vy = 0;
+}
+
+function clampPaddle(x) {
+    var nx = x - PADDLE_W / 2;
+    if (nx < FX + 3) nx = FX + 3;
+    if (nx > FX + FW - PADDLE_W - 3) nx = FX + FW - PADDLE_W - 3;
+    paddleX = nx;
 }
 
 function newGame() {
@@ -131,17 +111,43 @@ function newGame() {
     speed = 130;
     nextLife = 500;
     novoRec = false;
-    paddleX = (W - PADDLE_W) / 2;
+    over = false;
+    paused = false;
+    showResult = false;
+    overAt = 0;
+    flashAt = 0;
+    levelAt = 0;
+    hiBase = hi;
+    pops.length = 0;
+    paddleX = FX + (FW - PADDLE_W) / 2;
     buildBricks();
-    game.go("serve", null, true);         // force: reentra mesmo ja em serve
+    resetBall();
+}
+
+function saveHi() {
+    if (score <= hi) return;
+    hi = score;
+    A.data.saveState("hi", hi);
+}
+
+function addScore(pts) {
+    score += pts;
+    if (score > hi) { hi = score; A.data.saveState("hi", hi); }
+    while (score >= nextLife && lives < 5) {
+        nextLife += 500;
+        lives++;
+    }
 }
 
 function launch() {
-    // angulo inicial levemente aleatorio para a direita/esquerda
-    var ang = (-60 - Math.random() * 60) * Math.PI / 180;   // para cima
-    if (Math.random() < 0.5) ang = -ang + Math.PI;
-    ball.dx = Math.cos(ang);
-    ball.dy = Math.sin(ang);
+    var ang = (Math.random() * 2 - 1) * 0.9;
+    if (ang > -0.25 && ang < 0.25) {
+        ang = (Math.random() < 0.5 ? -0.3 : 0.3);
+    }
+    ball.vx = Math.sin(ang);
+    ball.vy = -Math.cos(ang);
+    serving = false;
+    lastNow = nowMs;
 }
 
 function levelCleared() {
@@ -149,426 +155,418 @@ function levelCleared() {
     return true;
 }
 
-// ------------------------------------------------------- formas (collide) --
-// a bola e um circulo, mas o sweep da engine trabalha com AABB: a caixa
-// de 2r x 2r e a mesma que o jogador ve; raquete/tijolo sao retangulos.
-// Caixas em scratch (o passo testa 40 tijolos ate 12x por quadro a 60 fps:
-// um objeto novo por teste era GC constante no Duktape)
-var _ar = { x: 0, y: 0, w: BALL_R * 2, h: BALL_R * 2 };
-var _pr = { x: 0, y: 0, w: PADDLE_W, h: PADDLE_H };
-var _br = { x: 0, y: 0, w: BRICK_W - 2, h: BRICK_H };
-function ballRect() {
-    _ar.x = ball.x - BALL_R; _ar.y = ball.y - BALL_R;
-    return _ar;
-}
-
-function paddleRect() {
-    _pr.x = paddleX; _pr.y = PADDLE_Y;
-    return _pr;
-}
-
-function brickRect(b) { _br.x = b.x; _br.y = b.y; return _br; }
-
-// -------------------------------------------------------------- eventos ----
-// "brick": juice + som do tijolo quebrado (quem quebrou ja cuidou do resto)
-E.on("brick", function (b) {
-    var bc = brickRect(b);
-    E.fx.burst(bc.x + bc.w / 2, bc.y + bc.h / 2,
-               { n: 10, color: ROW_COLORS[b.r], speed: 80, life: 0.4, size: 2 });
-    E.fx.ring(bc.x + bc.w / 2, bc.y + bc.h / 2,
-              { r0: 4, speed: 160, color: ROW_COLORS[b.r], life: 0.35 });
-    E.fx.popText(bc.x + bc.w / 2, bc.y, "+" + ROW_POINTS[b.r],
-                 { color: ROW_COLORS[b.r], life: 0.6 });
-    E.audio.sfx("brick");
-});
-
-// "score": ponto entra e pode render vida extra (que dispara "life")
-E.on("score", function (pts) {
-    score += pts;
-    while (score >= nextLife && lives < 5) {
-        nextLife += 500;
-        E.emit("life", 1);
+function loseLife() {
+    lives--;
+    sfx([[320, 90], [200, 160]]);
+    flashAt = nowMs;
+    if (lives <= 0) {
+        over = true;
+        overAt = nowMs;
+        saveHi();
+        novoRec = (score > hiBase && score > 0);
+        if (novoRec) A.toast("NOVO RECORDE!", 1600);
+        serving = true;
+        resetBall();
+        UI.invalidate();
+    } else {
+        resetBall();
     }
-});
-
-// "life": delta de vidas; perder vida pisca e toca o som de queda
-E.on("life", function (d) {
-    lives += d;
-    if (d < 0) {
-        E.fx.flash(T.err, 200);
-        E.audio.sfx("lose");
-    }
-});
-
-// "level": aviso que some sozinho (ui 1.2) + som de fase
-E.on("level", function (lv) {
-    E.ui.toast("Nível " + lv + "!", { color: T.warn });
-    E.audio.sfx("win");
-});
-
-// ---------------------------------------------------------------- fsm ------
-function paddleBounce() {
-    ball.y = PADDLE_Y - BALL_R;
-    var rel = (ball.x - (paddleX + PADDLE_W / 2)) / (PADDLE_W / 2);  // -1..1
-    var ang = rel * 1.1;                                             // rad p/ vertical
-    var sp = Math.sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
-    ball.dx = sp * Math.sin(ang);
-    ball.dy = -Math.abs(sp * Math.cos(ang));
-    E.audio.sfx("paddle");
 }
 
 function breakBrick(b) {
     b.alive = false;
-    E.emit("brick", b);
-    E.emit("score", ROW_POINTS[b.r]);
-    if (levelCleared()) game.go("levelup");
+    addScore(ROW_POINTS[b.r]);
+    pops.push({ x: b.x, y: b.y, w: BRICK_W - 2, h: BRICK_H,
+                t0: nowMs, c: ROW_COLORS[b.r] });
+    if (pops.length > 6) pops.splice(0, pops.length - 6);
+    sfx([[740, 30], [990, 45]]);
+    fieldVer++;
 }
 
-function loseLife() {
-    E.emit("life", -1);
-    if (lives <= 0) {
-        game.go("over");
-        return;
-    }
-    game.go("serve");                     // serve.enter repoe a bola
+function checkLevel() {
+    if (!levelCleared()) return false;
+    level++;
+    speed += 20;
+    addScore(100);
+    levelAt = nowMs;
+    sfx([[523, 80], [659, 80], [784, 150]]);
+    buildBricks();
+    pops.length = 0;
+    resetBall();
+    return true;
 }
 
-// fisica (dt s): um passo por quadro com sweep; o pedaco restante do
-// deslocamento continua depois do rebote (2-3 contatos por quadro no max)
-function step(dt) {
-    if (!game.is("play")) return;
-    var remaining = speed * dt;
-    var guard = 0;
-    while (remaining > 0.001 && guard++ < 12 && game.is("play")) {
-        var vx = ball.dx * remaining, vy = ball.dy * remaining;
-        var ar = ballRect();
-        var bestT = 2.0, hit = null, hnx = 0, hny = 0, push = null;
+// ------------------------------------------------------------- fisica -------
+function stepPhysics(dt) {
+    if (serving || over) return;
+    var dist = speed * dt;
+    var n = Math.ceil(dist / 4);
+    if (n < 1) n = 1;
+    if (n > 12) n = 12;
+    var sdt = dt / n;
+    for (var s = 0; s < n; s++) {
+        ball.x += ball.vx * speed * sdt;
+        ball.y += ball.vy * speed * sdt;
 
-        // raquete: so conta descendo (como antes)
-        if (vy > 0) {
-            var pr = paddleRect();
-            var tp = C.sweep(ar, vx, vy, pr);
-            if (tp >= 0) {
-                if (C.normal.x || C.normal.y) {
-                    bestT = tp; hit = "paddle";
-                    hnx = C.normal.x; hny = C.normal.y;
-                }
-            } else if (C.rect(ar, pr)) {
-                bestT = 0; hit = "paddle";       // ja dentro: repoem no topo
-            }
+        // paredes do campo (a bola nunca cobre a moldura)
+        if (ball.x < FX + BALL_R + 2) {
+            ball.x = FX + BALL_R + 2;
+            ball.vx = Math.abs(ball.vx);
+        }
+        if (ball.x > FX + FW - BALL_R - 2) {
+            ball.x = FX + FW - BALL_R - 2;
+            ball.vx = -Math.abs(ball.vx);
+        }
+        if (ball.y < FY + BALL_R + 2) {
+            ball.y = FY + BALL_R + 2;
+            ball.vy = Math.abs(ball.vy);
         }
 
-        // tijolos: sweep pega o mais proximo do quadro; rect+push resolve
-        // o caso de ja estar sobreposto (spawn/teleporte/erro de ponto)
+        // raquete (so descendo)
+        if (ball.vy > 0 &&
+            ball.y + BALL_R >= PADDLE_Y &&
+            ball.y - BALL_R <= PADDLE_Y + PADDLE_H &&
+            ball.x + BALL_R >= paddleX &&
+            ball.x - BALL_R <= paddleX + PADDLE_W) {
+            ball.y = PADDLE_Y - BALL_R;
+            var rel = (ball.x - (paddleX + PADDLE_W / 2)) / (PADDLE_W / 2);
+            if (rel < -1) rel = -1;
+            if (rel > 1) rel = 1;
+            var ang = rel * 1.05;
+            ball.vx = Math.sin(ang);
+            ball.vy = -Math.abs(Math.cos(ang));
+            sfx([[240, 45]]);
+        }
+
+        // tijolos: um por passo, eixo pela menor penetracao
+        var bw = BRICK_W - 2;
         for (var i = 0; i < bricks.length; i++) {
             var b = bricks[i];
             if (!b.alive) continue;
-            var br = brickRect(b);
-            if (C.rect(ar, br)) {
-                var pv = C.push(ar, br);
-                if (pv) {
-                    bestT = 0; hit = b; push = pv;
-                    hnx = pv.x ? (pv.x > 0 ? 1 : -1) : 0;
-                    hny = pv.y ? (pv.y > 0 ? 1 : -1) : 0;
-                    break;
-                }
+            if (ball.x + BALL_R <= b.x || ball.x - BALL_R >= b.x + bw ||
+                ball.y + BALL_R <= b.y || ball.y - BALL_R >= b.y + BRICK_H) {
+                continue;
             }
-            var t = C.sweep(ar, vx, vy, br);
-            if (t < 0) continue;
-            var nx = C.normal.x, ny = C.normal.y;
-            if (!nx && !ny) continue;         // encostado e saindo: ignora
-            if (t < bestT) {
-                bestT = t; hit = b; push = null;
-                hnx = nx; hny = ny;
+            var ox = Math.min(ball.x + BALL_R, b.x + bw) -
+                     Math.max(ball.x - BALL_R, b.x);
+            var oy = Math.min(ball.y + BALL_R, b.y + BRICK_H) -
+                     Math.max(ball.y - BALL_R, b.y);
+            if (ox < oy) {
+                ball.x = (ball.x < b.x + bw / 2)
+                         ? b.x - BALL_R : b.x + bw + BALL_R;
+                ball.vx = -ball.vx;
+            } else {
+                ball.y = (ball.y < b.y + BRICK_H / 2)
+                         ? b.y - BALL_R : b.y + BRICK_H + BALL_R;
+                ball.vy = -ball.vy;
             }
-        }
-
-        if (!hit) {                           // sem contato: anda o resto
-            ball.x += vx;
-            ball.y += vy;
+            breakBrick(b);
+            if (checkLevel()) { lastNow = nowMs; return; }
             break;
         }
-        if (hit === "paddle") {
-            if (bestT > 0) {
-                ball.x += vx * bestT;
-                ball.y += vy * bestT;
-                remaining *= (1 - bestT);
-            }
-            paddleBounce();
-            continue;
-        }
-        // tijolo: reposiciona (sweep) ou empurra (push) e reflete no eixo
-        if (push) {
-            ball.x += push.x;
-            ball.y += push.y;
-        } else {
-            ball.x += vx * bestT;
-            ball.y += vy * bestT;
-            remaining *= (1 - bestT);
-        }
-        if (hnx) ball.dx = hnx * Math.abs(ball.dx);
-        if (hny) ball.dy = hny * Math.abs(ball.dy);
-        breakBrick(hit);
-        if (!game.is("play")) return;
-    }
 
-    // paredes (o campo fechado, como antes)
-    if (ball.x < FX + BALL_R) { ball.x = FX + BALL_R; ball.dx = Math.abs(ball.dx); }
-    if (ball.x > FX + FW - BALL_R) {
-        ball.x = FX + FW - BALL_R;
-        ball.dx = -Math.abs(ball.dx);
+        // fundo: perde vida
+        if (ball.y - BALL_R > L.bottom + 4) {
+            loseLife();
+            lastNow = nowMs;
+            return;
+        }
     }
-    if (ball.y < FY + BALL_R) { ball.y = FY + BALL_R; ball.dy = Math.abs(ball.dy); }
-
-    // fundo: perde vida
-    if (ball.y > H + 8) loseLife();
 }
 
-game = E.fsm(null, {
-    serve: {
-        enter: function () { resetBall(); },
-        draw: function () {
-            // dica dentro do campo (a camada suja apaga quando o jogo anda)
-            E.gfx.text("toque para lançar", W / 2, PADDLE_Y - 26,
-                       { ts: "small", align: "center", color: T.textDim, screen: true });
-            drawBall(ball.y);
-            drawPaddle();
-            E.fx.draw();
-        },
-        on: {
-            launch: function () { launch(); return "play"; }
-        }
-    },
-    play: {
-        update: function (m, dt) { step(dt); },
-        draw: function () {
-            drawBall(ball.y);
-            drawPaddle();
-            E.fx.draw();
-        }
-    },
-    levelup: {
-        enter: function () {
-            level++;
-            speed += 22;
-            E.emit("score", 100);
-            E.emit("level", level);
-        },
-        after: [0.9, "serve"],
-        exit: function (m, next) {
-            if (next === "serve") {
-                buildBricks();
-                E.dirty.full();
-            }
-        },
-        draw: function () {
-            drawBall(PADDLE_Y - BALL_R - 1);
-            drawPaddle();
-            E.fx.draw();
-        }
-    },
-    over: {
-        enter: function () {
-            if (E.save.best("hi", score)) {
-                novoRec = score > 0;
-                if (novoRec) E.ui.toast("Novo recorde!", { color: T.accent });
-            }
-            hi = Math.max(hi, score);
-            E.goto("fim", { transition: "iris", ms: 450 });
-        },
-        draw: function () {}
+// ----------------------------------------------------------------- desenho ---
+function drawBrick(b) {
+    var bw = BRICK_W - 2;
+    S.fillGradient(b.x, b.y, bw, BRICK_H,
+                   ROW_COLORS[b.r], ROW_DARK[b.r], 3);
+}
+
+function drawFrame() {
+    S.fillRect(FX + 1, FY + 1, FW - 2, 1, T.stroke);
+    S.fillRect(FX + 1, L.bottom - 2, FW - 2, 1, T.stroke);
+    S.fillRect(FX + 1, FY + 1, 1, L.bottom - FY - 2, T.stroke);
+    S.fillRect(FX + FW - 2, FY + 1, 1, L.bottom - FY - 2, T.stroke);
+}
+
+function drawBg() {
+    S.fillRect(0, FY, 240, 320 - FY, T.bg);
+    drawFrame();
+    for (var i = 0; i < bricks.length; i++) if (bricks[i].alive) drawBrick(bricks[i]);
+    if (serving) {
+        S.setTextColor(T.textDim);
+        S.setTextDatum(5);
+        S.drawString("toque para lançar a bola", 120, PADDLE_Y - 55, 2);
+        S.setTextDatum(0);
     }
-}, "serve");
-
-// ------------------------------------------------------------- desenho -----
-var _ballO = { smooth: true };
-function drawBall(y) {
-    E.gfx.circle(ball.x, y, BALL_R, T.text, _ballO);
 }
 
-function drawPaddle() {
-    // gradiente cru como o original (dir 4) + caixa na camada suja
-    if (E.dirty.on) E.dirty.add(paddleX, PADDLE_Y, PADDLE_W, PADDLE_H);
-    System.fillGradient(paddleX, PADDLE_Y, PADDLE_W, PADDLE_H,
-                        T.accent, T.accentD, 4);
-}
-
-// painter da camada suja: repinta o FUNDO (bg AI + moldura + tijolos vivos)
-// so dentro da caixa pedida — o rastro da bola/raquete/particulas apaga
-// sozinho e os tijolos voltam intactos
-function paintField(x, y, w, h) {
-    System.fillRect(x, y, w, h, T.bg);
-    if (BG) System.blitSprite(BG.id, x, y, w, h);   // so a caixa (API 34)
-    var x2 = x + w, y2 = y + h;
+// repinta so a caixa de fundo (apaga bola/raquete/estouro sem repintar tudo)
+function repaintBg(x, y, w, h) {
+    var x0 = Math.floor(x), y0 = Math.floor(y);
+    var x1 = Math.ceil(x + w), y1 = Math.ceil(y + h);
+    if (x0 < 0) x0 = 0;
+    if (y0 < FY) y0 = FY;
+    if (x1 > 240) x1 = 240;
+    if (y1 > 320) y1 = 320;
+    if (x1 <= x0 || y1 <= y0) return;
+    S.fillRect(x0, y0, x1 - x0, y1 - y0, T.bg);
+    drawFrame();
     for (var i = 0; i < bricks.length; i++) {
         var b = bricks[i];
         if (!b.alive) continue;
-        var bx = b.x, by = b.y, bw = BRICK_W - 2;
-        if (bx >= x2 || bx + bw <= x || by >= y2 || by + BRICK_H <= y) continue;
-        System.fillGradient(bx, by, bw, BRICK_H, ROW_COLORS[b.r], ROW_DARK[b.r], 3);
-    }
-    // moldura do campo quando a caixa toca as bordas
-    if (x <= FX + 2 || x2 >= FX + FW - 2 || y <= FY + 2 || y2 >= FY + FH - 2) {
-        System.drawRect(FX, FY, FW, FH, T.stroke);
+        var bw = BRICK_W - 2;
+        if (b.x + bw <= x0 || b.x >= x1 || b.y + BRICK_H <= y0 || b.y >= y1) {
+            continue;
+        }
+        drawBrick(b);
     }
 }
 
-var hudKey = -1;   // score*1000 + lives*100 + level*10 + stateCode
-function hudCode() {
-    return score * 1000 + lives * 100 + level * 10 + (game.is("serve") ? 1 : 0);
+function drawPaddle() {
+    S.fillGradient(Math.round(paddleX), PADDLE_Y, PADDLE_W, PADDLE_H,
+                   T.accent, T.accentD, 4);
 }
 
-function drawHeader() {
-    // faixa acima do campo: pintada FORA da camada suja (as caixas do jogo
-    // nao sobem alem do FY; registrar aqui faria o painter apagar o placar)
-    var on = E.dirty.on;
-    E.dirty.on = false;
-    E.gfx.rect(0, 0, W, 40, T.card, { screen: true });
-    E.gfx.text("Pontos " + score, 10, 4, { ts: "title", bg: T.card });
-    E.gfx.text("Nível " + level, 10, 24,
-               { ts: "small", color: T.accent, bg: T.card });
-    E.gfx.text("Vidas " + lives + "  ·  Rec " + hi, W - 10, 25,
-               { ts: "small", align: "right", color: T.textDim, bg: T.card });
-    // botao de pausa: card arredondado + duas barras (sem glifo/emoji)
-    E.gfx.rect(PB.x, PB.y, PB.w, PB.h, T.raised, { r: 5, screen: true });
-    E.gfx.rect(PB.x + 6, PB.y + 5, 3, PB.h - 10, T.accent, { screen: true });
-    E.gfx.rect(PB.x + PB.w - 9, PB.y + 5, 3, PB.h - 10, T.accent, { screen: true });
-    E.gfx.rect(0, 40, W, 2, T.accent, { screen: true });
-    E.dirty.on = on;
+function drawBall() {
+    S.fillSmoothCircle(Math.round(ball.x), Math.round(ball.y), BALL_R, T.text);
 }
 
-// ------------------------------------------------------------------ cenas ---
-E.run({
-    // static: o titulo so repinta no toque/dialogo (antes redesenhava a tela
-    // inteira a 60 fps parado no menu)
-    titulo: {
-        static: true,
-        // dialogo datilografa; tap fora dos botoes tambem comeca (o draw
-        // precisa rodar no quadro do tap para ve-lo)
-        update: function () { if (help || E.input.tap) E.redraw(); },
-        draw: function () {
-            E.gfx.rect(0, 0, W, H, T.bg, { screen: true });
-            // faixa de tijolos decorativa no rodape (identidade do jogo)
-            var dy = H - 58;
-            for (var r = 0; r < 3; r++) {
-                for (var c = 0; c < BRICK_COLS; c++) {
-                    E.gfx.rect(FX + 8 + c * BRICK_W, dy + r * (BRICK_H + 3),
-                               BRICK_W - 2, BRICK_H,
-                               ROW_COLORS[(r + c) % ROW_COLORS.length], { screen: true });
-                }
-            }
-            var act = E.ui.title({ game: "BREAKOUT", best: hi, extra: "Como jogar" });
-            if (help) {
-                if (!help.draw(15, H * 0.42, W - 30)) help = null;
-                return;
-            }
-            if (act === "start" || (!act && E.input.tap)) {
-                // toque fora dos botoes tambem comeca: o titulo e a unica
-                // cena antes do jogo (nada de tela morta no primeiro toque)
-                E.goto("jogo", { transition: "fade", ms: 300 });
-            } else if (act === "extra") {
-                help = E.ui.dialog(HELP_TXT, { name: "Como jogar", speed: 40 });
+function drawPops() {
+    for (var i = pops.length - 1; i >= 0; i--) {
+        var p = pops[i];
+        var e = (nowMs - p.t0) / 240;
+        if (e >= 1) { pops.splice(i, 1); continue; }
+        var g = Math.round(1 + 4 * e);
+        S.drawRect(p.x - g, p.y - g, p.w + 2 * g, p.h + 2 * g, p.c);
+    }
+}
+
+function erasePrev() {
+    if (prevBall.x >= 0) {
+        repaintBg(prevBall.x - BALL_R - 2, prevBall.y - BALL_R - 2,
+                  BALL_R * 2 + 5, BALL_R * 2 + 5);
+    }
+    if (prevPad >= 0) repaintBg(prevPad - 1, PADDLE_Y - 1,
+                                PADDLE_W + 2, PADDLE_H + 2);
+    for (var i = 0; i < pops.length; i++) {
+        var p = pops[i];
+        repaintBg(p.x - 8, p.y - 8, p.w + 16, p.h + 16);
+    }
+}
+
+function drawObjects() {
+    drawPaddle();
+    drawBall();
+    drawPops();
+    prevBall.x = ball.x;
+    prevBall.y = ball.y;
+    prevPad = paddleX;
+}
+
+// ------------------------------------------------------------------ telas ----
+function drawDeco() {
+    S.fillRect(0, 124, 240, 60, T.bg);
+    for (var r = 0; r < 3; r++) {
+        for (var c = 0; c < BRICK_COLS; c++) {
+            S.fillGradient(BRICK_X + c * BRICK_W, 132 + r * (BRICK_H + 3),
+                           BRICK_W - 2, BRICK_H,
+                           ROW_COLORS[(r + c) % ROW_COLORS.length],
+                           ROW_DARK[(r + c) % ROW_DARK.length], 3);
+        }
+    }
+}
+
+function menu(c) {
+    fullFrame = c.full;
+    A.style.card(L.x, 16, L.w, 94, { full: c.full, draw: function (r) {
+        var cx = r.x + r.w / 2;
+        UI.text("BREAKOUT", cx, r.y, { role: "display", align: "center",
+                w: r.w, color: T.accent, bg: r.bg });
+        UI.text("Quebre os tijolos e não deixe a bola cair", cx, r.y + 30,
+                { role: "caption", align: "center", w: r.w, lines: 2,
+                  color: T.textDim, bg: r.bg });
+        UI.text("Recorde: " + hi, cx, r.y + 64, { role: "body",
+                align: "center", w: r.w, color: T.text, bg: r.bg });
+    }});
+    paint("deco", 0, 124, 240, 60, 1, drawDeco, T.bg);
+
+    if (A.style.button("JOGAR", L.x, 196, L.w, 40)) {
+        wantNew = true;
+        return "jogo";
+    }
+    if (A.style.button("Como jogar", L.x, 246, 100, 30,
+                       { variant: "secondary" })) return "ajuda";
+    UI.text("toque para lançar a bola", 120, 288,
+            { role: "caption", align: "center", color: T.textDim });
+    var t = UI.touch();
+    if (t.tap || (t.released && t.moved)) {
+        wantNew = true;
+        return "jogo";
+    }
+}
+menu.fps = 20;
+
+function ajuda(c) {
+    fullFrame = c.full;
+    A.style.card(12, 26, 216, 224, { full: c.full, draw: function (r) {
+        UI.text("Como jogar", r.x, r.y, { role: "title", color: T.text, bg: r.bg, w: r.w });
+        UI.text("Arraste o dedo para mover a raquete. Toque para lançar a bola. " +
+                "Quebre todos os tijolos para subir de nível (a bola acelera). " +
+                "A cada 500 pontos você ganha uma vida, até cinco. Não deixe a " +
+                "bola cair: são três vidas. O recorde fica salvo.",
+                r.x, r.y + 28, { role: "caption", color: T.textDim, bg: r.bg,
+                                 w: r.w, lines: 10 });
+    }});
+    if (A.style.button("Voltar", 70, 262, 100, 30)) return A.BACK;
+    if (UI.touch().tap) return A.BACK;
+}
+ajuda.fps = 15;
+
+function drawPause(c) {
+    A.style.card(16, 76, 208, 170, { full: c.full, draw: function (r) {
+        var cx = r.x + r.w / 2;
+        UI.text("PAUSA", cx, r.y, { role: "title", align: "center",
+                                     w: r.w, color: T.text, bg: r.bg });
+        UI.text("O jogo está congelado.", cx, r.y + 24,
+                { role: "caption", align: "center", w: r.w,
+                  color: T.textDim, bg: r.bg });
+    }});
+    if (A.style.button("Continuar", 36, 132, 168, 30)) return "resume";
+    if (A.style.button("Recomeçar", 36, 168, 168, 30,
+                       { variant: "secondary" })) return "restart";
+    if (A.style.button("Menu", 36, 204, 168, 30,
+                       { variant: "secondary" })) return "quit";
+    return null;
+}
+
+function drawResult(c) {
+    A.style.card(16, 78, 208, 184, { full: c.full, draw: function (r) {
+        var cx = r.x + r.w / 2;
+        UI.text("FIM DE JOGO", cx, r.y, { role: "title", align: "center",
+                w: r.w, color: T.err, bg: r.bg });
+        UI.text("Pontos " + score, cx, r.y + 28, { role: "title",
+                align: "center", w: r.w, color: T.text, bg: r.bg });
+        UI.text("Recorde " + hi, cx, r.y + 48, { role: "caption",
+                align: "center", w: r.w, color: T.textDim, bg: r.bg });
+        if (novoRec) {
+            UI.text("NOVO RECORDE!", cx, r.y + 64, { role: "caption",
+                    align: "center", w: r.w, color: T.ok, bg: r.bg });
+        }
+    }});
+    if (A.style.button("Jogar de novo", 36, 166, 168, 32)) return "again";
+    if (A.style.button("Menu", 36, 206, 168, 32,
+                       { variant: "secondary" })) return "menu";
+    return null;
+}
+
+function jogo(c) {
+    fullFrame = c.full;
+    nowMs = c.now;
+    if (c.entered || wantNew) {
+        wantNew = false;
+        newGame();
+        lastNow = nowMs;
+    }
+    var dt = lastNow ? (nowMs - lastNow) / 1000 : 0.016;
+    lastNow = nowMs;
+    if (dt < 0.001) dt = 0.001;
+    if (dt > 0.05) dt = 0.05;
+
+    var show = (over && nowMs - overAt >= 700);
+    showResult = show;
+    var overlay = paused || showResult;
+
+    // HUD
+    UI.text("Pontos " + score, L.x, 4, { role: "title", color: T.text, id: 71 });
+    UI.text("Nível " + level, L.x, 22, { role: "caption",
+                                         color: T.accent, id: 72 });
+    UI.text("Vidas " + lives + "  Rec " + hi, L.x + L.w - 32, 22,
+            { role: "caption", align: "right", w: 110,
+              color: T.textDim, id: 73 });
+
+    if (!overlay && !over) {
+        if (A.widgets.iconButton("menu", L.x + L.w - 26, 4, 26)) {
+            paused = true;
+            pops.length = 0;
+            UI.invalidate();
+            overlay = true;
+        }
+    }
+
+    // arrasto/launch (so no campo; nao roubar o toque do HUD)
+    if (!overlay && !over) {
+        var t = UI.touch();
+        if (t.down && t.y >= FY) {
+            clampPaddle(t.x);
+            if (serving) {
+                ball.x = paddleX + PADDLE_W / 2;
+                ball.y = PADDLE_Y - BALL_R - 1;
             }
         }
-    },
+        if (t.released && t.y >= FY && serving) {
+            launch();
+            UI.invalidate();
+        }
+        if (serving) {
+            ball.x = paddleX + PADDLE_W / 2;
+            ball.y = PADDLE_Y - BALL_R - 1;
+        }
+    }
 
-    jogo: {
-        enter: function () {
+    if (!overlay) stepPhysics(dt);
+    if (over) show = (nowMs - overAt >= 700);
+
+    // campo: fundo/tijolos na area pintada; bola/raquete por cima
+    var flash = (nowMs - flashAt < 300);
+    var levelFlash = (nowMs - levelAt < 400);
+    var fsig = fieldVer + (serving ? "s" : "p") +
+               ((flash || levelFlash) ? ":" + nowMs : "");
+    if (overlay) {
+        if (c.full) {
+            paint("field", 0, FY, 240, 320 - FY, fsig, drawBg, T.bg);
+            prevBall.x = -1;
+            prevPad = -1;
+            drawObjects();
+        }
+    } else {
+        var bg = paint("field", 0, FY, 240, 320 - FY, fsig, drawBg, T.bg);
+        if (!bg && !c.full) erasePrev();
+        drawObjects();
+        if (flash) S.drawRect(FX + 1, FY + 1, FW - 2, L.bottom - FY - 2, T.err);
+        if (levelFlash) {
+            S.drawRect(FX + 1, FY + 1, FW - 2, L.bottom - FY - 2, T.warn);
+            S.drawRect(FX + 2, FY + 2, FW - 4, L.bottom - FY - 4, T.warn);
+        }
+    }
+
+    if (paused) {
+        var pa = drawPause(c);
+        if (pa === "resume") {
+            paused = false;
+            lastNow = nowMs;
+            UI.invalidate();
+        } else if (pa === "restart") {
+            paused = false;
             newGame();
+            lastNow = nowMs;
+            UI.invalidate();
+        } else if (pa === "quit") {
             paused = false;
-            trail.start();
-            E.dirty.enable(paintField);   // 1o quadro: campo inteiro
-            // o apagar/redesenho do mundo nao sobe alem do placar: sem o
-            // recorte, o repaint integral do 1o quadro (e de cada full,
-            // ex. nivel novo) apagava o cabecalho pintado no update — ele
-            // so reaparecia no proximo ponto
-            E.dirty.clip(0, 42, W, H - 42);
-            hudKey = -1;
-            drawHeader();
-        },
-        // volta da pausa (E.pop): a camada suja da cena volta e repinta
-        // tudo; "restart" recomeca a partida
-        resume: function (arg) {
-            paused = false;
-            trail.start();
-            hudKey = -1;
-            if (arg === "restart") newGame();
-        },
-        update: function (dt) {
-            // botao de pausa no HUD: a pausa e uma cena static por cima (o
-            // veu desenha 1x; antes ele e o campo inteiro repintavam a cada
-            // quadro com a camada suja ligada)
-            if (E.hit(PB)) {
-                paused = true;
-                trail.stop();
-                E.push("pausa");
-                return;
-            }
-            // arrasto da raquete (serve acompanha a bola na saida)
-            var i = E.input;
-            if (i.down) {
-                var nx = i.x - PADDLE_W / 2;
-                if (nx < FX + 1) nx = FX + 1;
-                if (nx > FX + FW - PADDLE_W - 1) nx = FX + FW - PADDLE_W - 1;
-                paddleX = nx;
-                if (game.is("serve")) ball.x = paddleX + PADDLE_W / 2;
-            } else if (i.justUp && game.is("serve")) {
-                game.send("launch");
-            }
-            game.update(dt);
-            // placar so quando muda, ou quando algo tocou a faixa dele
-            // (repaint integral do fim do veu, flash de tela cheia — o
-            // memo so de valores deixava restos na faixa de cima)
-            var k = hudCode();
-            if (k !== hudKey || E.dirty.touches(0, 0, W, 42)) {
-                hudKey = k;
-                if (!game.is("over")) drawHeader();
-            }
-        },
-        draw: function () {
-            game.draw();   // serve/play/levelup desenham bola, raquete e fx
-        },
-        exit: function () {
-            paused = false;
-            trail.stop();
-            E.dirty.off();
+            return A.BACK;
         }
-    },
-
-    pausa: {
-        static: true,
-        draw: function () {
-            var act = E.ui.pause({ title: "PAUSA" });
-            if (act === "resume") E.pop();
-            else if (act === "restart") E.pop({ arg: "restart" });
-            else if (act === "quit") {
-                trail.stop();
-                E.goto("titulo", { transition: "fade", ms: 300 });
-            }
-        }
-    },
-
-    fim: {
-        static: true,
-        enter: function () {
-            overAct = null;
-            if (novoRec) E.audio.sfx("record");
-        },
-        update: function () {
-            if (overAct === "again") {
-                overAct = null;
-                E.goto("jogo", { transition: "wipe", ms: 300 });
-            } else if (overAct === "quit") {
-                overAct = null;
-                E.goto("titulo", { transition: "fade", ms: 300 });
-            }
-        },
-        draw: function () {
-            var act = E.ui.gameOver({
-                title: "FIM DE JOGO", score: score, best: hi, isNew: novoRec,
-                labels: ["Jogar de novo", "Sair"]
-            });
-            if (act) overAct = act;
+        return;
+    }
+    if (show) {
+        var ra = drawResult(c);
+        if (ra === "again") {
+            newGame();
+            lastNow = nowMs;
+            UI.invalidate();
+        } else if (ra === "menu") {
+            return A.BACK;
         }
     }
-}, "titulo");
+}
+jogo.fps = 30;
+
+A.run({ menu: menu, ajuda: ajuda, jogo: jogo }, "menu");

@@ -1,15 +1,18 @@
 {
   "name": "Calculator",
   "packageName": "celeros.calculator",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "api": 30,
   "permissions": ["fs"],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
-  "description": "Calculadora de toque no tema do CelerOS: previa ao vivo, historico das ultimas contas e ANS que encadeia no resultado anterior (salvo no aparelho).",
+  "description": "Calculadora de toque no tema do CelerOS: previa ao vivo, chip do ANS, historico em sheet (tocar numa conta reaproveita o resultado) e tema escolhido no aparelho.",
   "deps": {
-    "celeros.app": "^1.0.0"
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0",
+    "celeros.app.widgets": "^1.0.0"
   },
-  "changelog": "1.4.0 - migrada para o CelerKit (dep celeros.app): o core fica com o laco e o tema; conserto de encadear apos o igual (digito/operador agora começam a conta nova em vez de colar na expressao antiga) e previa avaliada so quando a conta muda\n1.3.0 - teclado e visor com o toolkit UI (API 22): botoes com estado pressionado, fontes do sistema\n1.2.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.1 - layout cabe na tela: grade sobe/compacta e a linha do \"=\" nao e mais cortada embaixo\n1.2.0 - tema CelerOS, previa ao vivo, historico, ANS encadeado (começar por operador repete o ultimo resultado) e persistencia\n1.0.0 - original"
+  "changelog": "2.0.0 - UI kit 2.0: visor em card com previa ao vivo e chip do ANS (tocar insere o ultimo resultado), teclado grande no A.style com press nativo, historico em sheet (tocar numa conta reaproveita o resultado), seletor de tema (Sistema/Suave/Plano/Neon/Papel) salvo no aparelho e operador apos o \"=\" encadeando no resultado mesmo quando ele e 0; o historico agora persiste no FS; segue sem PSRAM\n1.4.0 - migrada para o CelerKit (dep celeros.app): o core fica com o laco e o tema; conserto de encadear apos o igual (digito/operador agora começam a conta nova em vez de colar na expressao antiga) e previa avaliada so quando a conta muda\n1.3.0 - teclado e visor com o toolkit UI (API 22): botoes com estado pressionado, fontes do sistema\n1.2.2 - permissoes declaradas (fs): o consentimento do CelerOS (API 14) mostra so o que o app usa; 1.2.1 - layout cabe na tela: grade sobe/compacta e a linha do \"=\" nao e mais cortada embaixo\n1.2.0 - tema CelerOS, previa ao vivo, historico, ANS encadeado (começar por operador repete o ultimo resultado) e persistencia\n1.0.0 - original"
 }

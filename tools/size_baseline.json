@@ -1,6 +1,6 @@
 {
  "smartdisplay": {
-  "image": 2675008,
+  "image": 2681984,
   "slot": 6553600,
   "archives": {
    "libmain.a": 725530,
@@ -104,7 +104,7 @@
   "stale": null
  },
  "cyd": {
-  "image": 1561440,
+  "image": 1551648,
   "slot": 1638400,
   "archives": {
    "libmain.a": 290066,
@@ -281,7 +281,7 @@
   "stale": null
  },
  "spotpear-dog": {
-  "image": 2518384,
+  "image": 2801616,
   "slot": 6553600,
   "archives": {
    "libmain.a": 681614,
@@ -378,7 +378,7 @@
   "stale": null
  },
  "waveshare-watch": {
-  "image": 2802880,
+  "image": 2816608,
   "slot": 6291456,
   "archives": {
    "libmain.a": 790264,
@@ -484,7 +484,7 @@
   "stale": null
  },
  "devkit": {
-  "image": 1327952,
+  "image": 1336528,
   "slot": 1638400,
   "archives": {
    "libduktape.a": 197744,
@@ -569,7 +569,7 @@
   "stale": null
  },
  "devkit-s3": {
-  "image": 1854656,
+  "image": 1870544,
   "slot": 6553600,
   "archives": {
    "libmain.a": 326546,
@@ -660,7 +660,7 @@
   "stale": null
  },
  "esp32-cam": {
-  "image": 1767200,
+  "image": 1776416,
   "slot": 1900544,
   "archives": {
    "libmain.a": 270285,

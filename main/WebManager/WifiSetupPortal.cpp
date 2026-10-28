@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <new>  // std::nothrow
 
 // Estado compartilhado entre a task do httpd (handlers do componente) e o
 // poll. Credenciais sao copiadas antes da flag; races benignas.
@@ -40,10 +41,13 @@ static int64_t s_connStartedUs = 0;
 static constexpr int64_t K_CONN_WATCHDOG_US = 30LL * 1000000LL;
 
 // ++/compound em volatile e deprecado no C++20 (build usa -Werror=volatile):
-// le + soma + grava, atomico de facto aqui (unico escritor).
+// le + soma + grava, atomico de facto aqui (unico escritor). Devolve a
+// geracao NOVA: a portal_conn so reporta se `job->gen` casar com ela — devolver
+// a ANTIGA fazia o casamento falhar sempre e o portal reportava "Falhou" no
+// watchdog dos 30 s mesmo conectando (bancada 2026-10-26).
 static uint32_t bumpGen() {
-    uint32_t g = s_connGen;
-    s_connGen = g + 1;
+    const uint32_t g = s_connGen + 1;
+    s_connGen = g;
     return g;
 }
 
@@ -148,15 +152,23 @@ WifiSetupPortal::State WifiSetupPortal::poll(std::string& detail) {
     s_portal.reportConnectionState(PortalConnState::Connecting);
 
     // O httpd do portal segue vivo na task dele respondendo /status
-    PortalJob* job = new PortalJob{s_pendingSsid, s_pendingPass, bumpGen()};
-    if (xTaskCreate(portalConnTask, "portal_conn", 6144, job, 5, nullptr) != pdPASS) {
-        delete job;
-        // geracao bumpada e morta sem task: nada para invalidar
+    // nothrow: sem excecoes um new que falha aborta o aparelho
+    PortalJob* job = new (std::nothrow) PortalJob{s_pendingSsid, s_pendingPass, bumpGen()};
+    if (job == nullptr) {
         s_portal.reportConnectionState(PortalConnState::Failed);
         return Failed;
     }
+    // Estado ANTES de criar a task: ela pode terminar (falha rapida do
+    // connect) antes do "conectando" ser marcado e o resultado seria
+    // sobrescrito — a tela ficava 30 s girando e reportava falha.
     s_connState = 1;
     s_connStartedUs = esp_timer_get_time();
+    if (xTaskCreate(portalConnTask, "portal_conn", 6144, job, 5, nullptr) != pdPASS) {
+        delete job;
+        s_connState = 0;  // geracao bumpada e morta sem task: nada a invalidar
+        s_portal.reportConnectionState(PortalConnState::Failed);
+        return Failed;
+    }
     return Waiting;
 }
 

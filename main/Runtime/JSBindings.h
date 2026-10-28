@@ -357,6 +357,13 @@ public:
     static duk_ret_t js_getVolume(duk_context *ctx);
     static duk_ret_t js_backlightSupported(duk_context *ctx);
     static duk_ret_t js_openWifiSetup(duk_context *ctx);
+    // Portal cativo do setup de WiFi (API 52): a tela virou app JS e dirige
+    // o AP + portal daqui (o radio/servidor segue nativo). Build sem vidro
+    // nao expoe (CONFIG_CELEROS_UI).
+    static duk_ret_t js_wifiPortalStart(duk_context *ctx);
+    static duk_ret_t js_wifiPortalPoll(duk_context *ctx);
+    static duk_ret_t js_wifiPortalStop(duk_context *ctx);
+    static duk_ret_t js_wifiPortalSsid(duk_context *ctx);
     static duk_ret_t js_exitApp(duk_context *ctx);
     static duk_ret_t js_launchApp(duk_context *ctx);  // API 16
     static duk_ret_t js_present(duk_context *ctx);

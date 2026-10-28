@@ -190,6 +190,19 @@ config CELEROS_JS_GAME_ACCEL
       corrente). Ligado por padrao so nas placas S3; no CYD o slot OTA e o
       limite e os jogos que usam isto exigem PSRAM de qualquer jeito.
 
+config CELEROS_JS_AI
+    bool "Objeto AI para apps (chat LLM + TTS, API 18/24)"
+    default y
+    help
+      Superficie AI.chat/AI.speak/AI.warm/AI.configured/AI.cancel: transporte
+      HTTPS em task propria (TLS persistente), providers DeepSeek/OpenRouter,
+      tool-calls e TTS. Custo: ~10 KB de flash em todas as placas.
+
+      Desligado, o objeto AI nao existe (typeof AI === "undefined") e a dep
+      celeros.app.ai (com os apps que a usam) sai do ar. Na CYD o Chat IA ja
+      esta fora da imagem de dados (boards/cyd/data-exclude.txt), entao o
+      firmware paga ~10 KB por uma feature inalcancavel na placa.
+
 config CELEROS_JS_PHYSICS
     bool "Fisica nativa para apps (System.verlet*, API 31)"
     default y

@@ -1,7 +1,7 @@
 # CYD (ESP32, 4 MB): a particao littlefs tem 768 KB e o custo por arquivo
 # (~6-8 KB somando bloco de cauda e metadados) estoura com a fabrica
 # inteira desde a migracao ao CelerKit (data/modules passou a viajar na
-# imagem). Ficam o nucleo do sistema (Store, Settings, Nucleo, Installer,
+# imagem). Ficam o nucleo do sistema (Store, Settings, WiFi, Nucleo, Installer,
 # Terminal, Barebone), os modulos das deps.json deles e os icones de que
 # precisam; todo o resto instala pela Loja — apps do hub embutem a propria
 # arte (icon.png no pacote) e o catalogo desenha o icone do pacote

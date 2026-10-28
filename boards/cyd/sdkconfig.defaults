@@ -128,6 +128,11 @@ CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_MIC is not set
 # CONFIG_CELEROS_JS_PHYSICS is not set
 # CONFIG_CELEROS_WEB_SERVER is not set
+# IA fora: os apps de IA (Chat IA, Qwen) ja estao em data-exclude.txt — sem
+# eles o objeto AI (transporte LLM/TTS em C++ + TLS) e ~10 KB de firmware que
+# nenhum app alcanca. Desligado, typeof AI === "undefined" e a dep
+# celeros.app.ai nao vem na imagem.
+# CONFIG_CELEROS_JS_AI is not set
 # Tela de crash com QR fica de fora no perfil lite: o codificador QR da
 # LovyanGFX custa ~10 KB de flash e o slot OTA da CYD e o mais apertado das
 # placas. O REGISTRO continua inteiro (RAM RTC + /local/log/crash.txt, que o

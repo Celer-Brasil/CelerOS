@@ -10,19 +10,24 @@
 #include "../../USBDevice/LogSink.h"
 #include "../../USBDevice/LogPersist.h"
 #include <cstdio>
+#include <cstdlib>
 
 namespace {
 
+// Bloco fixo no lugar do `new AppParams` com std::string: sem excecoes, um
+// new sem heap aborta o aparelho NO MOMENTO DO LAUNCH; malloc devolve null e
+// o launch e recusado com log. Tamanhos: pasta de app + main.js caem em 160
+// (mesmo teto da chave de cache do require); pkg e rotulo em 64. filePath e
+// appPkg NAO truncam (identidade/jail): passou do teto, recusa.
 struct AppParams {
-    std::string filePath;
-    std::string title;
+    char filePath[160];
+    char title[64];
     bool topbarFixed;
-    std::string appPkg;
-    uint32_t perms = 0xFFFFFFFFu;
+    char appPkg[64];
+    uint32_t perms;
 };
 
 volatile bool s_running = false;
-volatile bool s_wifiSetupRequested = false;
 
 void appTask(void* raw) {
     AppParams* p = (AppParams*)raw;
@@ -31,8 +36,7 @@ void appTask(void* raw) {
     // reinicia em ~15s — os pontos de espera ja alimentam o WDT)
     esp_task_wdt_add(nullptr);
 
-    CelerKernel::runFile(p->filePath.c_str(), p->title.c_str(), p->topbarFixed,
-                         p->appPkg.c_str(), p->perms);
+    CelerKernel::runFile(p->filePath, p->title, p->topbarFixed, p->appPkg, p->perms);
 
     // Sobra de stack da task do app (palavras de 4B), junto da linha de
     // sessao que o runFile emite. O caminho sincrono roda na task do
@@ -41,7 +45,7 @@ void appTask(void* raw) {
         char msg[48];
         snprintf(msg, sizeof(msg), "sessao: hwm da task = %u words",
                  (unsigned)uxTaskGetStackHighWaterMark(nullptr));
-        LogPersist::app(p->appPkg.c_str(), msg);
+        LogPersist::app(p->appPkg, msg);
     }
 
     // Desinscreve ANTES do vTaskDelete: no IDF 6.x o TWDT nao tem hook de
@@ -49,7 +53,7 @@ void appTask(void* raw) {
     // desaloca) e o proximo timeout do WDT andava em memoria morta.
     esp_task_wdt_delete(nullptr);
 
-    delete p;
+    free(p);
     // Ordem importa: s_running e o UNICO estado compartilhado escrito aqui
     // (o handle da task nao e guardado — so start() o via, na criacao).
     // Depois deste ponto a task nao toca nada compartilhado, so vTaskDelete.
@@ -67,15 +71,32 @@ bool start(const std::string& filePath, const std::string& title, bool topbarFix
                       const std::string& appPkg, uint32_t perms) {
     if (s_running) return false;  // um app por vez
 
+    // Identidade sem truncar (jail de FS/Storage segue o pkg): path que nao
+    // cabe no bloco fixo e recusa com log — o chamador cai no caminho
+    // sincrono (launchApp), que roda o app do mesmo jeito.
+    if (filePath.size() >= sizeof(AppParams::filePath) || appPkg.size() >= sizeof(AppParams::appPkg)) {
+        celer_log_println("app: caminho/pkg acima do teto do bloco de launch (recusado)");
+        return false;
+    }
     // Reclama ANTES do xTaskCreate: se o app terminar antes do retorno da
     // criacao (a task ja roda na outra core), um "s_running = true" tardio
     // deixava a UI esperando para sempre com o input suspenso. O handle da
     // task nao e guardado: com a task podendo terminar antes do retorno de
     // xTaskCreate, escrever nele apos o fim era escrever em task morta.
     s_running = true;
-    AppParams* p = new AppParams{filePath, title, topbarFixed, appPkg, perms};
+    AppParams* p = (AppParams*)malloc(sizeof(AppParams));
+    if (p == nullptr) {
+        s_running = false;
+        celer_log_println("app: sem RAM para o bloco de launch (recusado)");
+        return false;
+    }
+    snprintf(p->filePath, sizeof(p->filePath), "%s", filePath.c_str());
+    snprintf(p->title, sizeof(p->title), "%s", title.c_str());  // rotulo: so display
+    p->topbarFixed = topbarFixed;
+    snprintf(p->appPkg, sizeof(p->appPkg), "%s", appPkg.c_str());
+    p->perms = perms;
     if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, nullptr, portNUM_PROCESSORS - 1) != pdPASS) {
-        delete p;
+        free(p);
         s_running = false;
         return false;
     }
@@ -91,14 +112,6 @@ bool start(const std::string& filePath, const std::string& title, bool topbarFix
 
 bool running() { return s_running; }
 
-void requestWifiSetup() { s_wifiSetupRequested = true; }
-
-bool consumeWifiSetupRequest() {
-    if (!s_wifiSetupRequested) return false;
-    s_wifiSetupRequested = false;
-    return true;
-}
-
 }  // namespace AppRunner
 
 #else  // caminho sincrono: stubs, o AppHostScreen nem tenta
@@ -108,8 +121,6 @@ namespace AppRunner {
 bool supported() { return false; }
 bool start(const std::string&, const std::string&, bool, const std::string&, uint32_t) { return false; }
 bool running() { return false; }
-void requestWifiSetup() {}
-bool consumeWifiSetupRequest() { return false; }
 
 }  // namespace AppRunner
 

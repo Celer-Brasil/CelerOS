@@ -497,7 +497,9 @@ static void aiRunSpeak(AiSlot* s) {
         ok = false;
         snprintf(err, sizeof(err), "abrir %.70s falhou", part);
     }
-    if (!ok && errBody.n > 0 && errBody.append("", 1)) {  // NUL p/ o strstr
+    // NUL p/ o strstr — so quando ha folga: no teto o append nao escreve (o
+    // sink descarta o excedente) e o strstr sairia do malloc de 640 B
+    if (!ok && errBody.n > 0 && errBody.n < AI_TTS_ERR_MAX && errBody.append("", 1)) {
         ttsDetailFrom(errBody.p, detail, sizeof(detail));
     }
     free(errBody.p);

@@ -16,7 +16,7 @@ One directory per board holding its `sdkconfig.defaults`. Board code itself live
 | `esp32-cam` | ESP32-S (classic) AI-Thinker, 4MB DIO, PSRAM quad 4MB | **None** — the "glass" is the OV2640 sensor | `partitions_4MB_cam.csv` | Camera node: `headless`, `CELEROS_UI=n`, **dual-core** (unicore reset-looped in INT_WDT with WiFi+NimBLE), NimBLE (CelerNet mesh), TLS buffers in PSRAM, microSD by SDSPI (CLK14/CMD15/D0-2/CS13 — apps live on the SD, hence the small littlefs/1.81MB slots). Bench: brownout is failure #1 (sturdy 5V supply); flash mode = GPIO0 to GND at reset; GPIO12 is the MTD strap (never an output); GPIO16/17 belong to the PSRAM |
 
 ## FEATURE MENU (what each board compiles in)
-Hardware-coupled subsystems are Kconfig flags in `main/Kconfig.projbuild`; a board picks its set in `boards/<b>/sdkconfig.defaults`. Defaults: `y` for `CELEROS_AUDIO` (digital I2S audio: `playWav`/QOA, `playMusic` chiptune, `sfx`, the TTS `PcmFeed`), `CELEROS_JS_GPIO`, `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_PHYSICS` (native verlet worlds — PSRAM money); `n` opt-in for `CELEROS_MIC` (capture I2S1 + `Mic` object: dog, watch), `CELEROS_JS_CAMERA` (esp32-cam), `CELEROS_WAKE_WORD` (dog; depends on MIC).
+Hardware-coupled subsystems are Kconfig flags in `main/Kconfig.projbuild`; a board picks its set in `boards/<b>/sdkconfig.defaults`. Defaults: `y` for `CELEROS_AUDIO` (digital I2S audio: `playWav`/QOA, `playMusic` chiptune, `sfx`, the TTS `PcmFeed`), `CELEROS_JS_AI` (o objeto `AI`: chat LLM + TTS, ~10 KB de transporte TLS), `CELEROS_JS_GPIO`, `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_PHYSICS` (native verlet worlds — PSRAM money); `n` opt-in for `CELEROS_MIC` (capture I2S1 + `Mic` object: dog, watch), `CELEROS_JS_CAMERA` (esp32-cam), `CELEROS_WAKE_WORD` (dog; depends on MIC).
 
 An off-flag keeps every JS contract: the implementation leaves the binary but inline stubs in `AudioPlayer.h` / `MusicSynth.h` / `BoardIO.h` answer with the documented no-hardware values (`playWav`/`playMusic` false, `sfx` 0, `musicPos` -1, `micLevel` -1, `speakerChannel` null), and whole JS objects disappear the documented way (`typeof Mic === "undefined"`; `System.verlet*` entries not registered — the physics dep feature-detects and falls back to interpreted `P.verlet`). `System.playTone` is NOT behind `CELEROS_AUDIO`: the analog LEDC tone (CYD speaker on GPIO26) and `toneAsync` beeps work on every board.
 
@@ -24,6 +24,7 @@ An off-flag keeps every JS contract: the implementation leaves the binary but in
 |------|----|-----|----------|----|-----|----|----|-----|
 | `CELEROS_AUDIO` | y | — | — | y | y | — | — | — |
 | `CELEROS_MIC` | — | — | — | y | y | — | — | — |
+| `CELEROS_JS_AI` | y | — | y | y | y | y | y | y |
 | `CELEROS_JS_PHYSICS` | y | — | — | y | y | — | — | — |
 | `CELEROS_WEB_SERVER` | y | — | — | y | y | y | y | y |
 | `CELEROS_SD_CARD` | y | y | — | y | y | — | — | y |
@@ -36,7 +37,7 @@ An off-flag keeps every JS contract: the implementation leaves the binary but in
 1. **overlays** `boards/<board>/data/` on top — the watch adds Timer/Clima/Musica/Alarmes/Celular/Atividade; the dog adds Dog Face (its `homeApp`), and
 2. **excludes** paths listed in `boards/<board>/data-exclude.txt` (one per line, relative to `data/`; `#` comments) — the watch drops Terminal, HTTP Demo, Touch Test and Web Server (tight littlefs, keyboard-centric apps); the headless boards (`devkit`, `devkit-s3`, `esp32-cam`) drop every app that draws plus `icons/`, because `CELEROS_UI=n` removes `System.draw*`/`UI`/`Keypad`/`prompt` from the firmware — the image keeps only Barebone, the headless reference (plus, on devkit-s3, the board overlay with the `USB HID` service and `Impressora`; private verticals come from `CELEROS_PRIVATE_DATA`).
 
-Partition size comes from the CSV picked above (single source of truth). New board with a data overlay: add the case to `flash_data.sh` and the overlay dir; the repo-wide app lint already globs `boards/*/data/apps` automatically. `flash_data.sh` currently accepts seven names (`smartdisplay cyd spotpear-dog waveshare-watch devkit devkit-s3 esp32-cam`) — `cyd-vspi` still has no case even though it shares the `cyd` 4MB image; add the case when that variant goes to the bench.
+Partition size comes from the CSV picked above (single source of truth). New board with a data overlay: add the case to `flash_data.sh` and the overlay dir; the repo-wide app lint already globs `boards/*/data/apps` automatically. `flash_data.sh` accepts the eight names (`smartdisplay cyd cyd-vspi spotpear-dog waveshare-watch devkit devkit-s3 esp32-cam`) — `cyd-vspi` shares the `cyd` 4MB image (same `partitions_4MB.csv` case).
 
 ## PRIVATE OVERLAYS (external verticals)
 Closed verticals are not part of this public tree. Their apps/configs/tests

@@ -36,7 +36,6 @@ set(CELEROS_SRCS
     "Runtime/JsUi.cpp"
     "Runtime/JsSystem.cpp"
     "Runtime/JsNet.cpp"
-    "Runtime/JsAi.cpp"
     "Runtime/JsFs.cpp"
     "Runtime/JsKeypad.cpp"
     "Runtime/JsSystemApps.cpp"
@@ -132,6 +131,11 @@ endif()
 # JsGfx.cpp atras do mesmo #if
 if(CONFIG_CELEROS_JS_GAME_ACCEL)
     list(APPEND CELEROS_SRCS "Runtime/JsRigid.cpp")
+endif()
+# Objeto AI (API 18/24): ~10 KB de transporte LLM/TTS. Desligado na CYD, onde
+# os apps de IA ja estao fora da imagem de dados (boards/cyd/data-exclude.txt).
+if(CONFIG_CELEROS_JS_AI)
+    list(APPEND CELEROS_SRCS "Runtime/JsAi.cpp")
 endif()
 # Wake word on-device "Hi Celer" (microWakeWord proprio sobre TFLite Micro):
 # detector em task propria + objeto WakeWord + o frontend de features

@@ -115,7 +115,9 @@ void JSBindings::appExitCleanup() {
     deleteAllSprites();
 #endif
     netAsyncReset();
+#if CONFIG_CELEROS_JS_AI
     aiReset();
+#endif
 #if CONFIG_CELEROS_USB_HOST
     usbAppReset();  // solta interfaces/listeners DELE (o registry do SO fica)
 #endif
@@ -334,40 +336,43 @@ static int tbButtonAt(int jx) {
 // retratil, tratado no bloco retratil abaixo), baixo a central, esquerda so
 // sai. Nao consome o toque (o X/topbar e os apps seguem vendo a borda); o
 // app so perde o gesto que virou sistema.
+// Estado no escopo do arquivo (nao local a funcao) porque o init de cada app
+// precisa zera-lo: um dedo que atravessava a saida do app levava o gesto
+// armado para o proximo (o "began" nao acontecia e ele abria painel/saia).
+static int s_edgeKind = 0;  // borda do gesto em curso (0 = nenhum)
+static int s_edgeX0 = 0, s_edgeY0 = 0;
+static bool s_edgePrev = false;
 static bool pollWatchEdges(bool touched, uint16_t x, uint16_t y) {
-    static int s_edge = 0;  // borda do gesto em curso (0 = nenhum)
-    static int s_x0 = 0, s_y0 = 0;
-    static bool s_prev = false;
-    const bool began = touched && !s_prev;
-    s_prev = touched;
+    const bool began = touched && !s_edgePrev;
+    s_edgePrev = touched;
     if (began) {
-        s_edge = WatchPanels::edgeAt(x, y);
-        s_x0 = x;
-        s_y0 = y;
+        s_edgeKind = WatchPanels::edgeAt(x, y);
+        s_edgeX0 = x;
+        s_edgeY0 = y;
     }
-    if (s_edge == 0) return false;
+    if (s_edgeKind == 0) return false;
     if (!touched) {
-        s_edge = 0;
+        s_edgeKind = 0;
         return false;
     }
-    const int dx = (int)x - s_x0, dy = (int)y - s_y0;
+    const int dx = (int)x - s_edgeX0, dy = (int)y - s_edgeY0;
     WatchPanels::Panel p = WatchPanels::Panel::None;
-    if (s_edge == 1 && dy >= UI::sy(60)) {
-        const int third = WatchPanels::topThirdAt(s_x0);
+    if (s_edgeKind == 1 && dy >= UI::sy(60)) {
+        const int third = WatchPanels::topThirdAt(s_edgeX0);
         if (third == 0) {
             p = WatchPanels::Panel::Quick;
         } else if (third == 1) {
             p = WatchPanels::Panel::Notifications;
         } else {
-            s_edge = 0;  // terco direito: fica com o app (revelar a topbar)
+            s_edgeKind = 0;  // terco direito: fica com o app (revelar a topbar)
             return false;
         }
-    } else if (s_edge == 2 && dy <= -UI::sy(60)) {
+    } else if (s_edgeKind == 2 && dy <= -UI::sy(60)) {
         p = WatchPanels::Panel::Notifications;
-    } else if (!(s_edge == 3 && dx >= UI::sx(70) && abs(dy) < UI::sy(50))) {
+    } else if (!(s_edgeKind == 3 && dx >= UI::sx(70) && abs(dy) < UI::sy(50))) {
         return false;
     }
-    s_edge = 0;
+    s_edgeKind = 0;
     if (p != WatchPanels::Panel::None) {
         WatchPanels::request(p, s_appPkg == LauncherUI::homeTarget());
     }
@@ -563,7 +568,9 @@ void JSBindings::present() {
     // chamadores — o longjmp nao atravessa recurso C aberto).
     if (s_jsCtx != nullptr) {
         timersTick(s_jsCtx);
+#if CONFIG_CELEROS_JS_AI
         aiTick(s_jsCtx);  // AI (API 18): entrega a resposta ao callback do app
+#endif
         // Debugger (debug on): segunda chance do attach — o cliente pode ter
         // conectado depois do lancamento; attacha com a versao dele ja no buffer
         JsDebugger::maybeAttach(s_jsCtx);
@@ -682,7 +689,9 @@ void JSBindings::present() {
 
 duk_ret_t JSBindings::js_topbarText(duk_context *ctx) {
     const char *t = duk_require_string(ctx, 0);
-    s_tbText = t ? t : "";
+    // teto ANTES da copia: atribuir a string crua a um std::string cresce sem
+    // excecao e aborta o aparelho no heap apertado (a faixa mostra uma linha)
+    s_tbText.assign(t ? t : "", strnlen(t ? t : "", 96));
     s_tbTextCustom = (s_tbText[0] != '\0');   // "" volta ao nome do app
     s_tbDirty = true;
     return 0;
@@ -709,12 +718,13 @@ duk_ret_t JSBindings::js_topbarButtons(duk_context *ctx) {
         const char *lb = duk_get_string(ctx, -1);
         duk_pop(ctx);
         if (!lb || !lb[0]) continue;
+        // teto antes da copia (std::string que cresce sem excecao aborta)
+        TbButton b;
+        b.label.assign(lb, strnlen(lb, 48));
         int pw = tftInstance->textWidth(lb, kui::type::caption());
         int vw = (int)((long)pw * 240 / tftInstance->width()) + 12;   // padding virtual
         if (vw < 28) vw = 28;
         if (cursor - vw < 60) break;           // sem espaco: reserva o titulo
-        TbButton b;
-        b.label = lb;
         b.w = vw;
         b.x = cursor - vw;
         cursor = b.x - 6;
@@ -847,9 +857,17 @@ duk_ret_t JSBindings::js_drawPNG(duk_context *ctx) {
 }
 #endif  // CONFIG_CELEROS_UI
 duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    // No svchost nao ha vidro: present() bombearia os timers do app na thread
+    // do servico (heap/UI de outra task). La so o TWDT e alimentado.
+    if (!inService()) present();  // chamada bloqueante: o que o app desenhou aparece antes
+    else esp_task_wdt_reset();
     const char* from = duk_require_string(ctx, 0);
     const char* to = duk_require_string(ctx, 1);
+    // "<to>.tmp" da copia atomica e um std::string no FileSystem: caminho
+    // absurdo (app hostil) abortaria o aparelho no crescimento sem excecoes
+    if (strlen(from) > kJsPathMax || strlen(to) > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "FS.copyFile: caminho longo demais");
+    }
     // origem E destino: copiar POR CIMA de um arquivo do sistema (ota_url,
     // PIN...) era tao perigoso quanto ler um
     if (!fsPathAllowed(from)) {
@@ -868,9 +886,15 @@ duk_ret_t JSBindings::js_copyFile(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    if (!inService()) present();  // chamada bloqueante (ver js_copyFile)
+    else esp_task_wdt_reset();
     const char* from = duk_require_string(ctx, 0);
     const char* to = duk_require_string(ctx, 1);
+    // copyTree monta "<dir>/<filho>" em std::string por nivel: teto do path
+    // (o mesmo do FS.writeFile) antes de entrar na copia
+    if (strlen(from) > kJsPathMax || strlen(to) > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "FS.copyDirectory: caminho longo demais");
+    }
     if (!fsTreeAllowed(from)) {
         char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
         snprintf(msg, sizeof(msg), "FS: copiar %s requer permissao \"system\"", from);
@@ -893,7 +917,13 @@ duk_ret_t JSBindings::js_copyDirectory(duk_context *ctx) {
 // aceita pasta vazia; sem isso o Settings nao conseguiria desinstalar apps.
 // Re-lista em passos de 50: pastas com mais filhos saiam truncadas (o
 // buffer fixo fazia a remocao parar no 50o sem erro).
-static bool removeTree(const std::string& dir) {
+// Teto de recursao: cada nivel segura FileEntry entries[50] (~2,6 KB) na
+// pilha da task do app (20 KB na CYD). Uma arvore absurda, que o proprio app
+// cria com mkdir (/local/data/<pkg>/a/a/a/...), estourava a pilha no meio da
+// remocao; acima disto aborta com false em vez de derrubar o aparelho.
+constexpr int kRemoveTreeMaxDepth = 4;
+static bool removeTree(const std::string& dir, int depth = 0) {
+    if (depth > kRemoveTreeMaxDepth) return false;
     for (;;) {
         FileEntry entries[50];
         int n = FileSystem::listDirectory(dir.c_str(), entries, 50);
@@ -903,7 +933,7 @@ static bool removeTree(const std::string& dir) {
         for (int i = 0; i < n; i++) {
             if (!fsWriteAllowed(entries[i].path.c_str())) continue;  // jail: nao e dono
             if (entries[i].isDir) {
-                if (!removeTree(entries[i].path)) return false;
+                if (!removeTree(entries[i].path, depth + 1)) return false;
             } else if (!FileSystem::deleteFile(entries[i].path.c_str())) {
                 return false;
             }
@@ -917,7 +947,8 @@ static bool removeTree(const std::string& dir) {
 }
 
 duk_ret_t JSBindings::js_removeDirectory(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    if (!inService()) present();  // chamada bloqueante (ver js_copyFile)
+    else esp_task_wdt_reset();
     const char* path = duk_require_string(ctx, 0);
     if (!fsTreeWriteAllowed(path)) {
         char msg[160];  // pre-formatado: duk_error com %s em lightfunc corrompe o heap
@@ -951,19 +982,26 @@ void JSBindings::putFns(duk_context* ctx, const JsFn* fns, int n) {
 // (a forma de tabela estatica e o template-membro no header)
 
 // ---- Identidade do svchost (API 42): pkg/perms/ctx/pasta do servico ----
-static std::string s_savedPkg;
-static uint32_t s_savedPerms = 0;
-static std::string s_savedDir;
-static duk_context* s_savedCtx = nullptr;
+// Pilha de save: o dispatch aninha (mesmo cenario do save de deps em
+// JsModules.cpp) — 1 nivel era sobrescrito pelo Begin interno e o End
+// externo restaurava vazio.
+static std::string s_savedPkg[4];
+static uint32_t s_savedPerms[4] = {0, 0, 0, 0};
+static std::string s_savedDir[4];
+static duk_context* s_savedCtx[4] = {nullptr, nullptr, nullptr, nullptr};
+static int s_savedIdentityN = 0;
 
 void JSBindings::svcIdentity(duk_context* thr, const char* appPkg, uint32_t perms,
                              const char* appDir) {
     extern void jsModulesSetAppDir(const char* d);        // JsModules.cpp
     extern const std::string& jsModulesGetAppDir();       // idem
-    s_savedPkg = s_appPkg;
-    s_savedPerms = s_perms;
-    s_savedCtx = s_jsCtx;
-    s_savedDir = jsModulesGetAppDir();
+    if (s_savedIdentityN < 4) {
+        s_savedPkg[s_savedIdentityN] = s_appPkg;
+        s_savedPerms[s_savedIdentityN] = s_perms;
+        s_savedCtx[s_savedIdentityN] = s_jsCtx;
+        s_savedDir[s_savedIdentityN] = jsModulesGetAppDir();
+    }
+    s_savedIdentityN++;
     s_appPkg = appPkg ? appPkg : "";
     s_perms = perms;
     s_jsCtx = thr;
@@ -973,11 +1011,14 @@ void JSBindings::svcIdentity(duk_context* thr, const char* appPkg, uint32_t perm
 
 void JSBindings::svcIdentityRestore() {
     extern void jsModulesSetAppDir(const char* d);        // JsModules.cpp
-    s_appPkg = s_savedPkg;
-    s_perms = s_savedPerms;
-    s_jsCtx = s_savedCtx;
+    if (s_savedIdentityN > 0) s_savedIdentityN--;
+    if (s_savedIdentityN < 4) {
+        s_appPkg = s_savedPkg[s_savedIdentityN];
+        s_perms = s_savedPerms[s_savedIdentityN];
+        s_jsCtx = s_savedCtx[s_savedIdentityN];
+        jsModulesSetAppDir(s_savedDir[s_savedIdentityN].c_str());
+    }
     s_svcActive = false;
-    jsModulesSetAppDir(s_savedDir.c_str());
 }
 
 bool JSBindings::inService() { return s_svcActive; }
@@ -1033,9 +1074,11 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // resultados nao consumidos sao liberados (o slot nunca atravessa apps)
     netAsyncReset();
 
+#if CONFIG_CELEROS_JS_AI
     // Requisicao AI de um app anterior: descartada (o callback morreu no
     // heap stash do app que saiu)
     aiReset();
+#endif
 
 #if CONFIG_CELEROS_JS_CAMERA
     // Camera de um app anterior: desligada (sensor, slots retidos e quirc)
@@ -1072,6 +1115,12 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_tbDirty = false;
     s_tbHotOnGlass = -2;
     s_bannerText.clear();
+#if CONFIG_CELEROS_UI
+    // Gesto de borda do relogio nao atravessa apps (ver pollWatchEdges): o
+    // dedo que continua no vidro apos a saida vira um pouso novo.
+    s_edgeKind = 0;
+    s_edgePrev = false;
+#endif
 
     // Quadro automatico: alocado uma vez (PSRAM) e reaproveitado entre apps
 #if CONFIG_CELEROS_UI
@@ -1404,6 +1453,14 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     static const JsFn kFnsSysDanger[] = {
         {"restart", js_restart, 0},
         {"openWifiSetup", js_openWifiSetup, 0},
+#if CONFIG_CELEROS_UI
+        // API 52: portal cativo dirigido pelo app WiFi em JS (a tela nativa
+        // saiu do firmware). Sem vidro nao ha setup por portal.
+        {"wifiPortalStart", js_wifiPortalStart, 0},
+        {"wifiPortalPoll", js_wifiPortalPoll, 0},
+        {"wifiPortalStop", js_wifiPortalStop, 0},
+        {"wifiPortalSsid", js_wifiPortalSsid, 0},
+#endif
         {"factoryReset", js_factoryReset, 1},
         {"otaCheck", js_otaCheck, 0},
         {"otaStart", js_otaStart, 2},
@@ -1568,6 +1625,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     // --- AI Object (API 18): chat LLM (opts.provider: deepseek|openrouter)
     // + AI.speak TTS (API 24, openrouter) — capability "net" (HTTPS) ---
+#if CONFIG_CELEROS_JS_AI
     if (perm(celer::PERM_NET)) {
     duk_push_object(ctx); // AI
     static const JsFn kFnsAI[] = {
@@ -1580,6 +1638,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     putFns(ctx, kFnsAI);
     duk_put_prop_string(ctx, -2, "AI");
     }
+#endif  // CONFIG_CELEROS_JS_AI
 
     // --- Mic Object (API 19): gravacao de microfone — capability "mic".
     // O audio do dono e dado sensivel: o objeto so nasce para app

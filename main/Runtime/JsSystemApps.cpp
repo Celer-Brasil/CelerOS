@@ -38,6 +38,7 @@
 #include "../Utils/AppPackage.h"
 #include "../Launcher/LauncherUI.h"
 #include "../Launcher/Screens.h"
+#include "../WebManager/WifiSetupPortal.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
 #include "JsFsJail.h"
@@ -106,14 +107,12 @@ duk_ret_t JSBindings::js_backlightSupported(duk_context *ctx) {
 duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
 #if CONFIG_CELEROS_UI
-    // Empilha a tela nativa de WiFi. Como o app JS roda sincrono, a tela
-    // so entra em cena quando o script devolver o controle ao loop do Kui
-    // (o app deve chamar System.exitApp() logo em seguida).
-    // App em task propria (CELEROS_APP_TASK): empilhar agora pintaria a
-    // tela nativa POR CIMA do app vivo — o pedido e atendido pelo
-    // AppHostScreen::finishApp quando o app sai (task da UI).
-    if (AppRunner::running()) AppRunner::requestWifiSetup();
-    else kui::Navigator::push(WifiSetupScreen::instance());
+    // API 52: a tela nativa de WiFi saiu do firmware e virou o app
+    // "celeros.wifi" (data/apps/Wifi), que usa as bindings Net.wifi* e
+    // System.wifiPortal*. Aqui so pedimos o lancamento e saimos pela mesma
+    // porta do X: o launcher consome o pedido no tick seguinte a saida.
+    LauncherUI::requestLaunch("celeros.wifi");
+    throwAppExit(ctx);
 #else
     // Sem vidro nao ha tela de setup: o caminho headless e o celerctl
     // (celerctl wifi ...), como no devkit barebone.
@@ -121,6 +120,39 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
 #endif
     return 0;
 }
+
+#if CONFIG_CELEROS_UI
+// ---- portal cativo (API 52) ------------------------------------------------
+// O app WiFi em JS dirige o AP + captive portal que a WifiSetupScreen nativa
+// dirigia. Fica no firmware porque e radio + servidor: o app so faz a tela.
+// (Build sem portal: begin() devolve false e poll() fica em Waiting — o app
+// faz feature-detect e simplesmente nao oferece o botao.)
+duk_ret_t JSBindings::js_wifiPortalStart(duk_context *ctx) {
+    duk_push_boolean(ctx, WifiSetupPortal::begin() ? 1 : 0);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_wifiPortalPoll(duk_context *ctx) {
+    std::string detail;
+    WifiSetupPortal::State st = WifiSetupPortal::poll(detail);
+    duk_push_object(ctx);
+    putInt(ctx, "state", (int)st);
+    putStr(ctx, "detail", detail.c_str());
+    return 1;
+}
+
+duk_ret_t JSBindings::js_wifiPortalStop(duk_context *ctx) {
+    (void)ctx;
+    WifiSetupPortal::end();
+    return 0;
+}
+
+duk_ret_t JSBindings::js_wifiPortalSsid(duk_context *ctx) {
+    const char* ssid = WifiSetupPortal::apSsid();
+    duk_push_string(ctx, ssid != nullptr ? ssid : "");
+    return 1;
+}
+#endif  // CONFIG_CELEROS_UI
 
 #if CONFIG_CELEROS_UI
 duk_ret_t JSBindings::js_setClip(duk_context *ctx) {
@@ -173,6 +205,11 @@ duk_ret_t JSBindings::js_launchApp(duk_context *ctx) {
     // a saida. O consentimento de permissoes do app de destino segue valendo.
     const char* target = duk_require_string(ctx, 0);
     if (!*target) duk_error(ctx, DUK_ERR_TYPE_ERROR, "launchApp: alvo vazio");
+    // requestLaunch copia para std::string: alvo absurdo (app hostil) cresce
+    // sem excecao e aborta o aparelho no heap apertado; package <= 64 chars
+    if (strlen(target) > 96) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "launchApp: alvo longo demais");
+    }
     if (s_appExitPending) return 0;  // saida ja armada: nao empilha outro pedido
     LauncherUI::requestLaunch(target);
     throwAppExit(ctx);
@@ -545,6 +582,10 @@ duk_ret_t JSBindings::js_wifiConnect(duk_context *ctx) {
     const char* ssid = duk_require_string(ctx, 0);
     const char* pass = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
     bool ok = WebManager::connect(ssid, pass);
+    // Conexao feita pelo app tem que "pegar" como a da tela nativa: liga o
+    // auto-reconnect (WebManager::enable era o passo que a WifiSetupScreen
+    // fazia depois do connect). Idempotente.
+    if (ok) WebManager::enable();
     CelerKernel::noteAppYield();  // connect espera ate 15s
     duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
@@ -648,7 +689,12 @@ static celer::AlarmSpec alarmFromObj(duk_context* ctx, duk_idx_t idx) {
     a.enabled = duk_is_undefined(ctx, -1) ? true : duk_to_boolean(ctx, -1);
     duk_pop(ctx);
     duk_get_prop_string(ctx, idx, "label");
-    if (duk_is_string(ctx, -1)) a.label = duk_get_string(ctx, -1);
+    if (duk_is_string(ctx, -1)) {
+        // teto antes da copia (o alarmCleanLabel so corta DEPOIS): atribuir a
+        // string crua a um std::string cresce sem excecao e aborta
+        const char* lb = duk_get_string(ctx, -1);
+        a.label.assign(lb ? lb : "", strnlen(lb ? lb : "", 48));
+    }
     duk_pop(ctx);
     return a;
 }
@@ -699,7 +745,13 @@ duk_ret_t JSBindings::js_removeAlarm(duk_context *ctx) {
 // System.setTimer(segundos, rotulo?) -> bool (1..86400; substitui o atual)
 duk_ret_t JSBindings::js_setTimer(duk_context *ctx) {
     int sec = duk_require_int(ctx, 0);
-    const char* lbl = duk_is_string(ctx, 1) ? duk_get_string(ctx, 1) : "";
+    // rotulo limitado: a conversao const char* -> std::string do parametro
+    // copiaria tudo (cresce sem excecao = abort no heap apertado)
+    char lbl[48] = {0};
+    if (duk_is_string(ctx, 1)) {
+        const char* l = duk_get_string(ctx, 1);
+        snprintf(lbl, sizeof(lbl), "%s", l ? l : "");
+    }
     duk_push_boolean(ctx, sec > 0 && Alarms::setTimer((uint32_t)sec, lbl));
     return 1;
 }
@@ -838,7 +890,11 @@ duk_ret_t JSBindings::js_playMusic(duk_context *ctx) {
         duk_pop(ctx);
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "playMusic: tracks deve ser um array");
     }
-    const duk_uarridx_t nTracks = duk_get_length(ctx, -1);
+    const duk_uarridx_t nTracksRaw = duk_get_length(ctx, -1);
+    // teto da varredura: array esparso com length absurdo (a.length = 2^30
+    // sem elementos) fazia o for nativo rodar bilhoes de get_prop_index sem
+    // alimentar WDT/exec-timeout = reboot. 64 varre de sobra as 4 trilhas.
+    const duk_uarridx_t nTracks = nTracksRaw > 64 ? 64 : nTracksRaw;
     for (duk_uarridx_t t = 0; t < nTracks && song.nTracks < MusicEngine::kMaxTracks; t++) {
         duk_get_prop_index(ctx, -1, t);
         if (!duk_is_object(ctx, -1)) { duk_pop(ctx); continue; }
@@ -860,7 +916,9 @@ duk_ret_t JSBindings::js_playMusic(duk_context *ctx) {
         duk_pop(ctx);
         duk_get_prop_string(ctx, -1, "notes");
         if (duk_is_array(ctx, -1)) {
-            const duk_uarridx_t n = duk_get_length(ctx, -1);
+            const duk_uarridx_t nRaw = duk_get_length(ctx, -1);
+            // mesmo teto da varredura (array esparso): 256 cobre as 48 notas
+            const duk_uarridx_t n = nRaw > 256 ? 256 : nRaw;
             for (duk_uarridx_t i = 0; i < n && tr.count < MusicEngine::kMaxNotes; i++) {
                 duk_get_prop_index(ctx, -1, i);
                 if (duk_is_array(ctx, -1) && duk_get_length(ctx, -1) >= 2) {
@@ -933,8 +991,12 @@ duk_ret_t JSBindings::js_sfx(duk_context *ctx) {
         flat = duk_is_number(ctx, -1);
         duk_pop(ctx);
     }
-    const int count = flat ? (int)len / 2 : (int)len;
-    for (int i = 0; i < count && n < MusicEngine::kMaxSfxTones; i++) {
+    // teto da varredura: com to_int, buraco/lixo do array vira 0 (ms <= 0 ->
+    // continue) e um length absurdo fazia o for nativo rodar sem fim (sem
+    // WDT/exec-timeout = reboot). 256 varre de sobra os tons do efeito.
+    duk_size_t count = flat ? len / 2 : len;
+    if (count > 256) count = 256;
+    for (duk_size_t i = 0; i < count && n < MusicEngine::kMaxSfxTones; i++) {
         int f, ms;
         if (flat) {
             duk_get_prop_index(ctx, 0, i * 2); f = duk_to_int(ctx, -1); duk_pop(ctx);

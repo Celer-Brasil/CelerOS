@@ -924,8 +924,26 @@ fuso vazio, maior que 48 caracteres ou com `|`/caracteres de controle;
 
 - `Net.wifiScan()` → array `[{ssid, rssi, secure}]` (bloqueante, ~2s).
 - `Net.wifiConnect(ssid, password)` → Boolean (bloqueante, até 15s; salva as
-  credenciais).
+  credenciais e arma o auto-reconnect).
 - `Net.wifiDisconnect()` — desconecta o STA, mantém redes salvas.
+
+### 12.4b Portal do setup de WiFi (`System.wifiPortal*`, API 52)
+
+A tela de WiFi agora é o app `WiFi` (`packageName: celeros.wifi`, em
+`data/apps/Wifi`) — ela saiu do firmware na API 52. Nas placas com vidro o app
+dirige o mesmo AP + captive portal que a tela nativa usava:
+
+- `System.wifiPortalStart()` → Boolean — sobe o AP + portal (não bloqueia).
+- `System.wifiPortalPoll()` → `{state, detail}` — `state` é `0` aguardando,
+  `1` conectando, `2` conectado, `3` falhou; `detail` traz o SSID/IP conectado
+  quando há. Chame no laço.
+- `System.wifiPortalStop()` — derruba o AP (o STA conectado é preservado).
+- `System.wifiPortalSsid()` → String — SSID do AP para mostrar na tela.
+
+Exige a capability `system`. Faça feature-detect com
+`typeof System.wifiPortalStart === "function"`: builds headless e builds sem o
+portal não expõem. `System.openWifiSetup()` continua existindo e agora abre o
+app `WiFi` (sai do app chamador, como `System.launchApp`).
 
 ### 12.5 Cópia de arquivos (`FS.copyFile(de, para)` / `FS.copyDirectory(de, para)` / `FS.removeDirectory(caminho)`)
 
@@ -2906,7 +2924,7 @@ acendimento longo (> 250 ms), ignora o próximo `led(true)` por 4x o tempo que
 ficou aceso. Pulsos curtos (piscadas) passam livres. Não serve de lanterna
 contínua.
 
-#### `Camera.scanQR({timeoutMs, attempts, led})` -> string | `null`
+#### `Camera.scanQR({timeoutMs, attempts, led, vga})` -> string | `null`
 Lê códigos QR **no próprio aparelho** (decodificador quirc; o quadro
 grayscale vai direto para o decoder — sem etapa de JPEG). Reconfigura o
 sensor para grayscale QVGA durante a leitura e devolve o modo foto depois
@@ -2914,7 +2932,9 @@ sensor para grayscale QVGA durante a leitura e devolve o modo foto depois
 Tenta até decodificar algo, estourar o orçamento de `attempts` (default:
 derivado do `timeoutMs`, uma tentativa ~250 ms) ou o `timeoutMs`
 (default 6000). `led:true` acende o flash na leitura, sujeito ao mesmo teto do
-`Camera.led` (até 800 ms por leitura; prefira `led:false` com luz ambiente). Devolve o
+`Camera.led` (até 800 ms por leitura; prefira `led:false` com luz ambiente).
+`vga:true` lê em VGA em vez de QVGA (dobra os pixels por módulo: códigos
+pequenos ou longe da lente; cada tentativa passa a ~400 ms). Devolve o
 texto decodificado ou `null`.
 
 ```javascript
@@ -3713,3 +3733,22 @@ o SHA-256 do stream antes de marcar o boot; assinatura ausente/inválida,
 hash divergente ou variante/API incompatível viram `rejected` e o agente
 reporta falha no ack. O CA pinning ainda não existe; a assinatura autentica
 o publicador e é o gate para usar `os_update` em frota de cliente.
+
+## 51. Nível de API 52 — o setup de WiFi virou app
+
+A `WifiSetupScreen` nativa saiu do firmware: o setup de WiFi agora é o app
+`WiFi` (`data/apps/Wifi`, `packageName: celeros.wifi`), escrito em JS sobre
+`Net.wifiScan`/`Net.wifiConnect` e as novas chamadas `System.wifiPortal*`
+(seção 12.4b). `System.openWifiSetup()` continua funcionando e abre esse app.
+
+Duas notas de comportamento para quem escreve apps:
+
+- `Net.wifiConnect` agora arma o auto-reconnect no sucesso - o passo que a
+  tela nativa fazia depois de conectar.
+- `System.openWifiSetup` encerra o app chamador (como `System.launchApp`),
+  então o chamador não volta para a tela anterior. Abra o app `WiFi` você
+  mesmo quando quiser controlar o fluxo.
+
+O motivo da mudança: a tela de setup é um app normal, então atualiza pelo hub
+sem OTA de firmware, e o firmware fica só com o rádio, o portal e as
+credenciais.

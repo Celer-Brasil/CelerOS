@@ -659,8 +659,27 @@ Time configuration (persisted by TimeManager). The setters **require `"system"`*
 ### 12.4 WiFi (`Net.wifiScan()` / `Net.wifiConnect(ssid, pass)` / `Net.wifiDisconnect()`)
 
 - `Net.wifiScan()` → array `[{ssid, rssi, secure}]` (blocking, ~2s).
-- `Net.wifiConnect(ssid, password)` → Boolean (blocking, up to 15s; saves credentials).
+- `Net.wifiConnect(ssid, password)` → Boolean (blocking, up to 15s; saves credentials and arms auto-reconnect).
 - `Net.wifiDisconnect()` — disconnects STA, keeps saved networks.
+
+### 12.4b WiFi setup portal (`System.wifiPortal*`, API 52)
+
+The WiFi setup screen is now the `WiFi` app (`packageName: celeros.wifi`, in
+`data/apps/Wifi`) — it left the firmware in API 52. On boards with a display it
+drives the same AP + captive portal the native screen used:
+
+- `System.wifiPortalStart()` → Boolean — brings up the AP + captive portal
+  (non-blocking).
+- `System.wifiPortalPoll()` → `{state, detail}` — `state` is `0` waiting,
+  `1` connecting, `2` connected, `3` failed; `detail` carries the connected
+  SSID/IP when available. Call it from the loop.
+- `System.wifiPortalStop()` — tears the AP down (STA is preserved if connected).
+- `System.wifiPortalSsid()` → String — SSID of the AP to show on screen.
+
+Requires the `system` capability. Feature-detect with
+`typeof System.wifiPortalStart === "function"`: headless builds and builds
+without the portal do not expose it. `System.openWifiSetup()` still exists and
+now launches the `WiFi` app (it exits the caller, like `System.launchApp`).
 
 ### 12.5 File copy (`FS.copyFile(from, to)` / `FS.copyDirectory(from, to)` / `FS.removeDirectory(path)`)
 
@@ -2604,7 +2623,7 @@ the firmware turns it off by itself after 800 ms lit and, after a long burst
 (> 250 ms), ignores the next `led(true)` for 4x the time it stayed lit. Short
 pulses (blinks) pass freely. It is not a continuous torch.
 
-#### `Camera.scanQR({timeoutMs, attempts, led})` -> string | `null`
+#### `Camera.scanQR({timeoutMs, attempts, led, vga})` -> string | `null`
 Reads QR codes **on-device** (quirc decoder; the grayscale frame goes straight
 to the decoder — no JPEG step). Reconfigures the sensor to grayscale QVGA
 while scanning and restores the photo mode afterwards (the switch costs tens
@@ -2612,7 +2631,10 @@ of ms, only when the app mixes photos and scanning). Retries until something
 decodes, the `attempts` budget (default: derived from `timeoutMs`, one
 attempt ~= 250 ms) or `timeoutMs` (default 6000) runs out. `led:true` lights
 the flash for the scan under the same cap as `Camera.led` (up to 800 ms per
-scan; prefer `led:false` in ambient light). Returns the decoded text or `null`.
+scan; prefer `led:false` in ambient light). `vga:true` scans at VGA instead
+of QVGA (doubles the pixels per module: codes that are small or far from the
+lens; each attempt takes ~400 ms instead of ~250). Returns the decoded text
+or `null`.
 
 ```javascript
 var code = Camera.scanQR({ timeoutMs: 5000, led: true });
@@ -3410,3 +3432,22 @@ partition; a missing/invalid signature, a hash mismatch or a
 variant/API mismatch becomes `rejected`, and the agent reports a failed
 ack. CA pinning does not exist yet; the signature authenticates the
 publisher and is the gate for `os_update` on a customer fleet.
+
+## 51. API Level 52 — WiFi setup is an app
+
+The native `WifiSetupScreen` left the firmware: WiFi setup is now the `WiFi`
+app (`data/apps/Wifi`, `packageName: celeros.wifi`), written in JS over
+`Net.wifiScan`/`Net.wifiConnect` plus the new `System.wifiPortal*` calls
+(section 12.4b). `System.openWifiSetup()` still works and launches that app.
+
+Two behaviour notes for app authors:
+
+- `Net.wifiConnect` now arms auto-reconnect on success — the step the native
+  screen did after connecting.
+- `System.openWifiSetup` exits the calling app (like `System.launchApp`), so
+  the caller does not return to its previous screen. Launch the `WiFi` app
+  yourself when you want to keep control of the flow.
+
+The point of the move: the setup screen is a normal app, so it upgrades from
+the hub without a firmware OTA, and the firmware keeps only the radio, the
+portal and the credentials.

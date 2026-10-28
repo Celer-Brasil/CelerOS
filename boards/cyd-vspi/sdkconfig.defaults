@@ -86,6 +86,10 @@ CONFIG_CELEROS_APP_SERVICES=y
 # CONFIG_CELEROS_MIC is not set
 # CONFIG_CELEROS_JS_PHYSICS is not set
 # CONFIG_CELEROS_WEB_SERVER is not set
+# Tela de crash com QR fora tambem (mesma conta da cyd: o codificador QR da
+# LovyanGFX custa ~10 KB e o slot OTA de 4MB e o mais apertado; o REGISTRO
+# em RAM RTC + /local/log/crash.txt segue inteiro).
+# CONFIG_CELEROS_CRASH_SCREEN is not set
 # Extras de UI (UI.custom/UI.clip) fora do lite: ~1 KB de imagem no slot OTA
 # mais apertado e sem PSRAM o redesenho parcial nao paga. O kit JS cai no
 # caminho base com a mesma API (UI.extras=false).

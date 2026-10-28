@@ -23,10 +23,4 @@ bool start(const std::string& filePath, const std::string& title, bool topbarFix
 // false quando nao ha app rodando (ou ja terminou — o chamador faz o pop)
 bool running();
 
-// System.openWifiSetup vindo de um app: o push da tela nativa tem que
-// acontecer na main task (Navigator nao e thread-safe). O AppHostScreen
-// consome o pedido quando a task do app termina.
-void requestWifiSetup();
-bool consumeWifiSetupRequest();
-
 }  // namespace AppRunner

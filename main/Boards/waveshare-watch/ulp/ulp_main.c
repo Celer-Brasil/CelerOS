@@ -283,18 +283,23 @@ int main(void) {
     // Raise: nivel baixo na INT1 (segura ate ler STATUS1). Servir limpa e
     // rearma o engine; cada evento e 1 hit e 2 hits na janela sao o gesto.
     // Qualquer hit volta o ciclo para o rapido: pulso mexendo = PWR e raise
-    // provaveis em seguida.
+    // provaveis em seguida. Leitura que FALHA nao limpou a INT (nivel segue
+    // baixo): se contasse como hit, o ciclo seguinte (leitura ok) via
+    // "2 hits na janela" e acordava o relogio com um raise falso a cada
+    // glitch de I2C no sono.
     if ((cfg_enable & ULP_EN_RAISE) && ulp_riscv_gpio_get_level(ULP_PIN_IMU_INT) == 0) {
         uint8_t st1 = 0;
-        i2c_read_reg(ULP_QMI_ADDR, ULP_QMI_STATUS1, &st1, 1);
+        const bool ok = i2c_read_reg(ULP_QMI_ADDR, ULP_QMI_STATUS1, &st1, 1);
         s_moved_at = s_ms;
         set_slow(false);
-        if (s_raise_have && (s_ms - s_raise_at) <= cfg_raise_win_ms) {
-            wake_main(ULP_WAKE_RAISE);
-            return 0;
+        if (ok) {
+            if (s_raise_have && (s_ms - s_raise_at) <= cfg_raise_win_ms) {
+                wake_main(ULP_WAKE_RAISE);
+                return 0;
+            }
+            s_raise_at = s_ms;
+            s_raise_have = true;
         }
-        s_raise_at = s_ms;
-        s_raise_have = true;
     }
 
     // VBUS: so a borda de subida acorda (dormir JA no cabo nao dispara).

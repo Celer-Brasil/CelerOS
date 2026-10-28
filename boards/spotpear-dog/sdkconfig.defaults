@@ -57,6 +57,12 @@ CONFIG_ULP_COPROC_RESERVE_MEM=4096
 # Ring de logs maior (tem PSRAM): historico do boot inteiro no logcat --dump
 CONFIG_CELEROS_LOG_RING=8192
 
+# Microfone MEMS INMP441 (I2S1 RX, pinos 4/5/6 do perfil): canal de captura
+# + objeto Mic. O CELEROS_WAKE_WORD abaixo depende disto — sem esta linha ele
+# era descartado em silencio pelo Kconfig e o cao perdeu mic E wake word
+# (bancada 2026-10-19 media o build com MIC=y; a linha nunca chegou aqui).
+CONFIG_CELEROS_MIC=y
+
 # Wake word "Hi Celer" on-device (microWakeWord V2 treinado por nos,
 # TFLite Micro): o app Dog Face ouve a palavra de ativacao e abre a janela
 # de comando de voz (API 20).

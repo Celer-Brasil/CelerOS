@@ -356,7 +356,10 @@ void motionTask(void*) {
 void start() {
     if (s_task != nullptr) return;
     if (s_imuLock == nullptr) s_imuLock = xSemaphoreCreateMutex();
-    xTaskCreate(motionTask, "celerimu", 4096, nullptr, 2, &s_task);
+    if (xTaskCreate(motionTask, "celerimu", 4096, nullptr, 2, &s_task) != pdPASS) {
+        s_task = nullptr;
+        ESP_LOGE("celer.imu", "task de movimento nao criou (sem RAM?): servico fora do ar");
+    }
 }
 
 bool raisePoll() {

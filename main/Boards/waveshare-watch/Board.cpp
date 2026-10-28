@@ -87,9 +87,11 @@ static const BoardProfile s_profile = {
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
     // I2C0 (14/15) e o barramento do touch FT3168, do PMU AXP2101, do RTC
     // PCF85063 e do IMU QMI8658: um app reconfigurando-o derruba os quatro.
-    // 19/20 sao o USB OTG nativo (CDC do celerctl); 43/44 a UART0 de fallback.
-    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 14) | (1ULL << 15) | (1ULL << 19) | (1ULL << 20) |
-                      (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8)
+    // 16 e o MCLK do codec (ES8311/ES7210 + canal do mic): tomado por um app,
+    // o audio e o microfone morrem ate rebootar. 19/20 sao o USB OTG nativo
+    // (CDC do celerctl); 43/44 a UART0 de fallback.
+    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 14) | (1ULL << 15) | (1ULL << 16) | (1ULL << 19) |
+                      (1ULL << 20) | (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8)
 };
 
 void init() {

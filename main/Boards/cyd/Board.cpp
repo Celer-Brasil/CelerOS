@@ -21,7 +21,7 @@ static const BoardProfile s_profile = {
     // rapido que o flash interno em escrita.
     .sd = {.cs = 5, .sck = 14, .miso = 12, .mosi = 13, .freqKhz = 10000},
     .hasPsram = false,
-    .backlightPwm = true,   // GPIO22 via Light_PWM (antes era fixo 100%)
+    .backlightPwm = true,   // GPIO21 via Light_PWM (antes era fixo 100%)
     .capacitiveTouch = false,
     .speakerPin = 26,  // saida de audio (amplificador SC8002B -> conector do alto-falante)
     .rotation = 3,     // vidro landscape 320x240 (varredura de sonda confirmou R3)

@@ -98,7 +98,15 @@ bool LauncherScreen::partialFrame(kui::Rect& out) {
     if ((m_dragDx < 0) != (m_dragPushed < 0)) return false;
     const int a = m_dragPushed, b = m_dragDx;
     const int lo = a < b ? a : b, hi = a < b ? b : a;
-    if (hi == lo) return false;
+    if (hi == lo) {
+        // Sem movimento desde a ultima passada: nao ha faixa para recompor.
+        // Devolver retangulo vazio (e nao false) evita o QUADRO CHEIO que o
+        // relogio (dirty 1x/s) dispararia no meio do gesto — 105 ms de
+        // travamento por segundo de arrasto. O relogio/aviso ficam para o
+        // quadro inteiro do release.
+        out = {0, 0, 0, 0};
+        return true;
+    }
     // dx < 0: a faixa e a da direita (largura |dx|); dx > 0: a da esquerda.
     const int x = (b < 0 ? UI::W : 0) + lo;
     out = {x, gridTop(), hi - lo, gridAreaH()};

@@ -119,11 +119,34 @@ class FakeDevice:
         # fila de fotos de profiling: cada KL_STATS devolve a proxima (a
         # ultima repete — o celerctl top pede 2+ seguidas)
         self.stats_q = [STATS_SNAP_A]
+        # canal hostil (RODADA 3): lixo antes da resposta, resposta saindo
+        # corrompida, ACK/resposta retida (device cala), respostas de READ
+        # atrasadas alem do timeout do host
+        self.garbage_next = 0
+        self.corrupt_reply_next = 0
+        self.ack_hold = 0
+        self.read_hold = 0
+        self.read_held = []
+        self.exec_hold = 0
+        self.hold_clock = None   # RelogioApressado: avanca o relogio do host
+        self.hellos = 0
+        self.infos = 0
 
     # ---- envio de resposta
     def reply(self, cmd, payload=b"", status=0):
-        self.ser.rx += frame_v2(cmd, payload, status) if self.proto == 2 \
+        fr = frame_v2(cmd, payload, status) if self.proto == 2 \
             else frame_v1(cmd, payload, status)
+        if self.garbage_next > 0:
+            self.garbage_next -= 1
+            # byte a mais do console (USB-JTAG/ruido): lixo antes do magic,
+            # sem formar frame — o host cacara o 0x43 e seguira limpo
+            self.ser.rx += b"\x00\x12I (99) main: ruido entre frames\r\n"
+        if self.corrupt_reply_next > 0:
+            self.corrupt_reply_next -= 1
+            bad = bytearray(fr)
+            bad[-1] ^= 0xFF  # ultimo byte do CRC: frame nao fecha
+            fr = bytes(bad)
+        self.ser.rx += fr
 
     # ---- recepcao
     def _lost_in_transit(self, data):
@@ -133,9 +156,13 @@ class FakeDevice:
         (seq,) = struct.unpack("<H", data[8:10])
         if seq in self.drop_chunk:
             self.drop_chunk.remove(seq)
+            if self.hold_clock is not None:
+                self.hold_clock.armed = True  # silencio: relogio do host salta
             return True  # sumiu: nenhum ACK, host reenvia no timeout
         if seq in self.corrupt_chunk:
             self.corrupt_chunk.remove(seq)
+            if self.hold_clock is not None:
+                self.hold_clock.armed = True  # silencio: relogio do host salta
             return True  # bit virado: CRC do frame nao fecha, device descarta
         return False
 
@@ -218,6 +245,7 @@ class FakeDevice:
 
     # ---- handlers
     def op_01(self, p):  # HELLO
+        self.hellos += 1
         v2 = p == b"CELERCTL2"
         if v2:
             ident = f"CelerOS 9.9|test|api 99|proto 2|chunk {self.chunk}|win {self.win}"
@@ -311,6 +339,7 @@ class FakeDevice:
             else frame_v1(KL["RES_DATA"], payload)
 
     def op_02(self, p):  # INFO: JSON do sistema (o pair imprime board/versao)
+        self.infos += 1
         self.reply(KL["INFO"], json.dumps({
             "version": "9.9", "board": "test", "api": 99, "uptime_s": 60,
             "app_part": "app1", "app_state": "valid",
@@ -364,6 +393,13 @@ class FakeDevice:
             data = p
         self.wr_data += data
         self.wr_crc = zlib.crc32(bytes(data), self.wr_crc) & 0xFFFFFFFF
+        if self.ack_hold > 0:
+            # device cala: chunk APLICADO e ACK perdido no caminho (o reenvio
+            # do host cai no dup-ACK com o total verdadeiro, como no firmware)
+            self.ack_hold -= 1
+            if self.hold_clock is not None:
+                self.hold_clock.armed = True  # silencio: relogio do host salta
+            return
         if self.proto == 2:
             self.reply(KL["WRITE_CHUNK"], struct.pack("<HI", self.wr_seq, len(self.wr_data)))
         else:
@@ -392,6 +428,23 @@ class FakeDevice:
         if getattr(self, "event_on_read", False):
             # o gateway empurra um evento do no virtual no meio do pull
             self.push_event(b"\x01\xbb\x02\x01W\x00ping")
+        if self.read_held:
+            # resposta atrasada finalmente sai (chegou ANTES da resposta nova:
+            # o device responde na ordem dos pedidos)
+            self.ser.rx += self.read_held.pop(0)
+        if self.read_hold > 0:
+            # device cala: resposta retida (host reenvia apos o timeout)
+            self.read_hold -= 1
+            z = p.index(b"\0")
+            off, want = struct.unpack("<II", p[z + 1:z + 9])
+            data = self.files.get(p[:z].decode(), b"")
+            body = data[off:off + want]
+            resp = struct.pack("<I", off) + body if self.proto == 2 else body
+            self.read_held.append(frame_v2(KL["READ"], resp, status=0) if self.proto == 2
+                                  else frame_v1(KL["READ"], resp, status=0))
+            if self.hold_clock is not None:
+                self.hold_clock.armed = True  # silencio: relogio do host salta
+            return
         z = p.index(b"\0")
         path = p[:z].decode()
         off, want = struct.unpack("<II", p[z + 1:z + 9])
@@ -460,10 +513,27 @@ class FakeDevice:
     def op_0c(self, p):  # EXEC: cmdline -> u8 exit + u32 len + saida
         line = p.rstrip(b"\0").decode()
         self.execs.append(line)
+        if self.exec_hold > 0:
+            # device cala no shell: EXEC some (host NAO reenvia: comando pode
+            # ter efeito; tem que falhar com timeout limpo)
+            self.exec_hold -= 1
+            if self.hold_clock is not None:
+                self.hold_clock.armed = True  # silencio: relogio do host salta
+            return
         rc, out = self.exec_out.get(line, (0, ""))
         body = out.encode("utf-8") if isinstance(out, str) else out
         # reply ja prefixa o status: payload = [exit u8][len u32][saida] e o
         # link.exec pula exatamente o status
+        if len(body) > self.chunk - 1:
+            # handleExec: o primeiro frame so carrega rc+len; a saida sai em
+            # frames KL_EXEC_CONT de MAX_PAYLOAD-1
+            self.reply(KL["EXEC"], bytes([rc]) + struct.pack("<I", len(body)))
+            off = 0
+            cap = self.chunk - 1
+            while off < len(body):
+                self.reply(KL["EXEC_CONT"], body[off:off + cap])
+                off += cap
+            return
         self.reply(KL["EXEC"], bytes([rc]) + struct.pack("<I", len(body)) + body)
 
 
@@ -481,6 +551,12 @@ class FakeSerial:
 
     def read(self, n):
         out, self.rx = self.rx[:n], self.rx[n:]
+        clk = getattr(self.dev, "hold_clock", None) if self.dev is not None else None
+        if not out and clk is not None and clk.armed:
+            # silencio do device: o tempo "passa" de uma vez para o host e os
+            # timeouts (10-30 s reais) disparam na hora do teste
+            clk.armed = False
+            clk.offset += 12.0
         return out
 
     def reset_input_buffer(self):
@@ -488,6 +564,22 @@ class FakeSerial:
 
     def close(self):
         pass
+
+
+class RelogioApressado:
+    """time.monotonic com offset controlavel para os testes de canal hostil:
+    o FakeDevice ARMA o avanco quando cala e o FakeSerial dispara o salto no
+    primeiro read sem dados. Instalar com C.time = shim (restaurar no fim)."""
+
+    def __init__(self):
+        self.offset = 0.0
+        self.armed = False
+
+    def monotonic(self):
+        return time.monotonic() + self.offset
+
+    def __getattr__(self, name):  # sleep/time/etc: os reais
+        return getattr(time, name)
 
 
 def make_link(proto=2, chunk=4096, win=4):
@@ -669,6 +761,160 @@ class TestProto2(unittest.TestCase):
         link.delete("/local/apps", recursive=True)
         self.assertNotIn("/local/apps", dev.dirs)
         self.assertEqual([k for k in dev.files if k.startswith("/local/apps/")], [])
+
+
+class TestCanalHostil(unittest.TestCase):
+    """Estados parciais do enlace vistos na bancada: device cala no meio,
+    byte a mais do console, resposta saindo corrompida, CRC errado 2x, EXEC
+    sem resposta e o re-hello do retry. O RelogioApressado evita dormir os
+    timeouts reais: o silencio do device avanca o relogio do host."""
+
+    def relogio(self):
+        shim = RelogioApressado()
+        self.addCleanup(setattr, C, "time", C.time)
+        C.time = shim
+        return shim
+
+    def test_byte_a_mais_do_console_nao_confunde_resposta(self):
+        link, dev = make_link()
+        link.hello()
+        dev.garbage_next = 1  # ruido entre frames: o host cacara o magic
+        info = link.info()
+        self.assertEqual(info["board"], "test")
+        self.assertEqual(dev.infos, 1)  # sem retry: resync foi suficiente
+
+    def test_resposta_corrompida_descarta_e_le_a_proxima(self):
+        link, dev = make_link()
+        link.hello()
+        body = json.dumps({"version": "9.9", "board": "t2", "api": 99}).encode()
+        boa = frame_v2(KL["INFO"], b"\x00" + body)
+        ruim = bytearray(boa)
+        ruim[-1] ^= 0xFF  # CRC nao fecha
+        link.keep_push = True  # nao limpar o rx pre-semeado
+        link.ser.rx += bytes(ruim) + boa
+        cmd, payload = link.xfer(KL["INFO"])
+        self.assertEqual(cmd, KL["INFO"])
+        self.assertEqual(json.loads(payload[1:].decode())["board"], "t2")
+        self.assertEqual(dev.hellos, 1)  # sem retry: o resync do host bastou
+
+    def test_info_sem_resposta_reenvia_com_rehello(self):
+        link, dev = make_link()
+        link.hello()
+        shim = self.relogio()
+        dev.hold_clock = shim
+        orig = dev.op_02
+
+        def calando(p):
+            dev.op_02 = orig  # so a primeira vez
+            shim.armed = True  # o timeout de 3 s do xfer dispara ja
+        dev.op_02 = calando
+        info = link.info()
+        self.assertEqual(info["board"], "test")
+        self.assertEqual(dev.infos, 1)  # a resposta vale na 2a tentativa
+        self.assertEqual(dev.hellos, 2)  # retry fez re-hello (sessao pode ter caido)
+
+    def test_push_device_cala_no_meio_e_reenvia(self):
+        link, dev = make_link()
+        link.hello()
+        shim = self.relogio()
+        dev.hold_clock = shim
+        dev.ack_hold = 2  # dois ACKs se perdem (chunk aplicado, resposta nao)
+        payload = b"k" * 30000  # ~8 chunks de 4094
+        path = tmpfile(payload)
+        try:
+            link.write_file(path, "/local/calado.bin", progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(dev.files["/local/calado.bin"], payload)
+
+    def test_push_crc_errado_2x(self):
+        link, dev = make_link()
+        link.hello()
+        shim = self.relogio()
+        dev.hold_clock = shim
+        dev.drop_chunk = [2, 2]  # o MESMO chunk some duas rodadas seguidas
+        payload = b"w" * 30000
+        path = tmpfile(payload)
+        try:
+            link.write_file(path, "/local/crc2x.bin", progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(dev.files["/local/crc2x.bin"], payload)
+
+    def test_pull_v1_resposta_atrasada_nao_vaza_pro_offset_seguinte(self):
+        # v1 sem offset na resposta: o device responde na ordem dos pedidos;
+        # a copia atrasada de um pedido reenviado reescreve o MESMO trecho e
+        # NUNCA pode ser atribuida ao offset seguinte (gravava dado errado)
+        link, dev = make_link(proto=1)
+        link.hello(force_v1=True)
+        self.assertEqual(link.proto, 1)
+        shim = self.relogio()
+        dev.hold_clock = shim
+        want = C.CHUNK - 1  # teto de leitura v1 (max_chunk - 1)
+        payload = bytes((i * 31) & 0xFF for i in range(2 * want + 500))
+        dev.files["/local/v1atr.bin"] = payload
+        dev.read_hold = 1  # a 1a resposta alem do timeout do host
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            link.read_file("/local/v1atr.bin", path, progress=False)
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            os.unlink(path)
+
+    def test_pull_v2_resposta_atrasada_repede_a_janela(self):
+        link, dev = make_link()
+        link.hello()
+        shim = self.relogio()
+        dev.hold_clock = shim
+        payload = bytes((i * 17) & 0xFF for i in range(50000))
+        dev.files["/local/v2atr.bin"] = payload
+        dev.read_hold = 1
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            link.read_file("/local/v2atr.bin", path, progress=False)
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), payload)
+        finally:
+            os.unlink(path)
+
+    def test_exec_saida_grande_em_continuacoes(self):
+        # handleExec: 1o frame so rc+len; a saida sai em KL_EXEC_CONT de
+        # MAX_PAYLOAD-1 (o host acumula ate out_len, log intercalado vai
+        # para a fila)
+        link, dev = make_link()
+        link.hello()
+        saida = "".join(f"linha {i:05d} do shell\n" for i in range(400))  # ~9 KB
+        dev.exec_out["ls /local"] = (0, saida)
+        code, out = link.exec("ls /local")
+        self.assertEqual(code, 0)
+        self.assertEqual(out, saida)
+        conts = [c for c in dev.execs]  # o EXEC chegou uma unica vez
+        self.assertEqual(conts, ["ls /local"])
+
+    def test_exec_sem_resposta_falha_sem_reenviar(self):
+        # EXEC nao e idempotente ("reboot" passaria por ali): timeout limpo,
+        # nenhum reenvio automatico
+        link, dev = make_link()
+        link.hello()
+        shim = self.relogio()
+        dev.hold_clock = shim
+        dev.exec_hold = 1
+        with self.assertRaises(C.CelerError) as ctx:
+            link.exec("svc setup x")
+        self.assertIn("timeout", str(ctx.exception))
+        self.assertEqual(dev.execs, ["svc setup x"])  # uma unica vez
+
+    def test_timeout_mutavel_do_ser_e_restaurado(self):
+        # read_exact usa ser.timeout como relogio da leitura; sem o restore
+        # ele ficava <= 1.0 para sempre (o set_baud reabria a porta errado)
+        link, dev = make_link()
+        link.hello()
+        self.assertEqual(link.ser.timeout, 3.0)
+        link.info()
+        self.assertEqual(link.ser.timeout, 3.0)
 
 
 class TestOta(unittest.TestCase):

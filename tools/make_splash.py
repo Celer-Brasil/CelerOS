@@ -29,7 +29,8 @@ bg_hex = args.bg.replace("0x", "").replace("0X", "")
 bg = tuple(int(bg_hex[i:i + 2], 16) for i in (0, 2, 4))
 
 img = Image.open(args.src).convert("RGBA")
-bbox = img.getbbox()  # recorta margens transparentes
+bbox = img.getchannel("A").getbbox()  # recorta margens transparentes (pelo alfa:
+# getbbox() dos 4 canais conta pixel RGB colorido com alfa 0 como conteudo)
 if bbox:
     img = img.crop(bbox)
 

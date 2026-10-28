@@ -509,14 +509,40 @@ async function release(cmd, action) {
 }
 
 async function addBreak(spec, temp) {
-    var m = /^(?:(\S+):)?(\d+)(?:\s+(?!if\b)(\S+))?(?:\s+if\s+(.+))?$/.exec(spec);
-    if (!m) { out('uso: b <linha> [arquivo] [if <condicao>]  (ou b arquivo:linha)'); return null; }
-    var line = parseInt(m[2], 10);
-    var file = resolveFile(m[1] || m[3]);
+    // O caminho pode ter espaco ("App Store"): o `if <cond>` e sempre o
+    // sufixo e a linha e o ULTIMO ":digitos" do spec. Corta o " if " de tras
+    // pra frente e so aceita o corte em que o que sobra ainda tem linha no
+    // comeco (N ...) sem arquivo comecando em "if", ou no fim (arq:N) —
+    // " if " dentro do caminho ou da propria condicao nao engana.
+    var cond = '';
+    var cut = spec.lastIndexOf(' if ');
+    while (cut >= 0) {
+        var tail = spec.slice(cut + 1);
+        var head = spec.slice(0, cut);
+        var okHead = /^if\s+\S/.test(tail) &&
+            ((/^\d+/.test(head) && !/^if\s/.test(head.replace(/^\d+\s*/, ''))) ||
+             /:\d+$/.test(head));
+        if (okHead) { cond = tail.replace(/^if\s+/, ''); spec = head; break; }
+        cut = head.lastIndexOf(' if ');
+    }
+    var file, line;
+    var mp = /^(.+):(\d+)$/.exec(spec);          // arq:linha (arq com espaco)
+    var ml = !mp ? /^(\d+)(?:\s+(.+))?$/.exec(spec) : null;  // linha [arq]
+    if ((!mp || !mp[1]) && !ml) {
+        out('uso: b <linha> [arquivo] [if <condicao>]  (ou b arquivo:linha; caminho pode ter espaco)');
+        return null;
+    }
+    if (mp && mp[1]) { file = mp[1]; line = parseInt(mp[2], 10); }
+    else {
+        line = parseInt(ml[1], 10);
+        file = (ml[2] || '').trim();
+        if (/^if(\s|$)/.test(file)) file = '';   // "b 14 if " sem condicao
+    }
+    file = resolveFile(file);
     if (!file) { out('arquivo desconhecido: use `b <linha> /local/apps/X/main.js`'); return null; }
     var r = await rpc(D.CMD.ADDBREAK, [D.str(file), D.int(line)]);
     if (!r.ok) { out(C.err(errText(r))); return null; }
-    var bp = { file: file, line: line, cond: m[4] || '', hits: 0, temp: temp };
+    var bp = { file: file, line: line, cond: cond, hits: 0, temp: temp };
     bps.push(bp);
     var warn = looksEmpty(file, line) ? C.err('  (linha sem codigo: nunca vai disparar)') : '';
     if (!temp) {

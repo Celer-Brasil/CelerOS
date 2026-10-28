@@ -82,8 +82,11 @@ def load_bonds(path=None):
 def save_bonds(bonds, path=None):
     p = Path(path) if path else bonds_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({a: k.hex() for a, k in sorted(bonds.items())}))
-    os.chmod(p, 0o600)   # a chave e credencial: so o dono le
+    # cria JA privado (0600 na criacao): gravar primeiro e chmod depois
+    # deixava a chave legivel para outros usuarios na janela entre os dois
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps({a: k.hex() for a, k in sorted(bonds.items())}))
 
 
 # ------------------------------------------------------------- motor malha --
@@ -245,7 +248,14 @@ async def _link_pair(args):
 async def _link_send(args):
     link = LinkClient()
     await open_and_pair(link, args.alvo, code=args.code)
-    await link.send(args.msg)
+    try:
+        await link.send(args.msg)
+    except ValueError:
+        # payload grande: traceback bruto deixava o link BLE aberto no exit
+        await link.close()
+        print("erro: payload > %d bytes (limite MTU do firmware)" % MAX_MSG,
+              file=sys.stderr)
+        return 1
     print("> %s" % args.msg)
     t0 = time.monotonic()
     while time.monotonic() - t0 < args.wait:
@@ -276,7 +286,12 @@ async def _link_chat(args):
             if line.strip() in ("sair", "quit", "exit"):
                 break
             if line.strip():
-                await link.send(line)
+                try:
+                    await link.send(line)
+                except ValueError:
+                    print("erro: linha > %d bytes, nao enviada" % MAX_MSG,
+                          file=sys.stderr)
+                    continue
                 print("> %s" % line)
     except EOFError:
         pass

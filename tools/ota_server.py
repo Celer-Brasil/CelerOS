@@ -94,7 +94,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":  # HEAD: so os headers (como no /firmware.bin)
+                self.wfile.write(body)
         elif path == "/firmware.bin":
             try:
                 size = os.path.getsize(self.bin_path)

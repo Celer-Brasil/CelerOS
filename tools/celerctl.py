@@ -168,14 +168,22 @@ def read_exact(ser, n, timeout):
     """Le exatamente n bytes (bloqueando ate timeout)."""
     buf = b""
     deadline = time.monotonic() + timeout
-    while len(buf) < n:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise CelerError("timeout lendo do dispositivo")
-        ser.timeout = min(remaining, 1.0)
-        chunk = ser.read(n - len(buf))
-        if chunk:
-            buf += chunk
+    original = getattr(ser, "timeout", None)
+    try:
+        while len(buf) < n:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CelerError("timeout lendo do dispositivo")
+            ser.timeout = min(remaining, 1.0)
+            chunk = ser.read(n - len(buf))
+            if chunk:
+                buf += chunk
+    finally:
+        # o timeout mutavel e o relogio da leitura, nao um ajuste permanente:
+        # sem o restore o ser.timeout ficava <= 1.0 para sempre (o set_baud
+        # reabria a porta com 1.0 s em vez do timeout configurado)
+        if original is not None:
+            ser.timeout = original
     return buf
 
 
@@ -251,6 +259,14 @@ def save_token(addr, token, devid=None):
         cache[addr] = token
         if devid:
             cache["id:" + devid] = token
+        # 0600: o token abre o bridge (OTA/shell) para qualquer processo local
+        if p.exists():
+            os.chmod(p, 0o600)
+        elif hasattr(os, "open"):
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(cache, indent=1, sort_keys=True))
+            return
         p.write_text(json.dumps(cache, indent=1, sort_keys=True))
     except OSError:
         pass  # cache e conveniencia: sem ele, --token/env continuam valendo
@@ -565,6 +581,8 @@ class HostLink:
         """Abre um recurso LOCAL do gateway; devolve dict com sid/lease/transp.
         Levanta CelerError com o motivo do ResProto na recusa."""
         nome_b = nome.encode()
+        if not 1 <= len(nome_b) <= 255:
+            raise CelerError("nome do recurso: 1 a 255 bytes")
         if isinstance(opts, dict):
             params = json.dumps(opts).encode()
         else:
@@ -975,6 +993,7 @@ class HostLink:
         targets = [(off, min(want, total - off)) for off in range(0, total, want)] or [(0, 0)]
         done = set()
         pend = {}   # offset -> n pedido
+        inflight = []  # v1: [off, n, enviados, recebidos] — respostas sem offset
         idx = 0
         last_frame = time.monotonic()
         tries = 0
@@ -986,6 +1005,8 @@ class HostLink:
                         req = remote_path.encode() + b"\0" + struct.pack("<II", off, n)
                         self.ser.write(self._frame(KL["READ"], req))
                         pend[off] = n
+                        if self.proto == 1:
+                            inflight.append([off, n, 1, 0])
                     idx += 1
                 if not pend:
                     break
@@ -999,15 +1020,29 @@ class HostLink:
                         (off,) = struct.unpack("<I", body[:4])
                         body = body[4:]
                         if off not in pend:
+                            if off in done:
+                                continue  # resposta duplicada (reenvio apos timeout): descarta
                             raise CelerError(f"READ voltou offset {off} fora da janela")
                     else:
-                        off = min(pend)  # stop-and-wait: o mais antigo
-                    del pend[off]
+                        # v1 sem offset na resposta: as respostas chegam na
+                        # ORDEM dos pedidos (dispatch serializado no device),
+                        # entao a resposta vale sempre para o pedido mais
+                        # antigo em voo. A copia atrasada de um pedido reenviado
+                        # reescreve o MESMO trecho (inofensivo) — atribui-la ao
+                        # proximo offset gravaria dado errado.
+                        if not inflight:
+                            continue  # duplicata de um chunk ja concluido
+                        ent = inflight[0]
+                        off = ent[0]
+                        ent[3] += 1
+                    pend.pop(off, None)
                     f.seek(off)
                     f.write(body)
                     done.add(off)
                     tries = 0
                     last_frame = time.monotonic()
+                    if self.proto == 1 and inflight and inflight[0][3] >= inflight[0][2]:
+                        inflight.pop(0)
                 elif cmd in PUSH_CMDS:
                     self.push_queue.append((cmd, payload))
                     last_frame = time.monotonic()
@@ -1018,8 +1053,17 @@ class HostLink:
                     tries += 1
                     if tries > 3:
                         raise CelerError("pull travado (repedidos esgotados)")
-                    pend = {}
-                    idx = 0
+                    if self.proto == 1:
+                        # repete o MESMO pedido em voo (a copia atrasada do
+                        # device continua valida); nova copia de resposta
+                        # reescreve o mesmo trecho
+                        for ent in inflight:
+                            req = remote_path.encode() + b"\0" + struct.pack("<II", ent[0], ent[1])
+                            self.ser.write(self._frame(KL["READ"], req))
+                            ent[2] += 1
+                    else:
+                        pend = {}
+                        idx = 0
                     last_frame = time.monotonic()
                 if progress:
                     show_progress(label, sum(n for o, n in targets if o in done), total)
@@ -1450,7 +1494,11 @@ def open_link(args):
                 die("nenhum CelerOS encontrado (USB ou WiFi; usar -p PORTA/IP)")
             link = try_open(f"{net[0][0]}:{BRIDGE_PORT}")
         if link is None:
-            die(f"{devices[0][0].device if devices else 'device'} nao responde "
+            # o motivo da recusa ("OTA em curso", "em uso por outro processo",
+            # "sessao ativa em outro canal") e a mensagem acionavel: sem ela
+            # o usuario procurava um problema de protocolo que nao existia
+            die(reason[0] if reason else
+                f"{devices[0][0].device if devices else 'device'} nao responde "
                 "ao protocolo HostLink")
     if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD and link.ser.baudrate == DEFAULT_BAUD:
         link.set_baud(args.baud)
@@ -1506,7 +1554,9 @@ def _cached_token_state(addr, devid=None):
 
 
 def cmd_devices(args):
-    found = find_devices(verbose=True)
+    # verbose so no -l: no modo curto o bloco de detalhe + a linha curta
+    # imprimiam a MESMA placa USB duas vezes
+    found = find_devices(verbose=bool(args.long))
     net = find_net_devices()
     cache = load_token_cache()
     for ip, ident in net:
@@ -2257,8 +2307,11 @@ def cmd_mesh(args):
             elif args.mesh_cmd == "accept":
                 link.res_ctl(SUB["ACCEPT"], b"\x00" if args.off else b"\x01")
             elif args.mesh_cmd == "invite":
+                alvo_b = args.alvo.encode()
+                if not 1 <= len(alvo_b) <= 255:
+                    die("alvo do convite: 1 a 255 bytes")
                 print("conectando em %s pelo CelerLink..." % args.alvo)
-                r = link.res_ctl(SUB["INVITE"], bytes((len(args.alvo.encode()),)) + args.alvo.encode(), timeout=30)
+                r = link.res_ctl(SUB["INVITE"], bytes((len(alvo_b),)) + alvo_b, timeout=30)
                 if r[:1] == b"\x01":
                     print("convite aceito: %s ja era pareado (bond), entrou sem codigo" % args.alvo)
                 else:
@@ -2359,6 +2412,10 @@ def cmd_cat(args):
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
             got += len(data)
+        if got < st["size"]:
+            # o device prometeu st["size"] e calou no meio: entregar metade do
+            # arquivo no stdout (scripting) e pior que falhar ruidoso
+            die(f"cat incompleto: {got} de {st['size']} bytes de {args.path}")
     finally:
         link.close()
 
@@ -3012,7 +3069,13 @@ def cmd_debug(args):
 
     def handle(cmd_, payload):
         if cmd_ == KL["DEBUG_DATA"]:
-            conn.sendall(payload)
+            # conn e nao-bloqueante: cliente lento (REPL imprimindo) enchia o
+            # buffer e o BlockingIOError encerrava o proxy como "serial caiu"
+            try:
+                conn.sendall(payload)
+            except (BlockingIOError, InterruptedError):
+                select.select([], [conn], [], 2.0)
+                conn.sendall(payload)
         elif cmd_ == KL["LOG_DATA"]:
             emit_log(payload[1:].decode("utf-8", "replace"))
 
@@ -3602,7 +3665,7 @@ _DEV_ONLY = {"test.js"}
 
 # pastas que nunca sobem: .dev (telas do `celerctl dev`, fora do git) e
 # _dev (fonte dev-only VERSIONADA ao lado do app: pipeline de arte, renders
-# brutos — ex. hub_apps/Lenda de Celer/_dev). O hub ja e flat (so a raiz)
+# brutos — ex. studio_games/<jogo>/_dev). O hub ja e flat (so a raiz)
 _DEV_DIRS = (".dev", "_dev")
 
 
@@ -4852,13 +4915,14 @@ def main():
         die(str(e))
     except serial.SerialException as e:
         die(f"porta serial: {e}")
+    except PORT_GONE[2:] as e:
+        # termios.error e subclasse de OSError: tem que vir ANTES do except
+        # OSError, senao este ramo era codigo morto e a CDC que sumia no meio
+        # (reboot/re-enumeracao) saia como "conexao: ..." em vez da receita
+        die(f"porta serial sumiu ({e}): o device reiniciou? tente de novo")
     except OSError as e:
         # bridge TCP fora do ar / reset no meio da sessao
         die(f"conexao: {e}")
-    except PORT_GONE as e:
-        # termios.error: a CDC sumiu no meio (reboot/re-enumeracao); era
-        # traceback cru (bancada 2026-10-11, ota push logo apos o build)
-        die(f"porta serial sumiu ({e}): o device reiniciou? tente de novo")
     except KeyboardInterrupt:
         print()
         sys.exit(130)

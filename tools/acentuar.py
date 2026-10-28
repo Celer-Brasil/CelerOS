@@ -131,7 +131,10 @@ def main():
     mapping = load_map()
     total = 0
     for path in args.files:
-        src = open(path, encoding="utf-8").read()
+        # newline="": le e grava sem traduzir quebras (um arquivo CRLF nao
+        # pode sair todo reescrito em LF — isso viraria diff fantasma)
+        with open(path, encoding="utf-8", newline="") as f:
+            src = f.read()
         changes = []
         proc = process_cpp_ui if args.cpp_ui else (process_cpp if args.cpp else process_js)
         new = proc(src, mapping, changes)
@@ -140,7 +143,8 @@ def main():
             uniq = sorted(set(changes))
             print("%s: %d trocas  %s" % (path, len(changes), ", ".join("%s>%s" % p for p in uniq)))
             if args.write:
-                open(path, "w", encoding="utf-8").write(new)
+                with open(path, "w", encoding="utf-8", newline="") as f:
+                    f.write(new)
     print("total: %d trocas%s" % (total, "" if args.write else " (ensaio; use --write)"))
 
 

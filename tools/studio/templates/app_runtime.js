@@ -394,7 +394,7 @@ function studioAppBoot(data, bases) {
         var inside = tr.x >= x && tr.x < x + w && tr.y >= y && tr.y < y + h;
         var mode = f.mode || 'hold';
         if (mode === 'hold') {
-            if (rec && tr.released) { stopMic(s, f); return true; }
+            if (rec && tr.released) { stopMic(s, ent, f); return true; }
             if (!rec && tr.down && inside && !s._micDown) {
                 s._micDown = true;
                 startMic(s, f);
@@ -402,7 +402,7 @@ function studioAppBoot(data, bases) {
             }
             if (!tr.down) s._micDown = false;
         } else if (tr.tap && inside) {
-            if (rec) stopMic(s, f);
+            if (rec) stopMic(s, ent, f);
             else startMic(s, f);
             return true;
         }
@@ -413,14 +413,16 @@ function studioAppBoot(data, bases) {
         try { s.recording = !!MIC.start({ ms: f.maxMs || 8000 }); } catch (e) { s.recording = false; }
     }
 
-    function stopMic(s, f) {
+    function stopMic(s, ent, f) {
         var out = null;
         try { out = MIC.stop(); } catch (e2) { out = null; }
         s.recording = false;
         s._micDown = false;
         if (out) {
             setSt(s, f.key, out);
-            events.push({ name: f.event || 'mic:done', value: { bytes: out.length }, source: s.key });
+            // source = fid da entidade (como nos outros eventos): o dispatch
+            // filtra script por e.fid, e uma chave de tela nunca casa
+            events.push({ name: f.event || 'mic:done', value: { bytes: out.length }, source: ent.fid });
         }
     }
 

@@ -690,10 +690,10 @@ function buildLegacy(project, check, warnings, buildDir) {
         if (n > 30 * 1024 && (p.api || 0) < 6) failBuild(f + ' > 30KB exige api >= 6');
     }
     const psram = (p.requires || []).indexOf('psram') >= 0;
-    const ceiling = psram ? 1024 * 1024 : 48 * 1024;
+    const ceiling = psram ? 1024 * 1024 : 64 * 1024;
     if (jsTotal > ceiling) {
         failBuild('JS enxuto soma ' + (jsTotal / 1024).toFixed(1) + 'KB (teto ' +
-                  (psram ? '1MB' : '48KB sem psram'));
+                  (psram ? '1MB' : '64KB sem psram'));
     }
 
     const { runLint } = require('../../app_lint/lint.js');
@@ -880,10 +880,10 @@ function buildProject(dir, opts) {
         if (n > 30 * 1024 && (p.api || 0) < 6) failBuild(f + ' > 30KB exige api >= 6');
     }
     const psram = (p.requires || []).indexOf('psram') >= 0;
-    const ceiling = psram ? 1024 * 1024 : 48 * 1024;
+    const ceiling = psram ? 1024 * 1024 : 64 * 1024;
     if (jsTotal > ceiling) {
         failBuild('JS enxuto soma ' + (jsTotal / 1024).toFixed(1) + 'KB (teto ' +
-                  (psram ? '1MB' : '48KB sem psram'));
+                  (psram ? '1MB' : '64KB sem psram'));
     }
     if (psram && jsTotal > 900 * 1024) {
         warnings.push({ code: 'build.size', path: 'pacote',

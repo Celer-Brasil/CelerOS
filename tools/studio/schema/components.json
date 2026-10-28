@@ -860,6 +860,14 @@
           "default": "visao",
           "label": "Chave da resposta"
         },
+        "maxTokens": {
+          "type": "int",
+          "default": 512,
+          "min": 64,
+          "max": 4096,
+          "label": "Tokens máximos",
+          "hint": "teto de resposta do provedor (default 512)"
+        },
         "errorKey": {
           "type": "string",
           "default": "erro",

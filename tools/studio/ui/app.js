@@ -1607,38 +1607,6 @@ function drawHitbox(ctx, e) {
   ctx.restore();
 }
 
-function entityBounds(e) {
-  const hud = hudBox(e);
-  if (hud) return hud;
-  const t = e.transform || {};
-  const p = entityParts(e);
-  if (p.sprite) {
-    const s = entitySize(e);
-    const piv = spritePivot(e);
-    const ax = t.ax === undefined ? piv.ax : t.ax;
-    const ay = t.ay === undefined ? piv.ay : t.ay;
-    return { x: (t.x || 0) - s.w * ax, y: (t.y || 0) - s.h * ay, w: s.w, h: s.h };
-  }
-  if (p.text) {
-    const s = entitySize(e);
-    const px = tsPx(p.text.ts, p.text.px);
-    const x = p.text.align === 'center' ? (t.x || 0) - s.w / 2 : (p.text.align === 'right' ? (t.x || 0) - s.w : (t.x || 0));
-    const y = p.text.valign === 'middle' ? (t.y || 0) - s.h / 2 : (p.text.valign === 'bottom' ? (t.y || 0) - s.h : (t.y || 0));
-    return { x, y, w: s.w, h: s.h };
-  }
-  if (p.shape) {
-    if (p.shape.shape === 'circle') {
-      const r = p.shape.r || (p.shape.w || 0) / 2;
-      return { x: (t.x || 0) - r, y: (t.y || 0) - r, w: r * 2, h: r * 2 };
-    }
-    if (p.shape.shape === 'line') {
-      return { x: (t.x || 0), y: (t.y || 0), w: p.shape.x2 || 0, h: p.shape.y2 || 0 };
-    }
-    return { x: (t.x || 0) - (p.shape.w || 0) / 2, y: (t.y || 0) - (p.shape.h || 0) / 2,
-             w: p.shape.w || 0, h: p.shape.h || 0 };
-  }
-  return { x: (t.x || 0) - 10, y: (t.y || 0) - 10, w: 20, h: 20 };
-}
 
 function entityBounds(e) {
   const t = e.transform || {};
@@ -2315,9 +2283,11 @@ function hitTest(w) {
 async function ops(list, opts) {
   opts = opts || {};
   try {
+    const body = { ops: list };
+    if (opts.ifRev !== undefined && opts.ifRev !== null) body.ifRev = opts.ifRev;
     const r = await api('/api/command', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ops: list }),
+      body: JSON.stringify(body),
     });
     const n = (r.changed || []).length;
     log('ops: ' + list.length + ' comando(s), ' + n + ' arquivo(s)' + (r.dryRun ? ' [dry-run]' : ''), 'ok');
@@ -2731,7 +2701,9 @@ function aiRender() {
   if (send) send.disabled = AI.busy;
   const hint = $('#aiHint');
   if (hint) {
-    hint.textContent = AI.busy ? 'pensando...' : (AI.image ? 'imagem anexada' : '');
+    hint.textContent = AI.busy ? 'pensando...' : (AI.image ? 'imagem anexada (clique p/ tirar)' : '');
+    hint.onclick = (!AI.busy && AI.image) ? () => { AI.image = null; aiRender(); } : null;
+    hint.style.cursor = (!AI.busy && AI.image) ? 'pointer' : '';
   }
 }
 
@@ -2752,6 +2724,7 @@ async function aiSend(fixMode) {
     AI.log.push({ role: 'assistant', text: (r.say || '(sem explicacao)') +
       (r.steps > 1 ? '   [' + r.steps + ' tentativas]' : '') });
     AI.pending = r.ops && r.ops.length ? { ops: r.ops, result: r.result } : null;
+    AI.image = null;             // anexo consumido: nao reenviar no proximo prompt
     if (r.snapshot) setSnapshot(r.snapshot, {});
     if (r.usage) log('ia: ' + (r.usage.total_tokens || '?') + ' tokens', 'dim');
   } catch (e) {
@@ -2768,9 +2741,12 @@ async function aiSend(fixMode) {
 async function aiApply() {
   if (!AI.pending) return;
   const list = AI.pending.ops;     // NAO chamar de `ops`: sombreia o helper ops()
+  // ifRev da previa: se o projeto mudou entre prever e aplicar, o lote falha
+  // em vez de pisar em mudanca externa (o watcher do studio roda solto)
+  const ifRev = AI.pending.result ? AI.pending.result.rev : undefined;
   AI.pending = null;
   try {
-    const r = await ops(list);
+    const r = await ops(list, ifRev !== undefined ? { ifRev: ifRev } : {});
     AI.log.push({ role: 'assistant', text: 'aplicado: ' + ((r.changed || []).length) +
       ' arquivo(s)' + (r.rev ? ', rev ' + r.rev : '') });
   } catch (e) {
@@ -2857,10 +2833,11 @@ function aiWire() {
   $('#btnAiMic').onclick = () => {
     if (AI.busy) return;
     const btn = $('#btnAiMic');
+    AI.busy = true;              // ja no gravar: 2o clique nao regrava por cima
+    aiRender();
     btn.textContent = 'gravando...';
     recordWav(4000).then((b64) => {
       btn.textContent = 'voz';
-      AI.busy = true;
       AI.log.push({ role: 'user', text: '(audio 4s)' });
       aiRender();
       return api('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' },

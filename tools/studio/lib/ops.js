@@ -422,17 +422,36 @@ const OPS = {
             deepMerge(c.fields, op.fields);
         }
         if (op.field !== undefined) {
-            const field = String(op.field).replace(/^fields\./, '');
-            if (!field) F.fail('op.args', 'component.set exige field');
-            if (unsafeKey(field)) F.fail('op.field', 'campo nao permitido: ' + field);
-            const cat = SC.componentCatalog()[c.type];
-            if (cat && !cat.fields[field]) {
-                F.fail('op.field', 'campo desconhecido em ' + c.type + ': ' + field,
-                       { hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+            const rawField = String(op.field);
+            // "fields.<chave>" num componente com objeto fields (script com
+            // exports.props): escreve DENTRO de c.fields.fields (o lugar que
+            // o build/validate leiam). Cada op parte do snapshot atual, entao
+            // o inspetor pode mandar uma tecla por op sem perder as outras.
+            if (rawField.indexOf('fields.') === 0 && rawField.length > 'fields.'.length) {
+                const key = rawField.slice('fields.'.length);
+                if (unsafeKey(key)) F.fail('op.field', 'campo nao permitido: ' + key);
+                const catF = SC.componentCatalog()[c.type];
+                if (!catF || !catF.fields.fields) {
+                    F.fail('op.field', c.type + ' nao tem objeto fields',
+                           { hint: 'campos: ' + (catF ? Object.keys(catF.fields).join(', ') : '?') });
+                }
+                c.fields = c.fields || {};
+                c.fields.fields = c.fields.fields || {};
+                if (op.value === null) delete c.fields.fields[key];
+                else c.fields.fields[key] = op.value;
+            } else {
+                const field = rawField;
+                if (!field) F.fail('op.args', 'component.set exige field');
+                if (unsafeKey(field)) F.fail('op.field', 'campo nao permitido: ' + field);
+                const cat = SC.componentCatalog()[c.type];
+                if (cat && !cat.fields[field]) {
+                    F.fail('op.field', 'campo desconhecido em ' + c.type + ': ' + field,
+                           { hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+                }
+                c.fields = c.fields || {};
+                if (op.value === null) delete c.fields[field];
+                else c.fields[field] = op.value;
             }
-            c.fields = c.fields || {};
-            if (op.value === null) delete c.fields[field];
-            else c.fields[field] = op.value;
         }
         if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);
         return { component: c };

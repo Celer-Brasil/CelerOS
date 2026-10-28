@@ -55,7 +55,7 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 - **Build deterministico**: mesma fonte => mesmos bytes; sem timestamps no
   pacote; assets/cenas ordenados.
 - **Device**: JS ES5 (Duktape), pacote flat, 8 deps, 16 extras, 128 KB/asset,
-  256 KB de assets, 1 MB JS com PSRAM (48 KB sem), 256 KB/modulo.
+  256 KB de assets, 1 MB JS com PSRAM (64 KB sem), 256 KB/modulo.
 - **Prefab e achatado no build**; o runtime nunca resolve prefab.
 - **Nada de `#ifdef` de placa** e nada de dep nova no hub para o runtime.
 - **Componente pertence a um modo** (`runtime` no catalogo: game/app/any):

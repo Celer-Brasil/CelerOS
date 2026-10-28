@@ -3,7 +3,9 @@
 // isso como formulario tipado (inspetor) e como default dos campos do
 // componente. NUNCA executamos o script do projeto: extraimos apenas o
 // literal apos `exports.props =` (varredura de chaves balanceadas, ciente de
-// strings/comentarios) e avaliamos so ele com new Function.
+// strings/comentarios) e avaliamos so ele, num reino vm SEM globais — o
+// literal ve de texto do projeto/copiloto, e um `new Function` rodaria no
+// escopo global do Studio (process/require ao alcance de IIFE no literal).
 //
 // Formato aceito (o campo do catalogo, com atalhos):
 //   exports.props = {
@@ -13,6 +15,7 @@
 //       dica: { type: 'string', default: '', hint: 'texto livre' }
 //   };
 
+const vm = require('vm');
 const TYPES = ['number', 'int', 'bool', 'string', 'color', 'enum', 'json'];
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
@@ -127,8 +130,9 @@ function propsOfSource(src) {
     if (!literal) return { props: {}, found: false, error: null };
     let obj;
     try {
-        // avalia SO o literal: sem acesso ao script, ao FS ou ao projeto
-        obj = new Function('"use strict"; return (' + literal + ');')();
+        // avalia SO o literal, num reino sem globais: sem processo, require
+        // ou FS do Studio (o texto pode vir do copiloto/projeto alheio)
+        obj = vm.runInNewContext('(' + literal + ')', {}, { timeout: 250 });
     } catch (e) {
         return { props: {}, found: true, error: 'exports.props invalido: ' + e.message };
     }

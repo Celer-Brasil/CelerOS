@@ -4995,7 +4995,8 @@ def build_parser():
     a = apps_sub.add_parser("deps-status", help="drift do cache de deps no DEVICE "
                             "contra o repo (tamanho + crc32 por versao)")
     a = apps_sub.add_parser("run", help="abre um app instalado (exit + run)")
-    a.add_argument("name", help="nome da pasta do app (procura /local e /sd)")
+    a.add_argument("name", help="pasta, sufixo, nome de exibicao ou packageName "
+                               "do app (procura /local e /sd)")
     p.set_defaults(func=cmd_apps)
     return parser
 

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 52 — 367 funcoes.
+// API level 52 — 371 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -20,6 +20,7 @@ interface UITextOpts {
 }
 interface UITouch { down: boolean; x: number; y: number; tap: boolean; released: boolean; moved: boolean; sx: number; sy: number; }
 interface UIListItem { label: string; sub?: string; right?: string; rightColor?: number; bars?: number; enabled?: boolean; }
+interface AlarmOpts { hour: number; minute: number; days?: number; enabled?: boolean; label?: string; }
 
 // CelerNet (API 26): malha BLE — poll/nodes/status
 interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }
@@ -43,38 +44,38 @@ declare const System: {
     pushSprite(x: number, y: number, arg2?: number): void;
     /** se true, TODAS as chamadas System.draw... e `System.fill...` subsequentes são interceptadas e desenhadas */
     bindSprite(enabled: boolean): void;
-    useSprite(arg0: number): any;
+    useSprite(id: number): any;
     spriteSlots(): any;
     /** desenho de linha vertical acelerado por hardware. Substancialmente mais rápido que `System.fillRect()` para fatias de */
     drawFastVLine(x: number, y: number, h: number, color: number): void;
     /** desenho de linha horizontal acelerado por hardware. */
     drawFastHLine(x: number, y: number, w: number, color: number): void;
     verletNew(iterations?: number, radius?: number): any;
-    verletFree(id: string): void;
-    verletAddPoint(id: string, x: number, y: number): any;
-    verletStick(id: string, a: number, b: number, len?: number): any;
-    verletPin(id: string, idx: number, on?: boolean): any;
-    verletSet(id: string, idx: number, x: number, y: number): any;
-    verletStep(id: string, dt: number, gx?: number, gy?: number, damp?: number, minX?: number, minY?: number, maxX?: number, maxY?: number, bounce?: number): any;
-    verletXY(id: string): any;
-    verletSticks(id: string): any;
-    verletCount(id: string): any;
-    verletDelStick(id: string, i: number): any;
-    verletDelPoint(id: string, idx: number): any;
-    verletPins(id: string): any;
+    verletFree(id: number): void;
+    verletAddPoint(id: number, x: number, y: number): any;
+    verletStick(id: number, a: number, b: number, len?: number): any;
+    verletPin(id: number, idx: number, on?: boolean): any;
+    verletSet(id: number, idx: number, x: number, y: number): any;
+    verletStep(id: number, dt: number, gx?: number, gy?: number, damp?: number, minX?: number, minY?: number, maxX?: number, maxY?: number, bounce?: number): any;
+    verletXY(id: number): any;
+    verletSticks(id: number): any;
+    verletCount(id: number): any;
+    verletDelStick(id: number, i: number): any;
+    verletDelPoint(id: number, idx: number): any;
+    verletPins(id: number): any;
     rigidNew(iterations?: number): any;
-    rigidFree(id: string): void;
-    rigidBox(id: string, x: number, y: number, w: number, h: number, angle?: number, density?: number, friction?: number, bounce?: number): any;
-    rigidCircle(id: string, x: number, y: number, r: number, density?: number, friction?: number, bounce?: number): any;
-    rigidRemove(id: string, idx: number): any;
-    rigidSet(id: string, idx: number, x: number, y: number, angle?: number, vx?: number, vy?: number, w?: number): any;
-    rigidImpulse(id: string, idx: number, jx: number, jy: number): any;
-    rigidStep(id: string, dt: number, gx?: number, gy?: number, maxSub?: number): any;
-    rigidState(id: string, buf?: number[]): any;
-    rigidCount(id: string): any;
-    drawSprite(id: string, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: string, smooth?: number): void;
-    blitSprite(id: string, x: number, y: number, w: number, h: number): void;
-    copySprite(id: string, sx: number, sy: number, w: number, h: number, dx: number, dy: number, key?: string): void;
+    rigidFree(id: number): void;
+    rigidBox(id: number, x: number, y: number, w: number, h: number, angle?: number, density?: number, friction?: number, bounce?: number): any;
+    rigidCircle(id: number, x: number, y: number, r: number, density?: number, friction?: number, bounce?: number): any;
+    rigidRemove(id: number, idx: number): any;
+    rigidSet(id: number, idx: number, x: number, y: number, angle?: number, vx?: number, vy?: number, w?: number): any;
+    rigidImpulse(id: number, idx: number, jx: number, jy: number): any;
+    rigidStep(id: number, dt: number, gx?: number, gy?: number, maxSub?: number): any;
+    rigidState(id: number, buf?: number[]): any;
+    rigidCount(id: number): any;
+    drawSprite(id: number, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: number, smooth?: number): void;
+    blitSprite(id: number, x: number, y: number, w: number, h: number): void;
+    copySprite(id: number, sx: number, sy: number, w: number, h: number, dx: number, dy: number, key?: number): void;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
     fillScreen(color: number): void;
     /** desenha retângulos vazados ou preenchidos. */
@@ -116,7 +117,7 @@ declare const System: {
     setTextColor(fg_color: number, bg_color?: number): void;
     /** multiplica a escala da fonte pixel padrão. */
     setTextSize(size: number): void;
-    setTextDatum(arg0: number): void;
+    setTextDatum(datum: number): void;
     textWidth(str: string, font?: number): number;
     fontHeight(font?: number): any;
     /** empacota valores RGB 8/8/8 de 24 bits no formato RGB 5/6/5 de 16 bits esperado pelo hardware. */
@@ -147,7 +148,9 @@ declare const System: {
     hasTemperatureSensor(): any;
     /** devolve um objeto com o estado atual do hardware ESP32, incluindo uso de memória, velocidade de CPU e especificações. Útil para */
     getInfo(): any;
+    /** estado do vidro AGORA. isScreenOn é true quando o app está visível (pleno ou dim) e `false` em AOD e apagado — o `present()` dos (API 51) */
     isScreenOn(): any;
+    /** estado do vidro AGORA. isScreenOn é true quando o app está visível (pleno ou dim) e `false` em AOD e apagado — o `present()` dos (API 51) */
     screenState(): any;
     /** devolve a hora local atual formatada pelo SO, respeitando automaticamente a preferência do usuário (12 ou 24 horas). */
     getTime(): any;
@@ -166,7 +169,8 @@ declare const System: {
     /** devolve o offset/fuso horário configurado pelo usuário. */
     getTimezone(): any;
     getWeekday(): any;
-    keepAwake(arg0?: number): void;
+    /** segura a tela acesa (pula a escada dim/AOD/off do ScreenPower) enquanto `true`, ou por `ms` milissegundos com */
+    keepAwake(bool?: boolean | number): void;
     /** devolve a string da versão atual do SO. */
     getOSVersion(): any;
     /** devolve o inteiro do Nível de API do SO. */
@@ -175,7 +179,7 @@ declare const System: {
     getIPAddress(): any;
     /** devolve true se o ESP32 estiver conectado a uma rede WiFi. */
     isWiFiActive(): any;
-    prompt(promptMsg?: string, initialText?: number, options?: Record<string, any>): any;
+    prompt(promptMsg?: string, initialText?: string, options?: Record<string, any>): any;
     keypadOpen(options?: Record<string, any>): any;
     /** bombeia o toque para o teclado, redesenha as teclas quando necessário (feedback de pressionamento, páginas de layout, cursor piscando) */
     keypadPoll(): any;
@@ -188,7 +192,9 @@ declare const System: {
     topbarPop(): any;
     setBrightness(level: number): void;
     getBrightness(): any;
-    setVolume(arg0: number): void;
+    /** volume do áudio do OS. Nas placas I²S escala a forma de onda; no codec do watch (ES8311) também vai no registrador de volume de (API 13) */
+    setVolume(pct: number): void;
+    /** volume do áudio do OS. Nas placas I²S escala a forma de onda; no codec do watch (ES8311) também vai no registrador de volume de (API 13) */
     getVolume(): any;
     backlightSupported(): any;
     setAutoBrightness(on?: boolean): any;
@@ -202,10 +208,11 @@ declare const System: {
     pinState(): any;
     rescanApps(): void;
     setting(key: string, arg1?: number): any;
-    toast(mensagem: number): void;
-    beep(arg0: number, arg1: number): any;
+    toast(mensagem: string): void;
+    beep(freq: number, ms: number): any;
     /** leitura media de ADC com cache de ~2 s. No cão robótico SpotPear lê o divisor 2:1 da Li-ion no GPIO2 (~4100 mV na USB, ~3300 mV = vazia). (API 10) */
     battery(): any;
+    /** o firmware guarda em cache por ~2 s; pode chamar uma vez por quadro. (API 15) */
     batteryInfo(): any;
     /** bloqueante curto (~100 ms); o desenho pendente aparece antes. A primeira chamada inicializa o canal RX (~300 ms). (API 10) */
     micLevel(): any;
@@ -215,28 +222,28 @@ declare const System: {
     get24hFormat(): any;
     getNtpEnabled(): any;
     theme(): CelerTheme;
-    setScreenTimeout(arg0: number): void;
+    setScreenTimeout(ms: number): void;
     screenTimeout(): any;
-    setAlarm(arg0: number, arg1: number, arg2?: number): any;
+    setAlarm(h: number, m: number, msg?: string): any;
     clearAlarm(): void;
     getAlarm(): any;
     alarms(): any;
-    addAlarm(arg0?: number): any;
-    updateAlarm(arg0: number, arg1?: number): any;
-    removeAlarm(arg0: number): any;
+    addAlarm(alarm?: AlarmOpts): any;
+    updateAlarm(id: number, alarm?: AlarmOpts): any;
+    removeAlarm(id: number): any;
     setTimer(seconds: number, label?: string): any;
     getTimer(): any;
     cancelTimer(): void;
     unreadNotifications(): any;
-    playTone(arg0?: number): any;
-    playWav(arg0: number): any;
+    playTone(notas?: number[] | number[][]): any;
+    playWav(caminho: string): any;
     /** uma música por vez; um novo playMusic só entra quando a anterior acaba (ou é cortada). Enquanto toca, o detector de wake word on-device dorm */
     playMusic(song?: Record<string, any>, opcoes?: Record<string, any>): any;
     musicStop(): any;
     sfx(melodia?: number): any;
     musicPlaying(): any;
     musicPos(): any;
-    notify(arg0: number, arg1?: number): void;
+    notify(titulo: string, msg?: string): void;
     setClip(x: number, y: number, w: number, h: number): void;
     clearClip(): void;
     setNativeCanvas(enable: number): any;
@@ -247,17 +254,25 @@ declare const System: {
     /** @permission "gpio" */
     relay(n: number, on: boolean): any;
     /** @permission "gpio" */
-    relayState(arg0: number): any;
+    relayState(n: number): any;
     /** @permission "gpio" */
     relayCount(): any;
     /** atualiza a fita inteira via RMT (sem DMA). Exemplo: System.neopixel(0, [0xFF0000, 0, 0x00FF00]). As fitas apagam quando o app sai. (API 10) */
     /** @permission "gpio" */
-    neopixel(strip: number, cores?: number): any;
+    neopixel(strip: number, cores?: number[]): any;
     /** reinicia instantaneamente o hardware ESP32. */
     /** @permission "system" */
     restart(): void;
     /** @permission "system" */
     openWifiSetup(): void;
+    /** @permission "system" */
+    wifiPortalStart(): any;
+    /** @permission "system" */
+    wifiPortalPoll(): any;
+    /** @permission "system" */
+    wifiPortalStop(): void;
+    /** @permission "system" */
+    wifiPortalSsid(): any;
     /** @permission "system" */
     factoryReset(mode?: number): any;
     /** @permission "system" */
@@ -281,27 +296,27 @@ declare const System: {
     /** @permission "system" */
     webActive(): any;
     /** @permission "system" */
-    webSetActive(arg0: number): void;
+    webSetActive(bool: boolean): void;
     /** @permission "system" */
     webAuthInfo(): any;
     /** @permission "system" */
-    webAuthSetPass(arg0: number): any;
+    webAuthSetPass(senha: string): any;
     /** @permission "system" */
-    deepSleep(arg0: number, arg1?: number): void;
+    deepSleep(ms: number, wakePin?: number): void;
     /** @permission "system" */
-    setPin(pin: number): any;
+    setPin(pin: string): any;
     /** @permission "system" */
-    verifyPin(arg0: number): any;
+    verifyPin(pin: string): any;
     /** @permission "system" */
     pinClear(): void;
     /** @permission "system" */
     setTimezone(tz: number): any;
     /** @permission "system" */
-    setManualTime(arg0: number, arg1: number, arg2: number, arg3: number, arg4: number): any;
+    setManualTime(year: number, month: number, day: number, hour: number, minute: number): any;
     /** @permission "system" */
-    set24hFormat(arg0: number): void;
+    set24hFormat(bool: boolean): void;
     /** @permission "system" */
-    setNtpEnabled(arg0: number): void;
+    setNtpEnabled(bool: boolean): void;
     /** @permission "system" */
     notifications(): any;
     /** @permission "system" */
@@ -345,18 +360,21 @@ declare const System: {
 };
 
 declare const Storage: {
-    get(arg0: number, arg1?: number): any;
-    set(arg0: number, arg1?: number): any;
-    remove(arg0: number): void;
+    get(chave: string, padrao?: string): string;
+    set(chave: string, valor?: string | number | boolean): any;
+    remove(chave: string): void;
     clear(): any;
     /** @permission "system" */
-    clearFor(arg0: number): any;
+    clearFor(pacote: string): any;
 };
 
 declare const Sensors: {
+    /** última amostra da task de movimento (cache a ~30 Hz — não faz I²C na chamada, segura em loops). */
     accel(): any;
+    /** pedômetro portado do firmware de referência do watch (pico/vale sobre a aceleração dinâmica, linha de base com LPF, cadência */
     steps(): any;
     temp(): any;
+    /** o pedômetro agora vira o dia à meia-noite com o relógio ligado (antes, só no boot) e arquiva o dia encerrado. (API 15) */
     stepHistory(): any;
 };
 
@@ -427,20 +445,20 @@ declare const Net: {
     /** @permission "net" */
     request(opts?: Record<string, any>): any;
     /** @permission "net+fs" */
-    download(url: string, caminho: number, onProgress?: (...args: any[]) => any): any;
+    download(url: string, caminho: string, onProgress?: (...args: any[]) => any): any;
     /** @permission "net" */
     beginGet(url: string): any;
     /** @permission "net" */
-    pollGet(arg0: number): any;
+    pollGet(handle: number): any;
     /** @permission "net" */
-    cancelGet(arg0: number): void;
+    cancelGet(handle: number): void;
     /** devolve true se o WiFi estiver conectado. */
     /** @permission "net" */
     isConnected(): any;
     /** @permission "net" */
     wifiScan(): any;
     /** @permission "net+system" */
-    wifiConnect(arg0: number, arg1?: number): any;
+    wifiConnect(ssid: string, senha?: string): any;
     /** @permission "net+system" */
     wifiDisconnect(): void;
 };
@@ -482,9 +500,9 @@ declare const Camera: {
     /** @permission "camera" */
     capture(): any;
     /** @permission "camera+fs" */
-    save(id: string, path: string): any;
+    save(id: number, path: string): any;
     /** @permission "camera" */
-    free(id: string): void;
+    free(id: number): void;
     /** @permission "camera" */
     led(on: boolean): void;
     /** @permission "camera" */
@@ -510,21 +528,21 @@ declare const FS: {
     /** @permission "fs" */
     readTextFile(path: string): string | null;
     /** @permission "fs" */
-    readFile(arg0: number, arg1?: number): any;
+    readFile(caminho: string, max?: number): string | null;
     /** apaga qualquer arquivo existente e escreve a totalidade de `content` no disco. */
     /** @permission "fs" */
-    writeTextFile(path: string, content: number): any;
+    writeTextFile(path: string, content: string): any;
     /** @permission "fs" */
-    writeFile(arg0: number, arg1: number): any;
+    writeFile(caminho: string, dados: string): any;
     /** acrescenta a string ao final de um arquivo existente. */
     /** @permission "fs" */
-    appendTextFile(path: string, content: number): any;
+    appendTextFile(path: string, content: string): any;
     /** apaga permanentemente um arquivo da partição. */
     /** @permission "fs" */
     deleteFile(path: string): any;
     /** renomeia um arquivo ou o move entre diretórios na mesma partição. */
     /** @permission "fs" */
-    renameFile(pathFrom: number, pathTo: number): any;
+    renameFile(pathFrom: string, pathTo: string): any;
     /** valida se um arquivo ou pasta existe fisicamente. */
     /** @permission "fs" */
     exists(path: string): any;
@@ -540,32 +558,36 @@ declare const FS: {
     /** avalia se o caminho alvo é diretório ou arquivo. */
     /** @permission "fs" */
     isDirectory(path: string): any;
+    /** avalia se o caminho alvo é diretório ou arquivo. */
     /** @permission "fs" */
-    isFile(arg0: number): any;
+    isFile(path: string): any;
     /** devolve o tamanho físico total de um arquivo em bytes. */
     /** @permission "fs" */
     getFileSize(path: string): any;
     /** devolve métricas exatas de armazenamento da partição indicada. */
     /** @permission "fs" */
-    getTotalSpace(drive: number): any;
+    getTotalSpace(drive: string): any;
+    /** devolve métricas exatas de armazenamento da partição indicada. */
     /** @permission "fs" */
-    getUsedSpace(arg0: number): any;
+    getUsedSpace(drive: string): any;
+    /** devolve métricas exatas de armazenamento da partição indicada. */
     /** @permission "fs" */
-    getFreeSpace(arg0: number): any;
+    getFreeSpace(drive: string): any;
     /** usa o motor criptográfico mbedtls acelerado por hardware para processar o arquivo em streaming e devolver seu hash MD5 preciso. */
     /** @permission "fs" */
     getFileMD5(path: string): any;
     /** dispara um remount/unmount SPI do cartão SD físico. */
     /** @permission "fs" */
     mountSD(): any;
+    /** dispara um remount/unmount SPI do cartão SD físico. */
     /** @permission "fs" */
     unmountSD(): void;
     /** @permission "fs" */
-    copyFile(arg0: number, arg1: number): any;
+    copyFile(de: string, para: string): any;
     /** @permission "fs" */
-    copyDirectory(arg0: number, arg1: number): any;
+    copyDirectory(de: string, para: string): any;
     /** @permission "fs" */
-    removeDirectory(arg0: number): any;
+    removeDirectory(caminho: string): any;
     /** @permission "fs" */
     appData(): any;
 };
@@ -578,10 +600,10 @@ interface CelerLinkApi {
     scan(timeoutMs?: number): any;
     connect(idOuNome: string, timeoutMs?: number): any;
     disconnect(): any;
-    send(mensagem?: number): any;
+    send(mensagem?: string | object): any;
     poll(): any;
     /** Envia a mensagem cifrada e autenticada ao peer conectado. Mensagem maior que o teto lança RangeError. (API 21) */
-    sendSealed(mensagem?: number): any;
+    sendSealed(mensagem?: string | object): any;
     /** O poll() comum nunca entrega quadros selados, e um selo que não confere é descartado pelo firmware — então o que sai daqui veio de quem pare (API 21) */
     pollSealed(): any;
     status(): any;
@@ -593,7 +615,7 @@ declare const CelerNet: {
     start(opcoes?: { name?: string; /** ignorado desde a API 37 */ net?: string; relay?: boolean }): boolean;
     stop(): boolean;
     broadcast(mensagem?: string | object, ttl?: number): boolean;
-    send(destino: string, mensagem?: number, opcoes?: Record<string, any>): any;
+    send(destino: string, mensagem?: string | object, opcoes?: Record<string, any>): any;
     poll(): MeshMessage | null;
     nodes(): MeshNode[];
     status(): MeshStatus;
@@ -602,7 +624,7 @@ declare const CelerNet: {
 declare const Pack: {
     me(): any;
     members(): any;
-    send(destino: string, mensagem?: number, opcoes?: Record<string, any>): any;
+    send(destino: string, mensagem?: string | object, opcoes?: Record<string, any>): any;
     poll(): any;
     handoffMusic(destino?: string): any;
     join(nome: string, senha: string): any;

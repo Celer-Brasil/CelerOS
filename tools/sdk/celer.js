@@ -173,10 +173,13 @@ function engineVersion(file) {
 }
 
 // Indice de deps do hub (/store/deps.json) — https do core, timeout curto:
-// sem rede cai no so-local sem quebrar o comando.
+// sem rede cai no so-local sem quebrar o comando. http:// e aceito (hub
+// local da bancada, como no celerhub/celerctl): https.get fixo estourava
+// ERR_INVALID_PROTOCOL sincrono e derrubava o CLI com traceback cru.
 function fetchHubDeps(cb) {
-    const https = require('https');
-    const req = https.get(HUB_URL.replace(/\/$/, '') + '/store/deps.json', (res) => {
+    const base = HUB_URL.replace(/\/$/, '');
+    const mod = require(base.startsWith('http://') ? 'http' : 'https');
+    const req = mod.get(base + '/store/deps.json', (res) => {
         if (res.statusCode !== 200) { res.resume(); return cb(null); }
         let body = '';
         res.on('data', (c) => { body += c; });
@@ -215,6 +218,9 @@ function resolveRepoDeps(cb) {
         }
     }
     if (!targets.length) return cb({ ok: true, hubErro: null, stderr: '', resultados: [] });
+    // except (Exception, SystemExit): o die() do celerhub.http (404/rede)
+    // sai como SystemExit, que NAO e Exception — sem ele o python morria sem
+    // o JSON e o hubErro virava "saida invalida do resolvedor" sem o motivo
     const script = [
         "import sys, json",
         "sys.path.insert(0, 'tools')",
@@ -223,7 +229,7 @@ function resolveRepoDeps(cb) {
         "try:",
         "    _, idx = celerhub.http('GET', req['hub'].rstrip('/') + '/store/deps.json')",
         "    index = (idx or {}).get('deps', {})",
-        "except Exception as e:",
+        "except (Exception, SystemExit) as e:",
         "    print(json.dumps({'hubErro': str(e), 'stderr': '', 'resultados': []}))",
         "    sys.exit(0)",
         "res = []",
@@ -285,7 +291,16 @@ function cmdDeps(args) {
         // resolveria AGORA para este app; --verify vira gate (exit 1)
         resolveRepoDeps((r) => {
             const meu = (r.resultados || []).find((x) => x.path === relRepo(dir));
-            if (!meu) return;  // fora do repo (app do autor): nada a acrescentar
+            if (!meu) {
+                // o gate nao pode passar calado com o hub fora: sem nada no
+                // resultados, o --verify offline devolvia 0 sem conferir nada
+                if (verify && r.hubErro) {
+                    const motivo = (r.stderr || '').trim().split('\n').pop() || r.hubErro;
+                    console.log('erro: hub inalcancavel (' + motivo + ') — --verify precisa do hub');
+                    process.exit(1);
+                }
+                return;  // fora do repo (app do autor): nada a acrescentar
+            }
             if (meu.erro) {
                 console.log('  RESOLVE: FALHA — ' + meu.erro);
                 if (verify) process.exit(1);
@@ -401,8 +416,8 @@ function cmdTest(args) {
     if (!folder) die('test: informe a PASTA do app');
     try {
         printRun(runAppFolder(path.resolve(folder), {
-            stopAtMs: flags.ms ? +flags.ms : undefined,
-            seed: flags.seed != null ? (+flags.seed >>> 0) : null,
+            stopAtMs: numFlag(flags, 'ms'),
+            seed: seedOpt(flags),
             events: buildEvents(flags),
         }));
     } catch (e) { die(e.message); }
@@ -418,14 +433,21 @@ function fmtProfile(p) {
            '  (' + p.frames + ' quadros)';
 }
 
+// seed de Math.random deterministico: ausente = null (o random nativo do
+// host); valor >>> 0 como o device (32 bits)
+function seedOpt(flags) {
+    const n = numFlag(flags, 'seed');
+    return n === undefined ? null : (n >>> 0);
+}
+
 function cmdBench(args) {
     const flags = parseFlags(args);
     const folder = flags._[0];
     if (!folder) die('bench: informe a PASTA do app');
-    const ms = flags.ms ? +flags.ms : 5000;
-    const seed = flags.seed != null ? (+flags.seed >>> 0) : null;
-    const run = (f) => runAppFolder(path.resolve(f), { stopAtMs: ms,
-                                                       events: buildEvents(flags), seed,
+    const ms = numFlag(flags, 'ms');
+    const run = (f) => runAppFolder(path.resolve(f), { stopAtMs: ms !== undefined ? ms : 5000,
+                                                       events: buildEvents(flags),
+                                                       seed: seedOpt(flags),
                                                        profile: true });
     const a = run(folder);
     if (a.err && !/harnessStop/.test(String(a.err))) {
@@ -501,18 +523,20 @@ function cmdEmu(args) {
     // processo (Ctrl+C encerra). O app roda num Worker com o harness.
     if (flags.serve) {
         const { startLive } = require('./lib/live_server.js');
+        const port = numFlag(flags, 'port'), fps = numFlag(flags, 'fps');
         startLive({
             appDir: dir,
-            port: flags.port != null ? +flags.port : 8420,
-            fps: flags.fps ? +flags.fps : 30,
+            port: port !== undefined ? port : 8420,
+            fps: fps !== undefined ? fps : 30,
             open: !!flags.open,
-            seed: flags.seed != null ? (+flags.seed >>> 0) : null,
+            seed: seedOpt(flags),
         });
         return;
     }
 
     const out = flags.out ? path.resolve(flags.out) : path.join(dir, '.dev', 'tela.png');
-    const decor = { grid: flags.grid ? (isNaN(+flags.grid) ? 20 : +flags.grid) : 0,
+    const decor = { grid: flags.grid === undefined ? 0
+                        : (flags.grid === true || isNaN(+flags.grid) ? 20 : +flags.grid),
                     marks: parseMarks(flags),
                     scale: flags.scale ? Math.max(1, Math.min(8, +flags.scale | 0)) : 1 };
 
@@ -533,20 +557,23 @@ function cmdEmu(args) {
     let frames = null, gifPath = null, gifFps = 20;
     if (flags.gif) {
         gifPath = path.resolve(flags.gif);
-        const ms = flags.ms ? Math.max(100, +flags.ms) : 3000;
-        gifFps = Math.max(1, Math.min(30, flags.fps ? +flags.fps : 20));
+        const ms = numFlag(flags, 'ms');
+        const msGif = ms !== undefined ? Math.max(100, ms) : 3000;
+        const fps = numFlag(flags, 'fps');
+        gifFps = Math.max(1, Math.min(30, fps !== undefined ? fps : 20));
         frames = [];
-        for (let t = 0; t <= ms + 0.5; t += 1000 / gifFps) frames.push(Math.round(t));
+        for (let t = 0; t <= msGif + 0.5; t += 1000 / gifFps) frames.push(Math.round(t));
     } else if (flags.frames != null) {
         frames = String(flags.frames).split(',').map((s) => parseInt(s.trim(), 10));
         if (frames.some((n) => isNaN(n) || n < 0)) die('--frames: lista de ms nao-negativos, ex. "0,600,1500"');
     }
 
     try {
+        const msRun = numFlag(flags, 'ms');
         const r = runAppFolder(dir, { render: true,
-                                      stopAtMs: flags.ms ? +flags.ms : undefined,
+                                      stopAtMs: msRun,
                                       frames, events,
-                                      seed: flags.seed != null ? (+flags.seed >>> 0) : null,
+                                      seed: seedOpt(flags),
                                       framesPng: !gifPath });
         fs.mkdirSync(path.dirname(out), { recursive: true });
         if (gifPath) {
@@ -712,6 +739,10 @@ function parseFlags(args) {
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
         if (a.startsWith('--')) {
+            // --flag=valor: sem isso o par era engolido como chave "flag=valor"
+            // (o --ms=200 rodava o app ate o LIMIT em vez de 200 ms)
+            const eq = a.indexOf('=');
+            if (eq > 2) { out[a.slice(2, eq)] = a.slice(eq + 1); continue; }
             const key = a.slice(2);
             const next = args[i + 1];
             if (next && !next.startsWith('--')) { out[key] = next; i++; }
@@ -719,6 +750,18 @@ function parseFlags(args) {
         } else out._.push(a);
     }
     return out;
+}
+
+// flag numerica opcional: ausente = undefined (o chamador aplica o default);
+// `--flag` sem valor ou com valor nao-numerico e erro loud — antes virava
+// NaN/1 silencioso (--ms abc rodava ate o LIMIT; --seed sozinho valia 1)
+function numFlag(flags, name) {
+    const v = flags[name];
+    if (v === undefined) return undefined;
+    if (v === true) die('--' + name + ': faltou o valor numerico');
+    const n = +v;
+    if (!Number.isFinite(n)) die('--' + name + ': esperava numero, recebi "' + v + '"');
+    return n;
 }
 
 function main() {

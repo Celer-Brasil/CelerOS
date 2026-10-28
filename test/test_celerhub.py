@@ -345,11 +345,12 @@ class TestPublishSnapshot(unittest.TestCase):
                 nomes = sorted(zf.namelist())
                 self.assertEqual(nomes, ["app.json", "main.js"])
                 main = zf.read("main.js")
-        # main.js sobe ENXUTO (sem linha em branco final de comentario)
-        self.assertIn(b"var A = 1;", main)
+        # main.js sobe ENXUTO (jsmin: espaco minimo entre tokens, quebras de
+        # linha preservadas para o "line N" do Duktape continuar valendo)
+        self.assertIn(b"var A=1;", main)
         # e o conteudo e o do snapshot: mudar a arvore AGORA nao muda nada
         (d / "main.js").write_text("MUDOU DEPOIS\n", encoding="utf-8")
-        self.assertIn(b"var A = 1;", main)
+        self.assertIn(b"var A=1;", main)
 
 
 class TestPublishPrivate(unittest.TestCase):
@@ -461,6 +462,119 @@ class TestPublishPrivate(unittest.TestCase):
                                tenant="vertical1")
         msg = die_saida(lambda: H.cmd_publish_dep(args))
         self.assertIn("--tenant exige --private", msg)
+
+
+class TestPublishHostil(unittest.TestCase):
+    """Estados hostis do publish offline: app.json trocado no meio, nome de
+    arquivo/armadilha de versao, deps ciclicas no fecho."""
+
+    def _app(self, td, version="1.0.0", extra=None):
+        d = Path(td) / "App"
+        d.mkdir()
+        (d / "app.json").write_text(
+            '{"name":"App","packageName":"celeros.app","version":"%s",'
+            '"api":30,"author":"t","description":"d","permissions":["fs"]}' % version,
+            encoding="utf-8")
+        (d / "main.js").write_text("System.delay(1);\n", encoding="utf-8")
+        for nome, conteudo in (extra or {}).items():
+            (d / nome).write_text(conteudo, encoding="utf-8")
+        return d
+
+    def _publish_dry(self, d, validate_hook=None):
+        from types import SimpleNamespace
+        orig = H.validate
+        if validate_hook:
+            def com_hook(folder, strip=True, snapshot=None):
+                return validate_hook(folder, strip=strip, snapshot=snapshot) or \
+                    orig(folder, strip=strip, snapshot=snapshot)
+            H.validate = com_hook
+        try:
+            args = SimpleNamespace(dry=True, force=False, folders=[str(d)],
+                                   no_strip=False, hub=None, token=None)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                H.cmd_publish(args)
+            return out.getvalue()
+        finally:
+            H.validate = orig
+
+    def test_appjson_mutado_no_meio_do_publish_morre(self):
+        # bancada em voo: o app.json e trocado DEPOIS da leitura do snapshot
+        # e ANTES do zip — o publish tem que abortar, nao validar um e subir
+        # o outro (era exatamente o buraco que o snapshot fechou pela metade)
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td)
+
+            def mutando(folder, strip=True, snapshot=None):
+                (Path(folder) / "app.json").write_text(
+                    '{"name":"App","packageName":"celeros.roubo","version":"9.9.9",'
+                    '"api":30,"author":"t","description":"d"}', encoding="utf-8")
+            msg = die_saida(lambda: self._publish_dry(d, validate_hook=mutando))
+            self.assertIn("mudaram durante o publish", msg)
+
+    def test_validate_consome_o_snapshot_nao_o_disco(self):
+        # meta e teto saem dos bytes do snapshot: disco valido com snapshot
+        # invalido tem que morrer no snapshot (packageName com espaco)
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td)
+            outro = json.dumps({"name": "App", "packageName": "celeros ruim",
+                                "version": "1.0.0", "api": 30, "author": "t",
+                                "description": "d"}).encode()
+            msg = die_saida(lambda: H.validate(
+                d, strip=True, snapshot={"app.json": outro, "main.js": b"System.delay(1);\n"}))
+            self.assertIn("packageName invalido", msg)  # o snapshot venceu
+
+    def test_teto_conta_o_main_do_snapshot(self):
+        # main.js gordo no disco, magro no snapshot: a soma do teto e a do
+        # conteudo que sobe (e o verify de mutacao cobre o resto)
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td)
+            gordo = ("// " + "x" * 96 + "\n") * 700 + "System.delay(100);\n"
+            (d / "main.js").write_text(gordo, encoding="utf-8")
+            _, _, js_sum_snap, _ = H.validate(
+                d, strip=True, snapshot={"app.json": (d / "app.json").read_bytes(),
+                                         "main.js": b"System.delay(1);\n"})
+            _, _, js_sum_disco, _ = H.validate(d, strip=True)
+            self.assertLess(js_sum_snap, 100)
+            self.assertGreater(js_sum_disco, 500)  # jsstrip preserva as quebras
+
+    def test_zip_com_nome_de_arquivo_estranho_morre(self):
+        # \n no nome passava pela ancora "$" do FILE_NAME_RE e ia para o zip
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, extra={"x\n.png": "\x89PNG"})
+            msg = die_saida(lambda: H.validate(d, strip=True))
+            self.assertIn("arquivo extra invalido", msg)
+
+    def test_versao_com_newline_morre(self):
+        # "1.0.0\n" (via \u000a no JSON) passava no VER_RE: "$" casa antes
+        # do \n final; com \Z morre no semver
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, version="1.0.0\\u000a")
+            msg = die_saida(lambda: H.validate(d, strip=True))
+            self.assertIn("semver", msg)
+
+    def test_deps_ciclicas_resolvem(self):
+        # A depende de B e B de A: o fecho tem que devolver o par, nao pendurar
+        hub = {"celeros.a": {"1.0.0": {"deps": {"celeros.b": "^1.0.0"}}},
+               "celeros.b": {"1.0.0": {"deps": {"celeros.a": "^1.0.0"}}}}
+        picks = H.resolve_dep_ranges({"celeros.a": "^1.0.0"}, hub)
+        self.assertEqual(picks, {"celeros.a": "1.0.0", "celeros.b": "1.0.0"})
+
+    def test_deps_em_briga_morrem_sem_pendurar(self):
+        # major em conflito sem versao que satisfaça os dois caminhos
+        hub = {"celeros.a": {"1.0.0": {"deps": {"celeros.b": "^1.0.0"}},
+                             "2.0.0": {"deps": {"celeros.b": "^2.0.0"}}},
+               "celeros.b": {"1.0.0": {}, "2.0.0": {}}}
+        with self.assertRaises(SystemExit):
+            H.resolve_dep_ranges({"celeros.a": "^1.0.0", "celeros.b": "^2.0.0"}, hub)
+
+    def test_diamante_de_deps_pega_o_maior_comum(self):
+        # app -> (A ^1, B ^1); A 1.0 -> C ^1.2; B 1.0 -> C ^1.4: C fica 1.9
+        hub = {"celeros.a": {"1.0.0": {"deps": {"celeros.c": "^1.2.0"}}},
+               "celeros.b": {"1.0.0": {"deps": {"celeros.c": "^1.4.0"}}},
+               "celeros.c": {"1.2.0": {}, "1.4.0": {}, "1.9.0": {}, "2.0.0": {}}}
+        picks = H.resolve_dep_ranges({"celeros.a": "^1.0.0", "celeros.b": "^1.0.0"}, hub)
+        self.assertEqual(picks["celeros.c"], "1.9.0")
 
 
 if __name__ == "__main__":

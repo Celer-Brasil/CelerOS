@@ -468,13 +468,27 @@ function scopeHas(scope, name) {
   return false;
 }
 
-// Cadeia de membro nao-computada: System.gpio.servo -> {root:'System', parts:[...]}
+// Acesso computado por literal (`System["gpio"]`) e o mesmo membro que o
+// ponto; chave dinamica (System[x]) segue opaca para o lint.
+function litProp(n) {
+  if (n.computed && n.property.type === 'Literal' && typeof n.property.value === 'string') return n.property.value;
+  return null;
+}
+
+// Cadeia de membro (ponto ou literal computado): System.gpio.servo e
+// System["gpio"].servo -> {root:'System', parts:['gpio','servo']}
 function memberChain(me) {
   const parts = [];
   let n = me;
-  while (n.type === 'MemberExpression' && !n.computed) {
-    if (n.property.type !== 'Identifier') return null;
-    parts.unshift(n.property.name);
+  while (n.type === 'MemberExpression') {
+    if (n.computed) {
+      const v = litProp(n);
+      if (v === null) break;
+      parts.unshift(v);
+    } else {
+      if (n.property.type !== 'Identifier') return null;
+      parts.unshift(n.property.name);
+    }
     n = n.object;
   }
   if (n.type !== 'Identifier') return null;
@@ -583,7 +597,22 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
         }
         return null;
       }
-      if (!last) return null; // uso do resultado como objeto (System.theme().bg): para por aqui
+      if (!last) {
+        // A cadeia continua ALEM do manifest (FS.readFile.call, .apply,
+        // .bind, .name): o app DEPENDE do membro do manifest, entao
+        // permissao e nivel contam AQUI — sem isto .call/.apply abriam
+        // o mesmo buraco que o acesso computado fechou (probe: aviso perm
+        // e aviso nivel sumiam). A aridade fica para quem devolve:
+        // no .call/.apply o 1o argumento e o this.
+        if (record) {
+          const perm = entry.perm || obj.perm;
+          if (perm) addPermUse(perm, propNode || node, objPath + '.' + name);
+          if (entry.nargs !== undefined) apiFnUses.push({ qualified: objPath + '.' + name, entry, node: propNode || node });
+        }
+        return entry.nargs !== undefined
+          ? { entry, qualified: objPath + '.' + name, beyond: chain.parts.slice(i + 1) }
+          : { const: entry };
+      }
       const full = objPath + '.' + name;
       if (record) {
         const perm = entry.perm || obj.perm;
@@ -610,7 +639,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
       if (n.type === 'FunctionDeclaration' || n.type === 'FunctionExpression') return;
       if (n.type === 'CallExpression') {
         const c = n.callee;
-        if (c.type === 'MemberExpression' && !c.computed) {
+        if (c.type === 'MemberExpression' && (!c.computed || litProp(c) !== null)) {
           const ch = memberChain(c);
           if (ch && ch.root === 'System' && ch.parts.length === 1 &&
               (ch.parts[0] === 'delay' || ch.parts[0] === 'prompt')) { found = true; return; }
@@ -663,7 +692,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
       case 'MemberExpression': {
         // So o passo mais externo da cadeia verifica existencia
         if (parent && parent.type === 'MemberExpression' && parent.object === node) break;
-        if (node.computed) break;
+        if (node.computed && litProp(node) === null) break;
         const chain = memberChain(node);
         // raiz OPCIONAL usada como objeto: vale para a regra "feature" mesmo
         // quando ela nao e um NAMESPACE_ROOT (Mic, Camera, WakeWord, Service)
@@ -701,7 +730,8 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
       }
       case 'CallExpression':
       case 'NewExpression': {
-        if (node.callee.type === 'MemberExpression' && !node.callee.computed &&
+        if (node.callee.type === 'MemberExpression' &&
+            (!node.callee.computed || litProp(node.callee) !== null) &&
             !node.arguments.some((a) => a.type === 'SpreadElement')) {
           const chain = memberChain(node.callee);
           if (chain && NAMESPACE_ROOTS.indexOf(chain.root) >= 0 &&
@@ -709,7 +739,15 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
             // report=false: a existencia e reportada no passo MemberExpression
             const r = checkMemberExistence(chain, node.callee, node.callee.property, false, false);
             if (r && r.entry) {
-              const n = node.arguments.length;
+              let n = node.arguments.length;
+              // FS.readFile.call(thisArg, ...)/.apply(thisArg, [...]): o 1o
+              // argumento e o this, nao e da API. Outras continuacoes
+              // (.bind, .name) nao deixam ler a aridade no call site.
+              if (r.beyond && r.beyond.length === 1 && (r.beyond[0] === 'call' || r.beyond[0] === 'apply')) {
+                n = Math.max(0, n - 1);
+              } else if (r.beyond && r.beyond.length) {
+                break;
+              }
               if (n > r.entry.nargs) {
                 d(node, 'erro', 'aridade', 'chamada com ' + n + ' argumentos: ' + r.qualified +
                   ' aceita no maximo ' + r.entry.nargs + ' (extras sao descartados no aparelho)');
@@ -908,6 +946,12 @@ function lintAppJson(dir, manifest) {
   }
 
   const entry = typeof app.main === 'string' && app.main ? app.main : 'main.js';
+  // O entry embarca no zip tal como esta e o aparelho abre relativo a pasta
+  // do app: "../fora.js" (ou caminho absoluto) nao sai no pacote e o app
+  // morre no boot sem diagnostico — barrar aqui.
+  if (path.isAbsolute(entry) || entry.split(/[\\/]/).indexOf('..') >= 0) {
+    d('erro', 'appjson', 'main deve ser caminho relativo DENTRO da pasta do app: "' + entry + '"');
+  }
   // App de overlay de placa (boards/<b>/data/apps) nasce na imagem de
   // fabrica: nunca passa pelo hub (o celerhub.py continua barrando na
   // publicacao), entao o teto do hub vira aviso, nao erro.
@@ -916,12 +960,22 @@ function lintAppJson(dir, manifest) {
     ? d('aviso', 'appjson', msg + ' — ok para app exclusivo de placa (imagem de fabrica), o hub nao publica')
     : d('erro', 'appjson', msg);
   const kbFmt = (b) => (b / 1024).toFixed(1) + 'KB';
-  // Teto contado pelo tamanho ENXUTO (jsstrip, o mesmo porte do firmware):
-  // e o que sobe no publish e o que o aparelho compila — um main.js de
-  // comentarios gordos nao "pesa" e nao devia barrar o install/publish
+  // Teto contado pelo tamanho ENXUTO e MINIFICADO (jsstrip + jsmin, o mesmo
+  // caminho do publish): e o que sobe e o que o aparelho compila. O strip do
+  // firmware e idempotente na saida do jsmin, entao este numero e o custo
+  // real de RAM. Modulos (qualquer arquivo != main.js) tem o topo manglado
+  // (o loader embrulha em funcao); o main.js nao, a menos que saibamos quais
+  // globais os irmaos leem — aqui medimos pelo caso conservador.
   const { strip } = require('../sdk/lib/jsstrip.js');
+  const jsmin = require('../sdk/lib/jsmin.js');
   const jsSize = (p) => {
-    try { return strip(fs.readFileSync(p)).length; } catch (e) { return 0; }
+    let src;
+    try { src = fs.readFileSync(p); } catch (e) { return 0; }
+    try {
+      return jsmin.minify(src, { top: path.basename(p) !== 'main.js' }).stats.min;
+    } catch (e) {
+      try { return strip(src).length; } catch (e2) { return 0; }
+    }
   };
 
   // Inventario do pacote (flat, mesmo contrato do celerhub.py/servidor):

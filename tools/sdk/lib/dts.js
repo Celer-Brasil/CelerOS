@@ -19,6 +19,8 @@ const RETURNS = {
     'System.micros': 'number',
     'System.textWidth': 'number',
     'FS.readTextFile': 'string | null',
+    'FS.readFile': 'string | null',   // binding: null (ausente/erro) ou string binaria
+    'Storage.get': 'string',          // binding: sempre string (default "")
     'FS.listDir': 'string[]',
     'System.mixColor': 'number',
     // UI (API 22)
@@ -92,6 +94,17 @@ const RETURNS = {
 
 // Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
 const PARAM_TYPES = {
+    // keepAwake: o binding aceita numero (keepAwakeFor, ms) OU booleano
+    // (latch) — 4 apps de fabrica chamam com ms (JsSystem.cpp:410)
+    'System.keepAwake.bool': 'boolean | number',
+    // require_string / objeto no binding (JsSystemApps.cpp, JsFs.cpp)
+    'System.setPin.pin': 'string',
+    'System.verifyPin.pin': 'string',
+    'FS.getTotalSpace.drive': 'string',
+    'FS.getUsedSpace.drive': 'string',
+    'FS.getFreeSpace.drive': 'string',
+    'System.addAlarm.alarm': 'AlarmOpts',
+    'System.updateAlarm.alarm': 'AlarmOpts',
     'UI.text.opts': 'UITextOpts',
     'UI.header.opts': '{ sub?: string; back?: boolean }',
     'UI.button.opts': '{ style?: "primary" | "ghost" | "danger"; disabled?: boolean; id?: number; color?: number; textColor?: number; role?: UITextRole }',
@@ -133,11 +146,45 @@ const PARAM_TYPES = {
     // USB (API 48): payloads sao arrays de bytes, nao um numero
     'USB.controlOut.data': 'number[]',
     'USB.out.data': 'number[]',
+    // ids NUMERICOS com nome ambiguo (croma do sprite e cor RGB565, nao texto)
+    'System.drawSprite.key': 'number',
+    'System.copySprite.key': 'number',
+    // ids STRING: slots de widget do toolkit UI (chave de nome no fnv do Kui)
+    // e o no do CelerLink ("dog-XXXX") — o default de `id` e numero
+    'UI.list.id': 'string',
+    'UI.scrollBegin.id': 'string',
+    'UI.resetScroll.id': 'string',
+    'UI.scrollTo.id': 'string',
     // API 52 (S3): area desenhada pelo app — id string, assinatura
     // numero/string e o callback recebe o retangulo
     'UI.custom.id': 'string',
     'UI.custom.sig': 'number | string',
     'UI.custom.draw': '(x: number, y: number, w: number, h: number) => void',
+    'CelerLink.unpair.id': 'string',
+    // string OU objeto: jsMsgBytes (string crua, objeto vira JSON) — o
+    // CelerNet.broadcast ja tinha override; os irmaos mentiam igual
+    'CelerLink.send.mensagem': 'string | object',
+    'CelerLink.sendSealed.mensagem': 'string | object',
+    'CelerNet.send.mensagem': 'string | object',
+    'Pack.send.mensagem': 'string | object',
+    // FS.copia: args genericos "de"/"para" sao caminhos
+    'FS.copyFile.de': 'string',
+    'FS.copyFile.para': 'string',
+    'FS.copyDirectory.de': 'string',
+    'FS.copyDirectory.para': 'string',
+    // System.neopixel(strip, cores): o binding exige array de cores RGB565
+    'System.neopixel.cores': 'number[]',
+    // System.playTone(notas): [freq,ms,...] plano ou [[freq,ms],...]
+    'System.playTone.notas': 'number[] | number[][]',
+    // Storage.set(chave, valor): binding faz duk_to_string (numero/boolean serializa)
+    'Storage.set.valor': 'string | number | boolean',
+    // Storage.get(chave, padrao): o doc promete "sempre string" — o padrao tambem e
+    'Storage.get.padrao': 'string',
+    // secoes combinadas do guia que o parser agora cobre
+    'FS.readFile.max': 'number',
+    'System.deepSleep.wakePin': 'number',
+    'System.setAlarm.h': 'number',
+    'System.setAlarm.m': 'number',
 };
 
 // Args que o guia documenta como obrigatorios mesmo quando o binding tolera
@@ -147,11 +194,20 @@ const REQUIRED_PARAMS = new Set(['UI.custom.draw']);
 // Nomes de argumento que indicam string (o restante e number: a API e
 // majoritariamente numerica — coordenadas, cores, tamanhos, ids). Compostos
 // camelCase contam pelo SUFIXO ("zipPath" e um path, "destinoN" nao).
+// `id` NAO esta aqui: no firmware quase todo id e slot NUMERICO (verlet/rigid
+// 1..4, sprites, cameras) — os raros ids-string (slots de widget UI.* e o no
+// do CelerLink) estao no PARAM_TYPES.
 function argType(name) {
-    if (/^(s|str|txt|text|texto|name|nome|label|path|arq|arquivo|ssid|pass|senha|key|chave|url|host|body|json|msg|linha|code|cod|prompt|title|descricao|id|destino|alvo)$/i.test(name)) return 'string';
-    if (/([Pp]ath|[Aa]rquivo|[Nn]ome|[Nn]ame|[Ss]enha|[Mm]sg|[Uu]rl|[Tt]itulo)$/.test(name) &&
+    // caminho/chave/pacote/content: FS e Storage em pt-BR (sec combinada 16.x);
+    // content e o 2o arg do FS.appendTextFile; inicial e o texto pre-preenchido
+    // do System.prompt
+    if (/^(s|str|txt|text|texto|name|nome|label|path|arq|arquivo|ssid|pass|senha|key|chave|url|host|body|json|msg|mensagem|linha|code|cod|prompt|title|descricao|destino|alvo|caminho|pacote|content|dados|inicial)$/i.test(name)) return 'string';
+    // sufixos: camelCase conta pelo FIM ("pathFrom" nao; "initialText"/"caminhoDestino" sim)
+    if (/([Pp]ath|[Aa]rquivo|[Nn]ome|[Nn]ame|[Ss]enha|[Mm]sg|[Uu]rl|[Tt]itulo|[Tt]ext|[Cc]aminho)$/.test(name) &&
         /^[A-Za-z_$][\w$]*$/.test(name)) return 'string';
-    if (/^(on|ok|down|touched|enabled)$/i.test(name)) return 'boolean';
+    // prefixo: pathFrom/pathTo (FS.renameFile)
+    if (/^[Pp]ath[A-Z]/.test(name)) return 'string';
+    if (/^(on|ok|down|touched|enabled|bool)$/i.test(name)) return 'boolean';
     // objeto de opcoes e callback: `number` mentia e o editor reclamava do
     // literal {..} / da funcao passados como manda o guia
     if (/^(opts|opcoes|options|cfg|config|song|musica)$/i.test(name)) return 'Record<string, any>';
@@ -160,14 +216,27 @@ function argType(name) {
 }
 
 // Headings `#### System.foo(a, b, cor)` (API N) -> args, nivel e resumo
-// (primeira frase da linha "- **Descricao:** ..." do guia pt-BR).
+// (primeira frase da linha "- **Descricao:** ..." do guia pt-BR). Secoes
+// combinadas do guia ("### 16.4 FS binario (`FS.readFile(caminho[, max])` /
+// `FS.writeFile(caminho, dados)`") e irmaas na mesma linha ("#### `System.toast(m)`
+// / `System.beep(freq, ms)`") tem o heading numerado/prosa ANTES da assinatura:
+// a ancora nao casa e o parser perdia os nomes dos args (o d.ts dizia
+// "arg0: number" para o que e string/array). Alem da ancora, varre TODAS as
+// assinaturas entre crases da linha (primeira ocorrencia vence).
 function parseGuide(filePath) {
     const out = new Map();  // "System.foo" -> { args: [nomes], api, doc }
     if (!fs.existsSync(filePath)) return out;
     const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    const sigRe = /`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([^)]*)\)`/g;
     for (let i = 0; i < lines.length; i++) {
+        if (!/^#{3,4}\s/.test(lines[i])) continue;
+        const sigs = [];
         const m = /^#{3,4}\s+`?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(([^)]*)\)`?/.exec(lines[i]);
-        if (!m) continue;
+        if (m) sigs.push(m);
+        let s;
+        sigRe.lastIndex = 0;
+        while ((s = sigRe.exec(lines[i]))) sigs.push(s);
+        if (!sigs.length) continue;
         const apiM = /\(API\s+(\d+)\)/.exec(lines[i]);
         // resumo: linha "- **Descricao:**" (+ 1 linha de continuacao indentada)
         let doc = '';
@@ -183,8 +252,10 @@ function parseGuide(filePath) {
             if (/^#{3,4}\s/.test(t)) break;  // heading seguinte sem descricao
         }
         doc = doc.replace(/\s+/g, ' ').slice(0, 140);
-        const args = m[2] ? m[2].split(',').map((a) => a.trim()).filter(Boolean) : [];
-        if (!out.has(m[1])) out.set(m[1], { args, api: apiM ? +apiM[1] : null, doc });
+        for (const sg of sigs) {
+            const args = sg[2] ? sg[2].split(',').map((a) => a.trim()).filter(Boolean) : [];
+            if (!out.has(sg[1])) out.set(sg[1], { args, api: apiM ? +apiM[1] : null, doc });
+        }
     }
     return out;
 }
@@ -289,6 +360,7 @@ function generate() {
     out.push('}');
     out.push('interface UITouch { down: boolean; x: number; y: number; tap: boolean; released: boolean; moved: boolean; sx: number; sy: number; }');
     out.push('interface UIListItem { label: string; sub?: string; right?: string; rightColor?: number; bars?: number; enabled?: boolean; }');
+    out.push('interface AlarmOpts { hour: number; minute: number; days?: number; enabled?: boolean; label?: string; }');
     out.push('');
     out.push('// CelerNet (API 26): malha BLE — poll/nodes/status');
     out.push('interface MeshMessage { from: string; fromName: string; msg: string; hops: number; rssi: number; }');

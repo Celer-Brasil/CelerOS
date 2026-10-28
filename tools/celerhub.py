@@ -71,17 +71,20 @@ VALID_REQUIRES = ("psram",)
 # na SOMA do teto de compile; assets (nao-.js) tem tetos proprios.
 # .sh = install.sh do Installer (API 42): roda 1x por versao no sh restrito.
 ASSET_EXTS = (".js", ".png", ".wav", ".qoa", ".json", ".bin", ".sh")
-FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# \Z e nao $: "$" casa antes de um \n final — "1.0.0\n" passaria como
+# versao valida e "x\n.png" como nome de asset (app.json/hostil com
+# nome armado no meio do publish)
+FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 MAX_ASSET_FILE = 128 * 1024
 MAX_ASSETS_TOTAL = 256 * 1024
 MAX_EXTRA_FILES = 16
 REQUIRED = ("name", "packageName", "version", "author", "description")
-PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+$")
-VER_RE = re.compile(r"^\d+\.\d+\.\d+$")
+PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+\Z")
+VER_RE = re.compile(r"^\d+\.\d+\.\d+\Z")
 # Dependencias compartilhadas (mesmas regras do servidor): nome com ponto
 # tipo celeros.engine, range "^x.y.z" (major) ou versao exata.
-DEP_NAME_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9-]+)+$")
-DEP_RANGE_RE = re.compile(r"^\^?\d+\.\d+\.\d+$")
+DEP_NAME_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9-]+)+\Z")
+DEP_RANGE_RE = re.compile(r"^\^?\d+\.\d+\.\d+\Z")
 MAX_APP_DEPS = 8
 
 
@@ -294,18 +297,64 @@ def http(method, url, token=None, data=None, headers=None, timeout=30):
 
 
 # --------------------------------------------------------------- validacao -
-def strip_js(path: Path) -> bytes:
-    """Fonte enxuto do jeito que o aparelho compila (tools/sdk/lib/jsstrip.js,
-    porte 1:1 do JsStripper do firmware: sem comentarios/indentacao, quebras
-    de linha preservadas — a linha do erro no device bate com o repo)."""
+def strip_js(path: Path, code: bytes | None = None, reserved=None, legacy=False) -> bytes:
+    """Fonte enxuto do jeito que o aparelho compila (tools/sdk/lib/jsstrip.js).
+    Sem comentarios/indentacao e, agora, MINIFICADO (jsmin: mangle de locais +
+    espacamento minimo, quebras de linha preservadas — a linha do erro no
+    device continua batendo com o repo). O strip do firmware e idempotente
+    nessa saida, entao o custo que o hub mede e o custo real de compile.
+    `code`: enxuta ESSES bytes (arquivo temporario) em vez de reler `path`.
+    `reserved`: nomes globais que OUTROS .js do pacote leem — o main.js nao
+    pode renomear esses (o topo de um main.js e o escopo global do app).
+    Modulos (qualquer arquivo != main.js) sao embrulhados pelo loader em
+    function(module,exports,require): o topo deles e local e pode manglar."""
     tool = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+    alvo = path
+    td = None
+    if code is not None:
+        td = tempfile.TemporaryDirectory()
+        alvo = Path(td.name) / path.name
+        alvo.write_bytes(code)
+    cmd = ["node", str(tool), str(alvo)]
+    if not legacy:
+        cmd.append("--min")
+        if path.name != "main.js":
+            cmd.append("--top")
+        if reserved:
+            cmd.extend(["--reserved", ",".join(sorted(reserved))])
     try:
-        out = subprocess.run(["node", str(tool), str(path)], capture_output=True, timeout=60)
+        out = subprocess.run(cmd, capture_output=True, timeout=60)
     except FileNotFoundError:
         die("node nao encontrado no PATH: necessario para enxugar o .js (ou --sem-strip)")
-    if out.returncode != 0 or (not out.stdout and path.stat().st_size > 0):
+    finally:
+        if td is not None:
+            td.cleanup()
+    if out.returncode != 0 or (not out.stdout and (code if code is not None else path.stat().st_size) > 0):
         die(f"jsstrip falhou em {path.name}: {out.stderr.decode('utf-8', 'replace').strip()}")
+    if out.stderr:
+        # aviso de fallback (jsmin recusou) nao pode virar silencio
+        print(out.stderr.decode("utf-8", "replace").strip())
     return out.stdout
+
+
+def free_names(paths) -> set:
+    """Nomes que os .js dados LEEM sem declarar (resolvem no escopo global).
+    Um main.js nao pode renomear um top-level que um irmao le por esse nome."""
+    files = [str(p) for p in paths if p and Path(p).is_file()]
+    if not files:
+        return set()
+    tool = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+    try:
+        out = subprocess.run(["node", str(tool), "--free-names"] + files,
+                             capture_output=True, timeout=60)
+    except FileNotFoundError:
+        return set()
+    if out.returncode != 0:
+        return set()
+    try:
+        return set(json.loads(out.stdout.decode("utf-8") or "[]"))
+    except ValueError:
+        return set()
 
 
 def git_dirty_files(paths) -> list:
@@ -349,6 +398,21 @@ def git_dirty_files(paths) -> list:
     return sujas
 
 
+def strip_md5s(path: Path, code: bytes | None = None) -> set:
+    """md5 do .js nos dois modos (strip legado e minificado). O hub guarda o
+    md5 do que subiu; deps publicadas antes do jsmin tem o md5 do strip
+    antigo, entao a comparacao aceita os dois."""
+    out = set()
+    for legacy in (False, True):
+        try:
+            out.add(hashlib.md5(strip_js(path, code, legacy=legacy)).hexdigest())
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+    return out
+
+
 def head_strip_md5(path: Path):
     """md5 do ENXUTO do arquivo como esta no HEAD (None se o repo/git nao
     tiver o arquivo — novo, ainda sem commit). O deps-status usa para
@@ -368,7 +432,7 @@ def head_strip_md5(path: Path):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td) / path.name
             tmp.write_bytes(blob.stdout)
-            return hashlib.md5(strip_js(tmp)).hexdigest()
+            return strip_md5s(tmp)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
 
@@ -423,19 +487,26 @@ def package_files(folder: Path):
     return out
 
 
-def validate(folder: Path, strip=True):
+def validate(folder: Path, strip=True, snapshot=None):
     """Confere o pacote localmente; devolve (meta, avisos, size, extras).
     Devolve erros via die. `strip`: a soma dos .js (e os tetos de
     stream-safe) contam o tamanho ENXUTO, como o publish sobe e o aparelho
     compila — o cru tem comentario/indentacao e bloqueava com mensagem
     errada ANTES do strip provar o contrario (main.js de 60KB cru que vira
-    40KB enxuto morria com "acima de 48KB")."""
+    40KB enxuto morria com "acima de 48KB").
+    `snapshot`: {"app.json": bytes, "main.js": bytes} — quando dado, meta e
+    teto saem DESSES bytes e nao de uma segunda leitura do disco: o publish
+    valida exatamente o conteudo que vai no zip (app.json trocado no meio
+    do publish nao valida uma versao e sobe outra)."""
+    snap = snapshot or {}
     avisos = []
     meta_path, code_path, icon_path = (folder / "app.json", folder / "main.js", folder / "icon.png")
     if not meta_path.is_file() or not code_path.is_file():
         die(f"{folder}: precisa conter app.json e main.js")
+    meta_text = snap["app.json"].decode("utf-8") if "app.json" in snap \
+        else meta_path.read_text(encoding="utf-8")
     try:
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_text)
     except ValueError as e:
         die(f"{folder}: app.json invalido: {e}")
     for f in REQUIRED:
@@ -447,10 +518,16 @@ def validate(folder: Path, strip=True):
         die(f"{folder}: version deve ser semver x.y.z")
     if "files" in meta:
         die(f"{folder}: campo \"files\" e computado pelo hub: nunca setar a mao")
-    api = int(meta.get("api") or 1)
+    try:
+        api = int(meta.get("api") or 1)
+    except (TypeError, ValueError):
+        die(f"{folder}: api deve ser um numero inteiro no app.json "
+            f"(veio {meta.get('api')!r})")
     if api > MAX_API_LEVEL:
         die(f"{folder}: api {api} > {MAX_API_LEVEL} (device nao instala)")
-    if api == 5 and "keypad" not in code_path.read_text(encoding="utf-8", errors="replace"):
+    main_src = snap["main.js"].decode("utf-8", "replace") if "main.js" in snap \
+        else code_path.read_text(encoding="utf-8", errors="replace")
+    if api == 5 and "keypad" not in main_src:
         avisos.append("declara api 5 mas nao usa keypad*")
 
     # Lint estatico (ES5 real + API do firmware): erros bloqueiam o publish
@@ -470,8 +547,15 @@ def validate(folder: Path, strip=True):
     if len(extras) > MAX_EXTRA_FILES:
         die(f"{folder}: {len(extras)} arquivos extras (max {MAX_EXTRA_FILES})")
     js_sizes = {}
-    for f in [code_path] + [p for n, p in extras.items() if n.endswith(".js")]:
-        js_sizes[f] = len(strip_js(f)) if strip else f.stat().st_size
+    main_fonte = snap["main.js"] if "main.js" in snap else code_path
+    # globais que os modulos do pacote leem: o main.js nao pode renomea-los
+    reserved = free_names([p for n, p in extras.items() if n.endswith(".js")]) if strip else set()
+    for f in [main_fonte] + [p for n, p in extras.items() if n.endswith(".js")]:
+        if isinstance(f, bytes):  # snapshot do publish: enxuta esses bytes
+            js_sizes[f] = len(strip_js(code_path, f, reserved=reserved)) if strip else len(f)
+        else:
+            js_sizes[f] = len(strip_js(f, reserved=reserved)) if strip else f.stat().st_size
+    main_enxuto = js_sizes[main_fonte]
     js_sum = sum(js_sizes.values())
     assets_total = 0
     for n, p in extras.items():
@@ -518,7 +602,7 @@ def validate(folder: Path, strip=True):
         die(f"{folder}: soma dos .js enxutos ({js_sum}B): acima de {MAX_MAIN_JS}B exige "
             f"\"psram\" em requires no app.json (sem PSRAM a RAM interna "
             f"nao fecha o compile)")
-    if js_sizes[code_path] > STREAM_SAFE_MAIN_JS and api < 6:
+    if main_enxuto > STREAM_SAFE_MAIN_JS and api < 6:
         die(f"{folder}: main.js enxuto > {STREAM_SAFE_MAIN_JS}B exige api >= 6 no "
             f"app.json (firmware antigo trunca o download em 32KB)")
     if icon_path.is_file():
@@ -558,13 +642,14 @@ def cmd_deps_status(args):
         dmeta = (hub.get(name) or {}).get(lv)
         if not dmeta or not dmeta.get("md5"):
             continue
-        if hashlib.md5(strip_js(f)).hexdigest() == dmeta["md5"]:
+        if dmeta["md5"] in strip_md5s(f):
             continue
         head = head_strip_md5(f)
         # HEAD igual ao hub -> WIP nao commitado (commite). HEAD SEM o
         # arquivo (novo, nunca commitado; git ausente da None igual) tambem
         # pede COMMIT — sugerir --force aqui subiria o nao-commitado
-        divergent[name] = "wip" if head in (None, dmeta["md5"]) else "real"
+        head_ok = head is None or dmeta["md5"] in head
+        divergent[name] = "wip" if head_ok else "real"
     linhas, drift = deps_status_report({n: v for n, (v, _) in local.items()},
                                        hub, divergent)
     print(f"{'dep':22} {'local':8} {'hub':8} veredito")
@@ -590,20 +675,34 @@ def cmd_publish(args):
     rc = 0
     for folder in args.folders:
         folder = Path(folder).expanduser().resolve()
-        meta, avisos, js_sum, extras = validate(folder, strip=not args.no_strip)
-        # SNAPSHOT de tudo o que sobe (uma leitura cada, ANTES da guarda de
-        # arvore suja): a guarda, os tetos e o zip trabalham sobre os MESMOS
-        # bytes — a arvore anda em voo na bancada e o zip relia os arquivos
-        # DEPOIS da checagem (o buraco da engine 1.2.3, no publish de app)
+        # SNAPSHOT de app.json/main.js: UMA leitura cada, ANTES de tudo —
+        # validate, guarda de arvore suja, tetos e zip trabalham sobre os
+        # MESMOS bytes (a bancada anda em voo: app.json trocado no meio do
+        # publish nao pode validar uma versao e subir outra)
+        raw_meta = (folder / "app.json").read_bytes()
+        raw_main = (folder / "main.js").read_bytes()
+        meta, avisos, js_sum, extras = validate(folder, strip=not args.no_strip,
+                                                snapshot={"app.json": raw_meta,
+                                                          "main.js": raw_main})
+        # fecha o TOCTOU: qualquer mutacao entre a leitura e aqui (bancada
+        # paralela, editor salvando) aborta — o que sobe e o que foi checado
+        raw_extras = {n: p.read_bytes() for n, p in extras.items()}
+        if (folder / "app.json").read_bytes() != raw_meta or \
+                (folder / "main.js").read_bytes() != raw_main or \
+                any(p.read_bytes() != raw_extras[n] for n, p in extras.items()):
+            die(f"{folder.name}: app.json/main.js/extras mudaram durante o publish — rode de novo")
+        # enxuto sai do SNAPSHOT, nao de nova leitura do arquivo
         enxutos = {}
         if not args.no_strip:
-            enxutos["main.js"] = strip_js(folder / "main.js")
+            enxutos["main.js"] = strip_js(
+                folder / "main.js", code=raw_main,
+                reserved=free_names([p for n, p in extras.items() if n.endswith(".js")]))
             for n, p in extras.items():
                 if n.endswith(".js"):
-                    enxutos[n] = strip_js(p)
+                    enxutos[n] = strip_js(p, code=raw_extras[n])
             js_sum = sum(len(b) for b in enxutos.values())
-        blobs = {"app.json": (folder / "app.json").read_bytes(),
-                 "main.js": (folder / "main.js").read_bytes()}
+        blobs = {"app.json": raw_meta,
+                 "main.js": raw_main}
         # --private/--tenant: o app.json versionado continua publico (o repo
         # publico nao carrega visibilidade de vertical); a CLI injeta na
         # COPIA que sobe — o hub grava em content/private e exige token.
@@ -633,7 +732,7 @@ def cmd_publish(args):
             blobs["icon.png"] = (folder / "icon.png").read_bytes()
         for n, p in extras.items():
             if n not in enxutos:
-                blobs[n] = p.read_bytes()
+                blobs[n] = raw_extras[n]
         # guarda de arvore suja (mesma do publish-dep): so sobe conteudo
         # COMMITADO — publish de app com WIP no main.js embarcaria trabalho
         # que o autor nem terminou (quase aconteceu com o Arrasa 1.0.0)
@@ -835,16 +934,9 @@ def cmd_publish_dep(args):
                     f"— suba a version ou use --force (rebaixamento)")
         # enxuta o SNAPSHOT: o que sobe e o que foi lintado
         if not args.no_strip:
-            strip = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
-            try:
-                out = subprocess.run(["node", str(strip), str(snap)],
-                                     capture_output=True, timeout=60)
-            except FileNotFoundError:
-                die("node nao encontrado no PATH: necessario para enxugar a dep (ou --sem-strip)")
-            if out.returncode != 0 or not out.stdout:
-                die(f"jsstrip falhou: {out.stderr.decode('utf-8', 'replace').strip()}")
-            print(f"{name}: {len(code)}B -> {len(out.stdout)}B enxuto (linhas preservadas)")
-            code = out.stdout
+            enxuto = strip_js(snap)
+            print(f"{name}: {len(code)}B -> {len(enxuto)}B minificado (linhas preservadas)")
+            code = enxuto
     md5_local = hashlib.md5(code).hexdigest()
 
     if args.dry:

@@ -140,11 +140,78 @@ function strip(input) {
 
 module.exports = { strip };
 
+// CLI. O modo historico (sem flags) e o porte 1:1 do firmware; `--min` usa o
+// jsmin (mangle de locais + espacamento minimo, linhas preservadas):
+//
+//   node jsstrip.js ARQ.js                     # so comentarios/indentacao
+//   node jsstrip.js ARQ.js --min               # minificado (topo intacto)
+//   node jsstrip.js mod.js --min --top         # modulo (o loader envolve em
+//                                              # function(module,exports,require):
+//                                              # o topo e local, pode manglar)
+//   node jsstrip.js main.js --min --reserved a,b   # nao renomeia a/b no topo
+//   node jsstrip.js --free-names a.js b.js     # JSON: nomes lidos sem declarar
 if (require.main === module) {
-    const f = process.argv[2];
-    if (!f) {
-        console.error('uso: node jsstrip.js ARQ.js');
+    const args = process.argv.slice(2);
+    const flags = {};
+    const files = [];
+    for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (!a.startsWith('--')) { files.push(a); continue; }
+        const k = a.slice(2);
+        if (k === 'min' || k === 'top' || k === 'stats' || k === 'free-names') { flags[k] = true; continue; }
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith('--')) { flags[k] = next; i++; }
+        else flags[k] = true;
+    }
+    const fs = require('fs');
+    const J = require('./jsmin');
+
+    if (flags['free-names']) {
+        if (!files.length) {
+            console.error('uso: node jsstrip.js --free-names ARQ.js [...]');
+            process.exit(2);
+        }
+        const all = new Set();
+        for (const f of files) {
+            try {
+                const fn = J.freeNames(fs.readFileSync(f));
+                for (const n of fn.names) all.add(n);
+            } catch (e) {
+                // arquivo ilegivel/sintaxe quebrada: o app_lint acusa depois;
+                // aqui nao bloqueia o publish por causa de um irmao invalido
+                console.error('aviso: --free-names ' + f + ': ' + e.message);
+            }
+        }
+        process.stdout.write(JSON.stringify(Array.from(all).sort()));
+        process.exit(0);
+    }
+
+    const file = files[0];
+    if (!file) {
+        console.error('uso: node jsstrip.js ARQ.js [--min] [--top] [--reserved a,b] [--stats]');
         process.exit(2);
     }
-    process.stdout.write(strip(require('fs').readFileSync(f)));
+    const src = fs.readFileSync(file);
+    if (!flags.min) {
+        const out = strip(src);
+        if (flags.stats) console.error(JSON.stringify({ orig: src.length, min: out.length }));
+        process.stdout.write(out);
+        process.exit(0);
+    }
+    const reserved = typeof flags.reserved === 'string'
+        ? flags.reserved.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    let r;
+    try {
+        r = J.minify(src, { top: !!flags.top, reserved: reserved });
+    } catch (e) {
+        // minificador recusou (sintaxe exotica): cai no strip, que e o que o
+        // aparelho faria de qualquer forma — avisa no stderr para o log
+        console.error('aviso: jsmin falhou em ' + file + ': ' + e.message + ' (usando jsstrip)');
+        const out = strip(src);
+        if (flags.stats) console.error(JSON.stringify({ orig: src.length, min: out.length, fallback: true }));
+        process.stdout.write(out);
+        process.exit(0);
+    }
+    if (flags.stats) console.error(JSON.stringify(r.stats));
+    process.stdout.write(r.code);
 }

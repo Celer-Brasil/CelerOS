@@ -26,6 +26,8 @@
 
 
 
+
+
 var A = require('celeros.app');
 require('celeros.app.list');
 
@@ -70,7 +72,7 @@ return out;
 }
 
 A.form = {
-version: '1.1.0',
+version: '1.1.1',
 
 
 info: function (label, value, color) {
@@ -128,11 +130,11 @@ if (!rows) rows = flat(build());
 var i;
 if (A.list && A.list.view && A.rows && A.rows.formRow) {
 i = A.list.view('kit:form', A.L.x, A.L.top, A.L.w,
-320 - A.L.top - 4, rows,
+A.L.bottom - A.L.top, rows,
 { row: 36, paintRow: A.rows.formRow });
 } else {
 i = UI.list('kit:form', A.L.x, A.L.top, A.L.w,
-320 - A.L.top - 4, rowsOf(rows));
+A.L.bottom - A.L.top, rowsOf(rows));
 }
 if (i >= 0) {
 var r = rows[i];
@@ -168,7 +170,7 @@ UI.resetScroll('kit:pick');
 for (;;) {
 UI.begin(T.bg);
 if (UI.header(title, { back: true })) return -1;
-var j = UI.list('kit:pick', A.L.x, A.L.top, A.L.w, 320 - A.L.top - 4,
+var j = UI.list('kit:pick', A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top,
 rows, { selected: selected });
 if (j >= 0) return j;
 UI.end(20);

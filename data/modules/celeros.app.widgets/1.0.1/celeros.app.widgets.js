@@ -58,7 +58,10 @@ return t.down && t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
 
 A.widgets = {
-version: '1.0.0',
+version: '1.0.1',
+
+
+
 
 
 
@@ -67,9 +70,19 @@ button: function (label, x, y, w, h, o) {
 o = o || {};
 var T = A.style.T;
 var dis = !!o.disabled;
-var bg = dis ? T.card : (o.bg === undefined ? T.accent : o.bg);
+var v = o.variant;
+var bg = dis ? T.card
+: o.bg !== undefined ? o.bg
+: v === 'danger' ? T.err
+: v === 'success' ? T.ok
+: v === 'secondary' ? T.raised
+: v === 'ghost' ? T.card : T.accent;
 var fg = dis ? T.textDim
-: (o.textColor === undefined ? T.onAccent : o.textColor);
+: o.textColor !== undefined ? o.textColor
+: v === 'danger' ? 0xFFFF
+: v === 'success' ? 0x0000
+: v === 'ghost' ? T.accent
+: v === 'secondary' ? T.text : T.onAccent;
 var on = !dis && pressIn(x, y, w, h);
 if (on !== _bOn) { _bOn = on; UI.invalidate(); }
 UI.card(x, y, w, h, {

@@ -1,16 +1,16 @@
 {
   "name": "USB Printer",
   "packageName": "celeros.usbprinter",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Impressora termica USB (ESC/POS) como driver em JS: acha a interface classe 7, monta o cupom com celeros.usb.escpos e imprime pelo USB Host (API 48). Referencia para escrever o driver da SUA impressora sem tocar no firmware.",
+  "description": "Impressora termica USB (ESC/POS) como driver de referencia em JS no CelerKit UI 2.0: acha a interface classe 7, toma o claim, monta o cupom (titulo 2x, corpo, QR opcional, feed e corte) e envia pelo bulk OUT do USB Host (API 48). Status por DLE EOT, titulo editavel e QR ligavel; sem impressora espera o hotplug.",
   "type": "App",
   "category": "Utility",
   "api": 48,
   "permissions": ["usb"],
   "deps": {
-    "celeros.usb": "^1.0.0",
-    "celeros.usb.escpos": "^1.0.0"
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0"
   },
-  "changelog": "1.0.0 - primeira versao: cupom de teste com texto, negrito, QR e corte em qualquer impressora ESC/POS de interface classe 7; botao de reimpressao e deteccao de hotplug"
+  "changelog": "2.0.0 - UI kit 2.0 (CelerKit): card da impressora com VID/PID, interface, endpoints OUT/IN, status (online/off-line/papel/erro) e ultimo envio; card do cupom com QR ligavel e titulo editavel (persistidos no NVS); botoes de imprimir e consultar status com overlay de ocupado. O cupom de teste mantem o mesmo texto e o QR do hub da 1.0, o init/titulo 2x/corte e o claim da interface classe 7; o status consulta DLE EOT 1/2 e decodifica online/papel/erro. Driver ESC/POS e transporte bulk inline (sem dep extra) para caber no orcamento; sem USB Host explica, sem impressora mostra o estado vazio e espera o hotplug, e o modo headless imprime ao conectar. Segue sem PSRAM\n1.0.0 - primeira versao: cupom de teste com texto, negrito, QR e corte em qualquer impressora ESC/POS de interface classe 7; botao de reimpressao e deteccao de hotplug"
 }

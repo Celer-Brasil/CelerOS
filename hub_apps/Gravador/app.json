@@ -1,19 +1,22 @@
 {
   "name": "Gravador",
   "packageName": "celeros.gravador",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "api": 30,
-  "permissions": ["fs", "mic"],
+  "permissions": [
+    "fs",
+    "mic"
+  ],
   "author": "CelerOS",
   "type": "App",
   "category": "Utility",
-  "description": "Gravador de voz do aparelho: grave pelo microfone (API 19), veja o nivel ao vivo num medidor de arco, salve os WAVs no espaco privado do app e escute de novo (playWav). Duracao ajustavel de 2 a 10 s.",
+  "description": "Gravador de voz no CelerKit UI 2.0: botão circular com anel de nível ao vivo e anel do tempo, duração alvo em segmented (2/5/10 s, persistida), lista de WAVs com data, tamanho e duração e sheet de detalhes com tocar/apagar. Em placa sem microfone (CYD/devkit) explica e continua tocando as gravações existentes.",
   "deps": {
     "celeros.app": "^1.0.0",
-    "celeros.app.data": "^1.0.0",
-    "celeros.app.fmt": "^1.0.0",
-    "celeros.app.list": "^1.0.0",
-    "celeros.app.path": "^1.0.0"
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0",
+    "celeros.app.widgets": "^1.0.0",
+    "celeros.app.caps": "^1.0.0"
   },
-  "changelog": "1.1.0 - migrado para o CelerKit (deps celeros.app.*, API 30): duracao alvo persiste no NVS (celeros.app.data), lista de gravacoes so varre o disco quando muda (celeros.app.list), duracoes/tamanhos no formato do sistema (celeros.app.fmt) e caminhos via celeros.app.path; o botao voltar agora funciona (sair na tela principal, cancelar a gravacao em curso) e o espaco livre e conferido ANTES de gravar (nao perde mais o audio ao falhar a gravacao)\n1.0.1 - nivel do microfone centrado no medidor (datum 5: no LovyanGFX o 4 e middle-left); 1.0.0 - primeiro lancamento: gravacao com medidor de nivel em fillArc (API 22) e arco de progresso, lista de gravacoes com tamanho, reproducao nativa e exclusao com confirmacao; em placa sem microfone o app explica e continua sendo um player"
+  "changelog": "2.0.0 - UI kit 2.0 (CelerKit): botão circular de gravar com anel de nível suavizado e anel fino do tempo, duração alvo em segmented (2/5/10 s, persistida no NVS), lista de gravações com data (índice leve no NVS), tamanho e duração lida do próprio WAV, e sheet de detalhes com tocar/apagar/fechar; header com o total de gravações e estado vazio. A capacidade de microfone vem do A.caps.mic: em CYD/devkit (ou sem a permissão) o app explica e segue como player das gravações existentes; em placa sem alto-falante o botão tocar fica desabilitado com o motivo. O anel é desenhado por primitivas (redesenho parcial nas S3 via UI.custom quando o kit local tem; senão frame total por assinatura). Grava/fecha em WAV PCM16 16 kHz no espaço privado do app, confere o espaço livre antes de gravar e salva automaticamente no teto de duração; segue sem PSRAM\n1.1.0 - migrado para o CelerKit (deps celeros.app.*, API 30): duracao alvo persiste no NVS (celeros.app.data), lista de gravacoes so varre o disco quando muda (celeros.app.list), duracoes/tamanhos no formato do sistema (celeros.app.fmt) e caminhos via celeros.app.path; o botao voltar agora funciona (sair na tela principal, cancelar a gravacao em curso) e o espaco livre e conferido ANTES de gravar (nao perde mais o audio ao falhar a gravacao)\n1.0.1 - nivel do microfone centrado no medidor (datum 5: no LovyanGFX o 4 e middle-left); 1.0.0 - primeiro lancamento: gravacao com medidor de nivel em fillArc (API 22) e arco de progresso, lista de gravacoes com tamanho, reproducao nativa e exclusao com confirmacao; em placa sem microfone o app explica e continua sendo um player"
 }

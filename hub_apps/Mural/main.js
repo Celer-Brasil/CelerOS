@@ -6,22 +6,28 @@
 // que tem. E o algoritmo Trickle (RFC 6206, o mesmo das redes de sensores):
 // em silencio quando todos concordam, rapido quando alguem chega atrasado.
 //
-// Migrado para o CelerKit: o casco do loop e o tema vieram do celeros.app
-// (A.run/A.T/A.header), o protocolo de malha do celeros.app.mesh (A.mesh,
-// familia "m", each parsing op/resto) e o cache de linhas do celeros.app.list.
-// O protocolo no ar NAO mudou (compativel com Mural 1.0..1.2.1 e com o
-// service.js do proprio pacote, que vendoriza celeros.mesh — servicos nao
-// carregam a tabela de deps do hub):
+// CelerKit UI 2.0: header com acoes, card de sincronia (recados + vizinhos em
+// dia), lista rica com autor/hora e sheet do recado completo. Roda na CYD
+// (sem BT): o portao explica e o app nao chama nada de malha.
+//
+// O protocolo no ar NAO mudou (compativel com Mural 1.0..1.3.1 e com o
+// service.js do proprio pacote, que segue identico):
 //   m+<id>|<autor>|<texto>   recado (novo: ttl 4; refofocado: ttl 1)
 //   m#<qtd>.<hash>           resumo do mural (ttl 1, so vizinhos diretos)
 
 var A = require("celeros.app");
-require("celeros.app.mesh");
+require("celeros.app.style");
+require("celeros.app.icons");
+require("celeros.app.widgets");
 require("celeros.app.list");
+require("celeros.app.caps");
+require("celeros.app.mesh");
 
 A.init();
+A.style.preset("soft");
 A.mesh.family("m");
 
+var T = A.style.T;
 var MAX_POSTS = 24, MAX_TXT = 48, MAX_ID = 24, MAX_BY = 16;
 var IMIN = 4000, IMAX = 32000;
 
@@ -31,6 +37,18 @@ var postsRev = 0;          // muda quando o mural muda (carimbo dos caches)
 var me = null;
 var mySeq = parseInt(Storage.get("seq", "0"), 10) || 0;
 var frameNow = 0;          // relogio do quadro corrente (os handlers usam)
+var caps = A.caps.probe();
+var sheetOpen = false;
+var sheetPost = null;      // recado aberto no sheet
+var sheetJust = false;     // abriu neste quadro: nao deixa o proprio toque fechar
+var lastSig = {};          // assinaturas do desenho base (sem UI.custom)
+
+// desenho animado: redesenho parcial nas S3, frame total + assinatura na CYD
+function custom(id, x, y, w, h, sig, full, draw) {
+    if (A.custom && A.style && A.style.custom) { A.style.custom(id, x, y, w, h, sig, draw); return; }
+    if (lastSig[id] !== sig) { lastSig[id] = sig; UI.invalidate(); }
+    if (full) draw(x, y, w, h);
+}
 
 function load() {
     try {
@@ -80,9 +98,9 @@ var I = IMIN, iStart = 0, tFire = 0, fired = false, consistent = 0;
 var neigh = {};            // vizinho -> {d: resumo, at, name}
 var pushQ = [];            // ids a refofocar
 var pushAt = 0;
-var lastSent = {};         // id -> quando EU refofoquei (supressão)
-var lastHeard = {};        // id -> quando OUVI alguém refofocar (supressão)
-var confirmAt = 0;         // resumo de confirmação agendado (0 = nenhum)
+var lastSent = {};         // id -> quando EU refofoquei (supressao)
+var lastHeard = {};        // id -> quando OUVI alguem refofocar (supressao)
+var confirmAt = 0;         // resumo de confirmacao agendado (0 = nenhum)
 function newInterval(now, len) {
     I = len;
     iStart = now;
@@ -131,7 +149,7 @@ function onMesh(from, op, rest, m) {
         if (addPost(id, rest.substring(p1 + 1, p2).substring(0, MAX_BY),
                     rest.substring(p2 + 1).substring(0, MAX_TXT), frameNow)) {
             System.beep(1500, 30);
-            inconsistent(frameNow);     // novidade: acelera o Trickle (outros podem não ter)
+            inconsistent(frameNow);     // novidade: acelera o Trickle (outros podem nao ter)
         }
     } else if (op === "#") {
         var prev = neigh[from];
@@ -169,19 +187,50 @@ function ago(at, now) {
     return s < 60 ? "agora" : "há " + Math.floor(s / 60) + " min";
 }
 
+// ---- portao da malha (2.0) -------------------------------------------------
+function gate(full) {
+    if (typeof CelerNet === "undefined" || typeof Pack === "undefined") {
+        A.style.card(10, 56, 220, 108, { full: full, draw: function (r) {
+            UI.text("Esta placa não tem Bluetooth no firmware.", r.x, r.y,
+                    { w: r.w, lines: 2, role: "body", color: T.text, bg: r.bg });
+            UI.text("O mural fala pela malha CelerNet (app Matilha).",
+                    r.x, r.y + 30, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
+        }});
+        return false;
+    }
+    if (CelerNet.status().active) return true;
+    A.style.card(10, 56, 220, 96, { full: full, draw: function (r) {
+        UI.text("Ligue a malha (app Matilha) para trocar recados com os aparelhos ao redor.",
+                r.x, r.y, { w: r.w, lines: 4, role: "body", color: T.text, bg: r.bg });
+    }});
+    if (A.widgets.button("Ligar a malha", 10, 168, 220, 36,
+                         { icon: "wifi", bg: T.accent, textColor: T.onAccent })) {
+        if (!CelerNet.start({})) UI.toast("Sem RAM para o rádio agora");
+    }
+    return false;
+}
+
 // linhas do mural: rebuild so quando o mural muda ou o minuto vira (o "ha N
 // min" das linhas envelhece)
 var postList = A.list.make(function () {
-    return postsRev + ":" + Math.floor(A.now() / 60000);
+    return postsRev * 100000 + Math.floor(A.now() / 60000);
 }, function () {
     var now = A.now();
     var items = [];
     for (var i = 0; i < posts.length; i++) {
-        items.push({ label: posts[i].txt, sub: posts[i].by + " · " + ago(posts[i].at, now) });
+        items.push({ label: posts[i].txt, sub: posts[i].by + " · " + ago(posts[i].at, now),
+                     icon: "dot" });
     }
-    if (!items.length) items.push({ label: "Mural vazio: escreva o primeiro recado", enabled: false });
+    if (!items.length) items.push({ label: "Mural vazio: escreva o primeiro recado",
+                                    sub: "os recados ficam guardados e viajam sozinhos",
+                                    icon: "dot", disabled: true });
     return items;
 });
+
+function findPost(id) {
+    for (var i = 0; i < posts.length; i++) if (posts[i].id === id) return posts[i];
+    return null;
+}
 
 load();
 newInterval(System.millis(), IMIN);
@@ -189,8 +238,10 @@ newInterval(System.millis(), IMIN);
 // ---- app -----------------------------------------------------------------
 A.run({
     main: function (c) {
-        if (A.header("Mural")) return A.BACK;
-        if (!A.mesh.gate("Ligue a malha (app Matilha) para trocar recados com os aparelhos ao redor.")) return;
+        var h = A.widgets.header("Mural", { full: c.full, actions: [{ icon: "info", id: "sobre" }] });
+        if (h.back) return A.BACK;
+        if (h.action === "sobre") return "sobre";
+        if (!gate(c.full)) return;
 
         me = A.mesh.me();
         var now = c.now;
@@ -205,11 +256,89 @@ A.run({
             nn++;
             if (neigh[k].d === d) agree++;
         }
-        UI.text(posts.length + " recados · " + (nn ? (agree === nn ? "em dia com " + nn + " vizinho" + (nn > 1 ? "s" : "")
-                                                              : "sincronizando " + (nn - agree) + " de " + nn)
-                                               : "sem vizinhos ainda"),
-                10, 50, { role: "caption", color: agree === nn && nn ? A.T.ok : A.T.textDim, w: 220, id: "sync" });
-        UI.list("posts", 10, 68, 220, 196, postList.rows(), { rowH: 48 });
-        if (UI.button("Escrever recado", 10, 274, 220, 36)) write();
+        var sync = posts.length + " recados · " +
+                   (nn ? (agree === nn ? "em dia com " + nn + " vizinho" + (nn > 1 ? "s" : "")
+                                       : "sincronizando " + (nn - agree) + " de " + nn)
+                        : "sem vizinhos ainda");
+        A.style.card(8, 44, 224, 58, { full: c.full, draw: function (r) {
+            var okAll = nn > 0 && agree === nn;
+            // a linha de sincronia e uma so (o teste da malha compara o texto
+            // inteiro): fonte caption cabe nos 224 px sem cortar
+            UI.text(sync, r.x, r.y, { role: "caption", w: r.w, lines: 1,
+                                      color: okAll ? T.ok : T.text, bg: r.bg, id: "sync" });
+            A.icons.draw(nn ? "wifi" : "dot", r.x, r.y + 16, 16,
+                         { color: okAll ? T.ok : (nn ? T.warn : T.textDim) });
+            UI.text(nn ? "Trickle ativo" : "Os vizinhos aparecem quando abrem o Mural",
+                    r.x + 20, r.y + 20, { role: "caption", color: T.textDim, bg: r.bg,
+                                          w: r.w - 84, lines: 1, id: "sync2" });
+            // bolinhas dos vizinhos: verde = em dia, amarelo = sincronizando
+            var bx = r.x + r.w - 64;
+            for (var v = 0; v < nn && v < 6; v++) {
+                var on = false, at = 0;
+                for (var id in neigh) {
+                    if (!neigh.hasOwnProperty(id) || now - neigh[id].at > 70000) continue;
+                    if (at++ === v) on = neigh[id].d === d;
+                }
+                System.fillCircle(bx + v * 10, r.y + 24, 3, on ? T.ok : T.warn);
+            }
+        }});
+
+        var rows = postList.rows();
+        var li = A.list.view("posts", 8, 108, 224, 154, rows,
+                             { row: 42, panel: true, rowR: 7, pad: 4 });
+        if (!sheetOpen && li >= 0 && posts[li]) {
+            sheetPost = posts[li].id;
+            sheetOpen = true;
+            sheetJust = true;    // o toque que abriu nao vale como "fora"
+            UI.invalidate();
+        }
+
+        // sheet do recado completo (autor, hora, texto)
+        if (sheetJust) sheetJust = false;
+        else {
+            // full:false: o veu do sheet cobre os slots do header/lista (que
+            // nao redesenham no parcial) e o titulo sumia; sem veu o card
+            // sobe e o fundo continua legivel
+            var sh = A.widgets.sheet("recado", { open: sheetOpen, full: false, h: 168,
+                                                 title: "Recado" }, function (r) {
+                var p = sheetPost ? findPost(sheetPost) : null;
+                if (!p) {
+                    UI.text("Recado indisponível", r.x, r.y,
+                            { role: "caption", color: T.textDim, bg: r.bg, w: r.w });
+                    return;
+                }
+                UI.text(p.by, r.x, r.y, { role: "title", bg: r.bg, w: r.w, lines: 1 });
+                UI.text(ago(p.at, System.millis()), r.x, r.y + 22,
+                        { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
+                A.style.divider(r.x, r.y + 38, r.w);
+                UI.text(p.txt, r.x, r.y + 46,
+                        { role: "body", color: T.text, bg: r.bg, w: r.w, lines: 5 });
+            });
+            if (sh === "close") { sheetOpen = false; UI.invalidate(); }
+        }
+
+        if (!sheetOpen) {
+            if (A.style.button("Escrever recado", 8, 272, 224, 40,
+                               { icon: "dot", variant: "primary" })) write();
+        } else {
+            A.style.card(8, 272, 224, 40, { full: c.full, draw: function (r) {
+                UI.text("Toque fora do recado para voltar", r.x, r.y + 2,
+                        { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
+            }});
+        }
+    },
+    sobre: function (c) {
+        var h = A.widgets.header("Como funciona", { full: c.full });
+        if (h.back) return A.BACK;
+        A.style.card(8, 48, 224, 252, { full: c.full, draw: function (r) {
+            UI.text("Cada Mural guarda os recados no aparelho e compara um resumo com os vizinhos.",
+                    r.x, r.y, { w: r.w, lines: 3, bg: r.bg });
+            UI.text("Resumo diferente: os dois empurram o que têm, do mais novo ao mais velho.",
+                    r.x, r.y + 52, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
+            UI.text("Quando todos concordam, o Trickle fica em silêncio e recomeça devagar.",
+                    r.x, r.y + 104, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
+            UI.text("O recado chega até a quem estava desligado: o vizinho que ouviu guarda por você.",
+                    r.x, r.y + 166, { w: r.w, lines: 4, role: "caption", color: T.accent, bg: r.bg });
+        }});
     }
 }, "main");

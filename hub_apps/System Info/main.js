@@ -116,7 +116,7 @@ function tela(c) {
             linha(r.x, r.y + 18, r.w, "CPU", (i.chipCores || 0) + "x " + (i.cpuFreqMHz || 0) + " MHz");
         }
     });
-    UI.text("flash " + (A.fmt.bytes(i.flashSize) || "?") + "  ·  /local livre " +
+    UI.text("flash " + (A.fmt.bytes(i.flashSize) || "?") + "  ·  /local " +
             (A.fmt.bytes(livre) || "0"), LX + 10, 176, { role: "caption", color: T.textDim,
             bg: T.card, w: LW - 20, id: "fs" });
 

@@ -1,16 +1,17 @@
 {
   "name": "USB Storage",
   "packageName": "celeros.usbstorage",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Pendrive no USB Host (API 48): monta FAT32/exFAT em JS (Bulk-Only Transport + SCSI + FAT, sem driver no firmware), mostra rotulo/tamanho e navega pelas pastas lendo arquivos de texto. O driver e a dep celeros.usb.msc.",
+  "description": "Pendrive no USB Host (API 48) com o driver 100% em JavaScript: monta FAT32/exFAT (Bulk-Only Transport + SCSI + FAT na dep celeros.usb.msc), mostra tipo/rotulo/tamanho/clusters, navega as pastas com lista rica, abre arquivos de texto com rolagem e ejetar/raiz. Sem USB Host explica; sem pendrive espera o hotplug e tenta montar de novo.",
   "type": "App",
   "category": "Utility",
   "api": 48,
   "permissions": ["usb"],
   "deps": {
+    "celeros.app": "^1.0.0",
     "celeros.usb": "^1.0.0",
-    "celeros.usb.msc": "^1.0.0"
+    "celeros.usb.msc": "^1.0.1"
   },
-  "changelog": "1.0.0 - primeira versao: monta FAT32 e exFAT somente-leitura, lista pastas/arquivos com tamanho, abre arquivos de texto pequenos; modo headless imprime a raiz no logcat"
+  "changelog": "2.0.0 - UI kit 2.0: card do volume (tipo/rotulo/tamanho/clusters e caminho), lista de pastas/arquivos com diretorios primeiro e nome ordenado, navegacao com voltar para a pasta pai, previa de texto com rolagem (primeiros 2 KB), ejetar e raiz; estado vazio, falha de montagem com 'Tentar de novo' e hotplug redesenhado. Sem USB Host explica e nao estoura; o modo headless continua imprimindo volume + raiz no logcat. O driver Bulk-Only/SCSI/FAT (celeros.usb.msc 1.0.1) e o fluxo de montagem com retry seguem os mesmos: FAT32 e exFAT somente leitura; lixo de controle vira '.' na previa e arquivos grandes avisam que so os 2 KB iniciais foram lidos. Sem PSRAM\n1.0.0 - primeira versao: monta FAT32 e exFAT somente-leitura, lista pastas/arquivos com tamanho, abre arquivos de texto pequenos; modo headless imprime a raiz no logcat"
 }

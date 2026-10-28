@@ -1,15 +1,16 @@
 {
   "name": "USB Devices",
   "packageName": "celeros.usbdevices",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Inspetor do USB Host (API 48): lista os dispositivos conectados com VID/PID, classe, interfaces e endpoints — o ponto de partida para escrever um driver em JS. Em placa com tela mostra na lista; em headless imprime no logcat.",
+  "description": "Inspetor do USB Host (API 48) no CelerKit UI 2.0: lista ao vivo com hotplug (VID/PID, classe, endereco e interfaces), sheet do dispositivo e detalhe com cada interface e seus endpoints (direcao, tipo, mps), alem de copiar o dump para o logcat. Sem USB Host (ou sem a permissao usb) explica sem estourar; em placa headless imprime no log.",
   "type": "App",
   "category": "Utility",
   "api": 48,
   "permissions": ["usb"],
   "deps": {
-    "celeros.usb": "^1.0.0"
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0"
   },
-  "changelog": "1.0.0 - primeira versao: enumeracao ao vivo com hotplug, classes/interfaces/endpoints e estado de claim; modo headless via System.print"
+  "changelog": "2.0.0 - UI kit 2.0 (CelerKit): lista rica com VID/PID, classe, endereco, interfaces e endpoints, barra de status do host (hotplug ao vivo) e estado vazio; toque abre sheet com o resumo e 'Interfaces' leva ao detalhe, com uma linha por interface (classe/sub/protocolo) e por endpoint (direcao/tipo/mps) e 'Copiar p/ log' despejando o dump completo no logcat. Sem USB Host (qualquer placa que nao o devkit-S3, ou sem a permissao usb) o app explica e nao estoura; o modo headless do devkit-S3 continua imprimindo o hotplug no log. O inspetor usa a API USB crua (perm 'usb', API 48) e nao depende de driver; glifos locais para caber no orcamento sem PSRAM\n1.0.0 - primeira versao: enumeracao ao vivo com hotplug, classes/interfaces/endpoints e estado de claim; modo headless via System.print"
 }

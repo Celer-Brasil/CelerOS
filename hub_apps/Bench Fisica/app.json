@@ -1,13 +1,17 @@
 {
   "name": "Bench Fisica",
   "packageName": "celeros.benchfisica",
-  "version": "1.0.1",
-  "api": 31,
-  "permissions": [],
-  "deps": { "celeros.physics": "^2.1.1" },
+  "version": "2.0.0",
+  "api": 30,
+  "permissions": ["fs"],
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0"
+  },
   "author": "CelerOS",
   "type": "Utility",
   "category": "Utility",
-  "description": "Mede o verlet da celeros.physics nos dois caminhos: interpretado (JS no Duktape) e nativo (System.verletStep, API 31), com a mesma cena de cordas, pano e pontos. Mostra ms/step e o ganho do acelerador nesta placa.",
-  "changelog": "1.0.1 - range da celeros.physics atualizado para ^2.1.1 (versao corrente; nenhum codigo mudou). 1.0.0 - primeira versao: verlet JS x verletFast nativo, mesma cena (~120 nos), 2000 steps"
+  "description": "Mede o verlet nos dois caminhos com a mesma cena (3 cordas, pano 8x6 e pontos soltos): JS puro no Duktape x nativo (System.verletStep, API 31). Roda em blocos com progresso, compara A/B em cards com barras e ganho, e registra o resultado no aparelho e no logcat. Sem o binding nativo explica e mede só o lado JS.",
+  "changelog": "2.0.0 - UI kit 2.0 (CelerKit): cards da cena (com miniatura), carga em segmented (600/1200/2400 steps), execução fatiada em blocos por quadro com barra de progresso (a janela de 1 s do exec-timeout nunca fecha) e comparação A/B em cards com barra normalizada, ms/step e ganho do acelerador; o tempo é medido por System.micros só em volta dos steps, sem o desenho no meio. 'Registrar' grava o resultado no espaço privado e no logcat; em placa sem display roda uma vez e imprime no log. O verlet JS agora é inline (mesma matemática do celeros.physics, cena idêntica dos dois lados) e o nativo é feature-detectado por typeof: sem o binding (firmware < API 31 ou CYD lite sem física) o app explica e mede só o lado JS, sem estourar. A dep celeros.physics saiu (o app é a própria referência); segue sem PSRAM\n1.0.1 - range da celeros.physics atualizado para ^2.1.1 (versao corrente; nenhum codigo mudou). 1.0.0 - primeira versao: verlet JS x verletFast nativo, mesma cena (~120 nos), 2000 steps"
 }

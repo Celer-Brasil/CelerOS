@@ -7,12 +7,21 @@ Uso (com o ambiente ESP-IDF exportado, apos `idf.py build`):
   python3 tools/size_report.py --save-baseline .omo/size_baseline.json
   python3 tools/size_report.py --baseline .omo/size_baseline.json
   python3 tools/size_report.py --check-budget tools/size_baseline.json
+  python3 tools/size_report.py --board cyd --per-object 20
+  python3 tools/size_report.py --save-ledger tools/size_ledger.json
+  python3 tools/size_report.py --check-ledger tools/size_ledger.json
 
 Sai com codigo 1 se alguma placa ficar com menos de --min-free-kb livres no
 slot OTA (padrao 64 KB) ou, com --check-budget, se a imagem crescer mais de
 --max-growth-kb (padrao 8 KB) em relacao ao baseline. O baseline e o teto sao
 deliberados: placa nova precisa entrar no JSON num commit proprio, senao o
 check falha (crescimento nao passa despercebido).
+
+O ledger (--save-ledger/--check-ledger) e o orcamento POR OBJETO: enquanto o
+baseline olha a imagem inteira, o ledger olha os objetos de main/libmain.a,
+que sao os que o CelerOS controla. Cada onda de migracao C++->JS grava o
+ledger no MESMO commit em que mexe no tamanho; o gate falha se um objeto
+crescer mais de --max-object-growth (padrao 512 B) sem essa atualizacao.
 """
 import argparse
 import csv
@@ -39,6 +48,10 @@ def load_boards():
 
 BOARDS = load_boards()
 
+# Archive cujo conteudo o repo controla: e o que o ledger vigia. Bibliotecas
+# do IDF (wifi, TLS, Duktape) variam com a versao do IDF e nao entram.
+LEDGER_ARCHIVES = ("libmain.a",)
+
 
 def slot_size(csv_name):
     with open(os.path.join(ROOT, csv_name)) as f:
@@ -59,7 +72,39 @@ def archive_sizes(map_path):
     return {os.path.basename(k): v.get("size", 0) for k, v in data.items()}
 
 
-def measure(board):
+def file_sizes(map_path, archives=LEDGER_ARCHIVES):
+    """Tamanho por objeto, CONTANDO SO CODIGO + RAM (fora o Flash Data).
+
+    O `--files` do esp_idf_size le o mapa do linker, e o mapa atribui ao
+    primeiro objeto de um grupo o vao inteiro ate a proxima secao listada:
+    no build da CYD o `.rodata.esp_stdio_register.str1.1` aparece com 91.496 B
+    quando o objeto real tem 76 B (conferido com xtensa-esp32-elf-size). Ou
+    seja, tamanho de rodata por objeto NAO e confiavel no mapa.
+
+    Codigo (`.text`, IRAM) e DRAM sao por simbolo e batem com o objeto, entao
+    o ledger vigia so eles. Dados grandes (fontes, tabelas, bundles) seguem
+    cobertos pelo gate da imagem inteira (--check-budget).
+    """
+    cmd = [sys.executable, "-m", "esp_idf_size", "--format", "json2", "--files", map_path]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"  (esp_idf_size --files indisponivel: {e}; exporte o ambiente do IDF)")
+        return {}
+    data = json.loads(out)
+    sizes = {}
+    for key, val in data.items():
+        archive, _, obj = key.rpartition(":")
+        if not obj or os.path.basename(archive) not in archives:
+            continue
+        mem = val.get("memory_types") or {}
+        code_ram = sum(int(v.get("size", 0)) for k, v in mem.items()
+                       if k != "Flash Data")
+        sizes[obj] = code_ram
+    return sizes
+
+
+def measure(board, want_files=False):
     cfg = BOARDS[board]
     # Local usa apelidos curtos (build-cyd, build-dog...); o CI constroi em
     # build-<board>. Procura o apelido primeiro e cai no padrao do CI — sem
@@ -72,12 +117,16 @@ def measure(board):
             break
     if bdir is None:
         return None
-    return {
+    map_path = os.path.join(bdir, "CelerOS.map")
+    out = {
         "image": os.path.getsize(os.path.join(bdir, "CelerOS.bin")),
         "slot": slot_size(cfg["csv"]),
-        "archives": archive_sizes(os.path.join(bdir, "CelerOS.map")),
+        "archives": archive_sizes(map_path),
         "stale": stale_source(bdir),
     }
+    if want_files:
+        out["files"] = file_sizes(map_path)
+    return out
 
 
 def stale_source(bdir):
@@ -140,6 +189,43 @@ def budget_problems(measured, baseline, selected, max_growth_kb):
     return out
 
 
+def ledger_problems(current, ledger, selected, max_growth):
+    """Problemas do orcamento por objeto, um (placa, objeto, motivo) por falha.
+
+    Funcao pura: `current` e `ledger` sao {placa: {objeto: bytes}}. Objeto novo
+    acima do teto conta como falha: o ledger so vale quando alguem olhou o
+    numero e o aprovou no mesmo commit. Encolher nunca e problema.
+
+    Placa fora do ledger NAO falha: o ledger e um catraca por placa, adotada
+    quando ela e medida com o build fresco (o baseline da imagem ja cobre a
+    presenca). Assim o CI de uma placa recem-adicionada nao quebra antes de
+    alguem gravar o numero dela.
+    """
+    out = []
+    for b in selected:
+        cur = current.get(b)
+        if cur is None:
+            if b in ledger:
+                out.append((b, "-", "esta no ledger e nao foi medido"))
+            continue
+        prev = ledger.get(b)
+        if prev is None:
+            continue
+        for obj in sorted(cur):
+            size = cur[obj]
+            old = prev.get(obj)
+            if old is None:
+                if size > max_growth:
+                    out.append((b, obj, f"objeto novo de {size:,} B "
+                                        f"(teto {max_growth} B; grave o ledger)"))
+                continue
+            d = size - old
+            if d > max_growth:
+                out.append((b, obj, f"cresceu {d:+,} B "
+                                    f"(teto {max_growth} B; atualize o ledger)"))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", choices=[*BOARDS, "all"], default="all")
@@ -151,6 +237,12 @@ def main():
                     help="JSON de baseline; falha se a imagem crescer acima do teto")
     ap.add_argument("--max-growth-kb", type=int, default=8,
                     help="teto de crescimento por placa em KB (com --check-budget)")
+    ap.add_argument("--per-object", type=int, default=0, metavar="N",
+                    help="lista os N maiores objetos de main/libmain.a (flash+RAM)")
+    ap.add_argument("--save-ledger", help="grava o orcamento por objeto (main/libmain.a)")
+    ap.add_argument("--check-ledger", help="JSON do orcamento por objeto; falha se um objeto crescer acima do teto")
+    ap.add_argument("--max-object-growth", type=int, default=512,
+                    help="teto de crescimento por objeto em bytes (com --check-ledger)")
     args = ap.parse_args()
 
     if args.check_budget and args.save_baseline:
@@ -166,10 +258,16 @@ def main():
     if args.check_budget:
         with open(args.check_budget) as f:
             budget = json.load(f)
+    ledger = {}
+    if args.check_ledger:
+        with open(args.check_ledger) as f:
+            ledger = json.load(f)
+        ledger = {k: v for k, v in ledger.items() if not k.startswith("_")}
+    want_files = bool(args.per_object or args.save_ledger or args.check_ledger)
 
     results, failed = {}, False
     for b in boards:
-        m = measure(b)
+        m = measure(b, want_files=want_files)
         if m is None:
             print(f"[{b}] sem build ({BOARDS[b]['build']}/CelerOS.bin)")
             if b in budget:
@@ -206,6 +304,16 @@ def main():
             moved = [x for x in moved if abs(x[1]) >= 1024]
             for n, d in sorted(moved, key=lambda x: x[1]):
                 print(f"    {'':>9}  {n}  ({d:+,})")
+        files = m.get("files") or {}
+        if args.per_object and files:
+            prev_files = ledger.get(b, {})
+            print(f"  objetos de main/libmain.a, codigo+RAM ({len(files)}):")
+            for obj in sorted(files, key=lambda k: -files[k])[: args.per_object]:
+                s = f"    {files[obj]:>9,}  {obj}"
+                d = files[obj] - prev_files.get(obj, files[obj])
+                if d:
+                    s += f"  ({d:+,})"
+                print(s)
         if free < args.min_free_kb * 1024:
             print(f"  ORCAMENTO ESTOURADO: menos de {args.min_free_kb} KB livres no slot OTA")
             failed = True
@@ -215,6 +323,30 @@ def main():
         for b, why in problems:
             print(f"  ORCAMENTO [{b}]: {why}")
             failed = True
+
+    if args.check_ledger:
+        cur = {b: m["files"] for b, m in results.items() if "files" in m}
+        problems = ledger_problems(cur, ledger, boards, args.max_object_growth)
+        for b, obj, why in problems:
+            print(f"  OBJETO [{b}] {obj}: {why}")
+            failed = True
+
+    if args.save_ledger:
+        # Mescla: rodar `--board cyd --save-ledger` num build fresco adota so
+        # aquela placa, sem apagar as outras ja medidas.
+        out = {}
+        if os.path.exists(args.save_ledger):
+            with open(args.save_ledger) as f:
+                out = json.load(f)
+        out["_doc"] = ("Orcamento por objeto de main/libmain.a (flash+RAM). "
+                       "Atualize no mesmo commit que mudar o tamanho.")
+        for b, m in results.items():
+            if "files" in m:
+                out[b] = m["files"]
+        os.makedirs(os.path.dirname(os.path.abspath(args.save_ledger)), exist_ok=True)
+        with open(args.save_ledger, "w") as f:
+            json.dump(out, f, indent=1, sort_keys=True)
+        print(f"ledger gravado em {args.save_ledger}")
 
     if args.save_baseline:
         os.makedirs(os.path.dirname(os.path.abspath(args.save_baseline)), exist_ok=True)

@@ -83,5 +83,60 @@ class BudgetProblemsTest(unittest.TestCase):
         self.assertEqual(S.budget_problems({}, {}, ["devkit"], 8), [])
 
 
+class LedgerProblemsTest(unittest.TestCase):
+    """Orcamento por objeto: o gate que cada onda C++->JS tem que passar."""
+
+    def test_dentro_do_teto(self):
+        self.assertEqual(
+            S.ledger_problems({"cyd": {"JsAi.cpp.obj": 9_000}},
+                              {"cyd": {"JsAi.cpp.obj": 9_000}}, ["cyd"], 512),
+            [],
+        )
+
+    def test_crescimento_no_limite_passa(self):
+        self.assertEqual(
+            S.ledger_problems({"cyd": {"A.obj": 512}}, {"cyd": {"A.obj": 0}}, ["cyd"], 512),
+            [],
+        )
+
+    def test_crescimento_acima_do_teto_falha(self):
+        p = S.ledger_problems({"cyd": {"A.obj": 513}}, {"cyd": {"A.obj": 0}}, ["cyd"], 512)
+        self.assertEqual(len(p), 1)
+        self.assertEqual(p[0][1], "A.obj")
+        self.assertIn("cresceu", p[0][2])
+
+    def test_migracao_para_js_passa(self):
+        # o caso do plano: o objeto encolhe 8 KB
+        self.assertEqual(
+            S.ledger_problems({"cyd": {"JsAi.cpp.obj": 1_200}},
+                              {"cyd": {"JsAi.cpp.obj": 9_290}}, ["cyd"], 512),
+            [],
+        )
+
+    def test_objeto_novo_acima_do_teto_falha(self):
+        p = S.ledger_problems({"cyd": {"Novo.cpp.obj": 700}}, {"cyd": {}}, ["cyd"], 512)
+        self.assertEqual(len(p), 1)
+        self.assertIn("objeto novo", p[0][2])
+
+    def test_objeto_novo_pequeno_passa(self):
+        self.assertEqual(
+            S.ledger_problems({"cyd": {"Novo.cpp.obj": 400}}, {"cyd": {}}, ["cyd"], 512),
+            [],
+        )
+
+    def test_placa_sem_entrada_no_ledger_nao_bloqueia(self):
+        # catraca por placa: cada board entra no commit em que e medido com
+        # build fresco; o baseline da imagem ja cobre a presenca
+        self.assertEqual(S.ledger_problems({"cyd": {"A.obj": 9_000}}, {}, ["cyd"], 512), [])
+
+    def test_placa_do_ledger_sem_medida_falha(self):
+        p = S.ledger_problems({}, {"cyd": {"A.obj": 1}}, ["cyd"], 512)
+        self.assertEqual(len(p), 1)
+        self.assertIn("nao foi medido", p[0][2])
+
+    def test_placa_selecionada_sem_build_e_sem_ledger_passa(self):
+        self.assertEqual(S.ledger_problems({}, {}, ["devkit"], 512), [])
+
+
 if __name__ == "__main__":
     unittest.main()

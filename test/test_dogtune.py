@@ -54,7 +54,7 @@ def io(answers):
 
 
 class TestPair(unittest.TestCase):
-    def test_codigo_certo_liberа(self):
+    def test_codigo_certo_libera(self):
         async def go():
             lk = FakeLink()
             ok = await D.pair_flow(lk, ask=io(["314159"]))

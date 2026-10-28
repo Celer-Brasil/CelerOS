@@ -85,9 +85,11 @@ int main(int argc, char** argv) {
     FILE* f = fopen((s_appDir + "/main.js").c_str(), "rb");
     if (!f) return 2;
     char b[8192];
-    size_t n = fread(b, 1, sizeof(b), f);
+    size_t n;
+    // leitura INTEIRA (um fread de 8KB truncava em silencio um main.js
+    // maior: o teste passaria com metade do programa)
+    while ((n = fread(b, 1, sizeof(b), f)) > 0) src.append(b, n);
     fclose(f);
-    src.assign(b, n);
     if (duk_peval_lstring(ctx, src.data(), src.size()) != 0) {
         const char* e = duk_safe_to_string(ctx, -1);
         if (strstr(e, "app exit") == nullptr) printf("ERRO: %s\n", e);

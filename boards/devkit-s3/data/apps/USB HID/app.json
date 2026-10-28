@@ -1,13 +1,20 @@
 {
   "name": "USB HID",
   "packageName": "celeros.usbhid",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Driver de teclado e mouse USB em JS (API 48): decodifica HID boot, injeta no barramento Input do OS e move o ponteiro. Roda como servico de fundo no devkit-s3 — conecte teclado/mouse no USB-C host e os apps leem com Input.poll()/Input.pointer().",
+  "description": "Driver de teclado e mouse USB em JS (API 48): decodifica HID boot, injeta no barramento Input do OS e move o ponteiro. Roda como servico de fundo no devkit-s3 — conecte teclado/mouse no USB-C host e os apps leem com Input.poll()/Input.pointer(). Com vidro, painel CelerKit UI 2.0 com estado do servico, dispositivos, teclas/eixos e teste do hardware.",
   "type": "Utility",
   "category": "Utility",
   "api": 48,
   "permissions": ["usb", "input"],
   "service": "service.js",
-  "changelog": "1.0.0 - primeira versao: teclado boot (modificadores + 6 teclas, diff entre reports) e mouse boot (botoes + dx/dy/roda) injetados via Input.key/Input.move; rescan em hotplug e a cada 2s; sem driver de dispositivo no firmware"
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0",
+    "celeros.app.widgets": "^1.0.0",
+    "celeros.app.list": "^1.1.0"
+  },
+  "changelog": "2.0.0 - painel CelerKit UI 2.0 (placa com vidro): header com acao de varredura, cartao do servico com estado e iniciar/parar, lista dos dispositivos USB (teclado/mouse HID pelo descritor) e cartao de teste com a ultima tecla/modificadores ou dx/dy/botoes do mouse e um eixo vetorial; com o servico parado o painel reclama a interface HID e le os reports crus ele mesmo (nada entra no Input do OS nesse modo); headless segue no logcat com o estado do driver; o service.js mantem o driver (claim/listen/read, diff de reports, hotplug, Input.key/Input.move) e ganhou so a chave usbhid.on no NVS (default ligado) que o painel usa para iniciar/parar\n1.0.0 - primeira versao: teclado boot (modificadores + 6 teclas, diff entre reports) e mouse boot (botoes + dx/dy/roda) injetados via Input.key/Input.move; rescan em hotplug e a cada 2s; sem driver de dispositivo no firmware"
 }

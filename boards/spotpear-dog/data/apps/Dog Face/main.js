@@ -1130,11 +1130,13 @@ function drawEyes(open, pupilR, lx, ly) {
     System.fillRoundRect(PX(76), PY(ey - eh / 2), PW_(34), PH_(eh), PH_(6), 0xFFFF);
     if (open) {
         // lx/ly explicitos = rosto de performance (dog_script); sem eles o
-        // olhar vivo do loop (lookX/lookY)
+        // olhar vivo do loop (lookX/lookY). A pupila e PRETA: o OLED e 1-bit
+        // e branco-sobre-branco (como era) nao aparecia — a cara ficava com
+        // dois blobs sem olhar nenhum.
         var px = Math.round((lx === undefined ? lookX : lx) * 6);
         var py = Math.round((ly === undefined ? lookY : ly) * 3);
-        System.fillCircle(PX(35 + px), PY(ey + py), PW_(pupilR), 0xFFFF);
-        System.fillCircle(PX(93 + px), PY(ey + py), PW_(pupilR), 0xFFFF);
+        System.fillCircle(PX(35 + px), PY(ey + py), PW_(pupilR), 0x0000);
+        System.fillCircle(PX(93 + px), PY(ey + py), PW_(pupilR), 0x0000);
     }
 }
 
@@ -2404,6 +2406,13 @@ happyUntil = System.millis() + 1400;
 var FRAME_MS = 60;
 var SLEEP_MS = 120000;      // 2 min sem comando/toque e sem link
 var lastLoop = System.millis();
+// Economia de bateria: o desenho e o flush do OLED por I2C (~100 ms a
+// 100 kHz) e domina o consumo da volta. Com o cao dormindo a cara e estatica
+// (olhos fechados), entao basta repintar de vez em quando; com o vidro
+// apagado (placa que suporta) nem isso. Estados que mudam continuam
+// desenhando no mesmo quadro (as acoes chamam draw() direto).
+var lastDraw = 0;
+var hasScreenOn = (typeof System.isScreenOn === "function");
 while (true) {
     var now = System.millis();
     var dt = now - lastLoop;
@@ -2514,8 +2523,20 @@ while (true) {
     seqTick(now);   // sequenciador roda ANTES da gait: o passo move ja vale
     gaitTick(dt);
     // andando, o flush do OLED (~100 ms no I2C) entre as fases viraria
-    // pausa extra no meio do passo: desenha so uma vez por ciclo
-    if (!walking() || gait.frames || gaitPhase === 0) draw();
+    // pausa extra no meio do passo: desenha so uma vez por ciclo. Dormindo
+    // (ou com o vidro apagado) a cara nao muda: repinta a 2,5/1 Hz.
+    var econ = sleeping ? 400 : 0;
+    if (hasScreenOn) {
+        var onNow = true;
+        try { onNow = System.isScreenOn(); } catch (e) { onNow = true; }
+        if (!onNow) econ = 1000;
+    }
+    if (!econ || now - lastDraw >= econ) {
+        if (!walking() || gait.frames || gaitPhase === 0) {
+            draw();
+            lastDraw = now;
+        }
+    }
     var spent = System.millis() - now;
     System.delay(spent < FRAME_MS - 10 ? FRAME_MS - spent : 10);
 }

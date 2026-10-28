@@ -108,10 +108,18 @@ function pollMouse() {
   }
 }
 
+// Chave usbhid.on no NVS do pacote: o painel (main.js) liga/desliga o driver.
+// Default "1" = comportamento de sempre; "0" solta teclado/mouse e para de
+// reclamar as interfaces (o painel pode entao testar o hardware).
+function driverOn() {
+  try { return Storage.get("usbhid.on", "1") !== "0"; } catch (e) { return true; }
+}
+
 function scan(force) {
   var now = System.millis();
   if (!force && now - lastScan < 2000) return;
   lastScan = now;
+  if (!driverOn()) { closeKbd(); closeMouse(); return; }
   var devs = USB.devices();
   var seenK = false, seenM = false;
   var i;

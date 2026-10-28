@@ -1,9 +1,9 @@
 {
   "name": "Impressora",
   "packageName": "celeros.printer",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Teste de impressora termica ESC/POS via USB Host (API 48): acha a Epson TM-T20X (vid 04B8) ou qualquer interface classe 7, le o status em tempo real e imprime uma pagina de teste com acentos, QR e corte. Headless: a saida e o logcat.",
+  "description": "Teste de impressora termica ESC/POS via USB Host (API 48): acha a Epson TM-T20X (vid 04B8) ou qualquer interface classe 7, le o status em tempo real e imprime uma pagina de teste com acentos, QR e corte. Com vidro, painel CelerKit UI 2.0 (lista de impressoras, interfaces e cupom com confirmacao); headless, a saida e o logcat.",
   "type": "Utility",
   "category": "Utility",
   "api": 48,
@@ -12,7 +12,12 @@
   ],
   "deps": {
     "celeros.usb": "^1.0.0",
-    "celeros.usb.escpos": "^1.0.0"
+    "celeros.usb.escpos": "^1.0.0",
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0",
+    "celeros.app.widgets": "^1.0.0",
+    "celeros.app.list": "^1.1.0"
   },
-  "changelog": "1.0.1 - status em tempo real via celeros.usb.escpos 1.1.0 (DLE EOT 1/2, retry do ZLP que a Epson manda no primeiro IN)"
+  "changelog": "2.0.0 - UI 2.0 no painel (placa com vidro): header com acao de busca, lista rica das impressoras classe 7 (Epson TM-T20X 04B8 primeiro), tela do device com as interfaces (cls.subcls.proto e endpoints) e status em tempo real a 1 Hz (on-line/off-line, erro, sem papel, acabando) pelo mesmo DLE EOT 1/2 do driver, cupom de teste num sheet com previa e botao Imprimir (confirmacao) e o estado sem USB Host explicado; o caminho headless do devkit-s3 continua igual (acha em ate 30 s e imprime no logcat) e o driver (claim da interface classe 7, WPC1252, QR e corte) segue intacto\n1.0.1 - status em tempo real via celeros.usb.escpos 1.1.0 (DLE EOT 1/2, retry do ZLP que a Epson manda no primeiro IN)"
 }

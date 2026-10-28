@@ -14,8 +14,12 @@
 
 var A = require('celeros.app');
 
+
+
+
+
 A.path = {
-version: '1.0.0',
+version: '1.0.1',
 
 
 base: function (p) {
@@ -25,10 +29,12 @@ return i >= 0 ? p.substring(i + 1) : p;
 },
 
 
+
 dir: function (p) {
 p = String(p);
 var i = p.lastIndexOf('/');
-return i > 0 ? p.substring(0, i) : p;
+if (i > 0) return p.substring(0, i);
+return i === 0 ? '/' : p;
 },
 
 
@@ -47,16 +53,19 @@ return i > 0 ? b.substring(0, i) : b;
 },
 
 
+
 join: function () {
-var out = '';
+var out = '', abs = false;
 for (var i = 0; i < arguments.length; i++) {
 var p = String(arguments[i] || '');
 if (!p) continue;
-if (out && out.charAt(out.length - 1) !== '/') out += '/';
+var lead = p.charAt(0) === '/';
 while (p.charAt(0) === '/') p = p.substring(1);
+if (out && out.charAt(out.length - 1) !== '/') out += '/';
+if (!out && lead) abs = true;
 out += p;
 }
-return out;
+return (abs ? '/' : '') + out;
 },
 
 

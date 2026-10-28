@@ -22,7 +22,23 @@
 
 
 
+
+
+
+
 var A = require('celeros.app');
+require('celeros.app.list');
+
+
+function flat(rows) {
+var out = [], i, j;
+for (i = 0; i < rows.length; i++) {
+if (rows[i] instanceof Array) {
+for (j = 0; j < rows[i].length; j++) out.push(rows[i][j]);
+} else out.push(rows[i]);
+}
+return out;
+}
 
 function rowsOf(rows) {
 var T = A.T || System.theme();
@@ -42,6 +58,10 @@ var v = r.get() | 0;
 out.push({ label: r.label, right: r.opts[v % r.opts.length] });
 } else if (r.k === 'picker') {
 out.push({ label: r.label, right: r.items[r.get()] || '', sub: r.sub });
+} else if (r.k === 'gauge' || r.k === 'stepper') {
+var gv = r.get();
+out.push({ label: r.label, right: String(r.fmt ? r.fmt(gv) : gv),
+enabled: false });
 } else {
 out.push({ label: r.label, sub: r.sub });
 }
@@ -50,7 +70,7 @@ return out;
 }
 
 A.form = {
-version: '1.0.1',
+version: '1.1.0',
 
 
 info: function (label, value, color) {
@@ -73,6 +93,28 @@ return { k: 'picker', label: label, get: get, set: set, items: items };
 secao: function (title) { return { k: 'secao', label: title }; },
 
 
+gauge: function (label, get, o) {
+o = o || {};
+return { k: 'gauge', label: label, get: get,
+min: o.min === undefined ? 0 : o.min,
+max: o.max === undefined ? 100 : o.max,
+fmt: o.fmt, color: o.color };
+},
+
+stepper: function (label, get, set, o) {
+o = o || {};
+return { k: 'stepper', label: label, get: get, set: set,
+min: o.min === undefined ? 0 : o.min,
+max: o.max === undefined ? 100 : o.max,
+step: o.step === undefined ? 1 : o.step,
+fmt: o.fmt };
+},
+
+card: function (title, rows) {
+return [A.form.secao(title)].concat(rows || []);
+},
+
+
 
 
 run: function (title, build) {
@@ -82,13 +124,26 @@ UI.resetScroll('kit:form');
 for (;;) {
 UI.begin(T.bg);
 if (UI.header(title, { back: true })) return;
-if (!rows) rows = build();
-var i = UI.list('kit:form', A.L.x, A.L.top, A.L.w, 320 - A.L.top - 4, rowsOf(rows));
+if (!rows) rows = flat(build());
+var i;
+if (A.list && A.list.view && A.rows && A.rows.formRow) {
+i = A.list.view('kit:form', A.L.x, A.L.top, A.L.w,
+320 - A.L.top - 4, rows,
+{ row: 36, paintRow: A.rows.formRow });
+} else {
+i = UI.list('kit:form', A.L.x, A.L.top, A.L.w,
+320 - A.L.top - 4, rowsOf(rows));
+}
 if (i >= 0) {
 var r = rows[i];
 var refresh = false;
 if (r && r.k === 'toggle') { r.set(!r.get()); refresh = true; }
-else if (r && r.k === 'choice') {
+else if (r && r.k === 'stepper') {
+var sv = r.get() + r.step;
+if (sv > r.max) sv = r.max;
+if (sv < r.min) sv = r.min;
+r.set(sv);
+} else if (r && r.k === 'choice') {
 r.set(((r.get() | 0) + 1) % r.opts.length);
 refresh = true;
 } else if (r && r.k === 'picker') {

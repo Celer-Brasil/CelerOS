@@ -18,7 +18,7 @@
 var A = require('celeros.app');
 
 A.fmt = {
-version: '1.0.1',
+version: '1.0.2',
 
 
 bytes: function (n) {
@@ -74,7 +74,9 @@ var s = Math.round(ms / 100) / 10;
 return (s % 1 ? s : s.toFixed(0)) + ' s';
 }
 var m = Math.floor(ms / 60000);
+
 var rs = Math.round((ms % 60000) / 1000);
+if (rs >= 60) { rs = 0; m++; }
 return m + 'm ' + A.fmt.pad2(rs) + 's';
 },
 

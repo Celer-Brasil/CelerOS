@@ -34,7 +34,12 @@
 
 
 
-var A = { version: '1.0.0' };
+
+
+
+
+
+var A = { version: '1.1.1' };
 
 
 A.BACK = '..';
@@ -43,6 +48,7 @@ A.EXIT = '\u0001';
 A._mods = [];
 A._stack = [];
 A._marks = {};
+A._cs = {};
 A._ctx = { full: false, now: 0, entered: false };
 
 
@@ -53,13 +59,45 @@ var MAX_STACK = 8;
 
 A.T = null;
 A.L = null;
+A.full = false;
 A.init = function () {
 A.T = System.theme();
 
-A.L = { x: 8, y: 48, w: 224, top: 48, bottom: 312, cx: 120 };
+var ins = 0;
+try { ins = (System.getInfo() || {}).inset || 0; } catch (e) { ins = 0; }
+var m = Math.round(ins / 2);
+
+
+A.L = { x: 8 + m, y: 48, w: 224 - 2 * m, top: 48,
+bottom: 312 - m, cx: 120 };
 return A;
 };
 
+
+
+
+
+
+
+
+
+
+A.custom = function (id, x, y, w, h, sig, draw, o) {
+if (typeof draw !== 'function') return false;
+if (UI.extras && typeof UI.custom === 'function') {
+return UI.custom(id, x, y, w, h, sig, draw, o);
+}
+var key = 'c' + id;
+if (!A.full && A._cs[key] === sig) return false;
+A._cs[key] = sig;
+o = o || {};
+if (!A.full && o.clear !== false) {
+System.fillRect(x, y, w, h,
+o.bg === undefined ? (A.T || System.theme()).card : o.bg);
+}
+draw(x, y, w, h);
+return true;
+};
 
 A.run = function (screens, first, opts) {
 if (!A.T) A.init();
@@ -84,6 +122,7 @@ c.entered = false;
 }
 c.now = System.millis();
 c.full = UI.begin(A.T.bg);
+A.full = c.full;
 var r = fn(c);
 UI.end(typeof opts.fps === 'number' ? opts.fps : (fn.fps || 20));
 if (r === A.EXIT) { System.exitApp(); return; }

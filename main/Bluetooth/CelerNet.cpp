@@ -388,6 +388,7 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
     if (len <= netframe::DATA_MAX) {
         f.type = netframe::TYPE_DATA;
         f.seq = NetKeys::nextSeqMesh();
+        if (f.seq == 0) return false;  // seqs esgotados (24 bits): recusa, sem reuso de nonce
         f.dlen = (uint8_t)len;
         f.data = data;
         return pushOurs(f, now + dueDelayMs, prio, f.seq, src);
@@ -397,6 +398,7 @@ bool enqueueMessage(uint16_t dst, const uint8_t* data, size_t len, uint8_t ttl, 
     if (seqZero == 0) {
         seqZero = NetKeys::reserveSeqMesh(total);
         copy = 0;
+        if (seqZero == 0) return false;  // idem: sem seqs, sem fragmentar pela metade
     }
     f.type = netframe::TYPE_FRAG;
     uint8_t chunk[netframe::DATA_MAX];
@@ -549,7 +551,11 @@ void handleFrame(const netframe::Frame& f, int net, const uint8_t* raw, uint8_t 
             if (n > CelerNet::MAX_NAME) n = CelerNet::MAX_NAME;
             memcpy(name, f.data + 2, n);
             name[n] = '\0';
-            nodeTouch(f.src, name, caps, flags, rssi, hops, nowMs);
+            // BEAT sem nome (dlen == 2): presenca sim, mas caps/flags NAO —
+            // um quadro autentico sem nome apagava o papel do vizinho (o
+            // handoffMusic deixava de achar o alto-falante) ate o BEAT
+            // completo seguinte; o gate do nodeTouch e name != nullptr.
+            nodeTouch(f.src, n > 0 ? name : nullptr, caps, flags, rssi, hops, nowMs);
             break;
         }
         case netframe::TYPE_DATA:
@@ -1035,7 +1041,10 @@ bool CelerNet::active() {
 // bruta e ordem de insercao, o nodes() e que ordena por RSSI na copia, e o
 // comentario antigo prometia o que o codigo nao fazia).
 bool CelerNet::resolveDest(const char* to, uint16_t* out) {
-    if (to == nullptr) return false;
+    // Alvo vazio: sem isto o match do no virtual (strcasecmp("", s_proxyName)
+    // com proxy sem nome) resolvia "" para o PC e "0000" devolvia id 0 —
+    // o chamador achava que achou e a mensagem nunca saia.
+    if (to == nullptr || to[0] == '\0') return false;
     bool hex = strlen(to) == 4;
     uint16_t id = 0;
     for (int i = 0; hex && i < 4; i++) {
@@ -1048,11 +1057,13 @@ bool CelerNet::resolveDest(const char* to, uint16_t* out) {
         if (hex) id = (uint16_t)((id << 4) | v);
     }
     if (hex) {
+        if (id == 0) return false;  // id 0 nao e destino valido (sendFrom recusa)
         *out = id;
         return true;
     }
     // "pc" = o computador no cabo DESTE gateway (no virtual, API 41)
-    if (s_proxyNode != 0 && (strcasecmp(to, "pc") == 0 || strcasecmp(to, s_proxyName) == 0)) {
+    if (s_proxyNode != 0 && s_proxyName[0] != '\0' &&
+        (strcasecmp(to, "pc") == 0 || strcasecmp(to, s_proxyName) == 0)) {
         *out = s_proxyNode;
         return true;
     }
@@ -1163,6 +1174,7 @@ bool CelerNet::sendFrom(uint16_t src, uint16_t dst, const void* data, size_t len
     const bool frag = len > netframe::DATA_MAX;
     // frags de TODAS as copias em seqs consecutivos (ver NetFrame.h)
     const uint32_t seqZero = ok && frag ? NetKeys::reserveSeqMesh((uint32_t)framesFor(len) * copies) : 0;
+    if (ok && frag && seqZero == 0) ok = false;  // seqs esgotados: nada sai (0 = sentinela)
     for (uint8_t c = 0; c < copies && ok; c++) {
         // Cada copia leva seq NOVO: o dedup do vizinho nao pode come-la (a
         // redundancia e a "retransmissao" do unicast sem ACK — a entrega
@@ -1284,6 +1296,14 @@ bool CelerNet::enabledSetting() {
 }
 
 void CelerNet::tick() {
+    // Reserva de seq no NVS MESMO com a malha desligada: o plano ESP-NOW
+    // (DataLink::send -> nextSeqNow) consome seqs por conta propria e o
+    // persistTick antigo so rodava no BEAT (dentro do s_active). Malha fora
+    // (setting, protecao de ciclo, carencia de RAM), ~164 s de audio a 25
+    // fps estouravam a reserva do boot e o REBOOT voltava a contar de tras:
+    // reuso de nonce do CCM com a mesma chave. Daqui (pilha interna do
+    // servico, a mesma do BEAT), custa duas comparacoes por tick.
+    NetKeys::persistTick();
     if (!s_active) {
         s_meshUpMs = 0;
         // Protecao de ciclo: boot apos crash/watchdog NAO auto-inicia a
@@ -1391,8 +1411,9 @@ void CelerNet::tickBody() {
         f.seq = NetKeys::nextSeqMesh();
         f.dlen = (uint8_t)(2 + nameLen);
         f.data = beat;
-        // fila cheia: o proximo BEAT (3 s) tenta de novo
-        pushOurs(f, nowMs, 0, f.seq);
+        // fila cheia: o proximo BEAT (3 s) tenta de novo; seq 0 = esgotado
+        // (sem reuso de nonce): o BEAT pula esta rodada
+        if (f.seq != 0) pushOurs(f, nowMs, 0, f.seq);
         // no virtual (PC no cabo do gateway, API 41): BEAT proprio com o id e
         // o nome dele — os vizinhos o listam como membro
         if (s_proxyNode != 0) {
@@ -1409,7 +1430,7 @@ void CelerNet::tickBody() {
             pf.seq = NetKeys::nextSeqMesh();
             pf.dlen = (uint8_t)(2 + pl);
             pf.data = pb;
-            pushOurs(pf, nowMs, 0, pf.seq, s_proxyNode);
+            if (pf.seq != 0) pushOurs(pf, nowMs, 0, pf.seq, s_proxyNode);  // 0 = seqs esgotados
         }
         // reserva de seq no NVS: daqui (pilha interna do servico), nunca das
         // tasks com pilha na PSRAM

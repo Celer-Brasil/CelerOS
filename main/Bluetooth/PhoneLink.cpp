@@ -523,7 +523,11 @@ bool enabled() { return s_enabled; }
 
 void setEnabled(bool on) {
     s_enabled = on;
-    Settings::setBool("phone_on", on);
+    // "0" explicito, nao o setBool do Settings: ele APAGA a chave em false,
+    // e phone_on tem default true — apagada, a leitura volta true e o Phone
+    // Link "ressuscitava" a cada boot depois de o usuario desligar.
+    // (parseBool do Settings le "0" como false; o leitor antigo == "1" idem.)
+    CelerSettings::set("phone_on", on ? "1" : "0");
     if (on) {
         s_bleUp = false;  // o proximo tick sobe/re-anuncia
         s_advHoldUntil = 0;

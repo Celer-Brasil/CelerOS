@@ -258,6 +258,16 @@ int establishedEspnow();  // abaixo (precisa de s_h/s_leases)
 // servidor, preso no AP em outro canal, cair para a malha).
 Link ownLink(bool allowWifiInit = true) {
     Link l;
+    // A task res_rx tem pilha na PSRAM: nada dela pode tocar a flash, e o
+    // WifiConnection::init toca (nvs_flash_init e, no pior caso,
+    // nvs_flash_erase — alem da corrida documentada com o init do
+    // WebManager). OPEN por controle em banda e retry do OPEN rodam aqui —
+    // nestes giros o driver vem como estiver (sem enlace ESP-NOW, a sessao
+    // cai para a malha); subir o driver segue sendo papel das tasks de pilha
+    // interna (app/tick), que chamam esta mesma funcao.
+    if (allowWifiInit && s_rxTask != nullptr && xTaskGetCurrentTaskHandle() == s_rxTask) {
+        allowWifiInit = false;
+    }
     if (!DataLink::ensure(allowWifiInit)) return l;
     rxTaskEnsure();
     DataLink::Self me;
@@ -859,6 +869,13 @@ void serverSendData(const LeaseTable<LEASES>::Lease& l, const uint8_t* d, size_t
 // JS (pollWrite). O lease ja veio renovado pelo chamador.
 void serverDataIn(const LeaseTable<LEASES>::Lease& l, uint16_t from, const char* fromName,
                   const uint8_t* d, size_t n) {
+    // O corpo do SUB_WRITE (cabo) nao tem teto do protocolo (o frame do
+    // HostLink vai a 4-8 KB): sem esta guarda um DATA grande do PC passava
+    // direto ao pushWrite e o memcpy estourava o WrMsg.data[DATA_CAP] do
+    // bloco compartilhado (corrupcao de heap). No radio o teto e natural
+    // (MAX_DATA/malha, PAYLOAD_MAX/ESP-NOW); sessao nenhuma manda mais que
+    // DATA_CAP nem do lado de quem escreve (write()/SUB_HWRITE recusam).
+    if (n > DATA_CAP) return;
     const Local& loc = s_local[l.rid];
     if (!loc.used) return;
     uint8_t reply[8];
@@ -1057,6 +1074,11 @@ void dispatch(const InMsg& m) {
         case OP_ACCEPT: {
             Accept ac;
             if (!decodeAccept(m.data + 1, m.len - 1, &ac)) return;
+            // sid 0 nunca e sessao (a tabela semeia a partir de 1): um ACCEPT
+            // assim abria o handle "eterno" — KEEP com sid 0 nunca renovava e
+            // o REVOKE "expired" do servidor nunca casava (handleBySid exige
+            // sid != 0): slot de handle preso ate o app fechar.
+            if (ac.sid == 0) return;
             if (ac.transport == TRANSPORT_ESPNOW) learnPeer(m.from, ac.mac);
             int h = handleByReq(m.from, ac.req);
             if (h < 0 && handleBySid(m.from, ac.sid) >= 0) return;  // copia (ESP-NOW + malha)
@@ -1128,6 +1150,10 @@ void dispatch(const InMsg& m) {
             if (h < 0) return;
             s_h[h].state = ST_REFUSED;
             s_h[h].reason = reason;
+            // O sendOpen prende o canal durante a negociacao; sem soltar aqui
+            // o hold vazava a cada recusa (o reuso do slot zerava x.held sem
+            // passar pelo holdRadio(false) e o radio ficava preso para sempre)
+            handleRelease(s_h[h]);
             return;
         }
         case OP_KEEP: {
@@ -1385,10 +1411,13 @@ void rxTask(void*) {
         }
         if (DataLink::pollWait(rx, 50)) {
             if (rx->kind == DataLink::KIND_ENV) {
-                // envelope do Pack em banda (API 41): token = destino
+                // envelope do Pack em banda (API 41): token = destino. So a
+                // rede PRIMARIA entrega (o plano BLE descarta net != 0 antes
+                // do handler; a chave da aberta e publica).
                 const uint16_t from = rx->sid;
                 const uint16_t pc = CelerNet::proxyNode();
-                const bool forUs = rx->token == ourNode() || (pc != 0 && rx->token == pc);
+                const bool forUs = rx->net == 0 &&
+                                   (rx->token == ourNode() || (pc != 0 && rx->token == pc));
                 if (forUs && from != 0 && from != ourNode() && rx->len > 0) {
                     {
                         Guard g;
@@ -1426,7 +1455,12 @@ void rxTask(void*) {
                             sendHello(0);
                         }
                     }
-                    inboxPush(from, "", rx->data, rx->len);
+                    // Controle so da rede PRIMARIA: a aberta "celer" tem chave
+                    // PUBLICA (o mesmo gate do plano BLE, que descarta net != 0
+                    // antes do handleFrame) — OPEN/KEEP/CLOSE vindos de quem so
+                    // tem a chave aberta nao podem abrir recurso algum num no
+                    // provisionado. Presenca (HELLO) e resposta a caca ficam.
+                    if (rx->net == 0) inboxPush(from, "", rx->data, rx->len);
                 }
             } else {
                 Guard g;
@@ -1575,11 +1609,18 @@ void tickTimers() {
 // Um quadro ESP-NOW recebido (sob s_lock): controle em banda, stream de
 // audio ou DATA de sessao — casa por (MAC, sid, token)
 void handleDataRx(const DataLink::Rx& dr) {
+    // A caixa (s_heap) so existe depois do 1o tick, e a task res_rx ja pode
+    // estar rodando desde o init: um quadro de controle nessa janela (ou
+    // para sempre, se o heap nao alocar) dereferenciava s_heap->ctrl e
+    // derrubava o aparelho. Sem caixa nao ha o que entregar — descarta.
+    if (s_heap == nullptr) return;
     if (dr.kind == DataLink::KIND_CTRL && dr.len > 0 && dr.len <= ENV_PAYLOAD) {
         // controle em banda: o sid do quadro e o id do no remetente; broadcast
-        // leva o destino no token
+        // leva o destino no token. SO a rede primaria despacha (a aberta tem
+        // chave publica — ver o gate do rxTask): sem isto um OPEN forjado na
+        // "celer" abria mic/gpio num no provisionado que a esteja escutando.
         const uint16_t from = dr.sid;
-        if (from == 0 || from == ourNode() ||
+        if (from == 0 || from == ourNode() || dr.net != 0 ||
             (dr.token != 0 && dr.token != ourNode() && dr.token != TOKEN_ALL)) {
             return;
         }
@@ -1906,6 +1947,16 @@ int open(uint16_t node, const char* name, const uint8_t* params, size_t plen, Mo
         if (s_h[i].state != ST_OPEN && s_h[i].state != ST_OPENING && !s_h[i].usb) h = i;
     }
     if (h < 0) return -1;
+    // Dado do handle ANTERIOR morre com o slot: as saidas via dispatch
+    // (ST_LOST/ST_REVOKED/ST_REFUSED) e a limpeza da procuracao do PC nao
+    // drenam o anel de RX (so close() drena) — sem isto o read() da sessao
+    // NOVA entregava DATA da sessao velha (amostra/resposta fora de contexto).
+    if (s_heap != nullptr) {
+        uint8_t buf[1];
+        size_t n;
+        while (read(h, buf, sizeof(buf), &n)) {
+        }
+    }
     Handle& x = s_h[h];
     const uint8_t gen = (uint8_t)(x.gen + 1);
     memset(&x, 0, sizeof(x));
@@ -2100,7 +2151,16 @@ int publish(const char* name, const void* data, size_t len) {
     for (int i = 0; i < LEASES; i++) {
         LeaseTable<LEASES>::Lease* l = s_leases.at(i);
         if (l == nullptr || l->rid != rid) continue;
-        if (l->transport == TRANSPORT_ESPNOW) {
+        if (l->transport == TRANSPORT_USB) {
+            // O PC no cabo nao esta no "ar": o DATA sai como KL_RES_DATA (o
+            // mesmo caminho do serverSendData). Antes caia no sendEnv, que
+            // endereca um no virtual inexistente no radio — o canal aberto
+            // pelo PC nunca recebia um publish.
+            if (s_usbSend != nullptr &&
+                s_usbSend(l->sid, s_seq, (const uint8_t*)data, len)) {
+                sent++;
+            }
+        } else if (l->transport == TRANSPORT_ESPNOW) {
             if (DataLink::send(l->mac, DataLink::KIND_DATA, l->sid, l->token, s_seq, data, len)) sent++;
         } else if (len <= MAX_DATA &&
                    sendEnv(l->client, b, encodeData(l->sid, s_seq, data, len, b, sizeof(b)), false)) {
@@ -2596,6 +2656,12 @@ void appReset() {
     // handles do PC (procuracao) nao sao do app: sobrevivem a troca
     for (int i = 0; i < HANDLES_MAX; i++) {
         if (!s_h[i].usb) close(i);
+    }
+    // o app morreu: ninguem colhe mais a gravacao remota dele (Mic.stop era
+    // a saida) — sem o descarte o PCM (ate 320 KB de PSRAM) ficava orfao e o
+    // proximo Pack.record recusava no ACCEPT (recStart ve o buffer vivo)
+    for (int i = 0; i < HANDLES_MAX; i++) {
+        if (!s_h[i].usb && s_h[i].mode == MODE_REC) AudioRes::recDiscard(s_h[i].sid);
     }
     for (int i = 0; i < HANDLES_MAX; i++) {
         if (s_h[i].usb) continue;

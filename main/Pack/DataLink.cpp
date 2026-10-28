@@ -1,5 +1,6 @@
 #include "DataLink.h"
 
+#include <atomic>
 #include <new>
 #include <string.h>
 
@@ -39,7 +40,11 @@ uint8_t* s_rxBuf = nullptr;
 // uma contagem numa corrida nao importa)
 uint32_t s_tx = 0, s_txFail = 0, s_txNoMem = 0, s_rxN = 0, s_rxDropped = 0, s_rxForeign = 0;
 uint32_t s_rxAuthFail = 0, s_rxReplay = 0;
-int s_holds = 0;
+// hold do canal: RMW de duas tasks (Resources guarda o mutex DELA, mas este
+// contador e daqui — e API publica de modulo multi-task) com ++/-- perdido
+// deixava o valor travado em 1 com zero holders: holdChannel(true) para
+// sempre, scans de fundo suspensos. Atomico.
+std::atomic<int> s_holds{0};
 // Enviadores: o tick dos recursos e a task da fonte de audio (mic) — o
 // quadro de montagem e a tabela de pares sao compartilhados
 SemaphoreHandle_t s_txLock = nullptr;
@@ -341,9 +346,19 @@ bool setChannel(uint8_t ch, bool log) {
 
 void hold(bool on) {
     if (on) {
-        if (s_holds++ == 0) NetworkManager::instance().holdChannel(true);
-    } else if (s_holds > 0) {
-        if (--s_holds == 0) NetworkManager::instance().holdChannel(false);
+        // fetch_* com o valor ANTES: a decisao do holdChannel sai da propria
+        // operacao atomica (sem janela entre o teste e o incremento)
+        if (s_holds.fetch_add(1, std::memory_order_acq_rel) == 0) {
+            NetworkManager::instance().holdChannel(true);
+        }
+        return;
+    }
+    const int prev = s_holds.fetch_sub(1, std::memory_order_acq_rel);
+    if (prev == 1) {
+        NetworkManager::instance().holdChannel(false);
+    } else if (prev <= 0) {
+        // release sem hold correspondente: nao deixa negativo
+        s_holds.store(0, std::memory_order_release);
     }
 }
 

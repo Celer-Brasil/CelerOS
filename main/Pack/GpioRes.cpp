@@ -115,7 +115,10 @@ bool serveStart(uint16_t sid, const char* name, const uint8_t* params, size_t pl
     }
     Sess* slot = freeSlot();
     if (slot == nullptr) {
-        if (!s.relay) s_myPins &= ~(1ULL << s.idx);
+        if (!s.relay) {
+            s_myPins &= ~(1ULL << s.idx);
+            pinMode(s.idx, INPUT);  // devolve o pino: a sessao nao vai nascer
+        }
         return false;
     }
     *slot = s;

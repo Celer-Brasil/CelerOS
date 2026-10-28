@@ -374,8 +374,17 @@ public:
         s->gotMask |= (uint32_t)(1u << idx);
         if ((size_t)(idx * CHUNK_MAX + chunkLen) > s->len) s->len = (uint16_t)(idx * CHUNK_MAX + chunkLen);
         if (s->gotMask != (uint32_t)((1u << s->total) - 1)) return false;
-        const size_t n = s->len < cap ? s->len : cap;
-        memcpy(outMsg, s->buf, n);
+        if (s->len > cap) {
+            // Destino menor que a mensagem: antes copiava cap bytes e devolvia
+            // *outLen = s->len (o chamador lia alem do buffer). Recusa a
+            // entrega, mas encerra o slot (e registra em done) para nao
+            // prende-lo ate o prune — a mensagem nao vai caber nunca.
+            s->active = false;
+            m_done[m_donePos] = Done{src, seqZero, true};
+            m_donePos = (uint8_t)((m_donePos + 1) % DONE);
+            return false;
+        }
+        memcpy(outMsg, s->buf, s->len);
         *outLen = s->len;
         s->active = false;
         m_done[m_donePos] = Done{src, seqZero, true};

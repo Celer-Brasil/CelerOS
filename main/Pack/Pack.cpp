@@ -308,11 +308,18 @@ bool sendAs(uint16_t src, uint16_t to, uint8_t kind, const void* payload, size_t
         }
     }
     uint8_t env[CelerNet::MAX_MSG];
-    env[0] = ENV_MAGIC;
-    env[1] = kind;
-    s_msgSeq++;
-    env[2] = (uint8_t)(s_msgSeq >> 8);
-    env[3] = (uint8_t)s_msgSeq;
+    // msgId sob o lock da fila: sendAs roda em MAIS de uma task (app JS,
+    // canal USB do gateway, shell) — duas chamadas concorrentes podiam tirar
+    // o MESMO msgId e o dedup do destino engolia a segunda mensagem de
+    // verdade (as copias redundantes do unicast compartilham o id).
+    {
+        QLock q;
+        env[0] = ENV_MAGIC;
+        env[1] = kind;
+        ++s_msgSeq;
+        env[2] = (uint8_t)(s_msgSeq >> 8);
+        env[3] = (uint8_t)s_msgSeq;
+    }
     memcpy(env + ENV_HDR, payload, len);
     // 2 copias: unicast sem ACK, a redundancia e a retransmissao
     const bool viaMesh = CelerNet::sendFrom(src, to, env, ENV_HDR + len, CelerNet::TTL_DEFAULT, urgent, 2);
@@ -359,7 +366,10 @@ bool handoffMusic(uint16_t to) {
     int32_t pos = MusicSynth::posMs();
     if (pos < 0) pos = 0;
     uint8_t payload[MAX_PAYLOAD];
-    size_t songLen = MusicEngine::encodeSong(song, payload + 6, sizeof(payload) - 6);
+    // O teto do encoder e o do RECEPTOR (s_musicSong), nao o do payload:
+    // uma song de 404..424 B era enviada com sucesso, a musica parava aqui
+    // (MusicSynth::stop) e o par descartava a festa por songLen invalido
+    size_t songLen = MusicEngine::encodeSong(song, payload + 6, sizeof(s_musicSong));
     if (songLen == 0) return false;
     payload[0] = (uint8_t)((uint32_t)pos >> 24);
     payload[1] = (uint8_t)((uint32_t)pos >> 16);
@@ -407,24 +417,42 @@ void tick() {
         CelerNet::setCaps(myCaps());
     }
 
-    // Handoff pendente: a festa chegou — toca do ponto onde parou.
-    if (s_musicPend) {
-        s_musicPend = false;
-        MusicEngine::Song song;
-        if (MusicEngine::decodeSong(s_musicSong, s_musicSongLen, &song)) {
+    // Handoff pendente: copia sob o lock (o handler da malha e a res_rx
+    // escrevem sob ele) e toca fora — decodificar com o lock tomado atrasaria
+    // a chegada de novos envelopes. Sem a copia, a leitura corria ao mesmo
+    // tempo em que o handler preenchia s_musicSong (festa tocada com lixo).
+    bool have = false;
+    uint32_t posMs = 0;
+    uint16_t songLen = 0;
+    char fromName[16] = {0};
+    uint8_t song[sizeof(s_musicSong)];
+    {
+        QLock q;
+        have = s_musicPend;
+        if (have) {
+            s_musicPend = false;
+            posMs = s_musicPosMs;
+            songLen = s_musicSongLen;
+            memcpy(song, s_musicSong, songLen);
+            snprintf(fromName, sizeof(fromName), "%s", s_musicFrom);
+        }
+    }
+    if (have) {
+        MusicEngine::Song songDec;
+        if (MusicEngine::decodeSong(song, songLen, &songDec)) {
             if ((myCaps() & netframe::CAPS_SPEAKER) && !MusicSynth::playing()) {
-                const bool ok = MusicSynth::play(song, s_musicPosMs);
-                ESP_LOGI(TAG, "festa de \"%s\" %s (pos %u ms)", s_musicFrom,
+                const bool ok = MusicSynth::play(songDec, posMs);
+                ESP_LOGI(TAG, "festa de \"%s\" %s (pos %u ms)", fromName,
                          ok ? "continuou aqui" : "nao coube no alto-falante",
-                         (unsigned)s_musicPosMs);
+                         (unsigned)posMs);
             } else {
-                ESP_LOGI(TAG, "festa de \"%s\" recusada (sem speaker ou ocupado)", s_musicFrom);
+                ESP_LOGI(TAG, "festa de \"%s\" recusada (sem speaker ou ocupado)", fromName);
             }
         } else {
             // sem else isto morria em silencio (bancada: a song de 84 B
             // remontava no 4848 e nada acontecia)
             ESP_LOGW(TAG, "festa de \"%s\": song nao decoda (%u B)",
-                     s_musicFrom, (unsigned)s_musicSongLen);
+                     fromName, (unsigned)songLen);
         }
     }
 }

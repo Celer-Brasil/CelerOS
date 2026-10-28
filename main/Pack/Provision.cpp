@@ -136,11 +136,16 @@ void tick() {
     switch (s_state) {
         case WAITING:
             if (s_invReady) {
-                NetKeys::init();
-                const bool ok = NetKeys::joinWithKeys(s_inv.name, s_inv.netKey, s_inv.adminKey);
-                ESP_LOGI(TAG, "convite para \"%s\": %s", s_inv.name, ok ? "entrou" : "falhou");
+                // Copia o slot e so DEPOIS solta s_invReady: o tap (task do
+                // NimBLE) so escreve com a flag falsa, entao o joinWithKeys
+                // nunca roda sobre chaves sobrescritas no meio (rede errada)
+                provproto::Invite iv = s_inv;
                 memset(&s_inv, 0, sizeof(s_inv));
                 s_invReady = false;
+                NetKeys::init();
+                const bool ok = NetKeys::joinWithKeys(iv.name, iv.netKey, iv.adminKey);
+                ESP_LOGI(TAG, "convite para \"%s\": %s", iv.name, ok ? "entrou" : "falhou");
+                memset(&iv, 0, sizeof(iv));
                 if (ok) netChangedAll();
                 sendAck(ok ? provproto::ACK_OK : provproto::ACK_FAIL);
                 setState(ok ? JOINED : FAIL);

@@ -197,6 +197,9 @@ bool serveStart(uint16_t sid, const uint8_t mac[6], uint32_t token, int sensorId
     memcpy(s->mac, mac, 6);
     s->token = token;
     if (rateMs < 0) rateMs = 0;
+    // RATE_MIN e o piso do stream: sem o clamp, {"rate":1} (ou 5) abria um
+    // bloqueio de leitura por milissegundo e inundava o radio/o cabo
+    if (rateMs != 0 && rateMs < RATE_MIN) rateMs = RATE_MIN;
     s->rateMs = (uint16_t)(rateMs > RATE_MAX ? RATE_MAX : rateMs);
     // threshold (API 47): {"gt":x} / {"lt":x} + histerese {"h":d}
     s->hasGt = resproto::paramHas(params, plen, "gt");
@@ -204,7 +207,7 @@ bool serveStart(uint16_t sid, const uint8_t mac[6], uint32_t token, int sensorId
     s->gt = resproto::paramFloat(params, plen, "gt", 0.0f);
     s->lt = resproto::paramFloat(params, plen, "lt", 0.0f);
     s->h = resproto::paramFloat(params, plen, "h", 0.0f);
-    if (s->h < 0.0f) s->h = 0.0f;
+    if (!(s->h >= 0.0f)) s->h = 0.0f;  // negativo E NaN (comparacao falsa)
     s->armedGt = true;
     s->armedLt = true;
     s->lastEvtMs = 0;

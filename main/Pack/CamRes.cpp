@@ -232,7 +232,10 @@ bool serveStart(const uint8_t mac[6], uint16_t sid, uint32_t token, int quality,
     memcpy(s_srv.mac, mac, 6);
     s_srv.sid = sid;
     s_srv.token = token;
-    s_srv.quality = quality;
+    // qualidade vem do fio ({"q":N} do OPEN): fora da faixa do sensor
+    // (5..63, o mesmo clamp do SNAP do gateway USB) o JPEG sai degradado ou
+    // nao sai — o fps tem clamp aqui embaixo, o q tambem precisa
+    s_srv.quality = quality < 5 ? 12 : (quality > 63 ? 63 : quality);
     s_srv.fps = fps < 0 ? 0 : fps > 10 ? 10 : fps;
     s_srv.ackNew = false;
     s_srv.run = true;

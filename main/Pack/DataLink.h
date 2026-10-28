@@ -77,7 +77,8 @@ bool up();
 void self(Self* out);
 // Troca o canal (so sem STA conectado). true = ja estava ou trocou.
 bool setChannel(uint8_t ch, bool log = true);
-// Sessao ESP-NOW viva: segura o canal (sem scans de fundo). Contador.
+// Sessao ESP-NOW viva: segura o canal (sem scans de fundo). Contador de
+// qualquer task (atomico).
 void hold(bool on);
 
 // Cifra na rede primaria e envia.

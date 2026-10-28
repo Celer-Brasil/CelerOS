@@ -333,12 +333,16 @@ const Net* byNid(uint8_t nid) {
 uint32_t reserveSeqMesh(uint32_t n) {
     if (n == 0) n = 1;
     portENTER_CRITICAL(&s_seqMux);
-    uint32_t v = s_seqMesh + 1;
-    s_seqMesh += n;
-    if (s_seqMesh > netframe::SEQ_MAX) {  // limite da v3.0 (ver NetFrame.h)
-        s_seqMesh = netframe::SEQ_MAX;
-        v = netframe::SEQ_MAX - n + 1;
+    if (s_seqMesh + n > netframe::SEQ_MAX) {
+        // Esgotado: devolve 0 (nunca e alocado legitimo — os blocos comecam na
+        // reserva do NVS) SEM avancar. Repetir o mesmo seq reusava o nonce do
+        // CCM (quebra de sigilo/autenticidade) e a janela anti-replay engolia
+        // todo quadro: os chamadores recusam o envio com 0.
+        portEXIT_CRITICAL(&s_seqMux);
+        return 0;
     }
+    const uint32_t v = s_seqMesh + 1;
+    s_seqMesh += n;
     portEXIT_CRITICAL(&s_seqMux);
     return v;
 }

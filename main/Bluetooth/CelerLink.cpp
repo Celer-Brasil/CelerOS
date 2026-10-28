@@ -1246,8 +1246,12 @@ int CelerLink::scan(uint32_t ms, Peer* out, int max) {
         return 0;
     }
     if (waitBits(EV_SCAN, deadlineIn(ms + 1000)) == 0) {
-        // o controlador nao fechou o scan: cancela antes de ler o cache
+        // o controlador nao fechou o scan: cancela antes de ler o cache. O
+        // cancel gera um DISC_COMPLETE: drena o bit antes de varrer o cache —
+        // sem isso o cache (escrito na task do host) era lido enquanto o
+        // ultimo report ainda podia chegar (entrada nova/nome pela metade).
         ble_gap_disc_cancel();
+        waitBits(EV_SCAN, deadlineIn(100));
     }
 
     int total = s_scanCount;
@@ -1531,7 +1535,11 @@ bool CelerLink::sendSealed(const void* data, size_t len) {
         ESP_LOGW(TAG, "sendSealed: sem bond com o peer (pareie por codigo)");
         return false;
     }
-    static uint8_t frame[MAX_MSG];  // so a task do app envia
+    // Buffer LOCAL, nao estatico: o convite da matilha sai de TRES tasks
+    // diferentes (app JS, shell "mesh invite" na console e o canal USB do
+    // gateway) — o static era corrida (convite cifrado com metade de cada
+    // chamada; o peer recusava com ACK_FAIL sem dizer por que).
+    uint8_t frame[MAX_MSG];
     memcpy(frame, K_SEAL_HDR, sizeof(K_SEAL_HDR));
     uint8_t* nonce = frame + sizeof(K_SEAL_HDR);
     esp_fill_random(nonce, K_SEAL_NONCE);

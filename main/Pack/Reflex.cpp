@@ -125,20 +125,24 @@ void serviceRemote(Rule& r, uint32_t now) {
     }
 }
 
-void apply(Rule& r, bool on) {
+void apply(Rule& r, bool cond) {
     if (r.action == ACT_NOTIFY) {
-        if (on) {
+        if (cond) {
             ESP_LOGI(TAG, "regra %u: %s", r.id, r.text);
             Notifications::push(r.text, std::string("reflexo: ") + r.sensor, "reflexo",
                                 0x52454600u + r.id);
         }
         return;
     }
+    // Nivel desejado: "on" LIGA quando a condicao vale; "off" DESLIGA quando
+    // ela vale (e religa quando cai). Antes o r.on do comando era ignorado e
+    // o atuador fazia o OPOSTO do configurado ("add ... rele1 off" ligava).
+    const bool level = (cond == r.on);
     if (r.targetNode == 0) {
-        applyLocal(r, on);
+        applyLocal(r, level);
         return;
     }
-    r.wantOn = on;
+    r.wantOn = level;
     serviceRemote(r, nowMs());
 }
 

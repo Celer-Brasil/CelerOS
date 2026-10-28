@@ -108,7 +108,7 @@ duk_ret_t JSBindings::js_openWifiSetup(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
 #if CONFIG_CELEROS_UI
     // API 52: a tela nativa de WiFi saiu do firmware e virou o app
-    // "celeros.wifi" (data/apps/Wifi), que usa as bindings Net.wifi* e
+    // "celeros.wifi" (data/apps/WiFi), que usa as bindings Net.wifi* e
     // System.wifiPortal*. Aqui so pedimos o lancamento e saimos pela mesma
     // porta do X: o launcher consome o pedido no tick seguinte a saida.
     LauncherUI::requestLaunch("celeros.wifi");

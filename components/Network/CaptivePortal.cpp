@@ -720,7 +720,10 @@ bool CaptivePortal::startHttpServer() {
             WiFiCredentials creds;
             creds.ssid = ssid;
             creds.password = password;
-            portal->_connState = PortalConnState::Connecting;  // /status
+            // /status le _connState/_connIp sob _connMutex: publica pelo
+            // mesmo caminho do hospedeiro (reportConnectionState) em vez de
+            // escrever a flag fora da guarda
+            portal->reportConnectionState(PortalConnState::Connecting);
             portal->onCredentialsReceived.trigger(creds);
 
             // Simple response - actual connection should be handled by event subscriber

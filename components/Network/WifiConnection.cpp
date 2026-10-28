@@ -790,13 +790,21 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
 
             case WIFI_EVENT_SCAN_DONE: {
                 ESP_LOGI(TAG, "WIFI_EVENT_SCAN_DONE");
-                
+
                 // Only process results here for async scans
                 // For blocking scans, results are processed in scan() function directly
                 if (!self->_blockingScan) {
-                    // Reset scan in progress flag only for async scans
+                    // Reset scan in progress flag only for async scans.
+                    // lockScan() le a flag sob _scanMutex: limpa sob a guarda
+                    // (0 ms: nunca bloquear a task de eventos).
+                    if (self->_scanMutex != nullptr) {
+                        xSemaphoreTake(self->_scanMutex, 0);
+                    }
                     self->_scanInProgress = false;
-                    
+                    if (self->_scanMutex != nullptr) {
+                        xSemaphoreGive(self->_scanMutex);
+                    }
+
                     if (self->_state == WiFiConnectionState::Scanning) {
                         self->processScanResults(self->_lastScanResult);
                         self->setState(WiFiConnectionState::Idle);

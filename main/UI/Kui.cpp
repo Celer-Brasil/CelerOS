@@ -358,15 +358,25 @@ void Canvas::dim(const Rect& keep) {
 
 bool Canvas::shiftX(const Rect& r, int dx) {
     if (!m_partial || m_mode != FullFrame || m_target != s_buf) return false;
+    Rect rc = r;
+    if (m_clipOn) {
+        // passada parcial: o deslocamento nao pode sair da regiao devolvida
+        // (a invariante e "buffer == vidro"; mexer fora dela desfaz o quadro)
+        int x0 = rc.x > m_clip.x ? rc.x : m_clip.x;
+        int y0 = rc.y > m_clip.y ? rc.y : m_clip.y;
+        int x1 = rc.x + rc.w < m_clip.x + m_clip.w ? rc.x + rc.w : m_clip.x + m_clip.w;
+        int y1 = rc.y + rc.h < m_clip.y + m_clip.h ? rc.y + rc.h : m_clip.y + m_clip.h;
+        rc = {x0, y0, x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0};
+    }
     auto* spr = static_cast<CelerSprite*>(m_target);
     uint16_t* p = (uint16_t*)spr->getBuffer();
     const int w = spr->width(), h = spr->height();
     if (p == nullptr || dx == 0) return p != nullptr;
     // origem recortada a tela e destino recortado a tela
-    int sx0 = r.x < 0 ? 0 : r.x, sx1 = r.x + r.w > w ? w : r.x + r.w;
+    int sx0 = rc.x < 0 ? 0 : rc.x, sx1 = rc.x + rc.w > w ? w : rc.x + rc.w;
     if (sx0 + dx < 0) sx0 = -dx;
     if (sx1 + dx > w) sx1 = w - dx;
-    const int y0 = r.y < 0 ? 0 : r.y, y1 = r.y + r.h > h ? h : r.y + r.h;
+    const int y0 = rc.y < 0 ? 0 : rc.y, y1 = rc.y + rc.h > h ? h : rc.y + rc.h;
     if (sx1 <= sx0 || y1 <= y0) return true;
     m_dev.waitDMA();  // o push anterior pode ainda estar lendo o buffer
     const size_t n = (size_t)(sx1 - sx0) * sizeof(uint16_t);
@@ -1270,6 +1280,8 @@ bool offUiTask() {
 
 bool s_repaint = true;
 bool s_repaintOnWake = false;   // tela apagou com o Navigator vivo: redesenha ao acender
+bool s_forceFullFrame = false;  // o despertar pediu UM quadro inteiro (o vidro pode
+                                // ter ficado num meio de passada parcial)
 bool s_inputSuspended = false;  // app JS em task propria: UI pausa o pump
 uint32_t s_lastTickMs = 0;
 TouchPump s_pump;
@@ -1304,7 +1316,12 @@ void drawFrame() {
     // composta e empurrada. Dialogo/toast por cima invalidam a regiao (sao
     // desenhados por cima do conteudo inteiro) e caem no quadro completo.
     Rect pr;
-    if (s_dialog == nullptr && s_toasts.empty() && !top->wantsDirectDraw() &&
+    // O despertar (tela apagou) pede quadro inteiro: a tela pode ter apagado
+    // no meio de uma passada parcial e o caminho parcial com regiao vazia
+    // nao empurraria pixel nenhum — o vidro ficaria no frame velho.
+    bool full = s_forceFullFrame;
+    s_forceFullFrame = false;
+    if (!full && s_dialog == nullptr && s_toasts.empty() && !top->wantsDirectDraw() &&
         top->partialFrame(pr)) {
         s_canvas->renderRegion(pr, paint);
         return;
@@ -1599,6 +1616,7 @@ void Navigator::tick() {
     if (s_repaintOnWake) {
         s_repaintOnWake = false;
         s_repaint = true;
+        s_forceFullFrame = true;   // acorda num vidro possivelmente defasado
     }
 
     // suppressRedraw: app JS rodando em task propria e dono do vidro — nem

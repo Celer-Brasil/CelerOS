@@ -1020,7 +1020,14 @@ duk_ret_t JSBindings::js_uiCustom(duk_context* ctx) {
         duk_push_int(ctx, h);
         rc = duk_pcall(ctx, 4);
     }  // guard: restaura fonte/estilo/recorte ANTES de propagar o erro
-    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
+    if (rc != DUK_EXEC_SUCCESS) {
+        // needDraw marcou o slot como desenhado antes do pcall: um callback
+        // que quebrou no meio deixaria a area limpada/velha ate o proximo
+        // frame total. Desmarca (se o slot foi reciclado durante o callback,
+        // o dono novo so desenha uma vez a mais — inofensivo).
+        s.drawn = false;
+        duk_throw(ctx);
+    }
     duk_push_boolean(ctx, 1);
     return 1;
 }

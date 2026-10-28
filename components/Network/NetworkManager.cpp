@@ -270,7 +270,10 @@ ErrorCode NetworkManager::connectToKnown() {
     
     if (count <= 0) {
         ESP_LOGW(TAG, "No networks found during scan");
-        setState(NetworkState::Disconnected);
+        // scan vazio nao desassocia o radio: o estado acompanha a conexao
+        // (mesmo tratamento do startScan bloqueante)
+        setState(_wifiConnection->isConnected() ? NetworkState::Connected
+                                                : NetworkState::Disconnected);
         return CommonErrorCodes::WifiScanFailed;
     }
 
@@ -287,7 +290,8 @@ ErrorCode NetworkManager::connectToKnown() {
     
     if (knownNetworks.empty()) {
         ESP_LOGW(TAG, "No known networks configured");
-        setState(NetworkState::Disconnected);
+        setState(_wifiConnection->isConnected() ? NetworkState::Connected
+                                                : NetworkState::Disconnected);
         return CommonErrorCodes::FileNotFound;
     }
 

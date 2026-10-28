@@ -1283,10 +1283,10 @@ scenario('CelerNet: no sumido sai no teto 4xTTL mesmo sob fila cheia', function(
 });
 
 // ---------------------------------------------------------------------------
-// Detona!: o cenario do DUELO 1x1 saiu aqui junto com a copia plana do jogo
-// (hub_apps/Detona): o Detona do Studio nao tem o modo duelo por CelerNet.
-// Se o duelo voltar como feature, o cenario esta no git (commit 7918405) e o
-// protocolo (dhl/dinv/.../rwin) segue descrito no README da versao 0.10.x.
+// Detona!: a copia plana do jogo (hub_apps/Detona) saiu daqui quando o jogo
+// virou projeto do Studio (studio_games/Detona, fonte unica). O DUELO 1x1 por
+// CelerNet EXISTE no Detona do Studio desde o 1.2.0 (protocolo dhl/di/da/ds/
+// dp/db/dm); o cenario da copia antiga segue no git (commit 7918405).
 
 // ---------------------------------------------------------------------------
 var filter = process.argv[2] || '';

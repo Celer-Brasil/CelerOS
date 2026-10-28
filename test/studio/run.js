@@ -23,6 +23,7 @@ const { runProject } = require('../../tools/studio/lib/run');
 const { runAppFolder } = require('../../tools/sdk/lib/runner.js');
 const { startStudio } = require('../../tools/studio/server');
 const { importGame } = require('../../tools/studio/lib/import_game');
+const scriptsLib = require('../../tools/studio/lib/scripts');
 const { encodePng, decodePng } = require('../../tools/sdk/lib/png.js');
 const F = require('../../tools/studio/lib/format');
 
@@ -231,6 +232,88 @@ let atlasGuid = null;
     check('scene.set replace troca data (nao mescla chaves antigas)', sd.a === 9 && sd.b === undefined,
         JSON.stringify(sd));
 })();
+
+    // props tipados do inspetor: component.set com field "fields.<chave>"
+    // escreve DENTRO de c.fields.fields (o que o build/validate leem) e uma
+    // tecla por op nao apaga as outras (o GUI manda uma op por tecla)
+    (function () {
+        console.log('Studio props tipados:');
+        applyOps(base, [
+            { op: 'script.set', name: 'props',
+              content: 'exports.props = { vel: 60, cor: "#38bcf8" };\n' },
+            { op: 'entity.create', scene: 'Fase 1', fid: 'e_props', name: 'Props' },
+            { op: 'component.add', scene: 'Fase 1', entity: 'e_props', type: 'script',
+              fields: { script: 'props' } },
+        ], {});
+        applyOps(base, [
+            { op: 'component.set', scene: 'Fase 1', entity: 'e_props',
+              component: 'script', field: 'fields.vel', value: 90 },
+        ], {});
+        applyOps(base, [
+            { op: 'component.set', scene: 'Fase 1', entity: 'e_props',
+              component: 'script', field: 'fields.cor', value: '#ff8800' },
+        ], {});
+        const comp = Project.open(base).scene('Fase 1').entities
+            .find((x) => x.fid === 'e_props').components.find((c) => c.type === 'script');
+        check('props tipados: fields.<chave> cai em fields.fields e nao zera irmaos',
+            comp && comp.fields && comp.fields.fields && comp.fields.fields.vel === 90 &&
+            comp.fields.fields.cor === '#ff8800' && comp.fields.script === 'props',
+            JSON.stringify(comp && comp.fields));
+        let failed = false;
+        try {
+            applyOps(base, [{ op: 'component.set', scene: 'Fase 1', entity: 'e_props',
+                              component: 'script', field: 'vel', value: 1 }], {});
+        } catch (e) { failed = String(e.message || e).indexOf('campo desconhecido') >= 0; }
+        check('props tipados: campo solto fora do catalogo continua barrado', failed);
+    })();
+
+    // lib/scripts.js: extracao e avaliacao do literal de exports.props
+    (function () {
+        console.log('Studio scripts lib:');
+        const XL = scriptsLib.extractLiteral;
+        check('extract: acha o objeto e para na chave certa',
+            XL('exports.props = { a: 1 };\nexports.start = 2;') === '{ a: 1 }');
+        check('extract: ignora chaves dentro de string/comentario',
+            XL('exports.props = { s: "}" /* } */ };\n// exports.props = { x: 1 }') ===
+            '{ s: "}" /* } */ }');
+        check('extract: sem declaracao devolve null', XL('var a = 1;') === null);
+
+        const ok = scriptsLib.propsOfSource(
+            'exports.props = { vel: 60, nome: "x", ver: true, cor: "#38bcf8",\n' +
+            '  modo: { type: "enum", values: ["a", "b"], default: "b" },\n' +
+            '  faixa: { type: "int", default: 7.9, min: 0, max: 10 },\n' +
+            '  estranho: { type: "cubo" } };\n');
+        check('props: atalhos viram campos tipados',
+            ok.found && ok.props.vel.type === 'int' && ok.props.vel.default === 60 &&
+            ok.props.nome.type === 'string' && ok.props.ver.type === 'bool' &&
+            ok.props.cor.type === 'color', JSON.stringify(ok.error || ''));
+        check('props: enum/defaults e int arredonda',
+            ok.props.modo.type === 'enum' && ok.props.modo.default === 'b' &&
+            ok.props.modo.values.join() === 'a,b' &&
+            ok.props.faixa.default === 8 && ok.props.faixa.min === 0,
+            JSON.stringify(ok.props.faixa));
+        check('props: tipo desconhecido cai em string com dica',
+            ok.props.estranho.type === 'string' &&
+            String(ok.props.estranho.hint || '').indexOf('cubo') >= 0);
+        check('props: __proto__/constructor nunca viram campo',
+            scriptsLib.propsOfSource('exports.props = { __proto__: 1, constructor: 2, ok: 3 };')
+                .props.ok !== undefined &&
+            !Object.keys(scriptsLib.propsOfSource(
+                'exports.props = { __proto__: 1, constructor: 2, ok: 3 };').props)
+                .some((k) => k === '__proto__' || k === 'constructor' || k === 'prototype'));
+
+        // o literal NAO executa no escopo global: vm sem process/require
+        const mal = scriptsLib.propsOfSource(
+            'exports.props = { x: (function () { return process.title; })() };\n');
+        check('props: literal hostil nao executa no escopo do Studio',
+            mal.found && (mal.error || '').length > 0 && Object.keys(mal.props).length === 0,
+            JSON.stringify(mal.error || ''));
+
+        const merged = scriptsLib.mergeFields(ok.props, { vel: 99, extra: 1 });
+        check('merge: campo do componente vence o default e preserva irmaos',
+            merged.vel === 99 && merged.nome === 'x' && merged.faixa === 8 &&
+            merged.extra === 1, JSON.stringify(merged));
+    })();
 
 // --------------------------------------------------------------- build -----
 let built = null;
@@ -667,6 +750,73 @@ let built = null;
         duel.dp === true && duel.db === true && duel.gx > 1, JSON.stringify(duel));
     check('Detona duelo: morte do rival fecha o round (melhor de 3)',
         duel.res === 'venci' && duel.ganhos === 1, JSON.stringify(duel));
+
+    // Minha morte no duelo (1.2.2): a janela de 0,9 s corre no duelRoundTick
+    // (o updateDuel nao roda com s.lost). 'dm' do rival DENTRO da janela =
+    // empate; sem 'dm', concedo 'perdi' sozinho; e o host so abre o proximo
+    // round com o round fechado. O estado do morto espelha o ramo de duelo
+    // do hurtPlayer (lostm/done/morteT/mortePend).
+    let wStage = 0;
+    let wT = 0;
+    const win = {};
+    runAppFolder(detona.dir, {
+        render: false, stopAtMs: 7000, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            const H = env.__harness;
+            env.System.delay = function (ms) {
+                const s = H.detona, now = env.System.millis();
+                if (wStage === 0 && s && s.ctx) { wStage = 1; H.tap(240, 380); }
+                else if (wStage === 1 && s && s.screen === 'duel') {
+                    wStage = 2;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'dhl' });
+                } else if (wStage === 2 && s && s.screen === 'duel' &&
+                           Object.keys(s.net.vistos).length) {
+                    wStage = 3;
+                    H.tap(240, 166);
+                } else if (wStage === 3 && s && s.net.fase === 'convidei') {
+                    wStage = 4;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'da1' });
+                } else if (wStage === 4 && s && s.mode === 'duel') {
+                    wStage = 5;
+                    wT = now;
+                    // morro: mesmo estado que hurtPlayer grava no ramo do duelo
+                    s.lives = 0; s.lost = true; s.done = true;
+                    s.morteT = 0.9; s.net.mortePend = true;
+                } else if (wStage === 5 && now - wT > 150 && s) {
+                    wStage = 6;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'dm1' });
+                    win.empate = s.net.res;
+                    win.placar = s.net.ganhos + '/' + s.net.perdidos;
+                    win.mortePend = s.net.mortePend;
+                } else if (wStage === 6 && s && s.net.fase === 'jogando' &&
+                           s.net.round === 2) {
+                    wStage = 7;    // round 2 aberto; a cena nova entra no proximo quadro
+                } else if (wStage === 7 && s && s.mode === 'duel' &&
+                           s.net.round === 2 && !s.lost) {
+                    wStage = 8;
+                    win.avancou = true;
+                    wT = now;
+                    s.lives = 0; s.lost = true; s.done = true;
+                    s.morteT = 0.9; s.net.mortePend = true;
+                } else if (wStage === 8 && now - wT > 1100 && s) {
+                    wStage = 9;
+                    win.res = s.net.res;
+                    win.perdidos = s.net.perdidos;
+                    win.fase = s.net.fase;
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Detona duelo: morri e o dm do rival na janela da EMPATE',
+        win.empate === 'empate' && win.placar === '0/0' && win.mortePend === false,
+        JSON.stringify(win));
+    check('Detona duelo: host so avanca o round com ele fechado',
+        win.avancou === true, JSON.stringify(win));
+    check('Detona duelo: sem dm do rival, a janela concede perdi',
+        win.res === 'perdi' && win.perdidos === 1 && win.fase === 'round',
+        JSON.stringify(win));
 
     // Lenda 2.2: 3 slots de save com estatisticas (o 0.x tinha um save so).
     const lendaSave = path.join(ROOT, 'studio_games', 'Lenda de Celer');

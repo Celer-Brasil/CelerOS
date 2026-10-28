@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "rev": 27,
+  "rev": 28,
   "studio": "0.1.0",
   "name": "Lenda de Celer",
   "packageName": "celeros.lenda",
-  "version": "2.2.0",
+  "version": "2.2.2",
   "author": "CelerOS",
   "description": "Remake NATIVO da Lenda de Celer no Celer Studio: as 20 salas ASCII (Campo, Gruta do Sabio e Templo) viram cenas com tilemap editavel e spawns como entidades. Espada, bomba, bumerangue, baus, Sabio, loja de cristais, paredes rachadas, guardiao com fases, save automatico, HUD e controles de toque.",
   "type": "Game",
@@ -22,7 +22,7 @@
     "celeros.game.tilemap": "^1.3.0",
     "celeros.game.ui": "^1.3.0"
   },
-  "changelog": "2.2.0: 3 slots de save com seletor (sala, cristais, minutos e quedas), troca do item B no menu de pausa e contagem de jornada/quedas; migra o save unico antigo para o slot 1",
+  "changelog": "2.2.2: o botao SAIR do titulo funciona (chamava um ctx.exit que nao existe; agora usa E.quit e volta ao launcher) e o icone \"swap\" inexistente (desenhava um ponto) virou \"refresh\" no botao de item.\n2.2.1: seletor de save cabe no vidro: o VOLTAR nascia em y=443 e o rodape saia cortado; card, slots e botao reorganizados dentro de 480 px. Sem mudanca de jogabilidade.\n2.2.0: 3 slots de save com seletor (sala, cristais, minutos e quedas), troca do item B no menu de pausa e contagem de jornada/quedas; migra o save unico antigo para o slot 1",
   "canvas": {
     "w": 480,
     "h": 480,

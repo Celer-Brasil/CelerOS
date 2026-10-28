@@ -145,6 +145,7 @@ function netReset() {
     NET.round = 0; NET.ganhos = 0; NET.perdidos = 0; NET.res = null;
     NET.envioMsg = ''; NET.vistos = {}; NET.pendIr = null;
     NET.ultC = -1; NET.ultR = -1; NET.lastSeq = -1; NET.ack = -1;
+    NET.mortePend = false;
 }
 
 function netConvidar(id) {
@@ -176,6 +177,7 @@ function netInicioRound() {
     NET.round++;
     NET.seed = 1000 + Math.floor(Math.random() * 89000);
     NET.res = null;
+    NET.mortePend = false;
     NET.ack = -1;
     NET.seq = 1;
     NET.lastSeq = -1;
@@ -283,6 +285,7 @@ function netMsg(m) {
             NET.fase = 'jogando';
             NET.seq = 1;
             NET.lastSeq = -1;
+            NET.mortePend = false;
             netSend('dy' + round);
             logDuelo('round ' + round + ' (seed ' + NET.seed + ')');
             netIrArena();
@@ -297,7 +300,14 @@ function netMsg(m) {
     var seq = parseInt(p[0], 10);
     if (op === 'm') {              // o rival morreu
         if (!netNovo(seq)) return;
-        if (NET.res === 'perdi') { NET.res = 'empate'; netEncerra('empate'); return; }
+        // morri tambem (concedi 'perdi' ou minha janela de 0,9 s esta
+        // correndo): os dois mortos na mesma janela = empate
+        if (NET.res === 'perdi' || NET.mortePend) {
+            NET.res = 'empate';
+            netEncerra('empate');
+            NET.mortePend = false;
+            return;
+        }
         netEncerra('venci');
         logDuelo('rival morreu');
         return;
@@ -959,6 +969,7 @@ function hurtPlayer(s) {
             // morri: aviso o rival e espero 0.9 s (os dois mortos = empate)
             netSend('dm' + netSeq());
             s.morteT = 0.9;
+            NET.mortePend = true;   // 'dm' do rival dentro da janela = empate
         } else if (s.mode === 'survive') {
             saveSurviveRecord(s);
         }
@@ -1160,13 +1171,6 @@ function updateDuel(s, E, ctx, dt) {
         }
     }
     NET.rivalDrop = null;          // itens sao locais; o rival recolhe os dele
-    if (s.morteT > 0) {
-        s.morteT -= dt;
-        if (s.morteT <= 0) {
-            s.morteT = 0;
-            if (!NET.res) netEncerra('perdi');
-        }
-    }
 }
 
 // Round encerrado: o host fecha o proximo (ou o fim da partida) sozinho;
@@ -1184,8 +1188,23 @@ function duelRoundTick(s, E, ctx, dt, act) {
         if (act === 'lobby') ctx.go('Duelo');
         return;
     }
+    // Morri no duelo: a janela de empate (0,9 s) corre AQUI — o updateDuel
+    // nao roda com s.lost (gameUpdate desvia para este tick). Vencido o
+    // prazo sem 'dm' do rival, concedo o round; o guard NET.res evita
+    // dobrar com o 'venci'/'empate' que o dm dele ja me deu.
     s.roundT = (s.roundT || 0) + dt;
-    if (NET.host && s.roundT > 2.0) {
+    if (s.morteT > 0) {
+        s.morteT -= dt;
+        if (s.morteT <= 0) {
+            s.morteT = 0;
+            NET.mortePend = false;
+            if (!NET.res) netEncerra('perdi');
+        }
+    }
+    // O host fecha o proximo round SO com o round encerrado: durante o
+    // 'jogando' o roundT nao e relogio de rodada (morri no meio e o roundT
+    // ja passado de 2,0 pularia o round sem contar a derrota).
+    if (NET.host && NET.fase === 'round' && s.roundT > 2.0) {
         s.roundT = 0;
         if (netFim()) return;
         netInicioRound();
@@ -1244,18 +1263,22 @@ function duelUpdate(s, E, ctx, dt) {
 function drawDuel(s, E) {
     var W = s.W, H = s.H;
     E.gfx.text('DUELO', W / 2, 36, HEAD_TXT);
-    E.gfx.text('melhor de 3  ·  mesma fase para os dois', W / 2, 72, SUB_TXT);
+    // as frases do lobby cabem no vidro de 480 em px16 (a antiga
+    // "melhor de 3 · mesma fase para os dois" media 592 px e saia cortada)
+    E.gfx.text('melhor de 3  ·  mesma fase', W / 2, 72, SUB_TXT);
     var stt;
-    if (!netRadio()) stt = 'sem radio: a malha CelerNet nao esta ativa';
+    if (!netRadio()) stt = 'sem radio: CelerNet inativa';
     else if (NET.fase === 'convidei') stt = 'aguardando ' + (NET.convide ? NET.convide.nome : '?') + '...';
     else if (NET.fase === 'aguarda') stt = 'chamando ' + (NET.rival ? NET.rival.nome : '?') + '...';
-    else stt = Object.keys(NET.vistos).length ? 'toque num nome para convidar' : 'procurando Detonas na malha...';
-    E.gfx.text(stt, W / 2, 104, SUB_TXT);
+    else stt = Object.keys(NET.vistos).length ? 'toque num nome para convidar' : 'procurando Detonas...';
+    // nome de aparelho pode ser longo: encolhe para caber em vez de cortar
+    E.gfx.text(stt, W / 2, 104, SUB_FIT);
     var c = E.ui.card(40, 136, W - 80, 236);
     var ids = Object.keys(NET.vistos);
     if (!ids.length) {
         E.gfx.text('nenhum outro Detona por perto', W / 2, c.y + 46, SUB_TXT);
-        E.gfx.text('abra o Detona em outro aparelho com a malha ligada', W / 2, c.y + 70, SUB_TXT);
+        E.gfx.text('abra o Detona em outro', W / 2, c.y + 70, SUB_TXT);
+        E.gfx.text('aparelho com a malha ligada', W / 2, c.y + 94, SUB_TXT);
     }
     for (var i = 0; i < ids.length && i < 4; i++) {
         var v = NET.vistos[ids[i]];
@@ -1298,6 +1321,9 @@ var LOGO_TXT = { px: 72, align: 'center', valign: 'middle', color: 0xFFE0,
                  outline: C(0x3A0A00), screen: true };
 var SUB_TXT = { px: 16, align: 'center', valign: 'middle', color: C(0xFFE6B0),
                 outline: C(0x1A0A20), screen: true };
+// mesma cor, mas encolhe para caber (nome de aparelho da malha e livre)
+var SUB_FIT = { px: 16, align: 'center', valign: 'middle', color: C(0xFFE6B0),
+                outline: C(0x1A0A20), screen: true, fit: 456 };
 var HEAD_TXT = { px: 30, align: 'center', valign: 'middle', color: 0xFFE0,
                  outline: C(0x1A0A20), screen: true };
 var BTN_BIG = { variant: 'primary', icon: 'play', ts: 'big' };
@@ -1315,9 +1341,15 @@ var PHASE_NAME = ['Jardim 1', 'Jardim 2', 'Forno 1', 'Forno 2', 'Nucleo', 'Chefe
 var PHASE_FACE = [16, 16, 24, 20, 24, -1];
 var HOW_BODY = 'Arraste: anda. Toque: bomba. Segure: detona as remotas.\n\n' +
                'CAMPANHA: quebre caixas, ache a saida e limpe a fase.\n' +
-               'SOBREVIVENCIA: ondas infinitas, sem saida nem relogio.\n' +
-               'DUELO: melhor de 3 pela malha, mesma fase para os dois.';
+               'SOBREVIVENCIA: ondas infinitas, sem relogio.\n' +
+               'DUELO: melhor de 3 pela malha, mesma fase.';
 var HOW_BTNS = [{ label: 'Entendi', value: 1, icon: 'check' }];
+// o corpo do modal usa o papel 'body' escalado por U (26 px no vidro de
+// 480): as 11 linhas do texto passavam de 480 e o modal saia cortado em
+// cima. Aqui o texto vai no papel 'small' dentro da area de conteudo do
+// proprio modal (mesmo painel/botao do kit), com a quebra medida por wrap.
+var HOW_TXT = { ts: 'small', color: 0xE71C, screen: true };
+var HOW_LINE_H = 20;
 var BOSS_SMALL = { key: 0xF81F, scale: 0.5 };
 
 function totalStars(E) {
@@ -1329,8 +1361,10 @@ function totalStars(E) {
 function drawTitle(s, E) {
     var W = s.W;
     E.gfx.text('DETONA!', W / 2, 74, LOGO_TXT);
-    E.gfx.text('3 mundos  ·  ' + totalStars(E) + '/18 estrelas  ·  onda ' +
-               E.save.num('sobre.onda', 0), W / 2, 124, SUB_TXT);
+    // duas linhas: a frase inteira em px16 mede 592 px e as pontas saiam
+    // cortadas no vidro de 480
+    E.gfx.text('3 mundos  ·  ' + totalStars(E) + '/18 estrelas', W / 2, 118, SUB_TXT);
+    E.gfx.text('sobrevivencia: onda ' + E.save.num('sobre.onda', 0), W / 2, 142, SUB_TXT);
     // elenco em escala 3 (cena estatica: o afim so roda no repaint)
     if (hasArt(E, ART[0])) {
         E.spr.stamp(ART[0], 92, 200, OPT_BIG);
@@ -1345,8 +1379,13 @@ function drawTitle(s, E) {
     if (E.ui.button('DUELO', c.x, c.y + 152, c.w, 44, BTN_SEC)) s.act = 'duel';
     if (E.ui.button('COMO JOGAR', c.x, c.y + 202, c.w, 40, BTN_SEC)) s.act = 'how';
     if (s.how) {
-        var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY,
-                                    buttons: HOW_BTNS });
+        var r = E.ui.modal('how', { title: 'COMO JOGAR', contentH: 224,
+                                    buttons: HOW_BTNS }, function (cr) {
+            var ls = E.gfx.wrap(HOW_BODY, cr.w, HOW_TXT);
+            for (var li = 0; li < ls.length; li++) {
+                E.gfx.text(ls[li], cr.x, cr.y + li * HOW_LINE_H, HOW_TXT);
+            }
+        });
         if (r !== null) s.act = 'howClose';
     }
 }

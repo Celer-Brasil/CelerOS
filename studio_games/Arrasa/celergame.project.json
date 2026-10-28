@@ -4,7 +4,7 @@
   "studio": "0.1.0",
   "name": "Arrasa!",
   "packageName": "celeros.arrasa",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "author": "CelerOS",
   "description": "Remake NATIVO do Arrasa! no Celer Studio: 10 fases como cenas editaveis, com cada caixa/goblin/rei virando entidade e corpo do P.rigid. Estilingue, mira, 7 tipos de pedra (pedrao, tripla, flecha, bomba, chocadeira, bumerangue), TNT em cadeia, dano por impacto, estrelas, progresso salvo e HUD.",
   "type": "Game",
@@ -23,7 +23,7 @@
     "celeros.game.ui": "^1.3.0",
     "celeros.physics": "^2.1.1"
   },
-  "changelog": "2.1.0: refeito com o kit de UI 1.3 e a arte nova do text2d. Rei goblin com caminhada propria (animate-set) e goblins em 24/32 px nativos (escala 1); pedras, pedrao, tripla, bomba, flecha, bumerangue, galinha e ovo do pack items em tamanho de desenho; caixa de TNT com cara de TNT; explosao e fumaca de goblin em vfx de 6 quadros. HUD de topo pelo E.ui.hud (fase, goblins, pontos), fila das proximas pedras com icones e pausa na faixa do chao; titulo/mapa/fim/pausa com card, badge, estrelas, modal e toast sobre o fundo. Fundo restaurado por blitSprite na camada suja em vez de carimbado inteiro todo quadro. Corrige pedras invisiveis (o atlas antigo so carregava nas fases com o rei).\n2.0.2: goblins comuns ganham ciclo de caminhada gerado com text2d (4 quadros, seed 5203); o controlador anima por peca e o rei continua na arte antiga.\n2.0.1: bases de asset incluem a pasta celeros_arrasa criada pelo celerctl; fundo/texturas/atlas voltam a carregar no 4848.\n2.0.0: remake nativo no Celer Studio. As 10 fases do original viram cenas com pecas entidades (texturas giradas pelo runtime) e o controlador cria o mundo P.rigid; menus Titulo/Mapa/Fim, pausa, mira, poderes no toque, TNT, pontuacao/estrelas e progresso salvo. Sem bridge legado.",
+  "changelog": "2.1.1: o fundo blitado pega o slot pela API publica E.spr.id (antes lia o _slots interno da engine).\n2.1.0: refeito com o kit de UI 1.3 e a arte nova do text2d. Rei goblin com caminhada propria (animate-set) e goblins em 24/32 px nativos (escala 1); pedras, pedrao, tripla, bomba, flecha, bumerangue, galinha e ovo do pack items em tamanho de desenho; caixa de TNT com cara de TNT; explosao e fumaca de goblin em vfx de 6 quadros. HUD de topo pelo E.ui.hud (fase, goblins, pontos), fila das proximas pedras com icones e pausa na faixa do chao; titulo/mapa/fim/pausa com card, badge, estrelas, modal e toast sobre o fundo. Fundo restaurado por blitSprite na camada suja em vez de carimbado inteiro todo quadro. Corrige pedras invisiveis (o atlas antigo so carregava nas fases com o rei).\n2.0.2: goblins comuns ganham ciclo de caminhada gerado com text2d (4 quadros, seed 5203); o controlador anima por peca e o rei continua na arte antiga.\n2.0.1: bases de asset incluem a pasta celeros_arrasa criada pelo celerctl; fundo/texturas/atlas voltam a carregar no 4848.\n2.0.0: remake nativo no Celer Studio. As 10 fases do original viram cenas com pecas entidades (texturas giradas pelo runtime) e o controlador cria o mundo P.rigid; menus Titulo/Mapa/Fim, pausa, mira, poderes no toque, TNT, pontuacao/estrelas e progresso salvo. Sem bridge legado.",
   "canvas": {
     "w": 480,
     "h": 480,

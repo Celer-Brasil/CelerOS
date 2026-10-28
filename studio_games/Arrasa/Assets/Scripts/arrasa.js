@@ -248,10 +248,9 @@ function updateFx(s, dt) {
 function setupBackground(s, E, ctx) {
     s.bgEnt = ctx.scene.find('Fundo');
     if (typeof __harness !== 'undefined') return;
-    var sl = E.spr && E.spr._slots && E.spr._slots.fundo;
-    if (!sl || !sl.id || typeof System === 'undefined' ||
+    var id = E.spr && E.spr.id ? E.spr.id('fundo') : 0;
+    if (!id || typeof System === 'undefined' ||
         typeof System.blitSprite !== 'function' || !E.dirty || !E.dirty.enable) return;
-    var id = sl.id;
     if (s.bgEnt) s.bgEnt.active = false;
     E.dirty.enable(function (x, y, w, h) {
         System.fillRect(x, y, w, h, 0);

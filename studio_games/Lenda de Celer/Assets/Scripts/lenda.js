@@ -362,7 +362,7 @@ function newGame(E, ctx) {
 function updateTitle(s, E, ctx) {
     var a = takeAct(s);
     if (s.how || s.pick || s.delSlot) E.redraw();   // modal/card animam
-    if (a === 'exit') { if (s.ctx && s.ctx.exit) s.ctx.exit(); return; }
+    if (a === 'exit') { E.quit(); return; }   // E.quit encerra o E.run (o ctx nao tem exit)
     if (a === 'pick') { s.pick = true; E.redraw(); return; }
     if (a === 'pickClose') { s.pick = false; E.redraw(); return; }
     if (a && a.indexOf('slot:') === 0) {
@@ -1013,11 +1013,14 @@ var SLOT_X = { px: 16, screen: true, align: 'center', color: 0xF04848 };
 function drawSlots(s, E) {
     var W = s.W, H = s.H;
     E.gfx.rect(0, 186, W, H - 186, C(0x0B1020), { screen: true });
-    E.gfx.text('ESCOLHA O SAVE', W / 2, 210, LOGO_TXT);
-    var c = E.ui.card(40, 246, W - 80, 200);
+    E.gfx.text('ESCOLHA O SAVE', W / 2, 206, LOGO_TXT);
+    // card 230..470: os 3 slots (56 px de passo) e o VOLTAR cabem inteiros;
+    // antes o botao nascia em 443 e o rodape ficava cortado pelo vidro
+    var c = E.ui.card(40, 230, W - 80, 240);
+    var sy = c.y + 6;
     for (var n = 1; n <= 3; n++) {
         var st = slotState(E, n);
-        var y = c.y + 8 + (n - 1) * 58;
+        var y = sy + (n - 1) * 56;
         var sel = n === s.slot;
         E.ui.card(c.x + 6, y, c.w - 12, 50,
                   { pad: 0, stroke: sel ? C(0xFFC83C) : C(0x22304A),
@@ -1033,7 +1036,7 @@ function drawSlots(s, E) {
         if (E.input.tap && E.hit(del) && st) { s.act = 'del:' + n; return; }
         if (E.input.tap && E.hit(hit)) { s.act = 'slot:' + n; return; }
     }
-    if (E.ui.button('VOLTAR', W / 2 - 80, c.y + c.h + 12, 160, 40, BTN_CONT)) s.act = 'pickClose';
+    if (E.ui.button('VOLTAR', W / 2 - 80, sy + 3 * 56 + 5, 160, 40, BTN_CONT)) s.act = 'pickClose';
     if (s.delSlot) {
         var r = E.ui.modal('del', { title: 'APAGAR SAVE',
                                     body: 'slot ' + s.delSlot + ' sera perdido.',
@@ -1129,7 +1132,7 @@ function drawGame(s, E) {
     }
 }
 
-var PAUSE_ITEM = { label: 'Item', value: 'swap', icon: 'swap' };
+var PAUSE_ITEM = { label: 'Item', value: 'swap', icon: 'refresh' };   // 'swap' nao existe no kit
 var PAUSE_BTNS = [{ label: 'Menu', value: 'menu', icon: 'home' },
                   { label: 'Continuar', value: 'resume' }];
 var PAUSE_BTNS_ITEM = [{ label: 'Menu', value: 'menu', icon: 'home' },

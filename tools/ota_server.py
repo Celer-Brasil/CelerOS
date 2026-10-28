@@ -10,9 +10,10 @@ Uso tipico:
     idf.py -B build build
     python3 tools/ota_server.py --board smartdisplay
 
-A versao publicada e lida do platformio.ini (CELEROS_VERSION); para testar
-a atualizacao, suba a versao la, rebuild e reinicie o servidor. No
-dispositivo, grave em /local/ota_url.txt a URL impressa no inicio:
+A versao publicada e lida do CMakeLists.txt raiz (project(CelerOS VERSION
+x.y.z); --version sobrepoe); para testar a atualizacao, suba a versao la,
+rebuild e reinicie o servidor. No dispositivo, grave em /local/ota_url.txt
+a URL impressa no inicio:
 
     http://<ip-do-pc>:10234/update.json
 

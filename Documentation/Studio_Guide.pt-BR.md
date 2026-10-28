@@ -390,7 +390,7 @@ O Studio não é só editor de jogos. Com `runtime: "app"` cada cena vira uma
 (`UI.*` — o mesmo que Ajustes/Loja usam):
 
 - **Sem dependência de engine**: o pacote não tem deps `celeros.game.*` nem
-  `requires: ["psram"]`, então um programa também cabe na CYD (teto de 48 KB de
+  `requires: ["psram"]`, então um programa também cabe na CYD (teto de 64 KB de
   JS).
 - `app.data.js` no lugar de `game.data.js`; o `main.js` embute o runtime de
   telas (sem `E.init`, sem `E.run`).
@@ -527,7 +527,7 @@ Limites de pacote impostos pelo build/validate (os mesmos do hub):
 - 8 deps diretas; no máximo 16 extras no pacote (arquivo(s) de dados + scripts
   + assets não-JS; `app.json`, `main.js` e `icon.png` são livres);
 - 128 KB por asset não-JS, 256 KB no total de assets não-JS;
-- teto de JS enxuto: 48 KB sem PSRAM; 1 MB com `requires: ["psram"]`;
+- teto de JS enxuto: 64 KB sem PSRAM; 1 MB com `requires: ["psram"]`;
   256 KB por módulo; módulo acima de 30 KB exige `api >= 6`;
 - nomes planos `[A-Za-z0-9._-]{1,64}`; sem subpastas no pacote.
 

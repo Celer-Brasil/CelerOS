@@ -57,6 +57,9 @@ fi
 # para a imagem de fabrica: no smartdisplay sao 18 KB reais (~32-64 KB em
 # blocos de 4 KB no littlefs).
 find "$STAGE" -type d -name .dev -prune -exec rm -rf {} + 2>/dev/null || true
+# Wires de teste (test.js da convencao `celer.js test/emu`) tambem ficam fora
+# da fabrica: nunca sao requeridos no aparelho (publish/install os filtram).
+find "$STAGE" -name test.js -delete 2>/dev/null || true
 # Exclusao opcional da placa: boards/<placa>/data-exclude.txt (um caminho
 # relativo a data/ por linha; # comenta) sai do stage — ex.: o relogio nao
 # leva Terminal/HTTP Demo.
@@ -69,6 +72,15 @@ if [ -f "$EXCL" ]; then
         rm -rf "${STAGE:?}/$rel"
         echo "excluido: $rel"
     done < "$EXCL"
+fi
+
+# JS minificado na imagem: o hub ja publica/deploya minificado e o aparelho
+# compila o mesmo codigo; aqui o ganho e de BLOCOS do LittleFS (um bloco de
+# 4 KB por arquivo). Sem isso a CYD (768 KB) nao cabe desde o CelerKit 2.0.
+if command -v node >/dev/null 2>&1; then
+    node "$ROOT/tools/sdk/lib/minify_apps.js" "$STAGE"
+else
+    echo "aviso: node ausente; JS da imagem sem minificar (a CYD pode nao caber)"
 fi
 
 IMG="$ROOT/build/littlefs-$(date +%s).img"

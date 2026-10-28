@@ -90,7 +90,7 @@ segurança.
   qualquer valor, sem restrição.
 - **`category`**: categoria específica (ex.: `Utilities`, `Games`, `Tools`).
   Pode digitar qualquer valor, sem restrição.
-- **Placas sem PSRAM** (ex.: a CYD clássica): o `main.js` inteiro — mais o heap JS e os temporários do compile — tem que caber na RAM interna; fonte acima de ~60KB não compila nela (comentários e indentação são removidos antes do compile, não custam nada). Apps acima de 48 KB precisam declarar `"requires": ["psram"]`; a loja marca como "Requer PSRAM" e bloqueia o install em placa sem PSRAM.
+- **Placas sem PSRAM** (ex.: a CYD clássica): o app inteiro (main + módulos + deps) — mais o heap JS e os temporários do compile — tem que caber na RAM interna. O teto aplicado é **64 KB minificados** (bancada: 61 KB cru / 52 KB enxuto compila, 82 KB cru mostra "Sem memória"; comentários, indentação e nomes locais longos são removidos antes do compile, então não custam nada). Apps acima de 64 KB precisam declarar `"requires": ["psram"]`; a loja marca como "Requer PSRAM" e bloqueia o install em placa sem PSRAM.
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`, `"mic"`, `"camera"`, `"usb"`, `"input"`. Sem o campo o app mantém as seis antigas (compatibilidade com a loja existente); `"usb"` e `"input"` (API 48) só entram com declaração explícita, porque dão acesso a qualquer dispositivo USB e ao teclado/mouse do sistema. Com o campo, só o que foi declarado é registrado: `FS` / `Net` / `System.gpio` **e as chamadas de hardware externo** (`System.led`, `System.relay*`, `System.neopixel`), além das que afetam o aparelho, como `restart`/`otaStart`. Arquivos do sistema em `/local` (credenciais Wi-Fi, PIN, config de OTA/boot) exigem `"system"` adicionalmente, mesmo para apps com `"fs"`. Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
   JS](JS_API_Guide.pt-BR.md) — atualmente `36`). Verificado pelo sistema na
@@ -102,7 +102,7 @@ segurança.
   cópia por versão no aparelho, compartilhada entre apps) e grava a escolha em
   `<pasta do app>/deps.json`, que é o que o `require()` lê. Um `<nome>.js`
   local na pasta do app ainda vence sobre o cache (vendorizar segue
-  funcionando). As deps contam no teto de compilação de 48/128 KB. Ordem de
+  funcionando). As deps contam no teto de compilação de 64 KB / 1 MB. Ordem de
   resolução e detalhes: [Guia da API JS, seção 35](JS_API_Guide.pt-BR.md).
 
 **Como os ranges se comportam** (o modelo do `pub` do Dart): `^1.1.0` roda
@@ -123,7 +123,7 @@ rodar. `node tools/sdk/celer.js deps <Pasta> --verify` falha quando um
 range não tem versão que satisfaça no hub (o gate do `celer.js check`
 cobra isso dos `hub_apps`).
 - **`requires`** (opcional): requisitos de hardware — `"psram"` é o único
-  valor hoje. Sobe o teto do hub para o `main.js` de 48 KB para 128 KB
+  valor hoje. Sobe o teto do hub para o `main.js` de 64 KB para 1 MB
   (placas com PSRAM compilam sem limite runtime); a loja marca o app como
   "Requer PSRAM" e bloqueia o install em placas sem PSRAM (CYD, devkit).
   Cartão SD **não** sobe o teto: o limite é RAM de compilação, não
@@ -156,8 +156,8 @@ do `app.json` são calculados e gravados pelo servidor — **não escreva à mã
 - **O seu `packageName` tem dono.** Quem publica primeiro vira o dono; só o
   mesmo token (ou o root do hub) atualiza/remove o pacote depois.
 - **Limites de tamanho:** a **soma dos arquivos `.js`** (`main.js` +
-  módulos) tem que ficar em **48 KB**; declarar `"requires": ["psram"]`
-  sobe o teto para **128 KB** — é a soma que ocupa a RAM de compilação,
+  módulos) tem que ficar em **64 KB**; declarar `"requires": ["psram"]`
+  sobe o teto para **1 MB** — é a soma que ocupa a RAM de compilação,
   então módulos contam no mesmo orçamento. Cada `.js` acima de **30 KB**
   exige `api: 6` (firmware antigo baixava via `Net.get`, que trunca em
   32 KB; o downloader streaming da API 6 não tem teto). Assets (não-`.js`):

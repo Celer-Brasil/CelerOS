@@ -46,7 +46,7 @@ function _hubLimit(name, fallback) {
   // so digitos e operadores aritmeticos: seguro de avaliar
   return Function('"use strict"; return (' + m[1] + ')')() || fallback;
 }
-const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 48 * 1024);
+const MAX_MAIN_JS = _hubLimit('MAX_MAIN_JS', 64 * 1024);
 const MAX_MAIN_JS_PSRAM = _hubLimit('MAX_MAIN_JS_PSRAM', 128 * 1024);
 const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 // Pacote multi-arquivo: mesmos tetos do celerhub.py (fonte unica); a
@@ -1029,7 +1029,7 @@ function lintAppJson(dir, manifest) {
   if (extras > MAX_EXTRA_FILES) dsize(extras + ' arquivos extras (max ' + MAX_EXTRA_FILES + ')');
   if (assetsTotal > MAX_ASSETS_TOTAL) dsize('assets somam ' + kbFmt(assetsTotal) + ' (max ' + (MAX_ASSETS_TOTAL / 1024) + 'KB)');
   // Teto em 2 niveis (o celerhub.py e o servidor reforcam no publish) pela
-  // SOMA dos .js ENXUTOS: 48KB em qualquer placa; "psram" em requires sobe
+  // SOMA dos .js ENXUTOS: 64KB em qualquer placa; "psram" em requires sobe
   const ceiling = psramDecl ? MAX_MAIN_JS_PSRAM : MAX_MAIN_JS;
   if (jsSum > ceiling) {
     const hint = psramDecl ? '' : ' — declare "psram" em requires para ate ' + (MAX_MAIN_JS_PSRAM / 1024) + 'KB';

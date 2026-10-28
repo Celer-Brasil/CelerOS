@@ -48,7 +48,11 @@ MAX_API_LEVEL = _read_api_level()
 # instalavam via Net.get, que trunca o corpo em 32KB.
 # Teto em 2 niveis: sem PSRAM o main.js inteiro (mais o heap Duktape e os
 # temporarios do compile) tem que caber na RAM interna — medido na CYD
-# (ENGINE_NOTES rodada 4): 61KB roda, 82KB nao compila. Declarando
+# (ENGINE_NOTES rodada 4): 61KB cru (52KB enxuto) roda, 82KB cru nao
+# compila. A migracao C++->JS da rodada 2 liberou ~20KB na CYD, entao o
+# teto passou de 48KB para 64KB (2026-10-28) — apps perto do teto devem
+# ser validados no aparelho.
+# Declarando
 # "psram" em requires o app sobe para MAX_MAIN_JS_PSRAM: as placas S3
 # com PSRAM (smartdisplay, dog, watch) compilam sem limite runtime
 # (dukHeapBudgetOk passa direto; o fonte cru vai num bloco so de PSRAM
@@ -56,7 +60,7 @@ MAX_API_LEVEL = _read_api_level()
 # folga — o preco de um app que use isso e a abertura (compile linear,
 # ~12x o maior app de 2026-10) e ~30% da littlefs de 3,5MB do
 # SmartDisplay. O teto e permissivo, nao um alvo.
-MAX_MAIN_JS = 48 * 1024
+MAX_MAIN_JS = 64 * 1024
 # Espelha o SERVIDOR (CelerOS-Server stacks/.celeros-hub/api/app.py, hub
 # 0.9.0+): 1MB com requires psram. Os dois sobem juntos — com o cliente em
 # 1MB e o hub em 128KB o --dry passava e o upload voltava 413 (Detona 0.6.0,
@@ -493,7 +497,7 @@ def validate(folder: Path, strip=True, snapshot=None):
     stream-safe) contam o tamanho ENXUTO, como o publish sobe e o aparelho
     compila — o cru tem comentario/indentacao e bloqueava com mensagem
     errada ANTES do strip provar o contrario (main.js de 60KB cru que vira
-    40KB enxuto morria com "acima de 48KB").
+    40KB enxuto morria com "acima de 64KB").
     `snapshot`: {"app.json": bytes, "main.js": bytes} — quando dado, meta e
     teto saem DESSES bytes e nao de uma segunda leitura do disco: o publish
     valida exatamente o conteudo que vai no zip (app.json trocado no meio

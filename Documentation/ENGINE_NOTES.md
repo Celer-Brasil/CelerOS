@@ -26,7 +26,7 @@ inteiro da camada nativa:
 
 **Decisão recomendada:** manter Duktape enquanto o alvo CYD (4 MB) estiver
 no conjunto de placas suportadas; reavaliar quando (a) a CYD sair de linha
-ou (b) o `main.js` > 48 KB virar gargalo real dos apps. O caminho
+ou (b) o `main.js` > 64 KB virar gargalo real dos apps. O caminho
 intermediário — transpilar ES6→ES5 no publish do hub (sucrase/esbuild no
 `celerhub.py`) — entrega ES2015 **para quem escreve app** sem tocar no
 firmware; ficou anotado como evolução do hub (repo CelerOS-Server).
@@ -150,16 +150,19 @@ roda (52KB enxuto, 128 funcoes); 82KB nao compila (tela "Sem memoria" limpa).
 `appRAM` passa a contar DRAM + IRAM (~225KB na CYD) e a loja usa
 `(appRAM - 60000) * 0,4` (~66KB).
 
-Consequencia dessas medicoes (2026-10): teto do hub em 2 niveis — 48KB para
-qualquer placa; `"psram"` em `requires` no app.json sobe para 1MB (as
-placas S3 com PSRAM compilam sem limite runtime; subido de 128KB em
-2026-10-09 junto com o servidor, hub 0.9.0+ — cliente e hub sobem juntos).
+Consequencia dessas medicoes (2026-10): teto do hub em 2 niveis — 64KB para
+qualquer placa (subido de 48KB em 2026-10-28: a migracao C++->JS liberou
+~20KB na CYD; o teste de 61KB cru / 52KB enxuto ja rodava e 82KB cru
+falhava — valide apps perto do teto no aparelho); `"psram"` em `requires` no
+app.json sobe para 1MB (as placas S3 com PSRAM compilam sem limite runtime;
+subido de 128KB em 2026-10-09 junto com o servidor, hub 0.9.0+ — cliente e
+hub sobem juntos).
 A loja passou a privilegiar a declaracao (badge "Requer PSRAM" + bloqueio)
 e mantem a formula acima so como fallback para entradas antigas do
 catalogo sem o campo. Cartao SD nao entra na conta: o gargalo e RAM de
-compilacao, nao armazenamento. Com a familia CelerGame modular o core sozinho ja
-passa dos 48KB da CYD (51KB enxutos na 1.5.0): jogo com a engine declara
-`requires: ["psram"]`, e nenhum jogo do catalogo roda na CYD.
+compilacao, nao armazenamento. Com a familia CelerGame modular o core sozinho
+(~50KB minificados) cabe no teto de 64KB, mas core+ui+app nao: jogo com a
+engine declara `requires: ["psram"]`, e nenhum jogo do catalogo roda na CYD.
 
 Descartado por render pouco: opcoes de objeto do Duktape (`FUNC_NAME_PROPERTY`
 off: -2% e perde nomes nos erros; `HSTRING_CLEN`/`HASH_PART`: ~0) e `-O2` no

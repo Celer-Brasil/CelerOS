@@ -96,7 +96,7 @@ function cmdNew(args) {
         // DEP do hub (API 30): nao e copiada — o install da loja baixa em
         // /local/modules e o require resolve de la. O scaffold adota so o
         // core + fx (cada modulo e uma dep; quem adota pouco paga pouco —
-        // sem psram o teto e 48KB e o core enxuto ~20KB cabe). Fisica de
+        // sem psram o teto e 64KB e o core enxuto ~20KB cabe). Fisica de
         // arcade de poucos corpos (o padrao do template) e na mao;
         // celeros.physics so entra quando o jogo pedir verlet/rigid (ver
         // Game Engine Guide)
@@ -110,7 +110,7 @@ function cmdNew(args) {
     if (appkit) {
         // app geral sobre o CelerKit: o pacote kit (core + fmt + path + data
         // + net + text + form + list + caps) numa unica dep — o fecho cabe
-        // de sobra no teto de 48KB sem psram (~14KB stripped). Modulos fora
+        // de sobra no teto de 64KB sem psram (~14KB stripped). Modulos fora
         // do kit (chat/input/ai/launch/...) entram a parte no app.json (ver
         // App Kit Guide)
         appJson.permissions = ['fs'];

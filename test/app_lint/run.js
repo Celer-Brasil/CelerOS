@@ -139,7 +139,7 @@ for (const c of CASES) {
   check('app.json invalido', got['erro:appjson'] === 7, 'esperado 7 erros appjson, obtido ' + fmt(got));
 }
 
-// Teto de main.js em 2 niveis (48KB geral; 128KB com "psram" em requires),
+// Teto de main.js em 2 niveis (64KB geral; 1MB com "psram" em requires),
 // contado pelo tamanho ENXUTO (jsstrip): o padding dos fixtures e CODIGO
 // REAL (repetido), porque comentario gigante enxuga a zero e nao pesa mais.
 {
@@ -162,15 +162,20 @@ for (const c of CASES) {
   };
   const countsOf = (dir) => ruleCounts(linter.lintApp(linter.buildManifest(), { dir }).diagnostics);
 
-  let dir = tmpApp(os.tmpdir(), {}, 50 * 1024);
+  let dir = tmpApp(os.tmpdir(), {}, 70 * 1024);
   let got = countsOf(dir);
-  check('teto: 50KB sem requires = erro pedindo psram',
+  check('teto: 70KB sem requires = erro pedindo psram',
     got['erro:appjson'] === 1 && (got['aviso:appjson'] || 0) === 0, fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
-  dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 50 * 1024);
+  dir = tmpApp(os.tmpdir(), {}, 60 * 1024);
   got = countsOf(dir);
-  check('teto: 50KB com requires psram = limpo', fmt(got) === '{}', fmt(got));
+  check('teto: 60KB sem requires = limpo (teto 64KB)', fmt(got) === '{}', fmt(got));
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 70 * 1024);
+  got = countsOf(dir);
+  check('teto: 70KB com requires psram = limpo', fmt(got) === '{}', fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
   dir = tmpApp(os.tmpdir(), { requires: ['psram'] }, 1030 * 1024);
@@ -196,9 +201,9 @@ for (const c of CASES) {
 
   // App de overlay de placa (boards/<b>/data/apps): teto vira aviso, nao erro
   const broot = fs.mkdtempSync(path.join(os.tmpdir(), 'lint-boards-'));
-  const bdir = tmpApp(path.join(broot, 'boards', 'cyd', 'data', 'apps'), {}, 50 * 1024);
+  const bdir = tmpApp(path.join(broot, 'boards', 'cyd', 'data', 'apps'), {}, 70 * 1024);
   got = countsOf(bdir);
-  check('teto: 50KB sem requires em app de placa = aviso',
+  check('teto: 70KB sem requires em app de placa = aviso',
     got['aviso:appjson'] === 1 && (got['erro:appjson'] || 0) === 0, fmt(got));
   fs.rmSync(broot, { recursive: true, force: true });
 
@@ -217,17 +222,17 @@ for (const c of CASES) {
     got['aviso:nivel'] === 1 && fmt(got) !== '{}' && !got['erro:appjson'], fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
-  dir = tmpApp(os.tmpdir(), { api: 23 }, 40 * 1024, undefined,
+  dir = tmpApp(os.tmpdir(), { api: 23 }, 50 * 1024, undefined,
     { 'mod.js': 'System.delay(1);\n'.repeat(Math.ceil(20 * 1024 / 17)) });
   got = countsOf(dir);
-  check('modulos: soma 40+20KB sem psram = erro pela soma',
+  check('modulos: soma 50+20KB sem psram = erro pela soma',
     got['erro:appjson'] === 1, fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
-  dir = tmpApp(os.tmpdir(), { api: 23, requires: ['psram'] }, 40 * 1024, undefined,
+  dir = tmpApp(os.tmpdir(), { api: 23, requires: ['psram'] }, 50 * 1024, undefined,
     { 'mod.js': 'System.delay(1);\n'.repeat(Math.ceil(20 * 1024 / 17)) });
   got = countsOf(dir);
-  check('modulos: soma 60KB com psram = limpo', fmt(got) === '{}', fmt(got));
+  check('modulos: soma 70KB com psram = limpo', fmt(got) === '{}', fmt(got));
   fs.rmSync(dir, { recursive: true, force: true });
 
   dir = tmpApp(os.tmpdir(), { api: 23 }, 100, undefined,

@@ -405,7 +405,7 @@ a **screen** of a regular CelerOS program, drawn with the system toolkit
 (`UI.*` — the same one Settings/Store use):
 
 - **No engine dependency**: the package has no `celeros.game.*` deps and no
-  `requires: ["psram"]`, so a program also fits the CYD (48 KB JS budget).
+  `requires: ["psram"]`, so a program also fits the CYD (64 KB JS budget).
 - `app.data.js` replaces `game.data.js`; `main.js` inlines the screen runtime
   (no `E.init`, no `E.run`).
 - `transform.x/y` is the widget's **top-left corner**; `z` is the draw order.
@@ -540,7 +540,7 @@ Package limits enforced by the build/validate (same as the hub):
 - 8 direct deps; max 16 package extras (data file(s) + scripts + non-script
   assets; `app.json`, `main.js` and `icon.png` are free);
 - 128 KB per non-JS asset, 256 KB total non-JS assets;
-- stripped JS ceiling: 48 KB without PSRAM; 1 MB with `requires: ["psram"]`;
+- stripped JS ceiling: 64 KB without PSRAM; 1 MB with `requires: ["psram"]`;
   256 KB per module; a module over 30 KB requires `api >= 6`;
 - flat names `[A-Za-z0-9._-]{1,64}`; no subdirectories in the package.
 

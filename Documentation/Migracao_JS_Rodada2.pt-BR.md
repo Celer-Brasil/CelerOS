@@ -95,7 +95,7 @@ expor o registry (`System.apps()`, ~1-2 KB de C++) e um fallback nativo mínimo
 precisa devolver para uma grade nativa, não para o app que falhou).
 
 Peso do lado JS: um launcher sem deps, com `System.drawIcon`/`System.apps()`,
-cabe em ~8-10 KB enxutos — folgado contra o teto de 48 KB da CYD (o app maior
+cabe em ~8-10 KB enxutos — folgado contra o teto de 64 KB da CYD (o app maior
 hoje é o Settings, ~44 KB com o kit).
 
 `System.apps()` também mata a duplicação: `celeros.app.launch` (2,1 KB) e o
@@ -127,7 +127,7 @@ ajustes rápidos ou a tela de alarme em JS enquanto um app roda. Isso trava
 = **11,2 KB** na CYD.
 
 **`UI.*`/`JsUi` (13,6 KB) fica.** É substrato que todo app usa: em JS viraria
-custo de heap por app. O Settings já está em ~44 KB dos 48 KB da CYD; somar
+custo de heap por app. O Settings já está em ~44 KB dos 64 KB da CYD; somar
 ~9 KB de uma dep de UI estouraria o teto. Além disso, o arrasto da launcher
 custou 76 ms/quadro quando ainda era nativo (commit 5450a16) — scroll com
 inércia em JS interpretado não fecha o orçamento de quadro.

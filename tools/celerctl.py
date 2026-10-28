@@ -3308,6 +3308,13 @@ def _sync_app_deps(link, src, dest, args):
     except (ValueError, OSError):
         return None
     if not meta.get("deps"):
+        # app que deixou de usar deps: um deps.json velho na pasta faria o
+        # require apontar para modulos que talvez nao existam mais
+        try:
+            link.delete(f"{dest}/deps.json")
+            print("deps: app sem deps; deps.json antigo removido")
+        except CelerError:
+            pass
         return None
     hub = (getattr(args, "hub", None) or
            os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
@@ -3386,7 +3393,11 @@ def _install_app_folder(link, src, args):
             # arquivos — so os pngs de dentro)
             if not any(l.startswith(r + "/") for l in local):
                 stale.append(r)
-        elif r not in local:
+        # deps.json e do INSTALLER (versao resolvida), nunca do pacote:
+        # a poda imprimia "1 obsoleto" em todo install e o _sync_app_deps
+        # reescrevia no passo seguinte. Quem decide o destino dele e o app
+        # ter deps ou nao (_sync_app_deps).
+        elif r not in local and r != "deps.json":
             stale.append(r)
     raizes = _poda_raizes(stale, remote)
     falhas = []

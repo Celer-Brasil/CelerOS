@@ -1898,6 +1898,9 @@ class TestAppsStore(unittest.TestCase):
         # rescan no fim (o launcher re-le a pasta)
         self.assertIn("rescan", dev.execs)
         self.assertIn("instalado: /local/apps/Demo", texto)
+        # deps.json e do installer: nao pode aparecer na poda (o install
+        # imprimia "poda: 1 obsoleto (deps.json)" em TODA instalacao)
+        self.assertEqual([l for l in texto.splitlines() if "poda" in l], [])
 
     def test_pacote_desconhecido_morre_com_catalogo(self):
         from types import SimpleNamespace
@@ -1992,6 +1995,19 @@ class TestInstallAtomico(unittest.TestCase):
         self.assertEqual(code, 0, err)
         ordem = [p for p in dev.files if p.startswith("/local/apps/App/")]
         self.assertEqual(ordem[-1], "/local/apps/App/app.json")
+
+    def test_app_sem_deps_remove_deps_json_antigo(self):
+        # app que deixou de usar deps: o deps.json da versao anterior
+        # apontaria para modulos que podem nao existir mais
+        link, dev = make_link()
+        link.hello()
+        dev.dirs["/local/apps/App"] = []
+        dev.files["/local/apps/App/deps.json"] = b'{"celeros.engine": "1.0.0"}'
+        out, err, code = run_cli(
+            ["apps", "install", str(self._app()), "--pula-lint"], link)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("/local/apps/App/deps.json", dev.files)
+        self.assertIn("deps.json antigo removido", out)
 
     def test_falha_no_meio_nao_grava_app_json(self):
         link, dev = make_link()

@@ -39,7 +39,7 @@ function sortValue(value) {
     const keys = Object.keys(value).sort((a, b) => {
         const ia = KEY_INDEX.has(a) ? KEY_INDEX.get(a) : 1e6;
         const ib = KEY_INDEX.has(b) ? KEY_INDEX.get(b) : 1e6;
-        return ia - ib || a.localeCompare(b);
+        return ia - ib || cmpStr(a, b);
     });
     const out = {};
     for (const k of keys) out[k] = sortValue(value[k]);
@@ -67,6 +67,8 @@ function readJson(file) {
     let text;
     try { text = fs.readFileSync(file, 'utf8'); }
     catch (e) { fail('file.read', 'nao consegui ler ' + file + ': ' + e.message); }
+    // editor externo pode salvar com BOM; JSON.parse nao aceita U+FEFF
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     try { return JSON.parse(text); }
     catch (e) {
         fail('json.invalid', file + ': JSON invalido: ' + e.message,
@@ -74,14 +76,27 @@ function readJson(file) {
     }
 }
 
-function writeJson(file, obj) {
+// gravacao atomica: um leitor concorrente (GUI/HTTP) nunca ve o arquivo
+// truncado no meio do write; o temporario fica na mesma pasta para o rename
+// ser atomico.
+function writeFileAtomic(file, data) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, canonicalJson(obj));
+    const tmp = file + '.tmp-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+    try {
+        fs.writeFileSync(tmp, data);
+        fs.renameSync(tmp, file);
+    } catch (e) {
+        try { fs.rmSync(tmp, { force: true }); } catch (e2) {}
+        throw e;
+    }
+}
+
+function writeJson(file, obj) {
+    writeFileAtomic(file, canonicalJson(obj));
 }
 
 function writeText(file, text) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, text);
+    writeFileAtomic(file, text);
 }
 
 function newGuid() {
@@ -123,6 +138,14 @@ function slug(name, max) {
 
 function normalizeRel(p) {
     return String(p).split(path.sep).join('/');
+}
+
+// comparacao deterministica por code unit: localeCompare depende do locale do
+// host (ICU) e mudaria a ordem de assets/cenas entre maquinas, quebrando o
+// "mesma fonte => mesmos bytes" do build.
+function cmpStr(a, b) {
+    const s = String(a), t = String(b);
+    return s < t ? -1 : (s > t ? 1 : 0);
 }
 
 function relPosix(from, to) {
@@ -187,6 +210,6 @@ function firstKey(obj) {
 
 module.exports = {
     KEY_ORDER, StudioError, fail, sortValue, canonicalJson, readJson, writeJson, writeText,
-    newGuid, newFid, sanitizeFileName, slug, normalizeRel, relPosix, isInside, deepClone,
-    round, parseColor, colorHex, uniqueName, firstKey,
+    writeFileAtomic, newGuid, newFid, sanitizeFileName, slug, normalizeRel, relPosix, isInside,
+    deepClone, round, parseColor, colorHex, uniqueName, firstKey, cmpStr,
 };

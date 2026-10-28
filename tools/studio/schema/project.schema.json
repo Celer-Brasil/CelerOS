@@ -38,7 +38,7 @@
       }
     },
     "startScene": { "type": "string", "description": "GUID da cena inicial (vazio antes da primeira cena)" },
-    "runtime": { "enum": ["studio", "legacy"], "description": "studio = componentes/cenas do Studio; legacy = roda o main.js original via bridge" },
+    "runtime": { "enum": ["studio", "app", "legacy"], "description": "studio = jogo com o runtime de cenas da CelerGame; app = programa/formulario com o runtime Kui (sem deps de engine); legacy = roda o main.js original via bridge" },
     "legacy": {
       "type": "object",
       "description": "Modo legado: o app original e copiado como fonte e roda dentro do Play do Studio.",

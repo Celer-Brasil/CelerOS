@@ -325,6 +325,19 @@ let built = null;
     const r2 = runProject(base, { ms: 300, frames: '0,600', out: out });
     check('deterministico com a mesma seed',
         !!firstFrame && r2.ok && fs.readFileSync(r2.frames[1].file).equals(firstFrame));
+    // paridade studio x harness: o MESMO build rodado pelo caminho do Studio
+    // (runProject) e pelo caminho do harness/emu (runAppFolder direto, o que
+    // `celer.js test`/emu usa) com a mesma seed captura os MESMOS quadros
+    if (r2.ok && firstFrame) {
+        const builtDir = Project.open(base).buildDir();
+        const r3 = runAppFolder(builtDir, {
+            render: true, stopAtMs: 300, frames: [0, 600], framesPng: true, seed: 7,
+        });
+        check('paridade studio x harness: mesmos quadros nos dois caminhos',
+            r3.err === null && r3.frames.length === 2 &&
+            r3.frames[1].png.equals(firstFrame),
+            r3.err ? String(r3.err) : 'frames=' + r3.frames.length);
+    }
 })();
 
 // -------------------------------------------------------------- prefab -----
@@ -565,6 +578,128 @@ let built = null;
         dWrapped && texts <= 24, 'wrapped=' + dWrapped + ' texts=' + texts);
     check('Detona: joystick de arraste anda', dWrapped && gx1 > gx0,
         'gx=' + gx0 + '->' + gx1);
+
+    // Modos novos do Detona 1.2: sobrevivencia (ondas) e duelo pela malha.
+    // O duelo usa o protocolo do 0.10.x portado: lobby (heartbeat), convite,
+    // aceite, arena pelo seed do host, posicao/bomba sincronizadas e melhor
+    // de 3. O harness injeta as mensagens por __harness.detona.netIn.
+    let mStage = 0;
+    const modes = {};
+    runAppFolder(detona.dir, {
+        render: false, stopAtMs: 3400, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            env.System.delay = function (ms) {
+                const s = env.__harness.detona, now = env.System.millis();
+                if (mStage === 0 && s && s.ctx) { mStage = 1; env.__harness.tap(240, 330); }
+                else if (mStage === 1 && s && s.mode === 'survive' && now > 1200) {
+                    mStage = 2;
+                    modes.survive = { onda: s.onda, inimigos: s.enemies.length,
+                                      time0: s.time0, exit: s.exit[0] };
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Detona: sobrevivencia entra em ondas sem relogio/saida',
+        modes.survive && modes.survive.onda === 1 && modes.survive.inimigos > 0 &&
+        modes.survive.time0 === 0 && modes.survive.exit === -1,
+        JSON.stringify(modes.survive));
+
+    let qStage = 0;
+    const duel = {};
+    runAppFolder(detona.dir, {
+        render: false, stopAtMs: 5600, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            const H = env.__harness;
+            env.System.delay = function (ms) {
+                const s = H.detona, now = env.System.millis();
+                if (qStage === 0 && s && s.ctx) { qStage = 1; H.tap(240, 380); }
+                else if (qStage === 1 && s && s.screen === 'duel') {
+                    qStage = 2;
+                    duel.lobby = true;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'dhl' });
+                } else if (qStage === 2 && s && s.screen === 'duel' &&
+                           Object.keys(s.net.vistos).length) {
+                    qStage = 3;
+                    H.tap(240, 166);                       // convida o Celer-A
+                } else if (qStage === 3 && s && s.net.fase === 'convidei') {
+                    qStage = 4;
+                    duel.di = s.net.tx.indexOf('di') >= 0;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'da1' });
+                } else if (qStage === 4 && s && s.mode === 'duel') {
+                    qStage = 5;
+                    duel.host = s.net.host;
+                    duel.round = s.net.round;
+                    duel.level = s.level;
+                    duel.esperado = 1 + (s.net.seed % 6);
+                    const px = Math.round(s.player.x), py = Math.round(s.player.y);
+                    const q = [{ x: px, y: py, touched: 1 }];
+                    for (let i = 1; i <= 14; i++) q.push({ x: px + i * 4, y: py, touched: 1 });
+                    for (let i = 0; i < 6; i++) q.push({ x: px + 56, y: py, touched: 1 });
+                    q.push({ x: 0, y: 0, touched: 0 });
+                    H.pushTouch(q);
+                } else if (qStage === 5 && now > 4600 && s && s.mode === 'duel') {
+                    qStage = 6;
+                    H.tap(240, 200);                       // bomba
+                } else if (qStage === 6 && now > 5100 && s && s.mode === 'duel') {
+                    qStage = 7;
+                    duel.dp = s.net.tx.some((m) => m.indexOf('dp') === 0);
+                    duel.db = s.net.tx.some((m) => m.indexOf('db') === 0);
+                    duel.gx = s.gx;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'dm1' });
+                } else if (qStage === 7 && s && s.net.fase === 'round') {
+                    qStage = 8;
+                    duel.res = s.net.res;
+                    duel.ganhos = s.net.ganhos;
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Detona duelo: lobby lista a malha e o convite sai',
+        duel.lobby === true && duel.di === true, JSON.stringify(duel));
+    check('Detona duelo: aceite vira host e abre o round na fase do seed',
+        duel.host === true && duel.round === 1 && duel.level === duel.esperado,
+        JSON.stringify(duel));
+    check('Detona duelo: posicao e bomba vao para o rival',
+        duel.dp === true && duel.db === true && duel.gx > 1, JSON.stringify(duel));
+    check('Detona duelo: morte do rival fecha o round (melhor de 3)',
+        duel.res === 'venci' && duel.ganhos === 1, JSON.stringify(duel));
+
+    // Lenda 2.2: 3 slots de save com estatisticas (o 0.x tinha um save so).
+    const lendaSave = path.join(ROOT, 'studio_games', 'Lenda de Celer');
+    const lendaB = buildProject(lendaSave, {});
+    let lStage = 0;
+    const slots = {};
+    runAppFolder(lendaB.dir, {
+        render: false, stopAtMs: 3600, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            const H = env.__harness;
+            env.System.delay = function (ms) {
+                const s = H.lenda, now = env.System.millis();
+                if (lStage === 0 && s && s.ctx) { lStage = 1; H.tap(240, 341); }
+                else if (lStage === 1 && s && s.pick) { lStage = 2; slots.pick = true; H.tap(240, 336); }
+                else if (lStage === 2 && s && s.screen !== 'title') {
+                    lStage = 3;
+                    slots.slot = s.E.save.num('lenda.slot', 0);
+                    slots.saved = !!s.E.save.obj('lenda.2', null);
+                } else if (lStage === 3 && now > 2500 && s && s.st) {
+                    lStage = 4;
+                    slots.ms = s.st.ms;
+                    slots.falls = s.st.falls;
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Lenda: seletor de 3 saves grava no slot escolhido',
+        slots.pick === true && slots.slot === 2 && slots.saved === true,
+        JSON.stringify(slots));
+    check('Lenda: jornada conta tempo e quedas', slots.ms > 0 && slots.falls === 0,
+        JSON.stringify([slots.ms, slots.falls]));
 })();
 
 // --------------------------------------------------------- CLI x HTTP ------
@@ -645,6 +780,286 @@ let built = null;
             JSON.stringify([f0.rgba[p0], f0.rgba[p0 + 1], f1.rgba[p1], f1.rgba[p1 + 1]]));
         check('legado: sprite carregado pelos bases do pacote', f0.rgba[s0 + 2] > 200 &&
             f0.rgba[s0] < 40);
+    }
+
+    // ---------------------------------------------------- modo programa ----
+    {
+        const app = tmpDir('app');
+        const { describeData } = require('../../tools/studio/studio.js');
+        Project.init(app, { app: true, name: 'App Teste', pkg: 'br.celer.appteste' });
+        let p = Project.open(app);
+        check('init --app: runtime app, tipo App, zero deps/psram',
+            p.data.runtime === 'app' && p.data.type === 'App' &&
+            Object.keys(p.data.deps || {}).length === 0 &&
+            (p.data.requires || []).length === 0 && p.data.canvas.native === false,
+            JSON.stringify([p.data.runtime, p.data.type, p.data.deps, p.data.requires]));
+        check('init --app: valida limpo', validateProject(p, {}).errors.length === 0,
+            JSON.stringify(validateProject(p, {}).errors));
+        const desc = describeData(p);
+        check('describe: componentes de programa no catalogo',
+            desc.components['ui.button'] && desc.components['ui.button'].runtime === 'app' &&
+            desc.runtime === 'app' && desc.limits.depsRequired === 0);
+
+        const SCRIPT = [
+            'exports.start = function (ctx) { ctx.set("msg", "inicio"); System.print("START " + ctx.get("on")); };',
+            'exports.destroy = function (ctx) { System.print("DESTROY"); };',
+            'exports.event = function (name, value, ctx) {',
+            '    System.print("EVT " + name + " " + String(value));',
+            '};',
+        ].join('\n');
+        const scriptOp = applyOps(app, [
+            { op: 'scene.create', name: 'B' },
+            { op: 'script.set', name: 'tela', content: SCRIPT },
+        ]);
+        const telaGuid = scriptOp.results[1].asset.guid;
+        const wid = (name, x, y, z, type, fields) => ({
+            op: 'entity.create', scene: 'A', name: name, x: x, y: y, z: z,
+            components: [{ id: 'c_' + F.newGuid().slice(0, 8), type: type, fields: fields }],
+        });
+        applyOps(app, [
+            { op: 'scene.rename', scene: 'Principal', name: 'A' },
+            { op: 'entity.delete', scene: 'A', entity: 'Titulo' },
+            { op: 'entity.delete', scene: 'A', entity: 'Acao' },
+            { op: 'scene.set', scene: 'A', settings: {
+                scripts: [telaGuid], persist: 't',
+                data: { msg: '', on: false, vol: 10, lista: -1 } } },
+            wid('Texto', 10, 48, 1, 'ui.text', { bind: 'msg' }),
+            wid('Acao', 10, 80, 2, 'ui.button', { label: 'Ir', w: 100, h: 30, event: 'clicar', id: 'ir' }),
+            wid('IrB', 120, 80, 3, 'ui.button', { label: 'B', w: 100, h: 30, go: 'B', id: 'irb' }),
+            wid('Chave', 10, 120, 4, 'ui.toggle', { key: 'on', event: 'on', id: 'on' }),
+            wid('Volume', 10, 160, 5, 'ui.slider', { key: 'vol', w: 150, event: 'vol', id: 'vol' }),
+            wid('Lista', 10, 200, 6, 'ui.list', {
+                id: 'lista', items: ['um', 'dois', 'tres'], key: 'lista',
+                w: 200, h: 100, rowH: 32, event: 'lista' }),
+        ]);
+        const appBuild = buildProject(app, {});
+        const builtApp = JSON.parse(fs.readFileSync(path.join(appBuild.dir, 'app.json'), 'utf8'));
+        const mainSrc = fs.readFileSync(path.join(appBuild.dir, 'main.js'), 'utf8');
+        check('build app: app.json sem deps/psram, type App',
+            builtApp.type === 'App' && !builtApp.deps &&
+            (builtApp.requires || []).length === 0, JSON.stringify(builtApp));
+        check('build app: main.js sem engine e data proprio',
+            mainSrc.indexOf('celeros.game') < 0 && mainSrc.indexOf('studioAppBoot') >= 0 &&
+            fs.existsSync(path.join(appBuild.dir, 'app.data.js')) &&
+            !fs.existsSync(path.join(appBuild.dir, 'game.data.js')));
+
+        let stage = 0;
+        const run1 = runAppFolder(appBuild.dir, {
+            render: true, stopAtMs: 1800, microsBias: 1, seed: 7, frames: [0, 1800],
+            events: (env) => {
+                const orig = env.System.delay;
+                env.System.delay = function (ms) {
+                    const now = env.System.millis();
+                    if (stage === 0 && now > 200) { stage = 1; env.__harness.tap(60, 95); }
+                    else if (stage === 1 && now > 450) { stage = 2; env.__harness.tap(32, 132); }
+                    else if (stage === 2 && now > 700) { stage = 3; env.__harness.tap(110, 174); }
+                    else if (stage === 3 && now > 950) { stage = 4; env.__harness.tap(100, 248); }
+                    else if (stage === 4 && now > 1200) { stage = 5; env.__harness.tap(170, 95); }
+                    else if (stage === 5 && now > 1500) { stage = 6; env.__harness.tap(20, 20); }
+                    return orig.call(env.System, ms);
+                };
+            },
+        });
+        const log = (run1.log || []).join('\n');
+        check('app runtime: script de tela start', /START false/.test(log), log);
+        check('app runtime: evento do botao', /EVT clicar/.test(log), log);
+        check('app runtime: toggle grava estado e emite valor', /EVT on true/.test(log), log);
+        check('app runtime: slider devolve valor', /EVT vol ([1-9]\d*)/.test(log), log);
+        check('app runtime: lista devolve indice', /EVT lista 1/.test(log), log);
+        check('app runtime: go troca de tela (destroy da anterior)', /DESTROY/.test(log), log);
+        check('app runtime: header voltar reentra na tela',
+            (log.match(/START/g) || []).length >= 2, log);
+        check('app runtime: estado persiste no Storage',
+            /"on":true/.test(String(run1.env.Storage.get('studio.a.t', '') || '')),
+            String(run1.env.Storage.get('studio.a.t', '')));
+        const shot = '/tmp/celer-app-shot.png';
+        fs.writeFileSync(shot, run1.frames[run1.frames.length - 1].png);
+        const png = decodePng(fs.readFileSync(shot));
+        check('app runtime: frame 240x320', png.w === 240 && png.h === 320, png.w + 'x' + png.h);
+
+        // ---- validacao cruzada de modos ----
+        const badScene = path.join(app, 'Assets', 'Scenes', 'Principal.scene.json');
+        const original = JSON.parse(fs.readFileSync(badScene, 'utf8'));
+        const withSprite = F.deepClone(original);
+        withSprite.entities[0].components.push({ id: 'c_x1', type: 'sprite', fields: { sprite: '' } });
+        fs.writeFileSync(badScene, JSON.stringify(withSprite, null, 2) + '\n');
+        let errs = validateProject(Project.open(app), {}).errors;
+        check('validacao: componente de jogo em projeto app', errs.some((e) => e.code === 'component.runtime'),
+            JSON.stringify(errs.map((e) => e.code)));
+        const withTile = F.deepClone(original);
+        withTile.tilemaps = [{ id: 'tm_1', tileset: 'x', cols: 1, rows: 1, cell: 16, data: [0] }];
+        fs.writeFileSync(badScene, JSON.stringify(withTile, null, 2) + '\n');
+        errs = validateProject(Project.open(app), {}).errors;
+        check('validacao: tilemap em projeto app', errs.some((e) => e.code === 'scene.tilemap'),
+            JSON.stringify(errs.map((e) => e.code)));
+        const withAi = F.deepClone(original);
+        withAi.entities.push({
+            fid: 'e_ia', name: 'IA', active: true, z: 9,
+            transform: { x: 0, y: 0 },
+            components: [{ id: 'c_ia', type: 'ai.chat', fields: { trigger: 'pedir' } }],
+        });
+        fs.writeFileSync(badScene, JSON.stringify(withAi, null, 2) + '\n');
+        errs = validateProject(Project.open(app), {}).errors;
+        check('validacao: ai.chat sem permissao net', errs.some((e) => e.code === 'perm.missing'),
+            JSON.stringify(errs.map((e) => e.code)));
+        fs.writeFileSync(badScene, JSON.stringify(original, null, 2) + '\n');
+
+        // ---- jogos continuam recusando componente de programa ----
+        const game = tmpDir('game');
+        Project.init(game, { name: 'Jogo Teste', pkg: 'br.celer.jogoteste' });
+        const gs = path.join(game, 'Assets', 'Scenes', 'Principal.scene.json');
+        const gj = JSON.parse(fs.readFileSync(gs, 'utf8'));
+        gj.entities[0].components.push({ id: 'c_ui', type: 'ui.button', fields: { label: 'x' } });
+        fs.writeFileSync(gs, JSON.stringify(gj, null, 2) + '\n');
+        errs = validateProject(Project.open(game), {}).errors;
+        check('validacao: componente de programa em jogo', errs.some((e) => e.code === 'component.runtime'),
+            JSON.stringify(errs.map((e) => e.code)));
+
+        // ---- exemplos que ficam no repo ----
+        const painelDir = path.join(ROOT, 'studio_apps', 'Painel');
+        const painel = buildProject(painelDir, {});
+        const painelApp = JSON.parse(fs.readFileSync(path.join(painel.dir, 'app.json'), 'utf8'));
+        check('exemplo Painel: build sem deps', painelApp.type === 'App' && !painelApp.deps,
+            JSON.stringify(painelApp.deps));
+        let navStage = 0;
+        const pr = runAppFolder(painel.dir, {
+            render: true, stopAtMs: 900, microsBias: 1, frames: [0, 900],
+            events: (env) => {
+                const orig = env.System.delay;
+                env.System.delay = function (ms) {
+                    const now = env.System.millis();
+                    if (navStage === 0 && now > 300) { navStage = 1; env.__harness.tap(60, 292); }
+                    return orig.call(env.System, ms);
+                };
+            },
+        });
+        const pf = pr.frames.map((f) => decodePng(f.png));
+        const diff = pf[0].rgba.some((v, i) => v !== pf[1].rgba[i]);
+        check('exemplo Painel: build+run e navega para Sobre', !pr.err && pf.length === 2 && diff,
+            String(pr.err || 'sem diferenca'));
+
+        const assDir = path.join(ROOT, 'studio_apps', 'Assistente');
+        const ass = buildProject(assDir, {});
+        const WAV = 'UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+        let aStage = 0;
+        const ar = runAppFolder(ass.dir, {
+            render: false, stopAtMs: 1600, microsBias: 1,
+            events: (env) => {
+                env.__harness.setAiResponse({ ok: true, status: 200, content: 'Ola!', raw: '' });
+                env.__harness.setAiSpeakResult({ ok: true, status: 200, played: true, bytes: 0 });
+                env.__harness.setMicB64(WAV);
+                env.__harness.pushPrompt(['e o ceu?']);
+                const orig = env.System.delay;
+                env.System.delay = function (ms) {
+                    const now = env.System.millis();
+                    if (aStage === 0 && now > 200) { aStage = 1; env.__harness.tap(60, 226); }
+                    else if (aStage === 1 && now > 500) { aStage = 2; env.__harness.tap(62, 289); }
+                    else if (aStage === 2 && now > 900) { aStage = 3; env.__harness.tap(176, 289); }
+                    else if (aStage === 3 && now > 1200) { aStage = 4; env.__harness.tap(62, 289); }
+                    return orig.call(env.System, ms);
+                };
+            },
+        });
+        const chats = (ar.env.__harness.aiChats || []).map((s) => JSON.parse(s));
+        const hasAudio = chats.some((c) => JSON.stringify(c.messages).indexOf('input_audio') >= 0);
+        check('exemplo Assistente: ai.chat com input_audio (multimodal)', !ar.err && chats.length >= 1 && hasAudio,
+            ar.err || ('chats=' + chats.length + ' audio=' + hasAudio));
+        check('exemplo Assistente: ai.speak disparado', (ar.env.__harness.aiSpeaks || []).length >= 1,
+            JSON.stringify(ar.env.__harness.aiSpeaks || []));
+
+        for (const d of [app, game]) fs.rmSync(d, { recursive: true, force: true });
+    }
+
+    // ---------------------------------------------------------- copiloto ----
+    {
+        const { spawnSync } = require('child_process');
+        const A = require('../../tools/studio/lib/ai');
+        console.log('Studio copiloto:');
+        check('ia: parser aceita objeto puro', A.parsePlan('{"say":"a","ops":[{"op":"x"}]}').ops.length === 1);
+        check('ia: parser aceita cerca ```json',
+            A.parsePlan('```json\n{"say":"b","ops":[{"op":"x"}]}\n```').say === 'b');
+        check('ia: parser aceita texto em volta',
+            A.parsePlan('claro! {"say":"c","ops":[]} ok').say === 'c');
+        let gcode = null;
+        try { A.guard([{ op: 'entity.delete', scene: 'x', entity: 'y' }], {}); } catch (e) { gcode = e.code; }
+        check('ia: op destrutiva bloqueada', gcode === 'ai.guard');
+        check('ia: destrutiva libera com allowDelete',
+            A.guard([{ op: 'entity.delete' }], { allowDelete: true }).length === 1);
+        gcode = null;
+        try { A.guard([{ op: 'asset.import', src: '/etc/passwd' }], {}); } catch (e) { gcode = e.code; }
+        check('ia: asset.import bloqueado no copiloto', gcode === 'ai.guard');
+
+        const aiDir = tmpDir('ai');
+        Project.init(aiDir, { app: true, name: 'IA T', pkg: 'br.celer.iat' });
+        const cfg = { provider: 'openrouter', model: 'm', key: 'k', url: 'http://127.0.0.1:1/v1' };
+        let calls = 0;
+        const fakeAsk = async () => {
+            calls++;
+            return { content: calls === 1
+                ? '{"say":"tentando","ops":[{"op":"nao.existe"}]}'
+                : '{"say":"criei","ops":[{"op":"scene.create","name":"Ajustes"}]}' };
+        };
+        const planned = await A.plan(aiDir, 'crie uma tela', { ask: fakeAsk, dryRun: true, config: cfg });
+        check('ia: refaz o lote apos erro de validacao', planned.steps === 2, 'steps=' + planned.steps);
+        check('ia: previa dry-run nao escreve',
+            !fs.existsSync(path.join(aiDir, 'Assets', 'Scenes', 'Ajustes.scene.json')));
+        const applied = await A.plan(aiDir, 'crie uma tela', { ask: fakeAsk, config: cfg });
+        check('ia: aplica quando nao e dry-run',
+            !!applied.result && fs.existsSync(path.join(aiDir, 'Assets', 'Scenes', 'Ajustes.scene.json')),
+            JSON.stringify(applied.result && applied.result.changed));
+
+        // HTTP: provedor falso local -> /api/command {cmd:"ai"}
+        const provider = http.createServer((req, res) => {
+            req.on('data', () => {});
+            req.on('end', () => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ choices: [{ message: { content:
+                    '{"say":"ok","ops":[{"op":"scene.create","name":"PelaIA"}]}' } }],
+                    usage: { total_tokens: 10 } }));
+            });
+        });
+        await new Promise((resolve) => provider.listen(0, '127.0.0.1', resolve));
+        const pport = provider.address().port;
+        process.env.CELER_STUDIO_AI_URL = 'http://127.0.0.1:' + pport + '/v1/chat/completions';
+        process.env.CELER_STUDIO_AI_KEY = 'teste';
+        const aiSrv = startStudio({ dir: aiDir, port: 0, open: false });
+        await new Promise((resolve) => {
+            if (aiSrv.server.listening) return resolve();
+            aiSrv.server.once('listening', resolve);
+        });
+        const aport = aiSrv.server.address().port;
+        const aiRes = await httpJson(aport, 'POST', '/api/command',
+            { cmd: 'ai', prompt: 'crie uma tela pela IA' });
+        check('ia HTTP: devolve plano em previa',
+            aiRes.ok === true && aiRes.ops.length === 1 && aiRes.dryRun === true,
+            JSON.stringify(aiRes.error || {}));
+        check('ia HTTP: previa nao escreve',
+            !fs.existsSync(path.join(aiDir, 'Assets', 'Scenes', 'PelaIA.scene.json')));
+        const aiApply = await httpJson(aport, 'POST', '/api/command',
+            { cmd: 'ai', prompt: 'crie', apply: true });
+        check('ia HTTP: apply escreve',
+            aiApply.ok === true && fs.existsSync(path.join(aiDir, 'Assets', 'Scenes', 'PelaIA.scene.json')));
+        // sem chave a resposta e ok:false com code estavel (400, nao 500)
+        delete process.env.CELER_STUDIO_AI_URL;
+        delete process.env.CELER_STUDIO_AI_KEY;
+        const aiNoKey = await httpJson(aport, 'POST', '/api/command', { cmd: 'ai', prompt: 'x' });
+        check('ia HTTP: sem chave -> erro ai.key',
+            aiNoKey.ok === false && aiNoKey.error && aiNoKey.error.code === 'ai.key',
+            JSON.stringify(aiNoKey.error || {}));
+        await new Promise((resolve) => aiSrv.close(resolve));
+        await new Promise((resolve) => provider.close(resolve));
+
+        // CLI: sem chave o erro e estavel (nao faz rede)
+        const noKey = Object.assign({}, process.env);
+        for (const k of ['CELER_STUDIO_AI_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY',
+                         'CELER_STUDIO_AI_URL']) delete noKey[k];
+        const cli = spawnSync(process.execPath, [path.join(ROOT, 'tools/sdk/celer.js'), 'studio', aiDir,
+            'ai', 'x', '--json'], { env: noKey, encoding: 'utf8' });
+        check('ia CLI: sem chave -> ai.key com exit 1',
+            cli.status === 1 && /ai\.key/.test(cli.stdout + cli.stderr),
+            (cli.stdout + cli.stderr).slice(0, 160));
+
+        fs.rmSync(aiDir, { recursive: true, force: true });
     }
 
     // limpeza

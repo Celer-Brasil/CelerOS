@@ -1,10 +1,17 @@
-# Celer Studio — editor de jogos para a CelerGame
+# Celer Studio — editor de jogos e programas para o CelerOS
 
-O Celer Studio é um editor no estilo Unity para a CelerGame, a engine ES5 que
-viaja como dependências `celeros.game.*`. Ele é **file-first**: projeto, cenas,
-prefabs e metadados de assets são JSON no disco, e toda ação é um comando JSON
-num único barramento usado pela GUI, pelo CLI e pela API HTTP. Uma IA consegue
-fazer um jogo inteiro sem abrir o navegador.
+O Celer Studio é um editor no estilo Unity para apps do CelerOS. Dois runtimes
+compartilham o mesmo formato de arquivo, barramento de ops e GUI:
+
+- **jogo** (`runtime: "studio"`, o padrão) — cenas, tilemaps e entidades sobre a
+  CelerGame, a engine ES5 que viaja como dependências `celeros.game.*`;
+- **programa** (`runtime: "app"`) — cada cena é uma TELA montada com os widgets
+  do toolkit do sistema (`UI.*`), sem dependência de engine nenhuma.
+
+Ele é **file-first**: projeto, cenas, prefabs e metadados de assets são JSON no
+disco, e toda ação é um comando JSON num único barramento usado pela GUI, pelo
+CLI e pela API HTTP. Uma IA — ou o copiloto embutido — consegue fazer um app
+inteiro sem abrir o navegador.
 
 - Local: `tools/studio/` (comando do SDK `node tools/sdk/celer.js studio ...`)
 - GUI: app web local servido por Node (sem build, sem dependências npm)
@@ -15,6 +22,7 @@ fazer um jogo inteiro sem abrir o navegador.
 ```bash
 # 1. cria um projeto (com uma cena inicial)
 node tools/sdk/celer.js studio init ~/Jogo --name "Meu Jogo"
+node tools/sdk/celer.js studio init ~/Painel --app --name "Painel"   # programa
 
 # 2. abre o editor (hierarquia, inspetor, viewport, play)
 node tools/sdk/celer.js studio ~/Jogo serve --open
@@ -24,6 +32,9 @@ node tools/sdk/celer.js studio ~/Jogo describe --json
 node tools/sdk/celer.js studio ~/Jogo validate
 node tools/sdk/celer.js studio ~/Jogo build
 node tools/sdk/celer.js studio ~/Jogo run --ms 1200 --out tela.png
+
+# 4. ou deixa o copiloto escrever as ops (precisa de chave de API no ambiente)
+node tools/sdk/celer.js studio ~/Jogo ai "adicione um botao Sobre que abre a cena Sobre"
 ```
 
 ## Estrutura do projeto
@@ -213,17 +224,20 @@ Aninhamento é achatado recursivamente no build (limite 4 níveis).
 
 ## Remontagens nativas (`studio_games/`)
 
-Os quatro jogos maiores agora são **projetos nativos do Studio**: as telas são
-cenas, as fases/salas são tilemaps e as peças/spawns são entidades. Os
-controladores ficam em `Assets/Scripts/*.js` e são editados como qualquer
-script do projeto. Os apps originais em `hub_apps/` não foram alterados.
+Os quatro jogos maiores são **projetos nativos do Studio e a fonte única**: as
+telas são cenas, as fases/salas são tilemaps e as peças/spawns são entidades.
+Os controladores ficam em `Assets/Scripts/*.js`. O hub publica o **build**
+destes projetos, então as antigas cópias planas em `hub_apps/` foram removidas
+(2026-10-27) — nunca edite um jogo em dois lugares.
 
-| Projeto | Original | Versão nativa | Cenas | Extras | JS | Assets |
-|---------|----------|---------------|-------|--------|----|--------|
-| `studio_games/Detona` | `hub_apps/Detona` | 1.0.5 | 9 | 9 | 63.4 KB | 133.1 KB |
-| `studio_games/Arrasa` | `hub_apps/Arrasa` | 2.0.2 | 13 | 14 | 91.8 KB | 90.5 KB |
-| `studio_games/Lenda de Celer` | `hub_apps/Lenda de Celer` | 2.0.7 | 23 | 9 | 118.6 KB | 204.4 KB |
-| `studio_games/Supernova` | `hub_apps/Supernova` | 3.0.2 | 5 | 8 | 38.5 KB | 120.2 KB |
+| Projeto | Versão | Cenas | Extras | JS | Assets |
+|---------|--------|-------|--------|----|--------|
+| `studio_games/Detona` | 1.2.0 | 10 | 9 | 68.3 KB | 131.6 KB |
+| `studio_games/Arrasa` | 2.1.0 | 13 | 14 | 81.5 KB | 66.8 KB |
+| `studio_games/Lenda de Celer` | 2.2.0 | 23 | 12 | 115.3 KB | 245.7 KB |
+| `studio_games/Supernova` | 3.1.0 | 5 | 8 | 32.8 KB | 192.7 KB |
+
+(Tamanhos medidos em 2026-10-27 com o pipeline minificado — `studio build`.)
 
 Abra, edite e jogue como qualquer projeto:
 
@@ -347,6 +361,151 @@ exports.destroy = function (ctx) { /* opcional */ };
 via `E.spr.box`, em coordenadas de mundo. `ctx.E` é o objeto da engine, então
 os scripts podem usar `E.spr.animOf`, `E.prof`, `E.anchor` etc. O script passa
 pelo `app_lint` (apenas ES5) durante o build.
+
+### Props tipados de script
+
+`exports.props` declara os campos do próprio script. O Studio extrai **só** o
+literal desse objeto (nunca executa o script) e grava o schema normalizado no
+`.meta` do asset (`settings.props`), então o inspetor mostra campos tipados em
+vez de um JSON cru e o build mescla os defaults:
+
+```js
+exports.props = {
+    velocidade: 60,                                     // number (atalho)
+    modo: { type: 'enum', values: ['normal', 'duro'], default: 'normal', label: 'Modo' },
+    cor: { type: 'color', default: '#38bcf8' },
+    raio: { type: 'number', default: 8, min: 1, max: 32, hint: 'em pixels' }
+};
+```
+
+Tipos: `number`, `int`, `bool`, `string`, `color`, `enum`, `json`. O valor do
+componente vence o default declarado; um campo que não existe em
+`exports.props` gera aviso `script.field` na validação. Scripts de TELA
+(`settings.scripts`) também recebem os props em `this.fields`.
+
+## Programas (`runtime: "app"`)
+
+O Studio não é só editor de jogos. Com `runtime: "app"` cada cena vira uma
+**tela** de um programa CelerOS comum, desenhada com o toolkit do sistema
+(`UI.*` — o mesmo que Ajustes/Loja usam):
+
+- **Sem dependência de engine**: o pacote não tem deps `celeros.game.*` nem
+  `requires: ["psram"]`, então um programa também cabe na CYD (teto de 48 KB de
+  JS).
+- `app.data.js` no lugar de `game.data.js`; o `main.js` embute o runtime de
+  telas (sem `E.init`, sem `E.run`).
+- `transform.x/y` é o **canto superior esquerdo** do widget; `z` é a ordem de
+  desenho.
+- O cabeçalho (`UI.header`) ocupa `y = 0..40`: comece o conteúdo em `y >= 44`.
+- `canvas.native` é recusado (o Kui é estritamente o espaço virtual 240x320).
+
+```bash
+node tools/sdk/celer.js studio init ~/Painel --app --name "Painel"
+node tools/sdk/celer.js studio ~/Painel run --frames 0,900
+```
+
+### Estado da tela
+
+`settings.data` é o estado inicial da tela. Widgets com `key`/`bind` leem e
+escrevem nesse objeto plano; scripts mudam por `ctx.set`. Com
+`settings.persist` (uma chave de Storage) o estado sobrevive a reboots — a
+gravação é debounced (1 s) porque a NVS não pode levar escrita por quadro.
+
+### Widgets
+
+| Tipo | Campos |
+|------|--------|
+| `ui.text` | `text`, `bind` (chave do estado), `role` (`caption/body/title/display`), `color`, `align`, `w`, `lines`, `bg`, `id` |
+| `ui.button` | `label`, `w`, `h`, `style` (`primary/ghost/danger`), `disabled`, `disabledBind`, `event`, `go` (tela), `id` |
+| `ui.toggle` | `key`, `event`, `id` (44x24) |
+| `ui.slider` | `key`, `w`, `min`, `max`, `step`, `event`, `id` |
+| `ui.progress` | `value` ou `key` (0..100), `w`, `h` |
+| `ui.list` | `items` (JSON) ou `itemsBind`, `key` (índice selecionado), `w`, `h`, `rowH`, `event`, `id` |
+| `ui.tabs` | `labels` (JSON), `key`, `w`, `h`, `event` |
+| `ui.card` | `w`, `h`, `radius`, `color`, `stroke` |
+| `ui.image` | `asset` (PNG de quadro único), `w`, `h`, `key` — desenha com `System.drawPNG` (tamanho natural) |
+| `ui.badge` | `text`/`bind`, `color`, `textColor` |
+| `ui.spinner` | `r`, `color` |
+| `ui.field` | `key`, `label`, `mask`, `hint` — abre `System.prompt` (bloqueante) e grava no estado |
+| `ai.chat` | `provider`, `model`, `system`, `prompt`/`promptKey`, `trigger`, `outKey`, `busyKey`, `errorKey`, `history`/`histKey`, `attach` (`mic` manda a última gravação), `maxTokens` |
+| `ai.speak` | `text`/`textKey`, `voice`, `trigger`, `busyKey` |
+| `ai.vision` | `prompt`, `imageKey` (caminho), `trigger`, `outKey`, `errorKey` |
+| `mic.record` | `key` (WAV em base64), `mode` (`hold`/`toggle`), `label`, `w`, `h`, `maxMs`, `event` |
+
+O catálogo de componentes (`studio describe`) é a fonte da verdade dos defaults.
+
+### Eventos e scripts de tela
+
+`settings.scripts` é uma lista de GUIDs de script. O runtime de tela chama
+`create/start/update(dt)/draw/event(nome, valor)/destroy` com um **ctx de tela**
+(sem entidade):
+
+```js
+{ scene, app, st, get(k), set(k, v), go(tela, arg), back(), exit(),
+  asset(slot), store{get,set,remove}, toast(msg), full, arg }
+```
+
+Widgets interativos despacham `event(nome, valor)` para os scripts de tela (e
+para os scripts da entidade que disparou). `ui.button.go` navega sem script.
+Widget sem `event` ainda atualiza o estado.
+
+### Navegação
+
+`ctx.go('Sobre')` empilha a tela atual; `ctx.back()` desempilha; voltar na raiz
+**encerra o app** desenrolando o laço (não precisa de permissão `system`). O
+cabeçalho desenha a seta de voltar sempre que a pilha não está vazia.
+
+### Cards abrem um intervalo de fundo
+
+`ui.card` não é um retângulo solto: ele **empilha a cor de fundo** usada pelos
+widgets desenhados depois, então o redesenho parcial limpa o próprio retângulo
+com a cor do card. O card fecha no próximo `ui.card` (ou no fim da tela).
+Coloque os cards antes do conteúdo (z menor).
+
+### Componentes de IA são dataflow
+
+Sem callback em JSON: o script seta uma chave do estado (`st.pedir = true`) e o
+componente dispara; a resposta cai em `outKey` e `event("ai:done")` avisa o
+script. `ai.*` exige permissão `net`, `ai.vision` também `fs`, e `mic.record`
+exige `mic` — a validação cobra isso. Sem o objeto no aparelho (ou sem a
+permissão) o widget se esconde e o estado recebe o erro.
+
+Para ver: `studio_apps/Painel` (painel do dispositivo) e
+`studio_apps/Assistente` (chat por texto e voz).
+
+## Copiloto de IA
+
+O Studio traz um copiloto que transforma um pedido em um lote de ops. Ele
+nunca escreve arquivo direto: o lote é validado por `applyOps` em **dry-run** e
+só depois aplicado pelo mesmo barramento (então o undo funciona).
+
+```bash
+export OPENROUTER_API_KEY=...          # ou CELER_STUDIO_AI_KEY / DEEPSEEK_API_KEY
+node tools/sdk/celer.js studio ~/Painel ai "adicione um cartao de temperatura na tela Painel"
+node tools/sdk/celer.js studio ~/Painel ai "crie uma tela de ajustes" --dry-run
+node tools/sdk/celer.js studio ~/Painel ai fix          # corrige validacao/build
+node tools/sdk/celer.js studio ~/Painel ai explain "o que faz a tela Sobre"
+node tools/sdk/celer.js studio ~/Painel ai "transforme este esboco em tela" --image esboco.png
+```
+
+Ambiente: `CELER_STUDIO_AI_PROVIDER` (`openrouter` padrão, `deepseek`,
+`openai`), `CELER_STUDIO_AI_MODEL`, `CELER_STUDIO_AI_KEY` (fallback
+`OPENROUTER_API_KEY`/`DEEPSEEK_API_KEY`/`OPENAI_API_KEY`) e
+`CELER_STUDIO_AI_URL` para qualquer endpoint compatível com OpenAI. Nada fica
+no repositório.
+
+Se o lote não validar, o erro volta para o modelo e ele tenta de novo
+(`--max-steps`, padrão 2). Guardrails: ops destrutivas
+(`asset/scene/entity.delete`, `tilemap.remove`) e `asset.import` são bloqueadas
+(`--allow-delete`/`--allow-import` para liberar), no máximo 40 ops por lote, e
+a `rev` atual é enviada para detectar edição concorrente.
+
+A GUI tem a aba **IA**: escreva o pedido, a resposta mostra as ops propostas e
+a contagem de arquivos da prévia; **Aplicar** manda exatamente aquele lote,
+**Descartar** joga fora. Também aceita imagem anexada (esboço/print) e 4 s de
+voz (WAV, enviado como `input_audio`). Equivalente HTTP:
+`POST /api/command {"cmd":"ai","prompt":"...","images":[],"audio":[],"apply":false}`
+— dry-run por padrão; para aplicar, mande o mesmo lote em `/api/command`.
 
 ## Assets e limites
 
@@ -541,7 +700,8 @@ dirigir uma sessão viva do editor enquanto um humano acompanha o viewport.
 ## Deploy / app.zip
 
 O `deploy` é a "compilação" do Studio: valida e builda, passa todo `.js` pelo
-mesmo `jsstrip` do hub, mantém só os assets escolhidos pelo build, compacta o
+mesmo `jsstrip` + `jsmin` do hub (sem comentários/indentação, nomes locais
+encurtados, quebras mantidas), mantém só os assets escolhidos pelo build, compacta o
 `app.json` e grava um ZIP determinístico com `app.json` na raiz (o layout
 aceito pelo `celerctl apps installzip`). O ZIP também leva o `deps.json` com
 o fecho resolvido de `celeros.game.*`: o `require` do device só cai para

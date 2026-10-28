@@ -11,8 +11,10 @@ const { Project } = require('./project');
 const { validateProject, isShipped } = require('./validate');
 const { resolveLocal } = require('./deps');
 const { strip } = require('../../sdk/lib/jsstrip.js');
+const jsmin = require('../../sdk/lib/jsmin.js');
 
 const RUNTIME = fs.readFileSync(path.join(__dirname, '..', 'templates', 'runtime.js'), 'utf8');
+const APP_RUNTIME = fs.readFileSync(path.join(__dirname, '..', 'templates', 'app_runtime.js'), 'utf8');
 const LEGACY = fs.readFileSync(path.join(__dirname, '..', 'templates', 'legacy.js'), 'utf8');
 const HEADER = '// GERADO POR CELER STUDIO ' + require('../version').STUDIO_VERSION +
     ' - NAO EDITE. Fonte: celergame.project.json + Assets/**.\n';
@@ -72,28 +74,46 @@ function collectUsed(project) {
 // os assets (a resolucao de sprite precisa disso); a copia e filtrada depois
 // pelas cenas que realmente usam (o teto de 16 extras e apertado).
 function planAssets(project) {
-    const usedNames = new Set(['main.js', 'app.json', 'icon.png', 'game.data.js']);
-    for (let i = 0; i < 16; i++) usedNames.add('game.data.' + i + '.js');
+    const app = project.data.runtime === 'app';
+    const dataFile = app ? 'app.data.js' : 'game.data.js';
+    const usedNames = new Set(['main.js', 'app.json', 'icon.png', dataFile]);
+    for (let i = 0; i < 16; i++) usedNames.add(dataFile.replace(/\.js$/, '.' + i + '.js'));
     const byGuid = new Map();
     const copies = [];
     const scripts = [];
-    const assets = project.assets.slice().sort((a, b) => a.relPath.localeCompare(b.relPath));
+    const assets = project.assets.slice().sort((a, b) => F.cmpStr(a.relPath, b.relPath));
+    // nome de SLOT no runtime (A[an].n / E.spr): dois assets com o mesmo
+    // basename (hero.png + hero.wav, ou .png em pastas distintas colidindo
+    // antes do rename de arquivo) se sobrescreviam no byName do runtime
+    const usedSlots = new Set();
 
     for (const a of assets) {
         if (!isShipped(a.kind)) continue;
-        const outName = F.uniqueName(F.sanitizeFileName(a.fileName), usedNames);
+        let srcName = F.sanitizeFileName(a.fileName);
+        // o engine appenda ".png" em load/sheet: no device (LittleFS
+        // case-sensitive) um arquivo `Foo.PNG` nunca seria encontrado
+        if (/\.png$/i.test(srcName)) srcName = srcName.replace(/\.png$/i, '.png');
+        const outName = F.uniqueName(srcName, usedNames);
+        const slot = F.uniqueName(outName.replace(/\.[^.]+$/, ''), usedSlots);
         if (a.kind === 'script') {
             const base = 's.' + F.slug(a.name) + '.js';
             const modFile = F.uniqueName(base, usedNames);
             scripts.push({ asset: a, file: modFile, module: modFile.slice(0, -3) });
             continue;
         }
-        const n = outName.replace(/\.[^.]+$/, '');
+        const n = slot;
         // o engine anexa ".png" em load/sheet: o asset guarda o nome SEM ext
         const graphicFile = outName.replace(/\.png$/i, '');
         const st = a.meta.settings || {};
         if (a.kind === 'audio') {
             byGuid.set(a.guid, { t: 'a', n: n, f: outName });
+        } else if (app) {
+            // modo programa: imagem unica desenhada por drawPNG (nao ha E.spr)
+            if ((st.mode || 'single') !== 'single') {
+                failBuild('modo app aceita so imagem de quadro unico: ' + a.name +
+                          ' (mode ' + (st.mode || 'single') + ')');
+            }
+            byGuid.set(a.guid, { t: 'img', n: n, f: outName, w: st.w || 0, h: st.h || 0 });
         } else {
             const regions = project.regions(a);
             const mode = st.mode || (a.kind === 'sprite' ? 'single' : 'grid');
@@ -144,8 +164,48 @@ function spriteName(project, plan, ref, at, load) {
     return key;
 }
 
+// cores de widget viram numero 565; vazio/ausente = default do tema no runtime
+const WIDGET_COLORS = {
+    text: ['color', 'bg'],
+    card: ['color', 'stroke'],
+    badge: ['color', 'textColor'],
+    image: ['key'],
+};
+
+function convertWidget(project, plan, c, at, load) {
+    const kind = c.type.slice(3);
+    const f = Object.assign({}, c.fields || {});
+    for (const k of (WIDGET_COLORS[kind] || [])) {
+        if (typeof f[k] === 'string' && f[k]) f[k] = F.parseColor(f[k]);
+        else delete f[k];
+    }
+    if (kind === 'image') {
+        const asset = project.asset(f.asset);
+        if (!asset) failBuild('imagem inexistente em ' + at + ': ' + f.asset);
+        const ra = plan.byGuid.get(asset.guid);
+        if (!ra || ra.t !== 'img') failBuild('asset grafico nao entrou no build: ' + asset.name);
+        load.add(asset.guid);
+        f.asset = ra;
+    }
+    return { t: 'ui', k: kind, id: c.id || '', f: f };
+}
+
+function convertAi(c) {
+    const f = Object.assign({}, c.fields || {});
+    if (!f.provider) f.provider = 'openrouter';
+    // strings vazias opcionais: o runtime testa truthiness, mas o data fica menor
+    for (const k of ['model', 'busyKey', 'errorKey', 'histKey', 'system', 'attach',
+                     'prompt', 'promptKey', 'text', 'textKey', 'label', 'event']) {
+        if (f[k] === '') delete f[k];
+    }
+    if (c.type === 'mic.record') return { t: 'ui', k: 'mic.record', id: c.id || '', f: f };
+    return { t: 'ai', k: c.type.slice(3), id: c.id || '', f: f };
+}
+
 function convertComponent(project, plan, c, at, load) {
     const f = c.fields || {};
+    if (c.type.indexOf('ui.') === 0) return convertWidget(project, plan, c, at, load);
+    if (c.type.indexOf('ai.') === 0 || c.type === 'mic.record') return convertAi(c);
     if (c.type === 'sprite') {
         return { t: 'spr', s: spriteName(project, plan, f.sprite, at, load), key: F.parseColor(f.key, 0x0000) };
     }
@@ -209,7 +269,10 @@ function convertComponent(project, plan, c, at, load) {
         if (!asset) failBuild('script inexistente em ' + at + ': ' + f.script);
         const sc = plan.scripts.find((x) => x.asset.guid === asset.guid);
         if (!sc) failBuild('script nao entrou no build: ' + asset.name);
-        return { t: 'script', m: sc.module, id: c.id || '', fields: f.fields || {} };
+        // defaults de exports.props <- campos do componente (campos vencem)
+        const props = (asset.meta.settings || {}).props || {};
+        const fields = require('./scripts').mergeFields(props, f.fields || {});
+        return { t: 'script', m: sc.module, id: c.id || '', fields: fields };
     }
     failBuild('componente desconhecido no build: ' + c.type);
 }
@@ -308,7 +371,23 @@ function expandInstance(project, plan, inst, ctx, depth) {
     return ctx.entities;
 }
 
-function buildScenes(project, plan, warnings) {
+function screenScripts(project, plan, refs, sceneName) {
+    const out = [];
+    for (const ref of refs || []) {
+        const a = project.asset(ref);
+        if (!a) failBuild('script de tela inexistente em "' + sceneName + '": ' + ref);
+        if (a.kind !== 'script') failBuild('settings.scripts aceita so script: ' + a.name);
+        const sc = plan.scripts.find((x) => x.asset.guid === a.guid);
+        if (!sc) failBuild('script de tela nao entrou no build: ' + a.name);
+        // props declarados viram o `fields` do script de tela
+        const fields = require('./scripts').propsDefaults((a.meta.settings || {}).props || {});
+        out.push(Object.keys(fields).length ? { m: sc.module, f: fields } : sc.module);
+    }
+    return out;
+}
+
+function buildScenes(project, plan, warnings, opts) {
+    const app = !!(opts && opts.app);
     const usedNames = new Set();
     const byGuid = new Map();
     const out = {};
@@ -338,11 +417,18 @@ function buildScenes(project, plan, warnings) {
         }
         const load = ctx.load;
         const tilemaps = [];
+        if (app) {
+            // programa: nao ha tilemap/camera; a tela e so widgets
+            if ((sc.tilemaps || []).length) {
+                failBuild('modo app nao aceita tilemap (cena "' + sc.name + '")');
+            }
+        } else {
         for (const tm of sc.tilemaps || []) {
-            load.add(tm.tileset);
             const asset = project.asset(tm.tileset);
             const ra = asset ? plan.byGuid.get(asset.guid) : null;
             if (!asset || !ra) failBuild('tileset do build nao resolvido: ' + tm.tileset);
+            // load usa GUID: a referencia pode vir como "guid#regiao"
+            load.add(asset.guid);
             const tileDefs = (asset.meta.settings && Array.isArray(asset.meta.settings.tiles))
                 ? asset.meta.settings.tiles : null;
             const solidValues = tileDefs && tileDefs.some((t) => t && t.solid)
@@ -354,7 +440,13 @@ function buildScenes(project, plan, warnings) {
                 autotile: tm.autotile || null,
             });
         }
-        if (st.music) load.add(st.music);
+        }
+        // musica aceita GUID ou nome no settings; o runtime indexa por GUID
+        let music = null;
+        if (st.music) {
+            const ma = project.asset(st.music);
+            if (ma) { music = ma.guid; load.add(ma.guid); }
+        }
         for (const ref of st.assets || []) {
             const a = project.asset(ref);
             if (a) load.add(a.guid);
@@ -383,15 +475,50 @@ function buildScenes(project, plan, warnings) {
                 follow: follow,
                 deadzone: st.camera.deadzone || null,
             } : null,
-            music: st.music ? st.music : null,
+            music: music,
             load: Array.from(load).sort(),
             entities: ctx.entities,
             tilemaps: tilemaps,
         };
+        if (app) {
+            // tela de programa: sem camera/tilemaps e com estado+scripts de tela
+            const def = out[key];
+            delete def.camera;
+            delete def.tilemaps;
+            delete def.static;
+            if (st.bg) def.bg = F.parseColor(st.bg);
+            else delete def.bg;      // ausente = tema do sistema no runtime
+            def.header = st.header === undefined ? true : !!st.header;
+            if (st.sub) def.sub = st.sub;
+            if (st.persist) def.persist = st.persist;
+            const scripts = screenScripts(project, plan, st.scripts, sc.name);
+            if (scripts.length) def.scripts = scripts;
+        }
     }
     const names = {};
-    for (const key of Object.keys(out)) names[out[key].title] = key;
+    for (const key of Object.keys(out)) {
+        const title = out[key].title;
+        if (Object.prototype.hasOwnProperty.call(names, title) && names[title] !== key) {
+            // E.goto(title) ficaria ambiguo e o mapa `names` perderia uma cena
+            failBuild('duas cenas com o mesmo nome: ' + title);
+        }
+        names[title] = key;
+    }
     return { scenes: out, keyByGuid, names };
+}
+
+// bases de asset: o celerctl instala a pasta com F.slug(packageName)
+// (ex.: celeros.detona -> /sd/apps/celeros_detona), enquanto o app original
+// usa o packageName e o nome. Inclui as quatro variantes para o mesmo app
+// rodar no Studio, no cartao e no /local.
+function assetBases(p) {
+    const names = [];
+    for (const n of [p.packageName, String(p.name), F.slug(p.packageName), F.slug(String(p.name))]) {
+        if (n && names.indexOf(n) < 0) names.push(n);
+    }
+    const bases = [];
+    for (const d of ['/local/apps/', '/sd/apps/']) for (const n of names) bases.push(d + n + '/');
+    return bases;
 }
 
 function generateMain(project, opts) {
@@ -399,31 +526,19 @@ function generateMain(project, opts) {
     const req = new Set(['celeros.game', 'celeros.game.spr', 'celeros.game.tilemap']);
     for (const d of deps) if (d.indexOf('celeros.game.') === 0) req.add(d);
     let src = HEADER;
-    const ordered = Array.from(req).sort((a, b) => a === 'celeros.game' ? -1 : (b === 'celeros.game' ? 1 : a.localeCompare(b)));
+    const ordered = Array.from(req).sort((a, b) => (a === 'celeros.game' ? -1 : (b === 'celeros.game' ? 1 : F.cmpStr(a, b))));
     for (const d of ordered) {
         src += (d === 'celeros.game' ? 'var E = ' : '') + 'require("' + d + '");\n';
     }
     const p = project.data;
-    const pkg = p.packageName;
-    const name = p.name.replace(/"/g, '\\"');
-    // bases de asset: o celerctl instala a pasta com F.slug(packageName)
-    // (ex.: celeros.detona -> /sd/apps/celeros_detona), enquanto o app
-    // original usa o packageName e o nome. Inclui as quatro variantes para
-    // o mesmo app rodar no Studio, no cartao e no /local.
-    const dirs = [
-        '/local/apps/', '/sd/apps/',
-    ];
-    const names = [];
-    for (const n of [pkg, name, F.slug(pkg), F.slug(name)]) {
-        if (n && names.indexOf(n) < 0) names.push(n);
-    }
-    const bases = [];
-    for (const d of dirs) for (const n of names) bases.push(d + n + '/');
-    src += '\nE.init({ dir: "' + name + '", fps: ' + (p.canvas.fps !== undefined ? p.canvas.fps : 30) +
+    // nome do projeto e dado livre: JSON.stringify escapa aspas, barra
+    // invertida e quebra de linha (o replace de `"` sozinho gerava JS invalido)
+    const name = String(p.name);
+    src += '\nE.init({ dir: ' + JSON.stringify(name) + ', fps: ' + (p.canvas.fps !== undefined ? p.canvas.fps : 30) +
            ', native: ' + (p.canvas.native ? 'true' : 'false') +
            ', save: "' + F.slug(p.name, 6) + '."' +
            (p.deps && p.deps['celeros.game.fx'] ? ', particles: 96' : '') +
-           ',\n         bases: ' + JSON.stringify(bases) + ' });\n';
+           ',\n         bases: ' + JSON.stringify(assetBases(p)) + ' });\n';
     if (p.editor && p.editor.debug) src += 'E.debug = true;\n';
     if (p.editor && p.editor.prof) src += 'if (E.prof) E.prof.on = true;\n';
     src += '\n';
@@ -432,8 +547,27 @@ function generateMain(project, opts) {
     return src;
 }
 
-function stripSize(src) {
-    try { return strip(src).length; } catch (e) { return Buffer.byteLength(src, 'utf8'); }
+// Runtime de programa: sem engine, sem E.init. O Kui e o proprio OS; o app
+// so precisa das bases de asset (drawPNG) e do data. Nenhum require de dep.
+function generateAppMain(project) {
+    const p = project.data;
+    let src = HEADER;
+    src += APP_RUNTIME;
+    src += '\nstudioAppBoot(require("app.data"), ' + JSON.stringify(assetBases(p)) + ');\n';
+    return src;
+}
+
+// tamanho que o deploy vai empacotar: minificado (jsmin) com o mesmo
+// criterio por arquivo — modulo (qualquer != main.js) tem o topo manglado.
+// Sem o `reserved` dos irmaos aqui: medir MAIOR que o pacote real e o lado
+// seguro do teto (o deploy recalcula com o reserved de verdade).
+function stripSize(src, name) {
+    try {
+        return Buffer.byteLength(jsmin.minify(src, { top: name && name !== 'main.js' }).code, 'utf8');
+    } catch (e) {
+        try { return Buffer.byteLength(strip(src), 'utf8'); }
+        catch (e2) { return Buffer.byteLength(src, 'utf8'); }
+    }
 }
 
 // Lock das deps compartilhadas no proprio pacote. O require do device le
@@ -460,7 +594,7 @@ function generateLegacyMain(project) {
     const req = new Set(['celeros.game']);
     for (const d of deps) if (d.indexOf('celeros.game.') === 0) req.add(d);
     let src = HEADER;
-    const ordered = Array.from(req).sort((a, b) => a === 'celeros.game' ? -1 : (b === 'celeros.game' ? 1 : a.localeCompare(b)));
+    const ordered = Array.from(req).sort((a, b) => (a === 'celeros.game' ? -1 : (b === 'celeros.game' ? 1 : F.cmpStr(a, b))));
     for (const d of ordered) src += (d === 'celeros.game' ? 'var E = ' : '') + 'require("' + d + '");\n';
     src += '\n' + LEGACY + '\n';
     const bases = (p.legacy && p.legacy.bases) || [];
@@ -474,7 +608,7 @@ function buildLegacy(project, check, warnings, buildDir) {
     const legacy = p.legacy || {};
     const entry = legacy.entry;
     const scripts = project.assets.filter((a) => a.kind === 'script')
-        .sort((a, b) => a.relPath.localeCompare(b.relPath));
+        .sort((a, b) => F.cmpStr(a.relPath, b.relPath));
     const entryAsset = scripts.find((a) => a.fileName === entry || a.name === String(entry).replace(/\.js$/, ''));
     if (!entryAsset) failBuild('script de entrada do modo legado nao encontrado: ' + entry);
 
@@ -494,7 +628,7 @@ function buildLegacy(project, check, warnings, buildDir) {
 
     const copies = [];
     const assets = project.assets.filter((a) => isShipped(a.kind) && a.kind !== 'script')
-        .sort((a, b) => a.relPath.localeCompare(b.relPath));
+        .sort((a, b) => F.cmpStr(a.relPath, b.relPath));
     let assetBytes = 0;
     for (const a of assets) {
         if (a.fileName === 'icon.png') continue;   // icone do projeto
@@ -549,7 +683,7 @@ function buildLegacy(project, check, warnings, buildDir) {
     const jsSizes = {};
     for (const f of jsFiles) {
         const src = fs.readFileSync(path.join(buildDir, f), 'utf8');
-        const n = stripSize(src);
+        const n = stripSize(src, f);
         jsSizes[f] = n;
         jsTotal += n;
         if (n > 256 * 1024) failBuild(f + ' tem ' + (n / 1024).toFixed(1) + 'KB (limite do require 256KB)');
@@ -615,12 +749,14 @@ function buildProject(dir, opts) {
     fs.rmSync(buildDir, { recursive: true, force: true });
     fs.mkdirSync(buildDir, { recursive: true });
     if (project.data.runtime === 'legacy') return buildLegacy(project, check, warnings, buildDir);
+    const isApp = project.data.runtime === 'app';
+    const dataFile = isApp ? 'app.data.js' : 'game.data.js';
 
     const plan = planAssets(project);
     if (!plan.scripts.length) warnings.push({ code: 'build.scripts', path: 'Assets/Scripts', message: 'nenhum script de componente' });
 
     // dados das cenas
-    const built = buildScenes(project, plan, warnings);
+    const built = buildScenes(project, plan, warnings, { app: isApp });
     const startKey = project.data.startScene ? built.keyByGuid.get(project.data.startScene) : null;
     if (!startKey) failBuild('cena inicial nao resolvida');
 
@@ -649,8 +785,8 @@ function buildProject(dir, opts) {
         version: p.version,
         author: p.author || 'Celer Studio',
         description: p.description || '',
-        type: p.type || 'Game',
-        category: p.category || 'Jogos',
+        type: p.type || (isApp ? 'App' : 'Game'),
+        category: p.category || (isApp ? 'Utility' : 'Jogos'),
         api: p.api,
         requires: p.requires || [],
         topbar: p.topbar === undefined ? false : !!p.topbar,
@@ -658,6 +794,9 @@ function buildProject(dir, opts) {
         deps: p.deps || {},
         changelog: p.changelog || (p.version + ': build do Celer Studio'),
     };
+    // o app_lint recusa `deps: {}` (campo vazio e ruido no manifesto); o
+    // runtime app normalmente nao tem dep nenhuma
+    if (app.deps && !Object.keys(app.deps).length) delete app.deps;
     F.writeJson(path.join(buildDir, 'app.json'), app);
 
     // icone
@@ -670,13 +809,14 @@ function buildProject(dir, opts) {
         } catch (e) { /* opcional */ }
     }
 
-    // game.data.js (divide cenas se passar do splitKB)
+    // dados (game.data.js ou app.data.js; divide cenas se passar do splitKB)
     const splitKB = p.build && p.build.splitKB ? p.build.splitKB : 96;
+    const dataBase = dataFile.replace(/\.js$/, '');
     const dataJson = JSON.stringify(data);
     const dataFiles = [];
     if (dataJson.length <= splitKB * 1024) {
-        F.writeText(path.join(buildDir, 'game.data.js'), 'module.exports = ' + dataJson + ';\n');
-        dataFiles.push('game.data.js');
+        F.writeText(path.join(buildDir, dataFile), 'module.exports = ' + dataJson + ';\n');
+        dataFiles.push(dataFile);
     } else {
         const head = JSON.stringify({ format: 1, assets: assetsObj, start: startKey,
                                       names: built.names });
@@ -700,18 +840,18 @@ function buildProject(dir, opts) {
         if (Object.keys(cur).length) parts.push(cur);
         let index = '// GERADO POR CELER STUDIO — partes de cenas\nvar out = ' + head + ';\nout.scenes = {};\nvar p;\n';
         parts.forEach((part, i) => {
-            const file = 'game.data.' + i + '.js';
+            const file = dataBase + '.' + i + '.js';
             F.writeText(path.join(buildDir, file), 'module.exports = ' + JSON.stringify(part) + ';\n');
             dataFiles.push(file);
-            index += 'p = require("game.data.' + i + '");\nfor (var k' + i + ' in p) out.scenes[k' + i + '] = p[k' + i + '];\n';
+            index += 'p = require("' + dataBase + '.' + i + '");\nfor (var k' + i + ' in p) out.scenes[k' + i + '] = p[k' + i + '];\n';
         });
         index += 'module.exports = out;\n';
-        F.writeText(path.join(buildDir, 'game.data.js'), index);
-        dataFiles.unshift('game.data.js');
+        F.writeText(path.join(buildDir, dataFile), index);
+        dataFiles.unshift(dataFile);
     }
 
-    // main.js com o runtime embutido
-    F.writeText(path.join(buildDir, 'main.js'), generateMain(project));
+    // main.js com o runtime embutido (cenas de jogo ou telas de programa)
+    F.writeText(path.join(buildDir, 'main.js'), isApp ? generateAppMain(project) : generateMain(project));
 
     // limites de pacote (extras = tudo menos app.json/main.js/icon.png;
     // deps.json conta como extra porque o hub o inclui no teto)
@@ -733,7 +873,7 @@ function buildProject(dir, opts) {
     const jsSizes = {};
     for (const f of jsFiles) {
         const src = fs.readFileSync(path.join(buildDir, f), 'utf8');
-        const n = stripSize(src);
+        const n = stripSize(src, f);
         jsSizes[f] = n;
         jsTotal += n;
         if (n > 256 * 1024) failBuild(f + ' tem ' + (n / 1024).toFixed(1) + 'KB (limite do require 256KB)');
@@ -791,6 +931,13 @@ function exportBuild(dir, target, opts) {
     const abs = path.resolve(target);
     if (F.isInside(buildDir, abs)) {
         F.fail('export.inside', 'destino contem o build: ' + abs, { path: abs });
+    }
+    // copiar para DENTRO do projeto injetava o build como "assets sem .meta"
+    // (Assets/) ou sobrescrevia a raiz: o scan bricava o barramento de ops
+    if (abs === project.dir || F.isInside(path.join(project.dir, 'Assets'), abs) ||
+        F.isInside(path.join(project.dir, '.studio'), abs)) {
+        F.fail('export.inside', 'destino nao pode ser dentro do projeto/Assets/.studio: ' + abs,
+               { path: abs });
     }
     let exists = false;
     try { exists = fs.readdirSync(abs).length > 0; } catch (e) { exists = false; }

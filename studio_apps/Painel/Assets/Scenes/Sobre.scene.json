@@ -1,0 +1,120 @@
+{
+  "format": 1,
+  "rev": 3,
+  "name": "Sobre",
+  "guid": "8405e2277f2774f78b1a8f994254bda9",
+  "settings": {
+    "fps": 20,
+    "data": {
+      "versao": "CelerOS"
+    },
+    "bg": "#0b1020",
+    "static": false,
+    "scripts": [
+      "dd9c4e60f397217f111ea988ade5ab75"
+    ],
+    "sub": "exemplo"
+  },
+  "entities": [
+    {
+      "name": "CardSobre",
+      "fid": "e_12fdae82",
+      "active": true,
+      "z": 1,
+      "transform": {
+        "x": 8,
+        "y": 48,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1
+      },
+      "components": [
+        {
+          "type": "ui.card",
+          "id": "c_935e430a",
+          "fields": {
+            "w": 224,
+            "h": 150,
+            "radius": 10
+          }
+        }
+      ]
+    },
+    {
+      "name": "TextoSobre",
+      "fid": "e_77f4fd96",
+      "active": true,
+      "z": 2,
+      "transform": {
+        "x": 18,
+        "y": 58,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1
+      },
+      "components": [
+        {
+          "type": "ui.text",
+          "id": "c_686ad802",
+          "fields": {
+            "w": 204,
+            "text": "Este app foi montado no Celer Studio com o runtime \"app\": cada cena e uma tela, cada entidade e um widget do toolkit do sistema (UI.*). O estado da tela e um objeto JSON que os widgets leem e que scripts ES5 podem mudar.",
+            "lines": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "Versao",
+      "fid": "e_b5f87726",
+      "active": true,
+      "z": 3,
+      "transform": {
+        "x": 18,
+        "y": 160,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1
+      },
+      "components": [
+        {
+          "type": "ui.text",
+          "id": "c_97b9dd1a",
+          "fields": {
+            "color": "#8894a8",
+            "bind": "versao",
+            "role": "caption"
+          }
+        }
+      ]
+    },
+    {
+      "name": "BotaoVoltar",
+      "fid": "e_d74cb1d1",
+      "active": true,
+      "z": 4,
+      "transform": {
+        "x": 8,
+        "y": 216,
+        "rot": 0,
+        "sx": 1,
+        "sy": 1
+      },
+      "components": [
+        {
+          "type": "ui.button",
+          "id": "c_3aa3398f",
+          "fields": {
+            "w": 104,
+            "h": 32,
+            "id": "voltar",
+            "event": "voltar",
+            "label": "Voltar",
+            "style": "ghost"
+          }
+        }
+      ]
+    }
+  ],
+  "tilemaps": []
+}

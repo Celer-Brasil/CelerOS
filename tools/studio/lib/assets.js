@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const F = require('./format');
 const SC = require('./schema');
+const P = require('./scripts');
 const { decodePng } = require('../../sdk/lib/png.js');
 
 const EXT_KIND = {
@@ -22,6 +23,14 @@ const KIND_DIR = {
     'tileset': 'Assets/Sprites',
     'audio': 'Assets/Audio',
     'script': 'Assets/Scripts',
+};
+
+const KIND_EXT = {
+    'sprite': ['.png'],
+    'sprite-sheet': ['.png'],
+    'tileset': ['.png'],
+    'audio': ['.qoa', '.wav'],
+    'script': ['.js'],
 };
 
 function pngInfo(file) {
@@ -41,6 +50,14 @@ function parseGrid(text) {
 
 // settings iniciais do importer grafico
 function graphicSettings(kind, info, opts) {
+    // cols/rows/tw/th de lixo (NaN do "+op[k]" do HTTP ou "--cols abc") nao
+    // podem ser ignorados em silencio: o autor pediu fatiamento
+    for (const k of ['cols', 'rows', 'tw', 'th']) {
+        if (opts[k] !== undefined && opts[k] !== null &&
+            (!isFinite(opts[k]) || Math.floor(opts[k]) !== opts[k] || opts[k] < 1)) {
+            F.fail('asset.grid', k + ' deve ser inteiro >= 1, recebi ' + opts[k]);
+        }
+    }
     const st = {
         mode: 'single',
         w: info.w,
@@ -49,6 +66,12 @@ function graphicSettings(kind, info, opts) {
         key: '#000000',
     };
     const grid = opts.grid ? parseGrid(opts.grid) : null;
+    // --grid presente mas ilegivel ("2xx2") nao pode cair em modo single
+    // em silencio: o autor pediu fatiamento e levaria a imagem inteira
+    if (opts.grid && !grid) {
+        F.fail('asset.grid', 'grade invalida: ' + opts.grid,
+               { hint: 'use o formato CxR (ex.: 4x4)' });
+    }
     const cols = opts.cols || (grid && grid.cols);
     const rows = opts.rows || (grid && grid.rows);
     const tw = opts.tw, th = opts.th;
@@ -81,6 +104,12 @@ function graphicSettings(kind, info, opts) {
 
 function importAsset(project, src, opts) {
     opts = opts || {};
+    if (opts.name !== undefined && typeof opts.name !== 'string') {
+        F.fail('op.args', 'asset.import: name deve ser string');
+    }
+    if (opts.importer !== undefined && typeof opts.importer !== 'string') {
+        F.fail('op.args', 'asset.import: importer deve ser string');
+    }
     const absSrc = path.resolve(src);
     if (!fs.existsSync(absSrc)) F.fail('asset.missing', 'arquivo nao existe: ' + absSrc);
     const ext = path.extname(absSrc).toLowerCase();
@@ -88,32 +117,51 @@ function importAsset(project, src, opts) {
     if (!kind) F.fail('asset.type', 'extensao nao suportada: ' + ext,
                       { hint: 'aceito: .png, .qoa, .wav, .js' });
     if (!KIND_DIR[kind]) F.fail('asset.importer', 'importer desconhecido: ' + kind);
+    if (KIND_EXT[kind].indexOf(ext) < 0) {
+        F.fail('asset.type', 'importer ' + kind + ' nao aceita ' + ext,
+               { hint: 'aceito: ' + KIND_EXT[kind].join(', ') });
+    }
     const dirRel = KIND_DIR[kind];
     const base = opts.name || path.basename(absSrc, path.extname(absSrc));
     const rel = project.freeRel(dirRel, base, ext);
     const absDest = project.resolveInside(rel);
+    const metaRel = rel + '.meta';
     fs.mkdirSync(path.dirname(absDest), { recursive: true });
     fs.copyFileSync(absSrc, absDest);
 
-    let settings = {};
-    if (kind === 'sprite' || kind === 'sprite-sheet' || kind === 'tileset') {
-        settings = graphicSettings(kind, pngInfo(absDest), opts);
-    } else if (kind === 'audio') {
-        settings = { loop: !!opts.loop, gain: opts.gain !== undefined ? +opts.gain : 1 };
-    } else if (kind === 'script') {
-        settings = { props: {} };
-    }
+    // a copia ja esta no projeto: qualquer falha depois disso tem de remove-la
+    // (asset sem .meta polui o scan e o proximo lote falha)
+    try {
+        let settings = {};
+        if (kind === 'sprite' || kind === 'sprite-sheet' || kind === 'tileset') {
+            settings = graphicSettings(kind, pngInfo(absDest), opts);
+        } else if (kind === 'audio') {
+            settings = { loop: !!opts.loop, gain: opts.gain !== undefined ? +opts.gain : 1 };
+        } else if (kind === 'script') {
+            // props tipados declarados pelo proprio script (exports.props)
+            settings = { props: P.propsOfSource(fs.readFileSync(absDest, 'utf8')).props };
+        }
 
-    const meta = {
-        format: 1,
-        guid: F.newGuid(),
-        importer: kind,
-        settings,
-    };
-    const metaRel = rel + '.meta';
-    F.writeJson(path.join(project.dir, metaRel), meta);
-    const asset = project.registerAsset(rel, meta);
-    return { asset, created: [absDest, path.join(project.dir, metaRel)] };
+        const meta = {
+            format: 1,
+            guid: F.newGuid(),
+            importer: kind,
+            settings,
+        };
+        const bad = [];
+        SC.validateMetaData(meta, bad);
+        if (bad.length) {
+            F.fail('asset.settings', 'meta invalido: ' +
+                   bad.map((b) => b.path + ': ' + b.message).join('; '));
+        }
+        F.writeJson(path.join(project.dir, metaRel), meta);
+        const asset = project.registerAsset(rel, meta);
+        return { asset, created: [absDest, path.join(project.dir, metaRel)] };
+    } catch (e) {
+        try { fs.rmSync(absDest, { force: true }); } catch (e2) {}
+        try { fs.rmSync(path.join(project.dir, metaRel), { force: true }); } catch (e2) {}
+        throw e;
+    }
 }
 
 // cria um script novo (Assets/Scripts/<nome>.js) com meta
@@ -121,8 +169,10 @@ function createScript(project, name, content) {
     const rel = project.freeRel('Assets/Scripts', name, '.js');
     const abs = project.resolveInside(rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, content === undefined ? scriptTemplate(name) : content);
-    const meta = { format: 1, guid: F.newGuid(), importer: 'script', settings: { props: {} } };
+    const src = content === undefined ? scriptTemplate(name) : content;
+    fs.writeFileSync(abs, src);
+    const meta = { format: 1, guid: F.newGuid(), importer: 'script',
+                   settings: { props: P.propsOfSource(src).props } };
     F.writeJson(path.join(project.dir, rel + '.meta'), meta);
     const asset = project.registerAsset(rel, meta);
     return { asset, created: [abs, path.join(project.dir, rel + '.meta')] };
@@ -140,7 +190,8 @@ function importScriptFile(project, src, fileName) {
     if (fs.existsSync(abs)) F.fail('asset.exists', 'script ja existe no projeto: ' + rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.copyFileSync(path.resolve(src), abs);
-    const meta = { format: 1, guid: F.newGuid(), importer: 'script', settings: { props: {} } };
+    const meta = { format: 1, guid: F.newGuid(), importer: 'script',
+                   settings: { props: P.propsOfSource(fs.readFileSync(abs, 'utf8')).props } };
     F.writeJson(path.join(project.dir, rel + '.meta'), meta);
     return { asset: project.registerAsset(rel, meta), created: [abs, path.join(project.dir, rel + '.meta')] };
 }
@@ -166,7 +217,12 @@ function setAssetSettings(project, asset, patch) {
     if (!asset) F.fail('asset.missing', 'asset inexistente');
     const meta = asset.meta;
     if (!meta.settings) meta.settings = {};
-    Object.assign(meta.settings, patch || {});
+    // copia chave a chave: Object.assign deixava "__proto__" do patch virar
+    // prototipo de settings (o patch vem de JSON.parse no barramento de ops)
+    for (const k of Object.keys(patch || {})) {
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        meta.settings[k] = patch[k];
+    }
     const st = meta.settings;
     if (st.mode === 'grid') {
         if (!st.cols) st.cols = 1;

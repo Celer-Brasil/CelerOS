@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "rev": 7,
+  "studio": "0.1.0",
+  "name": "Painel",
+  "packageName": "br.celer.painel",
+  "version": "0.1.0",
+  "author": "Celer Studio",
+  "description": "Exemplo de programa do Celer Studio (runtime app): estado do dispositivo, brilho e volume.",
+  "type": "App",
+  "category": "Utility",
+  "api": 51,
+  "requires": [],
+  "topbar": false,
+  "permissions": [
+    "system"
+  ],
+  "deps": {},
+  "changelog": "0.1.0: exemplo do modo programa",
+  "canvas": {
+    "w": 240,
+    "h": 320,
+    "native": false,
+    "fps": 20,
+    "inset": 0
+  },
+  "startScene": "5712456b244547fd9871a77388fd859a",
+  "build": {
+    "out": ".studio/build",
+    "splitKB": 96
+  },
+  "editor": {
+    "grid": 8,
+    "snap": true,
+    "debug": false,
+    "prof": false
+  },
+  "runtime": "app"
+}

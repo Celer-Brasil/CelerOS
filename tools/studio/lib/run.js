@@ -23,10 +23,20 @@ function runProject(dir, opts) {
     }
     const { runAppFolder } = require('../../sdk/lib/runner.js');
     const frames = parseFrames(opts.frames);
+    // mesmo contrato do --frames: numero invalido e erro limpo, nao silencio.
+    // ms NaN desligava o stop do harness (rodava ate o LIMIT como se nada
+    // tivesse sido pedido) e seed NaN virava 0 sem avisar
+    const ms = opts.ms !== undefined && opts.ms !== null ? Number(opts.ms) : 1200;
+    if (!Number.isFinite(ms) || ms < 0) throw new Error('--ms: numero de ms nao-negativo');
+    let seed = 7;
+    if (opts.seed !== undefined && opts.seed !== null) {
+        seed = Number(opts.seed);
+        if (!Number.isFinite(seed)) throw new Error('--seed: numero');
+        seed = seed >>> 0;
+    }
     const outFile = opts.out
         ? path.resolve(opts.out)
         : path.join(project.studioDir, 'run', 'tela.png');
-    const seed = opts.seed !== undefined && opts.seed !== null ? (opts.seed >>> 0) : 7;
     let events = null;
     if (opts.input) {
         const { parseInputScript, wireInput } = require('../../sdk/lib/input.js');
@@ -37,7 +47,7 @@ function runProject(dir, opts) {
     try {
         r = runAppFolder(built.dir, {
             render: true,
-            stopAtMs: opts.ms !== undefined ? +opts.ms : 1200,
+            stopAtMs: ms,
             frames: frames,
             framesPng: true,
             seed: seed,

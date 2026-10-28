@@ -4,7 +4,7 @@
 // assets e scripts ficam no projeto para edicao. A cena inicial e um cartao
 // informativo; o runtime legado nao a usa.
 //
-//   node tools/sdk/celer.js studio import-game hub_apps/Detona studio_games/Detona
+//   node tools/sdk/celer.js studio import-game hub_apps/Sentinela /tmp/Sentinela-legado
 
 const fs = require('fs');
 const path = require('path');

@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "guid": "42270a750273dbfebaf6517310e301f7",
+  "importer": "script",
+  "settings": {
+    "props": {
+      "intervalo": {
+        "type": "int",
+        "default": 1000,
+        "label": "Intervalo (ms)",
+        "max": 10000,
+        "min": 200
+      }
+    }
+  }
+}

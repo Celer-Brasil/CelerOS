@@ -8,10 +8,12 @@ const { startLive } = require('../../sdk/lib/live_server.js');
 
 const appDir = process.argv[2];
 const port = +process.argv[3] || 8521;
+// fps do projeto (canvas.fps), passado pelo server; 30 e o padrao antigo
+const fps = +process.argv[4] || 30;
 
 if (!appDir) {
-    console.error('uso: live.js <appDir> [porta]');
+    console.error('uso: live.js <appDir> [porta] [fps]');
     process.exit(2);
 }
 
-startLive({ appDir: appDir, port: port, fps: 30, open: false, seed: 7 });
+startLive({ appDir: appDir, port: port, fps: fps, open: false, seed: 7 });

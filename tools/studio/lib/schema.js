@@ -20,6 +20,16 @@ const RANGE_RE = /^\^?\d+\.\d+\.\d+$/;
 const GUID_RE = /^[0-9a-f]{32}$/;
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
+// Teto de `api` do app.json: lido do firmware, NAO duplicado aqui (o mesmo
+// numero estava escrito a mao e o Studio recusou a API 52 quando so o
+// CMakeLists subiu).
+const MAIN_CMAKE = path.join(__dirname, '..', '..', '..', 'main', 'CMakeLists.txt');
+const API_CEILING = (() => {
+    const m = /CELEROS_API_LEVEL=(\d+)/.exec(fs.readFileSync(MAIN_CMAKE, 'utf8'));
+    if (!m) throw new Error('CELEROS_API_LEVEL nao encontrado em main/CMakeLists.txt');
+    return parseInt(m[1], 10);
+})();
+
 function err(code, at, message, hint) {
     const out = { code, path: at, message };
     if (hint) out.hint = hint;
@@ -121,14 +131,26 @@ function validateProjectData(p, out) {
     for (const k of ['name', 'packageName', 'version', 'api']) {
         if (p[k] === undefined) out.push(err('schema.required', k, 'campo obrigatorio'));
     }
+    for (const k of ['name', 'version', 'author', 'description', 'type', 'category', 'changelog']) {
+        if (p[k] !== undefined && typeof p[k] !== 'string') {
+            out.push(err('schema.type', k, 'esperava string'));
+        }
+    }
+    if (p.topbar !== undefined && typeof p.topbar !== 'boolean') {
+        out.push(err('schema.type', 'topbar', 'esperava booleano'));
+    }
+    if (p.permissions !== undefined &&
+        (!Array.isArray(p.permissions) || p.permissions.some((x) => typeof x !== 'string'))) {
+        out.push(err('schema.type', 'permissions', 'permissions deve ser array de strings'));
+    }
     if (typeof p.packageName === 'string' && !PKG_RE.test(p.packageName)) {
         out.push(err('schema.format', 'packageName', 'use minusculas com ponto (ex: br.autor.jogo)'));
     }
     if (typeof p.version === 'string' && !SEMVER_RE.test(p.version)) {
         out.push(err('schema.format', 'version', 'versao deve ser x.y.z'));
     }
-    if (p.api !== undefined && (!isInt(p.api) || p.api < 1 || p.api > 51)) {
-        out.push(err('schema.range', 'api', 'api deve ser 1..50'));
+    if (p.api !== undefined && (!isInt(p.api) || p.api < 1 || p.api > API_CEILING)) {
+        out.push(err('schema.range', 'api', 'api deve ser 1..' + API_CEILING));
     }
     if (p.requires !== undefined) {
         if (!Array.isArray(p.requires) || p.requires.some((r) => r !== 'psram')) {
@@ -151,6 +173,16 @@ function validateProjectData(p, out) {
     if (!isObj(p.canvas)) out.push(err('schema.required', 'canvas', 'canvas obrigatorio'));
     else {
         if (!isInt(p.canvas.w) || !isInt(p.canvas.h)) out.push(err('schema.type', 'canvas', 'w/h inteiros'));
+        else {
+            for (const k of ['w', 'h']) {
+                if (p.canvas[k] < 64 || p.canvas[k] > 1024) {
+                    out.push(err('schema.range', 'canvas.' + k, 'canvas deve ter 64..1024'));
+                }
+            }
+        }
+        if (p.canvas.native !== undefined && typeof p.canvas.native !== 'boolean') {
+            out.push(err('schema.type', 'canvas.native', 'esperava booleano'));
+        }
         if (p.canvas.fps !== undefined && (!isInt(p.canvas.fps) || p.canvas.fps < 0 || p.canvas.fps > 60)) {
             out.push(err('schema.range', 'canvas.fps', 'fps deve ser 0..60'));
         }
@@ -158,21 +190,36 @@ function validateProjectData(p, out) {
             out.push(err('schema.range', 'canvas.inset', 'inset deve ser 0..64'));
         }
     }
+    if (p.build !== undefined) {
+        if (!isObj(p.build)) out.push(err('schema.type', 'build', 'build deve ser objeto'));
+        else {
+            if (p.build.out !== undefined && typeof p.build.out !== 'string') {
+                out.push(err('schema.type', 'build.out', 'esperava string'));
+            }
+            if (p.build.splitKB !== undefined &&
+                (!isInt(p.build.splitKB) || p.build.splitKB < 32 || p.build.splitKB > 255)) {
+                out.push(err('schema.range', 'build.splitKB', 'splitKB deve ser 32..255'));
+            }
+        }
+    }
     if (p.editor !== undefined) {
         if (!isObj(p.editor)) out.push(err('schema.type', 'editor', 'editor deve ser objeto'));
         else {
-            for (const k of ['debug', 'prof']) {
+            for (const k of ['debug', 'prof', 'snap']) {
                 if (p.editor[k] !== undefined && typeof p.editor[k] !== 'boolean') {
                     out.push(err('schema.type', 'editor.' + k, 'booleano'));
                 }
+            }
+            if (p.editor.grid !== undefined && (!isInt(p.editor.grid) || p.editor.grid < 1)) {
+                out.push(err('schema.range', 'editor.grid', 'grid deve ser inteiro >= 1'));
             }
         }
     }
     if (p.startScene !== undefined && typeof p.startScene !== 'string') {
         out.push(err('schema.type', 'startScene', 'startScene deve ser GUID ou vazio'));
     }
-    if (p.runtime !== undefined && p.runtime !== 'studio' && p.runtime !== 'legacy') {
-        out.push(err('schema.enum', 'runtime', 'runtime deve ser studio ou legacy'));
+    if (p.runtime !== undefined && p.runtime !== 'studio' && p.runtime !== 'app' && p.runtime !== 'legacy') {
+        out.push(err('schema.enum', 'runtime', 'runtime deve ser studio, app ou legacy'));
     }
     if (p.runtime === 'legacy') {
         if (!isObj(p.legacy)) out.push(err('schema.required', 'legacy', 'modo legado exige legacy.entry'));
@@ -212,12 +259,29 @@ function validateSceneData(s, out) {
             if (st.data !== undefined && !isObj(st.data)) {
                 out.push(err('schema.type', 'settings.data', 'data deve ser objeto'));
             }
+            if (st.scripts !== undefined &&
+                (!Array.isArray(st.scripts) || st.scripts.some((x) => typeof x !== 'string'))) {
+                out.push(err('schema.type', 'settings.scripts', 'scripts deve ser array de GUIDs'));
+            }
+            if (st.header !== undefined && typeof st.header !== 'boolean') {
+                out.push(err('schema.type', 'settings.header', 'esperava booleano'));
+            }
+            if (st.sub !== undefined && typeof st.sub !== 'string') {
+                out.push(err('schema.type', 'settings.sub', 'esperava string'));
+            }
+            if (st.persist !== undefined && typeof st.persist !== 'string') {
+                out.push(err('schema.type', 'settings.persist', 'esperava string (chave de Storage)'));
+            }
             if (st.camera !== undefined) {
                 if (!isObj(st.camera)) out.push(err('schema.type', 'settings.camera', 'camera deve ser objeto'));
                 else if (st.camera.bounds !== undefined &&
                          (!Array.isArray(st.camera.bounds) || st.camera.bounds.length !== 4 ||
                           st.camera.bounds.some((v) => !isNum(v)))) {
                     out.push(err('schema.type', 'settings.camera.bounds', 'bounds = [x,y,w,h]'));
+                } else if (st.camera.deadzone !== undefined &&
+                           (!Array.isArray(st.camera.deadzone) || st.camera.deadzone.length !== 2 ||
+                            st.camera.deadzone.some((v) => !isNum(v)))) {
+                    out.push(err('schema.type', 'settings.camera.deadzone', 'deadzone = [w,h]'));
                 }
             }
         }
@@ -250,6 +314,10 @@ function validateSceneData(s, out) {
                 }
                 if (tm.solids !== undefined && !Array.isArray(tm.solids)) {
                     out.push(err('schema.type', at + '.solids', 'solids deve ser array'));
+                } else if (Array.isArray(tm.solids) && isInt(tm.cols) && isInt(tm.rows) &&
+                           tm.solids.length !== tm.cols * tm.rows) {
+                    out.push(err('schema.range', at + '.solids',
+                                 'solids tem ' + tm.solids.length + ', esperava ' + (tm.cols * tm.rows)));
                 }
             });
         }
@@ -296,12 +364,39 @@ function validateMetaData(m, out) {
         if (mode === 'regions' && !isObj(s.regions)) {
             out.push(err('schema.type', 'settings.regions', 'regions deve ser objeto nome -> [x,y,w,h]'));
         }
+        if (mode === 'regions' && isObj(s.regions)) {
+            for (const name of Object.keys(s.regions)) {
+                const r = s.regions[name];
+                if (!Array.isArray(r) || r.length !== 4 || r.some((v) => !isNum(v)) || r[2] < 0 || r[3] < 0) {
+                    out.push(err('schema.type', 'settings.regions.' + name,
+                                 'regiao deve ser [x,y,w,h] com w/h >= 0'));
+                }
+            }
+        }
+        if (s.prefix !== undefined && typeof s.prefix !== 'string') {
+            out.push(err('schema.type', 'settings.prefix', 'prefix deve ser string'));
+        }
         if (s.pivot !== undefined && (!Array.isArray(s.pivot) || s.pivot.length !== 2 ||
                                       s.pivot.some((v) => !isNum(v)))) {
             out.push(err('schema.type', 'settings.pivot', 'pivot = [x, y]'));
         }
         if (s.key !== undefined && (typeof s.key !== 'string' || !COLOR_RE.test(s.key))) {
             out.push(err('schema.type', 'settings.key', 'key = #RRGGBB'));
+        }
+        // solidez por tile: um tile de lixo ({name: 5} / solid: "yes") virava
+        // colisao no build (`!!t.solid`) sem acusar nada
+        if (s.tiles !== undefined) {
+            if (!Array.isArray(s.tiles)) {
+                out.push(err('schema.type', 'settings.tiles', 'tiles deve ser array'));
+            } else {
+                s.tiles.forEach((t, i) => {
+                    if (!isObj(t) || typeof t.name !== 'string' ||
+                        (t.solid !== undefined && typeof t.solid !== 'boolean')) {
+                        out.push(err('schema.type', 'settings.tiles[' + i + ']',
+                                     'tile deve ser {name: string, solid?: booleano}'));
+                    }
+                });
+            }
         }
         if (s.anims !== undefined) {
             if (!isObj(s.anims)) out.push(err('schema.type', 'settings.anims', 'anims deve ser objeto clipe -> lista'));

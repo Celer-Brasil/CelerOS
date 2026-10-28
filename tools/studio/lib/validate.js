@@ -54,8 +54,9 @@ function checkSpriteRef(project, ref, at, errors) {
     }
 }
 
-function checkEntity(project, e, at, errors) {
+function checkEntity(project, e, at, errors, runtime) {
     if (!e || typeof e !== 'object') return;
+    const mode = runtime === 'app' ? 'app' : 'game';
     const comps = e.components || [];
     const ids = new Set();
     comps.forEach((c, i) => {
@@ -66,8 +67,33 @@ function checkEntity(project, e, at, errors) {
             ids.add(c.id);
         }
         if (!cat) return;   // schema ja acusou
+        // um componente do modo errado viraria lixo no build (o runtime do
+        // outro modo nao o conhece): erro com a lista do modo certo
+        const want = cat.runtime || 'any';
+        if (want !== 'any' && want !== mode) {
+            errors.push({
+                code: 'component.runtime', path: cat2 + '.type',
+                message: c.type + ' so vale em runtime ' + (want === 'app' ? '"app"' : '"studio"') +
+                         ' (projeto usa "' + (runtime || 'studio') + '")',
+                hint: 'componentes deste modo: ' + Object.keys(SC.componentCatalog())
+                    .filter((k) => (SC.componentCatalog()[k].runtime || 'any') === mode ||
+                                   (SC.componentCatalog()[k].runtime || 'any') === 'any')
+                    .join(', '),
+            });
+        }
         const f = c.fields || {};
         if (c.type === 'sprite') checkSpriteRef(project, f.sprite, cat2 + '.fields.sprite', errors);
+        if (c.type === 'ui.image') {
+            const a = project.asset(f.asset);
+            if (!a) {
+                errors.push({ code: 'ref.missing', path: cat2 + '.fields.asset', message: 'imagem inexistente: ' + f.asset });
+            } else if (!isGraphic(a.kind)) {
+                errors.push({ code: 'ref.sprite', path: cat2 + '.fields.asset', message: a.name + ' nao e imagem' });
+            } else if ((a.meta.settings || {}).mode !== undefined && (a.meta.settings || {}).mode !== 'single') {
+                errors.push({ code: 'ref.region', path: cat2 + '.fields.asset',
+                              message: a.name + ' e ' + a.meta.settings.mode + '; ui.image aceita so imagem unica' });
+            }
+        }
         if (c.type === 'script') {
             const a = project.asset(f.script);
             if (!a) errors.push({ code: 'ref.missing', path: cat2 + '.fields.script', message: 'script inexistente: ' + f.script });
@@ -130,8 +156,22 @@ function checkEntity(project, e, at, errors) {
                 if (ov.components) {
                     const byId = new Map((te.components || []).map((c) => [c.id, c]));
                     for (const cid of Object.keys(ov.components)) {
-                        if (!byId.has(cid)) {
+                        const pc = byId.get(cid);
+                        if (!pc) {
                             errors.push({ code: 'ref.override', path: at + '.overrides.' + target + '.components.' + cid, message: 'componente nao existe no prefab' });
+                            continue;
+                        }
+                        // campo de override fora do catalogo era engolido pelo
+                        // build (typo virava no-op silencioso no runtime)
+                        const cat = SC.componentCatalog()[pc.type];
+                        const patch = ov.components[cid] || {};
+                        for (const k of Object.keys(patch)) {
+                            if (cat && !cat.fields[k]) {
+                                errors.push({ code: 'op.field',
+                                              path: at + '.overrides.' + target + '.components.' + cid + '.' + k,
+                                              message: 'campo desconhecido em ' + pc.type + ': ' + k,
+                                              hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+                            }
                         }
                     }
                 }
@@ -140,13 +180,29 @@ function checkEntity(project, e, at, errors) {
     }
 }
 
-function checkScene(project, sc, asset, errors) {
+function checkScene(project, sc, asset, errors, warnings, runtime) {
     const diags = [];
     SC.validateSceneData(sc, diags);
     for (const d of diags) errors.push(d);
     const at = asset ? asset.relPath : ('cena ' + (sc && sc.name));
     if (!sc || typeof sc !== 'object') return;
+    const isApp = runtime === 'app';
     if (sc.settings) {
+        if (isApp) {
+            (sc.settings.scripts || []).forEach((ref, i) => {
+                const a = project.asset(ref);
+                if (!a) {
+                    errors.push({ code: 'ref.missing', path: at + '.settings.scripts[' + i + ']',
+                                  message: 'script de tela inexistente: ' + ref });
+                } else if (a.kind !== 'script') {
+                    errors.push({ code: 'ref.script', path: at + '.settings.scripts[' + i + ']',
+                                  message: a.name + ' nao e script' });
+                }
+            });
+        } else if ((sc.settings.scripts || []).length) {
+            errors.push({ code: 'component.runtime', path: at + '.settings.scripts',
+                          message: 'scripts de tela so valem no runtime "app" (no jogo use uma entidade de controle)' });
+        }
         for (const ref of sc.settings.assets || []) {
             const a = project.asset(ref);
             if (!a) {
@@ -169,7 +225,23 @@ function checkScene(project, sc, asset, errors) {
             }
         }
     }
-    (sc.entities || []).forEach((e, i) => checkEntity(project, e, at + '.entities[' + i + ']', errors));
+    (sc.entities || []).forEach((e, i) => checkEntity(project, e, at + '.entities[' + i + ']', errors, runtime));
+    if (isApp) {
+        if ((sc.tilemaps || []).length) {
+            errors.push({ code: 'scene.tilemap', path: at + '.tilemaps',
+                          message: 'runtime app nao tem tilemap: use ui.card/ui.image na tela' });
+        }
+        let widgets = 0;
+        for (const e of sc.entities || []) {
+            for (const c of e.components || []) if (String(c.type).indexOf('ui.') === 0) widgets++;
+        }
+        if (widgets > 40) {
+            warnings.push({ code: 'scene.widgets', path: at,
+                            message: widgets + ' widgets na tela (o Kui guarda 48 slots; acima de 40 o ' +
+                                     'desenho parcial recomeca a cada quadro)' });
+        }
+        return;
+    }
     (sc.tilemaps || []).forEach((tm, i) => {
         const a = project.asset(tm.tileset);
         const tat = at + '.tilemaps[' + i + ']';
@@ -198,13 +270,41 @@ function checkScene(project, sc, asset, errors) {
     });
 }
 
-function checkPrefab(project, pf, asset, errors) {
+function checkPrefab(project, pf, asset, errors, runtime) {
     const diags = [];
     SC.validatePrefabData(pf, diags);
     for (const d of diags) errors.push(d);
     const at = asset ? asset.relPath : ('prefab ' + (pf && pf.name));
     if (!pf || typeof pf !== 'object') return;
-    (pf.entities || []).forEach((e, i) => checkEntity(project, e, at + '.entities[' + i + ']', errors));
+    (pf.entities || []).forEach((e, i) => checkEntity(project, e, at + '.entities[' + i + ']', errors, runtime));
+}
+
+// permissoes declaradas: ausente = PERM_LEGACY do firmware (fs/net/gpio/
+// system/mic/camera), entao so checamos quando o projeto declara a lista.
+function checkAppPerms(project, errors) {
+    if (project.data.runtime !== 'app') return;
+    if (!Array.isArray(project.data.permissions)) return;
+    const perms = new Set(project.data.permissions);
+    const need = (perm, at, message) => {
+        if (!perms.has(perm)) {
+            errors.push({ code: 'perm.missing', path: at, message,
+                          hint: 'adicione "' + perm + '" em permissions do projeto' });
+        }
+    };
+    for (const sc of project.sceneByGuid.values()) {
+        if (sc.settings && sc.settings.music) {
+            need('fs', 'cena ' + sc.name + ' / music', 'musica da tela toca um arquivo (playWav)');
+        }
+        for (const e of sc.entities || []) {
+            for (const c of e.components || []) {
+                const at = 'cena ' + sc.name + ' / ' + c.type;
+                if (String(c.type).indexOf('ai.') === 0) need('net', at, c.type + ' chama a IA (precisa de rede)');
+                if (c.type === 'ai.vision') need('fs', at, 'ai.vision le a imagem do disco');
+                if (c.type === 'mic.record') need('mic', at, 'mic.record usa o microfone');
+                if (c.type === 'ui.image') need('fs', at, 'ui.image desenha um PNG do pacote (drawPNG)');
+            }
+        }
+    }
 }
 
 function localVersion(name) {
@@ -331,6 +431,7 @@ function checkScripts(project, errors, warnings) {
 
 function checkLimits(project, errors, warnings) {
     const legacy = project.data.runtime === 'legacy';
+    const isApp = project.data.runtime === 'app';
     const shipped = project.assets.filter((a) => isShipped(a.kind));
     const scripts = shipped.filter((a) => a.kind === 'script').length;
     const files = shipped.length - scripts + scripts;   // assets + scripts (1 arquivo cada)
@@ -345,8 +446,10 @@ function checkLimits(project, errors, warnings) {
         warnings.push({ code: 'package.extras', path: 'Assets',
                         message: 'pacote com ' + extras + ' extras (limite 16; data pode dividir)' });
     }
+    // o runtime app nao usa engine nenhuma: zero deps obrigatorias (roda ate
+    // na CYD, sem psram). Jogo/legado continuam exigindo o fecho da CelerGame.
     const need = legacy ? ['celeros.game']
-        : ['celeros.game', 'celeros.game.spr', 'celeros.game.tilemap'];
+        : (isApp ? [] : ['celeros.game', 'celeros.game.spr', 'celeros.game.tilemap']);
     for (const n of need) {
         if (!deps[n]) {
             errors.push({ code: 'deps.missing', path: 'deps',
@@ -375,6 +478,15 @@ function validateProject(project, opts) {
         errors.push({ code: issue.code, path: issue.path, message: issue.message });
     }
     const legacy = project.data.runtime === 'legacy';
+    const runtime = project.data.runtime || 'studio';
+    if (runtime === 'app') {
+        // o Kui e estritamente virtual (240x320); canvas nativo nao existe nele
+        if (project.data.canvas && project.data.canvas.native) {
+            errors.push({ code: 'canvas.native', path: 'canvas.native',
+                          message: 'runtime app desenha no espaco virtual 240x320 (canvas.native nao vale)',
+                          hint: 'use uma imagem de fundo em ui.image se precisar de arte em pixel fisico' });
+        }
+    }
     if (!legacy && !project.scene(project.data.startScene) &&
         (project.data.startScene || project.sceneList().length)) {
         errors.push({ code: 'scene.start', path: 'startScene',
@@ -392,15 +504,52 @@ function validateProject(project, opts) {
         }
     }
     for (const sc of project.sceneByGuid.values()) {
-        checkScene(project, sc, project.byGuid.get(sc.guid), errors);
+        checkScene(project, sc, project.byGuid.get(sc.guid), errors, warnings, runtime);
     }
     for (const pf of project.prefabByGuid.values()) {
-        checkPrefab(project, pf, project.byGuid.get(pf.guid), errors);
+        checkPrefab(project, pf, project.byGuid.get(pf.guid), errors, runtime);
+    }
+    // o GUID do .meta e a identidade do arquivo (refs de cena/prefab apontam
+    // para ele); um guid divergente dentro do JSON orfava o startScene e as
+    // refs sem nenhum erro apontar a causa
+    for (const a of project.assets) {
+        if (a.kind === 'scene' && a.scene && a.scene.guid !== a.guid) {
+            errors.push({ code: 'guid.mismatch', path: a.relPath,
+                          message: 'guid da cena (' + a.scene.guid + ') difere do .meta (' + a.guid + ')' });
+        }
+        if (a.kind === 'prefab' && a.prefab && a.prefab.guid !== a.guid) {
+            errors.push({ code: 'guid.mismatch', path: a.relPath,
+                          message: 'guid do prefab (' + a.prefab.guid + ') difere do .meta (' + a.guid + ')' });
+        }
     }
     if (!opts.structural) {
         checkAssetFiles(project, errors, warnings);
         checkScripts(project, errors, warnings);
         checkLimits(project, errors, warnings);
+        checkAppPerms(project, errors);
+        // campo de script fora de exports.props: typo virava no-op silencioso
+        const propsOf = (ref) => {
+            const a = project.asset(ref);
+            return (a && a.meta && a.meta.settings && a.meta.settings.props) || {};
+        };
+        const scan = (obj, at) => {
+            for (const e of obj.entities || []) {
+                for (const c of e.components || []) {
+                    if (!c || c.type !== 'script') continue;
+                    const props = propsOf((c.fields || {}).script);
+                    if (!Object.keys(props).length) continue;
+                    const fields = (c.fields || {}).fields || {};
+                    for (const k of Object.keys(fields)) {
+                        if (!props[k]) {
+                            warnings.push({ code: 'script.field', path: at + ' / ' + (e.name || e.fid),
+                                            message: 'campo "' + k + '" nao declarado em exports.props do script' });
+                        }
+                    }
+                }
+            }
+        };
+        for (const sc of project.sceneByGuid.values()) scan(sc, 'cena ' + sc.name);
+        for (const pf of project.prefabByGuid.values()) scan(pf, 'prefab ' + pf.name);
     }
     return { ok: errors.length === 0, errors, warnings };
 }

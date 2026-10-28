@@ -265,7 +265,13 @@ function studioBoot(E, data) {
                 else if (c.t === 'script') {
                     ent.fields[c.id || ('s' + j)] = c.fields || {};
                     var mod = null;
-                    try { mod = require(c.m); } catch (e) { mod = null; }
+                    try { mod = require(c.m); }
+                    catch (errReq) {
+                        // script quebrado (sintaxe/require) nao pode sumir:
+                        // a entidade rodaria "muda" sem nenhuma pista no log
+                        mod = null;
+                        try { S.print('[studio] script ' + c.m + ' falhou: ' + errReq); } catch (e2) {}
+                    }
                     if (mod) {
                         var ctx = {
                             E: E, scene: s, entity: ent, assets: A, arg: arg,

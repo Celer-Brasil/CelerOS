@@ -1,97 +1,917 @@
 {
   "format": 1,
-  "note": "Catalogo unico de componentes: valida os arquivos, gera o inspetor da GUI e serve de descoberta para a IA (studio describe). Tipos: number, int, bool, string, color (#RRGGBB), enum, sprite (guid#regiao), script (guid), tilemap-tileset (guid), json, vec2.",
+  "note": "Catalogo unico de componentes: valida os arquivos, gera o inspetor da GUI e serve de descoberta para a IA (studio describe). Tipos: number, int, bool, string, color (#RRGGBB), enum, sprite (guid#regiao), script (guid), tilemap-tileset (guid), json, vec2. O campo `runtime` diz em qual modo o componente vale: game (runtime studio), app (runtime app) ou any.",
   "components": {
     "transform": {
       "label": "Transform",
       "implicit": true,
+      "runtime": "any",
       "fields": {
-        "x": { "type": "number", "default": 0, "label": "X" },
-        "y": { "type": "number", "default": 0, "label": "Y" },
-        "rot": { "type": "number", "default": 0, "label": "Rotacao" },
-        "sx": { "type": "number", "default": 1, "label": "Escala X" },
-        "sy": { "type": "number", "default": 1, "label": "Escala Y" },
-        "ax": { "type": "number", "default": 0.5, "min": 0, "max": 1, "label": "Ancora X" },
-        "ay": { "type": "number", "default": 0.5, "min": 0, "max": 1, "label": "Ancora Y" }
+        "x": {
+          "type": "number",
+          "default": 0,
+          "label": "X"
+        },
+        "y": {
+          "type": "number",
+          "default": 0,
+          "label": "Y"
+        },
+        "rot": {
+          "type": "number",
+          "default": 0,
+          "label": "Rotacao"
+        },
+        "sx": {
+          "type": "number",
+          "default": 1,
+          "label": "Escala X"
+        },
+        "sy": {
+          "type": "number",
+          "default": 1,
+          "label": "Escala Y"
+        },
+        "ax": {
+          "type": "number",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "label": "Ancora X"
+        },
+        "ay": {
+          "type": "number",
+          "default": 0.5,
+          "min": 0,
+          "max": 1,
+          "label": "Ancora Y"
+        }
       }
     },
     "sprite": {
       "label": "Sprite",
+      "runtime": "game",
       "fields": {
-        "sprite": { "type": "sprite", "required": true, "label": "Sprite" },
-        "key": { "type": "color", "default": "#000000", "label": "Cor-chave" }
+        "sprite": {
+          "type": "sprite",
+          "required": true,
+          "label": "Sprite"
+        },
+        "key": {
+          "type": "color",
+          "default": "#000000",
+          "label": "Cor-chave"
+        }
       }
     },
     "anim": {
       "label": "Animacao",
+      "runtime": "game",
       "fields": {
-        "meta": { "type": "asset", "default": "", "label": "Metadados do atlas",
-                  "hint": "asset sprite-sheet; usa E.spr.animOf (spr 1.6)" },
+        "meta": {
+          "type": "asset",
+          "default": "",
+          "label": "Metadados do atlas",
+          "hint": "asset sprite-sheet; usa E.spr.animOf (spr 1.6)"
+        },
         "clips": {
           "type": "json",
           "default": {},
           "label": "Clipes",
           "hint": "{ nome: { frames: [\"guid#regiao\", ...], fps: 6, loop: true } }"
         },
-        "current": { "type": "string", "default": "", "label": "Clipe atual" },
-        "autoplay": { "type": "bool", "default": true, "label": "Tocar ao entrar" }
+        "current": {
+          "type": "string",
+          "default": "",
+          "label": "Clipe atual"
+        },
+        "autoplay": {
+          "type": "bool",
+          "default": true,
+          "label": "Tocar ao entrar"
+        }
       }
     },
     "hud": {
       "label": "HUD",
+      "runtime": "game",
       "fields": {
-        "anchor": { "type": "int", "default": 0, "min": 0, "max": 8, "label": "Ancora 0..8",
-                    "hint": "0=NO, 1=N, 2=NE, 4=centro, 8=SE (E.anchor)" },
-        "mx": { "type": "number", "default": 4, "label": "Margem X" },
-        "my": { "type": "number", "default": 4, "label": "Margem Y" }
+        "anchor": {
+          "type": "int",
+          "default": 0,
+          "min": 0,
+          "max": 8,
+          "label": "Ancora 0..8",
+          "hint": "0=NO, 1=N, 2=NE, 4=centro, 8=SE (E.anchor)"
+        },
+        "mx": {
+          "type": "number",
+          "default": 4,
+          "label": "Margem X"
+        },
+        "my": {
+          "type": "number",
+          "default": 4,
+          "label": "Margem Y"
+        }
       }
     },
     "text": {
       "label": "Texto",
+      "runtime": "game",
       "fields": {
-        "text": { "type": "string", "default": "", "label": "Texto" },
-        "color": { "type": "color", "default": "#e8eefc", "label": "Cor" },
-        "px": { "type": "number", "default": 13, "label": "Altura (px)" },
-        "ts": { "type": "enum", "values": ["", "tiny", "small", "body", "label", "big", "title", "huge"], "default": "", "label": "Papel tipografico" },
-        "align": { "type": "enum", "values": ["left", "center", "right"], "default": "left", "label": "Alinhamento" },
-        "valign": { "type": "enum", "values": ["top", "middle", "bottom"], "default": "top", "label": "Vertical" },
-        "shadow": { "type": "color", "default": "", "label": "Sombra" }
+        "text": {
+          "type": "string",
+          "default": "",
+          "label": "Texto"
+        },
+        "color": {
+          "type": "color",
+          "default": "#e8eefc",
+          "label": "Cor"
+        },
+        "px": {
+          "type": "number",
+          "default": 13,
+          "label": "Altura (px)"
+        },
+        "ts": {
+          "type": "enum",
+          "values": [
+            "",
+            "tiny",
+            "small",
+            "body",
+            "label",
+            "big",
+            "title",
+            "huge"
+          ],
+          "default": "",
+          "label": "Papel tipografico"
+        },
+        "align": {
+          "type": "enum",
+          "values": [
+            "left",
+            "center",
+            "right"
+          ],
+          "default": "left",
+          "label": "Alinhamento"
+        },
+        "valign": {
+          "type": "enum",
+          "values": [
+            "top",
+            "middle",
+            "bottom"
+          ],
+          "default": "top",
+          "label": "Vertical"
+        },
+        "shadow": {
+          "type": "color",
+          "default": "",
+          "label": "Sombra"
+        }
       }
     },
     "shape": {
       "label": "Forma",
+      "runtime": "game",
       "fields": {
-        "shape": { "type": "enum", "values": ["rect", "circle", "line"], "default": "rect", "label": "Forma" },
-        "w": { "type": "number", "default": 16, "label": "Largura" },
-        "h": { "type": "number", "default": 16, "label": "Altura" },
-        "r": { "type": "number", "default": 8, "label": "Raio" },
-        "x2": { "type": "number", "default": 0, "label": "X2 (linha)" },
-        "y2": { "type": "number", "default": 0, "label": "Y2 (linha)" },
-        "color": { "type": "color", "default": "#38bcf8", "label": "Cor" },
-        "fill": { "type": "bool", "default": true, "label": "Preenchida" }
+        "shape": {
+          "type": "enum",
+          "values": [
+            "rect",
+            "circle",
+            "line"
+          ],
+          "default": "rect",
+          "label": "Forma"
+        },
+        "w": {
+          "type": "number",
+          "default": 16,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 16,
+          "label": "Altura"
+        },
+        "r": {
+          "type": "number",
+          "default": 8,
+          "label": "Raio"
+        },
+        "x2": {
+          "type": "number",
+          "default": 0,
+          "label": "X2 (linha)"
+        },
+        "y2": {
+          "type": "number",
+          "default": 0,
+          "label": "Y2 (linha)"
+        },
+        "color": {
+          "type": "color",
+          "default": "#38bcf8",
+          "label": "Cor"
+        },
+        "fill": {
+          "type": "bool",
+          "default": true,
+          "label": "Preenchida"
+        }
       }
     },
     "collider": {
       "label": "Colisor",
+      "runtime": "game",
       "fields": {
-        "shape": { "type": "enum", "values": ["rect", "circle"], "default": "rect", "label": "Forma" },
-        "w": { "type": "number", "default": 16, "label": "Largura" },
-        "h": { "type": "number", "default": 16, "label": "Altura" },
-        "r": { "type": "number", "default": 8, "label": "Raio" }
+        "shape": {
+          "type": "enum",
+          "values": [
+            "rect",
+            "circle"
+          ],
+          "default": "rect",
+          "label": "Forma"
+        },
+        "w": {
+          "type": "number",
+          "default": 16,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 16,
+          "label": "Altura"
+        },
+        "r": {
+          "type": "number",
+          "default": 8,
+          "label": "Raio"
+        }
       }
     },
     "script": {
       "label": "Script",
+      "runtime": "any",
       "fields": {
-        "script": { "type": "script", "required": true, "label": "Script" },
-        "fields": { "type": "json", "default": {}, "label": "Campos" }
+        "script": {
+          "type": "script",
+          "required": true,
+          "label": "Script"
+        },
+        "fields": {
+          "type": "json",
+          "default": {},
+          "label": "Campos",
+          "hint": "sobrepoe os defaults declarados em exports.props do script"
+        }
       }
     },
     "data": {
       "label": "Dados",
+      "runtime": "any",
       "fields": {
-        "fields": { "type": "json", "default": {}, "label": "Dados",
-                    "hint": "livre para scripts: tipo, patrulha, item, onda..." }
+        "fields": {
+          "type": "json",
+          "default": {},
+          "label": "Dados",
+          "hint": "livre para scripts: tipo, patrulha, item, onda..."
+        }
+      }
+    },
+    "ui.text": {
+      "label": "Texto (app)",
+      "runtime": "app",
+      "fields": {
+        "text": {
+          "type": "string",
+          "default": "",
+          "label": "Texto"
+        },
+        "bind": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do estado",
+          "hint": "se preenchida, mostra o valor do estado no lugar do texto"
+        },
+        "role": {
+          "type": "enum",
+          "values": [
+            "",
+            "caption",
+            "body",
+            "title",
+            "display"
+          ],
+          "default": "",
+          "label": "Papel tipografico"
+        },
+        "color": {
+          "type": "color",
+          "default": "#e8eefc",
+          "label": "Cor"
+        },
+        "align": {
+          "type": "enum",
+          "values": [
+            "left",
+            "center",
+            "right"
+          ],
+          "default": "left",
+          "label": "Alinhamento"
+        },
+        "w": {
+          "type": "number",
+          "default": 0,
+          "label": "Largura (0 = livre)"
+        },
+        "lines": {
+          "type": "int",
+          "default": 0,
+          "label": "Linhas (0 = auto)"
+        },
+        "bg": {
+          "type": "color",
+          "default": "",
+          "label": "Fundo"
+        },
+        "id": {
+          "type": "string",
+          "default": "",
+          "label": "Id do widget"
+        }
+      }
+    },
+    "ui.button": {
+      "label": "Botao",
+      "runtime": "app",
+      "fields": {
+        "label": {
+          "type": "string",
+          "default": "OK",
+          "label": "Rotulo"
+        },
+        "w": {
+          "type": "number",
+          "default": 200,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 32,
+          "label": "Altura"
+        },
+        "style": {
+          "type": "enum",
+          "values": [
+            "primary",
+            "ghost",
+            "danger"
+          ],
+          "default": "primary",
+          "label": "Estilo"
+        },
+        "disabled": {
+          "type": "bool",
+          "default": false,
+          "label": "Desabilitado"
+        },
+        "disabledBind": {
+          "type": "string",
+          "default": "",
+          "label": "Chave desabilitado"
+        },
+        "event": {
+          "type": "string",
+          "default": "",
+          "label": "Evento",
+          "hint": "nome entregue ao script da tela em event(nome, valor, ctx)"
+        },
+        "go": {
+          "type": "string",
+          "default": "",
+          "label": "Ir para a tela",
+          "hint": "navega sem script; vazio = nao navega"
+        },
+        "id": {
+          "type": "string",
+          "default": "",
+          "label": "Id do widget"
+        }
+      }
+    },
+    "ui.toggle": {
+      "label": "Interruptor",
+      "runtime": "app",
+      "fields": {
+        "key": {
+          "type": "string",
+          "required": true,
+          "label": "Chave do estado",
+          "default": "ligado"
+        },
+        "event": {
+          "type": "string",
+          "default": "",
+          "label": "Evento"
+        },
+        "id": {
+          "type": "string",
+          "default": "",
+          "label": "Id do widget"
+        }
+      }
+    },
+    "ui.slider": {
+      "label": "Slider",
+      "runtime": "app",
+      "fields": {
+        "key": {
+          "type": "string",
+          "required": true,
+          "label": "Chave do estado",
+          "default": "valor"
+        },
+        "w": {
+          "type": "number",
+          "default": 200,
+          "label": "Largura"
+        },
+        "min": {
+          "type": "number",
+          "default": 0,
+          "label": "Minimo"
+        },
+        "max": {
+          "type": "number",
+          "default": 100,
+          "label": "Maximo"
+        },
+        "step": {
+          "type": "number",
+          "default": 1,
+          "label": "Passo"
+        },
+        "event": {
+          "type": "string",
+          "default": "",
+          "label": "Evento"
+        },
+        "id": {
+          "type": "string",
+          "default": "",
+          "label": "Id do widget"
+        }
+      }
+    },
+    "ui.progress": {
+      "label": "Progresso",
+      "runtime": "app",
+      "fields": {
+        "value": {
+          "type": "number",
+          "default": 0,
+          "label": "Valor 0..100"
+        },
+        "key": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do estado",
+          "hint": "quando preenchida, o valor vem do estado (0..100)"
+        },
+        "w": {
+          "type": "number",
+          "default": 200,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 8,
+          "label": "Altura"
+        }
+      }
+    },
+    "ui.list": {
+      "label": "Lista",
+      "runtime": "app",
+      "fields": {
+        "items": {
+          "type": "json",
+          "default": [],
+          "label": "Itens",
+          "hint": "string ou {label, sub, right, rightColor, bars, enabled}"
+        },
+        "itemsBind": {
+          "type": "string",
+          "default": "",
+          "label": "Chave dos itens",
+          "hint": "quando preenchida, a lista vem do estado (o script troca os itens)"
+        },
+        "key": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do selecionado",
+          "hint": "indice selecionado, gravado no estado"
+        },
+        "w": {
+          "type": "number",
+          "default": 224,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 160,
+          "label": "Altura"
+        },
+        "rowH": {
+          "type": "number",
+          "default": 40,
+          "label": "Altura da linha"
+        },
+        "event": {
+          "type": "string",
+          "default": "",
+          "label": "Evento"
+        },
+        "id": {
+          "type": "string",
+          "required": true,
+          "label": "Id do widget",
+          "hint": "a lista guarda rolagem/inercia por id",
+          "default": ""
+        }
+      }
+    },
+    "ui.tabs": {
+      "label": "Abas",
+      "runtime": "app",
+      "fields": {
+        "labels": {
+          "type": "json",
+          "default": [
+            "A",
+            "B"
+          ],
+          "label": "Rotulos"
+        },
+        "key": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do ativo"
+        },
+        "w": {
+          "type": "number",
+          "default": 224,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 30,
+          "label": "Altura"
+        },
+        "event": {
+          "type": "string",
+          "default": "",
+          "label": "Evento"
+        }
+      }
+    },
+    "ui.card": {
+      "label": "Cartao",
+      "runtime": "app",
+      "fields": {
+        "w": {
+          "type": "number",
+          "default": 224,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 80,
+          "label": "Altura"
+        },
+        "radius": {
+          "type": "number",
+          "default": 10,
+          "label": "Raio"
+        },
+        "color": {
+          "type": "color",
+          "default": "",
+          "label": "Cor (vazio = tema)"
+        },
+        "stroke": {
+          "type": "color",
+          "default": "",
+          "label": "Borda"
+        }
+      }
+    },
+    "ui.image": {
+      "label": "Imagem",
+      "runtime": "app",
+      "fields": {
+        "asset": {
+          "type": "sprite",
+          "required": true,
+          "label": "Imagem",
+          "hint": "sprite de imagem unica (sem regiao/atlas)"
+        },
+        "w": {
+          "type": "number",
+          "default": 32,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 32,
+          "label": "Altura"
+        },
+        "key": {
+          "type": "color",
+          "default": "#000000",
+          "label": "Cor-chave"
+        }
+      }
+    },
+    "ui.badge": {
+      "label": "Selo",
+      "runtime": "app",
+      "fields": {
+        "text": {
+          "type": "string",
+          "default": "",
+          "label": "Texto"
+        },
+        "bind": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do estado"
+        },
+        "color": {
+          "type": "color",
+          "default": "",
+          "label": "Cor"
+        },
+        "textColor": {
+          "type": "color",
+          "default": "",
+          "label": "Cor do texto"
+        }
+      }
+    },
+    "ui.spinner": {
+      "label": "Spinner",
+      "runtime": "app",
+      "fields": {
+        "r": {
+          "type": "number",
+          "default": 8,
+          "label": "Raio"
+        },
+        "color": {
+          "type": "color",
+          "default": "",
+          "label": "Cor"
+        }
+      }
+    },
+    "ui.field": {
+      "label": "Campo de texto",
+      "runtime": "app",
+      "fields": {
+        "key": {
+          "type": "string",
+          "required": true,
+          "label": "Chave do estado",
+          "default": "texto"
+        },
+        "label": {
+          "type": "string",
+          "default": "",
+          "label": "Rotulo"
+        },
+        "mask": {
+          "type": "enum",
+          "values": [
+            "",
+            "num",
+            "pass"
+          ],
+          "default": "",
+          "label": "Mascara",
+          "hint": "abre o teclado do sistema (System.prompt) e grava no estado"
+        },
+        "hint": {
+          "type": "string",
+          "default": "",
+          "label": "Dica"
+        }
+      }
+    },
+    "ai.chat": {
+      "label": "IA: conversa",
+      "runtime": "app",
+      "fields": {
+        "provider": {
+          "type": "enum",
+          "values": [
+            "deepseek",
+            "openrouter"
+          ],
+          "default": "openrouter",
+          "label": "Provedor"
+        },
+        "model": {
+          "type": "string",
+          "default": "",
+          "label": "Modelo (vazio = padrao)"
+        },
+        "system": {
+          "type": "string",
+          "default": "",
+          "label": "Instrucao de sistema"
+        },
+        "prompt": {
+          "type": "string",
+          "default": "",
+          "label": "Prompt fixo"
+        },
+        "promptKey": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do prompt",
+          "hint": "quando preenchida, o texto do usuario vem do estado"
+        },
+        "trigger": {
+          "type": "string",
+          "required": true,
+          "label": "Chave de disparo",
+          "hint": "o script seta o estado para true e o runtime dispara a chamada",
+          "default": "pedir"
+        },
+        "outKey": {
+          "type": "string",
+          "default": "resposta",
+          "label": "Chave da resposta"
+        },
+        "busyKey": {
+          "type": "string",
+          "default": "ocupado",
+          "label": "Chave de ocupado"
+        },
+        "errorKey": {
+          "type": "string",
+          "default": "erro",
+          "label": "Chave de erro"
+        },
+        "histKey": {
+          "type": "string",
+          "default": "historico",
+          "label": "Chave do historico"
+        },
+        "history": {
+          "type": "bool",
+          "default": false,
+          "label": "Manter historico"
+        },
+        "attach": {
+          "type": "enum",
+          "values": [
+            "",
+            "mic"
+          ],
+          "default": "",
+          "label": "Anexo",
+          "hint": "mic = manda o ultimo audio gravado como input_audio (multimodal)"
+        },
+        "maxTokens": {
+          "type": "int",
+          "default": 1024,
+          "label": "Max tokens"
+        }
+      }
+    },
+    "ai.speak": {
+      "label": "IA: fala",
+      "runtime": "app",
+      "fields": {
+        "text": {
+          "type": "string",
+          "default": "",
+          "label": "Texto fixo"
+        },
+        "textKey": {
+          "type": "string",
+          "default": "",
+          "label": "Chave do texto"
+        },
+        "voice": {
+          "type": "string",
+          "default": "Charon",
+          "label": "Voz"
+        },
+        "trigger": {
+          "type": "string",
+          "required": true,
+          "label": "Chave de disparo",
+          "default": "falar"
+        },
+        "busyKey": {
+          "type": "string",
+          "default": "",
+          "label": "Chave de ocupado"
+        }
+      }
+    },
+    "ai.vision": {
+      "label": "IA: visao",
+      "runtime": "app",
+      "fields": {
+        "prompt": {
+          "type": "string",
+          "default": "Descreva a imagem.",
+          "label": "Prompt"
+        },
+        "imageKey": {
+          "type": "string",
+          "required": true,
+          "label": "Chave do caminho",
+          "hint": "caminho de imagem (/local, /sd ou /local/data/<pkg>/) no estado",
+          "default": "imagem"
+        },
+        "trigger": {
+          "type": "string",
+          "required": true,
+          "label": "Chave de disparo",
+          "default": "ver"
+        },
+        "outKey": {
+          "type": "string",
+          "default": "visao",
+          "label": "Chave da resposta"
+        },
+        "errorKey": {
+          "type": "string",
+          "default": "erro",
+          "label": "Chave de erro"
+        }
+      }
+    },
+    "mic.record": {
+      "label": "Microfone",
+      "runtime": "app",
+      "fields": {
+        "key": {
+          "type": "string",
+          "required": true,
+          "label": "Chave do audio",
+          "hint": "recebe o WAV em base64 ao soltar",
+          "default": "audio"
+        },
+        "mode": {
+          "type": "enum",
+          "values": [
+            "hold",
+            "toggle"
+          ],
+          "default": "hold",
+          "label": "Modo"
+        },
+        "label": {
+          "type": "string",
+          "default": "Segurar para falar",
+          "label": "Rotulo"
+        },
+        "w": {
+          "type": "number",
+          "default": 120,
+          "label": "Largura"
+        },
+        "h": {
+          "type": "number",
+          "default": 44,
+          "label": "Altura"
+        },
+        "maxMs": {
+          "type": "int",
+          "default": 8000,
+          "label": "Duracao maxima (ms)"
+        },
+        "event": {
+          "type": "string",
+          "default": "mic:done",
+          "label": "Evento"
+        }
       }
     }
   }

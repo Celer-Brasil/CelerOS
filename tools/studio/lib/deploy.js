@@ -11,6 +11,7 @@ const { Project } = require('./project');
 const { buildProject } = require('./build');
 const { resolveLocal } = require('./deps');
 const { strip } = require('../../sdk/lib/jsstrip.js');
+const jsmin = require('../../sdk/lib/jsmin.js');
 const { createZip, readZip } = require('./zip');
 
 const DEPLOY_DIR = '.studio/deploy';
@@ -53,13 +54,30 @@ function deployProject(dir, opts) {
         try { return fs.statSync(path.join(buildDir, n)).isFile(); } catch (e) { return false; }
     }).sort();
 
+    // globais que os modulos do pacote leem: o main.js nao pode renomear
+    // esses no topo (o topo de um programa E o escopo global do app)
+    const reserved = new Set();
+    for (const name of names) {
+        if (!name.endsWith('.js') || name === 'main.js') continue;
+        try {
+            for (const n of jsmin.freeNames(fs.readFileSync(path.join(buildDir, name))).names) reserved.add(n);
+        } catch (e) { /* lint acusa sintaxe quebrada */ }
+    }
     for (const name of names) {
         if (name === 'deps.json') continue;  // gerado abaixo a partir do build
         const abs = path.join(buildDir, name);
         let data = fs.readFileSync(abs);
         if (name.endsWith('.js')) {
             const before = data.length;
-            const min = strip(data);
+            let min;
+            try {
+                // modulo (s.*.js etc.) e embrulhado pelo loader: topo e local
+                min = Buffer.from(jsmin.minify(data, {
+                    top: name !== 'main.js', reserved: reserved,
+                }).code);
+            } catch (e) {
+                min = strip(data);   // sintaxe exotica: cai no strip de sempre
+            }
             jsBefore += before;
             jsAfter += min.length;
             jsFiles.push({ name, before, after: min.length });
@@ -94,19 +112,25 @@ function deployProject(dir, opts) {
         });
     }
 
-    // Todo require de modulo compartilhado no main.js tem que estar no lock;
-    // um build com deps faltando falha aqui em vez de crashar no device.
+    // Todo require de modulo compartilhado em QUALQUER .js do pacote tem que
+    // estar na pasta ou no lock; um build com deps faltando falha aqui em vez
+    // de crashar no device. Antes so o main.js era varrido: um s.<slug>.js
+    // com require("celeros.game.fx") passava e o app morria no primeiro boot.
     const localModules = new Set(names.filter((n) => n.endsWith('.js'))
         .map((n) => n.slice(0, -3)));
-    // varre o main ja enxuto: comentario nao vira falso require
-    const mainSrc = entries.find((e) => e.name === 'main.js').data.toString('utf8');
+    // varre o js ja enxuto: comentario nao vira falso require
     const requireRe = /require\(\s*["']([^"']+)["']\s*\)/g;
-    let rm;
-    while ((rm = requireRe.exec(mainSrc)) !== null) {
-        const mod = rm[1];
-        if (localModules.has(mod) || depLock[mod]) continue;
-        F.fail('deploy.deps',
-            'main.js requer "' + mod + '", que nao esta na pasta nem no deps.json');
+    for (const e of entries) {
+        if (!/\.js$/.test(e.name)) continue;
+        const src = e.data.toString('utf8');
+        let rm;
+        requireRe.lastIndex = 0;
+        while ((rm = requireRe.exec(src)) !== null) {
+            const mod = rm[1];
+            if (localModules.has(mod) || depLock[mod]) continue;
+            F.fail('deploy.deps',
+                e.name + ' requer "' + mod + '", que nao esta na pasta nem no deps.json');
+        }
     }
 
     const zip = createZip(entries);

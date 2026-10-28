@@ -94,10 +94,21 @@ function undo(project) {
     const root = path.join(project.studioDir, 'undo');
     let names;
     try { names = fs.readdirSync(root).sort(); } catch (e) { names = []; }
-    if (!names.length) F.fail('undo.empty', 'nada para desfazer');
-    const id = names[names.length - 1];
-    const dir = path.join(root, id);
-    const manifest = F.readJson(path.join(dir, 'manifest.json'));
+    // manifest truncado/corrompido (crash antigo) nao pode brickar a pilha:
+    // descarta o snapshot ruim e tenta o anterior
+    let id = null;
+    let dir = null;
+    let manifest = null;
+    while (names.length) {
+        id = names.pop();
+        dir = path.join(root, id);
+        try { manifest = F.readJson(path.join(dir, 'manifest.json')); break; }
+        catch (e) {
+            manifest = null;
+            try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e2) {}
+        }
+    }
+    if (!manifest) F.fail('undo.empty', 'nada para desfazer');
     const snap = { id, dir, manifest };
     // snapshot do estado ATUAL vira o redo (inclui arquivos criados pelo lote)
     const redoId = 'r' + Date.now() + '_' + F.newGuid().slice(0, 6);
@@ -112,10 +123,19 @@ function redo(project) {
     const root = path.join(project.studioDir, 'redo');
     let names;
     try { names = fs.readdirSync(root).sort(); } catch (e) { names = []; }
-    if (!names.length) F.fail('redo.empty', 'nada para refazer');
-    const id = names[names.length - 1];
-    const dir = path.join(root, id);
-    const manifest = F.readJson(path.join(dir, 'manifest.json'));
+    let id = null;
+    let dir = null;
+    let manifest = null;
+    while (names.length) {
+        id = names.pop();
+        dir = path.join(root, id);
+        try { manifest = F.readJson(path.join(dir, 'manifest.json')); break; }
+        catch (e) {
+            manifest = null;
+            try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e2) {}
+        }
+    }
+    if (!manifest) F.fail('redo.empty', 'nada para refazer');
     const undoId = 'u' + Date.now() + '_' + F.newGuid().slice(0, 6);
     takeSnapshot(project, 'undo', undoId, snapshotRels(manifest));
     restoreSnapshot(project, { id, dir, manifest });
@@ -160,6 +180,19 @@ function componentOf(entity, ref) {
     F.fail('ref.component', 'componente inexistente: ' + ref);
 }
 
+// nome de campo fora do catalogo: o build ignoraria em silencio, entao a op
+// falha (typo em `sprte` nao pode "passar")
+function assertFields(type, fields, at) {
+    const cat = SC.componentCatalog()[type];
+    if (!cat || !fields || typeof fields !== 'object' || Array.isArray(fields)) return;
+    for (const k of Object.keys(fields)) {
+        if (!cat.fields[k]) {
+            F.fail('op.field', 'campo desconhecido em ' + type + ': ' + k,
+                   { hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+        }
+    }
+}
+
 function defaultTransform(op) {
     const t = op && op.transform ? op.transform : {};
     const out = {
@@ -182,10 +215,21 @@ function mergeTransform(entity, patch) {
     }
 }
 
+// chaves que o [[Set]] de JS trata como prototipo: um op vindo de JSON
+// ("__proto__" vira propriedade propria no JSON.parse) nao pode poluir
+// Object.prototype do processo inteiro (GUI/CLI/HTTP no mesmo processo)
+function unsafeKey(k) {
+    return k === '__proto__' || k === 'constructor' || k === 'prototype';
+}
+
 function deepMerge(dst, src) {
+    // campos de op chegando com tipo errado (string/null) nao podem virar
+    // chaves numericas nem sobrescrever o formato
+    if (!src || typeof src !== 'object' || Array.isArray(src)) return dst;
     for (const k in src) {
+        if (!Object.prototype.hasOwnProperty.call(src, k) || unsafeKey(k)) continue;
         if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k])) {
-            if (!dst[k] || typeof dst[k] !== 'object') dst[k] = {};
+            if (!dst[k] || typeof dst[k] !== 'object' || Array.isArray(dst[k])) dst[k] = {};
             deepMerge(dst[k], src[k]);
         } else dst[k] = src[k];
     }
@@ -200,6 +244,13 @@ function uniqueEntityName(obj, base) {
     return name;
 }
 
+// coordenadas de grade: "abc"/undefined viravam 0 pelo |0 e pintavam a
+// celula errada em silencio
+function intArg(v, name) {
+    if (typeof v !== 'number' || !isFinite(v)) F.fail('op.args', name + ' deve ser numero');
+    return v | 0;
+}
+
 // -------------------------------------------------------------------- ops ----
 
 const OPS = {
@@ -210,7 +261,11 @@ const OPS = {
                          'startScene', 'runtime']) {
             if (op[k] !== undefined) data[k] = op[k];
         }
-        if (op.legacy !== undefined) data.legacy = F.deepClone(op.legacy);
+        if (op.legacy !== undefined) {
+            // null remove o bloco: sem isso nao ha como voltar runtime studio
+            if (op.legacy === null) delete data.legacy;
+            else data.legacy = F.deepClone(op.legacy);
+        }
         for (const k of ['canvas', 'build', 'editor']) {
             if (op[k] !== undefined) {
                 data[k] = data[k] || {};
@@ -236,6 +291,9 @@ const OPS = {
         const sc = project.scene(op.scene);
         if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
         if (!op.name) F.fail('op.args', 'scene.rename exige name');
+        if (project.sceneNameTaken(op.name, sc.guid)) {
+            F.fail('schema.duplicate', 'ja existe uma cena chamada ' + op.name);
+        }
         sc.name = op.name;
         project.writeScene(sc);
         project.markDirty('celergame.project.json');
@@ -244,7 +302,15 @@ const OPS = {
     'scene.set': function (project, op) {
         const sc = project.scene(op.scene);
         if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
-        if (op.name) sc.name = op.name;
+        if (op.name !== undefined) {
+            if (!op.name || typeof op.name !== 'string') F.fail('op.args', 'scene.set: name deve ser string');
+            // mesmo check do scene.rename: sem isso o lote grava duas cenas
+            // com o mesmo nome e o build falha depois (E.goto ambiguo)
+            if (project.sceneNameTaken(op.name, sc.guid)) {
+                F.fail('schema.duplicate', 'ja existe uma cena chamada ' + op.name);
+            }
+            sc.name = op.name;
+        }
         if (op.settings) {
             sc.settings = sc.settings || {};
             // replace: chaves que devem ser SUBSTITUIDAS (JSON de dados da
@@ -283,6 +349,9 @@ const OPS = {
             e.overrides = {};
         } else if (Array.isArray(op.components)) {
             e.components = F.deepClone(op.components);
+            for (const c of e.components) {
+                if (c && c.type) assertFields(c.type, c.fields, 'entity.create');
+            }
         }
         obj.entities = obj.entities || [];
         obj.entities.push(e);
@@ -326,6 +395,11 @@ const OPS = {
         const base = SC.defaultsFor(op.type);
         if (!base) F.fail('op.type', 'componente desconhecido: ' + op.type,
                          { hint: 'veja `studio describe` para o catalogo' });
+        if (op.fields !== undefined && (!op.fields || typeof op.fields !== 'object' ||
+                                        Array.isArray(op.fields))) {
+            F.fail('op.args', 'component.add: fields deve ser objeto');
+        }
+        assertFields(op.type, op.fields, 'component.add');
         const comp = { id: op.id || ('c_' + F.newGuid().slice(0, 8)), type: op.type, fields: base.fields };
         if (op.fields) deepMerge(comp.fields, op.fields);
         e.components = e.components || [];
@@ -338,10 +412,24 @@ const OPS = {
         const { obj, kind } = container(project, op);
         const e = entityOf(obj, op.entity);
         const c = componentOf(e, op.component);
-        if (op.fields) { c.fields = c.fields || {}; deepMerge(c.fields, op.fields); }
+        if (op.fields !== undefined && (!op.fields || typeof op.fields !== 'object' ||
+                                        Array.isArray(op.fields))) {
+            F.fail('op.args', 'component.set: fields deve ser objeto');
+        }
+        if (op.fields) {
+            assertFields(c.type, op.fields, 'component.set');
+            c.fields = c.fields || {};
+            deepMerge(c.fields, op.fields);
+        }
         if (op.field !== undefined) {
             const field = String(op.field).replace(/^fields\./, '');
             if (!field) F.fail('op.args', 'component.set exige field');
+            if (unsafeKey(field)) F.fail('op.field', 'campo nao permitido: ' + field);
+            const cat = SC.componentCatalog()[c.type];
+            if (cat && !cat.fields[field]) {
+                F.fail('op.field', 'campo desconhecido em ' + c.type + ': ' + field,
+                       { hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+            }
             c.fields = c.fields || {};
             if (op.value === null) delete c.fields[field];
             else c.fields[field] = op.value;
@@ -384,8 +472,12 @@ const OPS = {
         if (!sc) F.fail('ref.scene', 'cena inexistente: ' + (op.scene || '(vazia)'));
         const pf = project.prefab(op.prefab);
         if (!pf) F.fail('ref.prefab', 'prefab inexistente: ' + op.prefab);
+        const fid = op.fid || F.newFid('e');
+        if ((sc.entities || []).some((e) => e.fid === fid)) {
+            F.fail('schema.duplicate', 'fid ja existe: ' + fid);
+        }
         const e = {
-            fid: op.fid || F.newFid('e'),
+            fid: fid,
             name: op.name || uniqueEntityName(sc, pf.name),
             active: true,
             z: F.round(op.z || 0),
@@ -407,15 +499,34 @@ const OPS = {
         const pf = project.prefab(inst.prefab);
         const target = op.target || (pf && pf.entities && pf.entities[0] && pf.entities[0].fid);
         if (!target) F.fail('ref.override', 'prefab sem entidade para receber override');
+        if (pf && !(pf.entities || []).some((e) => e.fid === target)) {
+            F.fail('ref.override', 'entidade nao existe no prefab: ' + target);
+        }
         inst.overrides = inst.overrides || {};
         const ov = inst.overrides[target] || {};
-        if (op.transform) { ov.transform = ov.transform || {}; Object.assign(ov.transform, op.transform); }
+        // Object.assign aqui deixava "__proto__" do op virar prototipo e
+        // gravava transform sem round/validacao de chave
+        if (op.transform) {
+            ov.transform = ov.transform || {};
+            mergeTransform({ transform: ov.transform }, op.transform);
+        }
         if (op.active !== undefined) ov.active = !!op.active;
         if (op.name !== undefined) ov.name = op.name;
         if (op.component && op.fields) {
+            const te = pf ? (pf.entities || []).find((e) => e.fid === target) : null;
+            const tc = te ? (te.components || []).find((c) => c.id === op.component) : null;
+            if (!tc) F.fail('ref.override', 'componente nao existe no prefab: ' + op.component);
+            const cat = SC.componentCatalog()[tc.type];
+            for (const k of Object.keys(op.fields)) {
+                if (unsafeKey(k)) F.fail('op.field', 'campo nao permitido: ' + k);
+                if (cat && !cat.fields[k]) {
+                    F.fail('op.field', 'campo desconhecido em ' + tc.type + ': ' + k,
+                           { hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+                }
+            }
             ov.components = ov.components || {};
             const c = ov.components[op.component] || {};
-            Object.assign(c, op.fields);
+            deepMerge(c, op.fields);
             ov.components[op.component] = c;
         }
         inst.overrides[target] = ov;
@@ -446,17 +557,32 @@ const OPS = {
         }
         ctx.snapshotRels.push(asset.relPath);
         ctx.changedFiles.push(asset.relPath);
-        fs.rmSync(asset.absPath, { force: true });
-        fs.rmSync(path.join(project.dir, asset.metaPath), { force: true });
-        project.assets = project.assets.filter((a) => a.guid !== asset.guid);
-        project.byGuid.delete(asset.guid);
-        if (project.byName.get(asset.name) === asset) project.byName.delete(asset.name);
-        if (asset.scene) project.sceneByGuid.delete(asset.guid);
-        if (asset.prefab) project.prefabByGuid.delete(asset.guid);
-        project.files.delete(asset.relPath);
-        project.files.delete(asset.metaPath);
-        project.dirty.delete(asset.relPath);
-        project.dirty.delete(asset.metaPath);
+        if (op.force) {
+            const resolve = (ref) => project.asset(ref);
+            for (const sc of project.sceneByGuid.values()) {
+                if (asset.scene && sc.guid === asset.guid) continue;
+                if (stripRefs(sc, asset.guid, resolve)) project.writeScene(sc);
+            }
+            for (const pf of project.prefabByGuid.values()) {
+                if (asset.prefab && pf.guid === asset.guid) continue;
+                if (stripRefs(pf, asset.guid, resolve)) project.writePrefab(pf);
+            }
+        }
+        if (asset.scene) {
+            project.deleteScene(asset.scene);
+        } else if (asset.prefab) {
+            project.deletePrefab(asset.prefab);
+        } else {
+            fs.rmSync(asset.absPath, { force: true });
+            fs.rmSync(path.join(project.dir, asset.metaPath), { force: true });
+            project.assets = project.assets.filter((a) => a.guid !== asset.guid);
+            project.byGuid.delete(asset.guid);
+            if (project.byName.get(asset.name) === asset) project.byName.delete(asset.name);
+            project.files.delete(asset.relPath);
+            project.files.delete(asset.metaPath);
+            project.dirty.delete(asset.relPath);
+            project.dirty.delete(asset.metaPath);
+        }
     },
 
     'asset.rename': function (project, op, ctx) {
@@ -464,7 +590,16 @@ const OPS = {
         if (!asset) F.fail('ref.asset', 'asset inexistente: ' + op.asset);
         if (!op.name) F.fail('op.args', 'asset.rename exige name');
         const dirRel = path.posix.dirname(asset.relPath);
-        const ext = asset.ext;
+        // cena/prefab carregam o sufixo no nome do arquivo (o scan depende
+        // dele); usar so `.json` perdia o tipo do arquivo
+        const ext = asset.kind === 'scene' ? '.scene.json'
+            : (asset.kind === 'prefab' ? '.prefab.json' : asset.ext);
+        for (const other of project.assets) {
+            if (other.guid !== asset.guid &&
+                String(other.name).toLowerCase() === String(op.name).toLowerCase()) {
+                F.fail('schema.duplicate', 'ja existe um asset chamado ' + op.name);
+            }
+        }
         const base = F.sanitizeFileName(op.name + ext);
         let target = dirRel + '/' + base;
         let n = 2;
@@ -492,6 +627,7 @@ const OPS = {
         asset.absPath = project.resolveInside(target);
         asset.metaPath = target + '.meta';
         asset.fileName = path.posix.basename(target);
+        asset.ext = ext;
         asset.name = path.posix.basename(target, ext);
         if (project.byName.get(oldName) === asset) project.byName.delete(oldName);
         project.byName.set(asset.name, asset);
@@ -499,13 +635,25 @@ const OPS = {
     },
 
     'script.set': function (project, op, ctx) {
+        if (op.content !== undefined && typeof op.content !== 'string') {
+            F.fail('op.args', 'script.set: content deve ser string');
+        }
         if (op.script) {
             const asset = project.asset(op.script);
             if (!asset || asset.kind !== 'script') F.fail('ref.script', 'script inexistente: ' + op.script);
             if (typeof op.content !== 'string') F.fail('op.args', 'script.set exige content');
-            fs.writeFileSync(asset.absPath, op.content);
+            // gravacao atomica: um crash no meio do write truncaria o script
+            F.writeText(asset.absPath, op.content);
             ctx.changedFiles.push(asset.relPath);
-            return { asset: { guid: asset.guid, name: asset.name, path: asset.relPath } };
+            // props tipados: re-extrai exports.props do conteudo novo (o
+            // inspetor le do .meta; um literal quebrado so zera os props)
+            const got = require('./scripts').propsOfSource(op.content);
+            asset.meta.settings = asset.meta.settings || {};
+            asset.meta.settings.props = got.props;
+            project.writeMeta(asset);
+            const out = { asset: { guid: asset.guid, name: asset.name, path: asset.relPath } };
+            if (got.error) out.warning = { code: 'script.props', message: got.error };
+            return out;
         }
         if (op.name !== undefined) {
             const r = A.createScript(project, op.name, op.content);
@@ -597,8 +745,12 @@ const OPS = {
         if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
         const tm = (sc.tilemaps || []).find((t) => t.id === op.tilemap);
         if (!tm) F.fail('ref.tilemap', 'tilemap inexistente: ' + op.tilemap);
-        const c = op.c | 0, r = op.r | 0;
+        const c = intArg(op.c, 'c'), r = intArg(op.r, 'r');
         if (c < 0 || r < 0 || c >= tm.cols || r >= tm.rows) F.fail('schema.range', 'celula fora da grade');
+        // value/solid de lixo ("abc" virava 0 pelo |0 e pintava o tile 0)
+        if (op.value !== undefined && (typeof op.value !== 'number' || !isFinite(op.value))) {
+            F.fail('op.args', 'tilemap.paint: value deve ser numero');
+        }
         const i = r * tm.cols + c;
         if (op.value !== undefined) tm.data[i] = op.value | 0;
         if (op.solid !== undefined) {
@@ -614,7 +766,11 @@ const OPS = {
         if (!sc) F.fail('ref.scene', 'cena inexistente: ' + op.scene);
         const tm = (sc.tilemaps || []).find((t) => t.id === op.tilemap);
         if (!tm) F.fail('ref.tilemap', 'tilemap inexistente: ' + op.tilemap);
-        const c0 = op.c0 | 0, r0 = op.r0 | 0, c1 = op.c1 | 0, r1 = op.r1 | 0;
+        if (typeof op.value !== 'number' || !isFinite(op.value)) {
+            F.fail('op.args', 'tilemap.fill: value deve ser numero');
+        }
+        const c0 = intArg(op.c0, 'c0'), r0 = intArg(op.r0, 'r0'),
+              c1 = intArg(op.c1, 'c1'), r1 = intArg(op.r1, 'r1');
         for (let r = Math.max(0, r0); r <= Math.min(tm.rows - 1, r1); r++) {
             for (let c = Math.max(0, c0); c <= Math.min(tm.cols - 1, c1); c++) {
                 tm.data[r * tm.cols + c] = op.value | 0;
@@ -660,7 +816,91 @@ function referenced(project, guid) {
     const refs = new Set();
     for (const sc of project.sceneByGuid.values()) collectRefs(sc, refs);
     for (const pf of project.prefabByGuid.values()) collectRefs(pf, refs);
+    // settings.assets/music guardam GUID ou nome; collectRefs so ve GUID
+    for (const sc of project.sceneByGuid.values()) {
+        const st = sc.settings || {};
+        for (const ref of st.assets || []) {
+            const a = project.asset(ref);
+            if (a) refs.add(a.guid);
+        }
+        if (st.music) {
+            const a = project.asset(st.music);
+            if (a) refs.add(a.guid);
+        }
+    }
     return refs.has(guid);
+}
+
+function refGuid(value) {
+    if (typeof value !== 'string' || !value) return null;
+    const head = value.split('#')[0];
+    return /^[0-9a-f]{32}$/.test(head) ? head : null;
+}
+
+// remove de uma cena/prefab toda referencia ao asset (asset.delete --force).
+// Sem isso o lote falhava na validacao de ref orfa e o `force` nunca
+// funcionava para um asset realmente usado.
+function stripRefs(obj, guid, resolve) {
+    let changed = false;
+    if (obj.settings) {
+        const st = obj.settings;
+        if (Array.isArray(st.assets)) {
+            const keep = st.assets.filter((ref) => {
+                const a = resolve(ref);
+                return !(a && a.guid === guid);
+            });
+            if (keep.length !== st.assets.length) { st.assets = keep; changed = true; }
+        }
+        if (st.music) {
+            const a = resolve(st.music);
+            if (a && a.guid === guid) { delete st.music; changed = true; }
+        }
+    }
+    if (Array.isArray(obj.tilemaps)) {
+        const keep = obj.tilemaps.filter((tm) => {
+            const a = tm && resolve(tm.tileset);
+            return !(a && a.guid === guid);
+        });
+        if (keep.length !== obj.tilemaps.length) { obj.tilemaps = keep; changed = true; }
+    }
+    if (Array.isArray(obj.entities)) {
+        const keep = obj.entities.filter((e) => {
+            if (e && e.prefab === guid) { changed = true; return false; }
+            return true;
+        });
+        obj.entities = keep;
+        for (const e of keep) {
+            if (!Array.isArray(e.components)) continue;
+            const comps = [];
+            for (const c of e.components) {
+                const f = c.fields || {};
+                if (c.type === 'sprite' && refGuid(f.sprite) === guid) { changed = true; continue; }
+                if (c.type === 'script' && refGuid(f.script) === guid) { changed = true; continue; }
+                if (c.type === 'anim') {
+                    if (f.meta && refGuid(f.meta) === guid) { delete f.meta; changed = true; }
+                    if (f.clips && typeof f.clips === 'object') {
+                        for (const name of Object.keys(f.clips)) {
+                            const clip = f.clips[name] || {};
+                            if (!Array.isArray(clip.frames)) continue;
+                            const frames = clip.frames.filter((fr) => refGuid(fr) !== guid);
+                            if (frames.length !== clip.frames.length) {
+                                clip.frames = frames;
+                                changed = true;
+                            }
+                            if (!frames.length) { delete f.clips[name]; changed = true; }
+                        }
+                    }
+                    if (!f.meta && (!f.clips || !Object.keys(f.clips).length)) {
+                        changed = true;
+                        continue;
+                    }
+                }
+                comps.push(c);
+            }
+            e.components = comps;
+        }
+    }
+    return changed;
 }
 
 // ------------------------------------------------------------------ apply ----
@@ -691,7 +931,9 @@ function applyOps(dir, ops, opts) {
 
     try {
         for (const op of ops) {
-            const fn = OPS[op.op];
+            // lookup proprio: OPS["__proto__"]/["constructor"] herdaria do
+            // Object.prototype e viraria um TypeError sem codigo estavel
+            const fn = Object.prototype.hasOwnProperty.call(OPS, op.op) ? OPS[op.op] : null;
             if (!fn) F.fail('op.unknown', 'op desconhecida: ' + op.op,
                             { hint: 'veja `studio describe` para a lista' });
             results.push(fn(project, op, ctx) || null);
@@ -705,6 +947,14 @@ function applyOps(dir, ops, opts) {
                 'validacao falhou: ' + check.errors.length + ' erro(s)',
                 { diagnostics: check.errors });
             throw e;
+        }
+
+        // rev do projeto e o token do `--if-rev`: um lote que so mexe em
+        // cena/meta precisa bumpa-lo, senao dois editores com o mesmo rev
+        // sobrescrevem um ao outro sem stale
+        if (!opts.dryRun) {
+            const touched = project.dirty.size > 0 || ctx.changedFiles.length > 0 || ctx.created.length > 0;
+            if (touched) project.markDirty('celergame.project.json');
         }
 
         const changed = Array.from(new Set(
@@ -744,6 +994,11 @@ function applyOps(dir, ops, opts) {
                 JSON.stringify({ ts: Date.now(), id, ops, changed }) + '\n');
         } catch (e) { /* journal e opcional */ }
 
+        // um lote novo invalida o redo: refazer por cima dele reintroduziria
+        // o estado anterior e apagaria o trabalho recem-gravado
+        try { fs.rmSync(path.join(project.studioDir, 'redo'), { recursive: true, force: true }); }
+        catch (e) { /* sem redo */ }
+
         return { ok: true, id, changed, created: ctx.created, warnings, results, rev: project.data.rev };
     } catch (e) {
         // rollback: nada muda se o lote falhar
@@ -755,8 +1010,14 @@ function applyOps(dir, ops, opts) {
             if (!entriesRel.has(rel)) createdRels.add(rel);
         }
         snap.manifest.created = Array.from(createdRels);
-        try { restoreSnapshot(project, snap); } catch (e2) {}
+        let rollbackError = null;
+        try { restoreSnapshot(project, snap); } catch (e2) { rollbackError = e2; }
         try { fs.rmSync(snap.dir, { recursive: true, force: true }); } catch (e2) {}
+        // rollback quebrado nao pode sumir: o projeto ficou meio gravado
+        if (rollbackError && e && typeof e === 'object') {
+            e.rollback = rollbackError.message || String(rollbackError);
+            e.message = String(e.message || e) + ' (rollback falhou: ' + e.rollback + ')';
+        }
         throw e;
     }
 }

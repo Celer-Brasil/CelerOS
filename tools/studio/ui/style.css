@@ -184,3 +184,24 @@ input[type=color] { padding: 2px; height: 26px; cursor: pointer; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: #26314a; border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* aba IA (copiloto): chat + previa do lote */
+#aiWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px; gap: 10px; }
+/* o atributo hidden precisa vencer o display:flex acima */
+#aiWrap[hidden] { display: none; }
+#aiChat { background: #0d121b; border: 1px solid var(--line); border-radius: 8px;
+          padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.ai-msg { border-left: 3px solid var(--line2); padding: 4px 8px; }
+.ai-msg.me { border-left-color: var(--accent); }
+.ai-msg.bot { border-left-color: #c07aff; }
+.ai-role { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+.ai-text { color: #dce6f6; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+#aiPend .ai-pend { background: #121a2c; border: 1px solid var(--line2); border-radius: 8px;
+                   padding: 10px; margin-bottom: 8px; }
+.ai-ops { margin: 6px 0; max-height: 170px; overflow: auto; color: #9fd0f8;
+          font: 11px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+#aiBar { display: flex; flex-direction: column; gap: 8px; }
+#aiPrompt { width: 100%; resize: vertical; background: #0d121b; color: #dce6f6;
+            border: 1px solid var(--line2); border-radius: 8px; padding: 8px;
+            font: 13px/1.45 ui-sans-serif, system-ui, sans-serif; }
+#aiPrompt:focus { outline: 1px solid var(--accent); }

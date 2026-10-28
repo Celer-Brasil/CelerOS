@@ -48,6 +48,7 @@
       <button data-tab="scene" class="active">Cena</button>
       <button data-tab="game">Jogo</button>
       <button data-tab="build">Build</button>
+      <button data-tab="ai">IA</button>
       <div class="spacer"></div>
       <button id="btnFit" class="mini" title="enquadrar a cena">Fit</button>
       <label class="chk"><input id="chkGrid" type="checkbox" checked> grade</label>
@@ -78,6 +79,23 @@
       <div id="buildBudget"></div>
       <div id="shotWrap"><img id="runShot" alt="screenshot do jogo" hidden></div>
     </div>
+    <div id="aiWrap" hidden>
+      <div id="aiChat" class="scroll"></div>
+      <div id="aiPend"></div>
+      <div id="aiBar">
+        <textarea id="aiPrompt" rows="2" spellcheck="true"
+          placeholder="peca em portugues: &quot;crie uma tela de ajustes com dois toggles e um botao voltar&quot;  (Ctrl+Enter envia)"></textarea>
+        <div class="rowbtns">
+          <button id="btnAiSend" class="primary">Enviar</button>
+          <button id="btnAiFix" class="mini" title="propoe ops para os erros de validacao/build">Corrigir build</button>
+          <button id="btnAiImg" class="mini" title="anexa uma imagem (esboco, print, diagrama)">anexar imagem</button>
+          <button id="btnAiMic" class="mini" title="segure para falar (grava WAV e manda junto)">voz</button>
+          <button id="btnAiClear" class="mini">limpar</button>
+          <span id="aiHint" class="hint"></span>
+        </div>
+        <input id="aiFile" type="file" accept="image/*" hidden>
+      </div>
+    </div>
   </main>
 
   <aside id="right">
@@ -99,7 +117,9 @@
   <div class="modal-body">
     <div class="modal-head"><h3 id="modalTitle">Script</h3><button id="modalClose" class="mini">x</button></div>
     <textarea id="modalText" spellcheck="false"></textarea>
-    <div class="modal-foot"><span id="modalHint" class="hint"></span><button id="modalSave" class="primary">Salvar</button></div>
+    <div class="modal-foot"><span id="modalHint" class="hint"></span>
+      <button id="modalAi" class="mini" title="pedir ao copiloto uma melhoria deste script">IA</button>
+      <button id="modalSave" class="primary">Salvar</button></div>
   </div>
 </div>
 

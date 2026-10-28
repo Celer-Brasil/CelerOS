@@ -100,6 +100,10 @@ function asset(ref) {
   const raw = String(ref).split('#')[0];
   return assetByGuid(raw) || assetByName(raw);
 }
+// runtime do projeto: 'app' = programa (telas com widgets Kui), resto = jogo
+function isAppMode() {
+  return !!S.snap && S.snap.describe && S.snap.describe.runtime === 'app';
+}
 function prefabByGuid(guid) { return (S.snap.prefabs || {})[guid] || null; }
 function currentScene() {
   return S.snap && S.sceneGuid ? S.snap.scenes[S.sceneGuid] || null : null;
@@ -140,9 +144,15 @@ function setSnapshot(s, opts) {
     S.sceneGuid = (d.project.startScene && s.scenes[d.project.startScene])
       ? d.project.startScene : (Object.keys(s.scenes)[0] || null);
   }
-  if (S.sel.kind !== 'scene' && !selectionExists()) S.sel = { kind: 'scene', id: null, comp: null };
+  let selLost = false;
+  if (S.sel.kind !== 'scene' && !selectionExists()) {
+    S.sel = { kind: 'scene', id: null, comp: null };
+    selLost = true;
+  }
   renderHeader();
   renderSceneSel();
+  const gt = $('#tabs [data-tab="game"]');
+  if (gt) gt.textContent = d.runtime === 'app' ? 'Telas' : 'Jogo';
   renderHierarchy();
   renderAssets();
   renderBuild();
@@ -157,7 +167,10 @@ function setSnapshot(s, opts) {
         '; a cena e um cartao. Edite os scripts/assets no painel.';
     } else banner.hidden = true;
   }
-  if (!opts.keepInspector) renderInspector();
+  // keepInspector evita reconstruir o painel enquanto o usuario digita; mas
+  // se a selecao sumiu do disco ela nao pode continuar exibida como se
+  // existisse (toda edicao nela viraria erro de ref)
+  if (!opts.keepInspector || selLost) renderInspector();
   draw();
 }
 
@@ -303,6 +316,18 @@ function assetIcon(a) {
   return el('span', { class: 'ico', text: map[a.kind] || '·' });
 }
 
+// cena/prefab mostram o TITULO do JSON (scene.rename troca so o titulo; o
+// arquivo mantem o nome antigo, entao o asset.name enganava na lista)
+function assetLabel(a) {
+  if (a.kind === 'scene' && S.snap && S.snap.scenes && S.snap.scenes[a.guid]) {
+    return S.snap.scenes[a.guid].name || a.name;
+  }
+  if (a.kind === 'prefab' && S.snap && S.snap.prefabs && S.snap.prefabs[a.guid]) {
+    return S.snap.prefabs[a.guid].name || a.name;
+  }
+  return a.name;
+}
+
 function renderAssets() {
   const box = $('#assets');
   box.innerHTML = '';
@@ -340,7 +365,7 @@ function renderAssets() {
         },
       }, [
         assetIcon(a),
-        el('span', { class: 'nm', text: a.name }),
+        el('span', { class: 'nm', text: assetLabel(a) }),
         el('span', { class: 'tag', text: KIND_LABEL[a.kind] || a.kind }),
       ]);
       box.appendChild(row);
@@ -352,7 +377,7 @@ function renderAssets() {
       const name = prompt('nome do script (sem .js):', 'meu_script');
       if (!name) return;
       try {
-        const r = await runOps([{ op: 'script.set', name: name, content:
+        const r = await ops([{ op: 'script.set', name: name, content:
           '// ' + name + ' — componente do Celer Studio (ES5)\n' +
           'exports.props = { speed: 60 };\n' +
           'exports.start = function (ctx) { this.t = 0; };\n' +
@@ -476,7 +501,16 @@ function renderProjectInspector(box) {
     field('categoria', text(prj.category || '', (v) => set({ category: v }))),
     field('tipo', text(prj.type || 'Game', (v) => set({ type: v }))),
     field('API', num(prj.api, (v) => set({ api: v }), 1)),
-    field('runtime', el('input', { type: 'text', value: prj.runtime || 'studio', disabled: 'disabled' })),
+    field('runtime', select(prj.runtime || 'studio', [
+      { value: 'studio', label: 'jogo (studio)' },
+      { value: 'app', label: 'programa (app)' },
+      { value: 'legacy', label: 'legado (bridge)' },
+    ], (v) => {
+      if (v === (prj.runtime || 'studio')) return;
+      if (!confirm('Trocar o runtime para "' + v + '"?\\n\\nComponentes do outro modo passam a dar ' +
+                   'erro de validacao (ui.* so no app, sprite/anim so no jogo).')) return;
+      set({ runtime: v });
+    })),
     field('start scene', select(prj.startScene || '', (S.snap.describe.scenes || []).map((sc) => ({
       value: sc.guid, label: sc.name,
     })), (v) => set({ startScene: v }))),
@@ -528,7 +562,7 @@ function renderSceneInspector(box, sc) {
     field('nome', text(sc.name, (v) => ops([{ op: 'scene.rename', scene: sc.guid, name: v }]))),
     field('cor de fundo', color(st.bg || '#000000', (v) => sceneSetting(sc, { bg: v }))),
     field('fps', num(st.fps === undefined ? 30 : st.fps, (v) => sceneSetting(sc, { fps: v }), 1)),
-    field('estatica', check(st.static, (v) => sceneSetting(sc, { static: v }))),
+    isAppMode() ? null : field('estatica', check(st.static, (v) => sceneSetting(sc, { static: v }))),
     el('div', { class: 'rowbtns' }, [
       el('button', {
         class: 'mini', text: sc.guid === S.snap.describe.project.startScene ? 'cena inicial ✓' : 'definir inicial',
@@ -555,8 +589,42 @@ function renderSceneInspector(box, sc) {
     field('musica', select(st.music || '', [{ value: '', label: '(nenhuma)' }].concat(
       (S.snap.describe.assets || []).filter((a) => a.kind === 'audio')
         .map((a) => ({ value: a.guid, label: a.name }))), (v) => sceneSetting(sc, { music: v }, ['music']))),
-    el('div', { class: 'hint', text: 'data/assets sao lidos pelo controlador da cena; assets aceita GUID ou nome' }),
+    el('div', { class: 'hint', text: isAppMode()
+      ? 'data = estado inicial da TELA (os widgets leem/escrevem por chave)'
+      : 'data/assets sao lidos pelo controlador da cena; assets aceita GUID ou nome' }),
   ]));
+
+  if (isAppMode()) {
+    const sids = st.scripts || [];
+    const secApp = el('div', { class: 'insp-section' }, [
+      el('h4', { text: 'TELA (PROGRAMA)' }),
+      field('cabecalho', check(st.header !== false, (v) => sceneSetting(sc, { header: v }))),
+      field('subtitulo', text(st.sub || '', (v) => sceneSetting(sc, { sub: v }))),
+      field('persistir', text(st.persist || '', (v) => sceneSetting(sc, { persist: v }))),
+      el('div', { class: 'hint', text: 'persistir = chave de Storage do estado; o cabecalho desenha UI.header com voltar' }),
+    ]);
+    secApp.appendChild(el('h4', { text: 'SCRIPTS DA TELA (' + sids.length + ')' }));
+    if (!sids.length) secApp.appendChild(el('div', { class: 'hint', text: 'nenhum script de tela' }));
+    sids.forEach((ref, i) => {
+      const a = asset(ref);
+      secApp.appendChild(el('div', { class: 'row' }, [
+        el('span', { class: 'nm', text: a ? a.name : ref }),
+        el('button', {
+          class: 'mini', text: 'x',
+          onclick: () => {
+            const next = sids.slice();
+            next.splice(i, 1);
+            sceneSetting(sc, { scripts: next });
+          },
+        }),
+      ]));
+    });
+    const scriptAssets = (S.snap.describe.assets || []).filter((a) => a.kind === 'script');
+    secApp.appendChild(select('', [{ value: '', label: '+ script da tela...' }].concat(
+      scriptAssets.map((a) => ({ value: a.guid, label: a.name }))),
+      (v) => { if (v) sceneSetting(sc, { scripts: sids.concat([v]) }); }));
+    box.appendChild(secApp);
+  }
 
   const cam = st.camera || {};
   const b = cam.bounds || [0, 0, S.snap.describe.project.canvas.w, S.snap.describe.project.canvas.h];
@@ -646,6 +714,55 @@ function spriteOptions() {
   return out;
 }
 
+// input de um campo de componente a partir da definicao do catalogo (ou de
+// exports.props do script, que usa o mesmo formato)
+function compInput(def, val, onChange) {
+  const d = def || { type: 'string' };
+  if (d.type === 'number' || d.type === 'int') {
+    return num(val === undefined ? d.default : val, onChange, d.type === 'int' ? 1 : 0.1);
+  }
+  if (d.type === 'bool') return check(val === undefined ? d.default : val, onChange);
+  if (d.type === 'color') return color(val === undefined ? d.default : val, onChange);
+  if (d.type === 'enum') {
+    return select(val === undefined ? d.default : val,
+      (d.values || []).map((x) => ({ value: x, label: x || '(vazio)' })), onChange);
+  }
+  if (d.type === 'sprite') {
+    const s = el('select');
+    s.appendChild(el('option', { value: '', text: '(nenhum)' }));
+    for (const g of spriteOptions()) s.appendChild(g);
+    s.value = val || '';
+    s.addEventListener('change', () => onChange(s.value));
+    return s;
+  }
+  if (d.type === 'script') {
+    const s = el('select');
+    s.appendChild(el('option', { value: '', text: '(nenhum)' }));
+    for (const a of S.snap.describe.assets || []) {
+      if (a.kind === 'script') s.appendChild(el('option', { value: a.guid, text: a.name }));
+    }
+    const sa = asset(val);
+    s.value = sa ? sa.guid : (val || '');
+    s.addEventListener('change', () => onChange(s.value));
+    return s;
+  }
+  if (d.type === 'asset') {
+    const s = el('select');
+    s.appendChild(el('option', { value: '', text: '(nenhum)' }));
+    for (const a of S.snap.describe.assets || []) {
+      if (['sprite', 'sprite-sheet', 'tileset'].includes(a.kind)) {
+        s.appendChild(el('option', { value: a.guid, text: a.name }));
+      }
+    }
+    const sa = asset(val);
+    s.value = sa ? sa.guid : (val || '');
+    s.addEventListener('change', () => onChange(s.value));
+    return s;
+  }
+  if (d.type === 'json') return jsonArea(val === undefined ? d.default : val, onChange);
+  return text(val === undefined ? d.default : val, onChange);
+}
+
 function renderEntityInspector(box, sc, e) {
   const t = e.transform || { x: 0, y: 0, rot: 0, sx: 1, sy: 1, ax: 0.5, ay: 0.5 };
   box.appendChild(el('div', { class: 'insp-section' }, [
@@ -695,64 +812,54 @@ function renderEntityInspector(box, sc, e) {
     ]);
     const body = el('div', { class: 'comp-body' });
     const fields = cat[c.type].fields || {};
+    if (c.type === 'script') {
+      // script: o asset manda; os campos vem de exports.props (tipados).
+      // Sem props declarados, cai no JSON livre do catalogo.
+      body.appendChild(field('script', compInput(fields.script, (c.fields || {}).script,
+        (v) => compSet(sc, e, c, 'script', v))));
+      const sa = asset((c.fields || {}).script);
+      const props = (sa && sa.settings && sa.settings.props) || {};
+      const names = Object.keys(props);
+      const vals = (c.fields || {}).fields || {};
+      if (!names.length) {
+        body.appendChild(field('fields (JSON)', compInput(fields.fields, vals,
+          (v) => compSet(sc, e, c, 'fields', v)), true));
+        body.appendChild(el('div', { class: 'hint',
+          text: 'declare exports.props no script para editar os campos com tipo/default' }));
+      } else {
+        for (const name of names) {
+          const def = props[name] || { type: 'string' };
+          const val = vals[name] !== undefined ? vals[name] : def.default;
+          body.appendChild(field(def.label || name,
+            compInput(def, val, (v) => compSet(sc, e, c, 'fields.' + name, v))));
+        }
+        body.appendChild(el('div', { class: 'hint',
+          text: names.length + ' campo(s) declarados em exports.props' }));
+      }
+      comp.appendChild(head); comp.appendChild(body);
+      box.appendChild(comp);
+      continue;
+    }
     for (const name in fields) {
       const def = fields[name];
       const val = (c.fields || {})[name];
-      let input;
-      if (def.type === 'number' || def.type === 'int') {
-        input = num(val === undefined ? def.default : val, (v) => compSet(sc, e, c, name, v), def.type === 'int' ? 1 : 0.1);
-      } else if (def.type === 'bool') {
-        input = check(val === undefined ? def.default : val, (v) => compSet(sc, e, c, name, v));
-      } else if (def.type === 'color') {
-        input = color(val === undefined ? def.default : val, (v) => compSet(sc, e, c, name, v));
-      } else if (def.type === 'enum') {
-        input = select(val === undefined ? def.default : val,
-          (def.values || []).map((x) => ({ value: x, label: x || '(vazio)' })),
-          (v) => compSet(sc, e, c, name, v));
-      } else if (def.type === 'sprite') {
-        input = el('select');
-        input.appendChild(el('option', { value: '', text: '(nenhum)' }));
-        for (const g of spriteOptions()) input.appendChild(g);
-        input.value = val || '';
-        input.addEventListener('change', () => compSet(sc, e, c, name, input.value));
-      } else if (def.type === 'script') {
-        input = el('select');
-        input.appendChild(el('option', { value: '', text: '(nenhum)' }));
-        for (const a of S.snap.describe.assets || []) {
-          if (a.kind === 'script') input.appendChild(el('option', { value: a.guid, text: a.name }));
-        }
-        const sa = asset(val);
-        input.value = sa ? sa.guid : (val || '');
-        input.addEventListener('change', () => compSet(sc, e, c, name, input.value));
-      } else if (def.type === 'asset') {
-        input = el('select');
-        input.appendChild(el('option', { value: '', text: '(nenhum)' }));
-        for (const a of S.snap.describe.assets || []) {
-          if (['sprite', 'sprite-sheet', 'tileset'].includes(a.kind)) {
-            input.appendChild(el('option', { value: a.guid, text: a.name }));
-          }
-        }
-        const sa = asset(val);
-        input.value = sa ? sa.guid : (val || '');
-        input.addEventListener('change', () => {
-          const ma = asset(input.value);
+      const onChange = (v) => {
+        if (def.type === 'asset') {
+          // escolher o atlas tambem acerta o clipe atual (um lote so)
+          const ma = asset(v);
           const anims = (ma && ma.settings && ma.settings.anims) || {};
           const first = Object.keys(anims)[0] || '';
           const cur = (c.fields || {}).current;
-          const list = [{ op: 'component.set', scene: sc.guid, entity: e.fid,
-                          component: c.id, field: name, value: input.value }];
-          if (first && (!cur || !anims[cur])) {
-            list.push({ op: 'component.set', scene: sc.guid, entity: e.fid,
-                        component: c.id, field: 'current', value: first });
-          }
-          ops(list);
-        });
-      } else if (def.type === 'json') {
-        input = jsonArea(val === undefined ? def.default : val, (v) => compSet(sc, e, c, name, v));
-      } else {
-        input = text(val === undefined ? def.default : val, (v) => compSet(sc, e, c, name, v));
-      }
-      body.appendChild(field(def.label || name, input));
+          const patch = {};
+          patch[name] = v;
+          if (first && (!cur || !anims[cur])) patch.current = first;
+          ops([{ op: 'component.set', scene: sc.guid, entity: e.fid, component: c.id,
+                 fields: patch }], { keepInspector: true });
+          return;
+        }
+        compSet(sc, e, c, name, v);
+      };
+      body.appendChild(field(def.label || name, compInput(def, val, onChange)));
     }
     comp.appendChild(head); comp.appendChild(body);
     box.appendChild(comp);
@@ -1535,6 +1642,11 @@ function entityBounds(e) {
 
 function entityBounds(e) {
   const t = e.transform || {};
+  const wdg = widgetOf(e);
+  if (wdg) {
+    const s = widgetSize(e, wdg);
+    return { x: t.x || 0, y: t.y || 0, w: s.w, h: s.h };
+  }
   const p = entityParts(e);
   if (p.sprite) {
     const r = p.sprite.region;
@@ -1568,6 +1680,214 @@ function entityBounds(e) {
   return { x: (t.x || 0) - 10, y: (t.y || 0) - 10, w: 20, h: 20 };
 }
 
+// ---- modo programa: preview dos widgets do Kui no viewport ----
+// O editor nao roda o Kui; desenha uma aproximacao fiel o bastante para
+// posicionar/medir. A verdade e o build + run/Play.
+const UI_ROLE_PX = { caption: 10, body: 13, title: 17, display: 24 };
+const UI_TH = { bg: '#080c18', card: '#121a2c', stroke: '#2c3850', text: '#f0f4f8',
+                dim: '#8894a8', accent: '#38bcf8', onAccent: '#081020', err: '#f04848' };
+
+function widgetOf(e) {
+  for (const c of e.components || []) {
+    if (String(c.type).indexOf('ui.') === 0 || c.type === 'mic.record') {
+      return { kind: c.type === 'mic.record' ? 'mic.record' : c.type.slice(3), f: c.fields || {}, comp: c };
+    }
+  }
+  for (const c of e.components || []) {
+    if (String(c.type).indexOf('ai.') === 0) return { kind: c.type, f: c.fields || {}, comp: c, ai: true };
+  }
+  return null;
+}
+
+function widgetSize(e, w) {
+  const f = w.f || {};
+  const n = (v, d) => (typeof v === 'number' ? v : d);
+  const measure = (s, px) => {
+    const cv = $('#view').getContext('2d');
+    cv.save(); cv.font = px + 'px ui-monospace, monospace';
+    const tw = cv.measureText(String(s)).width; cv.restore();
+    return Math.ceil(tw);
+  };
+  switch (w.kind) {
+    case 'text': {
+      const px = UI_ROLE_PX[f.role] || 13;
+      const s = f.bind ? '[' + f.bind + ']' : (f.text || '');
+      const tw = n(f.w, 0) || measure(s, px) + 2;
+      const lines = n(f.lines, 0);
+      return { w: tw, h: lines > 1 ? Math.round(px * 1.4 * lines) : px + 4, px };
+    }
+    case 'button': return { w: n(f.w, 200), h: n(f.h, 32) };
+    case 'toggle': return { w: 44, h: 24 };
+    case 'slider': return { w: n(f.w, 200), h: 28 };
+    case 'progress': return { w: n(f.w, 200), h: n(f.h, 8) };
+    case 'list': return { w: n(f.w, 224), h: n(f.h, 160) };
+    case 'tabs': return { w: n(f.w, 224), h: n(f.h, 30) };
+    case 'card': return { w: n(f.w, 224), h: n(f.h, 80) };
+    case 'image': return { w: n(f.w, 32), h: n(f.h, 32) };
+    case 'badge': return { w: measure(f.badgeText || f.text || '', 10) + 10, h: 16 };
+    case 'spinner': return { w: n(f.r, 8) * 2, h: n(f.r, 8) * 2 };
+    case 'field': return { w: 220, h: 44 };
+    case 'mic.record': return { w: n(f.w, 120), h: n(f.h, 44) };
+    default: return { w: 14, h: 14 };   // ai.*: alvo pequeno e visivel
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function drawWidgetBox(ctx, e, w, x, y, selected) {
+  const f = w.f || {};
+  const s = widgetSize(e, w);
+  const k = w.kind;
+  ctx.save();
+  ctx.font = (s.px || 13) + 'px ui-monospace, monospace';
+  ctx.textBaseline = 'top';
+  if (k === 'card') {
+    roundRect(ctx, x, y, s.w, s.h, f.radius === undefined ? 10 : f.radius);
+    ctx.fillStyle = f.color || UI_TH.card;
+    ctx.fill();
+    ctx.strokeStyle = f.stroke || UI_TH.stroke;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  } else if (k === 'text') {
+    ctx.fillStyle = f.color || UI_TH.text;
+    const txt = f.bind ? '[' + f.bind + ']' : (f.text || '');
+    const px = s.px || 13;
+    const align = f.align || 'left';
+    if (align === 'center') ctx.textAlign = 'center';
+    else if (align === 'right') ctx.textAlign = 'right';
+    const tx = align === 'center' ? x + s.w / 2 : (align === 'right' ? x + s.w : x);
+    const maxW = f.w || 0;
+    if (maxW && f.lines) {
+      // quebra grosseira: uma linha por \n ou por corte de largura
+      const words = String(txt).split(/\s+/);
+      let line = '', ly = y, count = 0;
+      for (const word of words) {
+        const test = line ? line + ' ' + word : word;
+        if (ctx.measureText(test).width > maxW && line) {
+          ctx.fillText(line, tx, ly); line = word; ly += px * 1.4; count++;
+          if (count >= f.lines) break;
+        } else line = test;
+      }
+      if (count < f.lines && line) ctx.fillText(line, tx, ly);
+    } else {
+      ctx.fillText(String(txt).split('\n')[0], tx, y + 2);
+    }
+  } else if (k === 'button') {
+    roundRect(ctx, x, y, s.w, s.h, 8);
+    if (f.style === 'ghost') {
+      ctx.strokeStyle = UI_TH.stroke; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = UI_TH.text;
+    } else {
+      ctx.fillStyle = f.style === 'danger' ? UI_TH.err : UI_TH.accent; ctx.fill();
+      ctx.fillStyle = UI_TH.onAccent;
+    }
+    ctx.textAlign = 'center';
+    ctx.fillText(String(f.label || 'OK'), x + s.w / 2, y + (s.h - 13) / 2);
+  } else if (k === 'toggle') {
+    roundRect(ctx, x, y, 44, 24, 12);
+    ctx.fillStyle = UI_TH.stroke; ctx.fill();
+    ctx.beginPath(); ctx.arc(x + 12, y + 12, 9, 0, Math.PI * 2);
+    ctx.fillStyle = UI_TH.text; ctx.fill();
+  } else if (k === 'slider') {
+    ctx.fillStyle = UI_TH.card;
+    ctx.fillRect(x, y + 11, s.w, 6);
+    const min = f.min === undefined ? 0 : f.min, max = f.max === undefined ? 100 : f.max;
+    const pct = max > min ? 0.5 : 0;
+    ctx.fillStyle = UI_TH.accent;
+    ctx.fillRect(x, y + 11, s.w * pct, 6);
+    ctx.beginPath(); ctx.arc(x + s.w * pct, y + 14, 8, 0, Math.PI * 2);
+    ctx.fillStyle = UI_TH.text; ctx.fill();
+  } else if (k === 'progress') {
+    ctx.fillStyle = UI_TH.card; ctx.fillRect(x, y, s.w, s.h);
+    const v = f.key ? 0.5 : Math.max(0, Math.min(100, f.value || 0)) / 100;
+    ctx.fillStyle = UI_TH.accent; ctx.fillRect(x, y, s.w * v, s.h);
+  } else if (k === 'list') {
+    roundRect(ctx, x, y, s.w, s.h, 6);
+    ctx.fillStyle = UI_TH.card; ctx.fill();
+    ctx.strokeStyle = UI_TH.stroke; ctx.lineWidth = 1; ctx.stroke();
+    const rowH = f.rowH || 40;
+    const items = f.itemsBind ? ['[' + f.itemsBind + ']'] : (Array.isArray(f.items) ? f.items : []);
+    let ry = y + 4;
+    for (const it of items) {
+      if (ry + rowH > y + s.h) break;
+      const label = typeof it === 'string' ? it : (it && (it.label || '')) || '';
+      const sub = it && typeof it === 'object' && it.sub ? it.sub : '';
+      ctx.fillStyle = UI_TH.text;
+      ctx.fillText(String(label).slice(0, 26), x + 8, ry + 6);
+      if (sub) { ctx.fillStyle = UI_TH.dim; ctx.fillText(String(sub).slice(0, 26), x + 8, ry + 20); }
+      ry += rowH;
+      ctx.strokeStyle = 'rgba(120,150,200,.12)';
+      ctx.beginPath(); ctx.moveTo(x + 6, ry - 2); ctx.lineTo(x + s.w - 6, ry - 2); ctx.stroke();
+    }
+  } else if (k === 'tabs') {
+    const labels = Array.isArray(f.labels) ? f.labels : [];
+    const cw = s.w / Math.max(1, labels.length);
+    labels.forEach((l, i) => {
+      roundRect(ctx, x + i * cw + 1, y, cw - 2, s.h, 6);
+      ctx.fillStyle = i === 0 ? UI_TH.accent : UI_TH.card; ctx.fill();
+      ctx.fillStyle = i === 0 ? UI_TH.onAccent : UI_TH.dim;
+      ctx.textAlign = 'center';
+      ctx.fillText(String(l), x + i * cw + cw / 2, y + (s.h - 13) / 2);
+      ctx.textAlign = 'left';
+    });
+  } else if (k === 'image') {
+    ctx.fillStyle = 'rgba(122,92,255,.25)';
+    ctx.fillRect(x, y, s.w, s.h);
+    ctx.strokeStyle = 'rgba(122,92,255,.8)';
+    ctx.strokeRect(x, y, s.w, s.h);
+    ctx.fillStyle = UI_TH.dim;
+    ctx.font = '9px ui-monospace, monospace';
+    const a = asset(f.asset);
+    ctx.fillText(a ? a.name.slice(0, 10) : 'imagem', x + 2, y + 2);
+  } else if (k === 'badge') {
+    roundRect(ctx, x, y, s.w, s.h, 8);
+    ctx.fillStyle = f.color || UI_TH.accent; ctx.fill();
+    ctx.fillStyle = f.textColor || UI_TH.onAccent;
+    ctx.fillText(String(f.bind ? '[' + f.bind + ']' : (f.text || '')), x + 5, y + 2);
+  } else if (k === 'spinner') {
+    ctx.beginPath(); ctx.arc(x + s.w / 2, y + s.h / 2, s.w / 2 - 1, 0, Math.PI * 1.5);
+    ctx.strokeStyle = f.color || UI_TH.accent; ctx.lineWidth = 2; ctx.stroke();
+  } else if (k === 'field') {
+    ctx.fillStyle = UI_TH.dim;
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillText(String(f.label || f.key || 'campo'), x, y);
+    ctx.fillStyle = UI_TH.text;
+    ctx.font = '13px ui-monospace, monospace';
+    ctx.fillText('[' + (f.key || 'texto') + ']', x, y + 16);
+    ctx.strokeStyle = UI_TH.stroke;
+    ctx.beginPath(); ctx.moveTo(x, y + 38); ctx.lineTo(x + 220, y + 38); ctx.stroke();
+  } else if (k === 'mic.record') {
+    roundRect(ctx, x, y, s.w, s.h, s.h / 2);
+    ctx.fillStyle = UI_TH.accent; ctx.fill();
+    ctx.fillStyle = UI_TH.onAccent;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(f.label || 'falar').slice(0, 16), x + s.w / 2, y + (s.h - 13) / 2);
+    ctx.textAlign = 'left';
+  } else {
+    // ai.*: marcador com a chave de disparo
+    roundRect(ctx, x, y, 14, 14, 3);
+    ctx.fillStyle = '#c07aff'; ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.font = '8px ui-monospace, monospace';
+    ctx.fillText('IA', x + 2, y + 3);
+  }
+  if (selected) {
+    ctx.strokeStyle = '#38bcf8';
+    ctx.lineWidth = 1.5 / S.view.zoom;
+    ctx.setLineDash([4 / S.view.zoom, 3 / S.view.zoom]);
+    ctx.strokeRect(x - 1, y - 1, s.w + 2, s.h + 2);
+  }
+  ctx.restore();
+}
+
 function drawEntity(ctx, e, selected, dragPreview) {
   const t = e.transform || {};
   const hud = hudBox(e);
@@ -1584,6 +1904,12 @@ function drawEntity(ctx, e, selected, dragPreview) {
     return;
   }
   const pv = dragPreview || {};
+  const wdg = widgetOf(e);
+  if (wdg) {
+    drawWidgetBox(ctx, e, wdg, pv.x !== undefined ? pv.x : (t.x || 0),
+                  pv.y !== undefined ? pv.y : (t.y || 0), selected);
+    return;
+  }
   const x = pv.x !== undefined ? pv.x : (t.x || 0);
   const y = pv.y !== undefined ? pv.y : (t.y || 0);
   const rot = (pv.rot !== undefined ? pv.rot : (t.rot || 0)) * Math.PI / 180;
@@ -1865,6 +2191,29 @@ function draw() {
     ctx.stroke();
   }
 
+  // faixa do cabecalho (UI.header) no modo programa: mostra a area segura
+  if (isAppMode() && st.header !== false) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(18,26,44,.92)';
+    ctx.fillRect(0, 0, m.w, 40);
+    ctx.strokeStyle = 'rgba(44,56,80,.95)';
+    ctx.lineWidth = 1 / S.view.zoom;
+    ctx.beginPath(); ctx.moveTo(0, 40); ctx.lineTo(m.w, 40); ctx.stroke();
+    ctx.fillStyle = '#38bcf8';
+    ctx.fillRect(8, 14, 3, 12);
+    ctx.fillStyle = '#f0f4f8';
+    ctx.font = '13px ui-monospace, monospace';
+    ctx.fillText(String(sc.name || ''), 18, 16);
+    if (st.sub) {
+      ctx.fillStyle = '#8894a8';
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText(String(st.sub), m.w - 8, 19);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
   for (const tm of (sc.tilemaps || []).slice().sort((a, b) => (a.layer || 0) - (b.layer || 0))) {
     const a = asset(tm.tileset);
     if (!a) continue;
@@ -2054,7 +2403,9 @@ function renderPlay() {
   $('#btnStop').hidden = !running;
   if (running) {
     const frame = $('#gameFrame');
-    if (frame.src !== p.url) frame.src = p.url;
+    // src (propriedade) normaliza a URL com '/' final e nunca bate com
+    // p.url: todo snapshot reatribuia e RECARREGAVA o Play em cada op
+    if (frame.getAttribute('src') !== p.url) frame.src = p.url;
   }
 }
 
@@ -2066,7 +2417,12 @@ function setTab(name) {
   $('#sceneWrap').hidden = name !== 'scene';
   $('#gameWrap').hidden = name !== 'game';
   $('#buildWrap').hidden = name !== 'build';
+  $('#aiWrap').hidden = name !== 'ai';
+  if (name === 'ai') aiRender();
   if (name === 'scene') draw();
+  // "Jogo" vira "Telas" no runtime app (o Play mostra as telas do programa)
+  const gt = $('#tabs [data-tab="game"]');
+  if (gt) gt.textContent = isAppMode() ? 'Telas' : 'Jogo';
 }
 
 // -------------------------------------------------------------- actions ----
@@ -2197,7 +2553,11 @@ async function openScript(a) {
     modalAsset = a;
     $('#modalTitle').textContent = 'Script — ' + a.name;
     $('#modalText').value = txt;
-    $('#modalHint').textContent = 'ES5 apenas; o build linta com app_lint.';
+    const props = (a.settings && a.settings.props) || {};
+    const names = Object.keys(props);
+    $('#modalHint').textContent = 'ES5 apenas; o build linta com app_lint. ' +
+      (names.length ? 'props: ' + names.join(', ')
+                    : 'declare exports.props para campos tipados no inspetor.');
     $('#modal').hidden = false;
   } catch (e) { logError(e); }
 }
@@ -2208,6 +2568,20 @@ async function saveScript() {
     $('#modal').hidden = true;
     log('script salvo: ' + modalAsset.name, 'ok');
   } catch (e) { logError(e); }
+}
+
+// manda o script aberto para o copiloto (aba IA) — fecha o laco da edicao
+function aiFromScript() {
+  if (!modalAsset) return;
+  $('#modal').hidden = true;
+  setTab('ai');
+  const prompt = $('#aiPrompt');
+  prompt.value = 'Melhore o script "' + modalAsset.name + '" (ES5) mantendo o contrato ' +
+    'exports.props/start/update/draw/destroy e sem inventar API. ' +
+    'Responda com {"op":"script.set","script":"' + modalAsset.guid + '","content":"..."} ' +
+    'contendo o codigo completo.';
+  prompt.focus();
+  aiRender();
 }
 
 // ------------------------------------------------------------ commands -----
@@ -2314,6 +2688,196 @@ async function dropAssetAt(ev) {
   } catch (e) { logError(e); }
 }
 
+// ------------------------------------------------------------ copiloto ----
+
+// Estado da sessao do assistente. A previa vem SEMPRE em dry-run do servidor
+// (mesmas ops que serao aplicadas); "Aplicar" manda o MESMO lote pelo
+// /api/command — um caminho so, com undo.
+const AI = { log: [], pending: null, busy: false, image: null };
+
+function aiRender() {
+  const chat = $('#aiChat');
+  if (!chat) return;
+  chat.innerHTML = '';
+  for (const m of AI.log) {
+    chat.appendChild(el('div', { class: 'ai-msg ' + (m.role === 'user' ? 'me' : 'bot') }, [
+      el('div', { class: 'ai-role', text: m.role === 'user' ? 'voce' : 'assistente' }),
+      el('div', { class: 'ai-text', text: m.text }),
+    ]));
+  }
+  if (!AI.log.length) {
+    chat.appendChild(el('div', { class: 'hint', text:
+      'Descreva o que quer criar/alterar. O assistente propoe um lote de ops, ' +
+      'validado em dry-run; nada e escrito ate voce clicar em Aplicar. ' +
+      'Precisa de CELER_STUDIO_AI_KEY (ou OPENROUTER_API_KEY) no ambiente do servidor.' }));
+  }
+  chat.scrollTop = chat.scrollHeight;
+
+  const pend = $('#aiPend');
+  pend.innerHTML = '';
+  const p = AI.pending;
+  if (p) {
+    pend.appendChild(el('div', { class: 'ai-pend' }, [
+      el('div', { class: 'hint', text: p.ops.length + ' ops propostas (previa validada; ' +
+        (p.result && p.result.changed ? p.result.changed.length : 0) + ' arquivo(s))' }),
+      el('pre', { class: 'ai-ops', text: p.ops.map((o) => JSON.stringify(o).slice(0, 220)).join('\n') }),
+      el('div', { class: 'rowbtns' }, [
+        el('button', { class: 'mini primary', text: 'Aplicar', onclick: aiApply }),
+        el('button', { class: 'mini', text: 'Descartar', onclick: () => { AI.pending = null; aiRender(); } }),
+      ]),
+    ]));
+  }
+  const send = $('#btnAiSend');
+  if (send) send.disabled = AI.busy;
+  const hint = $('#aiHint');
+  if (hint) {
+    hint.textContent = AI.busy ? 'pensando...' : (AI.image ? 'imagem anexada' : '');
+  }
+}
+
+async function aiSend(fixMode) {
+  if (AI.busy) return;
+  const prompt = fixMode ? '' : String($('#aiPrompt').value || '').trim();
+  if (!fixMode && !prompt && !AI.image) return;
+  AI.busy = true;
+  AI.pending = null;
+  AI.log.push({ role: 'user', text: (fixMode ? '(corrigir build)' : prompt) +
+    (AI.image ? '  [imagem]' : '') });
+  aiRender();
+  const body = { cmd: 'ai', mode: fixMode ? 'fix' : 'edit', prompt: prompt };
+  if (AI.image) body.images = [AI.image];
+  try {
+    const r = await api('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify(body) });
+    AI.log.push({ role: 'assistant', text: (r.say || '(sem explicacao)') +
+      (r.steps > 1 ? '   [' + r.steps + ' tentativas]' : '') });
+    AI.pending = r.ops && r.ops.length ? { ops: r.ops, result: r.result } : null;
+    if (r.snapshot) setSnapshot(r.snapshot, {});
+    if (r.usage) log('ia: ' + (r.usage.total_tokens || '?') + ' tokens', 'dim');
+  } catch (e) {
+    AI.log.push({ role: 'assistant', text: 'erro: ' + (e.message || e) +
+      (e.hint ? '  (' + e.hint + ')' : '') });
+    if (e.diagnostics) {
+      for (const d of e.diagnostics) log('ia[' + (d.code || '?') + '] ' + (d.message || ''), 'err');
+    }
+  }
+  AI.busy = false;
+  aiRender();
+}
+
+async function aiApply() {
+  if (!AI.pending) return;
+  const list = AI.pending.ops;     // NAO chamar de `ops`: sombreia o helper ops()
+  AI.pending = null;
+  try {
+    const r = await ops(list);
+    AI.log.push({ role: 'assistant', text: 'aplicado: ' + ((r.changed || []).length) +
+      ' arquivo(s)' + (r.rev ? ', rev ' + r.rev : '') });
+  } catch (e) {
+    AI.log.push({ role: 'assistant', text: 'falhou ao aplicar: ' + (e.message || e) });
+  }
+  aiRender();
+}
+
+// grava ~ms de microfone como WAV PCM16 mono 16k em base64 (o provedor
+// aceita input_audio wav; MediaRecorder do browser so da webm/ogg)
+function recordWav(ms) {
+  return new Promise((resolve, reject) => {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const ctx = new AC();
+      const src = ctx.createMediaStreamSource(stream);
+      const node = ctx.createScriptProcessor(4096, 1, 1);
+      const chunks = [];
+      let total = 0;
+      node.onaudioprocess = (ev) => {
+        const d = ev.inputBuffer.getChannelData(0);
+        const copy = new Float32Array(d.length);
+        copy.set(d);
+        chunks.push(copy);
+        total += d.length;
+      };
+      src.connect(node);
+      node.connect(ctx.destination);
+      setTimeout(() => {
+        node.disconnect(); src.disconnect();
+        stream.getTracks().forEach((t) => t.stop());
+        const rate = ctx.sampleRate;
+        ctx.close();
+        const all = new Float32Array(total);
+        let o = 0;
+        for (const c of chunks) { all.set(c, o); o += c.length; }
+        const ratio = rate / 16000;
+        const n = Math.max(1, Math.floor(all.length / ratio));
+        const pcm = new Int16Array(n);
+        for (let i = 0; i < n; i++) {
+          const v = Math.max(-1, Math.min(1, all[Math.floor(i * ratio)]));
+          pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+        }
+        const buf = new ArrayBuffer(44 + pcm.length * 2);
+        const dv = new DataView(buf);
+        const wr = (off, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(off + i, s.charCodeAt(i)); };
+        wr(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); wr(8, 'WAVE');
+        wr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+        dv.setUint16(22, 1, true); dv.setUint32(24, 16000, true);
+        dv.setUint32(28, 32000, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+        wr(36, 'data'); dv.setUint32(40, pcm.length * 2, true);
+        for (let i = 0; i < pcm.length; i++) dv.setInt16(44 + i * 2, pcm[i], true);
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        resolve(btoa(bin));
+      }, ms);
+    }).catch(reject);
+  });
+}
+
+function aiWire() {
+  if (!$('#btnAiSend')) return;
+  $('#btnAiSend').onclick = () => aiSend(false);
+  $('#btnAiFix').onclick = () => aiSend(true);
+  $('#btnAiClear').onclick = () => { AI.log = []; AI.pending = null; aiRender(); };
+  $('#aiPrompt').addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); aiSend(false); }
+  });
+  $('#btnAiImg').onclick = () => $('#aiFile').click();
+  $('#aiFile').addEventListener('change', () => {
+    const f = $('#aiFile').files && $('#aiFile').files[0];
+    $('#aiFile').value = '';
+    if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const s = String(rd.result || '');
+      const comma = s.indexOf(',');
+      AI.image = { data: s.slice(comma + 1), mime: f.type || 'image/png' };
+      aiRender();
+    };
+    rd.readAsDataURL(f);
+  });
+  $('#btnAiMic').onclick = () => {
+    if (AI.busy) return;
+    const btn = $('#btnAiMic');
+    btn.textContent = 'gravando...';
+    recordWav(4000).then((b64) => {
+      btn.textContent = 'voz';
+      AI.busy = true;
+      AI.log.push({ role: 'user', text: '(audio 4s)' });
+      aiRender();
+      return api('/api/command', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd: 'ai', mode: 'edit', audio: [{ data: b64, format: 'wav' }],
+          prompt: 'Transcreva o audio e execute o pedido.' }) });
+    }).then((r) => {
+      if (!r) return;
+      AI.log.push({ role: 'assistant', text: (r.say || '(sem explicacao)') });
+      AI.pending = r.ops && r.ops.length ? { ops: r.ops, result: r.result } : null;
+      if (r.snapshot) setSnapshot(r.snapshot, {});
+    }).catch((e) => {
+      $('#btnAiMic').textContent = 'voz';
+      AI.log.push({ role: 'assistant', text: 'voz falhou: ' + (e.message || e) });
+    }).then(() => { AI.busy = false; aiRender(); });
+  };
+}
+
 // --------------------------------------------------------------- events ----
 
 function wireEvents() {
@@ -2344,7 +2908,14 @@ function wireEvents() {
     const sc = currentScene();
     if (!sc) return;
     const m = sceneMetrics();
-    const r = await ops([{ op: 'entity.create', scene: sc.guid, name: 'Entidade', x: Math.round(m.w / 2), y: Math.round(m.h / 2) }]);
+    // no modo programa o z e a ordem de desenho: a entidade nova entra por
+    // cima (no jogo o default 0 continua valendo)
+    let z = 0;
+    if (isAppMode()) {
+      for (const e of sc.entities || []) z = Math.max(z, (e.z || 0) + 1);
+    }
+    const r = await ops([{ op: 'entity.create', scene: sc.guid, name: 'Entidade',
+                           x: Math.round(m.w / 2), y: Math.round(m.h / 2), z: z }]);
     const e = r.results && r.results[0] && r.results[0].entity;
     if (e) selectEntity(e.fid);
   };
@@ -2371,6 +2942,7 @@ function wireEvents() {
   });
   $('#modalClose').onclick = () => { $('#modal').hidden = true; };
   $('#modalSave').onclick = saveScript;
+  if ($('#modalAi')) $('#modalAi').onclick = aiFromScript;
   $('#modal').addEventListener('click', (ev) => { if (ev.target.id === 'modal') $('#modal').hidden = true; });
   $('#chkGrid').addEventListener('change', draw);
   $('#chkSnap').addEventListener('change', () => {});
@@ -2560,7 +3132,12 @@ function wireEvents() {
   es.onmessage = (ev) => {
     let m = null;
     try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.type === 'fs') {
+    if (m.type === 'hello') {
+      // (re)conexao do EventSource: ressincroniza o snapshot e restaura o
+      // status; sem isso o painel fica "reconectando..." e congelado no
+      // estado de antes da queda ate o proximo evento do servidor
+      loadSnapshot({ keepInspector: true });
+    } else if (m.type === 'fs') {
       clearTimeout(t);
       t = setTimeout(() => { log('arquivo mudou: ' + m.path, 'dim'); loadSnapshot({ keepInspector: true }); }, 250);
     } else if (m.type === 'play') {
@@ -2585,6 +3162,7 @@ function wireEvents() {
 
 (async function boot() {
   wireEvents();
+  aiWire();
   $('#zoomLabel').textContent = S.view.zoom.toFixed(2) + 'x';
   await loadSnapshot({});
   log('Celer Studio pronto. Comandos JSON no prompt, ou: build, validate, run, play, undo, redo.', 'dim');

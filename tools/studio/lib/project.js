@@ -17,6 +17,11 @@ function walk(dir, out) {
     try { names = fs.readdirSync(dir).sort(); } catch (e) { return; }
     for (const name of names) {
         if (name === '.git' || name === '.studio' || name === 'node_modules') continue;
+        // temporario de gravacao atomica que sobrou de um crash: nao e asset
+        if (/\.tmp-\d+-[0-9a-f]+$/.test(name)) continue;
+        // lixo do sistema (.DS_Store, ._* do macOS): virava asset sem .meta
+        // e a issue meta.missing bloqueava TODA op no barramento
+        if (name.startsWith('.')) continue;
         const abs = path.join(dir, name);
         let st;
         try { st = fs.statSync(abs); } catch (e) { continue; }
@@ -62,6 +67,7 @@ class Project {
         const name = opts.name || path.basename(abs);
         const slugName = F.slug(name).replace(/_/g, '') || 'jogo';
         const pkg = opts.pkg || ('br.celer.' + slugName);
+        const app = !!opts.app;
         let api = 50;
         try { api = require('../../app_lint/lint.js').buildManifest().apiLevel; } catch (e) { api = 50; }
 
@@ -74,40 +80,73 @@ class Project {
             packageName: pkg,
             version: '0.1.0',
             author: opts.author || 'Celer Studio',
-            description: opts.description || 'Jogo feito com a CelerGame e o Celer Studio',
-            type: 'Game',
-            category: 'Jogos',
+            description: opts.description || (app
+                ? 'Programa feito com o Celer Studio'
+                : 'Jogo feito com a CelerGame e o Celer Studio'),
+            type: app ? 'App' : 'Game',
+            category: app ? 'Utility' : 'Jogos',
             api,
-            requires: ['psram'],
+            requires: app ? [] : ['psram'],
             topbar: false,
             permissions: [],
-            deps: engineDeps(),
+            deps: app ? {} : engineDeps(),
             changelog: '0.1.0: primeiro projeto',
-            canvas: { w: 240, h: 320, native: false, fps: 30, inset: 0 },
-            runtime: 'studio',
+            canvas: { w: 240, h: 320, native: false, fps: app ? 20 : 30, inset: 0 },
+            runtime: app ? 'app' : 'studio',
             startScene: '',
             build: { out: '.studio/build', splitKB: 96 },
             editor: { grid: 8, snap: true, debug: false, prof: false },
         };
+
+        // tela inicial: no programa e um cabecalho + titulo + botao (o modo
+        // app desenha UI.header por cima, entao o conteudo comeca em y=56)
+        const starter = app ? [
+            {
+                fid: F.newFid('e'),
+                name: 'Titulo',
+                active: true,
+                z: 1,
+                transform: { x: 12, y: 56, rot: 0, sx: 1, sy: 1, ax: 0, ay: 0 },
+                components: [{
+                    id: 'c_' + F.newGuid().slice(0, 8),
+                    type: 'ui.text',
+                    fields: { text: name, role: 'title', color: '#e8eefc', align: 'left' },
+                }],
+            },
+            {
+                fid: F.newFid('e'),
+                name: 'Acao',
+                active: true,
+                z: 2,
+                transform: { x: 12, y: 96, rot: 0, sx: 1, sy: 1, ax: 0, ay: 0 },
+                components: [{
+                    id: 'c_' + F.newGuid().slice(0, 8),
+                    type: 'ui.button',
+                    fields: { label: 'Comecar', w: 216, h: 36, style: 'primary' },
+                }],
+            },
+        ] : [{
+            fid: F.newFid('e'),
+            name: 'Titulo',
+            active: true,
+            z: 10,
+            transform: { x: 120, y: 80, rot: 0, sx: 1, sy: 1, ax: 0.5, ay: 0.5 },
+            components: [{
+                id: 'c_' + F.newGuid().slice(0, 8),
+                type: 'text',
+                fields: { text: name, color: '#e8eefc', px: 20, align: 'center' },
+            }],
+        }];
 
         const scene = {
             format: FORMAT,
             rev: 1,
             guid: F.newGuid(),
             name: 'Principal',
-            settings: { bg: '#0b1020', fps: 30, static: false },
-            entities: [{
-                fid: F.newFid('e'),
-                name: 'Titulo',
-                active: true,
-                z: 10,
-                transform: { x: 120, y: 80, rot: 0, sx: 1, sy: 1, ax: 0.5, ay: 0.5 },
-                components: [{
-                    id: 'c_' + F.newGuid().slice(0, 8),
-                    type: 'text',
-                    fields: { text: name, color: '#e8eefc', px: 20, align: 'center' },
-                }],
-            }],
+            settings: app
+                ? { bg: '#0b1020', fps: 20 }
+                : { bg: '#0b1020', fps: 30, static: false },
+            entities: starter,
             tilemaps: [],
         };
         project.data.startScene = scene.guid;
@@ -226,7 +265,7 @@ class Project {
                 }
             }
         }
-        this.assets.sort((a, b) => a.relPath.localeCompare(b.relPath));
+        this.assets.sort((a, b) => F.cmpStr(a.relPath, b.relPath));
     }
 
     // ------------------------------------------------------------ refs ----
@@ -259,11 +298,11 @@ class Project {
     }
 
     sceneList() {
-        return Array.from(this.sceneByGuid.values()).sort((a, b) => a.name.localeCompare(b.name));
+        return Array.from(this.sceneByGuid.values()).sort((a, b) => F.cmpStr(a.name, b.name));
     }
 
     prefabList() {
-        return Array.from(this.prefabByGuid.values()).sort((a, b) => a.name.localeCompare(b.name));
+        return Array.from(this.prefabByGuid.values()).sort((a, b) => F.cmpStr(a.name, b.name));
     }
 
     assetList(kind) {
@@ -391,7 +430,7 @@ class Project {
         };
         try { asset.size = fs.statSync(abs).size; } catch (e) { asset.size = 0; }
         this.assets.push(asset);
-        this.assets.sort((a, b) => a.relPath.localeCompare(b.relPath));
+        this.assets.sort((a, b) => F.cmpStr(a.relPath, b.relPath));
         this.byGuid.set(asset.guid, asset);
         if (!this.byName.has(asset.name)) this.byName.set(asset.name, asset);
         else this.byName.set(asset.name, null);
@@ -415,14 +454,40 @@ class Project {
         let n = 2;
         while (fs.existsSync(path.join(this.dir, dirRel, name)) ||
                this.files.has((dirRel + '/' + name).replace(/\/+/g, '/'))) {
-            const dot = ext.length;
             name = F.sanitizeFileName(base + '_' + n + ext);
             n++;
         }
         return (dirRel + '/' + name).replace(/\/+/g, '/');
     }
 
+    // nome de exibicao unico (case-insensitive): dois modelos com o mesmo
+    // nome deixam `scene(ref)`/`prefab(ref)` ambiguos e colidem no mapa
+    // `names` do build.
+    uniqueSceneName(base) {
+        const used = new Set();
+        for (const sc of this.sceneByGuid.values()) used.add(String(sc.name).toLowerCase());
+        let name = String(base);
+        let n = 2;
+        while (used.has(name.toLowerCase())) { name = base + ' ' + n; n++; }
+        return name;
+    }
+
+    sceneNameTaken(base, exceptGuid) {
+        for (const sc of this.sceneByGuid.values()) {
+            if (sc.guid !== exceptGuid && String(sc.name).toLowerCase() === String(base).toLowerCase()) return true;
+        }
+        return false;
+    }
+
+    prefabNameTaken(base, exceptGuid) {
+        for (const pf of this.prefabByGuid.values()) {
+            if (pf.guid !== exceptGuid && String(pf.name).toLowerCase() === String(base).toLowerCase()) return true;
+        }
+        return false;
+    }
+
     createScene(name) {
+        name = this.uniqueSceneName(name);
         const rel = this.freeRel('Assets/Scenes', name, '.scene.json');
         const sc = {
             format: FORMAT,
@@ -437,7 +502,7 @@ class Project {
         this.writeNewMeta(rel + '.meta', sc.guid, 'scene', {});
         const asset = {
             guid: sc.guid, relPath: rel, absPath: path.join(this.dir, rel),
-            fileName: path.basename(rel), name, ext: '.json', kind: 'scene',
+            fileName: path.basename(rel), name, ext: '.scene.json', kind: 'scene',
             meta: this.files.get(rel + '.meta'), metaPath: rel + '.meta',
             size: 0, scene: sc,
         };
@@ -451,6 +516,8 @@ class Project {
     }
 
     createPrefab(name) {
+        name = String(name);
+        while (this.prefabNameTaken(name)) name = name + ' copia';
         const rel = this.freeRel('Assets/Prefabs', name, '.prefab.json');
         const pf = {
             format: FORMAT,
@@ -463,7 +530,7 @@ class Project {
         this.writeNewMeta(rel + '.meta', pf.guid, 'prefab', {});
         const asset = {
             guid: pf.guid, relPath: rel, absPath: path.join(this.dir, rel),
-            fileName: path.basename(rel), name, ext: '.json', kind: 'prefab',
+            fileName: path.basename(rel), name, ext: '.prefab.json', kind: 'prefab',
             meta: this.files.get(rel + '.meta'), metaPath: rel + '.meta',
             size: 0, prefab: pf,
         };
@@ -530,9 +597,12 @@ class Project {
     writeReadme(name) {
         const file = path.join(this.dir, 'README.md');
         if (fs.existsSync(file)) return;
+        const app = this.data.runtime === 'app';
         fs.writeFileSync(file,
             '# ' + name + '\n\n' +
-            'Projeto do Celer Studio para a CelerGame.\n\n' +
+            (app
+                ? 'Programa do Celer Studio (runtime "app": telas com o toolkit UI do sistema).\n\n'
+                : 'Projeto do Celer Studio para a CelerGame.\n\n') +
             '```bash\n' +
             'node tools/sdk/celer.js studio . --serve   # abre o editor\n' +
             'node tools/sdk/celer.js studio . build     # gera o app em .studio/build\n' +
@@ -569,8 +639,8 @@ class Project {
                 // campos de publicacao/editaveis no painel Projeto
                 author: this.data.author || '',
                 description: this.data.description || '',
-                type: this.data.type || 'Game',
-                category: this.data.category || 'Jogos',
+                type: this.data.type || (this.data.runtime === 'app' ? 'App' : 'Game'),
+                category: this.data.category || (this.data.runtime === 'app' ? 'Utility' : 'Jogos'),
                 topbar: this.data.topbar === undefined ? false : !!this.data.topbar,
                 permissions: this.data.permissions || [],
                 requires: this.data.requires || [],

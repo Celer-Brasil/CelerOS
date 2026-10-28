@@ -48,21 +48,36 @@ function sendText(res, code, text, type) {
 function readBody(req, limit) {
     return new Promise((resolve, reject) => {
         let size = 0;
+        let done = false;
         const parts = [];
         req.on('data', (d) => {
+            if (done) return;
             size += d.length;
-            if (size > (limit || 8 * 1024 * 1024)) { req.destroy(); reject(new Error('corpo grande demais')); return; }
+            if (size > (limit || 8 * 1024 * 1024)) {
+                // estourar o limite nao pode destruir o socket (req.destroy
+                // derrubava a conexao sem resposta nenhuma); drena o resto e
+                // deixa o handler responder
+                done = true;
+                req.removeAllListeners('data');
+                req.removeAllListeners('end');
+                req.resume();
+                reject(new F.StudioError('body.limit', 'corpo grande demais', { http: 400 }));
+                return;
+            }
             parts.push(d);
         });
-        req.on('end', () => resolve(Buffer.concat(parts)));
-        req.on('error', reject);
+        req.on('end', () => { if (!done) { done = true; resolve(Buffer.concat(parts)); } });
+        req.on('error', (e) => { if (!done) { done = true; reject(e); } });
+        req.on('aborted', () => { if (!done) { done = true; reject(new Error('cliente abortou o envio')); } });
     });
 }
 
 function readJsonBody(req) {
     return readBody(req).then((buf) => {
         try { return JSON.parse(buf.toString('utf8') || '{}'); }
-        catch (e) { throw new Error('json invalido: ' + e.message); }
+        catch (e) {
+            throw new F.StudioError('json.invalid', 'json invalido: ' + e.message, { http: 400 });
+        }
     });
 }
 
@@ -129,8 +144,12 @@ function startStudio(opts) {
         stopPlay();
         const built = buildProject(projectDir, {});
         const port = (body && body.port) || (port0 + 100);
+        // o preview segue o fps do projeto (padrao 30): rodar a 30 fixo
+        // distorcia o pacing de projeto com canvas.fps diferente
+        let fps = 30;
+        try { fps = Project.open(projectDir).data.canvas.fps || 30; } catch (e) {}
         const child = spawn(process.execPath,
-            [path.join(__dirname, 'lib', 'live.js'), built.dir, String(port)],
+            [path.join(__dirname, 'lib', 'live.js'), built.dir, String(port), String(fps)],
             { env: Object.assign({}, process.env, { CELER_MICROS_BIAS: '1' }),
               stdio: ['ignore', 'pipe', 'pipe'] });
         play = { child: child, port: port, url: null, log: [] };
@@ -179,6 +198,24 @@ function startStudio(opts) {
     }
 
     async function handle(req, res) {
+        // ferramenta local: rejeita Host/Origin estranhos. Uma pagina web
+        // aberta no navegador da maquina consegue ENVIAR POSTs para
+        // 127.0.0.1 (CSRF/DNS rebinding escreve no projeto) mesmo sem poder
+        // ler a resposta; sem esse check o bind em 127.0.0.1 nao protege.
+        const host = String(req.headers.host || '');
+        if (!/^(127\.0\.0\.1|\[::1\]|localhost)(:\d+)?$/i.test(host)) {
+            sendText(res, 403, 'host nao permitido');
+            return;
+        }
+        const origin = req.headers.origin;
+        if (origin && String(origin) !== 'http://' + host && String(origin) !== 'null') {
+            // o Play roda no mesmo host: origem diferente nao e nossa
+            const o = (() => { try { return new URL(String(origin)).host; } catch (e) { return ''; } })();
+            if (o !== host) {
+                sendText(res, 403, 'origem nao permitida');
+                return;
+            }
+        }
         const u = new URL(req.url, 'http://127.0.0.1');
         const url = u.pathname;
 
@@ -252,7 +289,10 @@ function startStudio(opts) {
             const body = await readJsonBody(req);
             let out;
             if (Array.isArray(body.ops) || body.op) {
-                const ops = Array.isArray(body.ops) ? body.ops : [body.op || body];
+                // mesma semantica do readOps do CLI: {op:"x", ...} e a propria
+                // op (o corpo inteiro); {op:{...}} embute o objeto da op
+                const ops = Array.isArray(body.ops) ? body.ops
+                    : [typeof body.op === 'string' ? body : body.op];
                 out = applyOps(projectDir, ops, { dryRun: !!body.dryRun, ifRev: body.ifRev });
             } else if (body.cmd === 'build') {
                 const b = buildProject(projectDir, {});
@@ -281,7 +321,31 @@ function startStudio(opts) {
             } else if (body.cmd === 'export') {
                 out = exportBuild(projectDir, body.target, { force: !!body.force });
             } else if (body.cmd === 'describe') {
-                out = describeData(Project.open(projectDir));
+                // describeProject (o require tardio de describeData): chamar
+                // describeData direto era ReferenceError -> 500 em todo
+                // {"cmd":"describe"}
+                out = describeProject(Project.open(projectDir));
+            } else if (body.cmd === 'ai') {
+                // copiloto: por padrao PREVIA (dry-run). O "aplicar" da GUI
+                // manda as mesmas ops por /api/command — um caminho so.
+                const A = require('./lib/ai');
+                const env = Object.assign({}, process.env);
+                if (body.provider) env.CELER_STUDIO_AI_PROVIDER = String(body.provider);
+                if (body.model) env.CELER_STUDIO_AI_MODEL = String(body.model);
+                const opts = {
+                    config: A.config(env),
+                    dryRun: body.apply ? false : true,
+                    context: body.context || 'summary',
+                    maxSteps: body.maxSteps,
+                    images: body.images || [],
+                    audio: body.audio || [],
+                    allowDelete: !!body.allowDelete,
+                    allowImport: !!body.allowImport,
+                };
+                if (body.mode === 'fix') out = await A.fix(projectDir, opts);
+                else if (body.mode === 'explain') out = await A.explain(projectDir, body.prompt, opts);
+                else out = await A.plan(projectDir, String(body.prompt || ''), opts);
+                out = Object.assign({ ok: true }, out);
             } else {
                 sendJson(res, 400, { ok: false, error: { code: 'cmd.unknown', message: 'comando desconhecido' } });
                 return;
@@ -309,9 +373,25 @@ function startStudio(opts) {
                 tw: u.searchParams.get('tw') || undefined,
                 th: u.searchParams.get('th') || undefined,
             };
-            for (const k of ['cols', 'rows', 'tw', 'th']) if (op[k] !== undefined) op[k] = +op[k];
-            const r = applyOps(projectDir, [op], {});
-            try { fs.rmSync(tmp, { force: true }); } catch (e) {}
+            for (const k of ['cols', 'rows', 'tw', 'th']) {
+                if (op[k] !== undefined) {
+                    op[k] = +op[k];
+                    // "?cols=abc" virava NaN e o importer ignorava em silencio
+                    if (!isFinite(op[k])) {
+                        sendJson(res, 400, { ok: false, error: { code: 'op.args',
+                                             message: 'query ' + k + ' deve ser numero' } });
+                        return;
+                    }
+                }
+            }
+            let r;
+            try {
+                r = applyOps(projectDir, [op], {});
+            } finally {
+                // importando ou falhando, o temporario nao vaza em
+                // .studio/upload
+                try { fs.rmSync(tmp, { force: true }); } catch (e) {}
+            }
             r.snapshot = snapshot();
             broadcast({ type: 'changed', source: 'upload' });
             sendJson(res, 200, r);
@@ -323,8 +403,23 @@ function startStudio(opts) {
 
     const server = http.createServer((req, res) => {
         handle(req, res).catch((e) => {
-            sendJson(res, 500, { ok: false, error: { code: e.code || 'server', message: e.message,
-                                                      hint: e.hint, diagnostics: e.diagnostics || null } });
+            // cliente que abortou no meio do corpo: responder em socket
+            // morto lanca e derrubaria o processo inteiro (GUI + Play)
+            try {
+                if (!res.headersSent) {
+                    // erro do cliente (corpo/op malformada) e 400, nao 500
+                    let status = e.http || 500;
+                    if (status === 500 && e.code && /^(ops?|rev|undo|redo|ai|script\.props)\./.test(e.code)) {
+                        // copiloto: chave ausente/lote recusado sao erro do
+                        // pedido; falha do provedor (rede/HTTP) e 502
+                        status = (e.code === 'ai.net' || e.code === 'ai.http') ? 502 : 400;
+                    }
+                    sendJson(res, status, { ok: false, error: { code: e.code || 'server', message: e.message,
+                                                             hint: e.hint, diagnostics: e.diagnostics || null } });
+                } else {
+                    try { res.end(); } catch (e2) {}
+                }
+            } catch (e2) { try { res.destroy(); } catch (e3) {} }
         });
     });
 
@@ -373,6 +468,9 @@ function startStudio(opts) {
         stopPlay();
         clearInterval(ping);
         if (watcher) { try { watcher.close(); } catch (e) {} }
+        // cliente SSE pendurado mantem a conexao ativa e o callback do
+        // server.close() nunca dispararia
+        for (const c of Array.from(clients)) { try { c.end(); } catch (e) {} }
         server.close(cb || (() => {}));
     }
 

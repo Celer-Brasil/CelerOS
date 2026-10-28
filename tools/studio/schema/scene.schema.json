@@ -18,7 +18,12 @@
         "music": { "type": "string", "description": "referencia guid do asset de audio" },
         "assets": { "type": "array", "items": { "type": "string" },
                     "description": "assets carregados na cena para scripts (GUID ou nome)" },
-        "data": { "type": "object", "description": "dados livres da cena lidos por scripts (fase, ondas, etc.)" },
+        "data": { "type": "object", "description": "dados livres da cena lidos por scripts (fase, ondas, estado inicial da tela no modo app)" },
+        "scripts": { "type": "array", "items": { "type": "string" },
+                     "description": "scripts de TELA (GUID do asset): create/start/update/draw/event/destroy" },
+        "header": { "type": "boolean", "description": "modo app: desenha o cabecalho (UI.header) com titulo/voltar" },
+        "sub": { "type": "string", "description": "modo app: subtitulo do cabecalho" },
+        "persist": { "type": "string", "description": "modo app: chave de Storage que guarda o estado da tela" },
         "camera": {
           "type": "object",
           "properties": {

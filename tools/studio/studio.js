@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 'use strict';
-// Celer Studio — CLI do editor de jogos da CelerGame.
+// Celer Studio — CLI do editor de jogos E programas (runtime app) do CelerOS.
 //
 //   node tools/sdk/celer.js studio init ~/Jogo --name "Meu Jogo"
+//   node tools/sdk/celer.js studio init ~/Painel --app --name "Painel"
 //   node tools/sdk/celer.js studio ~/Jogo describe --json
 //   node tools/sdk/celer.js studio ~/Jogo apply ops.json
 //   node tools/sdk/celer.js studio ~/Jogo build
 //   node tools/sdk/celer.js studio ~/Jogo run --ms 1500 --out tela.png
 //   node tools/sdk/celer.js studio ~/Jogo serve --open
+//   node tools/sdk/celer.js studio ~/Jogo ai "adicione um botao Sobre"
 //
 // Toda acao e um comando JSON (apply) com --json/--dry-run e ids estaveis:
 // a GUI, a IA e o CLI usam o MESMO barramento (lib/ops.js).
@@ -26,7 +28,7 @@ const F = require('./lib/format');
 
 const COMMANDS = new Set([
     'init', 'describe', 'schema', 'import', 'import-game', 'apply', 'validate',
-    'build', 'run', 'export', 'deploy', 'undo', 'redo', 'fmt', 'serve', 'version', 'help',
+    'build', 'run', 'export', 'deploy', 'undo', 'redo', 'fmt', 'serve', 'ai', 'version', 'help',
 ]);
 
 const OPS_HELP = [
@@ -34,7 +36,7 @@ const OPS_HELP = [
     { op: 'scene.create', args: 'name' },
     { op: 'scene.delete', args: 'scene' },
     { op: 'scene.rename', args: 'scene, name' },
-    { op: 'scene.set', args: 'scene, settings{bg,fps,static,data,assets,music,camera}, replace?, name?' },
+    { op: 'scene.set', args: 'scene, settings{bg,fps,static,data,assets,music,camera,scripts,header,sub,persist}, replace?, name?' },
     { op: 'scene.start', args: 'scene' },
     { op: 'entity.create', args: 'scene|prefab, name, fid?, x?, y?, z?, transform?, prefab?, components?' },
     { op: 'entity.set', args: 'scene|prefab, entity, name?, active?, z?, transform?' },
@@ -61,7 +63,8 @@ const OPS_HELP = [
 function usage() {
     console.log('uso: node tools/sdk/celer.js studio [PASTA] <comando> [flags]');
     console.log('');
-    console.log('  init [PASTA] [--name N] [--pkg P] [--author A]  cria projeto + cena inicial');
+    console.log('  init [PASTA] [--app] [--name N] [--pkg P] [--author A]  cria projeto + tela inicial');
+    console.log('                                               --app = programa (runtime Kui, sem engine)');
     console.log('  describe [--json]                              estado, componentes, ops e limites');
     console.log('  schema [project|scene|prefab|meta|components]  JSON Schema do formato');
     console.log('  import ARQUIVO [--importer K] [--grid CxR] [--tw N --th N] [--name N]');
@@ -75,20 +78,35 @@ function usage() {
     console.log('  undo | redo                                    desfaz/refaz o ultimo lote');
     console.log('  fmt                                            reescreve tudo canonico');
     console.log('  serve [--port P] [--open]                      abre a GUI web (Unity-style)');
+    console.log('  ai "PEDIDO" [--dry-run] [--json] [--model M] [--provider P]');
+    console.log('     [--context none|summary|full] [--max-steps N] [--image PNG] [--allow-delete]');
+    console.log('  ai fix [--dry-run]                             propoe ops p/ corrigir a validacao');
+    console.log('  ai explain "TEXTO"                             pergunta livre (sem ops)');
+    console.log('');
+    console.log('  IA usa CELER_STUDIO_AI_KEY (ou OPENROUTER_API_KEY/DEEPSEEK_API_KEY);');
+    console.log('  CELER_STUDIO_AI_PROVIDER/MODEL/URL ajustam o provedor.');
     console.log('');
     console.log('flags globais: --dir PASTA  --json  --dry-run');
 }
 
+// flags que nunca consomem o token seguinte: sem isso, `apply --dry-run
+// ops.json` engolia o arquivo de ops e `export --force DEST` engolia o destino
+const BOOL_FLAGS = new Set(['json', 'dry-run', 'force', 'no-build', 'open', 'loop', 'app',
+                            'allow-delete', 'allow-import']);
+
 function parseFlags(args) {
-    const out = { _: [], op: [] };
+    const out = { _: [], op: [], image: [], audio: [] };
     for (let i = 0; i < args.length; i++) {
         const a = args[i];
         if (!a.startsWith('--')) { out._.push(a); continue; }
         const key = a.slice(2);
+        if (BOOL_FLAGS.has(key)) { out[key] = true; continue; }
         const next = args[i + 1];
         let value = true;
         if (next !== undefined && !next.startsWith('--')) { value = next; i++; }
         if (key === 'op') out.op.push(value);
+        else if (key === 'image') out.image.push(value);
+        else if (key === 'audio') out.audio.push(value);
         else out[key] = value;
     }
     return out;
@@ -124,10 +142,12 @@ function readOps(flags) {
 function describeData(project) {
     const deps = Object.keys(project.data.deps || {}).length;
     const psram = (project.data.requires || []).indexOf('psram') >= 0;
+    const runtime = project.data.runtime || 'studio';
     return Object.assign({
         ok: true,
         studio: STUDIO_VERSION,
         format: FORMAT,
+        runtime: runtime,
         ops: OPS_HELP,
         components: componentCatalog(),
         schemas: ['project', 'scene', 'prefab', 'meta', 'components'],
@@ -135,12 +155,14 @@ function describeData(project) {
             deps: 8, depsUsed: deps,
             extras: 16, assetKB: 128, assetsKB: 256,
             jsKB: psram ? 1024 : 48, requiresPsram: psram,
+            depsRequired: runtime === 'app' ? 0 : (runtime === 'legacy' ? 1 : 3),
         },
         rules: {
             es5: true,
             flat: true,
             colors: '#RRGGBB na fonte; RGB565 no build',
             scene: 'entidades com transform implicito; prefab achatado no build',
+            app: 'runtime app: cena = tela, transform x/y = canto do widget, estado em settings.data',
         },
     }, project.summary());
 }
@@ -162,26 +184,45 @@ function printDiags(list, label) {
 function main(argv) {
     const args = (argv || process.argv.slice(2)).slice();
     let dir = null;
+    let dirArg = null;          // token posicional consumido como pasta
+    let preJson = false;
+    let preDryRun = false;
+    // flags globais valem em qualquer posicao (inclusive antes do comando);
+    // sem o pre-scan, `studio --dir X describe` caia no usage com exit 2
+    while (args[0] === '--dir' || args[0] === '--json' || args[0] === '--dry-run') {
+        const f = args.shift();
+        if (f === '--dir') dir = args.shift();
+        else if (f === '--json') preJson = true;
+        else preDryRun = true;
+    }
     if (args[0] && !args[0].startsWith('-') && !COMMANDS.has(args[0])) {
-        dir = args.shift();
+        dirArg = args.shift();
+        dir = dirArg;
     }
     const cmd = args[0] || 'help';
     const flags = parseFlags(args.slice(1));
     if (!dir && flags.dir) dir = flags.dir;
-    const json = !!flags.json;
+    const json = preJson || !!flags.json;
     const projectDir = path.resolve(dir || '.');
 
     try {
-        if (cmd === 'help' || cmd === 'version') {
-            if (cmd === 'version') { console.log(STUDIO_VERSION); return; }
+        if (cmd === 'help') {
+            // typo de comando nao pode virar help silencioso com exit 0:
+            // so tratamos como pasta se o caminho existe
+            if (dirArg !== null && !fs.existsSync(dirArg)) {
+                console.error('erro[cmd.unknown]: comando desconhecido: ' + dirArg);
+                usage();
+                process.exit(2);
+            }
             usage();
             return;
         }
+        if (cmd === 'version') { console.log(STUDIO_VERSION); return; }
         if (cmd === 'init') {
             const target = path.resolve(flags._[0] || projectDir);
             const p = Project.init(target, {
                 name: flags.name, pkg: flags.pkg, author: flags.author,
-                description: flags.description,
+                description: flags.description, app: !!flags.app,
             });
             const s = p.summary();
             if (json) console.log(JSON.stringify({ ok: true, dir: target, project: s.project,
@@ -201,7 +242,8 @@ function main(argv) {
             if (json) console.log(JSON.stringify(d, null, 2));
             else {
                 console.log(d.project.name + '  ' + d.project.packageName + ' ' + d.project.version +
-                            '  (api ' + d.project.api + ', rev ' + d.project.rev + ')');
+                            '  (api ' + d.project.api + ', rev ' + d.project.rev +
+                            ', runtime ' + d.runtime + ')');
                 console.log('canvas: ' + d.project.canvas.w + 'x' + d.project.canvas.h +
                             (d.project.canvas.native ? ' nativo' : ' virtual') +
                             '  deps: ' + d.limits.depsUsed + '/8');
@@ -239,7 +281,9 @@ function main(argv) {
                 loop: flags.loop ? true : undefined,
                 gain: num(flags.gain),
             };
-            const r = applyOps(projectDir, [op], { dryRun: !!flags.dryRun });
+            // --dry-run e flag global (chave 'dry-run'); flags.dryRun nunca
+            // existia e o import gravava de verdade mesmo com --dry-run
+            const r = applyOps(projectDir, [op], { dryRun: !!flags['dry-run'] || preDryRun });
             if (json) console.log(JSON.stringify(r, null, 2));
             else {
                 const a = r.results && r.results[0] && r.results[0].asset;
@@ -269,7 +313,7 @@ function main(argv) {
         if (cmd === 'apply') {
             const ops = readOps(flags);
             const r = applyOps(projectDir, ops, {
-                dryRun: !!flags['dry-run'],
+                dryRun: !!flags['dry-run'] || preDryRun,
                 ifRev: flags['if-rev'] !== undefined && flags['if-rev'] !== true ? +flags['if-rev'] : undefined,
             });
             if (json) console.log(JSON.stringify(r, null, 2));
@@ -381,6 +425,62 @@ function main(argv) {
                 dir: projectDir,
                 port: flags.port !== undefined && flags.port !== true ? +flags.port : 8421,
                 open: !!flags.open,
+            });
+            return;
+        }
+        if (cmd === 'ai') {
+            const A = require('./lib/ai');
+            const env = Object.assign({}, process.env);
+            if (flags.provider && flags.provider !== true) env.CELER_STUDIO_AI_PROVIDER = String(flags.provider);
+            if (flags.model && flags.model !== true) env.CELER_STUDIO_AI_MODEL = String(flags.model);
+            const cfg = A.config(env);
+            const mode = (flags._[0] === 'fix' || flags._[0] === 'explain') ? flags._[0] : 'edit';
+            const text = flags._.filter((x) => x !== 'fix' && x !== 'explain' && x !== '.').join(' ').trim();
+            const opts = {
+                config: cfg,
+                dryRun: !!flags['dry-run'] || preDryRun,
+                context: flags.context && flags.context !== true ? String(flags.context) : 'summary',
+                maxSteps: flags['max-steps'] !== undefined && flags['max-steps'] !== true
+                    ? Math.max(1, Math.min(6, +flags['max-steps'])) : undefined,
+                images: flags.image,
+                audio: flags.audio,
+                allowDelete: !!flags['allow-delete'],
+                allowImport: !!flags['allow-import'],
+            };
+            const run = mode === 'fix' ? A.fix(projectDir, opts)
+                : mode === 'explain' ? A.explain(projectDir, text, opts)
+                : (text ? A.plan(projectDir, text, opts)
+                        : Promise.reject(new F.StudioError('op.args', 'ai exige um pedido (ou `ai fix` / `ai explain`)')));
+            run.then((r) => {
+                if (json) {
+                    console.log(JSON.stringify({ ok: true, mode: mode, provider: cfg.provider,
+                                                 model: cfg.model, say: r.say, ops: r.ops,
+                                                 steps: r.steps || 1, dryRun: !!r.dryRun,
+                                                 usage: r.usage,
+                                                 result: r.result || null }, null, 2));
+                    return;
+                }
+                console.log('[ia] ' + cfg.provider + '/' + cfg.model + '  (contexto ' + opts.context + ')');
+                if (r.say) console.log(r.say);
+                if (r.ops && r.ops.length) {
+                    console.log('');
+                    for (const op of r.ops) console.log('  op ' + op.op + '  ' + JSON.stringify(op).slice(0, 160));
+                    const res = r.result || {};
+                    console.log((r.dryRun ? '[dry-run] ' : '') + 'ops: ' + r.ops.length +
+                                '  arquivos: ' + ((res.changed || []).length) + '  rev: ' + res.rev +
+                                (r.steps > 1 ? '  (' + r.steps + ' tentativas)' : ''));
+                    for (const w of res.warnings || []) console.log('  aviso[' + w.code + '] ' + w.message);
+                }
+            }).catch((e) => {
+                const err = { code: e.code || 'error', message: e.message, hint: e.hint,
+                              diagnostics: e.diagnostics || null };
+                if (json) console.log(JSON.stringify({ ok: false, error: err }, null, 2));
+                else {
+                    console.error('erro[' + err.code + ']: ' + err.message);
+                    if (err.hint) console.error('  dica: ' + err.hint);
+                    if (err.diagnostics) printDiags(err.diagnostics, 'erro');
+                }
+                process.exitCode = 1;
             });
             return;
         }

@@ -1,10 +1,20 @@
-# tools/studio/ - Celer Studio (editor de jogos da CelerGame)
+# tools/studio/ - Celer Studio (editor de jogos E programas do CelerOS)
 
 ## OVERVIEW
 Editor estilo Unity, file-first: `celergame.project.json` + `Assets/**` +
 `*.scene.json` + `*.prefab.json` + sidecars `.meta` sao a fonte da verdade.
-GUI web, CLI e API HTTP executam o MESMO barramento (`lib/ops.js`). O build
-gera um pacote de app CelerOS plano (ES5) com o runtime embutido, sem dep nova.
+GUI web, CLI, API HTTP e copiloto de IA executam o MESMO barramento
+(`lib/ops.js`). O build gera um pacote de app CelerOS plano (ES5) com o
+runtime embutido, sem dep nova.
+
+Dois runtimes, mesmo formato de arquivo:
+- `runtime: "studio"` (jogo): cenas/tilemaps/entidades sobre a CelerGame;
+  runtime `templates/runtime.js`, data `game.data.js`, 3 deps de engine.
+- `runtime: "app"` (programa): cada cena e uma TELA com widgets `UI.*` (Kui);
+  runtime `templates/app_runtime.js`, data `app.data.js`, ZERO deps de engine
+  (roda na CYD, sem psram).
+- `runtime: "legacy"`: bridge para app nao portado (modo historico).
+
 Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 
 ## FILE MAP
@@ -21,11 +31,14 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
 | `lib/build.js` | codegen determinista: main/data/scripts/assets/app.json/deps.json; tilemap leva `solidValues` |
 | `lib/deps.js` | fecho de deps de `tools/sdk/engine` (index.json + literal `version:`) -> lock `{nome: versao}` |
 | `lib/zip.js` | ZIP deterministico (deflate 9, CRC32, timestamp fixo) + leitor de verificacao |
-| `lib/deploy.js` | compilacao de deploy: build + jsstrip + assets usados -> app.zip/report |
+| `lib/deploy.js` | compilacao de deploy: build + jsstrip/jsmin + assets usados -> app.zip/report |
 | `lib/run.js` | executa o build no harness do host (PNG/frames/input) |
 | `lib/import_game.js` | import-game: app existente -> projeto legado (assets/metas/scripts) |
+| `lib/scripts.js` | props tipados: extrai `exports.props` (so o literal), defaults e merge |
+| `lib/ai.js` | copiloto: contexto do projeto, prompt, parser do plano, guardrails, plan/fix/explain |
 | `lib/live.js` | filho do Play (emulador ao vivo) |
 | `templates/runtime.js` | runtime de cenas ES5 (API de cena/`settings.data`/`ctx.go`), concatenado no main.js |
+| `templates/app_runtime.js` | runtime de TELAS ES5 (Kui, estado, eventos, IA), concatenado no main.js do modo app |
 | `templates/legacy.js` | bridge do modo legado: captura E.run, redireciona goto/push/pop |
 | `schema/*.json` | JSON Schemas + catalogo de componentes (fonte de tudo) |
 | `ui/` | GUI sem build (index/style/app.js) |
@@ -37,16 +50,22 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
   `id`. Renomear arquivo nao muda GUID; refs de cena sao por GUID.
 - **Serializacao canonica** (ordem do schema, LF, 2 espacos, newline final,
   `rev` incrementado). `studio fmt` normaliza tudo.
-- **Um barramento**: toda mutacao e uma op em `applyOps`; GUI/CLI/HTTP nao
-  tem caminho paralelo. Lote e atomico (erro restaura o snapshot).
+- **Um barramento**: toda mutacao e uma op em `applyOps`; GUI/CLI/HTTP/copiloto
+  nao tem caminho paralelo. Lote e atomico (erro restaura o snapshot).
 - **Build deterministico**: mesma fonte => mesmos bytes; sem timestamps no
   pacote; assets/cenas ordenados.
 - **Device**: JS ES5 (Duktape), pacote flat, 8 deps, 16 extras, 128 KB/asset,
   256 KB de assets, 1 MB JS com PSRAM (48 KB sem), 256 KB/modulo.
 - **Prefab e achatado no build**; o runtime nunca resolve prefab.
 - **Nada de `#ifdef` de placa** e nada de dep nova no hub para o runtime.
-- **Engine atual**: o runtime usa `E.spr.meta`/`animOf`/`box` (spr 1.6+),
-  `E.anchor`/`E.ax/ay` e `E.prof` (core 1.5+) quando presentes (feature
+- **Componente pertence a um modo** (`runtime` no catalogo: game/app/any):
+  `ui.*`/`ai.*`/`mic.record` so em `runtime:"app"`; `sprite`/`anim`/`text`/
+  `shape`/`collider`/`hud` so em `runtime:"studio"`. `transform`/`script`/`data`
+  valem nos dois. A validacao recusa o componente do modo errado.
+- **Modo app nao toca na engine**: `main.js` nao tem `require`, `app.json` sem
+  `deps`/`psram` forcados, `canvas.native` proibido (Kui e 240x320 virtual).
+- **Engine atual**: o runtime de jogo usa `E.spr.meta`/`animOf`/`box` (spr
+  1.6+), `E.anchor`/`E.ax/ay` e `E.prof` (core 1.5+) quando presentes (feature
   detect); o projeto gerado declara as versoes locais do engine (hoje
   core ^1.6.0, spr ^1.7.0). Pivot do asset vira `ax/ay` do metadado;
   transform sem `ax/ay` herda.
@@ -97,17 +116,42 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
   o runtime legado. Assets/scripts sim. Use a bridge so para um app ainda nao
   portado; os quatro `studio_games/` ja sao nativos.
 
+## MODO PROGRAMA (`runtime: "app"`)
+- Cada `*.scene.json` e uma TELA; cada entidade e um widget com `transform.x/y`
+  = canto superior esquerdo e `z` = ordem de desenho. `UI.header` ocupa y=0..40.
+- **Estado**: `settings.data` e o estado inicial; widgets com `key`/`bind`
+  leem/escrevem nele; script de tela muda por `ctx.set`. `settings.persist`
+  (chave de Storage) grava debounced (1 s) e no `exit`.
+- **Eventos**: widget com `event` despacha `event(nome, valor, ctx)` para
+  `settings.scripts` (scripts de TELA) e para os scripts da entidade que
+  disparou. `ui.button.go` navega sem script.
+- **Pilha de telas**: `ctx.go/back`; voltar na raiz desenrola o laco e encerra
+  o app (sem permissao `system`).
+- **Card = intervalo de fundo**: `ui.card` empilha a cor de fundo (fecha no
+  proximo card ou no fim da tela) para o redesenho parcial dos widgets
+  limpar o proprio retangulo com a cor certa. Card antes do conteudo.
+- **Widgets customizados** (`ui.field`, `mic.record`) rodam na SEGUNDA passada
+  porque dependem de `UI.touch()` saber se um widget nativo ja consumiu o toque.
+- **IA e dataflow**: o script seta `st[trigger] = true`; o componente
+  `ai.chat/speak/vision` dispara, grava em `outKey` e emite `event("ai:done")`.
+  `mic.record` grava WAV base64 em `key` (hold ou toggle).
+- **Permissoes cobradas pela validacao**: `ai.*` -> `net`, `ai.vision` -> `fs`,
+  `mic.record` -> `mic`, `ui.image`/musica de tela -> `fs`.
+- Exemplos versionados: `studio_apps/Painel` e `studio_apps/Assistente`
+  (ver `studio_apps/README.md`). Viram teste no `test/studio`.
+
 ## COMO ESTENDER
 ### Componente novo
-1. `schema/components.json`: `label` + `fields` (tipo/default/required).
+1. `schema/components.json`: `label` + `runtime` (game/app/any) + `fields`
+   (tipo/default/required).
 2. `lib/build.js` `convertComponent`: converte a fonte para o formato de
-   runtime.
-3. `templates/runtime.js`: carregar no `enter`, atualizar em `update` e
-   desenhar em `draw` (se necessario).
-4. A GUI pega o inspetor do schema automaticamente; ajuste `ui/app.js` so se
-   precisar de um widget novo (ex.: sprite ref).
+   runtime (`{t:'ui',k:'...'}` no modo app; `{t:'ai',k:'...'}` para IA).
+3. `templates/runtime.js` (jogo) ou `templates/app_runtime.js` (programa):
+   carregar no `enter`, atualizar em `update` e desenhar em `draw`.
+4. A GUI pega o inspetor do schema automaticamente; `ui/app.js` precisa de um
+   pintor em `drawWidgetBox` (preview no viewport) e `widgetSize`.
 5. `test/studio/run.js`: crie/edite um caso cobrindo o componente.
-6. Docs EN + pt-BR (tabela de componentes e API de cena).
+6. Docs EN + pt-BR (tabela de componentes e API de cena/tela).
 
 ### Op nova
 1. `lib/ops.js` (tabela `OPS`) + `OPS_HELP` em `studio.js`.
@@ -147,15 +191,32 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
   no painel do projeto/cena.
 
 ## CONTRATO DE IA
-- `studio describe --json` descobre projeto, componentes, ops, limites e
-  assets; `studio schema components` da os campos.
+- `studio describe --json` descobre projeto, runtime, componentes, ops, limites
+  e assets (com `settings.props` dos scripts); `studio schema components` da os
+  campos.
 - `apply` aceita `[ops]`, `{ops:[...]}` ou `{op:...}`; aceita `--dry-run` e
   `--if-rev`. `entity.create`/`prefab.instance` aceitam `fid` explicito.
 - Erros tem `code` estavel (`schema.*`, `ref.*`, `asset.*`, `build.invalid`,
-  `build.lint`, `rev.stale`, `undo.empty`) + `hint` + `diagnostics`.
+  `build.lint`, `rev.stale`, `undo.empty`, `perm.missing`, `component.runtime`)
+  + `hint` + `diagnostics`.
 - HTTP: `POST /api/command` (mesmas ops), `GET /api/snapshot`, SSE
   `/api/events`; toda resposta de comando traz `snapshot`.
-- A GUI tem barra de comandos que aceita as mesmas ops JSON.
+- A GUI tem barra de comando que aceita as mesmas ops JSON.
+
+## COPILOTO (`lib/ai.js`)
+- `studio ai "pedido"`, `studio ai fix`, `studio ai explain "..."`; HTTP
+  `{"cmd":"ai"}` (dry-run por padrao; `apply:true` escreve); GUI aba **IA**
+  (previa -> Aplicar/Descartar, anexar imagem, gravar voz 4 s).
+- Chaves por ambiente: `CELER_STUDIO_AI_KEY` (fallback
+  `OPENROUTER_API_KEY`/`DEEPSEEK_API_KEY`/`OPENAI_API_KEY`),
+  `CELER_STUDIO_AI_PROVIDER/MODEL/URL`. Nada no repo.
+- O modelo responde `{"say","ops"}`; o lote passa por `applyOps` em dry-run e,
+  se falhar, o erro volta ao modelo (`--max-steps`, padrao 2).
+- Guardrails: `asset/scene/entity.delete` e `tilemap.remove` bloqueados sem
+  `allowDelete`; `asset.import` bloqueado sem `allowImport`; teto de 40 ops;
+  `rev` atual para concorrencia. NUNCA escreve arquivo direto.
+- Testes: `ask` injetavel (CI sem rede) + provedor HTTP falso no
+  `test/studio/run.js`.
 
 ## BUILD/LIMITES (resumo)
 - Saida: `.studio/build/<slug(packageName)>/` (`main.js` com runtime inline,
@@ -174,7 +235,8 @@ Docs: `Documentation/Studio_Guide.md` (EN) e `.pt-BR.md` (manter em sincronia).
   nao precisa de permissao `fs` para `E.spr.meta`/`E.scene`.
 - `app_lint` roda no pacote final e bloqueia o build em erro.
 - `deploy` gera `.studio/deploy/app.zip` (ou `--out`) depois de enxugar todo
-  `.js` com jsstrip, compactar `app.json`, incluir so assets do build e
+  `.js` com jsstrip + jsmin (modulos tem o topo manglado; main.js so com
+  `reserved`), compactar `app.json`, incluir so assets do build e
   regravar o `deps.json`; `report.json` tem bytes antes/depois, assets, lock,
   SHA-256 e entradas. ZIP deterministico (timestamp fixo, ordenado, deflate 9)
   e compativel com `celerctl apps installzip` (app.json na raiz). O
@@ -196,13 +258,27 @@ sem alinhar com o dono do arquivo: e trabalho em voo.
   1.6, tilemap.set/resize, ops/dry-run/undo, build determinista, app gerado no
   harness (spr.meta/animOf/box + HUD ancorado), cena nativa (`settings.data`,
   `data`, `ctx.go` com arg, solidos por tile), prefab achatado, CLI x HTTP,
-  build+run dos 4 jogos de `studio_games/`, deploy/app.zip deterministico
-  (com deps.json cobrindo todo require compartilhado) e a bridge legada.
+  **modo programa** (init --app, app.json sem deps/psram, app.data.js, script
+  de tela com eventos, toggle/slider/lista, persistencia em Storage, `go`/
+  voltar do header, validacao cruzada de modos, props tipados), os dois
+  `studio_apps/` (Painel navega; Assistente manda `input_audio` e chama
+  `AI.speak`), **copiloto** (parser/guardrails/retry, HTTP com provedor falso,
+  CLI sem chave), build+run dos 4 jogos de `studio_games/`, deploy/app.zip
+  deterministico (com deps.json cobrindo todo require compartilhado) e a
+  bridge legada.
 - `node tools/sdk/celer.js check` cobre drift de types/renderer/deps.
 - Preview: `serve --open`; headless: `run --frames 0,600`.
 
 ## ANTI-PATTERNS
-- Editar `.studio/build/**` ou `game.data.js`/`main.js` gerados a mao.
+- Editar `.studio/build/**` ou `game.data.js`/`app.data.js`/`main.js` gerados
+  a mao.
+- Misturar componentes dos dois modos (a validacao recusa; nao "conserte"
+  afrouxando a regra).
+- Usar `fillRect`/`drawPNG` por quadro no runtime de programa (card e
+  `ui.image` ja sao especiais: card usa `UI.card` e imagem so em quadro
+  total).
+- Deixar o copiloto escrever arquivo fora do `applyOps` (perde undo, validacao
+  e a garantia de lote atomico).
 - Referenciar asset por nome em arquivos de cena (use GUID; nome so e atalho
   no CLI).
 - Colocar subpasta em `Assets/` esperando que ela va para o pacote (o build e

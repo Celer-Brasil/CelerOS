@@ -79,6 +79,7 @@ import time
 import zlib
 from pathlib import Path
 from urllib import request as _urlreq
+from urllib.parse import quote as _urlquote
 
 try:
     import serial
@@ -3311,7 +3312,8 @@ def _sync_app_deps(link, src, dest, args):
     hub = (getattr(args, "hub", None) or
            os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
     resolved = _install_shared_deps(link, meta["deps"], hub,
-                                    local=getattr(args, "deps_local", False))
+                                    local=getattr(args, "deps_local", False),
+                                    token=_hub_token(args, link))
     with tempfile.TemporaryDirectory() as td:
         dj = Path(td) / "deps.json"
         dj.write_text(json.dumps(resolved), encoding="utf-8")
@@ -3336,6 +3338,11 @@ def _install_app_folder(link, src, args):
     dest = f"{base}/{src.name}"
     files = [f for f in sorted(src.rglob("*"))
              if f.is_file() and ".dev" not in f.parts and not _is_junk(f)]
+    # app.json e o ULTIMO arquivo: se um modulo falhar no meio, o device
+    # continua anunciando a versao ANTIGA (antes o app.json ia primeiro por
+    # ordem alfabetica e um push perdido deixava "app.json 1.2.0 + modulo
+    # 1.0.0" — o apps list mentia e o app rodava misto)
+    files.sort(key=lambda f: (f.name == "app.json", f.as_posix()))
     link.simple("MKDIR", dest.encode() + b"\0")
     for f in files:
         rel = f.relative_to(src).parent
@@ -3345,13 +3352,26 @@ def _install_app_folder(link, src, args):
     verificados = 0
     for f in files:
         dest_f = f"{dest}/{f.relative_to(src).as_posix()}"
-        link.write_file(str(f), dest_f)
-        if not args.pula_verify:
-            # rele cada arquivo: o push dizer ok nao prova que o
-            # filesystem vai servir o conteudo novo (push fantasma
-            # calado quebra o app so em runtime)
-            link.verify_file(str(f), dest_f)
-            verificados += 1
+        try:
+            link.write_file(str(f), dest_f)
+            if not args.pula_verify:
+                # rele cada arquivo: o push dizer ok nao prova que o
+                # filesystem vai servir o conteudo novo (push fantasma
+                # calado quebra o app so em runtime)
+                link.verify_file(str(f), dest_f)
+                verificados += 1
+        except CelerError as e:
+            # o app.json NAO foi (vai por ultimo): o device segue com a
+            # versao antiga e o install pode ser repetido. Deixar o erro
+            # subir cru fazia o celerctl sair com traceback e a pasta
+            # misturada sem ninguem saber o estado.
+            dica = ("" if f.name == "app.json" else
+                    "  app.json e gravado por ultimo: a versao no device "
+                    "continua a antiga ate reinstalar.\n")
+            die(f"install interrompido em {f.name}: {e}\n"
+                f"  {dica}"
+                f"  se o app estava aberto, `celerctl shell \"exit\"` libera "
+                f"o canal (o ACK do device falha com ele rodando) e repita.")
     # poda o que ficou para tras: modulos que sairam do app entre
     # versoes seguem no device e o require ainda os acha — app misto
     # (main novo + fx velho) quebra em runtime (Supernova 2.0:
@@ -3404,11 +3424,47 @@ def _http_get(url, timeout=30):
         return resp.read()
 
 
-def _hub_url(hub, u):
+def _hub_url(hub, u, token=""):
     """URL do catalogo: relativa (hub + path) ou ja absoluta (o hub passou a
-    servir meta/app/icon com o host) — concatenar as duas quebrava o DNS."""
+    servir meta/app/icon com o host) — concatenar as duas quebrava o DNS.
+
+    `token` vira ?token= (o hub aceita Bearer e query; a query serve tambem
+    para os GETs crus de asset, que nao mandam header)."""
     u = str(u)
-    return u if u.startswith(("http://", "https://")) else hub + u
+    full = u if u.startswith(("http://", "https://")) else hub + u
+    if token:
+        sep = "&" if "?" in full else "?"
+        full += sep + "token=" + _urlquote(token, safe="")
+    return full
+
+
+def _hub_token(args, link=None):
+    """Token de LEITURA do hub, para ver/baixar app privado.
+
+    Ordem: --hub-token, CELER_HUB_TOKEN e por fim o /local/hub_token.txt do
+    PROPRIO device (o mesmo arquivo que a loja do aparelho usa). Sem ele o PC
+    so enxerga o catalogo publico: `apps store celeros.park.*` dizia "nao
+    esta no hub" com o app publicado, so que privado."""
+    tok = (getattr(args, "hub_token", None) or
+           os.environ.get("CELER_HUB_TOKEN") or "").strip()
+    if tok or link is None:
+        return tok
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="hubtoken-")
+        os.close(fd)
+        link.read_file("/local/hub_token.txt", tmp, progress=False)
+        tok = Path(tmp).read_text(encoding="utf-8", errors="replace").strip()
+    except (CelerError, OSError):
+        tok = ""
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return tok
+
 
 
 def _apps_store(link, args):
@@ -3419,11 +3475,18 @@ def _apps_store(link, args):
     local (default producao) — as deps saem do MESMO hub do pacote."""
     hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
     import celerhub
-    _, cat = celerhub.http("GET", f"{hub}/store/all.json")
+    # token de leitura: sem ele o catalogo vem so publico e o app privado
+    # "nao existe" (o celerctl nao tinha token nenhum; o device tem o dele em
+    # /local/hub_token.txt)
+    token = _hub_token(args, link)
+    _, cat = celerhub.http("GET", _hub_url(hub, "/store/all.json", token))
     entry = (cat.get("apps") or {}).get(args.pkg)
     if not entry:
         nomes = ", ".join(sorted((cat.get("apps") or {}))[:10])
-        die(f"pacote '{args.pkg}' nao esta no hub {hub} (catalogo: {nomes}...)")
+        dica = "" if token else (
+            "\n  app privado? passe --hub-token, exporte CELER_HUB_TOKEN ou "
+            "grave /local/hub_token.txt no device")
+        die(f"pacote '{args.pkg}' nao esta no hub {hub} (catalogo: {nomes}...){dica}")
     nome = entry.get("name") or args.pkg
     tamanho = (entry.get("size") or 0) + sum(
         (f or {}).get("size") or 0 for f in (entry.get("files") or {}).values())
@@ -3457,7 +3520,7 @@ def _apps_store(link, args):
         # o app.json servido pelo hub leva os campos COMPUTADOS (size, md5,
         # published_at, publisher, zip): o lint local os recusa ("nunca
         # setar a mao"), entao o install tira antes de gravar
-        meta_raw = _http_get(_hub_url(hub, entry["meta"]))
+        meta_raw = _http_get(_hub_url(hub, entry["meta"], token))
         try:
             meta = json.loads(meta_raw.decode("utf-8"))
         except ValueError:
@@ -3466,7 +3529,7 @@ def _apps_store(link, args):
             meta.pop(k, None)
         (src / "app.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        main = _http_get(_hub_url(hub, entry["app"]))
+        main = _http_get(_hub_url(hub, entry["app"], token))
         if entry.get("md5") and hashlib.md5(main).hexdigest() != entry["md5"]:
             die(f"main.js: md5 divergente do catalogo do hub")
         (src / "main.js").write_bytes(main)
@@ -3474,7 +3537,7 @@ def _apps_store(link, args):
         for n, fi in (entry.get("files") or {}).items():
             if n in ("app.json", "main.js", "icon.png") or "/" in n or ".." in n:
                 continue  # o que tem tratamento proprio (ou nao e caminho)
-            data = _http_get(_hub_url(hub, fi.get("url") or base_url + n))
+            data = _http_get(_hub_url(hub, fi.get("url") or base_url + n, token))
             if fi.get("md5") and hashlib.md5(data).hexdigest() != fi["md5"]:
                 die(f"{n}: md5 divergente do catalogo do hub")
             dst = src / n
@@ -3482,10 +3545,13 @@ def _apps_store(link, args):
             dst.write_bytes(data)
         if entry.get("icon"):
             try:
-                (src / "icon.png").write_bytes(_http_get(_hub_url(hub, entry["icon"])))
+                (src / "icon.png").write_bytes(
+                    _http_get(_hub_url(hub, entry["icon"], token)))
             except Exception as e:  # noqa: BLE001 — icon e nao-fatal na loja
                 print(f"aviso: icon.png nao veio ({e})")
         args.hub = hub
+        # as deps do pacote tambem podem ser privadas: o token segue adiante
+        args.hub_token = token or getattr(args, "hub_token", None)
         _install_app_folder(link, src, args)
 
 
@@ -3545,21 +3611,33 @@ def _installed_apps(link):
     return out
 
 
+def _resolve_installed(link, name):
+    """Acha o app instalado por pasta, sufixo do packageName, nome de
+    exibicao ou packageName INTEIRO ("celeros.park.entrada" funcionava so
+    depois de virar a pasta — `apps run celeros.park.entrada` dizia "nao
+    encontrado" com o app instalado). Devolve (base, pasta, meta) ou None."""
+    want = _norm_app_name(name)
+    if not want:
+        return None
+    for base, dirname, meta in _installed_apps(link):
+        meta = meta or {}
+        pkg = str(meta.get("packageName") or "")
+        sufixo = pkg.rsplit(".", 1)[-1] if pkg else ""
+        for cand in (dirname, sufixo, str(meta.get("name") or ""), pkg):
+            if _norm_app_name(cand) == want:
+                return base, dirname, meta
+    return None
+
+
 def _app_not_found(link, name, action="run"):
     """Mensagem que ensina a pasta REAL do app: o install usa o sufixo do
     packageName (celeros.webpass -> pasta "webpass") e `apps run NOME` olha
     a PASTA, nao o nome de exibicao ("WebPass") — o erro classico de bancada."""
     apps = _installed_apps(link)
-    want = _norm_app_name(name)
     achado = None
-    for base, dirname, meta in apps:
-        meta = meta or {}
-        pkg = str(meta.get("packageName") or "")
-        sufixo = pkg.rsplit(".", 1)[-1] if pkg else ""
-        cands = (dirname, sufixo, str(meta.get("name") or ""))
-        if want and any(_norm_app_name(c) == want for c in cands):
-            achado = (base, dirname, pkg)
-            break
+    hit = _resolve_installed(link, name)
+    if hit:
+        achado = (hit[0], hit[1], str((hit[2] or {}).get("packageName") or ""))
     msgs = [f"app '{name}' nao encontrado em /local/apps nem /sd/apps"]
     if achado:
         base, dirname, pkg = achado
@@ -3923,7 +4001,7 @@ def _local_sdk_deps():
     return out
 
 
-def _push_dep_module(link, name, ver, meta):
+def _push_dep_module(link, name, ver, meta, hub="", token=""):
     """Baixa (ou tira do SDK local, meta["_local"]) o modulo <name> <ver> e
     poe no cache /local/modules com escrita verificada por releitura (crc32):
     /local/modules e o caminho mais historico de push fantasma (cache
@@ -3937,7 +4015,7 @@ def _push_dep_module(link, name, ver, meta):
         blob = celerhub.strip_js(Path(meta["_local"]))
     else:
         print(f"dep {name} {ver}: baixando do hub...")
-        req = _urlreq.Request(meta["url"],
+        req = _urlreq.Request(_hub_url(hub, meta["url"], token),
                               headers={"User-Agent": "celerosctl/1.0"})
         with _urlreq.urlopen(req, timeout=30) as resp:
             blob = resp.read()
@@ -3967,7 +4045,7 @@ def _push_dep_module(link, name, ver, meta):
     print(f"dep {name} {ver}: no cache do device ({len(blob)} B, verificada)")
 
 
-def _install_shared_deps(link, deps, hub, local=False):
+def _install_shared_deps(link, deps, hub, local=False, token=""):
     """Deps compartilhadas (API 30): resolve os ranges contra o indice do
     hub (mesma semantica do celerhub.py), baixa cada modulo no PC e empurra
     para /local/modules/<nome>/<versao>/ — o cache publico do require.
@@ -3975,7 +4053,7 @@ def _install_shared_deps(link, deps, hub, local=False):
     pasta do app)."""
     import celerhub  # mesma pasta tools/; so funcoes, main() e guardado
     try:
-        status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
+        status, idx = celerhub.http("GET", _hub_url(hub, "/store/deps.json", token))
     except (Exception, SystemExit) as e:  # noqa: BLE001 — offline vale com --deps-local
         # celerhub.http falha de rede com die() (SystemExit): so Exception
         # deixava o fallback do --deps-local morto (offline abortava)
@@ -3996,7 +4074,7 @@ def _install_shared_deps(link, deps, hub, local=False):
         die(f"deps: indice do hub indisponivel ({hub}/store/deps.json)")
     resolved = celerhub.resolve_dep_ranges(deps, index)
     for name, ver in resolved.items():
-        _push_dep_module(link, name, ver, index[name][ver])
+        _push_dep_module(link, name, ver, index[name][ver], hub=hub, token=token)
     return resolved
 
 
@@ -4397,6 +4475,12 @@ def _apps_run(link, args):
         if st is not None and st["dir"]:
             target = f"{candidate_base}/{args.name}"
             break
+    if target is None:
+        hit = _resolve_installed(link, args.name)
+        if hit:
+            # o exit/run do device falam com a PASTA: troca o nome resolvido
+            args.name = hit[1]
+            target = f"{hit[0]}/{hit[1]}"
     if target is None:
         _app_not_found(link, args.name, "run")
     _relaunch(link, args.name)
@@ -4855,6 +4939,9 @@ def build_parser():
                    help="pula a releitura de verificacao (crc32) de cada arquivo")
     a.add_argument("--run", action="store_true",
                    help="abre o app ao final (exit + run; encerra o anterior)")
+    a.add_argument("--hub-token", default=None, metavar="T",
+                   help="token de leitura do hub para deps privadas; default: "
+                        "CELER_HUB_TOKEN ou o /local/hub_token.txt do device")
     a = apps_sub.add_parser("store", help="baixa o pacote do hub e instala "
                                          "(o caminho da loja, sem dirigir a UI)")
     a.add_argument("pkg", help="pacote no hub (ex: celeros.arrasa — veja o "
@@ -4867,6 +4954,9 @@ def build_parser():
                    help="pula a releitura de verificacao (crc32) de cada arquivo")
     a.add_argument("--run", action="store_true",
                    help="abre o app ao final (exit + run; encerra o anterior)")
+    a.add_argument("--hub-token", default=None, metavar="T",
+                   help="token de leitura do hub (app privado); default: "
+                        "CELER_HUB_TOKEN ou o /local/hub_token.txt do device")
     a = apps_sub.add_parser("installzip", help="instala um pacote unico .zip no device "
                                                 "(o mesmo layout que o hub publica)")
     a.add_argument("zipfile", help="caminho do .zip no PC (app.json na raiz)")

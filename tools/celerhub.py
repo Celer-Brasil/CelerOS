@@ -274,6 +274,12 @@ def token_or_die(args):
     return tok
 
 
+def user_token(args):
+    """Token se houver (sem morrer): leituras que mudam com credencial, como
+    o catalogo (app privado aparece so com token do tenant)."""
+    return args.token or os.environ.get("CELER_HUB_TOKEN") or ""
+
+
 def http(method, url, token=None, data=None, headers=None, timeout=30):
     req = request.Request(url, data=data, method=method)
     if token:
@@ -613,7 +619,10 @@ def validate(folder: Path, strip=True, snapshot=None):
         isz = icon_path.stat().st_size
         if isz > 10 * 1024:
             avisos.append(f"icon.png grande ({isz}B); o pipeline gera ~2-5KB")
-    else:
+    elif not str(meta.get("icon") or "").strip():
+        # app que declara `icon` usa o icone do sistema (data/icons/<id>.png):
+        # nao ter icon.png no pacote e o esperado, nao um aviso (WiFi e os
+        # CelerPark caiam aqui e o aviso dizia o contrario do contrato)
         avisos.append("sem icon.png (o launcher usa gradiente+inicial)")
     return meta, avisos, js_sum, extras
 
@@ -1009,13 +1018,29 @@ def local_packages():
 
 def cmd_list(args):
     _, cats = http("GET", f"{hub_url(args)}/store/index.json")
-    _, data = http("GET", f"{hub_url(args)}/store/all.json")
+    # o catalogo muda com o token: app privado so aparece para quem tem
+    # credencial do tenant. Sem token a lista e a publica (comportamento de
+    # antes); com token, os que so existem la sao marcados "privado" — a
+    # vertical ficava invisivel no `list` mesmo depois do publish --private.
+    tok = user_token(args)
+    _, data = http("GET", f"{hub_url(args)}/store/all.json", token=tok or None)
     _, info = http("GET", f"{hub_url(args)}/api/info")
     apps = data.get("apps", {})
+    privados = set()
+    if tok:
+        try:
+            _, pub = http("GET", f"{hub_url(args)}/store/all.json")
+            privados = set(apps) - set(pub.get("apps") or {})
+        except SystemExit:
+            privados = set()   # leitura anonima bloqueada: lista sem marca
     downloads = info.get("downloads", {})
     local = local_packages()
     print(f"CelerOS Hub ({hub_url(args)}) - {len(apps)} apps em "
-          f"{len(cats.get('categories', {}))} categorias\n")
+          f"{len(cats.get('categories', {}))} categorias")
+    if privados:
+        print(f"{len(privados)} privado(s) visiveis com o token: "
+              f"{', '.join(sorted(privados))}")
+    print()
     print(f"{'pacote':40} {'v':8} {'api':4} {'tam':7} {'down':5} {'categoria':12} local")
     for pkg in sorted(apps):
         a = apps[pkg]
@@ -1029,6 +1054,8 @@ def cmd_list(args):
             mark = f"local v{lv} (hub atrasado)"
         else:
             mark = f"hub v{hv} (device tem update)"
+        if pkg in privados:
+            mark = "privado " + mark
         size = a.get("size")
         size_s = f"{size // 1024}KB" if size else "-"
         print(f"{pkg:40} {hv:8} {a.get('api', '?'):4} {size_s:7} "

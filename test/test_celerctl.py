@@ -1801,6 +1801,23 @@ class TestAppsStore(unittest.TestCase):
             "/store/apps/celeros.demo/lib.js": lib,
             "/store/apps/celeros.demo/icon.png": icon,
         }
+        # catalogo "com token": o mesmo + um app privado (o hub so o inclui
+        # quando a credencial do tenant vai junto)
+        priv_main = b"var priv = 1;\n"
+        cat_pub = json.loads(rota["/store/all.json"])
+        cat_priv = {"apps": dict(cat_pub["apps"])}
+        cat_priv["apps"]["celeros.privado"] = {
+            "name": "Privado", "version": "1.0.0", "api": 33,
+            "size": len(priv_main),
+            "meta": "/store/apps/celeros.privado/app.json",
+            "app": "/store/apps/celeros.privado/main.js"}
+        rota["/store/all.privado.json"] = json.dumps(cat_priv).encode()
+        rota["/store/apps/celeros.privado/app.json"] = json.dumps({
+            "name": "Privado", "packageName": "celeros.privado",
+            "version": "1.0.0", "api": 33}).encode()
+        rota["/store/apps/celeros.privado/main.js"] = priv_main
+        rota["_pedidos"] = []
+        self.priv_main = priv_main
         dep_base = "http://127.0.0.1:%d" % 0  # remontado abaixo com a porta
         dep_entry = {"9.9.9": {"size": len(dep), "md5": hashlib.md5(dep).hexdigest(),
                                "url": "PENDING"}}
@@ -1814,11 +1831,16 @@ class TestAppsStore(unittest.TestCase):
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
-                # url absoluta da dep precisa da porta real: remonta na hora
-                if self.path.startswith("/dep/celeros.engine.js"):
+                # o token vai na query (como a loja do device): separa antes
+                # de resolver o path e guarda o pedido para as assercoes
+                caminho, _, query = self.path.partition("?")
+                rota_ref["_pedidos"].append(self.path)
+                if caminho.startswith("/dep/celeros.engine.js"):
                     corpo = rota_ref["/dep/celeros.engine.js"]
+                elif caminho == "/store/all.json" and "token=segredo" in query:
+                    corpo = rota_ref["/store/all.privado.json"]
                 else:
-                    corpo = rota_ref.get(self.path)
+                    corpo = rota_ref.get(caminho)
                 if corpo is None:
                     self.send_response(404)
                     self.end_headers()
@@ -1898,6 +1920,97 @@ class TestAppsStore(unittest.TestCase):
             else:
                 os.environ["CELER_HUB"] = saved
         self.assertIn("celeros.demo", err.getvalue())  # dica do catalogo
+
+    def _instala_privado(self, link, dev, **extra):
+        """Roda _apps_store para o app PRIVADO do catalogo fake (ele so
+        aparece entre os apps quando o token vai junto)."""
+        from types import SimpleNamespace
+        import contextlib
+        link.hello()
+        args = SimpleNamespace(pkg="celeros.privado", sd=False, pula_lint=True,
+                               pula_verify=False, run=False, deps_local=False,
+                               hub=None, hub_token=None)
+        for k, v in extra.items():
+            setattr(args, k, v)
+        out, err = io.StringIO(), io.StringIO()
+        os.environ.update(self.env)
+        os.environ.pop("CELER_HUB_TOKEN", None)
+        try:
+            with contextlib.redirect_stdout(out), redirect_stderr(err):
+                try:
+                    C._apps_store(link, args)
+                except SystemExit:
+                    pass
+        finally:
+            pass
+        return out.getvalue(), err.getvalue()
+
+    def test_app_privado_com_hub_token(self):
+        link, dev = make_link()
+        _, err = self._instala_privado(link, dev, hub_token="segredo")
+        self.assertEqual(err, "")
+        self.assertEqual(dev.files["/local/apps/Privado/main.js"], self.priv_main)
+        self.assertTrue(any("token=segredo" in p for p in self.rota["_pedidos"]),
+                        self.rota["_pedidos"][:5])
+
+    def test_app_privado_com_token_do_device(self):
+        link, dev = make_link()
+        dev.files["/local/hub_token.txt"] = b"segredo\n"
+        _, err = self._instala_privado(link, dev)
+        self.assertEqual(err, "")
+        self.assertEqual(dev.files["/local/apps/Privado/main.js"], self.priv_main)
+
+    def test_app_privado_sem_token_ensina_o_caminho(self):
+        link, dev = make_link()
+        _, err = self._instala_privado(link, dev)
+        self.assertIn("nao esta no hub", err)
+        self.assertIn("--hub-token", err)
+        self.assertNotIn("/local/apps/Privado/main.js", dev.files)
+
+
+class TestInstallAtomico(unittest.TestCase):
+    """app.json e o ULTIMO arquivo do install: um push perdido no meio nao
+    pode deixar o device anunciando a versao nova com o modulo velho — foi
+    o que aconteceu no totem CelerPark (app.json 1.2.0 no disco e
+    celeros.usb 1.0.0, o bug que a versao nova corrigia)."""
+
+    def _app(self):
+        src = Path(tempfile.mkdtemp()) / "App"
+        src.mkdir()
+        (src / "app.json").write_text(json.dumps({
+            "name": "App", "packageName": "celeros.app", "version": "2.0.0",
+            "api": 30}), encoding="utf-8")
+        (src / "main.js").write_text("var a = 1;\n", encoding="utf-8")
+        (src / "lib.js").write_text("var b = 2;\n", encoding="utf-8")
+        return src
+
+    def test_app_json_e_o_ultimo_arquivo(self):
+        link, dev = make_link()
+        link.hello()
+        out, err, code = run_cli(
+            ["apps", "install", str(self._app()), "--pula-lint"], link)
+        self.assertEqual(code, 0, err)
+        ordem = [p for p in dev.files if p.startswith("/local/apps/App/")]
+        self.assertEqual(ordem[-1], "/local/apps/App/app.json")
+
+    def test_falha_no_meio_nao_grava_app_json(self):
+        link, dev = make_link()
+        link.hello()
+        src = self._app()
+        original = link.write_file
+
+        def write_falho(local_path, remote_path, progress=True):
+            if remote_path.endswith("/main.js"):
+                raise C.CelerError("sem ACK do device")
+            return original(local_path, remote_path, progress=progress)
+
+        link.write_file = write_falho
+        out, err, code = run_cli(
+            ["apps", "install", str(src), "--pula-lint"], link)
+        self.assertEqual(code, 1)
+        self.assertNotIn("/local/apps/App/app.json", dev.files)
+        self.assertIn("app.json e gravado por ultimo", err)
+        self.assertIn('shell "exit"', err)
 
 
 # --------------------------------------------------- push-dep / deps-status
@@ -2390,15 +2503,17 @@ class TestAppsHint(unittest.TestCase):
         dev.dirs[base] = [dirname]
         dev.files[f"{base}/{dirname}/app.json"] = json.dumps(self.META).encode()
 
-    def test_run_por_nome_de_exibicao_ensina_a_pasta(self):
+    def test_run_por_nome_de_exibicao_abre_a_pasta_real(self):
+        # antes so ENSINAVA a pasta ("WebPass nao abre, a pasta e webpass");
+        # agora resolve nome de exibicao/packageName e abre a pasta certa.
+        # pull/rm continuam exigindo o nome real (destrutivos).
         link, dev = make_link()
         link.hello()
         self._populate(dev)
         out, err, code = run_cli(["apps", "run", "WebPass"], link)
-        self.assertEqual(code, 1)
-        self.assertIn("a pasta instalada e 'webpass'", err)
-        self.assertIn("packageName celeros.webpass", err)
-        self.assertIn("celerctl apps run webpass", err)
+        self.assertEqual(code, 0, err)
+        self.assertIn("abrindo: /local/apps/webpass", out)
+        self.assertIn("run webpass", dev.execs)
 
     def test_pull_idem(self):
         link, dev = make_link()
@@ -2424,6 +2539,15 @@ class TestAppsHint(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("apps instalados: webpass", err)
         self.assertIn("nome da PASTA", err)
+
+    def test_run_pelo_package_name_inteiro(self):
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        out, err, code = run_cli(["apps", "run", "celeros.webpass"], link)
+        self.assertEqual(code, 0, err)
+        self.assertIn("abrindo: /local/apps/webpass", out)
+        self.assertIn("run webpass", dev.execs)
 
     def test_installzip_ensina_a_pasta_e_o_run(self):
         link, dev = make_link()
@@ -2544,7 +2668,7 @@ class TestDepsCompartilhadas(unittest.TestCase):
         (src / "app.json").write_text(json.dumps(
             {"name": "Meu App", "deps": {"celeros.game": "^1.0.0"}}), encoding="utf-8")
         enviados = []
-        C._push_dep_module = lambda lk, n, v, meta: enviados.append((n, v))
+        C._push_dep_module = lambda lk, n, v, meta, **kw: enviados.append((n, v))
         args = C.build_parser().parse_args(["apps", "install", str(src)])
         out = C._sync_app_deps(link, src, "/local/apps/Meu App", args)
         self.assertEqual(out, {"celeros.game": "1.3.0"})  # maior satisfazendo

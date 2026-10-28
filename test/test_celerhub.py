@@ -10,11 +10,13 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 import celerhub as H  # noqa: E402
@@ -575,6 +577,79 @@ class TestPublishHostil(unittest.TestCase):
                "celeros.c": {"1.2.0": {}, "1.4.0": {}, "1.9.0": {}, "2.0.0": {}}}
         picks = H.resolve_dep_ranges({"celeros.a": "^1.0.0", "celeros.b": "^1.0.0"}, hub)
         self.assertEqual(picks["celeros.c"], "1.9.0")
+
+
+class TestIconAviso(unittest.TestCase):
+    """App que declara `icon` usa o icone do SISTEMA (data/icons/<id>.png):
+    nao ter icon.png no pacote e o contrato, nao um aviso. O WiFi e os
+    CelerPark caiam no aviso "sem icon.png" a cada publish."""
+
+    def _app(self, extra=None):
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        d = Path(td) / "App"
+        d.mkdir()
+        meta = {"name": "App", "packageName": "celeros.app", "version": "1.0.0",
+                "api": 30, "author": "t", "description": "d"}
+        meta.update(extra or {})
+        (d / "app.json").write_text(json.dumps(meta), encoding="utf-8")
+        (d / "main.js").write_text("var a = 1;\n", encoding="utf-8")
+        return d
+
+    def test_icon_do_sistema_nao_avisa(self):
+        _, avisos, _, _ = H.validate(self._app({"icon": "wifi_on"}))
+        self.assertFalse([a for a in avisos if "sem icon.png" in a], avisos)
+
+    def test_sem_icon_nem_icone_do_sistema_avisa(self):
+        _, avisos, _, _ = H.validate(self._app())
+        self.assertTrue([a for a in avisos if "sem icon.png" in a], avisos)
+
+
+class TestListPrivados(unittest.TestCase):
+    """`celerhub list` com token mostra os apps privados (marcados): antes o
+    catalogo era lido sem credencial e a vertical ficava invisivel mesmo
+    depois do publish --private."""
+
+    def _run(self, token):
+        from types import SimpleNamespace
+        publico = {"apps": {"celeros.a": {"version": "1.0.0", "api": 30,
+                                          "size": 2048, "category": "Utility"}}}
+        com_token = {"apps": dict(publico["apps"], **{
+            "celeros.segredo": {"version": "2.0.0", "api": 30, "size": 2048,
+                                "category": "System"}})}
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            if url.endswith("/store/index.json"):
+                return 200, {"categories": {}}
+            if url.endswith("/store/all.json"):
+                return 200, (com_token if token else publico)
+            if url.endswith("/api/info"):
+                return 200, {"downloads": {}}
+            raise AssertionError("url inesperada: " + url)
+
+        args = SimpleNamespace(token=token, hub="https://hub.teste")
+        out = io.StringIO()
+        with patch.object(H, "http", side_effect=fake_http), \
+                patch.object(H, "local_packages", return_value={}), \
+                contextlib.redirect_stdout(out):
+            H.cmd_list(args)
+        return out.getvalue()
+
+    def test_sem_token_nao_lista_privado(self):
+        texto = self._run(None)
+        self.assertIn("celeros.a", texto)
+        self.assertNotIn("celeros.segredo", texto)
+
+    def test_com_token_lista_e_marca_privado(self):
+        texto = self._run("tk")
+        self.assertIn("celeros.segredo", texto)
+        self.assertIn("1 privado(s) visiveis", texto)
+        for linha in texto.splitlines():
+            if "celeros.segredo" in linha:
+                self.assertIn("privado", linha)
+                break
+        else:
+            self.fail("linha do app privado ausente")
 
 
 if __name__ == "__main__":

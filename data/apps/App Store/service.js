@@ -29,9 +29,12 @@ var RES_KEY = "auto_result";     // resultado da ultima rodada (texto curto)
 var TICK_MS = 30000;             // giro do servico (o timer do svchost)
 var RETRY_MS = 600000;           // plano/rede falhou: nova tentativa em 10 min
 var MAX_LIST = 40;
+var MAX_WAKES = 6;               // 6 x 5 min de radio por vida do servico
+var WAKES_MS = 5 * 60000;        // janela pedida ao firmware (watch acorda o radio)
 
 var busy = false;
 var nextTry = 0;
+var wakes = 0;
 
 function log(m) { try { System.print("[auto] " + String(m)); } catch (e) {} }
 function nowMs() { try { return Number(System.millis()) || 0; } catch (e) { return 0; } }
@@ -55,9 +58,12 @@ function wifiUp() { try { return Net.isConnected() === true; } catch (e) { retur
 
 // Placa que desliga o radio com a tela apagada: pede a janela de manutencao
 // ao firmware, quando ele oferecer. Sem a API, o catch-up do dia cobre.
+// O numero de tentativas e LIMITADO: rede configurada mas fora do ar nao pode
+// deixar o radio ligado o dia inteiro no relogio (bateria).
 function wifiWake() {
+    if (wakes >= MAX_WAKES) return false;
     try {
-        if (typeof System.wifiWake === "function") { System.wifiWake(10); return true; }
+        if (typeof System.wifiWake === "function") { wakes++; System.wifiWake(WAKES_MS / 60000); return true; }
     } catch (e) { /* segue para o catch-up */ }
     return false;
 }
@@ -80,6 +86,7 @@ function run() {
     try { if (System.timeValid) timeValid = System.timeValid() === true; } catch (e) { timeValid = false; }
     if (!timeValid) return;                                // sem hora certa nao existe 02:00
     var day = txt(System.getDate, ""), time = txt(System.getTime, "");
+    if (!day) return;                                      // sem data nao ha "uma vez por dia"
     var last = storeGet(DAY_KEY, "");
     // Primeiro avistamento DEPOIS da hora configurada: marca o dia e nao roda
     // agora. Instalar a loja as 15h nao pode virar um lote de updates as 15h;

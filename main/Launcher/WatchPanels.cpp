@@ -66,6 +66,14 @@ private:
 FlashlightScreen s_flash;
 
 // ------------------------------------------------------- Ajustes rapidos --
+// Painel estatico na pilha: a GUARDA contra instancias duplicadas e o
+// Navigator::bringToFront (topo: no-op; coberto: sobe; ausente: empilha).
+// Antes do bringToFront um painel COBERTO (alerta/chamada por cima) fazia o
+// service consumir o pedido sem subir nada — o "toque: central" do alerta
+// pedia a central e nada acontecia. E com o antigo "top() == target" a mesma
+// instancia estatica chegava a empilhar DUAS vezes (fechar uma mostrava a
+// outra), motivo das flags que existiam aqui.
+
 class QuickSettingsScreen : public kui::Screen {
 public:
     void onEnter() override {
@@ -347,7 +355,21 @@ public:
         int idx = rowAt(ev.startY);
         if (idx < 0) return true;
         if (sw == kui::TouchEvent::SwipeLeft || sw == kui::TouchEvent::SwipeRight) {
-            Notifications::removeAt(idx);  // indice de list() == m_rows
+            // m_rows e o retrato da ENTRADA: uma notificacao nova (task do
+            // BLE) desloca list() e o removeAt(idx) apagava OUTRA nota (o
+            // indice de list() deixava de casar com a linha). Casa a linha
+            // pela identidade antes de remover.
+            const Notifications::Note& want = m_rows[idx].n;
+            const std::vector<Notifications::Note> all = Notifications::list();
+            for (int i = 0; i < (int)all.size(); i++) {
+                const bool same = want.id != 0
+                                      ? all[i].id == want.id
+                                      : (all[i].epoch == want.epoch && all[i].title == want.title);
+                if (same) {
+                    Notifications::removeAt(i);
+                    break;
+                }
+            }
             m_rows.erase(m_rows.begin() + idx);
             m_expanded = -1;
             clampScroll();
@@ -475,6 +497,10 @@ private:
 };
 NotificationCenterScreen s_notif;
 
+// Sobe o painel estatico (ver o comentario dos Ajustes rapidos): topo no-op,
+// coberto traz a frente, ausente empilha — nunca duplica a instancia.
+void pushPanel(kui::Screen* s) { kui::Navigator::bringToFront(s); }
+
 bool edgeGestureHook(const kui::TouchEvent& ev) {
     if (ev.type != kui::TouchEvent::Release) return false;
     const kui::TouchEvent::Swipe sw = ev.swipe();
@@ -485,12 +511,12 @@ bool edgeGestureHook(const kui::TouchEvent& ev) {
         const int third = WatchPanels::topThirdAt(ev.startX);
         if (third == 2) return false;  // terco direito: so o app (topbar retratil)
         s_returnHome = false;
-        kui::Navigator::push(third == 0 ? (kui::Screen*)&s_quick : (kui::Screen*)&s_notif);
+        pushPanel(third == 0 ? (kui::Screen*)&s_quick : (kui::Screen*)&s_notif);
         return true;
     }
     if (edge == 2 && sw == kui::TouchEvent::SwipeUp) {
         s_returnHome = false;
-        kui::Navigator::push(&s_notif);
+        pushPanel(&s_notif);
         return true;
     }
     return false;
@@ -542,7 +568,7 @@ void service() {
     kui::Screen* target = p == Panel::Quick ? (kui::Screen*)&s_quick : (kui::Screen*)&s_notif;
     if (kui::Navigator::top() == target) return;
     s_returnHome = home;
-    kui::Navigator::push(target);
+    pushPanel(target);
 }
 
 }  // namespace WatchPanels

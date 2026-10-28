@@ -27,6 +27,11 @@ constexpr int kBodyLines = 6;
 portMUX_TYPE s_reqMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool s_req = false;
 volatile uint32_t s_reqAt = 0;
+// Alerta NA pilha (topo OU coberto): guarda pela flag, como AlarmScreen e
+// PhoneScreens. Com o antigo "top() == &s_alert" uma notificacao chegando com
+// o alerta COBERTO (ex.: chamada por cima) empilhava a mesma instancia
+// estatica de novo — fechar uma mostrava a outra.
+bool s_pushed = false;
 
 class AlertScreen : public kui::Screen {
 public:
@@ -37,6 +42,11 @@ public:
         m_ageMs = 0;
         m_repaints = 0;
     }
+
+    // Saiu de VERDADE da pilha (pop/home/remove — coberta nao passa aqui):
+    // solta a guarda do service. Sem isto o alerta ficava "pushed" para
+    // sempre e a proxima notificacao nunca mais aparecia em tela cheia.
+    void onExit() override { s_pushed = false; }
 
     // Notificacao nova com o alerta ja na tela: troca o conteudo e renova.
     void refresh() {
@@ -207,7 +217,12 @@ void service(bool inApp) {
         // nao fica em silencio: no watch o push nao faz toast (virou
         // alerta), entao o heads-up aqui e o toast com o titulo.
         if (ScreenPower::state() >= 3) {
+            // Consome SOB O MUX: sem ele um pedido novo (task do BLE) posto
+            // entre a leitura e esta escrita era engolido sem tocar/virar
+            // heads-up.
+            portENTER_CRITICAL(&s_reqMux);
             s_req = false;
+            portEXIT_CRITICAL(&s_reqMux);
             for (const Notifications::Note& n : Notifications::list()) {
                 if (!n.read) {
                     kui::Navigator::toast(n.title, THEME_ACCENT, 3000);
@@ -227,10 +242,11 @@ void service(bool inApp) {
     portENTER_CRITICAL(&s_reqMux);
     s_req = false;  // consumido: sobe o alerta ou renova o que ja esta nele
     portEXIT_CRITICAL(&s_reqMux);
-    if (kui::Navigator::top() == &s_alert) {
-        s_alert.refresh();
+    if (s_pushed) {
+        s_alert.refresh();  // ja na pilha (topo ou coberto): so renova
         return;
     }
+    s_pushed = true;
     kui::Navigator::push(&s_alert);
 }
 

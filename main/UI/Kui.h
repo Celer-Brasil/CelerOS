@@ -509,6 +509,12 @@ public:
     static void pop();                 // volta para a anterior (redesenha)
     static void replace(Screen* s);    // troca o topo
     static void remove(Screen* s);     // tira s da pilha (mesmo sem ser o topo)
+    // s COBERTA na pilha: sobe para o topo (o topo antigo leva onCovered, s
+    // reajusta estado com onEnter+onResume, como no pop); ausente: empilha
+    // (mesmo contrato do push, inclusive a fila de outra task); no topo: no-op.
+    // Painel de borda coberto por alerta/chamada que recebe pedido de servico
+    // — antes o pedido era consumido e o painel nao subia nunca.
+    static void bringToFront(Screen* s);
     static void home();                // esvazia ate a base (launcher)
     static Screen* top();
     static int depth();

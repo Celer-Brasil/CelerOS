@@ -292,7 +292,18 @@ static void celerSetup() {
 #if CONFIG_CELEROS_UI
     if (!Board::profile().capacitiveTouch) {
         uint16_t calData[5];
-        if (!FileSystem::readCalData(calData)) {
+        // Arquivo presente mas com lixo (flash de fabrica, escrita pela
+        // metade, setor corrompido): aplicar como calibracao deixava o
+        // vidro todo errado sem caminho de volta — o XPT2046 entrega raw
+        // 0..4095, entao uma calibracao real tem faixa com folga. A faixa
+        // vale em MODULO: o calibrador de 5 pontos grava faixa invertida
+        // de proposito quando o eixo cru roda ao contrario do retrato (o
+        // driver mapeia espelhado); exigir crescente rejeitava calibracao
+        // valida e religava o calibrador a cada boot.
+        const bool calOk = FileSystem::readCalData(calData) &&
+                           abs((int)calData[1] - (int)calData[0]) > 200 &&
+                           abs((int)calData[3] - (int)calData[2]) > 200;
+        if (!calOk) {
             celer_log_println("No calibration data. Entering calibrator.");
             TouchCalibrator::runCalibration();
         } else {

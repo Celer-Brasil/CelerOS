@@ -90,14 +90,24 @@ public:
         cfg.y_min = calData[2];
         cfg.y_max = calData[3];
         _touch.config(cfg);
+        // CRITICO (mesmo bug que a variante classica corrigiu): sem isto a
+        // matriz afim do painel NAO e recalculada — a calibracao salva era
+        // ignorada e o mapeamento usava os defaults do driver para sempre.
+        _panel.setTouch(&_touch);
     }
 
     // Calibracao interativa de 2 pontos (cantos opostos): le o raw do
-    // XPT2046 em duas marcas e deriva a faixa de mapeamento.
+    // XPT2046 em duas marcas e deriva a faixa de mapeamento. Com TEMPOS
+    // LIMITE (como na variante classica): leitura fantasma ou dedo ausente
+    // nao prendem o boot — o chamador (TouchCalibrator) reinicia e tenta
+    // de novo quando calData[4] volta 1.
     void calibrateTouch(uint16_t* calData, uint32_t color, uint32_t bg, uint8_t size) override {
         (void)size;
         static constexpr int MARGIN_DIV = 8;
         static constexpr int SAMPLES = 8;
+        static constexpr uint32_t RELEASE_TIMEOUT_MS = 3000;  // leitura fantasma
+        static constexpr uint32_t TOUCH_TIMEOUT_MS = 12000;   // ninguem tocou
+        static constexpr int32_t MIN_SPAN = 300;  // faixa minima util (raw 0..4095)
 
         int32_t w = width();
         int32_t h = height();
@@ -107,7 +117,7 @@ public:
         setTextDatum(MC_DATUM);
         setTextColor(color, bg);
 
-        lgfx::touch_point_t pts[2];
+        lgfx::touch_point_t pts[2] = {};  // timeout deixa lixo fora da conta: faixa minima rejeita
         const int32_t pos[2][2] = {
             {w / MARGIN_DIV, h / MARGIN_DIV},
             {w - w / MARGIN_DIV, h - h / MARGIN_DIV},
@@ -118,13 +128,16 @@ public:
             drawLine(pos[i][0], pos[i][1] - 10, pos[i][0], pos[i][1] + 10, color);
             drawString("touch the crosshair", w / 2, h - 16, 2);
 
-            // espera soltar
-            do { delay(20); } while (getTouchRaw(&tp, 1));
+            // espera soltar (max 3 s — leitura fantasma nao trava)
+            uint32_t t0 = lgfx::millis();
+            do { delay(20); } while (getTouchRaw(&tp, 1) && lgfx::millis() - t0 < RELEASE_TIMEOUT_MS);
+            delay(300);
 
-            // acumula amostras
+            // espera tocar e acumula amostras (max 12 s sem dedo = desiste)
             int32_t sx = 0, sy = 0;
             int valid = 0;
-            for (int s = 0; s < SAMPLES;) {
+            t0 = lgfx::millis();
+            for (int s = 0; s < SAMPLES && lgfx::millis() - t0 < TOUCH_TIMEOUT_MS;) {
                 if (getTouchRaw(&tp, 1)) {
                     sx += tp.x;
                     sy += tp.y;
@@ -133,6 +146,7 @@ public:
                 }
                 delay(10);
             }
+            if (valid < SAMPLES / 2) break;  // timeout: calData[4]=1 abaixo
             pts[i].x = sx / valid;
             pts[i].y = sy / valid;
             delay(300);
@@ -143,6 +157,20 @@ public:
         calData[2] = (uint16_t)pts[0].y;  // y_min
         calData[3] = (uint16_t)pts[1].y;  // y_max
         calData[4] = 0;
+        // Amostras inconsistentes NAO viram calibracao: faixa curta (toque
+        // no mesmo lugar) ou eixos invertidos (x_max < x_min) deixam o
+        // vidro todo errado — sinaliza falha para o chamador reiniciar.
+        int32_t rx = (int32_t)calData[1] - calData[0];
+        int32_t ry = (int32_t)calData[3] - calData[2];
+        if (rx < MIN_SPAN || ry < MIN_SPAN) {
+            calData[4] = 1;
+            fillScreen(bg);
+            setTextDatum(MC_DATUM);
+            setTextColor(0xF800, bg);
+            drawString("calibracao falhou", w / 2, h / 2 - 12, 2);
+            drawString("toque mais firme - de novo", w / 2, h / 2 + 14, 2);
+            delay(1800);
+        }
     }
 };
 

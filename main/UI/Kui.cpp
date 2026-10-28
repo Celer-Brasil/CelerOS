@@ -25,6 +25,13 @@ static const char* TAG = "kui";
 
 namespace {
 TouchState s_touch;
+
+// Release sem deslocamento relevante, SEM teto de tempo: o isTap() corta em
+// 800 ms e num touch resistivo (CYD) segurar firme antes de soltar e normal —
+// o alvo ficava morto no toque longo (mesmo motivo do fix do Keyboard.cpp).
+bool releasedInPlace(const TouchEvent& ev) {
+    return abs(ev.dx()) < TouchEvent::slopX() && abs(ev.dy()) < TouchEvent::slopY();
+}
 }  // namespace
 
 const TouchState& touchState() { return s_touch; }
@@ -104,7 +111,9 @@ bool ensureBuffer(CelerDisplay& dev) {
 
     if (Board::profile().hasPsram) {
         s_bufs[0] = newSprite(dev, true);
-        if (s_bufs[0]->createSprite(w, h) != nullptr) {
+        // newSprite e nothrow: sem a checagem o createSprite() abaixo
+        // desreferenciava nullptr e o boot caia com a PSRAM apertada
+        if (s_bufs[0] != nullptr && s_bufs[0]->createSprite(w, h) != nullptr) {
             s_bufMode = Canvas::FullFrame;
             ESP_LOGI(TAG, "canvas: full-frame %dx%d (PSRAM)", w, h);
             return true;
@@ -733,7 +742,7 @@ void Button::draw(Canvas& c) {
 
 bool Button::onTouch(const TouchEvent& ev, Rect myRect) {
     if (!myRect.contains(ev.startX, ev.startY)) return false;
-    if (ev.isTap() && myRect.contains(ev.x, ev.y)) {
+    if (releasedInPlace(ev) && myRect.contains(ev.x, ev.y)) {
         if (onTap) onTap();
         return true;
     }
@@ -838,7 +847,7 @@ bool List::onTouch(const TouchEvent& ev, Rect myRect) {
                 if (m_vel < -3.0f) m_vel = -3.0f;
                 return true;
             }
-            if (ev.isTap() && myRect.contains(ev.x, ev.y)) {
+            if (releasedInPlace(ev) && myRect.contains(ev.x, ev.y)) {
                 // Seleciona pela posicao do POUSO (startY), nao do release:
                 // no resistivo o dedo deriva ao pressionar e a linha da vez
                 // trocava no fim (mesmo fix do teclado, Keyboard.cpp).
@@ -874,7 +883,7 @@ void Switch::draw(Canvas& c) {
 
 bool Switch::onTouch(const TouchEvent& ev, Rect myRect) {
     if (!myRect.contains(ev.startX, ev.startY)) return false;
-    if (ev.isTap() && myRect.contains(ev.x, ev.y)) {
+    if (releasedInPlace(ev) && myRect.contains(ev.x, ev.y)) {
         on = !on;
         if (onChange) onChange(on);
         return true;
@@ -891,8 +900,9 @@ void Slider::draw(Canvas& c) {
 
 bool Slider::onTouch(const TouchEvent& ev, Rect myRect) {
     // Arrasto vivo so se o gesto COMECOU no slider (Drag de outro canto nao
-    // mexe o valor); o release confirma.
-    if (!myRect.contains(ev.startX, ev.startY)) return false;
+    // mexe o valor); o release confirma. w 0 (tela mal configurada) virava
+    // divisao por zero — excecao do xtensa = reboot do aparelho.
+    if (myRect.w <= 0 || !myRect.contains(ev.startX, ev.startY)) return false;
     if (ev.type == TouchEvent::Press || ev.type == TouchEvent::Drag) {
         int v = (int)((long)(ev.x - myRect.x) * 100 / myRect.w);
         if (v < 0) v = 0;
@@ -1029,6 +1039,7 @@ void TouchPump::quarantine(uint32_t ms) {
 void TouchPump::reset() {
     m_down = false;
     m_releaseSinceMs = 0;
+    s_touch = {};  // sem dedo: nenhum widget fica desenhado "pressionado"
 }
 
 // ========================================================== readTouches ====
@@ -1251,6 +1262,7 @@ TaskHandle_t s_uiTask = nullptr;
 SemaphoreHandle_t s_pendMux = nullptr;
 std::vector<Toast> s_pendToasts;
 std::vector<Screen*> s_pendPush;
+std::vector<Screen*> s_pendRaise;  // bringToFront pedido de outra task
 
 bool offUiTask() {
     return s_uiTask != nullptr && xTaskGetCurrentTaskHandle() != s_uiTask && s_pendMux != nullptr;
@@ -1339,7 +1351,15 @@ void dispatchTouch(const TouchEvent& ev) {
 
 }  // namespace
 
-bool canvasBuffered() { return s_buf != nullptr; }
+// Buffer offscreen existe no FullFrame (PSRAM) E nas faixas (RAM interna):
+// nos dois a composicao e fora do vidro, entao o launcher pode seguir o dedo
+// no arrasto sem piscar (leitura do compose: cada faixa comeca com
+// fillScreen e o recorte do sprite descarta o que sai dela — o resultado e
+// identico ao full-frame, so mais barato). So o Direct (sem memoria) fica de
+// fora: ali cada redraw aparece, e o launcher acumula e vira pagina no
+// release (Screens.cpp). Voltar a exigir FullFrame aqui matava o arrasto
+// continuo da CYD/dog, que o 5450a16 mediu a ~37 ms por quadro (perfeito).
+bool canvasBuffered() { return s_bufMode != Canvas::Direct && s_buf != nullptr; }
 
 void Navigator::begin(CelerDisplay& dev) {
     if (s_canvas == nullptr) s_canvas = new Canvas(dev);
@@ -1404,7 +1424,39 @@ void Navigator::remove(Screen* s) {
         s_repaint = true;
         return;
     }
-    if (!s_stack.empty()) s_stack.back()->onResume();
+    // Fora da pilha: nada mudou, nao mexe no estado de quem esta no topo
+    // (o onResume extra limpava/redesenha uma tela que ninguem tocou).
+}
+
+// Sobe s que ja esta na pilha (ou empilha, se ausente). Chamado so na task
+// da UI — bringToFront enfileira para ca quando vem de fora.
+static void applyRaise(Screen* s) {
+    for (size_t i = s_stack.size(); i-- > 0;) {
+        if (s_stack[i] != s) continue;
+        if (i == s_stack.size() - 1) return;  // ja no topo: nada a fazer
+        // Espelha push()+pop(): quem estava no topo vira coberto (onCovered)
+        // e a tela que sobe reajusta estado (onEnter) e confirma o quadro
+        // (onResume) — mesmos ganchos do retorno por pop/remove.
+        s_stack.erase(s_stack.begin() + i);
+        s_stack.back()->onCovered();
+        s_stack.push_back(s);
+        s->onEnter();
+        s_repaint = true;
+        s->onResume();
+        return;
+    }
+    Navigator::push(s);  // ausente: empilha (mesmo contrato do push)
+}
+
+void Navigator::bringToFront(Screen* s) {
+    if (s == nullptr) return;
+    if (offUiTask()) {  // aplicado no proximo tick, na task da UI
+        xSemaphoreTake(s_pendMux, portMAX_DELAY);
+        s_pendRaise.push_back(s);
+        xSemaphoreGive(s_pendMux);
+        return;
+    }
+    applyRaise(s);
 }
 
 void Navigator::home() {
@@ -1487,13 +1539,15 @@ void Navigator::tick() {
     // intervalo de loop.
     if (dt > 250) dt = 250;
 
-    // pedidos de outras tasks (toast/push): aplicados aqui, na task da UI
+    // pedidos de outras tasks (toast/push/raise): aplicados aqui, na task da UI
     if (s_pendMux != nullptr) {
         std::vector<Toast> toasts;
         std::vector<Screen*> pushes;
+        std::vector<Screen*> raises;
         xSemaphoreTake(s_pendMux, portMAX_DELAY);
         toasts.swap(s_pendToasts);
         pushes.swap(s_pendPush);
+        raises.swap(s_pendRaise);
         xSemaphoreGive(s_pendMux);
         for (Toast& t : toasts) {
             t.shownAtMs = 0;  // conta a partir de quando aparece
@@ -1501,6 +1555,7 @@ void Navigator::tick() {
             s_repaint = true;
         }
         for (Screen* sc : pushes) push(sc);
+        for (Screen* sc : raises) applyRaise(sc);
     }
 
     pumpEvents();
@@ -1515,6 +1570,7 @@ void Navigator::tick() {
         // "Permissao nao respondida" imediato; bancada 2026-10-18, 4848)
         if (d == s_dialog && d->timeoutMs > 0 &&
             (int32_t)(now - d->shownAtMs) > (int32_t)d->timeoutMs) {
+            d->timeoutMs = 0;  // dispara UMA vez: onTimeout pode manter o dialogo aberto
             if (d->onTimeout) d->onTimeout();
             else closeDialog();
         }

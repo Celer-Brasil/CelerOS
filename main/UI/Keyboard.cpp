@@ -456,12 +456,15 @@ bool KeyboardScreen::onTouch(const TouchEvent& ev) {
     int idx = keyAt(hx, hy);
     if (idx < 0) return false;
     if (m_keys[idx].kind == KBksp) {
-        // repeat ja apagou durante o hold: o release nao apaga de novo
-        if (m_repeatArmMs && millis() - m_repeatArmMs >= 450) {
+        // repeat ja apagou durante o hold: o release nao apaga de novo. Se
+        // NENHUM repeat rodou (loop lento: o release chega antes do tick dos
+        // 450 ms), cai no handleKey e apaga UMA vez — antes o hold inteiro
+        // nao apagava nada.
+        if (m_repeatArmMs && m_repeatCount > 0 && millis() - m_repeatArmMs >= 450) {
             m_repeatArmMs = 0;
             return true;
         }
-        m_repeatArmMs = 0;  // soltou rapido: repeat nao chega a rodar
+        m_repeatArmMs = 0;  // soltou rapido (ou antes do 1o repeat): apaga agora
     }
     handleKey(idx);
     return true;
@@ -476,8 +479,12 @@ void KeyboardScreen::handleKey(int idx) {
     markDirty();
 
     switch (k.kind) {
-        case KChar:
-            if ((int)m_text.size() < m_maxLen) {
+        case KChar: {
+            // maxLen e em BYTES e o acento entra com 2: sem contar o tamanho
+            // da sequencia, o texto estourava o teto em 1 byte (ex.: PIN/senha
+            // de 31 com acento virava 32 e o validador do lado rejeitava)
+            const int add = k.sym ? (int)strlen(k.sym) : 1;
+            if ((int)m_text.size() + add <= m_maxLen) {
                 if (k.sym) m_text += k.sym;  // acento: literal UTF-8
                 else m_text += labelChar(k.ch);
                 if (m_mode == Upper && !m_capsLock) {  // shift one-shot
@@ -487,6 +494,7 @@ void KeyboardScreen::handleKey(int idx) {
                 if (onChange) onChange();
             }
             break;
+        }
         case KSpace:
             if ((int)m_text.size() < m_maxLen) {
                 m_text += ' ';

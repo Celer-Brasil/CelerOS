@@ -35,7 +35,7 @@ var _bmO = { w: 1 };
 
 // particulas/floaters/flash tickados pelo loop; draw() por cima da cena
 E.fx = {
-    version: '1.4.2',
+    version: '1.4.3',
     _parts: [],
     _live: 0,           // particulas vivas: 0 = _tick/draw nem olham o pool
     _cursor: 0,
@@ -78,6 +78,8 @@ E.fx = {
         p.grav = o.grav || 0;
         p.drag = o.drag || 0;
         p.shape = o.shape || 'dot';
+        p.grow = 30;   // reset do pool: sem isto um burst 'ring' herava o
+                       // speed do anel anterior (expandia 10x mais rapido)
         return true;
     },
 

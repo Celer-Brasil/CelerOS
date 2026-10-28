@@ -18,11 +18,18 @@
 // SFX.combo(mel, k, teto): sobe k semitons (moeda 1, 2, 3 do combo).
 // 1.4.0: sons de aventura (espada, porta, segredo, item, chave, bumerangue,
 // queda, escada, cristal) — composicoes originais.
+// 1.4.1: mel(null) (nome inexistente) em transpor/varia/tempo devolvia
+// crash "reading '0'" — agora melodia vazia; junta pula arg nulo.
 
-var SFX = { version: '1.4.0' };
+var SFX = { version: '1.4.1' };
 
-// [f, ms] -> [[f, ms]] (melodia sempre lista de notas)
-function notas(mel) { return typeof mel[0] === 'number' ? [mel] : mel; }
+// [f, ms] -> [[f, ms]] (melodia sempre lista de notas; null/undefined do
+// mel() de nome inexistente vira lista vazia — transpor/varia/tempo sobre
+// um nome errado devolviam crash "reading '0'" em vez de silencio)
+function notas(mel) {
+    if (!mel || mel.length === undefined) return [];
+    return typeof mel[0] === 'number' ? [mel] : mel;
+}
 
 // Tabela por intencao. "p" = pausa curta de articulacao.
 var T = {
@@ -123,6 +130,9 @@ SFX.junta = function () {
         args.pop();
     }
     for (var j = 0; j < args.length; j++) {
+        // null/undefined no meio (nome que nao existe foi mel(null) antes)
+        // pula em vez de estourar no args[j][0]
+        if (!args[j]) continue;
         var m = typeof args[j] === 'string' ? SFX.mel(args[j]) :
                 (typeof args[j][0] === 'number' ? [args[j]] : args[j]);
         if (!m) continue;

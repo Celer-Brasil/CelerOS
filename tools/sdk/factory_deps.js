@@ -125,6 +125,11 @@ if (fs.existsSync(MODULES)) {
     }
 }
 
+if (sujo) {
+    // app com dep nao resolvivel: a fabrica sai incompleta (deps.json velho,
+    // modulo ausente) — erro no stderr com exit 0 passava despercebido
+    process.exit(1);
+}
 if (acao.length) {
     console.log((check ? 'DRIFT (' : 'regenerado (') + acao.length + '):');
     for (const a of acao) console.log('  ' + a);

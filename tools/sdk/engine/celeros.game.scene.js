@@ -33,6 +33,10 @@
 // como dep). O parentesco e' ligado na fase 2b do instantiate (depois das
 // refs, antes do start) e o save reemite os offsets VIVOS.
 //
+// 1.1.1: refs "#nome" e "#id" moravam no MESMO objeto (chaves de objeto sao
+// strings): uma entidade nomeada "2" era atingida pela ref "#2" da de id 2
+// (ou o contrario, pela ordem) — mapas separados, nome vence.
+//
 // Custo: so quem adota paga; o core nao muda. Uma cena de 30 entidades
 // custa um JSON pequeno (o parse e' do Duktape, nao da engine).
 
@@ -43,7 +47,7 @@ var EMPTY = {};
 var META = { tipo: 1, x: 1, y: 1, id: 1 };
 
 E.scene = {
-    version: '1.1.0',
+    version: '1.1.1',
     formato: 1,
     _tipos: {},
     _prefabs: {},
@@ -124,7 +128,7 @@ E.scene = {
         if (typeof lista === 'string') lista = E.scene._prefabs[lista];
         if (!lista) return [];
         var dx = o.x || 0, dy = o.y || 0;
-        var criados = [], mapa = {}, i, e, rec, props;
+        var criados = [], mapaN = {}, mapaI = {}, i, e, rec, props;
         for (i = 0; i < lista.length; i++) {
             rec = lista[i];
             if (!rec || !rec.tipo) continue;
@@ -133,19 +137,23 @@ E.scene = {
                               rec.x !== undefined ? rec.x + dx : undefined,
                               rec.y !== undefined ? rec.y + dy : undefined, props);
             if (!e) continue;
-            if (e.nome !== undefined) mapa[e.nome] = e;
-            mapa[e.id] = e;
+            if (e.nome !== undefined) mapaN[e.nome] = e;
+            mapaI[e.id] = e;
             criados.push(e);
             if (grupo && grupo.add) grupo.add(e);
         }
-        for (i = 0; i < criados.length; i++) resolveRefs(criados[i], mapa);
+        // refs "#nome" e "#id" em mapas SEPARADOS: um mapa so (chaves de
+        // objeto sao strings) fazia nome "2" e id 2 se sobrescrever — a ref
+        // "#2" ia para a entidade errada
+        for (i = 0; i < criados.length; i++) resolveRefs(criados[i], mapaN, mapaI);
         // fase 2b: PARENTESCO (pai: "#nome" + ox/oy/rot/sx/sy) — depois das
         // refs e antes do start, para o start ja ler x/y de mundo. Exige o
         // modulo celeros.game.node (opt-in: a cena nao o arrasta como dep)
         for (i = 0; i < criados.length; i++) {
             var f2 = criados[i], pf = f2.props;
             if (!pf || typeof pf.pai !== 'string') continue;
-            var pai2 = mapa[pf.pai.charAt(0) === '#' ? pf.pai.substring(1) : pf.pai];
+            var chave = pf.pai.charAt(0) === '#' ? pf.pai.substring(1) : pf.pai;
+            var pai2 = mapaN[chave] !== undefined ? mapaN[chave] : mapaI[chave];
             if (!pai2 || pai2 === f2) continue;
             if (!E.node) { E._warn('scene: campo pai exige celeros.game.node'); continue; }
             E.node.attach(f2, pai2, { ox: pf.ox, oy: pf.oy, rot: pf.rot, sx: pf.sx, sy: pf.sy });
@@ -237,14 +245,14 @@ E.scene = {
     resolve: function (e, grupo) {
         var a = grupo && grupo.items ? grupo.items : grupo;
         if (!e || !a) return 0;
-        var mapa = {}, i, o;
+        var mapaN = {}, mapaI = {}, i, o;
         for (i = 0; i < a.length; i++) {
             o = a[i];
             if (!o || o.dead) continue;
-            if (o.nome !== undefined) mapa[o.nome] = o;
-            mapa[o.id] = o;
+            if (o.nome !== undefined) mapaN[o.nome] = o;
+            mapaI[o.id] = o;
         }
-        return resolveRefs(e, mapa);
+        return resolveRefs(e, mapaN, mapaI);
     }
 };
 
@@ -271,15 +279,18 @@ function refDe(v) {
 }
 
 // "#nome" ou "#12" -> entidade. Devolve quantas resolveu; ref sem alvo fica
-// como string (o dado sobrevive e o app decide: re-resolve ou ignora)
-function resolveRefs(e, mapa) {
+// como string (o dado sobrevive e o app decide: re-resolve ou ignora).
+// Nome vence id na ambiguidade ("#2" com uma entidade NOMEADA "2" e outra de
+// id 2 resolve pela nomeada — refs por nome sao o caminho documentado)
+function resolveRefs(e, mapaN, mapaI) {
     var p = e.props;
     if (!p) return 0;
     var n = 0;
     for (var k in p) {
         var v = p[k];
         if (typeof v === 'string' && v.charCodeAt(0) === 35) {   // '#'
-            var alvo = mapa[v.substring(1)];
+            var chave = v.substring(1);
+            var alvo = mapaN[chave] !== undefined ? mapaN[chave] : mapaI[chave];
             if (alvo !== undefined) { e[k] = alvo; n++; }
         }
     }

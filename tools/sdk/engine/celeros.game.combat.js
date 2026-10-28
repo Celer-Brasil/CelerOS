@@ -28,6 +28,8 @@
 // (bumerangue) so atordoa.
 // 1.0.2: filtro de time/dono antes da geometria e teste inline no caminho
 // direto (sem collide.test por par tiro x corpo: ~6 -> ~4,5 ms no Supernova).
+// 1.0.3: body() duas vezes no mesmo ent aposava o velho (dois corpos = dano
+// dobrado e "hit"/"kill" repetidos; so o novo ficava no _cbody).
 
 var E = require('celeros.game');
 require('celeros.game.collide');
@@ -143,7 +145,7 @@ function acertoShot(q) {
 }
 
 E.combat = {
-    version: '1.0.2',
+    version: '1.0.3',
     hitstop: 45,        // ms de congelamento por golpe que acerta (0 desliga)
 
     // registra a entidade como alvo: o {team, stats, ox, oy, w, h,
@@ -151,6 +153,9 @@ E.combat = {
     // hit) -> true ignora, onHit(ent, dano, src), onKill(ent, src)}
     body: function (ent, o) {
         o = o || {};
+        // re-registro do MESMO ent (troca de team/stats) aposa o corpo velho:
+        // dois corpos na lista dobra cada golpe e cada evento "hit"
+        if (ent._cbody) ent._cbody.dead = true;
         var b = { ent: ent, team: o.team || 'neutro', stats: o.stats || null,
                   ox: o.ox || 0, oy: o.oy || 0, w: o.w, h: o.h,
                   knockRes: o.knockRes || 0, iframes: o.iframes === undefined ? 300 : o.iframes,

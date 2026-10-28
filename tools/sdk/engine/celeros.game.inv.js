@@ -17,6 +17,11 @@
 //
 // Slot = {id, n} ou null. Item sem def no registro empilha ate 99. Todas as
 // mudancas chamam onChange(bag) uma vez por operacao (o HUD redesenha).
+//
+// 1.0.1: load nao clampeava a pilha ao max do item (save corrompido/velho
+// restaurava 500 pocoes com max 9 e o add() completava por cima) e aceitava
+// slot de id nulo; add falho (mochila cheia, qty omitido) chamava onChange
+// sem nada ter entrado.
 
 var E = require('celeros.game');
 
@@ -28,7 +33,7 @@ function maxOf(id) {
 }
 
 E.inv = {
-    version: '1.0.0',
+    version: '1.0.1',
     defs: _defs,
 
     // registra/atualiza defs: {id: {name, max, use(item, bag) -> true gasta 1, ...}}
@@ -51,6 +56,7 @@ E.inv = {
         b.add = function (id, qty) {
             var left = qty === undefined ? 1 : qty;
             if (!(left > 0)) return 0;
+            var want = left;
             var mx = maxOf(id), k, s;
             for (k = 0; k < n && left > 0; k++) {
                 s = slots[k];
@@ -67,7 +73,9 @@ E.inv = {
                     left -= p;
                 }
             }
-            if (left !== qty) changed();
+            // so avisa quando algo ENTROU (mochila cheia com qty omitido nao
+            // pode redesenhar o HUD a toa: left===want e nada mudou)
+            if (left !== want) changed();
             return left;
         };
         // cabe inteiro? (loja: so cobra se couber)
@@ -197,7 +205,11 @@ E.inv = {
         b.load = function (arr) {
             for (var k = 0; k < n; k++) {
                 var e = arr && arr[k];
-                slots[k] = e && e[0] !== undefined && e[1] > 0 ? { id: e[0], n: e[1] } : null;
+                // id nulo/vazio e pilha acima do max do item nao voltam (save
+                // corrompido ou de versao com regra diferente nao cria uma
+                // pilha de 500 pocoes com max 9 — o add() ia completar por cima)
+                slots[k] = e && e[0] && e[1] > 0 ?
+                           { id: e[0], n: Math.min(e[1], maxOf(e[0])) } : null;
             }
             changed();
             return b;

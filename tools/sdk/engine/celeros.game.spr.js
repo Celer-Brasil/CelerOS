@@ -55,25 +55,40 @@
 // giro e escala uniforme os caminhos rapidos (copySprite/pushSprite)
 // continuam valendo; regiao de folha nao gira (o drawSprite nao tem
 // retangulo de origem) e avisa 1x. E.spr.box aceita {sx, sy, angle}.
+// 1.7.2: troca de dono de um nome sem vazar slot no ledger — sheet/grid/
+// prescale sobrepondo um sprite SOLTO soltam o slot velho antes, e o
+// freeSheet so apaga o nome se ainda e regiao DELE (um free() seguido de
+// load() do mesmo nome perdia o sprite novo e o slot ficava preso).
 
 var E = require('celeros.game');
 var S = System;
 var EMPTY = {};
-var _stO = { key: 0 };
+var _stO = { key: 0, ax: 0, ay: 0 };   // stamp de folha sem setClip -> blit no
+                                       // TOPO-ESQ (dx/dy ja saem do ancora)
 // API 45: regiao de sprite -> alvo corrente numa chamada, sem escala (inclusive
 // DENTRO de um sprite: a sala do world gravada sem o drawSprite afim)
 var HAS_COPY = typeof S.copySprite === 'function';
 var _alO = { scaleX: 1, scaleY: 1, angle: 0, key: 0, ax: 0, ay: 0 };   // stamp/blit de apelido
-var _psO = { scale: 1, key: null };              // gravacao do prescale
+var _psO = { scale: 1, key: null, ax: 0, ay: 0 }; // gravacao do prescale: o
+                                                  // quadro entra no canto da
+                                                  // prateleira (o ancora do
+                                                  // slot de origem NAO vale
+                                                  // aqui — sem isto a arte
+                                                  // saia fora da regiao)
 
 // repassa ancora/giro/escala para o desenho do original de um apelido
 function alias(s, x, y, o, kx, ky, ang) {
+    var orig = E.spr._slots[s.alias];
     _alO.scaleX = kx * s._k;
     _alO.scaleY = ky * s._k;
     _alO.angle = ang || 0;
     _alO.key = o && o.key !== undefined ? o.key : 0x0000;
-    _alO.ax = o ? (o.ax !== undefined ? o.ax : (o.cx ? 0.5 : 0)) : 0;
-    _alO.ay = o ? (o.ay !== undefined ? o.ay : (o.cy ? 0.5 : 0)) : 0;
+    // sem ax/ay/cx/cy nas opts vale a ancora DEFAULT do original (meta) —
+    // era 0 e o apelido perdia o pe-no-chao do blit do sprite real
+    _alO.ax = o ? (o.ax !== undefined ? o.ax : (o.cx ? 0.5 : (orig && orig.ax) || 0))
+                : ((orig && orig.ax) || 0);
+    _alO.ay = o ? (o.ay !== undefined ? o.ay : (o.cy ? 0.5 : (orig && orig.ay) || 0))
+                : ((orig && orig.ay) || 0);
     return E.spr.stamp(s.alias, x, y, _alO);
 }
 
@@ -93,7 +108,7 @@ function reciclado(s) {
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.7.0',
+    version: '1.7.2',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
@@ -205,6 +220,11 @@ E.spr = {
             var r = regs[rn];
             var rx = r[0] * tw, ry = r[1] * th, rw = tw, rh = th;
             if (r.length >= 4) { rx = r[0]; ry = r[1]; rw = r[2]; rh = r[3]; }
+            // nome que era um sprite SOLTO vira regiao: o slot velho sai do
+            // pool antes (o load faz o mesmo ao recarregar; sem isto o slot
+            // antigo ficava alocado para sempre no ledger)
+            var velho = E.spr._slots[rn];
+            if (velho && velho.id && !velho.sheet) E.slots.release(velho.id);
             E.spr._slots[rn] = { id: sh.id, w: rw, h: rh, sheet: sh,
                                  rx: rx, ry: ry, paint: o.paint || null };
             sh.regs.push(rn);
@@ -351,7 +371,13 @@ E.spr = {
         var sh = E.spr._sheets[name];
         if (!sh) return;
         if (sh.id) E.slots.release(sh.id);
-        for (var i = 0; i < sh.regs.length; i++) delete E.spr._slots[sh.regs[i]];
+        for (var i = 0; i < sh.regs.length; i++) {
+            var rn = sh.regs[i], s = E.spr._slots[rn];
+            // o nome pode ter sido REUTILIZADO por um sprite solto depois do
+            // free() da regiao: so apaga se ainda e a regiao DESTE sheet —
+            // apagar o nome novo perdia o sprite e vazava o slot no ledger
+            if (s && s.sheet === sh) delete E.spr._slots[rn];
+        }
         delete E.spr._sheets[name];
     },
 
@@ -535,7 +561,7 @@ E.spr = {
     // maxW (default 512), name (nome do sheet p/ freeSheet)}
     prescale: function (list, o) {
         o = o || EMPTY;
-        var items = [], i, it, src;
+        var items = [], i, it, src, solto;
         for (i = 0; i < list.length; i++) {
             it = list[i];
             var nm = it.name !== undefined ? it.name : it[0];
@@ -544,7 +570,10 @@ E.spr = {
             src = E.spr._slots[nm];
             if (!src || !(k > 0)) continue;
             items.push({ nm: nm, k: k, as: as, w: Math.max(1, Math.round(src.w * k)),
-                         h: Math.max(1, Math.round(src.h * k)), x: 0, y: 0 });
+                         h: Math.max(1, Math.round(src.h * k)), x: 0, y: 0,
+                         // ancora fracionaria (0..1) do origem: com a escala o
+                         // PONTO relativo nao muda — o novo nome ancora igual
+                         ax: src.ax, ay: src.ay });
         }
         var maxW = o.maxW || 512, cx = 0, cy = 0, rowH = 0, totW = 0;
         for (i = 0; i < items.length; i++) {
@@ -561,6 +590,8 @@ E.spr = {
         if (!id) {
             for (i = 0; i < items.length; i++) {
                 it = items[i];
+                solto = E.spr._slots[it.as];
+                if (solto && solto.id && !solto.sheet) E.slots.release(solto.id);
                 E.spr._slots[it.as] = { id: 0, w: it.w, h: it.h, alias: it.nm, _k: it.k, paint: null };
             }
             return false;
@@ -581,7 +612,10 @@ E.spr = {
         var sh = { id: id, w: totW, h: totH, name: shn, regs: [], gen: E.slots.gen(id) };
         for (i = 0; i < items.length; i++) {
             it = items[i];
-            E.spr._slots[it.as] = { id: id, w: it.w, h: it.h, sheet: sh, rx: it.x, ry: it.y, paint: null };
+            solto = E.spr._slots[it.as];
+            if (solto && solto.id && !solto.sheet) E.slots.release(solto.id);
+            E.spr._slots[it.as] = { id: id, w: it.w, h: it.h, sheet: sh, rx: it.x, ry: it.y,
+                                    ax: it.ax, ay: it.ay, paint: null };
             sh.regs.push(it.as);
         }
         E.spr._sheets[shn] = sh;

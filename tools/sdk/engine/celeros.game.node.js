@@ -24,6 +24,11 @@
 //
 // Escala NAO uniforme em pai rotacionado nao e' representavel por
 // (rotacao, escala) — o resultado combina como no deki e pode cisalhar.
+//
+// 1.0.1: entidade morta (e.dead, a mesma convencao do combat/scene) ficava
+// para sempre no registro — o tick crescia a cada inimigo nascido e morto e
+// o calc continuava arrastando o filho pelo cadaver do pai. Morto sai da
+// arvore; os filhos dele ficam soltos onde estavam.
 
 var E = require('celeros.game');
 var D2R = 0.017453292519943295;
@@ -80,7 +85,7 @@ function calc(e) {
 }
 
 E.node = {
-    version: '1.0.0',
+    version: '1.0.1',
 
     // filho passa a seguir pai; o = {ox, oy, rot (graus), sx, sy}. Devolve
     // false em ciclo (avisa 1x) ou entidade invalida
@@ -139,8 +144,33 @@ E.node = {
     // antes do update da cena; quem depende de zero atraso chama depois de
     // mover o pai (no fim do update)
     tick: function () {
-        for (var i = 0; i < _nos.length; i++) {
-            var e = _nos[i];
+        // mortos saem do registro (e da arvore): entidade morta ficava para
+        // sempre no _nos — vazava e o calc continuava seguindo o cadaver do
+        // pai. Filhos sobrevivem soltos, parados onde estavam (x/y de mundo)
+        var w = 0, i, e, no;
+        for (i = 0; i < _nos.length; i++) {
+            e = _nos[i];
+            if (e.dead) {
+                no = e._no;
+                if (no) {
+                    if (no.p && no.p._no) {
+                        var irmaos = no.p._no.ch;
+                        var k = irmaos.indexOf(e);
+                        if (k >= 0) irmaos.splice(k, 1);
+                    }
+                    for (var c = 0; c < no.ch.length; c++) {
+                        var f = no.ch[c];
+                        if (f._no) { f._no.p = null; f._no.ox = 0; f._no.oy = 0; f._no.rot = 0; f._no.sx = 1; f._no.sy = 1; }
+                    }
+                    no.ch.length = 0;
+                }
+                continue;
+            }
+            _nos[w++] = e;
+        }
+        _nos.length = w;
+        for (i = 0; i < _nos.length; i++) {
+            e = _nos[i];
             if (e._no && !e._no.p) calc(e);
         }
     },

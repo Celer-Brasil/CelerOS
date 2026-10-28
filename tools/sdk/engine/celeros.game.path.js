@@ -25,6 +25,9 @@
 // seguidor com {loop} / {pingpong} (patrulha).
 // 1.1.1: flow le o custo de cada celula uma vez (antes ate 3x por vizinho)
 // e, com custo uniforme sem diagonal, roda BFS em vez do Dijkstra com heap.
+// 1.1.2: follower com ponto NaN no caminho envenenava obj.x/y no 1o
+// update (d NaN caia no ramo do passo fracionario) — ponto invalido e
+// pulado, o corpo segue finito.
 
 var E = require('celeros.game');
 
@@ -72,7 +75,7 @@ var DX8 = [1, -1, 0, 0, 1, 1, -1, -1], DY8 = [0, 0, 1, -1, 1, -1, 1, -1];
 var SQ2 = Math.SQRT2;
 
 E.path = {
-    version: '1.1.1',
+    version: '1.1.2',
     // nos expandidos na ultima busca (diagnostico/orcamento)
     expanded: 0,
 
@@ -322,6 +325,13 @@ E.path = {
                 var tx = ox + p.c * cell + cell / 2, ty = oy + p.r * cell + cell / 2;
                 var dx = tx - obj.x, dy = ty - obj.y;
                 var d = Math.sqrt(dx * dx + dy * dy);
+                if (!(d >= 0)) {
+                    // ponto com c/r NaN: d NaN entrava no else e
+                    // envenenava obj.x/y para sempre — pula o ponto
+                    f.i += f.dir;
+                    if (++spins > L * 2 + 2) break;
+                    continue;
+                }
                 if (d <= step) {
                     obj.x = tx; obj.y = ty;
                     step -= d;

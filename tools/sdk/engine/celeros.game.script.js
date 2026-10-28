@@ -25,6 +25,11 @@
 // E.timeScale) e e da CENA onde nasceu: dorme sob um E.push e morre quando
 // ela sai ({global: true} sobrevive). s.skip() termina na hora: tweens vao
 // ao valor final, esperas zeram e os {call} restantes rodam.
+//
+// 1.0.1: passo que lanca (funcao com erro, label inexistente) nao deixa mais
+// roteiro zumbi no _live — o mesmo erro subia de novo em TODO quadro e o app
+// nem conseguia cancelar (a propria E.script() subia). O erro sobe 1 vez com
+// o roteiro ja cancelado.
 
 var E = require('celeros.game');
 
@@ -161,11 +166,21 @@ E.script = function (steps, opts) {
         }
     };
     _live.push(s);
-    // 1o passo roda ja (um {call} inicial nao espera o proximo quadro)
-    s._tick(0);
+    // 1o passo roda ja (um {call} inicial nao espera o proximo quadro). Um
+    // passo que lanca na criacao nao pode deixar o roteiro no _live: o erro
+    // voltaria a subir EM TODOS os quadros, sem o app conseguir cancelar
+    try {
+        s._tick(0);
+    } catch (e) {
+        s.cancel();
+        s.dead = true;
+        var ix = _live.indexOf(s);
+        if (ix >= 0) _live.splice(ix, 1);
+        throw e;
+    }
     return s;
 };
-E.script.version = '1.0.0';
+E.script.version = '1.0.2';
 // roteiros vivos (diagnostico); clear() mata todos (troca de fase)
 E.script.live = function () { return _live.length; };
 E.script.clear = function () {
@@ -182,7 +197,15 @@ E._modTicks.push(function (dt) {
             if (stacked(s.gen)) continue;      // cena dele coberta: dorme
             s.cancel();                        // cena saiu: morre
         }
-        if (!s.dead) s._tick(dt);
+        // passo que lanca no meio do roteiro: cancela antes de subir (o
+        // erro e visto 1 vez; sem isto o mesmo passo relancava a cada
+        // quadro e o jogo inteiro congelava nesse erro)
+        try {
+            if (!s.dead) s._tick(dt);
+        } catch (e) {
+            s.cancel();
+            throw e;
+        }
     }
     var w = 0;
     for (i = 0; i < _live.length; i++) if (!_live[i].dead) _live[w++] = _live[i];

@@ -14,6 +14,9 @@
 // Tudo iterativo (sem recursao: a pilha do Duktape e curta) e deterministico
 // dado o rnd. Custo: gere na entrada da fase, nunca por quadro — uma
 // caverna 40x30 com 4 passos sao ~5k celulas x 9 leituras.
+//
+// 1.0.1: rooms com o.min > o.max (opts trocadas) sorteava lado 0/negativo,
+// o x passava da borda e o grid saia com linhas mais compridas que cols.
 
 var E = require('celeros.game');
 
@@ -21,7 +24,7 @@ function R(o) { return (o && o.rnd) || Math.random; }
 function ri(rnd, a, b) { return a + Math.floor(rnd() * (b - a + 1)); }
 
 E.gen = {
-    version: '1.0.0',
+    version: '1.0.1',
 
     // grade rows x cols cheia de ch (array de arrays de 1 caractere)
     grid: function (cols, rows, ch) {
@@ -50,6 +53,10 @@ E.gen = {
         o = o || {};
         var rnd = R(o), wall = o.wall || '#', floor = o.floor || '.';
         var want = o.rooms || 8, mn = o.min || 4, mx = o.max || 9;
+        // min > max (opts trocadas) nao pode virar sala de lado 0/negativo:
+        // o x sorteado passava da borda e a grade saia com linhas irregulares
+        if (mx < mn) mx = mn;
+        if (mn < 1) mn = 1;
         var g = E.gen.grid(cols, rows, wall);
         var rooms = [], tries = o.tries || want * 12;
         for (var t = 0; t < tries && rooms.length < want; t++) {

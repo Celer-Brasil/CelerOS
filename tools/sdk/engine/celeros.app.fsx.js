@@ -19,8 +19,17 @@
 var A = require('celeros.app');
 require('celeros.app.path');
 
+// nome de arquivo do pacote aceito: so o NOME (nada de "/" nem "..") — o
+// catalogo do hub e dado de fora e "<dir>/../../local/modules/x.new" sairia
+// da pasta do app
+function nomeSeguro(n) {
+    var s = String(n === undefined || n === null ? '' : n);
+    return s.length > 0 && s !== '.' && s !== '..' && s.indexOf('/') < 0 &&
+           s.indexOf('\\') < 0 && s.indexOf('..') < 0;
+}
+
 A.fsx = {
-    version: '1.0.1',
+    version: '1.0.2',
 
     // bytes livres no drive (default "/local"; use "/sd" no cartao). O
     // binding exige o drive (JsFs.cpp): chamar sem argumento lancava e o
@@ -81,6 +90,7 @@ A.fsx = {
         var fail = '';
         for (var i = 0; i < files.length && !fail; i++) {
             var fe = files[i];
+            if (!fe || !nomeSeguro(fe.name)) { fail = 'Nome de arquivo invalido no pacote'; break; }
             var ftmp = dir + '/' + fe.name + '.new';
             var ok = false;
             try {

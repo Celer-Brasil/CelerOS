@@ -33,8 +33,16 @@
 // 2.1.1: verletFast com os mundos nativos ESGOTADOS (verletNew -> -1)
 // devolvia um objeto "nativo" morto (todo step/add ia ao id -1 em silencio
 // e a corda nunca aparecia) — cai no fallback JS como o firmware antigo.
+// 2.1.2: o fallback JS trocava v.points/v.sticks de array (delPoint e
+// free faziam `v.x = novo`) — o step fecha sobre os arrays ORIGINAIS
+// (closure do P.verlet): depois de um delPoint a haste velha apontava
+// indice deslocado e derrubava o step (pts[i] undefined); mundo "free"
+// continuava simulando e add/stick posteriores ficavam fora da simulacao.
+// Ambos mutam o array no lugar agora. step com dt NaN nao destroi mais a
+// corda (dt2 invalido vira 0), damp NaN volta a 1 e a haste pula par
+// com distancia NaN (o ponto contaminado nao arrasta o vizinho).
 
-var P = { version: '2.1.1' };
+var P = { version: '2.1.2' };
 
 function isCircle(b) { return b.r !== undefined && b.r !== null; }
 
@@ -88,7 +96,9 @@ P.verlet = function (opts) {
         o = o || {};
         var g = o.gravity || { x: 0, y: 900 };
         var damp = o.damp === undefined ? 1 : o.damp;
+        if (!(damp >= 0)) damp = 1;        // NaN/Inf: 1 quadro ruim nao mata a corda
         var dt2 = dt * dt;
+        if (!(dt2 >= 0)) dt2 = 0;          // dt NaN/Inf idem (antes tudo virava NaN)
         var i, p;
         for (i = 0; i < pts.length; i++) {
             p = pts[i];
@@ -105,7 +115,9 @@ P.verlet = function (opts) {
                 var A = pts[s.a], B = pts[s.b];
                 var dx = B.x - A.x, dy = B.y - A.y;
                 var d = Math.sqrt(dx * dx + dy * dy);
-                if (d < 1e-6) continue;
+                // !(d >= 1e-6) pula tambem NaN: ponto contaminado nao
+                // arrasta o vizinho (antes f virava NaN e espalhava)
+                if (!(d >= 1e-6)) continue;
                 var ma = A.pin ? 0 : 1, mb = B.pin ? 0 : 1;
                 var tot = ma + mb;
                 if (!tot) continue;
@@ -229,7 +241,11 @@ function verletFastJS(opts) {
                 keep.push({ a: s.a > idx ? s.a - 1 : s.a,
                             b: s.b > idx ? s.b - 1 : s.b, len: s.len });
             }
-            v.sticks = keep;
+            // NO LUGAR: o step fecha sobre ESTE array (closure do P.verlet);
+            // `v.sticks = keep` trocava o array e a haste velha ficava
+            // apontando indice deslocado (TypeError no step seguinte)
+            v.sticks.length = 0;
+            for (var k2 = 0; k2 < keep.length; k2++) v.sticks.push(keep[k2]);
             return true;
         },
         pins: function () {
@@ -237,7 +253,10 @@ function verletFastJS(opts) {
             for (var i = 0; i < v.points.length; i++) out.push(v.points[i].pin ? 1 : 0);
             return out;
         },
-        free: function () { v.points = []; v.sticks = []; }
+        // idem: sem o .length = 0 o mundo "liberado" seguia simulando
+        // (os arrays originais continuavam povoados) e um add/stick depois
+        // do free nascia fora da simulacao
+        free: function () { v.points.length = 0; v.sticks.length = 0; }
     };
 };
 

@@ -32,6 +32,8 @@ function stacked(g) {
 E.bus = function () {
     var subs = {};          // nome -> [sub]
     var depth = 0;          // emits em voo (a varredura espera o de fora)
+    var seq = 0;            // ordem de inscricao (quem nasce num emit nao ouve)
+    var markSeq = 0;        // carimbo por entrega (array deslocado nao repete)
     var b = {};
     function list(name) { return subs[name] || (subs[name] = []); }
     b.on = function (name, fn, o) {
@@ -39,8 +41,13 @@ E.bus = function () {
                   // geracao da cena (core 1.2): sair e voltar a MESMA cena
                   // ja e outra vida — o ouvinte velho nao ressuscita
                   scene: o && o.scene ? E._sceneGen : null,
-                  prio: (o && o.prio) || 0 };
+                  prio: (o && o.prio) || 0, _seq: ++seq, _m: 0 };
         s.off = function () { s.dead = true; };
+        // mortos de cenas passadas saem ja: sem isto a lista de um evento
+        // que nunca mais e emitido crescia um ouvinte por troca de cena.
+        // Com um emit em voo nao varre (o splice deslocaria o indice do
+        // laco de fora); o proprio emit varre no fim
+        if (!depth) sweep(name);
         var L = list(name);
         // prioridade maior ouve antes (estavel no empate)
         var i = L.length;
@@ -63,13 +70,17 @@ E.bus = function () {
         s.dead = true;
     };
     // entrega sincrona; um ouvinte que devolve false PARA a propagacao
-    // (o escudo come o "dano" antes do HUD). Devolve quantos ouviram
-    function deliver(L, coringa, name, a1, a2, a3) {
-        var n = 0;
-        // so os inscritos ATE agora (ouvinte que inscreve outro nao o chama)
-        for (var i = 0, n0 = L.length; i < n0 && i < L.length; i++) {
+    // (o escudo come o "dano" antes do HUD). Devolve quantos ouviram.
+    // seqEnd = inscritos ate o inicio do emit: um ouvinte que inscreve
+    // outro (ainda mais com prio maior, que entra ANTES no array) nao
+    // desloca o indice e nao faz o atual ouvir duas vezes. O carimbo _m
+    // garante o mesmo se o array for reordenado no meio da varredura.
+    function deliver(L, coringa, name, a1, a2, a3, seqEnd) {
+        var n = 0, mark = ++markSeq;
+        for (var i = 0; i < L.length; i++) {
             var s = L[i];
-            if (s.dead) continue;
+            if (s.dead || s._seq > seqEnd || s._m === mark) continue;
+            s._m = mark;
             if (s.scene !== null && s.scene !== E._sceneGen) {
                 // cena dele coberta por um E.push: dorme; saiu de vez: morre
                 if (!stacked(s.scene)) s.dead = true;
@@ -91,19 +102,24 @@ E.bus = function () {
     b.emit = function (name, a1, a2, a3) {
         var L = subs[name], W = name !== '*' ? subs['*'] : null;
         if (!L && !W) return 0;
-        var n = 0;
+        var n = 0, seqEnd = seq;
         depth++;
-        if (L) {
-            n = deliver(L, false, name, a1, a2, a3);
-            if (n < 0) n = -n;
+        try {
+            if (L) {
+                n = deliver(L, false, name, a1, a2, a3, seqEnd);
+                if (n < 0) n = -n;
+            }
+            // o coringa ouve depois dos ouvintes do nome (e ouve mesmo quando
+            // um deles parou a propagacao: e observador, nao participante)
+            if (W) deliver(W, true, name, a1, a2, 0, seqEnd);
+        } finally {
+            // um ouvinte que lanca nao pode vazar o depth: sem isto a
+            // varredura de mortos nunca mais rodava (lista crescia sem teto)
+            depth--;
+            // varre os mortos so no emit mais externo: um emit de dentro que
+            // fizesse splice deslocava o indice do laco de fora
+            if (!depth) { sweep(name); if (W) sweep('*'); }
         }
-        // o coringa ouve depois dos ouvintes do nome (e ouve mesmo quando
-        // um deles parou a propagacao: e observador, nao participante)
-        if (W) deliver(W, true, name, a1, a2, a3);
-        depth--;
-        // varre os mortos so no emit mais externo: um emit de dentro que
-        // fizesse splice deslocava o indice do laco de fora
-        if (!depth) { sweep(name); if (W) sweep('*'); }
         return n;
     };
     b.count = function (name) {
@@ -111,7 +127,15 @@ E.bus = function () {
         if (L) for (var i = 0; i < L.length; i++) if (!L[i].dead) n++;
         return n;
     };
-    b.clear = function () { subs = {}; };
+    // zera o barramento; um emit EM VOO para de entregar na hora (os
+    // ouvintes marcados como mortos sao pulados pela varredura)
+    b.clear = function () {
+        for (var k in subs) {
+            var L = subs[k];
+            for (var i = 0; i < L.length; i++) L[i].dead = true;
+        }
+        subs = {};
+    };
     return b;
 };
 
@@ -132,7 +156,7 @@ E._modTicks.push(function () {
     for (var i = 0; i < q.length; i++) G.emit(q[i][0], q[i][1], q[i][2], q[i][3]);
 });
 
-E.events.version = '1.1.0';
+E.events.version = '1.1.1';
 E._mods.push('events');
 
 module.exports = E;

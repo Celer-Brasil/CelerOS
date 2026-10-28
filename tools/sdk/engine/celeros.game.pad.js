@@ -34,6 +34,9 @@
 // 1.2.3: controle escondido (visible = false) apaga o proprio desenho (o
 // stick flutuante do Detona ficava como fantasma ao soltar o dedo); rotulo
 // e cor do botao entram na chave do redesenho.
+// 1.2.4: controle escondido tambem SOLTA o dedo e nao pega outro (o botao
+// invisivel continuava reportando down e rouvava o dedo do stick visivel —
+// o draw ja o tratava como ausente, o tick nao).
 
 var E = require('celeros.game');
 var EMPTY = {};
@@ -88,7 +91,7 @@ var _knob = { screen: true, smooth: true };
 var _lbl = { align: 'center', valign: 'middle', screen: true, color: 0, px: 12 };
 
 E.pad = {
-    version: '1.2.3',
+    version: '1.2.4',
 
     // stick analogico. o = {zone {x,y,w,h} (onde o dedo PRESSIONA para
     // pegar o stick; default metade esquerda), r (raio em px, default
@@ -164,12 +167,16 @@ E.pad = {
         for (var b = 0; b < _buttons.length; b++) {
             var bt = _buttons[b];
             f = bt.finger !== null ? i.finger(bt.finger) : null;
-            if (!live(bt) || (f && !f.down) || (bt.finger !== null && !f)) {
+            // escondido nao pega dedo (o draw o trata como ausente): sem
+            // isto o botao invisivel continuava segurando o toque e o
+            // divulgando como down — e rouvava o dedo do stick visivel
+            if (!bt.visible && bt.finger !== null) { delete _own[bt.finger]; bt.finger = null; f = null; }
+            if (!live(bt) || !bt.visible || (f && !f.down) || (bt.finger !== null && !f)) {
                 if (bt.finger !== null) delete _own[bt.finger];
                 bt.finger = null;
                 f = null;
             }
-            if (!f && live(bt)) {
+            if (!f && live(bt) && bt.visible) {
                 for (k = 0; k < L.length; k++) {
                     g = L[k];
                     // dedo novo no botao, ou dedo sem dono que ENTROU nele
@@ -194,7 +201,8 @@ E.pad = {
             var s = _sticks[n], z = s.zone;
             s.tap = false;
             f = s.finger !== null ? i.finger(s.finger) : null;
-            if (!live(s) || (f && !f.down) || (s.finger !== null && !f)) {
+            if (!s.visible && s.finger !== null) { delete _own[s.finger]; s.finger = null; f = null; }
+            if (!live(s) || !s.visible || (f && !f.down) || (s.finger !== null && !f)) {
                 // levantou: toque seco (sem arrastar, rapido) e o "A" do stick
                 if (f && !f.down && !f.moved && f.heldMs < i.tapMs) s.tap = true;
                 if (s.finger !== null) delete _own[s.finger];
@@ -203,7 +211,7 @@ E.pad = {
                 s.cx = s._home.x; s.cy = s._home.y;
                 f = null;
             }
-            if (!f && live(s)) {
+            if (!f && live(s) && s.visible) {
                 for (k = 0; k < L.length; k++) {
                     g = L[k];
                     if (g.justDown && g.down && !_own[g.id] &&

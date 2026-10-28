@@ -14,8 +14,12 @@
 
 var A = require('celeros.app');
 
+// 1.0.1: join preserva a RAIZ do primeiro pedaco absoluto (join("/local",
+// "apps") devolvia "local/apps" e o FS.exists do Installer nunca achava o
+// cache) e dir("/x") devolve "/" (devolvia "/x").
+
 A.path = {
-    version: '1.0.0',
+    version: '1.0.1',
 
     // ultimo componente: "main.js" de "/local/apps/Loja/main.js"
     base: function (p) {
@@ -24,11 +28,13 @@ A.path = {
         return i >= 0 ? p.substring(i + 1) : p;
     },
 
-    // tudo antes do ultimo "/" (sem cortar a barra final de pastas)
+    // tudo antes do ultimo "/" (sem cortar a barra final de pastas); na raiz
+    // ("/main.js") devolve "/", nao o proprio caminho
     dir: function (p) {
         p = String(p);
         var i = p.lastIndexOf('/');
-        return i > 0 ? p.substring(0, i) : p;
+        if (i > 0) return p.substring(0, i);
+        return i === 0 ? '/' : p;
     },
 
     // extensao em MAIUSCULO (o farejador de tipo dos apps compara assim):
@@ -46,17 +52,20 @@ A.path = {
         return i > 0 ? b.substring(0, i) : b;
     },
 
-    // junta e ignora pedacos vazios: join("a", "", "b") = "a/b"
+    // junta e ignora pedacos vazios: join("a", "", "b") = "a/b". Um primeiro
+    // pedaco ABSOLUTO mantem a raiz: join("/local", "apps") = "/local/apps"
     join: function () {
-        var out = '';
+        var out = '', abs = false;
         for (var i = 0; i < arguments.length; i++) {
             var p = String(arguments[i] || '');
             if (!p) continue;
-            if (out && out.charAt(out.length - 1) !== '/') out += '/';
+            var lead = p.charAt(0) === '/';
             while (p.charAt(0) === '/') p = p.substring(1);
+            if (out && out.charAt(out.length - 1) !== '/') out += '/';
+            if (!out && lead) abs = true;
             out += p;
         }
-        return out;
+        return (abs ? '/' : '') + out;
     },
 
     // nome seguro p/ arquivo: tudo fora de [A-Za-z0-9 ._()-] vira "_"

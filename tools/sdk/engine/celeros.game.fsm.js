@@ -53,23 +53,30 @@ E.fsm = function (owner, states, first, opts) {
         return s;
     }
     var ANY = states['*'] || null;
+    // descarta a troca pendente (pedido posterior "fica no mesmo estado")
+    function limpaPend() { m._pend = null; m._pendArg = undefined; m._pendSaved = null; }
     function apply(name, arg, saved) {
         var to = st(name);
         var from = m.state ? states[m.state] : null;
         m._busy = true;
-        if (from && from.exit) from.exit(m, name);
-        m.prev = m.state;
-        m.state = name;
-        m.time = saved ? saved.time : 0;
-        m.data = saved ? saved.data : {};
-        if (histMax > 0) {
-            m.history.push(name);
-            if (m.history.length > histMax) m.history.shift();
+        try {
+            if (from && from.exit) from.exit(m, name);
+            m.prev = m.state;
+            m.state = name;
+            m.time = saved ? saved.time : 0;
+            m.data = saved ? saved.data : {};
+            if (histMax > 0) {
+                m.history.push(name);
+                if (m.history.length > histMax) m.history.shift();
+            }
+            if (m.onChange) m.onChange(m, m.prev, name);
+            if (saved && to.resume) to.resume(m, arg);
+            else if (to.enter) to.enter(m, arg);
+        } finally {
+            // exit/enter/onChange que lanca nao pode deixar _busy preso: as
+            // trocas seguintes ficavam penduradas ate um update qualquer
+            m._busy = false;
         }
-        if (m.onChange) m.onChange(m, m.prev, name);
-        if (saved && to.resume) to.resume(m, arg);
-        else if (to.enter) to.enter(m, arg);
-        m._busy = false;
     }
     // troca pedida dentro de um callback: aplica quando ele termina (laco
     // com teto: enter que pede outra troca encadeia, ciclo infinito para)
@@ -84,9 +91,11 @@ E.fsm = function (owner, states, first, opts) {
         }
     }
 
-    // vai para o estado (arg chega no enter). Mesmo estado: so com force
+    // vai para o estado (arg chega no enter). Mesmo estado: so com force.
+    // "Ficar onde esta" tambem cancela uma troca pedida antes no mesmo
+    // callback (a ultima pedida vence; antes o pendente era aplicado por cima)
     m.go = function (name, arg, force) {
-        if (name === m.state && !force) return false;
+        if (name === m.state && !force) { limpaPend(); return false; }
         if (name === '*') throw new Error('fsm: "*" e o estado coringa, nao um destino');
         st(name);
         if (m._busy) { m._pend = name; m._pendArg = arg; m._pendSaved = null; return true; }
@@ -114,14 +123,18 @@ E.fsm = function (owner, states, first, opts) {
         var s = states[m.state];
         m.time += dt;
         m._busy = true;
-        if (ANY && ANY.update) ANY.update(m, dt);
-        if (s.update && m._pend === null) s.update(m, dt);
-        // saida automatica: after = [segundos, proximo] (ou fn(m) -> nome)
-        if (m._pend === null && s.after && m.time >= s.after[0]) {
-            var nx = typeof s.after[1] === 'function' ? s.after[1](m) : s.after[1];
-            if (nx) { m._pend = nx; m._pendArg = undefined; }
+        try {
+            if (ANY && ANY.update) ANY.update(m, dt);
+            if (s.update && m._pend === null) s.update(m, dt);
+            // saida automatica: after = [segundos, proximo] (ou fn(m) -> nome)
+            if (m._pend === null && s.after && m.time >= s.after[0]) {
+                var nx = typeof s.after[1] === 'function' ? s.after[1](m) : s.after[1];
+                if (nx) { m._pend = nx; m._pendArg = undefined; }
+            }
+        } finally {
+            // update que lanca nao deixa a fsm travada em _busy
+            m._busy = false;
         }
-        m._busy = false;
         flush();
     };
     // repassa um evento ao estado: estados[x].on[nome](m, arg) — devolve
@@ -133,12 +146,18 @@ E.fsm = function (owner, states, first, opts) {
         if (!h) return false;
         var was = m._busy;
         m._busy = true;
-        var r = h(m, arg);
-        m._busy = was;
-        // string devolvida pelo handler = transicao (vence um go pendente)
-        if (typeof r === 'string' && r !== m.state) {
+        var r;
+        try {
+            r = h(m, arg);
+        } finally {
+            m._busy = was;
+        }
+        // string devolvida pelo handler = transicao (vence um go pendente).
+        // Devolver o estado CORRENTE e "ficar": cancela o pendente tambem
+        if (typeof r === 'string') {
             st(r);
-            m._pend = r; m._pendArg = undefined; m._pendSaved = null;
+            if (r === m.state) limpaPend();
+            else { m._pend = r; m._pendArg = undefined; m._pendSaved = null; }
         }
         if (!was) flush();
         return true;
@@ -151,7 +170,7 @@ E.fsm = function (owner, states, first, opts) {
     if (first) m.go(first, opts.arg);
     return m;
 };
-E.fsm.version = '1.1.0';
+E.fsm.version = '1.1.1';
 
 E._mods.push('fsm');
 

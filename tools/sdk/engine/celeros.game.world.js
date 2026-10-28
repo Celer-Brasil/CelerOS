@@ -44,6 +44,12 @@
 // 1.1.1: os sprites da sala sao alocados/liberados por E.slots (ledger do
 // core, dono "world:sala") — falta de slot agora aparece no log com o
 // tamanho pedido, e o contador deixa de ser ajustado a mao aqui.
+// 1.1.2: entrada hostil — get/set/solidAt/toCell deixavam NaN passar
+// (`c < 0` nao pega NaN): solidAt/rectSolid respondiam "livre" lendo
+// data[NaN] (parede furada) e set gravava propriedade lixa; agora NaN
+// e fora da grade (outside/null/false). bake/rebakeCell/painter/drawRoom
+// ganham try/finally: paint/decor do app que lanca deixava E.dirty._mute
+// preso (camada suja muda para sempre) e o clip/alvo de sprite vazando.
 
 var E = require('celeros.game');
 require('celeros.game.level');
@@ -162,14 +168,17 @@ E.world = function (o) {
     W.take = function (spawn) { W.flag('got:' + spawn.i, true); };
 
     // ---------------------------------------------------- celulas ------
+    // guards a prova de NaN: `c < 0` deixa NaN passar e a celula "NaN"
+    // lia data[NaN] = undefined = livre (parede furada) ou gravava uma
+    // propriedade lixa no array de dados
     W.get = function (c, r) {
-        if (!W.room || c < 0 || r < 0 || c >= cols || r >= rows) return undefined;
+        if (!W.room || !(c >= 0) || !(r >= 0) || !(c < cols) || !(r < rows)) return undefined;
         return W.room.data[r * cols + c];
     };
     // muda a celula (repinta ja); persist grava no save da sala (bau
     // aberto, porta destrancada) — sem persist volta ao ASCII na proxima visita
     W.set = function (c, r, v, persist) {
-        if (!W.room || c < 0 || r < 0 || c >= cols || r >= rows) return false;
+        if (!W.room || !(c >= 0) || !(r >= 0) || !(c < cols) || !(r < rows)) return false;
         var k = r * cols + c;
         W.room.data[k] = v;
         if (persist) {
@@ -200,7 +209,7 @@ E.world = function (o) {
     // pixel de tela -> celula da sala (objeto reaproveitado; null fora)
     W.toCell = function (x, y) {
         var c = Math.floor((x - ox) / cell), r = Math.floor((y - oy) / cell);
-        if (c < 0 || r < 0 || c >= cols || r >= rows) return null;
+        if (!(c >= 0) || !(r >= 0) || !(c < cols) || !(r < rows)) return null;
         _cell.c = c; _cell.r = r;
         return _cell;
     };
@@ -219,13 +228,15 @@ E.world = function (o) {
     W.solidAt = function (x, y) {
         if (!W.room) return W.outside;
         var c = Math.floor((x - ox) / cell), r = Math.floor((y - oy) / cell);
-        if (c < 0 || r < 0 || c >= cols || r >= rows) return W.outside;
+        if (!(c >= 0) || !(r >= 0) || !(c < cols) || !(r < rows)) return W.outside;
         return !!solid(W.room.data[r * cols + c], c, r);
     };
     W.rectSolid = function (x, y, w, h) {
         if (!W.room) return W.outside;
         var c0 = Math.floor((x - ox) / cell), c1 = Math.floor((x + w - 1 - ox) / cell);
         var r0 = Math.floor((y - oy) / cell), r1 = Math.floor((y + h - 1 - oy) / cell);
+        // NaN em qualquer canto: o laco nao girava e respondia "livre"
+        if (!(c0 <= c1) || !(r0 <= r1)) return W.outside;
         for (var r = r0; r <= r1; r++) {
             for (var c = c0; c <= c1; c++) {
                 if (c < 0 || r < 0 || c >= cols || r >= rows) { if (W.outside) return true; continue; }
@@ -269,47 +280,55 @@ E.world = function (o) {
         if (!hasDraw) return 0;
         return E.slots.create('world:sala', E.W, E.H);
     }
-    // grava a sala rec inteira no sprite slot (fundo o.bg fora da sala)
+    // grava a sala rec inteira no sprite slot (fundo o.bg fora da sala).
+    // try/finally: paint/decor do APP pode lancar — sem isso o _mute
+    // ficava preso (>0) e a camada suja parava de registrar para sempre
     function bake(rec, slot) {
         if (!slot) return false;
         E.dirty._mute++;
-        S.useSprite(slot);
-        if (E.spr) E.spr.alvo = slot;
-        S.fillScreen(o.bg === undefined ? 0x0000 : o.bg);
-        if (tileOf) {
-            // laco INLINE (sem paintCell/frameOf por celula); regioes
-            // resolvidas de novo a cada gravacao (folha recarregada muda o id)
-            _tc = {};
-            var fr = anim && anim.frames, d = rec.data, n = d.length;
-            for (var q = 0; q < n; q++) {
-                var v = d[q];
-                if (fr && fr[v]) v = fr[v][W._anim % fr[v].length];
-                var rg = _tc[v] || regOf(v);
-                var cc = q % cols, x = ox + cc * cell, y = oy + (q - cc) / cols * cell;
-                if (rg.id && HAS_COPY) S.copySprite(rg.id, rg.rx, rg.ry, cell, cell, x, y);
-                else if (E.spr) E.spr.stamp(rg.nm, x, y, _opaco);
+        try {
+            S.useSprite(slot);
+            if (E.spr) E.spr.alvo = slot;
+            S.fillScreen(o.bg === undefined ? 0x0000 : o.bg);
+            if (tileOf) {
+                // laco INLINE (sem paintCell/frameOf por celula); regioes
+                // resolvidas de novo a cada gravacao (folha recarregada muda o id)
+                _tc = {};
+                var fr = anim && anim.frames, d = rec.data, n = d.length;
+                for (var q = 0; q < n; q++) {
+                    var v = d[q];
+                    if (fr && fr[v]) v = fr[v][W._anim % fr[v].length];
+                    var rg = _tc[v] || regOf(v);
+                    var cc = q % cols, x = ox + cc * cell, y = oy + (q - cc) / cols * cell;
+                    if (rg.id && HAS_COPY) S.copySprite(rg.id, rg.rx, rg.ry, cell, cell, x, y);
+                    else if (E.spr) E.spr.stamp(rg.nm, x, y, _opaco);
+                }
+            } else {
+                for (var k = 0; k < rec.data.length; k++) paintCell(rec, k, ox, oy);
             }
-        } else {
-            for (var k = 0; k < rec.data.length; k++) paintCell(rec, k, ox, oy);
+            if (o.decor) o.decor(rec, W);    // por cima dos tiles, dentro do bake
+            return true;
+        } finally {
+            if (E.spr) E.spr.alvo = 0;
+            S.useSprite(0);
+            E.dirty._mute--;
         }
-        if (o.decor) o.decor(rec, W);    // por cima dos tiles, dentro do bake
-        if (E.spr) E.spr.alvo = 0;
-        S.useSprite(0);
-        E.dirty._mute--;
-        return true;
     }
     function rebakeCell(k) {
         if (!W.baked || !W._slotA) return;
         E.dirty._mute++;
-        S.useSprite(W._slotA);
-        if (E.spr) E.spr.alvo = W._slotA;
-        var c = k % cols, r = (k - c) / cols;
-        S.setClip(ox + c * cell, oy + r * cell, cell, cell);
-        paintCell(W.room, k, ox, oy);
-        S.clearClip();
-        if (E.spr) E.spr.alvo = 0;
-        S.useSprite(0);
-        E.dirty._mute--;
+        try {
+            S.useSprite(W._slotA);
+            if (E.spr) E.spr.alvo = W._slotA;
+            var c = k % cols, r = (k - c) / cols;
+            S.setClip(ox + c * cell, oy + r * cell, cell, cell);
+            paintCell(W.room, k, ox, oy);
+            S.clearClip();
+        } finally {
+            if (E.spr) E.spr.alvo = 0;
+            S.useSprite(0);
+            E.dirty._mute--;
+        }
     }
     function scanAnim() {
         W._animCells.length = 0;
@@ -335,12 +354,17 @@ E.world = function (o) {
         var r0 = Math.max(0, Math.floor((y - oy) / cell)), r1 = Math.min(rows - 1, Math.floor((y + h - 1 - oy) / cell));
         if (c1 < c0 || r1 < r0) return;
         // repintura de FUNDO nao entra na camada suja (senao cada celula
-        // repintada se apagaria no quadro seguinte e a lista crescia sem fim)
+        // repintada se apagaria no quadro seguinte e a lista crescia sem
+        // fim). try/finally: paint pode lancar — sem isso o _mute ficava
+        // preso e o clip do sprite vazava para o resto do quadro
         E.dirty._mute++;
-        S.setClip(x, y, w, h);
-        for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) paintCell(W.room, r * cols + c, ox, oy);
-        S.clearClip();
-        E.dirty._mute--;
+        try {
+            S.setClip(x, y, w, h);
+            for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) paintCell(W.room, r * cols + c, ox, oy);
+        } finally {
+            S.clearClip();
+            E.dirty._mute--;
+        }
     };
     // sala inteira na tela (sem camada suja / 1o quadro)
     W.drawRoom = function () {
@@ -351,8 +375,11 @@ E.world = function (o) {
             S.useSprite(0);
         } else {
             E.dirty._mute++;
-            for (var k = 0; k < W.room.data.length; k++) paintCell(W.room, k, ox, oy);
-            E.dirty._mute--;
+            try {
+                for (var k = 0; k < W.room.data.length; k++) paintCell(W.room, k, ox, oy);
+            } finally {
+                E.dirty._mute--;
+            }
         }
         if (E.dirty.on) E.dirty.full();
     };
@@ -544,7 +571,7 @@ E.world = function (o) {
     return W;
 };
 var _live = [];
-E.world.version = '1.1.1';
+E.world.version = '1.1.2';
 
 E._modTicks.push(function (dt) {
     for (var i = 0; i < _live.length; i++) _live[i]._tick(dt);

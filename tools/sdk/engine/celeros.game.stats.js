@@ -22,6 +22,10 @@
 // usa no knockback) e guarda s.lastDir; s.blink(ms) diz se o sprite deve
 // SUMIR neste quadro durante os iframes (pisca sem alocar); s.hpMax
 // (atalho do get('hp')) e s.full().
+//
+// 1.1.1: cool(name) sem ms (ou com NaN) gravava _cool NaN e a habilidade
+// ficava nunca-pronta; load com hp acima do teto (save de versao com item
+// mais forte) deixa o hp estourado para quem le s.hp direto.
 
 var E = require('celeros.game');
 
@@ -134,8 +138,11 @@ E.stats = function (base, o) {
     // 0..1 da vida (barra)
     s.frac = function () { var mx = s.get('hp'); return mx > 0 ? s.hp / mx : 0; };
 
-    // recarga: true (e comeca a contar) se estava pronta
+    // recarga: true (e comeca a contar) se estava pronta. ms faltando/NaN
+    // conta como 0 (antes virava _cool NaN e ready() devolvia false PARA
+    // SEMPRE — a habilidade morria na 1a chamada sem ms)
     s.cool = function (name, ms) {
+        if (!(ms > 0)) ms = 0;
         var t = s._cool[name];
         if (t !== undefined && _clock < t) return false;
         s._cool[name] = _clock + ms;
@@ -183,12 +190,19 @@ E.stats = function (base, o) {
         if (v.base) for (var k2 in v.base) b[k2] = v.base[k2];
         if (v.level) s.level = v.level;
         if (v.xp !== undefined) s.xp = v.xp;
-        if (v.hp !== undefined) { s.hp = v.hp; s.dead = v.hp <= 0; }
+        if (v.hp !== undefined) {
+            s.hp = v.hp;
+            s.dead = v.hp <= 0;
+            // hp acima do teto no save (item nerfado, dado editado) desce ao
+            // maximo na carga — sem isto o HUD lia st.hp estourado ate a
+            // 1a chamada de get('hp')
+            if (s.hp > s.get('hp')) s.hp = s.get('hp');
+        }
         return s;
     };
     return s;
 };
-E.stats.version = '1.1.0';
+E.stats.version = '1.1.1';
 // relogio de jogo em ms (o mesmo dos buffs/recargas)
 E.stats.now = function () { return _clock; };
 

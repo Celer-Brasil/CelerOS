@@ -80,8 +80,13 @@ E.waves = function (list, o) {
         if (o.onWave) o.onWave(w, n);
     }
     w.start = function () { if (w.state === 'wait' && !w.wave) { w._wait = 0; w._auto = true; } };
-    // pula a espera/encerra a onda atual e comeca a proxima ja
-    w.next = function () { begin(w.wave + 1); };
+    // pula a espera/encerra a onda atual e comeca a proxima ja. Depois do
+    // fim (done) ou de um stop() e no-op — sem o guard o begin() caia no
+    // "sem definicao" e disparava onDone DE NOVO (duplo goto de vitoria)
+    w.next = function () {
+        if (w.dead || w.state === 'done') return;
+        begin(w.wave + 1);
+    };
     w.stop = function () { w.dead = true; };
     // 0..1 dos nascimentos da onda corrente
     w.progress = function () { return w.total ? w.spawned / w.total : 0; };
@@ -132,7 +137,7 @@ E.waves = function (list, o) {
     _live.push(w);
     return w;
 };
-E.waves.version = '1.0.0';
+E.waves.version = '1.0.1';
 
 E._modTicks.push(function (dt) {
     var n0 = _live.length, i;

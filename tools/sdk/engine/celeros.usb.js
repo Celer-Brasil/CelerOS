@@ -16,7 +16,7 @@
 // A placa precisa de USB Host e o app da permission "usb" (o objeto USB
 // simplesmente nao existe sem elas).
 
-var usb = { version: '1.0.0' };
+var usb = { version: '1.0.1' };
 
 // USB Host presente neste firmware/placa (e o app tem a permission).
 usb.available = function () {
@@ -81,16 +81,17 @@ usb.ep = function (iface, type, dir) {
 usb.open = function (dev, opts) {
     opts = opts || {};
     if (!dev) return null;
+    var ifs = dev.ifs || [];   // device sem interfaces no listing: nao estoura
     var iface = opts.iface || null;
     if (!iface) {
-        for (var i = 0; i < dev.ifs.length; i++) {
-            if (usb.ep(dev.ifs[i], 2, "out") >= 0 || usb.ep(dev.ifs[i], 2, "in") >= 0) {
-                iface = dev.ifs[i];
+        for (var i = 0; i < ifs.length; i++) {
+            if (usb.ep(ifs[i], 2, "out") >= 0 || usb.ep(ifs[i], 2, "in") >= 0) {
+                iface = ifs[i];
                 break;
             }
         }
     }
-    if (!iface && dev.ifs.length) iface = dev.ifs[0];
+    if (!iface && ifs.length) iface = ifs[0];
     if (!iface) return null;
     if (!USB.claim(dev.addr, iface.n, iface.alt)) return null;
     return {

@@ -10,8 +10,12 @@
 
 // 1.1.1: flood com a origem fora da grade derrubava o app (ok[sr][sc] de
 // linha inexistente) — devolve conjunto vazio.
+// 1.1.2: a origem NaN passava pelo mesmo guard (`sr < 0` nao pega NaN) e
+// esbarrava em ok[NaN] (TypeError); escolheAlcancavel derrubava com
+// candidato fora da grade (ok[r] de linha inexistente) — candidatos ruins
+// sao ignorados, como uma celula parede.
 
-var GRID = { version: '1.1.1' };
+var GRID = { version: '1.1.2' };
 
 // xorshift32 — mesmo esquema do E.rng/celeros.physics; modulo independente
 GRID.rng = function (seed) {
@@ -83,7 +87,7 @@ GRID.flood = function (grid, sc, sr, passavel) {
         return passavel(grid[r][c]);
     };
     var ok = GRID.nova(cols, rows, 0);
-    if (sr < 0 || sr >= rows || sc < 0 || sc >= cols) return { ok: ok, quantos: 0 };
+    if (!(sr >= 0) || !(sr < rows) || !(sc >= 0) || !(sc < cols)) return { ok: ok, quantos: 0 };
     var fila = [sr * cols + sc];
     ok[sr][sc] = 1;
     var quantos = 1;
@@ -110,11 +114,16 @@ GRID.flood = function (grid, sc, sr, passavel) {
 // tratando qualquer nao-'#' como passavel); sem candidato valido, o
 // primeiro da lista (ou null).
 GRID.escolheAlcancavel = function (grid, candidatos, sc, sr) {
+    var rows = grid.length, cols = rows ? grid[0].length : 0;
     var f = GRID.flood(grid, sc, sr, function (ch) {
         return ch !== '#';
     });
     for (var i = 0; i < candidatos.length; i++) {
-        if (f.ok[candidatos[i].r][candidatos[i].c]) return candidatos[i];
+        var cd = candidatos[i];
+        // candidato fora da grade nao derruba (ok[r] de linha inexistente
+        // era TypeError) — tratado como inalcancavel
+        if (!cd || !(cd.r >= 0) || !(cd.r < rows) || !(cd.c >= 0) || !(cd.c < cols)) continue;
+        if (f.ok[cd.r][cd.c]) return cd;
     }
     return candidatos.length ? candidatos[0] : null;
 };

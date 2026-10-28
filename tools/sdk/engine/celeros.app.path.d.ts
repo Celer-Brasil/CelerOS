@@ -6,13 +6,14 @@ declare namespace A {
         version: string;
         /** "main.js" de "/local/apps/Loja/main.js" */
         base(p: string): string;
-        /** "/local/apps/Loja" (tudo antes do ultimo "/") */
+        /** "/local/apps/Loja" (tudo antes do ultimo "/"; na raiz devolve "/") */
         dir(p: string): string;
         /** extensao em MAIUSCULO ("PNG"); "" se nao tem */
         ext(p: string): string;
         /** nome sem extensao ("pacote" de "pacote.zip") */
         stem(p: string): string;
-        /** junta ignorando pedacos vazios: join("a", "", "b") = "a/b" */
+        /** junta ignorando pedacos vazios: join("a", "", "b") = "a/b"
+         *  (o primeiro pedaco absoluto mantem a raiz: "/local/apps") */
         join(...partes: (string | undefined | null)[]): string;
         /** tudo fora de [A-Za-z0-9 ._()-] vira "_" */
         safeName(s: string): string;

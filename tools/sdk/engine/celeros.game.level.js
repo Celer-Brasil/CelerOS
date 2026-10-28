@@ -25,11 +25,13 @@
 // estourava "caractere fora da legenda" no \r; progress de lista vazia
 // dava unlocked -1. Novos: lv.tilemap(o) monta o E.tilemap da fase (com o
 // modulo tilemap), progress.complete(i, estrelas) e totalStars().
+// 1.1.1: save corrompido/vazio (del sem Storage.remove grava '') dava
+// unlocked NaN — go(i) falhava para todas as fases e totalStars() NaN.
 
 var E = require('celeros.game');
 
 E.level = {
-    version: '1.1.0',
+    version: '1.1.1',
 
     parse: function (lines, o) {
         o = o || {};
@@ -112,7 +114,12 @@ E.level = {
         o = o || {};
         var key = o.save || 'level';
         var p = { list: list, cur: 0, unlocked: 0 };
-        p.unlocked = Math.max(0, Math.min(list.length - 1, Math.floor(E.save.num(key, 0))));
+        // save corrompido/vazio (E.save.del sem Storage.remove grava '') da
+        // parseFloat NaN: unlocked NaN fazia go(i) falhar para TODAS as fases
+        // e totalStars() virava NaN (a porta de 10 estrelas nunca abria)
+        var sv = E.save.num(key, 0);
+        if (!isFinite(sv)) sv = 0;
+        p.unlocked = Math.max(0, Math.min(list.length - 1, Math.floor(sv)));
         p.def = function () { return list[p.cur]; };
         p.isLast = function () { return p.cur >= list.length - 1; };
         p.go = function (i) {
@@ -129,10 +136,12 @@ E.level = {
             }
             return true;
         };
-        // estrelas/nota por fase: guarda so se melhorou; sem n le
+        // estrelas/nota por fase: guarda so se melhorou; sem n le (leitura
+        // NaN do save conta como 0 — a fase continua melhoravel)
         p.stars = function (i, n) {
             var k = key + '.s' + i;
             var cur = E.save.num(k, 0);
+            if (!isFinite(cur)) cur = 0;
             if (n === undefined) return cur;
             if (n > cur) { E.save.set(k, n); return true; }
             return false;

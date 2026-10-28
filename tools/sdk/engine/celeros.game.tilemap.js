@@ -16,6 +16,8 @@
 // 1.3.0: autotile(c, r, same) — mascara de 4 bits dos vizinhos iguais
 // (1 cima, 2 direita, 4 baixo, 8 esquerda) p/ escolher a peca de parede/
 // agua/estrada sem tabela a mao; neighbors(c, r, fn, diag).
+// 1.3.1: tilemap sem o.paint avisava nada e o 1o flush estourava no device
+// ("m.paint is not a function") — agora avisa na construcao.
 
 var E = require('celeros.game');
 var NX = [0, 1, 0, -1, 1, 1, -1, -1], NY = [-1, 0, 1, 0, -1, 1, 1, -1];
@@ -47,6 +49,9 @@ E.tilemap = function (o) {
         }
     }
     var solid = o.solid || null;
+    // sem paint o 1o flush estourava ("m.paint is not a function") — a fase
+    // abria e o app morria no device; avisado aqui, o erro aponta a causa
+    if (!o.paint) E._warn('tilemap: sem paint — o flush nao tem como repintar as celulas');
     var _rc = { x: 0, y: 0, w: 0, h: 0 };
     var m = {
         cols: cols, rows: rows, cw: cw, ch: ch, ox: ox, oy: oy,
@@ -190,7 +195,7 @@ E.tilemap = function (o) {
     };
     return m;
 };
-E.tilemap.version = '1.3.0';
+E.tilemap.version = '1.3.1';
 
 E._mods.push('tilemap');
 

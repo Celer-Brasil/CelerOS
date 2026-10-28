@@ -18,7 +18,7 @@
 var A = require('celeros.app');
 
 A.fmt = {
-    version: '1.0.1',
+    version: '1.0.2',
 
     // bytes: "512 B", "1.5 KB" (1 casa, sem ".0"), "2.3 MB"; vazio se <= 0
     bytes: function (n) {
@@ -74,7 +74,9 @@ A.fmt = {
             return (s % 1 ? s : s.toFixed(0)) + ' s';
         }
         var m = Math.floor(ms / 60000);
+        // arredonda os segundos e carrega o 60 (119900 ms era "1m 60s")
         var rs = Math.round((ms % 60000) / 1000);
+        if (rs >= 60) { rs = 0; m++; }
         return m + 'm ' + A.fmt.pad2(rs) + 's';
     },
 

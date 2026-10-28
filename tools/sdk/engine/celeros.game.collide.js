@@ -26,14 +26,46 @@
 // movimento: fracao do 1o contato).
 // 1.2.0: hash em baldes numericos fixos (sem chave string nem array por
 // caixa) e pairs sem closure por corpo — mesma API e mesmo resultado.
+//
+// Correcoes da revisao da area 3 (mundo/fisica/navegacao):
+// - hash: o selo de "ja visto" era um contador POR INSTANCIA (mark=1 na
+//   primeira busca de todo hash): o mesmo corpo em dois hashes sumia da
+//   segunda busca, e uma query dentro de outra trocava o selo no meio do
+//   laco (pulava candidato / chamava fn 2x). Agora o selo e global.
+// - hash(cell) com cell negativo desligava a busca em silencio (nenhuma
+//   celula indexada, query sempre 0): cell invalido cai no default 32.
+// - segRect/sweep/ray com NaN (velocidade/posicao envenenada): segRect
+//   devolvia 0 (acerto fantasma), sweep devolvia NaN e ray devolvia
+//   hit com x/y/dist NaN. Agora devolvem "sem contato".
+// - point/test/hash: forma com r: null era tratada como circulo de raio
+//   null (NaN) e nunca colidia; r null passa a ser caixa (como isCircle
+//   do celeros.physics) — inclusive no span do hash (indexacao).
+// - move: mapa com cw/ch <= 0 ou NaN travava o laco de passos (passo
+//   negativo/NaN e left nunca zerava); corpo com w/h <= 0 (bala/ponto)
+//   atravessava tudo porque o rectSolid do mapa testa x + w - 1 (celula
+//   ANTERIOR); e corpo nascido sobreposto a um bloco ficava preso para
+//   sempre (o encaixe pixel a pixel nao vencia a meia celula).
+// 1.2.2: o bloco acima vale no codigo (selo _hmSeq aplicado, span do hash
+// pela mesma isCircle do point/test, cell invalido -> 32, isFinite em
+// segRect/sweep/ray, move com cw/ch validos e corpo minimo de 1 px); o
+// laco de passos ganhou teto de iteracoes (dx finito enorme nao gira
+// ~1e9 vezes). FORA: corpo nascido DENTRO de bloco grosso continua
+// parado (arrancar exige profundidade de penetracao por eixo — teste de
+// bancada antes de mudar o slide de plataforma).
 
 var E = require('celeros.game');
 
 var _res = { hitX: false, hitY: false, ground: false, ceil: false, dx: 0, dy: 0 };
 var _ray = { hit: false, x: 0, y: 0, c: 0, r: 0, dist: 0 };
+// selo GLOBAL das buscas do hash: duas instancias (ou uma query dentro de
+// outra) nao podem compartilhar o mesmo numero em _hm
+var _hmSeq = 0;
+
+// circulo = r definido e nao nulo (r: null e "sem raio", igual ao physics)
+function isCircle(o) { return o.r !== undefined && o.r !== null; }
 
 E.collide = {
-    version: '1.2.0',
+    version: '1.2.2',
     normal: { x: 0, y: 0 },   // normal do ultimo sweep com contato
 
     // retangulo x retangulo (bordas encostando NAO contam)
@@ -52,12 +84,12 @@ E.collide = {
         return dx * dx + dy * dy < c.r * c.r;
     },
     point: function (x, y, b) {
-        return b.r !== undefined ? (x - b.x) * (x - b.x) + (y - b.y) * (y - b.y) < b.r * b.r
-                                 : x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
+        return isCircle(b) ? (x - b.x) * (x - b.x) + (y - b.y) * (y - b.y) < b.r * b.r
+                           : x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
     },
     // qualquer combinacao (r = circulo, w/h = retangulo)
     test: function (a, b) {
-        var ca = a.r !== undefined, cb = b.r !== undefined;
+        var ca = isCircle(a), cb = isCircle(b);
         if (ca && cb) return E.collide.circle(a, b);
         if (ca) return E.collide.circleRect(a, b);
         if (cb) return E.collide.circleRect(b, a);
@@ -74,8 +106,12 @@ E.collide = {
         return { x: 0, y: py };
     },
     // segmento (x0,y0)-(x1,y1) contra retangulo: fracao 0..1 do primeiro
-    // toque ou -1 (tiro rapido que atravessaria o alvo num quadro)
+    // toque ou -1 (tiro rapido que atravessaria o alvo num quadro).
+    // Entrada envenenada (NaN/Inf) = sem contato (antes o Liang-Barsky
+    // deixava a restricao NaN passar e devolvia 0 = acerto fantasma)
     segRect: function (x0, y0, x1, y1, b) {
+        if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1) ||
+            !isFinite(b.x) || !isFinite(b.y) || !isFinite(b.w) || !isFinite(b.h)) return -1;
         var t0 = 0, t1 = 1, dx = x1 - x0, dy = y1 - y0;
         var p = [-dx, dx, -dy, dy], q = [x0 - b.x, b.x + b.w - x0, y0 - b.y, b.y + b.h - y0];
         for (var i = 0; i < 4; i++) {
@@ -93,6 +129,8 @@ E.collide = {
     sweep: function (a, vx, vy, b) {
         var S2 = E.collide.normal;
         S2.x = 0; S2.y = 0;
+        if (!isFinite(vx)) vx = 0;      // mesma sanidade do move
+        if (!isFinite(vy)) vy = 0;
         var ix0, ix1, iy0, iy1;
         if (vx > 0) { ix0 = b.x - (a.x + a.w); ix1 = b.x + b.w - a.x; }
         else { ix0 = b.x + b.w - a.x; ix1 = b.x - (a.x + a.w); }
@@ -108,7 +146,9 @@ E.collide = {
             ty0 = -Infinity; ty1 = Infinity;
         } else { ty0 = iy0 / vy; ty1 = iy1 / vy; }
         var t0 = Math.max(tx0, ty0), t1 = Math.min(tx1, ty1);
-        if (t0 > t1 || t1 < 0 || t0 > 1) return -1;
+        // !(t0 <= t1): NaN de coordenada envenenada cai aqui (antes
+        // `t0 > t1` era false com NaN e o sweep devolvia a fracao NaN)
+        if (!(t0 <= t1) || t1 < 0 || t0 > 1) return -1;
         if (t0 < 0) return 0;          // ja encostado/dentro
         if (tx0 > ty0) S2.x = vx > 0 ? -1 : 1;
         else S2.y = vy > 0 ? -1 : 1;
@@ -121,10 +161,17 @@ E.collide = {
     // na 1a celula solida (ou o fim do raio sem hit)
     ray: function (x0, y0, x1, y1, map) {
         var R = _ray;
-        var cw = map.cw || 8, ch = map.ch || 8, ox = map.ox || 0, oy = map.oy || 0;
+        var cw = map.cw > 0 ? map.cw : 8, ch = map.ch > 0 ? map.ch : 8;
+        var ox = map.ox || 0, oy = map.oy || 0;
         var dx = x1 - x0, dy = y1 - y0;
         var len = Math.sqrt(dx * dx + dy * dy);
         R.hit = false; R.x = x1; R.y = y1; R.dist = len;
+        // entrada envenenada: devolve "sem contato" FINITO (antes o DDA
+        // girava 4096 passos com NaN e devolvia dist/celula NaN)
+        if (!isFinite(x0) || !isFinite(y0) || !isFinite(x1) || !isFinite(y1)) {
+            R.x = 0; R.y = 0; R.dist = 0; R.c = 0; R.r = 0;
+            return R;
+        }
         var c = Math.floor((x0 - ox) / cw), r = Math.floor((y0 - oy) / ch);
         R.c = c; R.r = r;
         if (map.solidAt(x0, y0)) { R.hit = true; R.x = x0; R.y = y0; R.dist = 0; return R; }
@@ -156,7 +203,7 @@ E.collide = {
     // query(caixa, fn) chama fn(o) UMA vez por candidato que de fato colide
     // (test) — fn devolvendo true para a busca
     hash: function (cell) {
-        cell = cell || 32;
+        if (!(cell > 0)) cell = 32;   // 0/NaN/negativo desligava a busca em silencio
         // 1.2.0: baldes NUMERICOS fixos (hash da celula -> 0..NB-1) no lugar
         // do dicionario por chave "c,r": sem string por celula nem array por
         // caixa (no 4848 o hash de 4 corpos custava ~9 ms/quadro). Celulas
@@ -171,7 +218,9 @@ E.collide = {
         var _c0 = 0, _r0 = 0, _c1 = 0, _r1 = 0;
         function span(o) {
             var x, y, w, hh;
-            if (o.r !== undefined) { x = o.x - o.r; y = o.y - o.r; w = hh = o.r * 2; }
+            // MESMA reca do isCircle (r: null e caixa; o span usava so
+            // "r !== undefined" e indexava a celula errada)
+            if (o.r !== undefined && o.r !== null) { x = o.x - o.r; y = o.y - o.r; w = hh = o.r * 2; }
             else { x = o.x; y = o.y; w = o.w || 0; hh = o.h || 0; }
             _c0 = Math.floor(x / cell); _c1 = Math.floor((x + w) / cell);
             _r0 = Math.floor(y / cell); _r1 = Math.floor((y + hh) / cell);
@@ -197,7 +246,7 @@ E.collide = {
         };
         h.query = function (q, fn) {
             span(q);
-            mark++;
+            mark = ++_hmSeq;   // selo GLOBAL: 2 instancias/queries aninhadas nao colidem selos
             var c0 = _c0, c1 = _c1, r0 = _r0, r1 = _r1;
             var n = 0;
             for (var r = r0; r <= r1; r++) {
@@ -245,16 +294,26 @@ E.collide = {
         if (!isFinite(dy)) dy = 0;
         R.hitX = R.hitY = R.ground = R.ceil = false;
         R.dx = R.dy = 0;
-        var cw = map.cw || 8, ch = map.ch || 8;
+        // cw/ch <= 0 ou NaN: passo invertido/zero e left nunca zera (laco
+        // infinito) — cai no default, como o hash
+        var cw = map.cw > 0 ? map.cw : 8, ch = map.ch > 0 ? map.ch : 8;
+        // corpo de area 0 (bala/ponto): o rectSolid do mapa testa
+        // x + w - 1 (celula ANTERIOR) e ele atravessava parede — colide
+        // com no minimo 1 px
+        var bw = b.w >= 1 ? b.w : 1, bh = b.h >= 1 ? b.h : 1;
         var stepX = cw / 2, stepY = ch / 2;
+        // teto de passos por eixo (4096 meias-celulas = dezenas de milhares
+        // de px): velocidade finita envenenada (divisao por epsilon) nao
+        // gira o laco ~1e9 vezes; a sobra do deslocamento fica de fora
+        var guard = 0;
         // eixo X
         var left = dx;
-        while (left !== 0) {
+        while (left !== 0 && ++guard <= 4096) {
             var sx = left > 0 ? Math.min(left, stepX) : Math.max(left, -stepX);
-            if (map.rectSolid(b.x + sx, b.y, b.w, b.h)) {
+            if (map.rectSolid(b.x + sx, b.y, bw, bh)) {
                 // encosta: aproxima pixel a pixel ate a parede
                 var u = sx > 0 ? 1 : -1, k = 0;
-                while (k < Math.abs(sx) && !map.rectSolid(b.x + u, b.y, b.w, b.h)) {
+                while (k < Math.abs(sx) && !map.rectSolid(b.x + u, b.y, bw, bh)) {
                     b.x += u; R.dx += u; k++;
                 }
                 R.hitX = true;
@@ -263,12 +322,13 @@ E.collide = {
             }
             b.x += sx; R.dx += sx; left -= sx;
         }
+        guard = 0;
         left = dy;
-        while (left !== 0) {
+        while (left !== 0 && ++guard <= 4096) {
             var sy = left > 0 ? Math.min(left, stepY) : Math.max(left, -stepY);
-            if (map.rectSolid(b.x, b.y + sy, b.w, b.h)) {
+            if (map.rectSolid(b.x, b.y + sy, bw, bh)) {
                 var v = sy > 0 ? 1 : -1, j = 0;
-                while (j < Math.abs(sy) && !map.rectSolid(b.x, b.y + v, b.w, b.h)) {
+                while (j < Math.abs(sy) && !map.rectSolid(b.x, b.y + v, bw, bh)) {
                     b.y += v; R.dy += v; j++;
                 }
                 R.hitY = true;
@@ -279,7 +339,7 @@ E.collide = {
             b.y += sy; R.dy += sy; left -= sy;
         }
         // parado em cima do chao conta como ground (pulo no quadro seguinte)
-        if (!R.ground && dy >= 0 && map.rectSolid(b.x, b.y + 1, b.w, b.h)) R.ground = true;
+        if (!R.ground && dy >= 0 && map.rectSolid(b.x, b.y + 1, bw, bh)) R.ground = true;
         return R;
     }
 };

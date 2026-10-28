@@ -431,11 +431,15 @@ RTC_NOINIT_ATTR static uint32_t s_fatalMagic;
 RTC_NOINIT_ATTR static char s_fatalMsg[80];
 static constexpr uint32_t kFatalMagic = 0xCE1EFA7Au;
 
-// Contexto do app corrente para o /local/lastcrash.txt: titulo e pacote do
-// app em execucao (populados no runFile; o my_fatal os embute na mensagem
-// que sobrevive ao reinicio)
-static char s_crashApp[64] = {0};
-static char s_crashPkg[64] = {0};
+// Contexto do app corrente para o /local/lastcrash.txt e para o crash.txt
+// que o boot SEGUINTE grava (CrashRecord::consumeAndLog le crashTitle/
+// crashPkg): .bss morre no reboot do panic — sem RTC o "app:" saia sempre
+// vazio ("- (-)"). RTC_NOINIT + magic, mesmo padrao do s_fatalMsg; lixo de
+// energizacao nao vira nome de app (magic so fica de pe apos o 1o runFile).
+RTC_NOINIT_ATTR static uint32_t s_crashMagic;
+RTC_NOINIT_ATTR static char s_crashApp[64];
+RTC_NOINIT_ATTR static char s_crashPkg[64];
+static constexpr uint32_t kCrashMagic = 0xCE1AC8A9u;
 
 const char* CelerKernel::takeLastFatal() {
     if (s_fatalMagic != kFatalMagic) return nullptr;
@@ -444,10 +448,10 @@ const char* CelerKernel::takeLastFatal() {
     return s_fatalMsg;
 }
 
-// App corrente para o CrashRecord (chamado no contexto do panic: leitura de
-// .bss, sem alocacao, sem flash)
-const char* CelerKernel::crashTitle() { return s_crashApp; }
-const char* CelerKernel::crashPkg() { return s_crashPkg; }
+// App corrente para o CrashRecord (chamado no boot seguinte ao panic: leitura
+// da RAM RTC, sem alocacao, sem flash). Magic invalido (cold boot/lixo) = "".
+const char* CelerKernel::crashTitle() { return s_crashMagic == kCrashMagic ? s_crashApp : ""; }
+const char* CelerKernel::crashPkg() { return s_crashMagic == kCrashMagic ? s_crashPkg : ""; }
 
 // ---------------------------------------------------------------------------
 // Last crash persistente: a stack de um erro de app antes so existia no
@@ -475,7 +479,14 @@ void CelerKernel::recordCrash(const char* kind, const char* detail) {
     int hn = snprintf(head, sizeof(head),
                       "CelerOS %s | %s | uptime %lus | app: %s (%s)\n%s\n",
                       CELEROS_VERSION, when, (unsigned long)(millis() / 1000),
-                      s_crashApp[0] ? s_crashApp : "-", s_crashPkg[0] ? s_crashPkg : "-", kind);
+                      crashTitle()[0] ? crashTitle() : "-",
+                      crashPkg()[0] ? crashPkg() : "-", kind);
+    // snprintf truncado devolve o tamanho QUE TERIA: sem o clamp o fwrite
+    // abaixo lia alem do buffer (app+pkg longos + kind estouravam os 192)
+    if (hn >= (int)sizeof(head)) {
+        hn = (int)sizeof(head) - 1;
+        head[hn - 1] = '\n';  // truncado: fecha a linha do header do mesmo jeito
+    }
 
     size_t dn = detail != nullptr ? strlen(detail) : 0;
     if (dn > 3000) dn = 3000;  // stack inteira nao cabe nem ajuda: trunca
@@ -589,7 +600,11 @@ void CelerKernel::checkJSError(duk_context *ctx, duk_int_t result) {
         // aparelho justamente no caminho que devia mostrar o erro
         if (duk_is_error(ctx, -1)) {
             duk_get_prop_string(ctx, -1, "stack");
-            duk_replace(ctx, -2);  // a stack substitui o objeto de erro
+            if (duk_is_string(ctx, -1)) {
+                duk_replace(ctx, -2);  // a stack substitui o objeto de erro
+            } else {
+                duk_pop(ctx);  // sem stack (app apagou e.stack): a mensagem do erro vale
+            }
         }
         const char* errorMsg = duk_safe_to_string(ctx, -1);
 
@@ -637,6 +652,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     s_crashApp[sizeof(s_crashApp) - 1] = 0;
     strncpy(s_crashPkg, appPkg ? appPkg : "", sizeof(s_crashPkg) - 1);
     s_crashPkg[sizeof(s_crashPkg) - 1] = 0;
+    s_crashMagic = kCrashMagic;  // contexto valido para o CrashRecord do boot seguinte
     s_sessionStart = millis();
     s_exitReason = "ok";
     if (ctx) {
@@ -667,7 +683,9 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         celer_log_printf(srcOom ? "sem bloco para o fonte: %s (maior bloco %u)\n" : "Failed to read JS file: %s\n",
                          filePath, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         if (srcOom) showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
-        s_exitReason = "fonte_oom";
+        // so e OOM quando o bloco falhou; arquivo ausente/ilegivel tinha que
+        // sair como motivo proprio (apps.log acusava fonte_oom a toa)
+        s_exitReason = srcOom ? "fonte_oom" : "sem_fonte";
         logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         return;
     }

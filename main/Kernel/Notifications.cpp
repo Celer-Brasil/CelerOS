@@ -33,6 +33,13 @@ void (*s_onDismiss)(uint32_t, bool) = nullptr;
 std::atomic<bool> s_dirty{false};
 std::atomic<uint32_t> s_dirtyAtMs{0};
 constexpr uint32_t kFlushMs = 1000;
+// Backoff da regravacao apos falha (LittleFS cheio/erro): sem re-arma, a
+// mudanca morria em silencio (s_dirty false antes do writeOut). Com re-arma
+// a cada 1 s o disco cheio seria escrito sem parar — dobra ate 30 s e zera
+// na primeira gravacao boa. Leitura inicial fora do lock: corrida benigna
+// de 32 bits (pior caso, uma regravacao a mais).
+uint32_t s_retryNotBeforeMs = 0;
+uint32_t s_retryBackoffMs = kFlushMs;
 
 uint32_t nowMs() { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -87,9 +94,12 @@ void loadLocked() {
             n.read = true;  // historico da API 12: ja visto
         }
         s_notes.push_back(n);
+        // Teto DURANTE a carga: o trim depois do laco alocava o arquivo INTEIRO
+        // antes de cortar (edicao manual/WebManager com milhares de linhas
+        // curtas abortava a placa sem PSRAM)
+        while ((int)s_notes.size() > Notifications::MAX) s_notes.erase(s_notes.begin());
     }
-    // O arquivo pode ter mais que MAX (firmware antigo, edicao manual):
-    // carregar tudo violaria o teto de RAM do centro de notificacoes.
+    // Redundancia defensiva (o trim de cima ja mantem o teto)
     while ((int)s_notes.size() > Notifications::MAX) s_notes.erase(s_notes.begin());
 }
 
@@ -117,8 +127,9 @@ std::string serializeLocked() {
 }
 
 // Grava FORA do s_mux (so sob s_writeMux): o push da task do BLE nao espera
-// a escrita no LittleFS (ms) para enfileirar a proxima notificacao.
-void writeOut(const std::string& out) {
+// a escrita no LittleFS (ms) para enfileirar a proxima notificacao. false =
+// falha na gravacao (o chamador decide o retry).
+bool writeOut(const std::string& out) {
     bool ok;
     if (out.empty()) {
         ok = FileSystem::deleteFile(NF);
@@ -127,6 +138,7 @@ void writeOut(const std::string& out) {
     }
     if (!ok)
         ESP_LOGW("celer.notif", "historico nao gravou em %s (LittleFS cheio?)", NF);
+    return ok;
 }
 
 // Marca o arquivo como sujo; o tick grava (coalesce rajadas do celular).
@@ -194,18 +206,34 @@ void push(const std::string& title, const std::string& msg, const std::string& s
 // (celerLoop e present), entao tambem descarrega com app aberto.
 void tick() {
     if (!s_dirty.load(std::memory_order_acquire)) return;
-    const uint32_t at = s_dirtyAtMs.load(std::memory_order_relaxed);
-    if ((uint32_t)(nowMs() - at) < kFlushMs) return;
+    const uint32_t now = nowMs();
+    if (s_retryNotBeforeMs != 0 && (int32_t)(now - s_retryNotBeforeMs) < 0) return;
+    if ((uint32_t)(now - s_dirtyAtMs.load(std::memory_order_relaxed)) < kFlushMs) return;
     std::lock_guard<std::mutex> wlock(s_writeMux);
     std::string out;
     {
         std::lock_guard<std::recursive_mutex> lock(s_mux);
         if (!s_dirty.load(std::memory_order_relaxed)) return;
         if ((uint32_t)(nowMs() - s_dirtyAtMs.load(std::memory_order_relaxed)) < kFlushMs) return;
+        // Hipotese de sucesso: a flag sai ANTES de serializar (a copy do
+        // historico e a parte que pode falhar por RAM). Se a GRAVACAO
+        // falhar, a re-arma abaixo restaura — retry honesto em vez de
+        // perder o historico em silencio.
         s_dirty.store(false, std::memory_order_relaxed);
         out = serializeLocked();
     }
-    writeOut(out);
+    if (writeOut(out)) {
+        s_retryNotBeforeMs = 0;
+        s_retryBackoffMs = kFlushMs;
+        return;
+    }
+    // Falhou: re-arma com backoff crescente (dobra ate 30 s) para nao
+    // desgastar o LittleFS tentando 1x/s com o disco cheio.
+    if (s_retryBackoffMs < 30u * 1000u) s_retryBackoffMs *= 2;
+    s_retryNotBeforeMs = nowMs() + s_retryBackoffMs;
+    std::lock_guard<std::recursive_mutex> lock(s_mux);
+    s_dirtyAtMs.store(nowMs(), std::memory_order_relaxed);
+    s_dirty.store(true, std::memory_order_release);
 }
 
 std::vector<Note> list() {

@@ -52,12 +52,22 @@ inline std::string formatAlarm(const AlarmSpec& a) {
 inline bool parseAlarm(const std::string& s, AlarmSpec& out) {
     // hh:mm|dias|ativo|rotulo — rotulo pode faltar (vazio)
     if (s.size() < 9 || s[2] != ':' || s[5] != '|') return false;
+    // hh:mm so com digitos: atoi("aa") = 0 transformava registro corrompido
+    // num alarme valido da meia-noite
+    for (int k = 0; k < 5; k++) {
+        if (k == 2) continue;
+        if (s[(size_t)k] < '0' || s[(size_t)k] > '9') return false;
+    }
     AlarmSpec a;
     a.hour = atoi(s.substr(0, 2).c_str());
     a.minute = atoi(s.substr(3, 2).c_str());
     size_t p1 = s.find('|', 6);
     if (p1 == std::string::npos) return false;
-    a.days = (uint8_t)atoi(s.substr(6, p1 - 6).c_str());
+    // mascara antes do cast: atoi("300") truncado para uint8 virava 44 (uma
+    // mascara valida) e o alarme tocava nos dias errados
+    const long days = atol(s.substr(6, p1 - 6).c_str());
+    if (days < 0 || days > 0x7F) return false;
+    a.days = (uint8_t)days;
     size_t p2 = s.find('|', p1 + 1);
     std::string en = s.substr(p1 + 1, p2 == std::string::npos ? std::string::npos : p2 - p1 - 1);
     a.enabled = en == "1";

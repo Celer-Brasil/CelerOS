@@ -235,20 +235,44 @@ bool tick() {
         s_snoozeAt = 0;
         s_snoozeId = -1;
         persistSnooze();
-        s_lastCheck = now;
+        // A soneca consome SO a ocorrencia da propria fonte: antes o
+        // s_lastCheck = now engolia todo alarme que venceu junto (alarme das
+        // 8:00 e soneca do timer das 8:00: o alarme nunca tocava — os outros
+        // vencidos do intervalo tocam depois, um por toque). Avancar ate a
+        // ocorrencia da fonte cobre o reencontro pelo olhar de 90 s do boot:
+        // sem isso, a soneca sobrevivente ao reinicio reencontraria o
+        // disparo que o usuario JA adiou e tocava de novo em seguida.
+        if (id >= 0 && id < MAX && s_used[id] && s_alarms[id].enabled) {
+            time_t occ = celer::nextAlarmAfter(s_alarms[id], s_lastCheck);
+            if (occ != 0 && occ > s_lastCheck && occ <= now) s_lastCheck = occ;
+        }
         startRingLocked(Kind::Snooze, id, lbl);
         return true;
     }
+    // Vencido = primeira ocorrencia dentro de (s_lastCheck, agora]. Pega o
+    // MAIS CEDO dos vencidos (a ordem de slot nao e cronologica) e avanca
+    // s_lastCheck so ate ele: os vencidos seguintes do MESMO intervalo tocam
+    // nas proximas voltas, um por toque (antes o s_lastCheck = now descartava
+    // todo o resto que tinha vencido junto — dois alarmes perdidos num deep
+    // sleep tocavam um so, e nem sempre o mais cedo).
+    int best = -1;
+    time_t bestAt = 0;
     for (int i = 0; i < MAX; i++) {
         if (!s_used[i] || !s_alarms[i].enabled) continue;
         time_t at = celer::nextAlarmAfter(s_alarms[i], s_lastCheck);
         if (at == 0 || at > now) continue;
-        if (s_alarms[i].days == 0) {  // uma vez: desarma
-            s_alarms[i].enabled = false;
-            persistSlot(i);
+        if (best < 0 || at < bestAt) {
+            best = i;
+            bestAt = at;
         }
-        s_lastCheck = now;
-        startRingLocked(Kind::Alarm, i, s_alarms[i].label);
+    }
+    if (best >= 0) {
+        if (s_alarms[best].days == 0) {  // uma vez: desarma
+            s_alarms[best].enabled = false;
+            persistSlot(best);
+        }
+        s_lastCheck = bestAt;  // monotonico: bestAt > s_lastCheck anterior
+        startRingLocked(Kind::Alarm, best, s_alarms[best].label);
         return true;
     }
     s_lastCheck = now;

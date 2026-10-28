@@ -65,10 +65,13 @@ const char* const kDescriptions[] = {
 
 const size_t kDescriptionCount = sizeof(kDescriptions) / sizeof(kDescriptions[0]);
 
+// kMaxKnownId (ErrorCode.h) precisa cobrir a tabela inteira
+static_assert(kDescriptionCount == 54, "kMaxKnownId fora de sincronia com kDescriptions");
+
 } // namespace
 
 const char* ErrorCode::description() const {
-    if (_id == 0 || _id > kDescriptionCount) {
+    if (!isValid()) {
         return "Invalid Error Code";
     }
     return kDescriptions[_id - 1];

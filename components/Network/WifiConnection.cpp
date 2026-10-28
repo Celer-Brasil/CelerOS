@@ -2,10 +2,14 @@
 #include "GeneralErrorCodes.h"
 #include "CommunicationErrorCodes.h"
 #include <cstring>
+#include <cstdlib>
 #include <esp_log.h>
 #include <algorithm>
 
 EventGroupHandle_t WifiConnection::_wifiEventGroup = nullptr;
+esp_event_handler_instance_t WifiConnection::_instanceAnyId = nullptr;
+esp_event_handler_instance_t WifiConnection::_instanceGotIp = nullptr;
+WifiConnection* WifiConnection::_eventOwner = nullptr;
 const char *WifiConnection::TAG = "WifiConnection";
 
 /**
@@ -17,16 +21,35 @@ WifiConnection::WifiConnection() :
         _ipAddress(), _rssi(0), _lastReportedRssi(0),
         _channel(0), _retryNum(0), _maxRetries(5), _connectionTimeout(20000),  // 20 seconds timeout
         _isConnected(false), _initialized(false), _asyncMode(false),
-        _scanInProgress(false), _blockingScan(false), _state(WiFiConnectionState::Idle), 
-        _scanMutex(nullptr) {
+        _scanInProgress(false), _blockingScan(false), _suppressNextDisconnect(false),
+        _state(WiFiConnectionState::Idle),
+        _scanMutex(nullptr), _ssidMutex(nullptr) {
     _scanMutex = xSemaphoreCreateMutex();
+    _ssidMutex = xSemaphoreCreateMutex();
 }
 
 WifiConnection::~WifiConnection() {
+    // Desregistra ANTES de liberar: o esp_event guarda este `this` como arg
+    // dos handlers (sem isto um evento tardio chamava um objeto morto).
+    if (_eventOwner == this) {
+        if (_instanceAnyId != nullptr) {
+            esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, _instanceAnyId);
+            _instanceAnyId = nullptr;
+        }
+        if (_instanceGotIp != nullptr) {
+            esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, _instanceGotIp);
+            _instanceGotIp = nullptr;
+        }
+        _eventOwner = nullptr;
+    }
     disconnect(); //NOLINT
     if (_scanMutex != nullptr) {
         vSemaphoreDelete(_scanMutex);
         _scanMutex = nullptr;
+    }
+    if (_ssidMutex != nullptr) {
+        vSemaphoreDelete(_ssidMutex);
+        _ssidMutex = nullptr;
     }
 }
 
@@ -105,27 +128,38 @@ ErrorCode WifiConnection::init() {
         return CommonErrorCodes::WifiInitFailed;
     }
 
-    // Register event handlers
-    static esp_event_handler_instance_t instance_any_id = nullptr;
-    static esp_event_handler_instance_t instance_got_ip = nullptr;
+    // Register event handlers. O dono pode ter mudado (init de um
+    // WifiConnection novo depois de falha/deinit): os registros antigos sao
+    // desfeitos e refeitos com `this` atual.
+    if (_eventOwner != this) {
+        if (_instanceAnyId != nullptr) {
+            esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, _instanceAnyId);
+            _instanceAnyId = nullptr;
+        }
+        if (_instanceGotIp != nullptr) {
+            esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, _instanceGotIp);
+            _instanceGotIp = nullptr;
+        }
+        _eventOwner = this;
+    }
 
-    if (instance_any_id == nullptr) {
+    if (_instanceAnyId == nullptr) {
         ret = esp_event_handler_instance_register(WIFI_EVENT,
                                                   ESP_EVENT_ANY_ID,
                                                   &eventHandler,
                                                   this,
-                                                  &instance_any_id);
+                                                  &_instanceAnyId);
         if (!ok(ret, false, "Erro ao registrar handler WIFI_EVENT")) {
             return CommonErrorCodes::WifiInitFailed;
         }
     }
 
-    if (instance_got_ip == nullptr) {
+    if (_instanceGotIp == nullptr) {
         ret = esp_event_handler_instance_register(IP_EVENT,
                                                   IP_EVENT_STA_GOT_IP,
                                                   &eventHandler,
                                                   this,
-                                                  &instance_got_ip);
+                                                  &_instanceGotIp);
         if (!ok(ret, false, "Erro ao registrar handler IP_EVENT")) {
             return CommonErrorCodes::WifiInitFailed;
         }
@@ -162,8 +196,32 @@ ErrorCode WifiConnection::connect(const std::string &ssid, const std::string &pa
         return err;
     }
 
+    // Station ja associada: o IDF exige esp_wifi_disconnect ANTES de um novo
+    // esp_wifi_connect. Sem isto o pedido morria em ESP_ERR_WIFI_CONN (o
+    // driver mantinha o AP antigo) e o chamador via "falha de conexao" com o
+    // radio ainda conectado. O evento STA_DISCONNECTED desse disconnect
+    // proprio e suprimido la no handler (a nova tentativa ja esta armada).
+    if (_isConnected) {
+        // So suprime se o driver aceitou o disconnect; se falhar, o proximo
+        // STA_DISCONNECTED e genuino (do connect novo) e precisa passar.
+        if (esp_wifi_disconnect() == ESP_OK) {
+            _suppressNextDisconnect = true;
+        }
+        _isConnected = false;
+    }
+
+    // Alvo novo sob a guarda: o handler do esp_event le _ssid (makeEvent,
+    // onAuthFailed) a qualquer momento; um assign de std::string concorrente
+    // com essa leitura (ou com o assign de um SEGUNDO connect em outra task)
+    // rasgava o heap.
+    if (_ssidMutex != nullptr) {
+        xSemaphoreTake(_ssidMutex, portMAX_DELAY);
+    }
     _ssid = ssid;
     _password = password;
+    if (_ssidMutex != nullptr) {
+        xSemaphoreGive(_ssidMutex);
+    }
     _asyncMode = asyncConnect;
 
     // Clear event bits for new connection attempt
@@ -232,7 +290,10 @@ ErrorCode WifiConnection::connect(const std::string &ssid, const std::string &pa
 }
 
 void WifiConnection::disconnect() {
-    if (_state == WiFiConnectionState::Idle) {
+    // _state volta a Idle ao fim de QUALQUER scan (unlockScan), inclusive
+    // com a STA associada: checar so o estado fazia o "desligar WiFi" dado
+    // depois de um scan virar no-op com o radio ainda conectado.
+    if (_state == WiFiConnectionState::Idle && !_isConnected) {
         return;
     }
 
@@ -263,7 +324,15 @@ void WifiConnection::disconnect() {
     }
 
     setState(WiFiConnectionState::Idle);
+    // clear sob a guarda: o STA_DISCONNECTED disparado pelo esp_wifi_disconnect
+    // acima chega DEPOIS, mas o handler pode rodar concorrente com este clear.
+    if (_ssidMutex != nullptr) {
+        xSemaphoreTake(_ssidMutex, portMAX_DELAY);
+    }
     _ssid.clear();
+    if (_ssidMutex != nullptr) {
+        xSemaphoreGive(_ssidMutex);
+    }
     _ipAddress = IPAddress();
     _rssi = 0;
     _channel = 0;
@@ -289,7 +358,15 @@ std::string WifiConnection::getSSID() const {
         const char* ssid = reinterpret_cast<const char*>(wifi_config.sta.ssid);
         return std::string(ssid, strnlen(ssid, sizeof(wifi_config.sta.ssid)));
     }
-    return _ssid;
+    // Fallback sob a guarda (mesma razao do makeEvent).
+    if (_ssidMutex != nullptr) {
+        xSemaphoreTake(_ssidMutex, portMAX_DELAY);
+    }
+    std::string alvo = _ssid;
+    if (_ssidMutex != nullptr) {
+        xSemaphoreGive(_ssidMutex);
+    }
+    return alvo;
 }
 
 IPAddress WifiConnection::getIPAddress() const {
@@ -414,10 +491,18 @@ WiFiScanResult WifiConnection::failScanResult() {
 }
 
 // Evento de conexao montado do estado atual (campos identicos nos sitios que
-// disparam onConnected/onDisconnected).
+// disparam onConnected/onDisconnected). O _ssid sai copiado SOB a guarda:
+// o handler roda na task do esp_event e o assign/clear do connect() na task
+// chamadora e concorrente.
 WiFiConnectionEvent WifiConnection::makeEvent(const ErrorCode& error) const {
     WiFiConnectionEvent event;
+    if (_ssidMutex != nullptr) {
+        xSemaphoreTake(_ssidMutex, portMAX_DELAY);
+    }
     event.ssid = _ssid;
+    if (_ssidMutex != nullptr) {
+        xSemaphoreGive(_ssidMutex);
+    }
     event.rssi = _rssi;
     event.ip = _ipAddress;
     event.error = error;
@@ -569,20 +654,40 @@ void WifiConnection::processScanResults(WiFiScanResult& result) {
         return;
     }
 
-    // Allocate temporary buffer for AP records
-    std::vector<wifi_ap_record_t> ap_records(ap_count);
-    ret = esp_wifi_scan_get_ap_records(&ap_count, ap_records.data());
+    // Teto defensivo + malloc: um scan denso lista 100+ APs e o array de
+    // wifi_ap_record_t (~100 B cada) virava um new de >10 KB — sem PSRAM,
+    // um new que falha aborta o aparelho (sem excecoes). 32 APs cobrem
+    // qualquer lista de UI e malloc devolve erro limpo.
+    constexpr uint16_t kMaxKeptAps = 32;
+    if (ap_count > kMaxKeptAps) ap_count = kMaxKeptAps;
+    result.count = ap_count;
+
+    wifi_ap_record_t* ap_records = static_cast<wifi_ap_record_t*>(
+        malloc((size_t)ap_count * sizeof(wifi_ap_record_t)));
+    if (ap_records == nullptr) {
+        ESP_LOGE(TAG, "Sem RAM para %u registros de scan", (unsigned)ap_count);
+        // Descarta a lista interna do driver, senao fica alocada (piora o OOM).
+        esp_wifi_clear_ap_list();
+        result.success = false;
+        result.error = CommonErrorCodes::WifiScanFailed;
+        result.count = 0;
+        return;
+    }
+
+    ret = esp_wifi_scan_get_ap_records(&ap_count, ap_records);
     
     if (ret != ESP_OK) {
+        free(ap_records);
         result.success = false;
         result.error = CommonErrorCodes::WifiScanFailed;
         return;
     }
 
     // Convert to ScannedNetwork
-    for (const auto& record : ap_records) {
-        result.networks.emplace_back(record);
+    for (uint16_t i = 0; i < ap_count; i++) {
+        result.networks.emplace_back(ap_records[i]);
     }
+    free(ap_records);
 
     // Sort by RSSI
     std::sort(result.networks.begin(), result.networks.end(), compareByRssi);
@@ -619,6 +724,15 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                 auto* disconnect_event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
                 ESP_LOGI(TAG, "Disconnected from AP, reason: %d", disconnect_event->reason);
 
+                // Evento do nosso PROPRIO disconnect (troca de AP dentro do
+                // connect()): a nova tentativa ja esta armada — nao e falha,
+                // nao queima retry, nao arma o FAIL_BIT.
+                if (self->_suppressNextDisconnect) {
+                    self->_suppressNextDisconnect = false;
+                    ESP_LOGD(TAG, "Disconnect proprio (troca de AP) suprimido");
+                    break;
+                }
+
                 bool wasConnected = self->_isConnected;
                 self->_isConnected = false;
 
@@ -628,21 +742,41 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                                    disconnect_event->reason == WIFI_REASON_HANDSHAKE_TIMEOUT);
 
                 if (self->_state == WiFiConnectionState::Connecting) {
+                    // Copia do alvo sob a guarda (o trigger passa std::string
+                    // por valor; ler o membro direto e concorrente com o
+                    // assign de um connect() em outra task).
+                    std::string alvo;
+                    if (self->_ssidMutex != nullptr) {
+                        xSemaphoreTake(self->_ssidMutex, portMAX_DELAY);
+                    }
+                    alvo = self->_ssid;
+                    if (self->_ssidMutex != nullptr) {
+                        xSemaphoreGive(self->_ssidMutex);
+                    }
                     if (authFailed) {
                         // Authentication failed
                         self->setState(WiFiConnectionState::Idle);
                         xEventGroupSetBits(_wifiEventGroup, WIFI_FAIL_BIT);
-                        self->onAuthFailed.trigger(self, self->_ssid, CommonErrorCodes::WifiAuthFailed);
+                        self->onAuthFailed.trigger(self, alvo, CommonErrorCodes::WifiAuthFailed);
                     } else if (self->_retryNum < self->_maxRetries) {
                         // Retry connection
                         self->_retryNum++;
                         ESP_LOGI(TAG, "Retrying connection (%d/%d)...", self->_retryNum, self->_maxRetries);
-                        esp_wifi_connect();
+                        // Falha do proprio retry: antes era engolida e o
+                        // connect() bloqueante esperava o timeout inteiro
+                        esp_err_t r = esp_wifi_connect();
+                        if (r != ESP_OK) {
+                            ESP_LOGE(TAG, "Erro no retry da conexao: %s", esp_err_to_name(r));
+                            self->setState(WiFiConnectionState::Idle);
+                            xEventGroupSetBits(_wifiEventGroup, WIFI_FAIL_BIT);
+                            self->onAuthFailed.trigger(self, alvo,
+                                                       CommonErrorCodes::WifiConnectionFailed);
+                        }
                     } else {
                         // Max retries reached
                         self->setState(WiFiConnectionState::Idle);
                         xEventGroupSetBits(_wifiEventGroup, WIFI_FAIL_BIT);
-                        self->onAuthFailed.trigger(self, self->_ssid, CommonErrorCodes::WifiConnectionFailed);
+                        self->onAuthFailed.trigger(self, alvo, CommonErrorCodes::WifiConnectionFailed);
                     }
                 } else if (wasConnected) {
                     // Was connected, now disconnected

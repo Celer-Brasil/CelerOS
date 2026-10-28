@@ -31,9 +31,9 @@ public:
      * @brief Indica se o codigo foi definido.
      *
      * @return true se o id e de um codigo conhecido; false para o codigo
-     *         padrao (id 0).
+     *         padrao (id 0) e para ids fora da tabela (ex.: valor corrompido).
      */
-    [[nodiscard]] bool isValid() const { return _id != 0; }
+    [[nodiscard]] bool isValid() const { return _id != 0 && _id <= kMaxKnownId; }
 
     /** Comparacao por id (barata; nao ha string envolvida). */
     constexpr bool operator==(const ErrorCode& other) const { return _id == other._id; }
@@ -42,6 +42,8 @@ public:
     constexpr bool operator!=(const ErrorCode& other) const { return _id != other._id; }
 
 private:
+    /** Ultimo id documentado (tabela de descricoes em ErrorCode.cpp). */
+    static constexpr uint16_t kMaxKnownId = 54;
     uint16_t _id;
 };
 

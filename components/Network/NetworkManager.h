@@ -422,6 +422,16 @@ private:
     void absorbScanResults(const std::vector<ScannedNetwork>& networks);
 
     /**
+     * @brief Alvo da reconexao (_lastSsid/_lastPassword). Sao std::string
+     *        escritas por connect() na task chamadora (httpd/UI) E lidas/
+     *        escritas pela background task (tryReconnect/roaming): a troca
+     *        passa pela guarda _mutex, senao um assign concorrente rasga a
+     *        leitura do buffer.
+     */
+    void setLastTarget(const std::string& ssid, const std::string& password);
+    void getLastTarget(std::string& ssid, std::string& password) const;
+
+    /**
      * @brief Aplica o modo de economia do modem conforme _lowLatency (dono
      *        do radio: unico lugar que chama esp_wifi_set_ps).
      */
@@ -430,7 +440,7 @@ private:
     WifiConnection* _wifiConnection;        /**< WiFi connection handler (heap allocated) */
     NetworkConfig _config;                   /**< Configuration */
     NetworkState _state;                     /**< Current state */
-    NetworkInfo _activeNetwork;              /**< Currently connected network info */
+    NetworkInfo _activeNetwork;              /**< Currently connected network info (contem std::string: escrito por sys_evt E pela task chamadora — todo acesso sob a guarda _mutex) */
     NetworkManagerStats _stats;              /**< Statistics */
     std::vector<ScannedNetwork> _lastScan;   /**< Last scan results */
     std::string _lastSsid;                   /**< Last connected SSID */

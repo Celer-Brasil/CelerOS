@@ -38,7 +38,7 @@ enum class ResetReason {
 struct ChipInfo {
     std::string model;      /**< Chip model name (e.g., "ESP32", "ESP32-S3") */
     uint8_t cores;          /**< Number of CPU cores */
-    uint8_t revision;       /**< Silicon revision number */
+    uint16_t revision;      /**< Silicon revision (IDF: major*100+minor; nao cabe em 8 bits) */
     bool hasWifi;           /**< Has WiFi capability */
     bool hasBluetooth;      /**< Has Bluetooth capability */
     bool hasBLE;            /**< Has Bluetooth Low Energy capability */
@@ -110,9 +110,9 @@ public:
 
     /**
      * @brief Get silicon revision.
-     * @return Revision number.
+     * @return Revision number (IDF: major*100+minor).
      */
-    uint8_t getChipRevision() const;
+    uint16_t getChipRevision() const;
 
     // ========== Memory Information ==========
 

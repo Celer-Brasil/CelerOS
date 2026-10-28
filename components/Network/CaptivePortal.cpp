@@ -8,6 +8,7 @@
 #include "lwip/sockets.h"
 #include "lwip/dns.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include <cstring>
@@ -250,7 +251,9 @@ CaptivePortal::CaptivePortal() :
     _dnsTask(nullptr),
     _dnsRunning(false),
     _dnsDone(false),
-    _connState(PortalConnState::Idle) {
+    _connState(PortalConnState::Idle),
+    _connMutex(nullptr) {
+    _connMutex = xSemaphoreCreateMutex();
 }
 
 CaptivePortal::CaptivePortal(const CaptivePortalConfig& config) :
@@ -261,11 +264,17 @@ CaptivePortal::CaptivePortal(const CaptivePortalConfig& config) :
     _dnsTask(nullptr),
     _dnsRunning(false),
     _dnsDone(false),
-    _connState(PortalConnState::Idle) {
+    _connState(PortalConnState::Idle),
+    _connMutex(nullptr) {
+    _connMutex = xSemaphoreCreateMutex();
 }
 
 CaptivePortal::~CaptivePortal() {
     stop();
+    if (_connMutex != nullptr) {
+        vSemaphoreDelete(_connMutex);
+        _connMutex = nullptr;
+    }
 }
 
 bool CaptivePortal::start() {
@@ -332,6 +341,18 @@ bool CaptivePortal::stop() {
     stopDnsServer();
     WifiAP::instance().stop();
 
+    // Reseta o resultado da tentativa anterior: sem isto, a proxima sessao
+    // do portal via "connected"/"failed" velho no 1o poll de /status, antes
+    // de qualquer /connect novo.
+    if (_connMutex != nullptr) {
+        xSemaphoreTake(_connMutex, portMAX_DELAY);
+    }
+    _connState = PortalConnState::Idle;
+    _connIp.clear();
+    if (_connMutex != nullptr) {
+        xSemaphoreGive(_connMutex);
+    }
+
     setState(CaptivePortalState::Stopped);
 
     ESP_LOGI(TAG, "Captive Portal stopped");
@@ -393,8 +414,17 @@ int CaptivePortal::scanNetworks() {
 }
 
 void CaptivePortal::reportConnectionState(PortalConnState state, const std::string& ip) {
+    // _connIp e std::string: o /status roda na task do httpd e um assign
+    // concorrente (free do buffer antigo + new) rasgava a leitura de
+    // .c_str() — troca sob a guarda.
+    if (_connMutex != nullptr) {
+        xSemaphoreTake(_connMutex, portMAX_DELAY);
+    }
     _connState = state;
     _connIp = (state == PortalConnState::Connected) ? ip : "";
+    if (_connMutex != nullptr) {
+        xSemaphoreGive(_connMutex);
+    }
 }
 
 bool CaptivePortal::startDnsServer() {
@@ -710,16 +740,29 @@ bool CaptivePortal::startHttpServer() {
         .method = HTTP_GET,
         .handler = [](httpd_req_t* req) -> esp_err_t {
             CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
+            // Snapshot do estado/IP sob a guarda: _connIp e atribuido pela
+            // task do hospedeiro (reportConnectionState) — ler .c_str()
+            // direto corria contra o free/alloc do assign.
+            PortalConnState st = PortalConnState::Idle;
+            char ip[48] = "";
+            if (portal->_connMutex != nullptr) {
+                xSemaphoreTake(portal->_connMutex, portMAX_DELAY);
+            }
+            st = portal->_connState;
+            strncpy(ip, portal->_connIp.c_str(), sizeof(ip) - 1);
+            ip[sizeof(ip) - 1] = '\0';
+            if (portal->_connMutex != nullptr) {
+                xSemaphoreGive(portal->_connMutex);
+            }
             const char* s = "idle";
-            switch (portal->_connState) {
+            switch (st) {
                 case PortalConnState::Connecting: s = "connecting"; break;
                 case PortalConnState::Connected:  s = "connected"; break;
                 case PortalConnState::Failed:     s = "failed"; break;
                 default: break;
             }
             char buf[96];
-            snprintf(buf, sizeof(buf), "{\"state\":\"%s\",\"ip\":\"%s\"}",
-                     s, portal->_connIp.c_str());
+            snprintf(buf, sizeof(buf), "{\"state\":\"%s\",\"ip\":\"%s\"}", s, ip);
             sendStr(req, "application/json", buf, HTTPD_RESP_USE_STRLEN);
             return ESP_OK;
         },

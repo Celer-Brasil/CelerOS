@@ -5,6 +5,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include <algorithm>
+#include <new>
 
 NetworkManager::NetworkManager()
     : _wifiConnection(nullptr)
@@ -42,13 +43,20 @@ NetworkManager& NetworkManager::instance() {
 
 ErrorCode NetworkManager::init(bool startBackgroundTask) {
     if (_initialized) {
+        // Um init(false) anterior deixava a task de reconexao desligada para
+        // sempre (o init idempotente so devolvia None): o pedido posterior
+        // com startBackgroundTask=true tem que subi-la.
+        if (startBackgroundTask && !_backgroundTaskRunning) {
+            this->startBackgroundTask();
+        }
         return CommonErrorCodes::None;
     }
 
     ESP_LOGI(TAG, "Initializing NetworkManager...");
 
-    // Create WiFi connection instance
-    _wifiConnection = new WifiConnection();
+    // Create WiFi connection instance. nothrow: sem excecoes um new que falha
+    // aborta o aparelho (convencao da casa para caminho sem PSRAM)
+    _wifiConnection = new (std::nothrow) WifiConnection();
     if (_wifiConnection == nullptr) {
         ESP_LOGE(TAG, "Failed to allocate WifiConnection");
         return CommonErrorCodes::OperationFailed;
@@ -67,6 +75,11 @@ ErrorCode NetworkManager::init(bool startBackgroundTask) {
     err = NetworkCredentialStore::instance().init();
     if (err != CommonErrorCodes::None) {
         ESP_LOGE(TAG, "Failed to initialize credential store: %s", err.description());
+        // Sem store nao ha conexao: devolve a instancia. Antes ela ficava
+        // viva (vazando) e o proximo init criava outra, com os handlers do
+        // esp_event ainda apontando para a primeira.
+        delete _wifiConnection;
+        _wifiConnection = nullptr;
         return err;
     }
 
@@ -131,29 +144,79 @@ ErrorCode NetworkManager::deinit() {
         disconnect();
     }
 
+    // Libera a instancia (o destrutor do WifiConnection desregistra os
+    // handlers do esp_event). Sem isto um init posterior criava uma segunda
+    // WifiConnection e a primeira ficava viva para sempre, dona dos eventos.
+    if (_wifiConnection != nullptr) {
+        delete _wifiConnection;
+        _wifiConnection = nullptr;
+    }
+    // _activeNetwork carrega std::string (NetworkInfo) e e escrito por DUAS
+    // tasks (sys_evt nos handlers de wifi, task chamadora no disconnect):
+    // clear() concorrente com o assign do onWifiConnected rasgava o string
+    // (free do buffer + new = heap corrompido). Mesma guarda do _lastScan.
+    if (_mutex != nullptr) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _activeNetwork.clear();
+        _state = NetworkState::Disconnected;
+        xSemaphoreGive(_mutex);
+    }
+
     _initialized = false;
     ESP_LOGI(TAG, "NetworkManager deinitialized");
     return CommonErrorCodes::None;
 }
 
 void NetworkManager::setState(NetworkState newState) {
-    if (xSemaphoreTake(_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        if (_state != newState) {
-            NetworkState oldState = _state;
-            _state = newState;
-            ESP_LOGI(TAG, "State: %s -> %s", 
-                     networkStateToString(oldState), networkStateToString(newState));
-            xSemaphoreGive(_mutex);
-            onStateChanged.trigger(oldState, newState);
-        } else {
-            xSemaphoreGive(_mutex);
-        }
+    if (_mutex == nullptr) {
+        return;  // construtor sem mutex: nada a proteger
     }
+    // portMAX_DELAY: a guarda so e tomada aqui e por regioes minusculas; com
+    // o timeout de 100 ms uma transicao (ex.: Connected) era descartada em
+    // silencio quando outra task estava do lado de dentro.
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    if (_state == newState) {
+        xSemaphoreGive(_mutex);
+        return;
+    }
+    NetworkState oldState = _state;
+    _state = newState;
+    xSemaphoreGive(_mutex);
+
+    ESP_LOGI(TAG, "State: %s -> %s",
+             networkStateToString(oldState), networkStateToString(newState));
+    onStateChanged.trigger(oldState, newState);
+}
+
+// Alvo da reconexao: veja o contrato no header. Regioes curtas (so os dois
+// assigns), mesmo padrao de guarda null-safe do resto da classe.
+void NetworkManager::setLastTarget(const std::string& ssid, const std::string& password) {
+    if (_mutex == nullptr) {
+        _lastSsid = ssid;
+        _lastPassword = password;
+        return;
+    }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _lastSsid = ssid;
+    _lastPassword = password;
+    xSemaphoreGive(_mutex);
+}
+
+void NetworkManager::getLastTarget(std::string& ssid, std::string& password) const {
+    if (_mutex == nullptr) {
+        ssid = _lastSsid;
+        password = _lastPassword;
+        return;
+    }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    ssid = _lastSsid;
+    password = _lastPassword;
+    xSemaphoreGive(_mutex);
 }
 
 // ========== Connection Management ==========
 
-ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& password, 
+ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& password,
                                   bool saveOnSuccess) {
     if (!_initialized) {
         return CommonErrorCodes::NotInitialized;
@@ -161,8 +224,7 @@ ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& pa
 
     ESP_LOGI(TAG, "Connecting to network: %s", ssid.c_str());
 
-    _lastSsid = ssid;
-    _lastPassword = password;
+    setLastTarget(ssid, password);
 
     setState(NetworkState::Connecting);
 
@@ -265,7 +327,13 @@ ErrorCode NetworkManager::disconnect() {
 
     _wifiConnection->disconnect();
     setState(NetworkState::Disconnected);
-    _activeNetwork.clear();
+    // Guarda: o onWifiConnected do sys_evt pode estar no meio do assign de
+    // _activeNetwork (std::string) para o AP que acabou de cair.
+    if (_mutex != nullptr) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _activeNetwork.clear();
+        xSemaphoreGive(_mutex);
+    }
 
     return CommonErrorCodes::None;
 }
@@ -275,15 +343,17 @@ ErrorCode NetworkManager::reconnect() {
         return CommonErrorCodes::NotInitialized;
     }
 
-    if (_lastSsid.empty()) {
+    std::string ssid, password;
+    getLastTarget(ssid, password);
+    if (ssid.empty()) {
         ESP_LOGW(TAG, "No previous network to reconnect to");
         return connectToKnown();
     }
 
-    ESP_LOGI(TAG, "Reconnecting to %s...", _lastSsid.c_str());
+    ESP_LOGI(TAG, "Reconnecting to %s...", ssid.c_str());
     _stats.reconnections++;
-    
-    return connect(_lastSsid, _lastPassword, false);
+
+    return connect(ssid, password, false);
 }
 
 // ========== Network Management ==========
@@ -312,21 +382,37 @@ bool NetworkManager::isKnownNetwork(const std::string& ssid) const {
 
 // Absorve o resultado de um scan para _lastScan marcando isKnownNetwork
 // (loop identico nos caminhos bloqueante, background e evento async).
+// _lastScan e escrito pela task do WiFi (scan async), pela task de fundo e
+// pela task chamadora, e lido por UI/httpd: a troca do vector passa pela
+// guarda (_mutex), senao um clear/push_back concorrente com o leitor virava
+// use-after-free.
 void NetworkManager::absorbScanResults(const wifi_ap_record_t* ap_list, int count) {
-    _lastScan.clear();
+    std::vector<ScannedNetwork> nets;
+    nets.reserve((size_t)count);
     for (int i = 0; i < count; i++) {
         ScannedNetwork net(ap_list[i]);
         net.isKnown = isKnownNetwork(net.ssid);
-        _lastScan.push_back(net);
+        nets.push_back(net);
+    }
+    if (_mutex != nullptr) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _lastScan.swap(nets);
+        xSemaphoreGive(_mutex);
     }
 }
 
 void NetworkManager::absorbScanResults(const std::vector<ScannedNetwork>& networks) {
-    _lastScan.clear();
+    std::vector<ScannedNetwork> nets;
+    nets.reserve(networks.size());
     for (const auto& net : networks) {
         ScannedNetwork scanned = net;
         scanned.isKnown = isKnownNetwork(scanned.ssid);
-        _lastScan.push_back(scanned);
+        nets.push_back(scanned);
+    }
+    if (_mutex != nullptr) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _lastScan.swap(nets);
+        xSemaphoreGive(_mutex);
     }
 }
 
@@ -351,16 +437,33 @@ ErrorCode NetworkManager::startScan(bool blocking) {
 
         setState(_wifiConnection->isConnected() ? NetworkState::Connected : NetworkState::Disconnected);
         _lastScanTime = nowSeconds();
-        onScanCompleted.trigger(_lastScan);
+        // copia sob a guarda: _lastScan pode ser trocado pela task do WiFi
+        // enquanto os handlers rodam (trigger passa referencia)
+        std::vector<ScannedNetwork> results = getLastScanResults();
+        onScanCompleted.trigger(results);
 
         return CommonErrorCodes::None;
     } else {
-        return _wifiConnection->startScanAsync();
+        ErrorCode err = _wifiConnection->startScanAsync();
+        if (err != CommonErrorCodes::None) {
+            // o scan nem comecou (outro em curso/erro do driver): o estado
+            // ficava Scanning e a background task pulava o loop para sempre
+            setState(_wifiConnection->isConnected() ? NetworkState::Connected
+                                                   : NetworkState::Disconnected);
+        }
+        return err;
     }
 }
 
 std::vector<ScannedNetwork> NetworkManager::getLastScanResults() const {
-    return _lastScan;
+    std::vector<ScannedNetwork> copy;
+    if (_mutex == nullptr) {
+        return copy;
+    }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    copy = _lastScan;
+    xSemaphoreGive(_mutex);
+    return copy;
 }
 
 // ========== State Queries ==========
@@ -450,6 +553,16 @@ ErrorCode NetworkManager::startBackgroundTask() {
         return CommonErrorCodes::None;  // Already running
     }
 
+    // Resta de um stop() recente cuja task ainda esta drenando (connect
+    // bloqueante em curso): esperar o handle zerar antes de criar outra,
+    // senao duas NetworkMgr varrem/reconectam em paralelo ate a velha sair.
+    for (int i = 0; i < 400 && _backgroundTask != nullptr; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (_backgroundTask != nullptr) {
+        ESP_LOGW(TAG, "Task de fundo antiga ainda saindo; criando assim mesmo");
+    }
+
     ESP_LOGI(TAG, "Starting background task...");
 
     _backgroundTaskRunning = true;
@@ -479,20 +592,22 @@ void NetworkManager::stopBackgroundTask() {
     }
 
     ESP_LOGI(TAG, "Stopping background task...");
-    
+
     _backgroundTaskRunning = false;
-    
-    // Wait for task to finish
+
+    // ESPERA COOPERATIVA, sem vTaskDelete forcado: o laco da task dorme em
+    // fatias de 100 ms (ver bgDelay), entao ela ve a flag cair em <= 100 ms
+    // e se autodeleta APÓS zerar o handle. Matar a task de fora podia
+    // apanha-la com o mutex do credential store tomado (saveNetwork/
+    // getKnownNetworks) ou dentro de uma escrita LittleFS — o mutex/FS
+    // ficava preso para sempre. Teto de 40 s: cobre o pior corpo (scan de
+    // ~9 s + connect bloqueante de connectionTimeout=20 s). Estourou, a
+    // task sai sozinha depois e o handle zera nela; nada fica tomado.
+    for (int i = 0; i < 400 && _backgroundTask != nullptr; ++i) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
     if (_backgroundTask != nullptr) {
-        // Give the task time to exit gracefully
-        vTaskDelay(pdMS_TO_TICKS(200));
-        
-        // Force delete if still running
-        TaskHandle_t task = _backgroundTask;
-        _backgroundTask = nullptr;
-        if (task != nullptr && eTaskGetState(task) != eDeleted) {
-            vTaskDelete(task);
-        }
+        ESP_LOGW(TAG, "Task de fundo nao saiu em 40 s (reconnect em curso?); sai sozinha");
     }
 
     ESP_LOGI(TAG, "Background task stopped");
@@ -504,6 +619,17 @@ bool NetworkManager::isBackgroundTaskRunning() const {
 
 // Roaming so procura outro AP abaixo deste sinal (dBm)
 static constexpr int8_t K_ROAM_SCAN_RSSI = -70;
+
+// Sono do laco de fundo em fatias de 100 ms: o stopBackgroundTask derruba
+// _backgroundTaskRunning e a task sai em <= 100 ms em vez de completar o
+// backoff inteiro (ate 60 s) para so entao ser forcada com vTaskDelete.
+static void bgDelay(volatile bool& running, uint32_t ms) {
+    while (ms > 0 && running) {
+        const uint32_t passo = ms > 100 ? 100 : ms;
+        vTaskDelay(pdMS_TO_TICKS(passo));
+        ms -= passo;
+    }
+}
 
 void NetworkManager::holdChannel(bool on) {
     if (on) {
@@ -527,7 +653,11 @@ void NetworkManager::applyPowerSave() {
     if (_wifiConnection == nullptr) {
         return;  // radio nem iniciado: esp_wifi_set_ps falharia sem pista
     }
-    esp_wifi_set_ps(_lowLatency ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+    esp_err_t err = esp_wifi_set_ps(_lowLatency ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+    if (err != ESP_OK) {
+        // antes era engolido: o pedido de baixa latencia "sumia" sem pista
+        ESP_LOGW(TAG, "esp_wifi_set_ps falhou: %s", esp_err_to_name(err));
+    }
 }
 
 void NetworkManager::setLowLatency(bool on) {
@@ -553,7 +683,7 @@ void NetworkManager::backgroundTaskFunc(void* param) {
 
         // Don't do anything if we're currently in the middle of scanning or connecting
         if (self->_state == NetworkState::Scanning || self->_state == NetworkState::Connecting) {
-            vTaskDelay(pdMS_TO_TICKS(1000));  // Wait a bit and check again
+            bgDelay(self->_backgroundTaskRunning, 1000);  // Wait a bit and check again
             continue;
         }
 
@@ -577,7 +707,7 @@ void NetworkManager::backgroundTaskFunc(void* param) {
         if (self->_channelHolds > 0) {
             const bool justDropped = s_lastConnectedSec != 0 && now - s_lastConnectedSec < 120;
             if (self->isConnected() || !justDropped) {
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                bgDelay(self->_backgroundTaskRunning, 1000);
                 continue;
             }
         }
@@ -597,11 +727,11 @@ void NetworkManager::backgroundTaskFunc(void* param) {
         if (!self->isConnected() && self->_config.autoReconnect) {
             // Check if there are any known networks first
             std::vector<KnownNetwork> knownNetworks = NetworkCredentialStore::instance().getKnownNetworks();
-            
+
             if (!knownNetworks.empty()) {
                 ESP_LOGI(TAG, "Auto-reconnecting...");
                 self->tryReconnect();
-                
+
                 // Check result
                 if (self->isConnected()) {
                     consecutiveFailures = 0;  // Reset on success
@@ -627,16 +757,21 @@ void NetworkManager::backgroundTaskFunc(void* param) {
         // nao traz o AP mais rapido, so queima bateria e interrompe o light
         // sleep (tempestade de retry da bancada). Piso de 15 s NESTE caso
         // (ultima rede vazia = o ciclo foi de scan completo); quem caiu do AP
-        // e tenta o _lastSsid segue no backoff normal. Custo: ate 15 s a mais
-        // para achar um AP que acabou de ligar.
-        if (!self->isConnected() && self->_lastSsid.empty()) {
-            if (delaySeconds < 15) delaySeconds = 15;
+        // e tenta o alvo guardado segue no backoff normal. Custo: ate 15 s a
+        // mais para achar um AP que acabou de ligar.
+        if (!self->isConnected()) {
+            std::string lastSsid, lastPassword;
+            self->getLastTarget(lastSsid, lastPassword);
+            if (lastSsid.empty() && delaySeconds < 15) delaySeconds = 15;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
+        bgDelay(self->_backgroundTaskRunning, delaySeconds * 1000);
     }
 
     ESP_LOGI(TAG, "Background task exiting");
+    // Zera o handle ANTES de se deletar: depois do vTaskDelete(NULL) o TCB
+    // e liberado e stopBackgroundTask nao pode mais tocar nele
+    self->_backgroundTask = nullptr;
     vTaskDelete(nullptr);
 }
 
@@ -677,8 +812,10 @@ void NetworkManager::checkForBetterNetwork() {
 
     NetworkInfo currentNetwork = getActiveNetwork();
     std::vector<KnownNetwork> knownNetworks = getKnownNetworks();
+    // copia: _lastScan pode ser trocado pela task do WiFi (scan async)
+    std::vector<ScannedNetwork> scan = getLastScanResults();
 
-    for (const auto& scanned : _lastScan) {
+    for (const auto& scanned : scan) {
         if (NetworkSelector::instance().isBetterNetwork(
                 currentNetwork, scanned, knownNetworks, _config.roamingThreshold)) {
             
@@ -696,8 +833,7 @@ void NetworkManager::checkForBetterNetwork() {
                 // Atualiza _last* no inicio do roam, como o connect() faz: um
                 // reconnect() manual depois do roam A->B dar certo usaria a
                 // senha de A contra B (staleness do caminho de sucesso).
-                _lastSsid = network.ssid;
-                _lastPassword = network.password;
+                setLastTarget(network.ssid, network.password);
 
                 // Disconnect and connect to new network
                 _wifiConnection->disconnect();
@@ -708,17 +844,26 @@ void NetworkManager::checkForBetterNetwork() {
                     // onWifiConnected que chega junto.
                 } else {
                     // Roaming failed, try to reconnect to old network.
-                    // A senha TEM que vir do store: _lastSsid/_lastPassword
-                    // agora descrevem a rede ALVO do roam que falhou
-                    // (A->B ok, B->C falhou => _lastPassword e a senha de
-                    // C): autenticar B com ela falhava sempre.
+                    // A senha TEM que vir do store: _last* agora descrevem a
+                    // rede ALVO do roam que falhou (A->B ok, B->C falhou =>
+                    // o alvo guardado e C): autenticar B com ela falhava
+                    // sempre.
                     ESP_LOGW(TAG, "Roaming failed, reconnecting to previous network");
                     KnownNetwork previous;
                     if (NetworkCredentialStore::instance().getNetwork(oldNetwork.ssid, previous) ==
                         CommonErrorCodes::None) {
-                        _wifiConnection->connect(oldNetwork.ssid, previous.password, false);
+                        if (_wifiConnection->connect(oldNetwork.ssid, previous.password, false) ==
+                            CommonErrorCodes::None) {
+                            // Voltamos para a rede antiga: _last* (postos no
+                            // alvo do roam) precisam descrever a rede ATIVA,
+                            // senao reconnect()/tryReconnect tentariam a
+                            // senha do alvo no SSID velho
+                            setLastTarget(oldNetwork.ssid, previous.password);
+                        }
                     } else {
-                        _wifiConnection->connect(oldNetwork.ssid, _lastPassword, false);
+                        std::string oldSsid, oldPassword;
+                        getLastTarget(oldSsid, oldPassword);
+                        _wifiConnection->connect(oldNetwork.ssid, oldPassword, false);
                     }
                 }
             }
@@ -736,9 +881,11 @@ void NetworkManager::tryReconnect() {
     }
 
     // First try last connected network
-    if (!_lastSsid.empty()) {
-        ESP_LOGI(TAG, "Trying to reconnect to %s", _lastSsid.c_str());
-        ErrorCode err = connect(_lastSsid, _lastPassword, false);
+    std::string lastSsid, lastPassword;
+    getLastTarget(lastSsid, lastPassword);
+    if (!lastSsid.empty()) {
+        ESP_LOGI(TAG, "Trying to reconnect to %s", lastSsid.c_str());
+        ErrorCode err = connect(lastSsid, lastPassword, false);
         if (err == CommonErrorCodes::None) {
             _stats.reconnections++;
             return;
@@ -798,7 +945,15 @@ void NetworkManager::onWifiConnected(WifiConnection* conn, const WiFiConnectionE
     // default do IDF: reafirma o modo pedido a cada conexao.
     applyPowerSave();
 
-    _activeNetwork = _wifiConnection->getNetworkInfo();
+    // _activeNetwork e lido pelo onWifiSignalChanged (sys_evt) e escrito na
+    // task chamadora (disconnect/deinit): assign sob a guarda, fora dela so
+    // o que nao toca no campo.
+    NetworkInfo info = _wifiConnection->getNetworkInfo();
+    if (_mutex != nullptr) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _activeNetwork = info;
+        xSemaphoreGive(_mutex);
+    }
     _connectionStartTime = nowSeconds();
 
     // Update credential store
@@ -811,7 +966,13 @@ void NetworkManager::onWifiConnected(WifiConnection* conn, const WiFiConnectionE
 void NetworkManager::onWifiDisconnected(WifiConnection* conn, const WiFiConnectionEvent& event) {
     ESP_LOGI(TAG, "WiFi disconnected: %s", event.ssid.c_str());
 
-    _activeNetwork.clear();
+    // Mesma guarda do onWifiConnected: clear de std::string concorrente com
+    // o assign rasga o heap.
+    if (_mutex != nullptr) {
+        xSemaphoreTake(_mutex, portMAX_DELAY);
+        _activeNetwork.clear();
+        xSemaphoreGive(_mutex);
+    }
 
     // Update uptime stats
     if (_connectionStartTime > 0) {
@@ -838,8 +999,13 @@ void NetworkManager::onWifiScanCompleted(WifiConnection* conn, const WiFiScanRes
     } else {
         setState(NetworkState::Disconnected);
     }
-    
-    onScanCompleted.trigger(_lastScan);
+
+    // copia sob a guarda (mesmo padrao do caminho bloqueante): entre o
+    // absorbScanResults e o trigger outro scan (bloqueante de outra task ou
+    // o proximo async) pode trocar o vector, e os handlers recebem
+    // referencia — iterar _lastScan trocavel era use-after-free
+    std::vector<ScannedNetwork> results = getLastScanResults();
+    onScanCompleted.trigger(results);
 }
 
 void NetworkManager::onWifiAuthFailed(WifiConnection* conn, const std::string& ssid, ErrorCode error) {
@@ -852,11 +1018,19 @@ void NetworkManager::onWifiAuthFailed(WifiConnection* conn, const std::string& s
 void NetworkManager::onWifiSignalChanged(WifiConnection* conn, int8_t oldRssi, int8_t newRssi) {
     ESP_LOGD(TAG, "WiFi signal changed: %d -> %d dBm", oldRssi, newRssi);
 
-    // Update active network info
+    // Update active network info. O .ssid sai copiado SOB a guarda (o
+    // disconnect da task chamadora da clear() concorrente); a escrita no
+    // store fica FORA dela (I/O de NVS nao segura o mutex do estado).
     if (isConnected()) {
-        _activeNetwork.rssi = newRssi;
-        
+        std::string ssid;
+        if (_mutex != nullptr) {
+            xSemaphoreTake(_mutex, portMAX_DELAY);
+            _activeNetwork.rssi = newRssi;
+            ssid = _activeNetwork.ssid;
+            xSemaphoreGive(_mutex);
+        }
+
         // Update in credential store
-        NetworkCredentialStore::instance().updateLastRssi(_activeNetwork.ssid, newRssi);
+        NetworkCredentialStore::instance().updateLastRssi(ssid, newRssi);
     }
 }

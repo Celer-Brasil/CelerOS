@@ -9,7 +9,13 @@
 ErrorCode NVS::initialize() {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
+        // ESP_ERROR_CHECK abortava o aparelho no boot; a API devolve
+        // ErrorCode e o chamador decide (o store falha fechado)
+        esp_err_t eraseErr = nvs_flash_erase();
+        if (eraseErr != ESP_OK) {
+            ESP_LOGE("NVS", "NVS erase failed: %s", esp_err_to_name(eraseErr));
+            return CommonErrorCodes::StorageInitFailed;
+        }
         err = nvs_flash_init();
     }
     if (err != ESP_OK) {

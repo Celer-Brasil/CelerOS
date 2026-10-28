@@ -312,8 +312,19 @@ private:
     static const int WIFI_SCAN_DONE_BIT = BIT2; /**< Event bit for scan completion. */
     static const char* TAG; /**< Log tag for the class. */
 
-    std::string _ssid; /**< SSID of the target WiFi network. */
-    std::string _password; /**< Password of the target WiFi network. */
+    /**
+     * @brief Registro do esp_event do WIFI_EVENT/IP_EVENT (dono UNICO).
+     *
+     * Os handlers recebem `this` como arg: precisam ser re-registrados quando
+     * outra instancia vira a dona (um function-local static antigo deixava a
+     * instancia nova surda e entregava eventos no `this` ja liberado).
+     */
+    static esp_event_handler_instance_t _instanceAnyId;
+    static esp_event_handler_instance_t _instanceGotIp;
+    static WifiConnection* _eventOwner; /**< Instancia registrada como arg. */
+
+    std::string _ssid; /**< SSID of the target WiFi network (escrito pela task chamadora em connect()/disconnect() e lido pelo handler do esp_event: acesso sob _ssidMutex). */
+    std::string _password; /**< Password of the target WiFi network (mesma guarda do _ssid: dois connect() de tasks diferentes escreviam concorrente). */
     IPAddress _ipAddress; /**< The current IP address of the device. */
     int8_t _rssi; /**< Current signal strength. */
     int8_t _lastReportedRssi; /**< Last RSSI value reported via event. */
@@ -326,9 +337,20 @@ private:
     bool _asyncMode; /**< Flag indicating if in async connection mode. */
     bool _scanInProgress; /**< Flag indicating if a scan is currently running. */
     bool _blockingScan; /**< Flag indicating if current scan is blocking (results handled by caller). */
+    /**
+     * @brief Suprime o proximo WIFI_EVENT_STA_DISCONNECTED.
+     *
+     * connect() sobre uma estacao associada chama esp_wifi_disconnect()
+     * POR CONTA PROPRIA antes de associar ao novo AP: o evento gerado por
+     * esse disconnect chega depois e, sem a flag, era lido como falha da
+     * NOVA tentativa (retry espurio ou FAIL_BIT que derrubava a conexao
+     * que estava subindo).
+     */
+    bool _suppressNextDisconnect;
     WiFiConnectionState _state; /**< Current connection state. */
     WiFiScanResult _lastScanResult; /**< Results from the last scan. */
     SemaphoreHandle_t _scanMutex; /**< Mutex to protect scan operations. */
+    SemaphoreHandle_t _ssidMutex; /**< Guarda de _ssid/_password: std::string escritos pela task chamadora (connect/disconnect) e lidos pelo handler do esp_event (makeEvent/onAuthFailed) — assign/clear concorrente com a copia do handler rasgava o heap. */
 
     static constexpr int8_t RSSI_CHANGE_THRESHOLD = 5; /**< RSSI change threshold for events (dB). */
 };

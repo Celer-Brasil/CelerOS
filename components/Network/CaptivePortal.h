@@ -264,10 +264,13 @@ private:
     volatile bool _dnsDone; // task de DNS sinalizou saida (socket fechado por ela)
 
     // Estado da tentativa de conexao (escrito pelo hospedeiro via
-    // reportConnectionState, lido pelo handler de /status na task do httpd —
-    // race benigna de enum/ip curto)
+    // reportConnectionState, lido pelo handler de /status na task do httpd).
+    // O enum aguenta leitura rasgada, mas _connIp e std::string: atribuicao
+    // concorrente com leitura de .c_str() era use-after-free — a troca passa
+    // por _connMutex.
     volatile PortalConnState _connState;
     std::string _connIp;
+    SemaphoreHandle_t _connMutex;  /**< Guarda de _connState/_connIp (criado no ctor) */
 
     static constexpr const char* TAG = "CaptivePortal";
 };

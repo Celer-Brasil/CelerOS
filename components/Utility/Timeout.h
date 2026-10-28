@@ -52,7 +52,9 @@ public:
     bool TimeoutOccurred() {
         if (!_running) return false;
         auto now = xTaskGetTickCount();
-        return (now - _start > _timeout);
+        // >= : no instante exato do timeout TrueUntilTimeout() ja devolve
+        // false; com '>' o mesmo instante respondia "nao expirou" nos dois
+        return (now - _start >= _timeout);
     }
 
 private:

@@ -85,6 +85,12 @@ bool init() {
             ESP_LOGE(TAG, "chave corrompida no NVS (senha antigas viram indecifráveis)");
             return false;
         }
+    } else if (err != CommonErrorCodes::FileNotFound && err != CommonErrorCodes::FileIsEmpty) {
+        // Erro de leitura (corrupcao, tipo trocado, NVS ilegivel) NAO e
+        // "primeira execucao": gerar chave nova por cima tornaria todas as
+        // senhas ja cifradas indecifraveis. Falha fechado, como o store pede.
+        ESP_LOGE(TAG, "falha ao ler a chave do NVS (%s); nao gero outra", err.description());
+        return false;
     } else {
         esp_fill_random(s_key, sizeof(s_key));
         char enc[KEY_LEN * 2 + 1];

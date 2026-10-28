@@ -162,14 +162,19 @@ bool WifiAP::stop() {
     ESP_LOGI(TAG, "Stopping AP...");
 
     // Em APSTA o STA continua de pe — so derruba o AP. So para o radio
-    // inteiro quando o AP era o unico modo ativo.
+    // inteiro quando o AP era o unico modo ativo. E se o AP NEM CHEGOU a
+    // subir (start falhou antes do set_mode, ex. senha curta -> estado
+    // Error), o modo segue STA: dar esp_wifi_stop() aqui derrubava a
+    // estacao que nada tem a ver com o AP.
     wifi_mode_t curMode = WIFI_MODE_NULL;
     esp_wifi_get_mode(&curMode);
     esp_err_t err;
     if (curMode == WIFI_MODE_APSTA) {
         err = esp_wifi_set_mode(WIFI_MODE_STA);
-    } else {
+    } else if (curMode == WIFI_MODE_AP) {
         err = esp_wifi_stop();
+    } else {
+        err = ESP_OK;  // AP nunca ativou o radio: nada a fazer
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to stop WiFi: %s", esp_err_to_name(err));
@@ -297,9 +302,15 @@ bool WifiAP::disconnectClient(const uint8_t* mac) {
     if (mac == nullptr) {
         return false;
     }
-    
-    esp_err_t err = esp_wifi_deauth_sta(0);  // Deauth all for simplicity
-    return err == ESP_OK;
+
+    // Deauth do cliente ESPECIFICO: o esp_wifi_deauth_sta(0) antigo derrubava
+    // TODOS os clientes do AP (aid 0 = todos). O aid individual vem da
+    // tabela do driver; MAC ausente = falha, sem estrago colateral.
+    uint16_t aid = 0;
+    if (esp_wifi_ap_get_sta_aid(mac, &aid) != ESP_OK) {
+        return false;  // cliente nao esta associado
+    }
+    return esp_wifi_deauth_sta(aid) == ESP_OK;
 }
 
 void WifiAP::setState(WifiAPState newState) {

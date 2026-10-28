@@ -195,6 +195,15 @@ ErrorCode NVS::readValue(const std::string& namespaceName, const std::string& ke
         esp_err = nvs_get_str(handle, key.c_str(), nullptr, &requiredSize); // Get required size
         if (esp_err != ESP_OK) {
             nvs_close(handle);
+            // So NOT_FOUND e "primeira execucao"; mascarar os demais erros
+            // (tipo trocado, chave invalida) como FileNotFound fazia o
+            // CredCipher tratar corrupcao como primeira vez e gerar uma
+            // chave nova por cima das senhas ja cifradas
+            if (esp_err != ESP_ERR_NVS_NOT_FOUND) {
+                ESP_LOGE("NVS", "Failed to read string '%s' in '%s': %s", key.c_str(),
+                         namespaceName.c_str(), esp_err_to_name(esp_err));
+                return CommonErrorCodes::StorageReadError;
+            }
             return CommonErrorCodes::FileNotFound;
         }
         // malloc em vez de new[]: sem excecoes, um new que falha aborta o
@@ -270,7 +279,15 @@ ErrorCode NVS::getEntriesFromNamespace(const std::string& namespaceName, std::ma
     // Note: We can't use typeid with -fno-rtti, so we iterate all entries and try to read them
     // In ESP-IDF v6.0, we use NVS_TYPE_ANY to iterate all types
     nvs_iterator_t it = nullptr;
-    nvs_entry_find(NVSConstants::PartitionName, namespaceName.c_str(), NVS_TYPE_ANY, &it);
+    esp_err_t findErr = nvs_entry_find(NVSConstants::PartitionName, namespaceName.c_str(),
+                                       NVS_TYPE_ANY, &it);
+    if (findErr != ESP_OK && findErr != ESP_ERR_NVS_NOT_FOUND) {
+        // NO_MEM/chave invalida virando "namespace vazio" escondia a falha
+        nvs_close(handle);
+        ESP_LOGE("NVS", "Failed to enumerate namespace '%s': %s",
+                 namespaceName.c_str(), esp_err_to_name(findErr));
+        return CommonErrorCodes::StorageReadError;
+    }
     
     while (it != nullptr) {
         nvs_entry_info_t info;

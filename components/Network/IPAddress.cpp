@@ -14,7 +14,11 @@ IPAddress::IPAddress() {
 
 // Constructor from 4 octets
 IPAddress::IPAddress(uint8_t firstOctet, uint8_t secondOctet, uint8_t thirdOctet, uint8_t fourthOctet) {
-    _address.addr = (firstOctet << 24) | (secondOctet << 16) | (thirdOctet << 8) | fourthOctet;
+    // Mesma ordem de REDE do fromString (inet_pton): gravar o uint32 em
+    // ordem de host fazia toString() (inet_ntop) imprimir os octetos
+    // invertidos ("5.1.168.192" para 192.168.1.5)
+    _address.addr = htonl(((uint32_t)firstOctet << 24) | ((uint32_t)secondOctet << 16) |
+                          ((uint32_t)thirdOctet << 8) | (uint32_t)fourthOctet);
 }
 
 // Constructor from esp_ip4_addr_t
@@ -51,7 +55,12 @@ esp_ip4_addr_t IPAddress::get() const {
 
 // Access octet by index
 uint8_t IPAddress::operator[](int index) const {
-    return ((_address.addr >> ((3 - index) * 8)) & 0xFF);
+    // addr esta em ordem de rede; no little-endian o octeto 0 (primeiro,
+    // "192" em 192.168.1.5) e o byte menos significativo do uint32
+    if (index < 0 || index > 3) {
+        return 0;
+    }
+    return static_cast<uint8_t>((_address.addr >> (index * 8)) & 0xFF);
 }
 
 // Equality comparison

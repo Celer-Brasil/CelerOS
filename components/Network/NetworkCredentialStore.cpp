@@ -36,10 +36,12 @@ ErrorCode NetworkCredentialStore::init() {
     // lido/escrito de varias tasks (portal, UI, sys_evt absorvendo scans,
     // NetworkMgr) — sem ela, um push_back/erase realocando o vector virava
     // use-after-free no leitor.
-    _mutex = xSemaphoreCreateMutex();
-    if (_mutex == nullptr) {
-        ESP_LOGE(TAG, "Failed to create store mutex");
-        return CommonErrorCodes::OperationFailed;
+    if (_mutex == nullptr) {  // init repetido depois de uma falha: nao vaza outro
+        _mutex = xSemaphoreCreateMutex();
+        if (_mutex == nullptr) {
+            ESP_LOGE(TAG, "Failed to create store mutex");
+            return CommonErrorCodes::OperationFailed;
+        }
     }
 
     // Initialize NVS if not already done
@@ -171,6 +173,9 @@ ErrorCode NetworkCredentialStore::clearAllNetworks() {
     ErrorCode err = saveToNvs();  // count=0 + limpeza das keys residuais
     if (err != CommonErrorCodes::None) {
         ESP_LOGW(TAG, "Failed to clear NVS keys: %s", err.description());
+        // antes devolvia None: quem chama (forgetAllNetworks) achava que a
+        // flash estava limpa e as senhas voltavam no proximo boot
+        return err;
     }
 
     ESP_LOGI(TAG, "All networks cleared");
@@ -326,7 +331,18 @@ ErrorCode NetworkCredentialStore::setAutoConnect(const std::string& ssid, bool a
 }
 
 size_t NetworkCredentialStore::getNetworkCount() const {
-    return _networks.size();
+    // _networks e escrito por varias tasks; size() por fora da guarda corria
+    // contra push_back/erase (o resto da classe ja usa o mutex). Regioes da
+    // guarda sao curtas (NVS roda fora), entao esperar aqui e seguro.
+    if (_mutex == nullptr) {
+        return 0;
+    }
+    size_t count = 0;
+    if (xSemaphoreTake(_mutex, portMAX_DELAY) == pdTRUE) {
+        count = _networks.size();
+        xSemaphoreGive(_mutex);
+    }
+    return count;
 }
 
 std::vector<KnownNetwork> NetworkCredentialStore::getNetworksByPriority() const {
@@ -388,8 +404,10 @@ ErrorCode NetworkCredentialStore::loadFromNvs() {
     for (uint8_t i = 0; i < count && i < NetworkStoreConstants::MAX_STORED_NETWORKS; i++) {
         KnownNetwork network;
         bool legacy = false;
-        err = loadNetworkFromNvs(i, network, &legacy, &sawPlain);
+        bool plain = false;  // por entrada: o loadNetwork zera a flag logo na entrada
+        err = loadNetworkFromNvs(i, network, &legacy, &plain);
         if (legacy) sawLegacy = true;
+        if (plain) sawPlain = true;
         if (err == CommonErrorCodes::None) {
             _networks.push_back(network);
             ESP_LOGD(TAG, "Loaded network: %s (priority: %d)", network.ssid, network.priority);
@@ -531,6 +549,12 @@ ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork&
     if (err == CommonErrorCodes::None) {
         strncpy(network.ssid, ssid.c_str(), sizeof(network.ssid) - 1);
         network.ssid[sizeof(network.ssid) - 1] = '\0';
+        // saveNetwork recusa SSID vazio: um registro assim so vem de
+        // corrupcao e viraria uma "rede fantasma" na lista/busca
+        if (network.ssid[0] == '\0') {
+            ESP_LOGE(TAG, "Registro corrompido no indice %zu (SSID vazio)", index);
+            return CommonErrorCodes::OperationFailed;
+        }
 
         // Senha: primeiro o formato cifrado atual ("cw"); se ausente, cai para
         // o texto claro das versoes antigas ("w") e marca migracao — o
@@ -635,6 +659,10 @@ ErrorCode NetworkCredentialStore::loadNetworkFromNvs(size_t index, KnownNetwork&
     }
     if (!ok) {
         ESP_LOGE(TAG, "Corrupt legacy network entry at index %zu", index);
+        return CommonErrorCodes::OperationFailed;
+    }
+    if (network.ssid[0] == '\0') {
+        ESP_LOGE(TAG, "Legacy network entry at index %zu has empty SSID", index);
         return CommonErrorCodes::OperationFailed;
     }
 

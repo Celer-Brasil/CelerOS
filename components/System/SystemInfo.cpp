@@ -74,7 +74,7 @@ uint8_t SystemInfo::getCoreCount() const {
     return chip_info.cores;
 }
 
-uint8_t SystemInfo::getChipRevision() const {
+uint16_t SystemInfo::getChipRevision() const {
     esp_chip_info_t chip_info;
     esp_chip_info(&chip_info);
     return chip_info.revision;
@@ -265,6 +265,8 @@ FlashInfo SystemInfo::getFlashInfo() const {
             info.size = 8 * 1024 * 1024;
         #elif defined(CONFIG_ESPTOOLPY_FLASHSIZE_16MB)
             info.size = 16 * 1024 * 1024;
+        #elif defined(CONFIG_ESPTOOLPY_FLASHSIZE_32MB)
+            info.size = 32 * 1024 * 1024;
         #else
             info.size = 4 * 1024 * 1024;  // Default
         #endif
@@ -312,6 +314,8 @@ uint32_t SystemInfo::getFlashSize() const {
         return 8 * 1024 * 1024;
     #elif defined(CONFIG_ESPTOOLPY_FLASHSIZE_16MB)
         return 16 * 1024 * 1024;
+    #elif defined(CONFIG_ESPTOOLPY_FLASHSIZE_32MB)
+        return 32 * 1024 * 1024;
     #else
         return 4 * 1024 * 1024;
     #endif

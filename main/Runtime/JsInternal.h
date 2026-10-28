@@ -40,6 +40,15 @@ extern std::string s_appDir;
 // RESOLVIDAS no install): require() cai p/ /local/modules/<nome>/<versao>/
 // quando o modulo nao esta na pasta do app. Tambem alimentada no runFile.
 void jsLoadAppDeps(const char* appDir);
+// Deps de UM ocupante do svchost (handle opaco guardado pelo AppServices).
+// jsDepsLoad le a flash — so na carga do servico, nunca no callback;
+// jsDepsFree solta (idempotente); jsDepsSvcBegin/jsDepsSvcEnd trocam e
+// restauram a tabela ativa no dispatch (so ponteiro, sem I/O). Ver
+// JsModules.cpp.
+void jsDepsLoad(const char* appDir, void** table, int* count);
+void jsDepsFree(void** table);
+void jsDepsSvcBegin(const void* table, int count);
+void jsDepsSvcEnd();
 // Verlet nativo (API 31, JsPhysics.cpp): mundos do app anterior saem no
 // init do proximo (malloc incluso). Chamado pelo JSBindings::init.
 void jsPhysicsReset();

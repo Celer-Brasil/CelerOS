@@ -604,8 +604,23 @@ duk_ret_t JSBindings::js_packRecordStop(duk_context *ctx) {
         raw = duk_get_boolean(ctx, -1) != 0;
         duk_pop(ctx);
         duk_get_prop_string(ctx, 1, "path");
-        if (duk_is_string(ctx, -1)) path = duk_get_string(ctx, -1);
+        if (duk_is_string(ctx, -1)) {
+            // teto ANTES da copia: atribuir a string crua ao std::string
+            // cresce sem excecao e aborta o aparelho (o check de tamanho
+            // de baixo so ve o caminho depois de copiado)
+            const char* p = duk_get_string(ctx, -1);
+            if (p != nullptr && strlen(p) > kJsPathMax) {
+                duk_pop(ctx);
+                duk_error(ctx, DUK_ERR_RANGE_ERROR, "Pack.recordStop: caminho longo demais");
+            }
+            path.assign(p ? p : "", p != nullptr ? strlen(p) : 0);
+        }
         duk_pop(ctx);
+    }
+    // "<path>.tmp" e montado num std::string abaixo: caminho absurdo (app
+    // hostil) abortaria o aparelho no crescimento sem excecoes
+    if (path.size() > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Pack.recordStop: caminho longo demais");
     }
     if (!path.empty() && (!perm(celer::PERM_FS) || !fsWriteAllowed(path.c_str()))) {
         duk_error(ctx, DUK_ERR_ERROR, "Pack.recordStop: escrita negada nesse caminho");
@@ -653,7 +668,15 @@ duk_ret_t JSBindings::js_packSnap(duk_context *ctx) {
     std::string path = "/local/snap.jpg";
     if (duk_is_object(ctx, 1)) {
         duk_get_prop_string(ctx, 1, "path");
-        if (duk_is_string(ctx, -1)) path = duk_get_string(ctx, -1);
+        if (duk_is_string(ctx, -1)) {
+            // teto ANTES da copia (mesmo motivo do recordStop)
+            const char* p = duk_get_string(ctx, -1);
+            if (p != nullptr && strlen(p) >= 64) {
+                duk_pop(ctx);
+                duk_error(ctx, DUK_ERR_RANGE_ERROR, "Pack.snap: caminho longo demais (max 63)");
+            }
+            path.assign(p ? p : "", p != nullptr ? strlen(p) : 0);
+        }
         duk_pop(ctx);
     }
     if (path.size() >= 64) {

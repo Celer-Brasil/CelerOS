@@ -74,7 +74,12 @@ static bool netFetch(duk_context *ctx, bool isPost) {
             duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.post: corpo acima de 64KB");
         }
         body.assign(b, blen);
-        if (duk_is_string(ctx, 2)) contentType = duk_get_string(ctx, 2);
+        // contentType limitado na copia (std::string que cresce sem excecao
+        // aborta; um mime real e curto)
+        if (duk_is_string(ctx, 2)) {
+            const char* ct = duk_get_string(ctx, 2);
+            contentType.assign(ct ? ct : "", strnlen(ct ? ct : "", 64));
+        }
     }
 
     // Componente Http (esp_http_client): https usa o cert bundle do sistema
@@ -173,7 +178,11 @@ duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
     }
     duk_pop(ctx);
     duk_get_prop_string(ctx, 0, "contentType");
-    if (duk_is_string(ctx, -1)) contentType = duk_get_string(ctx, -1);
+    if (duk_is_string(ctx, -1)) {
+        // mesmo teto da copia do Net.post (abort no -fno-exceptions)
+        const char* ct = duk_get_string(ctx, -1);
+        contentType.assign(ct ? ct : "", strnlen(ct ? ct : "", 64));
+    }
     duk_pop(ctx);
 
     duk_get_prop_string(ctx, 0, "timeoutMs");

@@ -66,6 +66,14 @@ duk_ret_t JSBindings::js_createSprite(duk_context *ctx) {
     // Canvas virtual: o sprite e alocado no tamanho FISICO equivalente
     int pw = jsx(w);
     int ph = appSh(h);  // sprite = canvas do app: area abaixo da topbar
+    // createSprite(70000, 70000): as escalas e o teste `pw * ph * 2` abaixo
+    // estouram o int (o alocador do LovyanGFX pode receber um tamanho
+    // envolvido = escrever alem do buffer). O maior vidro e 480x480: teto
+    // folgado e falha limpa (id 0) acima dele.
+    if (pw < 1 || ph < 1 || pw > 2048 || ph > 2048) {
+        duk_push_int(ctx, 0);
+        return 1;
+    }
 
     int slot = -1;
     for (int i = 0; i < spriteCap(); i++) {

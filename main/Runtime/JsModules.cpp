@@ -62,8 +62,21 @@ struct SharedDep {
     char name[64];
     char ver[24];
 };
+// Tabela ATIVA (quem executa agora) e a SALVA durante o dispatch de um
+// servico do svchost (jsDepsSvcBegin/jsDepsSvcEnd). A troca e so de ponteiro:
+// o deps.json de cada ocupante e lido da flash UMA vez, na carga (runFile do
+// app, jsDepsLoad do servico) — nunca dentro do callback. A tabela salva e
+// emprestada (dono: o ocupante de fora); quem carrega/libera cada uma:
+// jsLoadAppDeps (app) e jsDepsLoad/jsDepsFree (servico).
 SharedDep* s_sharedDeps = nullptr;
 int s_sharedDepCount = 0;
+// Pilha de save do dispatch aninhado (top-level do loadService -> JS
+// bloqueante -> present -> pump -> slot de outro servico): 1 nivel era
+// sobrescrito pelo Begin interno e o End externo restaurava NULO. Profundidade
+// real chega a 2; 4 sao cinta, o 5o reusa o slot 3 (inatingivel).
+static SharedDep* s_savedDeps[4] = {nullptr, nullptr, nullptr, nullptr};
+static int s_savedDepCount[4] = {0, 0, 0, 0};
+static int s_savedDepsN = 0;
 
 // Nome de modulo: [A-Za-z0-9_.-], 1..63 chars (sufixo ".js" opcional). O
 // ponto entrou com as deps compartilhadas (identidade "celeros.engine");
@@ -98,22 +111,13 @@ const SharedDep* findSharedDep(const char* mod) {
     return nullptr;
 }
 
-}  // namespace
-
-// Identidade do servico no svchost (API 42): o dispatch do AppServices troca
-// a pasta base do require() para a do servico corrente e restaura depois.
-void jsModulesSetAppDir(const char* appDir) { s_appDir = appDir ? appDir : ""; }
-const std::string& jsModulesGetAppDir() { return s_appDir; }
-
-void jsLoadAppDeps(const char* appDir) {
-    // Mapa nome->versao do deps.json (gravado pelo installer com a versao
-    // RESOLVIDA do range do app.json). Chamado no runFile junto com o
-    // s_appDir; sem pasta/deps.json = nenhuma dep (vendoring puro).
-    s_sharedDepCount = 0;
-    if (s_sharedDeps) {
-        heap_caps_free(s_sharedDeps);
-        s_sharedDeps = nullptr;
-    }
+// Le o deps.json de appDir para a tabela dada (usado pelo app no runFile e
+// pelo servico na carga). So memoria: pares em new nothrow, tabela em
+// mem::alloc (PSRAM primeiro); sem RAM = tabela vazia (o require devolve o
+// erro claro "modulo nao encontrado"/"reinstale o app").
+void depsParseInto(const char* appDir, SharedDep** outDeps, int* outCount) {
+    *outDeps = nullptr;
+    *outCount = 0;
     if (appDir == nullptr || appDir[0] == '\0') return;
     std::string json = FileSystem::readTextFile((std::string(appDir) + "/deps.json").c_str());
     if (json.empty()) return;
@@ -124,20 +128,82 @@ void jsLoadAppDeps(const char* appDir) {
     int n = FileSystem::parseJsonStringMap(json, pairs, kMaxSharedDeps);
     if (n > 0) {
         size_t sz = sizeof(SharedDep) * (size_t)n;
-        s_sharedDeps = (SharedDep*)mem::alloc(sz, mem::Want::Psram);
+        *outDeps = (SharedDep*)mem::alloc(sz, mem::Want::Psram);
     }
-    if (!s_sharedDeps) n = 0;
-    for (int i = 0; i < n && s_sharedDepCount < kMaxSharedDeps; i++) {
+    if (!*outDeps) n = 0;
+    for (int i = 0; i < n && *outCount < kMaxSharedDeps; i++) {
         const char* nm = pairs[i].key.c_str();
         const char* vr = pairs[i].value.c_str();
         if (!validModuleName(nm, strlen(nm))) continue;
         if (!validDepVersion(vr) || strlen(vr) >= sizeof(SharedDep::ver)) continue;
-        SharedDep& d = s_sharedDeps[s_sharedDepCount++];
+        SharedDep& d = (*outDeps)[(*outCount)++];
         strncpy(d.name, nm, sizeof(d.name) - 1);
         d.name[sizeof(d.name) - 1] = '\0';
         strcpy(d.ver, vr);
     }
     delete[] pairs;
+}
+
+}  // namespace
+
+// Identidade do servico no svchost (API 42): o dispatch do AppServices troca
+// a pasta base do require() para a do servico corrente e restaura depois.
+void jsModulesSetAppDir(const char* appDir) { s_appDir = appDir ? appDir : ""; }
+const std::string& jsModulesGetAppDir() { return s_appDir; }
+
+void jsLoadAppDeps(const char* appDir) {
+    // Mapa nome->versao do deps.json (gravado pelo installer com a versao
+    // RESOLVIDA do range do app.json). Chamado no runFile junto com o
+    // s_appDir; sem pasta/deps.json = nenhuma dep (vendoring puro). So roda
+    // fora de dispatch de servico (a tabela salva emprestada nao existe aqui).
+    if (s_sharedDeps) {
+        heap_caps_free(s_sharedDeps);
+        s_sharedDeps = nullptr;
+    }
+    s_sharedDepCount = 0;
+    depsParseInto(appDir, &s_sharedDeps, &s_sharedDepCount);
+}
+
+// ---- Tabela de deps por ocupante do svchost ----
+// O servico carrega a SUA tabela na carga (jsDepsLoad, leitura de flash na
+// task do pump — o mesmo contexto dos outros reads do loadService) e o
+// dispatch (svcSlotBegin/svcSlotEnd) so troca ponteiro via jsDepsSvcBegin/
+// jsDepsSvcEnd. Sem isto, require("celeros.engine") num servico resolvia
+// contra a tabela do ULTIMO app em foreground (versao errada ou "modulo nao
+// encontrado" no boot, antes do 1o app). Contrato JS inalterado: require
+// sempre existiu no servico — o que muda e a tabela que ele consulta.
+
+void jsDepsLoad(const char* appDir, void** table, int* count) {
+    if (table == nullptr || count == nullptr) return;
+    if (*table != nullptr) heap_caps_free(*table);
+    depsParseInto(appDir, (SharedDep**)table, count);
+}
+
+void jsDepsFree(void** table) {
+    if (table == nullptr || *table == nullptr) return;
+    heap_caps_free(*table);
+    *table = nullptr;
+}
+
+// Ativa a tabela do servico guardando a corrente (a do app). Emparelhado com
+// jsDepsSvcEnd; o save e PILHA — o dispatch pode aninhar (callback/top-level
+// de servico chama binding bloqueante -> present -> pump -> outro dispatch).
+void jsDepsSvcBegin(const void* table, int count) {
+    if (s_savedDepsN < 4) {
+        s_savedDeps[s_savedDepsN] = s_sharedDeps;
+        s_savedDepCount[s_savedDepsN] = s_sharedDepCount;
+    }
+    s_savedDepsN++;
+    s_sharedDeps = (SharedDep*)table;
+    s_sharedDepCount = count;
+}
+
+void jsDepsSvcEnd() {
+    if (s_savedDepsN > 0) s_savedDepsN--;
+    if (s_savedDepsN < 4) {
+        s_sharedDeps = s_savedDeps[s_savedDepsN];
+        s_sharedDepCount = s_savedDepCount[s_savedDepsN];
+    }
 }
 
 duk_ret_t JSBindings::js_require(duk_context* ctx) {

@@ -28,6 +28,15 @@
 
 #if CONFIG_CELEROS_APP_SERVICES
 
+// Runtime/JsModules.cpp (declarado em Runtime/JsInternal.h): deps compartil-
+// hadas por ocupante. Cada servico carrega a propria tabela (deps.json) na
+// carga e o dispatch troca/restaura por ponteiro — sem isso o require() de
+// shared dep no servico resolvia contra a tabela do ultimo app em foreground.
+extern void jsDepsLoad(const char* appDir, void** table, int* count);
+extern void jsDepsFree(void** table);
+extern void jsDepsSvcBegin(const void* table, int count);
+extern void jsDepsSvcEnd();
+
 // =====================================================
 // svchost: um heap Duktape, uma thread por servico (API 42)
 // =====================================================
@@ -71,6 +80,8 @@ struct SvcApp {
     int restarts = 0;
     duk_context* thr = nullptr;
     duk_size_t stashIdx = 0;   // posicao da thread no stash "svcs" (para soltar)
+    void* depsTable = nullptr; // deps compartilhadas DELE (jsDepsLoad na carga)
+    int depsCount = 0;         // (jsDepsFree solta no release/discover)
 };
 
 std::vector<SvcApp> s_apps;
@@ -79,6 +90,36 @@ bool s_suspended = false;
 uint32_t s_lastTickMs = 0;
 SemaphoreHandle_t s_mux = nullptr;  // s_apps: pump (principal) x shell (canal)
 std::string s_stopReq;  // svc stop do shell: consumido no giro do pump
+
+// Profundidade de reentrancia do tick (0 = fora): o tick pode aninhar
+// (callback de servico -> binding com present() -> tickPresent -> tick).
+int s_tickDepth = 0;
+// Tabelas de deps de servicos soltos com dispatch POSSIVELMENTE em curso:
+// o releaseThread pode rodar dentro de um tick aninhado (rescan/stop) para
+// um servico cujo callback ainda esta na pilha — liberar a tabela ali
+// deixaria o require() do callback lendo memoria livre. O cemiterio segura
+// os ponteiros ate um ponto provavelmente fora de dispatch: o fim do tick
+// MAIS EXTERNO (depois de drainTimers) e o destroyHeap.
+std::vector<void*> s_deadDeps;
+
+void drainDeadDeps() {
+    for (size_t i = 0; i < s_deadDeps.size(); i++) {
+        void* p = s_deadDeps[i];
+        jsDepsFree(&p);
+    }
+    s_deadDeps.clear();
+}
+
+// Fecha a profundidade: no retorno do tick MAIS EXTERNO nenhuma tabela esta
+// ativa/salva — lugar seguro para soltar o cemiterio.
+struct TickDepth {
+    TickDepth() { s_tickDepth++; }
+    ~TickDepth() {
+        if (--s_tickDepth == 0) drainDeadDeps();
+    }
+    TickDepth(const TickDepth&) = delete;
+    TickDepth& operator=(const TickDepth&) = delete;
+};
 
 // Guard do estado dos servicos (recursivo: o tick chama discover)
 struct SvcGuard {
@@ -120,6 +161,16 @@ void logPrint(void*, const char* fmt, ...) {
 
 void discover() {
     SvcGuard g;  // o rescan RECONSTRói s_apps: leitores (info/stop) fora
+    // tabelas de deps dos servicos antigos vao para o cemiterio antes da
+    // reconstrucao (o discover pode rodar num tick aninhado, com o dispatch
+    // de um callback pai ainda na pilha — liberar aqui seria UAF)
+    for (auto& a : s_apps) {
+        if (a.depsTable != nullptr) {
+            s_deadDeps.push_back(a.depsTable);
+            a.depsTable = nullptr;
+        }
+        a.depsCount = 0;
+    }
     s_apps.clear();
     s_installs.clear();
     const int n = LauncherUI::appEntryCount();
@@ -241,8 +292,14 @@ void destroyHeap() {
         a.thr = nullptr;
         a.running = false;
         a.needsLoad = !a.stopped;
+        if (a.depsTable != nullptr) {  // cemiterio: suspensoForApp nao roda em dispatch
+            s_deadDeps.push_back(a.depsTable);
+            a.depsTable = nullptr;
+            a.depsCount = 0;
+        }
     }
     JSBindings::timersResetSvc();
+    drainDeadDeps();  // fora de dispatch: pode liberar de verdade
 }
 
 // Solta a thread do servico: timers mortos e a referencia do stash (raiz
@@ -253,6 +310,13 @@ void releaseThread(SvcApp& a) {
     // preso a um heap que nao existe mais (o app HID perde o teclado para
     // sempre apos um svc stop).
     UsbHost::releaseOwner(a.pkg.c_str());
+    // deps do servico: a tabela vai para o cemiterio (pode haver dispatch
+    // em curso nesta profundidade — ver TickDepth/drainDeadDeps)
+    if (a.depsTable != nullptr) {
+        s_deadDeps.push_back(a.depsTable);
+        a.depsTable = nullptr;
+    }
+    a.depsCount = 0;
     if (a.thr != nullptr) {
         JSBindings::timersClearCtx(a.thr);
         duk_push_heap_stash(s_heap);                 // [stash]
@@ -275,6 +339,10 @@ void svcSlotBegin(duk_context* tctx) {
     for (auto& a : s_apps) {
         if (a.thr != tctx || !a.running) continue;
         JSBindings::svcIdentity(tctx, a.pkg.c_str(), a.perms, a.dir.c_str());
+        // deps compartilhadas DELE (pinadas na carga): o require() do callback
+        // cai na versao do servico, nao na do ultimo app em foreground. So
+        // ponteiro — leitura de flash nenhuma aqui dentro.
+        jsDepsSvcBegin(a.depsTable, a.depsCount);
         // janela FRESCA por callback: o setInterval de 1 s chega com o
         // s_jsSliceStart do giro anterior — sem isto o primeiro interrupt
         // via 1000 ms > 250 ms e o callback morria de "execution timeout"
@@ -285,6 +353,7 @@ void svcSlotBegin(duk_context* tctx) {
 }
 
 void svcSlotEnd(duk_context* tctx) {
+    jsDepsSvcEnd();  // devolve a tabela do ocupante (espelho do begin, LIFO)
     JSBindings::svcIdentityRestore();
     if (SvcApi::consumeStopRequest()) {  // Service.stop() do proprio servico
         for (auto& a : s_apps) {
@@ -298,7 +367,15 @@ void svcSlotEnd(duk_context* tctx) {
 }
 
 void svcSlotCrash(duk_context* tctx, const char* err) {
-    duk_pop(tctx);  // a string do erro (duk_safe_to_string empilhou)
+    // err aponta para a string do erro NO HEAP Duktape (duk_safe_to_string
+    // converteu no proprio slot): o duk_pop abaixo solta a ultima referencia
+    // e o Duktape libera o bloco — noteCrash lia memoria ja livre (o log/
+    // notificacao saiam com lixo quando o malloc reusava o bloco). Copia
+    // ANTES de soltar.
+    char errCopy[96] = {0};
+    if (err != nullptr) snprintf(errCopy, sizeof(errCopy), "%s", err);
+    err = errCopy;
+    duk_pop(tctx);  // o valor do erro deixado pelo pcall falho
     for (auto& a : s_apps) {
         if (a.thr != tctx) continue;
         noteCrash(a, err);
@@ -324,6 +401,12 @@ void loadService(SvcApp& a) {
         a.stopped = true;
         return;
     }
+
+    // Deps compartilhadas do servico: deps.json DELE, lido da flash UMA vez
+    // por carga (mesmo contexto dos reads acima, task do pump, fora de
+    // callback). Fica pinada em a.depsTable ate a thread sair; o dispatch so
+    // troca ponteiro. Sem memoria = tabela vazia (require reporta o erro).
+    jsDepsLoad(a.dir.c_str(), &a.depsTable, &a.depsCount);
 
     duk_push_heap_stash(s_heap);                 // [stash]
     duk_get_prop_string(s_heap, -1, "svcs");     // [stash, arr?]
@@ -390,6 +473,10 @@ void loadService(SvcApp& a) {
     }
     char* shrunk = (char*)realloc(src, len + 1);
     if (shrunk != nullptr) src = shrunk;
+    // require() do top-level consulta as deps DO SERVICO (antes: as do
+    // ultimo app, ou nenhuma no boot). Sem caminho de saida entre begin e
+    // end: pcompile/pcall devolvem codigo, nao lancam.
+    jsDepsSvcBegin(a.depsTable, a.depsCount);
     duk_push_string(a.thr, path.c_str());
     duk_int_t rc = duk_pcompile_lstring_filename(a.thr, 0, src, (duk_size_t)len);
     free(src);
@@ -399,6 +486,7 @@ void loadService(SvcApp& a) {
         rc = duk_pcall(a.thr, 0);
         CelerKernel::setExecSliceMs(kAppSliceMs);
     }
+    jsDepsSvcEnd();
     JSBindings::svcIdentityRestore();
     JSBindings::timersUseSvcHost(false);
     if (rc != DUK_EXEC_SUCCESS) {
@@ -459,6 +547,8 @@ void tick(bool inApp) {
     (void)inApp;
     if (s_suspended) return;  // resumeAfterApp reativa; o watchdog do
     // TimeManager assume (s_lastTickMs velho = servico "sem girar")
+    TickDepth depth;  // reentrancia + cemiterio de deps no giro mais externo
+    (void)depth;
     SvcGuard g;  // estado dos servicos exclusivo do pump enquanto gira
     if (LauncherUI::svcDirty) {
         LauncherUI::svcDirty = false;  // apps mudaram: redescobre (install/remocao)
@@ -516,6 +606,10 @@ void tick(bool inApp) {
             a.backoffAt = 0;
         }
         if (a.needsLoad) {
+            // startService marcou needsLoad num servico VIVO: (re)carga agora
+            // (contrato do header) — solta a thread velha antes de carregar;
+            // sem isto o svc start em servico no ar era no-op silencioso
+            if (a.thr != nullptr) releaseThread(a);
             loadService(a);
             if (millis() - t0 > kTickBudgetMs) return;  // round-robin
             continue;

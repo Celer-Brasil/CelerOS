@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <dirent.h>
+#include "esp_task_wdt.h"
 
 // =====================================================
 // FileSystem Bindings
@@ -48,7 +49,10 @@ duk_ret_t JSBindings::js_readTextFile(duk_context *ctx) {
     // abortava o aparelho. Agora malloc + jsPushOwnedString (uma copia) com
     // teto: 256 KB cobre o all.json da Loja (~58 KB) e texto de app.
     constexpr long kMaxText = 256 * 1024;
-    JSBindings::present();  // leitura grande (SD): quadro antes
+    // Presente no APP (quadro antes da leitura grande). No svchost NAO:
+    // present() bombearia os timers do app no heap/thread do servico.
+    if (!inService()) JSBindings::present();
+    else esp_task_wdt_reset();
     FILE* f = fopen(path, "rb");
     if (f == nullptr) { duk_push_null(ctx); return 1; }
     fseek(f, 0, SEEK_END);
@@ -135,6 +139,8 @@ duk_ret_t JSBindings::js_listDir(duk_context *ctx) {
     const char *path = duk_require_string(ctx, 0);
     // "/local/." etc. e pasta privada de outro app: lista vazia (como ausente)
     if (!inService()) present();  // servico: sem vidro/reentrada do app
+    else esp_task_wdt_reset();    // svchost: sem vidro, mas o readdir de uma
+                                  // pasta grande tambem e espera longa
     DIR* dir = fsPathAllowed(path) ? opendir(path) : nullptr;
     if (dir == nullptr) {
         duk_push_array(ctx);
@@ -217,7 +223,8 @@ duk_ret_t JSBindings::js_getFreeSpace(duk_context *ctx) {
 }
 
 duk_ret_t JSBindings::js_getFileMD5(duk_context *ctx) {
-    present();  // chamada bloqueante: o que o app desenhou aparece antes
+    if (!inService()) present();  // idem readTextFile: svchost so alimenta o TWDT
+    else esp_task_wdt_reset();
     const char *path = duk_require_string(ctx, 0);
     if (!fsPathAllowed(path)) fsDeny(ctx, path);
     std::string hash = FileSystem::getFileMD5(path);
@@ -255,7 +262,8 @@ duk_ret_t JSBindings::js_readFile(duk_context *ctx) {
         if (maxLen > 64 * 1024) maxLen = 64 * 1024;
     }
 
-    present();  // leitura de ate 64KB no SD: quadro antes
+    if (!inService()) present();  // leitura de ate 64KB no SD: quadro antes
+    else esp_task_wdt_reset();   // svchost: present() reentraria o pump do app
     FILE* f = fopen(path, "rb");
     if (f == nullptr) { duk_push_null(ctx); return 1; }
     fseek(f, 0, SEEK_END);
@@ -295,7 +303,8 @@ duk_ret_t JSBindings::js_writeFile(duk_context *ctx) {
     const bool atomic = strncmp(path, "/local/", 7) == 0;
     char tmp[kJsPathMax + 8];
     snprintf(tmp, sizeof(tmp), "%s%s", path, atomic ? ".tmp" : "");
-    present();  // escrita de ate 64KB (LittleFS fragmentado): quadro antes
+    if (!inService()) present();  // escrita de ate 64KB (LittleFS fragmentado): quadro antes
+    else esp_task_wdt_reset();
     FILE* f = fopen(tmp, "wb");
     if (f == nullptr) { duk_push_boolean(ctx, 0); return 1; }
     bool ok = fwrite(data, 1, len, f) == len;

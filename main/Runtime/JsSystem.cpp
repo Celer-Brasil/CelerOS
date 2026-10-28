@@ -75,6 +75,10 @@ bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
     *jx = (int)tx * 240 / tftInstance->width();
     int offY = s_topbarFixed ? UI::topbarH() : 0;
     *jy = ((int)ty - offY) * 320 / ((int)tftInstance->height() - offY);
+    // toque na faixa da topbar que o chrome NAO consumiu: y virtual negativo
+    // — o cast direto devolvia ~-3 a -40 ao app (o caminho multi clampa
+    // desde a API 43; o getTouch simples ficou de fora do mesmo corte)
+    if (*jy < 0) *jy = 0;
     return true;
 #else
     (void)tx; (void)ty; (void)touched;  // sem vidro: nao ha dedo nem chrome
@@ -124,8 +128,12 @@ size_t JSBindings::readAppTouches(duk_context *ctx, kui::TouchPoint *out, size_t
             out[i].y = pts[i].y;
         } else {
             out[i].x = (uint16_t)((int)pts[i].x * 240 / tftInstance->width());
-            out[i].y = (uint16_t)(((int)pts[i].y - offY) * 320 /
-                                  ((int)tftInstance->height() - offY));
+            // dedo secundario DENTRO da faixa da topbar (o primario e
+            // consumido pelo chrome, o secundario nao): y virtual negativo —
+            // o cast direto em uint16 dava a volta (app via y ~65400)
+            int vy = ((int)pts[i].y - offY) * 320 / ((int)tftInstance->height() - offY);
+            if (vy < 0) vy = 0;
+            out[i].y = (uint16_t)vy;
         }
         out[i].id = pts[i].id;
         out[i].size = pts[i].size;

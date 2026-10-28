@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "esp_task_wdt.h"
 
 // =====================================================
 // USB (API 48): USB Host cru para drivers em JS
@@ -53,8 +54,10 @@ uint32_t optTimeout(duk_context* ctx, duk_idx_t idx) {
     return (uint32_t)v;
 }
 
-// Copia um array de bytes do JS (cada elemento 0..255).
-size_t readBytes(duk_context* ctx, duk_idx_t idx, uint8_t* buf, size_t cap, const char* what) {
+// Validacao SEM buffer: readBytes lanca (tipo/valor/teto) e o chamador com
+// malloc feito antes do launch vazaria o buffer (longjmp pula o free) —
+// valide ANTES do malloc e copie depois.
+void validateBytes(duk_context* ctx, duk_idx_t idx, size_t cap, const char* what) {
     if (!duk_is_array(ctx, idx)) jsThrowMsg(ctx, DUK_ERR_TYPE_ERROR, what);
     const duk_size_t n = duk_get_length(ctx, idx);
     if (n > cap) jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, what);
@@ -63,6 +66,17 @@ size_t readBytes(duk_context* ctx, duk_idx_t idx, uint8_t* buf, size_t cap, cons
         const int v = duk_get_int(ctx, -1);
         duk_pop(ctx);
         if (v < 0 || v > 255) jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, what);
+    }
+}
+
+// Copia um array de bytes do JS (cada elemento 0..255).
+size_t readBytes(duk_context* ctx, duk_idx_t idx, uint8_t* buf, size_t cap, const char* what) {
+    validateBytes(ctx, idx, cap, what);
+    const duk_size_t n = duk_get_length(ctx, idx);
+    for (duk_size_t i = 0; i < n; i++) {
+        duk_get_prop_index(ctx, idx, (duk_uarridx_t)i);
+        const int v = duk_get_int(ctx, -1);
+        duk_pop(ctx);
         buf[i] = (uint8_t)v;
     }
     return (size_t)n;
@@ -96,10 +110,13 @@ int pushResult(duk_context* ctx, const UsbHost::Result& r, bool withData, const 
 }
 
 // Chamada que espera o URB: no app cede o quadro (jsBlocking); no svchost so
-// renova a janela do executor.
+// renova a janela do executor. A entrada TAMBEM alimenta o TWDT (mesmo
+// padrao de Net.request/otaCheck no servico): o URB pode esperar o timeout
+// inteiro (5 s) sem nenhum outro ponto de cedida no caminho.
 template <typename F>
 auto usbCall(F&& f) -> decltype(f()) {
     if (JSBindings::inService()) {
+        esp_task_wdt_reset();
         auto r = f();
         CelerKernel::noteAppYield();
         return r;
@@ -240,6 +257,8 @@ duk_ret_t JSBindings::js_usbControlOut(duk_context *ctx) {
     const uint8_t req = requireU8(ctx, 2, "USB.controlOut: bRequest 0..255");
     const uint16_t val = requireU16(ctx, 3, "USB.controlOut: wValue 0..65535");
     const uint16_t idx = requireU16(ctx, 4, "USB.controlOut: wIndex 0..65535");
+    // valida ANTES do malloc: um elemento invalido lancaria com o buffer vivo
+    validateBytes(ctx, 5, UsbHost::kMaxControl, "USB.controlOut: data 0..255");
     uint8_t* buf = (uint8_t*)malloc(UsbHost::kMaxControl);
     if (buf == nullptr) jsThrowMsg(ctx, DUK_ERR_ERROR, "USB.controlOut: sem RAM");
     const size_t len = readBytes(ctx, 5, buf, UsbHost::kMaxControl, "USB.controlOut: data 0..255");
@@ -256,6 +275,8 @@ duk_ret_t JSBindings::js_usbOut(duk_context *ctx) {
     const uint8_t addr = requireAddr(ctx, 0);
     const uint8_t ep = requireU8(ctx, 1, "USB.out: endpoint 0..255");
     if ((ep & 0x80) != 0) jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, "USB.out: endpoint IN (use USB.in)");
+    // valida ANTES do malloc (mesmo motivo do controlOut)
+    validateBytes(ctx, 2, UsbHost::kMaxTransfer, "USB.out: data 0..255");
     uint8_t* buf = (uint8_t*)malloc(UsbHost::kMaxTransfer);
     if (buf == nullptr) jsThrowMsg(ctx, DUK_ERR_ERROR, "USB.out: sem RAM");
     const size_t len = readBytes(ctx, 2, buf, UsbHost::kMaxTransfer, "USB.out: data 0..255");

@@ -280,7 +280,13 @@ duk_ret_t JSBindings::js_storageClearFor(duk_context *ctx) {
     if (!perm(celer::PERM_SYSTEM)) {
         duk_error(ctx, DUK_ERR_ERROR, "Storage.clearFor requer permissao \"system\"");
     }
-    std::string pkg = duk_require_string(ctx, 0);
+    // package tem no maximo 64 chars: teto antes da copia (std::string que
+    // cresce sem excecao aborta o aparelho)
+    const char* p = duk_require_string(ctx, 0);
+    if (strlen(p) > 64) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Storage.clearFor: package longo demais");
+    }
+    std::string pkg(p);
     bool ok = storageClearPackage(pkg);
     // a loja chama na desinstalacao: a concessao de permissoes vai junto
     // (reinstalar pede consentimento de novo)

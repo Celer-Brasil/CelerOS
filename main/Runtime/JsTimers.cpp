@@ -137,7 +137,9 @@ void JSBindings::timersTick(duk_context* ctx) {
             if (h.slotCrash != nullptr) {
                 // svchost: o erro e CONSUMIDO aqui (sem frame protegido no
                 // pump, o duk_throw ia ao fatal handler = reboot/boot loop).
-                // O dono para (noteCrash + timersClearCtx); os outros seguem.
+                // O dono para (noteCrash + timersClearCtx). O hook e DONO da
+                // pilha do erro: svcSlotCrash copia a string e faz o pop dele
+                // proprio — um pop extra aqui descia ABAIXO da base da thread.
                 h.slotCrash(tctx, duk_safe_to_string(tctx, -1));
                 continue;
             }
@@ -202,6 +204,9 @@ static duk_ret_t timerClear(duk_context *ctx) {
     if (id < 1) return 0;
     for (int i = 0; i < kTimerSlots; i++) {
         if (!h.slots[i].used || h.slots[i].id != id) continue;
+        // ids sao POR HOST (no svchost o nextId e unico): um servico nao pode
+        // cancelar o timer de OUTRO — slot de outro ctx fica de fora
+        if (h.slots[i].ctx != nullptr && h.slots[i].ctx != ctx) continue;
         duk_context* tctx = h.slots[i].ctx != nullptr ? h.slots[i].ctx : ctx;
         h.slots[i].used = false;
         timerStashArray(tctx);

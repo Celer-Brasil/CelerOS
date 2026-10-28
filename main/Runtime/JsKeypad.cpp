@@ -158,9 +158,17 @@ duk_ret_t JSBindings::js_keypadOpen(duk_context *ctx) {
     bool mask = false;
     char hint = 0;
     if (duk_is_object(ctx, 0)) {
-        if (duk_get_prop_string(ctx, 0, "title") && duk_is_string(ctx, -1)) title = duk_get_string(ctx, -1);
+        // teto ja na copia: atribuir a string crua e DEPOIS resize copia tudo
+        // duas vezes (std::string que cresce sem excecao aborta o aparelho)
+        if (duk_get_prop_string(ctx, 0, "title") && duk_is_string(ctx, -1)) {
+            const char* t = duk_get_string(ctx, -1);
+            title.assign(t ? t : "", strnlen(t ? t : "", 64));
+        }
         duk_pop(ctx);
-        if (duk_get_prop_string(ctx, 0, "initial") && duk_is_string(ctx, -1)) initial = duk_get_string(ctx, -1);
+        if (duk_get_prop_string(ctx, 0, "initial") && duk_is_string(ctx, -1)) {
+            const char* t = duk_get_string(ctx, -1);
+            initial.assign(t ? t : "", strnlen(t ? t : "", 256));
+        }
         duk_pop(ctx);
         if (duk_get_prop_string(ctx, 0, "maxLen") && duk_is_number(ctx, -1)) maxLen = duk_get_int(ctx, -1);
         duk_pop(ctx);

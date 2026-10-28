@@ -151,7 +151,11 @@ void flashLed(bool on) {
         esp_timer_create_args_t ta = {};
         ta.callback = flashTimerCb;
         ta.name = "cam_flash";
-        esp_timer_create(&ta, &s_flashTimer);
+        // create falhou (sem RAM pro timer): NEM ACENDE — o teto termico de
+        // 800 ms e o timer que o aplica; sem ele o LED ficava aceso ate o
+        // flashLed(false) do app (que pode nunca vir). Proxima chamada tenta
+        // de novo (s_pinCfg so trava com o timer criado).
+        if (esp_timer_create(&ta, &s_flashTimer) != ESP_OK) return;
         s_pinCfg = true;
     }
     const int64_t now = esp_timer_get_time();
@@ -678,6 +682,11 @@ duk_ret_t JSBindings::js_cameraSave(duk_context *ctx) {
         duk_push_int(ctx, -1);
         return 1;
     }
+    // "<path>.tmp" e um std::string: caminho absurdo (app hostil) abortaria
+    // o aparelho no crescimento sem excecoes (mesmo teto do FS.writeFile)
+    if (strlen(path) > kJsPathMax) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "Camera.save: caminho longo demais");
+    }
     if (!perm(celer::PERM_FS) || !fsWriteAllowed(path)) {  // lint-perm: fs
         // mesma regra do FS.writeFile/Pack.snap: a permissao "camera" libera
         // o sensor, gravar arquivo no disco pede "fs"
@@ -777,7 +786,12 @@ duk_ret_t JSBindings::js_cameraScanQR(duk_context *ctx) {
         duk_push_null(ctx);
         return 1;
     }
-    duk_push_lstring(ctx, out.data(), (duk_size_t)out.size());
+    // push protegido: duk_push_lstring lanca (longjmp) sem RAM e o std::string
+    // `out` vazaria (destrutor nao roda no longjmp) — mesmo padrao do
+    // jsPushOwnedString (JsInternal.h), com o buffer dono vivo na pilha
+    JsPushBuf b{out.data(), out.size()};
+    duk_int_t rc = duk_safe_call(ctx, jsPushBufSafe, &b, 0, 1);
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
     return 1;
 }
 

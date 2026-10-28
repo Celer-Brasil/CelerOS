@@ -716,9 +716,11 @@ inline void subStep(World* w, float dt, float gx, float gy) {
 inline int step(World* w, float dt, float gx, float gy, int maxSub) {
     // dt denormal (1e-45 passa no dt > 0): sdt subnormal e invDt = inf —
     // pbias vira inf, bvx inf e a posicao NaN (probe). Step menor que um
-    // microssegundo nao move nada mesmo: descarta
-    if (!(dt >= 1e-6f)) return 0;
-    // NaN tambem cai aqui (comparacao falsa) — igual dt <= 0
+    // microssegundo nao move nada mesmo: descarta. NaN/infinito tambem:
+    // !(dt >= 1e-6) so cobre o NaN — dt = +inf PASSAVA, sdt virava inf e a
+    // posicao de todo corpo acordado virava NaN (mundo morto para sempre,
+    // o mesmo vfin do stepWorld do Verlet2D)
+    if (!finf(dt) || dt < 1e-6f) return 0;
     if (!(maxSub >= 1)) maxSub = 1;
     if (maxSub > kMaxSub) maxSub = kMaxSub;
     // gravidade nao-finita vinda de conta errada do app envenenaria v de

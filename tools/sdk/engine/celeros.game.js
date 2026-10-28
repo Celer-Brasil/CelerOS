@@ -15,10 +15,10 @@
 // require faz o core ser singleton) e pendura o tick em E._modTicks, que
 // o loop chama antes do update da cena. Quem adota pouco paga pouco: as
 // deps contam no teto do app MESMO compartilhadas (cada app compila o
-// modulo no proprio heap) — o core sozinho ja ocupa ~47KB enxutos, medidos
-// com tools/sdk/lib/jsstrip.js: jogo so-core NAO cabe no teto de 48KB sem
-// psram. Feature nova entra em modulo, nao no core; confira o tamanho antes
-// de planejar (Documentation/Game_Engine_Guide).
+// modulo no proprio heap) — o core sozinho ocupa ~50KB minificados (63KB
+// enxutos), medidos com jsstrip: cabe sozinho no teto de 64KB sem psram,
+// mas qualquer jogo real soma o kit de UI e o app. Feature nova entra em
+// modulo, nao no core; confira o tamanho antes de planejar (Game_Engine_Guide).
 // O pacote "celeros.engine" e a familia montada (compatibilidade 1.2.x).
 // Fisica (P.hit/verlet/rigid) e a dep "celeros.physics"; grades de IA a
 // "celeros.grid"; sons de tabela a "celeros.sfx". Recursos do firmware

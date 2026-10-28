@@ -65,6 +65,8 @@ declare namespace E {
         /** libera o slot do sheet e todas as regioes dele */
         freeSheet(name: string): void;
         has(name: string): boolean;
+        /** id do slot do sprite (0 se nao existe) — para blit/drawSprite direto */
+        id(name: string): number;
         /** true se esta num slot real (blit com cor-chave); false = painter */
         backed(name: string): boolean;
         /** Blit do sprite/regiao. Sem slot E sem painter (PNG falhou e a def

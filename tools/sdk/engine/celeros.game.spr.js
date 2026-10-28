@@ -41,6 +41,8 @@
 // 1.5.2: stamp dentro de um sprite (E.spr.alvo: prescale, fundo gravado)
 // nao registra caixa suja de TELA — a coordenada e do sprite, e a caixa
 // falsa repintava um pedaco do vidro a toa no quadro seguinte.
+// 1.7.3: E.spr.id(nome) expoe o id do slot (0 se ausente) — o jogo blita o
+// fundo com System.blitSprite sem ler o _slots interno.
 // 1.6.0: os slots passam a ser alocados por E.slots (ledger do core): o
 // dono aparece no log quando falta slot ("sem slot de sprite para spr:x"),
 // e a contagem e uma so (E.spr._used segue valendo, escrita pelo ledger).
@@ -108,7 +110,7 @@ function reciclado(s) {
 // o firmware informa o limite do pool (System.spriteSlots, API 29; 8 com
 // PSRAM); o que nao couber vira painter procedural
 E.spr = {
-    version: '1.7.2',
+    version: '1.7.3',
     bases: [],
     // sprite que esta recebendo desenho (useSprite) — quem grava num sprite
     // (world.bake) marca aqui para o stamp nao usar o atalho do quadro
@@ -165,6 +167,13 @@ E.spr = {
     },
 
     has: function (name) { return !!E.spr._slots[name]; },
+
+    // id do slot do sprite (0 se nao existe) — para System.blitSprite/drawSprite
+    // direto no jogo sem tocar no _slots interno
+    id: function (name) {
+        var s = E.spr._slots[name];
+        return s ? s.id : 0;
+    },
 
     // {w, h} do sprite/regiao carregado (null se nao existe) — layout e
     // colisao sem repetir as medidas do load

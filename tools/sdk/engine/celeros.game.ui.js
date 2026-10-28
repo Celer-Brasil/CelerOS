@@ -16,6 +16,9 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme) por baixo dos tokens.
 //
+// 1.3.2: a assinatura do HUD memoizado leva geometria (x/y/w/h) e as cores
+// (bg/life/coin/score/time): mudar so cor/posicao repinta em vez de servir
+// HUD velho (a caixa movida nunca apagava a anterior).
 // 1.3.1: os 12 icones comuns (back/close/check/gear/wifi/star/play/
 // search/menu/heart/info/alert) saem para o modulo compartilhado
 // celeros.ui.icons (mesma tabela do CelerKit); a UI mantem os extras
@@ -445,7 +448,7 @@ function dialogInput(d, o, x, y, w, h) {
 // ------------------------------------------------------------ E.ui ---------
 
 E.ui = {
-    version: '1.3.1',
+    version: '1.3.2',
     tokens: TK,
 
     // patch de tokens (aceita '#rrggbb'); guarda para reaplicar se o E.theme
@@ -1048,6 +1051,7 @@ E.ui = {
         ensure();
         var st = { items: o.items || [], row: o.row || Math.round(28 * E.U),
                    scroll: 0, _dragOn: false, _dragY: 0, _vel: 0,
+                   bar: o.scrollbar !== false,
                    onPick: o.onPick || null, picked: null, index: -1 };
         st.scrollTo = function (index) {
             st.scroll = index * st.row;
@@ -1168,7 +1172,7 @@ E.ui = {
                 }
             }
             if (E.caps.clip) S.clearClip();
-            scrollbar(x, y, w, h, content, st.scroll, maxScroll);
+            if (st.bar) scrollbar(x, y, w, h, content, st.scroll, maxScroll);
             return fired;
         };
         return st;
@@ -1662,7 +1666,13 @@ E.ui = {
                   (o.maxLives === undefined ? '' : o.maxLives) + '|' +
                   (o.coins === undefined ? '' : o.coins) + '|' +
                   (o.time === undefined ? '' : o.time) + '|' +
-                  (o.level === undefined ? '' : o.level);
+                  (o.level === undefined ? '' : o.level) + '|' +
+                  bx + ',' + y + ',' + bw + ',' + h + ',' +
+                  (o.bg === undefined ? '' : o.bg) +
+                  (o.lifeColor === undefined ? '' : o.lifeColor) +
+                  (o.coinColor === undefined ? '' : o.coinColor) +
+                  (o.scoreColor === undefined ? '' : o.scoreColor) +
+                  (o.timeColor === undefined ? '' : o.timeColor);
         var i;
         if (o.left) for (i = 0; i < o.left.length; i++) {
             sig += '|L' + (o.left[i].icon || '') + ':' + o.left[i].text +

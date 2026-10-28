@@ -38,6 +38,8 @@ declare namespace E {
         row: number;
         onPick: ((value: any, index: number) => void) | null;
         scroll: number;
+        /** barra de rolagem ligada (opts.scrollbar, default true) */
+        bar: boolean;
         /** rola ate a linha index ficar no topo */
         scrollTo(index: number): void;
         scrollBy(dy: number): void;
@@ -113,6 +115,8 @@ declare namespace E {
     interface UiListOpts {
         items: (string | ListItem)[];
         row?: number;
+        /** fonte do texto das linhas (default 'body'; 'small' quando tem sub) */
+        ts?: 'tiny' | 'small' | 'body' | 'label' | 'big' | 'title' | 'huge';
         onPick?: (value: any, index: number) => void;
         pad?: number;
         r?: number;
@@ -138,7 +142,6 @@ declare namespace E {
     interface UiModalOpts {
         /** default true; false anima a saida e depois devolve null */
         open?: boolean;
-        id?: string;
         w?: number; h?: number; x?: number; y?: number;
         title?: string;
         body?: string;
@@ -197,11 +200,11 @@ declare namespace E {
         /** soft (default), flat, neon, paper */
         preset(name: 'soft' | 'flat' | 'neon' | 'paper'): UiTokens;
         resetTheme(): UiTokens;
-        /** icone vetorial (24 nomes); rect em scratch */
+        /** icone vetorial (13 compartilhados + 18 extras do kit); rect em scratch */
         icon(name: string, x: number, y: number, size?: number,
              o?: { color?: number; w?: number }): Rect;
         stack(x: number, y: number, w: number, o?: {
-            dir?: 'v' | 'h'; gap?: number; pad?: number;
+            dir?: 'v' | 'h'; gap?: number;
         }): UiStack;
         grid(x: number, y: number, w: number, cols: number, o?: {
             gap?: number; rowH?: number;
@@ -265,7 +268,6 @@ declare namespace E {
             realtime?: boolean; tap?: boolean;
             choices?: (string | { label: string; icon?: string })[];
             sound?: boolean; soundEvery?: number;
-            bg?: number; r?: number; elev?: number;
         }): Dialog;
         /** modal centrado com veu + card + botoes; devolve o value/'dismiss'/null */
         modal(id: string, o: UiModalOpts,

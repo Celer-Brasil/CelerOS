@@ -21,7 +21,7 @@ aparelho compila), medidos em 2026-10 — confira com
 de planejar. As quebras de linha são preservadas, então a linha do erro no
 device continua batendo com o repo.
 
-Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho já passa do teto de 48 KB sem PSRAM** (65 KB desde a 1.7.0; 51 KB na 1.5), então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~119 KB e a família inteira ~255 KB.
+Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho são ~50 KB minificados (63 KB enxutos)**, dentro do teto de 64 KB sem PSRAM, mas qualquer jogo real soma o kit de UI (~40 KB) e o código do app, então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~90 KB e a família inteira ~255 KB.
 
 Tudo é ES5 (Duktape) e detecta os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
 
@@ -31,9 +31,9 @@ Tudo é ES5 (Duktape) e detecta os recursos do firmware em tempo de execução, 
 |---|---|
 | API do firmware | 23+ para módulos; **30+** para as deps compartilhadas (recursos novos — primitivas smooth, `playMusic`, canvas nativo — são auto-detectados) |
 | Placas-alvo | As ESP32-S3 com PSRAM: SmartDisplay, watch Waveshare, cão SpotPear |
-| Orçamento de tamanho | Deps somam no teto do app MESMO compartilhadas (compilam no heap de cada jogo): **o core sozinho são ~51 KB enxutos**, acima do teto simples de 48 KB — apps com a engine declaram `"requires": ["psram"]`, o que sobe o teto para 1 MB (a loja passa a bloquear install em placa sem PSRAM). O hub mede as deps **enxutas**, como o aparelho compila |
+| Orçamento de tamanho | Deps somam no teto do app MESMO compartilhadas (compilam no heap de cada jogo): **o core sozinho são ~50 KB minificados (63 KB enxutos)**, dentro do teto simples de 64 KB, mas core + kit de UI + código do app não — apps com a engine declaram `"requires": ["psram"]`, o que sobe o teto para 1 MB (a loja passa a bloquear install em placa sem PSRAM). O hub mede as deps **enxutas**, como o aparelho compila |
 | Sabor do app | `"topbar": false` para jogos em tela cheia (como o Supernova) é recomendado; o botão de saída mora no menu de título do seu jogo (`System.exitApp()`) |
-| CYD (sem PSRAM) | A engine **não roda** na CYD: sem PSRAM o teto é 48 KB e o core sozinho passa disso. Na CYD, app usa a API JS direto (`System`/`UI`), como os apps de sistema; nenhum jogo do catálogo roda nela hoje (todos declaram `psram`) |
+| CYD (sem PSRAM) | O core da engine sozinho agora cabe no teto de 64 KB, mas todo jogo do catálogo soma o kit de UI (~40 KB) e o código do app e declara `psram`; nenhum jogo do catálogo roda nela hoje. Na CYD, app usa a API JS direto (`System`/`UI`), como os apps de sistema |
 
 ## 2. Começando
 
@@ -1038,7 +1038,7 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 
 ## 18. Tamanho e performance
 
-- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~51 KB minificados, fx ~10, ui ~41, spr ~12, tilemap ~3 (família inteira ~131 KB). Como o core sozinho já passa de 48 KB, app com a engine declara `"requires": ["psram"]` (teto de 1 MB). O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: sem comentários/indentação, nomes locais encurtados, quebras mantidas — a linha do erro continua batendo com o fonte), que é exatamente o que o aparelho compila; o JsStripper do firmware é idempotente nessa saída.
+- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~50 KB minificados (63 KB enxutos), fx ~10, ui ~40, spr ~12, tilemap ~3 (família inteira ~131 KB). O core sozinho cabe no teto de 64 KB, mas o kit de UI mais o código do app não — app com a engine declara `"requires": ["psram"]` (teto de 1 MB). O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: sem comentários/indentação, nomes locais encurtados, quebras mantidas — a linha do erro continua batendo com o fonte), que é exatamente o que o aparelho compila; o JsStripper do firmware é idempotente nessa saída.
 - **Zero alocação por frame**: use `E.pool`, remoção swap-pop e reúso de objetos. Um `new`/`[...]` por frame por entidade é o que dispara pausa de GC. Desde a engine 1.2.3 os wrappers também não alocam: chamadas de `E.gfx.*` sem opts compartilham um objeto só de leitura, a busca do `E.font` é memoizada e a largura de cada string (`textWidth`) é medida uma vez por estilo — HUD/placar/botão repetidos não custam chamadas de firmware.
 - Se você chama `System.setTextDatum` direto, devolva o `0` ao terminar: a engine 1.2.3 só toca no datum quando o texto pede origem diferente do default, então o `E.gfx.text` confia que o app o deixou em `0` (todos os apps do repo já fazem).
 - Evite `fillScreen` + redesenho total por frame: no painel RGB do SmartDisplay (framebuffer varrido da PSRAM) isso estrangula o DMA do LCD e a imagem treme. Use cenas `static`, `E.dirty` e `E.tilemap` (§16b).
@@ -1107,7 +1107,8 @@ regras abaixo foram o que fez a diferença.
 
 Rodada vinda do estudo do **deki-engine** (veja `DekiEngine_Estudo.pt-BR.md`). Tudo aditivo:
 declare `^1.5.0` no core (e `^1.6.0` no spr) para usar. **Atenção ao tamanho**: com esta
-rodada o core sozinho passou de 48 KB enxutos — app com a engine declara `"requires": ["psram"]`.
+rodada o core sozinho (~50 KB minificados) cabe no teto de 64 KB, mas o kit de UI mais o
+código do app não — app com a engine declara `"requires": ["psram"]`.
 
 ### `E.prof` — onde vão os milissegundos
 

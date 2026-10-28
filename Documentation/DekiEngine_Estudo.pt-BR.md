@@ -80,6 +80,10 @@ Medido nesta árvore com `tools/sdk/lib/jsstrip.js` (o que o aparelho compila):
 Teto sem PSRAM: **48 KB = 49.152 B** (`tools/celerhub.py:59-65`, espelhado no
 servidor). Com `"requires": ["psram"]`: 1 MB.
 
+> **Atualizacao 2026-10-28:** o teto sem PSRAM subiu para **64 KB (65.536 B)**.
+> O core (~50 KB minificados) passa a caber sozinho; a conta de folga abaixo e
+> as conclusoes que dependem do teto de 48 KB ficam como historico.
+
 **Consequência dura:** um jogo só-core tem **864 B** de folga na placa sem PSRAM
 (CYD). Qualquer byte novo no core transforma "roda na CYD" em "exige psram" —
 ou seja, **crescimento do core hoje é breaking change**. Toda ideia abaixo é

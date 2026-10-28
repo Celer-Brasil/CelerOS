@@ -1,1658 +1,447 @@
-// CelerOS App Store v3 — app de sistema com abas. Le o catalogo do CelerOS
-// Hub (os.celer.tec.br; 2 HTTPS: indice + "Todos"), instala/atualiza apps em
-// /local/apps ou /sd/apps, desinstala e ATUALIZA A SI MESMA (celeros.appstore
-// esta no proprio catalogo: gravar os arquivos em disco basta — o main.js e
-// relido do disco a cada abertura; ao se atualizar, a loja pede sair/reabrir).
+// CelerOS App Store 3.0 — loja de apps do CelerOS Hub (os.celer.tec.br).
+// Refeita no CelerKit UI 2.0 (celeros.app/style/icons/list/caps): abas e
+// categorias segmentadas, linhas ricas (icone, versao, badge de estado,
+// barras de tamanho), detalhe em folha com descricao/changelog/permissoes e
+// os overlays de busy/progresso/ok/erro do kit. CYD-f0: sem PSRAM o
+// catalogo vem por getJSON/categoria (o all.json de ~106 KB so por
+// Net.download em placa com PSRAM), o cache gravado e compacto e o indice de
+// deps vem por Net.get (o download streaming e so em placa com PSRAM).
 //
-// Interface no toolkit UI (API 22):
-//   [Loja | Atualizar | Instalados]  abas (UI.tabs) no topo do canvas
-//   Loja:        Buscar + seletor de categoria + lista com o estado de cada
-//                app a direita (Novo / Instalado / Atualizar / API / PSRAM)
-//   Atualizar:   so apps com versao nova (vLocal > vRemota + changelog),
-//                rodape "Atualizar tudo" (a propria loja vai por ultimo)
-//   Instalados:  instalados, com Desinstalar no detalhe (dupla confirmacao
-//                p/ app de sistema)
-// Instalacao: quando o hub publica it.zip = {url, size, md5} e o firmware
-// tem System.installZip (API 42), o pacote inteiro vem em 1 download e a
-// pasta e trocada de uma vez; senao, arquivo a arquivo: main.js em
-// <pkg>/main.js.new via Net.download (streaming, sem teto de 32KB), MD5 do
-// catalogo conferido e rename em lote (app.json incluido) no mesmo FS. A
-// pasta alvo e RESOLVIDA por packageName (primeira vista na ordem do
-// listDir, mesma regra do launcher) — updates in-place nao criam copias
-// sombreadas de apps preinstalados ("App Store" vs celeros.appstore) e as
-// duplicatas antigas sao removidas apos o update. X no canto sup. sai.
+// Catalogo: /store/index.json (categorias) -> all.json (PSRAM, 1 download)
+// -> uma request por categoria (CYD). all.txt (TSV compacto) continua
+// aceito pelo parser exposto ao harness, mas o hub de hoje responde 404.
+// Instalacao por arquivos com staging .new, MD5 do catalogo por arquivo e
+// rename em lote (a versao nova so aparece junto; nada de meia versao) e
+// app.json no mesmo lote; pacote unico (System.installZip, API 42) quando o
+// hub publica zip. Deps resolvidas por semver no /store/deps.json e
+// servidas do cache /local/modules; deps.json gravado por ultimo (commit do
+// conjunto). Update de engine baixa so as versoes novas e regrava o
+// deps.json sem reinstalar o app. O App Store se atualiza pelo proprio
+// catalogo: gravar os arquivos basta, o main.js e relido do disco.
+//
+// Estados: carregando, Wi-Fi fora, erro de rede, catalogo vazio/parcial,
+// progresso, sucesso, conflito de versao (local mais nova que o hub) e app
+// incompativel (API/PSRAM). O app.json do pacote e a fonte de
+// files/requires/permissoes no install; permissoes novas pedem consentimento.
 
-var INDEX_URL = "https://os.celer.tec.br/store/index.json";
-var HUB_BASE = INDEX_URL.substring(0, INDEX_URL.indexOf("/store/"));
-// Catalogo compacto (hub >= 0.16): 1 request, 14 campos por linha, sem
-// JSON. Resolve o corte de 32 KB do Net.get que forcava 5 categorias na CYD.
-var ALL_TXT = HUB_BASE + "/store/all.txt";
-// Cache de dependencias compartilhadas (API 30): /local/modules/<nome>/
-// <versao>/<nome>.js — escrita permitida a system apps (a loja e uma).
-// Compatibilidade de hardware: apps com requires ["psram"] sao bloqueados
-// em placa sem PSRAM (badge "Requer PSRAM"). Fallback para catalogo antigo
-// sem o campo: teto DINAMICO pela RAM da placa, calibrado na CYD
-// (61KB roda, 82KB nao compila -> (appRAM - 60000) * 0,4 = ~66KB).
-var HWINFO = System.getInfo ? System.getInfo() : null;
-var NO_PSRAM = !!(HWINFO && HWINFO.totalPSRAM === 0);
-// so tenta o all.json inteiro (dezenas de KB no heap) quando o PSRAM existe
-// de fato; totalPSRAM ausente (firmware antigo) = caminho conservador
-var HAS_PSRAM = !!(HWINFO && HWINFO.totalPSRAM > 0);
-var PSRAM_MAX_JS = !NO_PSRAM ? Infinity
-    : HWINFO.appRAM ? Math.max(4096, Math.floor((HWINFO.appRAM - 60000) * 0.4))
-    : Math.max(4096, Math.floor(((HWINFO.freeRAM || 0) - 52000) / 1.7));
-// requires psram declarado vence; heuristica cobre catalogo antigo
-function needsPsram(it) { return (it.req && it.req.indexOf("psram") >= 0) || (it.size || 0) > PSRAM_MAX_JS; }
+var IU = "https://os.celer.tec.br/store/index.json";
+var HB = IU.substring(0, IU.indexOf("/store/")); var CA = "/local/appstore_cache.json"; var SP = "celeros.appstore"; var FL = "/local/config_install_sd.txt";
+var TP = "/local/hub_token.txt";
 
-// Flag "instalar no SD" no NVS de settings (F3; System.setting). Arquivo
-// legado continua valendo para firmware antigo.
-var FLAG_SD = "/local/config_install_sd.txt";
-function installOnSd() {
-    if (System.setting) {
-        var v = System.setting("install_sd");
-        if (v !== null) return v === "1";
-    }
-    return FS.exists(FLAG_SD);
-}
-var CACHE = "/local/appstore_cache.json";
-var STORE_PKG = "celeros.appstore";
+// ---- CelerKit UI 2.0 -------------------------------------------------------
+var A = require("celeros.app"); require("celeros.app.style"); require("celeros.app.icons"); require("celeros.app.list"); require("celeros.app.caps"); A.init();
+var T = A.style.preset("soft"); var L = A.L; var CAP = A.caps.probe(); var PS = !!CAP.psram; var NP = !PS; var SM = !!CAP.small;
+var API = System.getAPILevel(); var IS = SM ? 44 : 56;
 
-var T = System.theme();
-var API = System.getAPILevel();
+// requires psram declarado vence; catalogo sem o campo cai na heuristica
+// calibrada na CYD (61 KB roda, 82 KB nao compila).
+var HI = System.getInfo ? System.getInfo() : null; var PM = !NP ? Infinity
+    : HI && HI.appRAM ? Math.max(4096, Math.floor((HI.appRAM - 60000) * 0.4)) : Math.max(4096, Math.floor(((HI && HI.freeRAM || 0) - 52000) / 1.7));
+function NPS(j) { return (j.req && j.req.indexOf("psram") >= 0) || (j.size || 0) > PM; }
 
-// ---- utilitarios -------------------------------------------------------------
-function baseName(p) {
-    var i = p.lastIndexOf("/");
-    return i >= 0 ? p.substring(i + 1) : p;
-}
-
-function dirName(p) {
-    var i = p.lastIndexOf("/");
-    return i > 0 ? p.substring(0, i) : p;
-}
-
-function fmtKB(n) {
-    if (!n || n <= 0) return "";
-    if (n < 1024) return n + " B";
-    var kb = Math.round(n / 102.4) / 10;
-    return (kb % 1 ? kb : kb.toFixed(0)) + " KB";
-}
+// ---- utilitarios -----------------------------------------------------------
+function bn(p) { var i = p.lastIndexOf("/"); return i >= 0 ? p.substring(i + 1) : p; } function fk(n) { if (!n || n <= 0) return ""; if (n < 1024) return n + " B";
+    var k = Math.round(n / 102.4) / 10; return (k % 1 ? k : k.toFixed(0)) + " KB"; }
+function K(o) { var n = 0, k; for (k in (o || {})) if (o.hasOwnProperty(k)) n++; return n; }
+function D(p) { try { FS.deleteFile(p); } catch (e) {} } function M(p) { var m = ""; try { m = FS.getFileMD5(p); } catch (e) { m = ""; } return m; } function N(u, p, cb) { var ok = false; try { ok = Net.download(HU(u), p, cb); } catch (e) { ok = false; } return ok; } function MK(p) { if (FS.isDirectory(p)) return true; return FS.mkdir(p); }
 
 // ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
-// ---- rede (Net bloqueante; qualquer erro vira null/false) ------------------
-// Token de leitura do hub (apps/deps privados): /local/hub_token.txt, uma
-// linha, gravado no provisionamento do device. Sem o arquivo o comportamento
-// e o de sempre (so catalogo publico). Net.download nao manda header, entao o
-// token vai em ?token= — o hub aceita header ou query. So URLs do NOSSO hub
-// recebem o token (nada de vazar credencial para terceiros).
-var TOKEN_PATH = "/local/hub_token.txt";
-var _hubTok = null;
-function hubToken() {
-    if (_hubTok === null) {
-        _hubTok = "";
-        try {
-            if (FS.exists(TOKEN_PATH)) {
-                var t = FS.readTextFile(TOKEN_PATH) || "";
-                t = t.replace(/^\s+/, "").replace(/\s+$/, "");
-                if (t) _hubTok = t;
-            }
-        } catch (e) { _hubTok = ""; }
-    }
-    return _hubTok;
-}
-function hubUrl(url) {
-    var t = hubToken();
-    // So URLs do NOSSO hub (host exato): "https://os.celer.tec.br" como
-    // PREFIXO aceitaria "os.celer.tec.br.evil.com" e "os.celer.tec.br@evil"
-    // e mandaria o token para terceiros; a barra fecha o host.
-    if (!t || !url || String(url).indexOf(HUB_BASE + "/") !== 0) return url;
-    return url + (String(url).indexOf("?") >= 0 ? "&" : "?") +
-        "token=" + encodeURIComponent(t);
-}
+// Token de leitura do hub (apps/deps privados) em TP; so URLs do NOSSO hub
+// (host exato) recebem ?token= — prefixo vazaria para os.celer.tec.br.evil.com.
+var _T = null; function HT() { if (_T === null) { _T = ""; try { if (FS.exists(TP)) {
+                var t = (FS.readTextFile(TP) || "").replace(/^\s+/, "").replace(/\s+$/, ""); if (t) _T = t; } } catch (e) { _T = ""; } } return _T; }
+function HU(u) { var t = HT(); if (!t || !u || String(u).indexOf(HB + "/") !== 0) return u;
+    return u + (String(u).indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(t); }
+function gj(u) { try { return Net.getJSON(HU(u)); } catch (e) { return null; } } function gt(u) { try { return Net.get(HU(u)); } catch (e) { return null; } }
+// indice de deps: Net.get em TODAS as placas (16 KB < teto de 32 KB); sem
+// ele a loja usa o snapshot do load (di). Nada de download streaming sem PSRAM.
+function gd() { var b = gt(HB + "/store/deps.json"); if (!b) return null;
+    var t = String(b).replace(/\s+$/, ""); if (t.charAt(t.length - 1) !== "}") return null; var d = null;
+    try { d = JSON.parse(t); } catch (e) { d = null; } return (d && d.deps) ? d.deps : null; }
 
-function fetchJSON(url) {
-    try { return Net.getJSON(hubUrl(url)); } catch (e) { return null; }
-}
+// ---- semver (gramatica normativa; test/semver/run.js extrai daqui) ---------
+// "^X.Y.Z" = mesma major e >= base (major = breaking; minor/patch sobem
+// sozinhos) ou "X.Y.Z" exata. Malformada ("1.2", "v1.0.0", "") nao satisfaz.
+var RE_VER_DEP = /^(\d+)\.(\d+)\.(\d+)$/; function cmpV(v1, v2) { v1 = v1 || ""; v2 = v2 || ""; var p1 = 0, p2 = 0; while (p1 < v1.length || p2 < v2.length) {
+        var n1 = 0, n2 = 0; while (p1 < v1.length && v1.charAt(p1) != ".") { n1 = n1 * 10 + (v1.charCodeAt(p1) - 48); p1++; }
+        while (p2 < v2.length && v2.charAt(p2) != ".") { n2 = n2 * 10 + (v2.charCodeAt(p2) - 48); p2++; } if (n1 > n2) return 1; if (n1 < n2) return -1; p1++; p2++; }
+    return 0; } function depRangeOk(rng, ver) { rng = String(rng); var c = rng.charAt(0) === "^"; var R = RE_VER_DEP.exec(c ? rng.substring(1) : rng);
+    var V = RE_VER_DEP.exec(String(ver)); if (!R || !V) return false; if (!c) return rng === String(ver);
+    return +V[1] === +R[1] && (+V[2] > +R[2] || (+V[2] === +R[2] && +V[3] >= +R[3])); } function depPick(nm, ranges, index) { var vs = index[nm], best = null;
+    if (!vs) return null; for (var v in vs) if (vs.hasOwnProperty(v)) { var ok = true;
+        for (var i = 0; i < ranges.length; i++) if (!depRangeOk(ranges[i], v)) { ok = false; break; } if (ok && (best === null || cmpV(v, best) > 0)) best = v; }
+    return best; } function _passadaDeps(sementes, index) { var want = {}, seen = {}, q = [], k, i; for (k in sementes) if (sementes.hasOwnProperty(k))
+        for (i = 0; i < sementes[k].length; i++) q.push([k, sementes[k][i]]); while (q.length) {
+        var pr = q.shift(), nm = pr[0], rng = String(pr[1]), key = nm + "|" + rng; if (seen[key]) continue; seen[key] = 1; if (!want[nm]) want[nm] = [];
+        want[nm].push(rng); var es = depPick(nm, want[nm], index); if (!es) return null; var sub = (index[nm][es] && index[nm][es].deps) || {};
+        for (k in sub) if (sub.hasOwnProperty(k)) q.push([k, String(sub[k])]); } var picks = {}; for (k in want) if (want.hasOwnProperty(k)) {
+        var p = depPick(k, want[k], index); if (!p) return null; picks[k] = p; } return { wanted: want, picks: picks }; }
+// fecho de ponto fixo: uma passada pode SUBIR o pick no meio e as arestas
+// do pick velho vazavam (sobrava pino e faltava modulo do pick novo).
+function resolveDeps(want, index) { var dir = {}, k, n2; for (k in want) if (want.hasOwnProperty(k)) dir[k] = String(want[k]); var sem = {};
+    for (k in dir) if (dir.hasOwnProperty(k)) sem[k] = [dir[k]]; for (var pa = 0; pa < 32; pa++) { var r = _passadaDeps(sem, index); if (!r) return null;
+        var ex = {}, prox = {}, exato = true; for (k in r.picks) if (r.picks.hasOwnProperty(k)) { var v = r.picks[k];
+            var sub = (index[k] && index[k][v] && index[k][v].deps) || {}; for (var d in sub) if (sub.hasOwnProperty(d)) { d = String(d); if (!ex[d]) ex[d] = [];
+                if (!prox[d]) prox[d] = []; if (ex[d].indexOf(String(sub[d])) < 0) ex[d].push(String(sub[d]));
+                if (prox[d].indexOf(String(sub[d])) < 0) prox[d].push(String(sub[d])); } } var nomes = {};
+        for (n2 in r.wanted) if (r.wanted.hasOwnProperty(n2)) nomes[n2] = 1; for (n2 in ex) if (ex.hasOwnProperty(n2)) nomes[n2] = 1;
+        for (n2 in nomes) if (nomes.hasOwnProperty(n2)) { var base = (ex[n2] || []).slice(); if (dir[n2] && base.indexOf(dir[n2]) < 0) base.push(dir[n2]);
+            if (base.sort().join("|") !== (r.wanted[n2] || []).slice().sort().join("|")) { exato = false; break; } } if (exato) return r.picks; sem = prox;
+        for (k in dir) if (dir.hasOwnProperty(k)) { if (!sem[k]) sem[k] = []; if (sem[k].indexOf(dir[k]) < 0) sem[k].push(dir[k]); } } return null; }
 
-function fetchText(url) {
-    try { return Net.get(hubUrl(url)); } catch (e) { return null; }
-}
-
-// texto SEM o teto de 32 KB do Net.get (o deps.json ja passou de 16 KB e
-// cresce com a familia; o all.json caiu nesse corte na 2.8.0): baixa em
-// arquivo (Net.download streaming, sem teto) e le. null se falhar.
-function fetchTextBig(url) {
-    if (typeof Net.download !== "function") return fetchText(url);  // API velha
-    var tmp = "/local/appstore_fetch.json";
-    var ok = false;
-    try { ok = Net.download(hubUrl(url), tmp); } catch (e0) { ok = false; }
-    if (!ok) { try { FS.deleteFile(tmp); } catch (e1) {} return null; }
-    var body = FS.readTextFile(tmp);
-    try { FS.deleteFile(tmp); } catch (e2) {}
-    return body || null;
-}
-
-// {nome: {versao: {url,size,md5,minApi,deps}}} do indice de deps do hub;
-// null se falhar (sem rede, corpo truncado, JSON quebrado)
-function fetchDepsMap() {
-    var body = fetchTextBig(HUB_BASE + "/store/deps.json");
-    if (!body) return null;
-    var dj = null;
-    try { dj = JSON.parse(body); } catch (e) { dj = null; }
-    return (dj && dj.deps) ? dj.deps : null;
-}
-
-// semver numerico parte a parte (herdado do AppStoreUI.cpp)
-function cmpV(v1, v2) {
-    v1 = v1 || "";
-    v2 = v2 || "";
-    var p1 = 0, p2 = 0;
-    while (p1 < v1.length || p2 < v2.length) {
-        var n1 = 0, n2 = 0;
-        while (p1 < v1.length && v1.charAt(p1) != ".") {
-            n1 = n1 * 10 + (v1.charCodeAt(p1) - 48);
-            p1++;
-        }
-        while (p2 < v2.length && v2.charAt(p2) != ".") {
-            n2 = n2 * 10 + (v2.charCodeAt(p2) - 48);
-            p2++;
-        }
-        if (n1 > n2) return 1;
-        if (n1 < n2) return -1;
-        p1++;
-        p2++;
-    }
-    return 0;
-}
-
-// ---- deps compartilhadas (API 30) -------------------------------------------
-// Gramatica normativa (a MESMA do celerhub.py/servidor/harness; vetor de
-// conformidade em test/semver/run.js): "^X.Y.Z" = mesma major e >= base
-// (major = breaking; minor/patch sobem sozinhos) ou "X.Y.Z" exata.
-// Malformada ("1.2", "v1.0.0", "") NAO satisfaz — o parseInt(||0) antigo
-// aceitava "1.2" como "1.2.0" e divergia do PC (familia do bug 2.7.2).
-var RE_VER_DEP = /^(\d+)\.(\d+)\.(\d+)$/;
-function depRangeOk(rng, ver) {
-    rng = String(rng);
-    var caret = rng.charAt(0) === "^";
-    var R = RE_VER_DEP.exec(caret ? rng.substring(1) : rng);
-    var V = RE_VER_DEP.exec(String(ver));
-    if (!R || !V) return false;
-    if (!caret) return rng === String(ver);
-    return +V[1] === +R[1] &&
-           (+V[2] > +R[2] || (+V[2] === +R[2] && +V[3] >= +R[3]));
-}
-// maior versao do nome que satisfaca TODOS os ranges coletados
-function depPick(nm, ranges, index) {
-    var vers = index[nm], best = null;
-    if (!vers) return null;
-    for (var v in vers) if (vers.hasOwnProperty(v)) {
-        var ok = true;
-        for (var i = 0; i < ranges.length; i++) {
-            if (!depRangeOk(ranges[i], v)) { ok = false; break; }
-        }
-        if (ok && (best === null || cmpV(v, best) > 0)) best = v;
-    }
-    return best;
-}
-// uma passada do fecho: BFS semeando {nome: [ranges]}, re-pick a cada
-// visita e arestas do pick corrente na fila; {wanted, picks} ou null
-function _passadaDeps(sementes, index) {
-    var wanted = {}, seen = {}, queue = [], k, i;
-    for (k in sementes) if (sementes.hasOwnProperty(k)) {
-        for (i = 0; i < sementes[k].length; i++) queue.push([k, sementes[k][i]]);
-    }
-    while (queue.length) {
-        var pair = queue.shift(), nm = pair[0], rng = String(pair[1]);
-        var key = nm + "|" + rng;
-        if (seen[key]) continue;
-        seen[key] = 1;
-        if (!wanted[nm]) wanted[nm] = [];
-        wanted[nm].push(rng);
-        var escolhida = depPick(nm, wanted[nm], index);
-        if (!escolhida) return null;
-        var sub = (index[nm][escolhida] && index[nm][escolhida].deps) || {};
-        for (k in sub) if (sub.hasOwnProperty(k)) queue.push([k, String(sub[k])]);
-    }
-    var picks = {};
-    for (k in wanted) if (wanted.hasOwnProperty(k)) {
-        var p = depPick(k, wanted[k], index);
-        if (!p) return null;
-        picks[k] = p;
-    }
-    return { wanted: wanted, picks: picks };
-}
-// fecho de ponto fixo (mesma receita do celerhub.resolve_dep_ranges): uma
-// passada pode SUBIR o pick de um nome no meio do caminho e as arestas do
-// pick velho vazavam — sobrava pino de versao que o pick final nem usa e
-// FALTAVA modulo que so o pick novo traz (require quebrava em runtime).
-// Converge com diretas + arestas dos picks finais ate os ranges que cada
-// pick exige serem exatamente os que o limitaram; null se nao converge.
-function resolveDeps(want, index) {
-    var diretas = {}, k, n2;
-    for (k in want) if (want.hasOwnProperty(k)) diretas[k] = String(want[k]);
-    var sementes = {};
-    for (k in diretas) if (diretas.hasOwnProperty(k)) sementes[k] = [diretas[k]];
-    for (var passada = 0; passada < 32; passada++) {
-        var r = _passadaDeps(sementes, index);
-        if (!r) return null;
-        var exigidos = {}, prox = {}, exato = true;
-        for (k in r.picks) if (r.picks.hasOwnProperty(k)) {
-            var v = r.picks[k];
-            var sub = (index[k] && index[k][v] && index[k][v].deps) || {};
-            for (var d in sub) if (sub.hasOwnProperty(d)) {
-                d = String(d);
-                if (!exigidos[d]) exigidos[d] = [];
-                if (!prox[d]) prox[d] = [];
-                if (exigidos[d].indexOf(String(sub[d])) < 0) exigidos[d].push(String(sub[d]));
-                if (prox[d].indexOf(String(sub[d])) < 0) prox[d].push(String(sub[d]));
-            }
-        }
-        var nomes = {};
-        for (n2 in r.wanted) if (r.wanted.hasOwnProperty(n2)) nomes[n2] = 1;
-        for (n2 in exigidos) if (exigidos.hasOwnProperty(n2)) nomes[n2] = 1;
-        for (n2 in nomes) if (nomes.hasOwnProperty(n2)) {
-            var base = (exigidos[n2] || []).slice();
-            if (diretas[n2] && base.indexOf(diretas[n2]) < 0) base.push(diretas[n2]);
-            var tem = (r.wanted[n2] || []).slice();
-            if (base.sort().join("|") !== tem.sort().join("|")) { exato = false; break; }
-        }
-        if (exato) return r.picks;
-        sementes = prox;
-        for (k in diretas) if (diretas.hasOwnProperty(k)) {
-            if (!sementes[k]) sementes[k] = [];
-            if (sementes[k].indexOf(diretas[k]) < 0) sementes[k].push(diretas[k]);
-        }
-    }
-    return null;
-}
-// alimenta o cache /local/modules/<nome>/<versao>/ com o que falta — mesmo
-// contrato dos arquivos do app: download streaming, MD5, .new + rename
-function installDeps(it, resolved, index) {
-    for (var nm in resolved) if (resolved.hasOwnProperty(nm)) {
-        var ver = resolved[nm];
-        var d = index[nm][ver];
-        var dir = "/local/modules/" + nm + "/" + ver;
-        var dst = dir + "/" + nm + ".js";
-        if (FS.exists(dst)) {
-            // ja no cache — mas confere o TAMANHO contra o indice antes de
-            // pular: um modulo trunco/lixo no cache (push antigo, disco cheio
-            // no meio da escrita) persistia calado e quebrava todo app que o
-            // require. Tamanho divergente = baixa de novo.
-            var cacheSz = -1;
-            try { cacheSz = FS.getFileSize(dst); } catch (eSz) { cacheSz = -1; }
-            if (!d.size || cacheSz === d.size) continue;
-        }
-        if (d.minApi && d.minApi > API) return nm + " exige API " + d.minApi;
-        if (!FS.isDirectory("/local/modules") && !FS.mkdir("/local/modules")) return "Erro no disco";
-        if (!FS.isDirectory("/local/modules/" + nm) && !FS.mkdir("/local/modules/" + nm)) return "Erro no disco";
-        if (!FS.isDirectory(dir) && !FS.mkdir(dir)) return "Erro no disco";
-        drawDownload(it.name, nm + " " + ver);
-        System.delay(30);
-        var tmp = dir + "/" + nm + ".js.new";
-        var ok = false;
-        try {
-            ok = Net.download(hubUrl(d.url), tmp, function (got, total) { drawProgress(got, total); });
-        } catch (e) { ok = false; }
-        if (!ok) { try { FS.deleteFile(tmp); } catch (e9) {} return "Erro ao baixar " + nm; }
-        var md = "";
-        try { md = FS.getFileMD5(tmp); } catch (e2) { md = ""; }
-        if (d.md5 && md !== d.md5) {
-            try { FS.deleteFile(tmp); } catch (e3) {}
-            return "Verificação falhou (" + nm + ")";
-        }
-        if (!FS.renameFile(tmp, dst)) {
-            try { FS.deleteFile(tmp); } catch (e8) {}  // nao deixa .new orfao
-            return "Erro ao gravar " + nm;
-        }
-    }
-    return "";
-}
+// ---- deps compartilhadas: cache /local/modules/<nome>/<versao> -------------
+function idp(j, resolved, index) { for (var nm in resolved) if (resolved.hasOwnProperty(nm)) { var ver = resolved[nm], d = index[nm][ver];
+        var d2 = "/local/modules/" + nm + "/" + ver, dst = d2 + "/" + nm + ".js"; if (FS.exists(dst)) { var sz = -1;
+            try { sz = FS.getFileSize(dst); } catch (e0) { sz = -1; } if (!d.size || sz === d.size) continue;   // modulo sao
+        } if (d.minApi && d.minApi > API) return nm + " exige API " + d.minApi;
+        if (!MK("/local/modules")) return "Erro no disco";
+        if (!MK("/local/modules/" + nm)) return "Erro no disco";
+        if (!MK(d2)) return "Erro no disco"; dl(j.name, nm + " " + ver); System.delay(30); var tmp = dst + ".new", ok = false;
+        ok = N(d.url, tmp, function (g, t) { pg(g, t); });
+        if (!ok) { D(tmp); return "Erro ao baixar " + nm; } var md = M(tmp);
+        if (d.md5 && md !== d.md5) { D(tmp); return "Verificação falhou (" + nm + ")"; }
+        if (!FS.renameFile(tmp, dst)) { D(tmp); return "Erro ao gravar " + nm; } } return ""; }
 
 // ---- estado ----------------------------------------------------------------
-var apps = [];        // catalogo
-var cats = [];        // ["Todos", "Arcade", ...] (do catalogo)
-var curCat = "Todos";
-var curTab = 0;       // 0=Loja 1=Atualizar 2=Instalados
-var selIt = null;     // item aberto no detalhe
-var localMap = {};    // pkg -> {ver, root, dir, name, system, sd}
-var updCount = 0;
-var errMsg = "", errHint = "", retryMode = "";
-var wasUpdate = false, selfUpdated = false;
-var batchOk = 0, batchFails = [];
-var depIndex = null;   // indice /store/deps.json do load (deteccao de engine)
-var depUpd = {};       // pkg -> {names, resolved, have}: deps do hub mais novas
-var catWarn = "";      // catalogo parcial: categoria(s) que nao carregaram no load
-var lowSpace = false;  // /local apertado durante o load (muda a dica do erro)
+var ap = [], ct = ["Todos"], cc = "Todos", tb = 0, si = null, lm2 = {}; var uc = 0, em = "", eh = "", rm = ""; var wu = false, su = false, bo = 0, bf = [];
+var di = null, du = {}, cw = "", ls = false, q2 = ""; var ds = 0, vs = "", lc = { key: "", items: null }, nc = true, sf = -1;
 
-// livre em /local abaixo do piso? firmware sem FS.getFreeSpace (ou SD) segue
-// o comportamento de sempre (false) — o cheque e otimizacao, nao dependencia
-function freeSpaceLow(min) {
-    var f = 0;
-    try { f = FS.getFreeSpace("/local"); } catch (e) { return false; }
-    return f > 0 && f < min;
-}
-
-// Versao dos dados que alimentam as listas (apps/localMap/cats): sobe a cada
-// refresh(). curList()/curRows() cacheiam por essa chave — a lista e lida a
-// cada frame e refiltrar+reordenar o catalogo inteiro por frame custava caro
-// (installedItems: sort + catalogByPkg linear por item).
-var dataStamp = 0;
-var listCache = { key: null, items: null };
-var query = "";       // filtro de busca da Loja ("" = desligado)
+function BVW() { vs = ds + "|" + tb + "|" + cc + "|" + q2; } function fsl(m) { var f = 0; try { f = FS.getFreeSpace("/local"); } catch (e) { return false; }
+    return f > 0 && f < m; } function ios() { if (System.setting) { var v = null; try { v = System.setting("install_sd"); } catch (e) { v = null; } if (v === "1" || v === 1 || v === true) return true; if (v === "0" || v === 0 || v === false) return false; } return FS.exists(FL); }
+function SIO(v) { var wrote = false; if (System.setting) { try { wrote = System.setting("install_sd", v ? "1" : "0"); } catch (e) { wrote = false; } }
+    if (!wrote) { try { if (v) FS.writeTextFile(FL, "1"); else FS.deleteFile(FL); } catch (e2) {} } }
+function PSD() { sf = -1; try { sf = FS.getFreeSpace("/sd"); } catch (e) { sf = -1; } }
 
 // ---- disco: instalados -----------------------------------------------------
-// ---- disco: instalados -----------------------------------------------------
-// mesma regra do launcher (LauncherUI::scanLocalApps): PRIMEIRO visto ganha —
-// a ordem do listDir e a mesma nos dois, entao o estado exibido e o que o
-// launcher executa de verdade.
-function scanLocalApps() {
-    localMap = {};
-    var roots = ["/local/apps", "/sd/apps"];
-    for (var r = 0; r < 2; r++) {
-        var root = roots[r];
-        if (!FS.isDirectory(root)) continue;
-        var list = FS.listDir(root);
-        for (var i = 0; i < list.length; i++) {
-            var dir = list[i];
-            if (!FS.isDirectory(dir)) continue;
-            var body = FS.readTextFile(dir + "/app.json");
-            if (!body) continue;
-            var doc = null;
-            try { doc = JSON.parse(body); } catch (e) { doc = null; }
-            if (!doc) continue;
-            var pkg = doc.packageName || baseName(dir);
-            if (localMap[pkg]) continue;  // duplicata: o launcher usa a 1a
-            localMap[pkg] = {
-                ver: doc.version || "", dir: dir, root: root,
-                name: doc.name || pkg, system: doc.system === true,
-                sd: root === "/sd/apps"
-            };
-        }
-    }
-}
+// mesma regra do launcher: PRIMEIRO visto ganha (ordem do listDir igual).
+function W(cb) { var roots = ["/local/apps", "/sd/apps"]; for (var r = 0; r < 2; r++) { var ro = roots[r]; if (!FS.isDirectory(ro)) continue; var l2 = FS.listDir(ro);
+        for (var i = 0; i < l2.length; i++) { var d = l2[i]; if (!FS.isDirectory(d)) continue; var b = FS.readTextFile(d + "/app.json"); if (!b) continue; var j = null;
+            try { j = JSON.parse(b); } catch (e) { j = null; } if (j) cb(d, j, ro); } } } function SCA() { lm2 = {}; W(function (d, j, ro) {
+        var pk = j.packageName || bn(d); if (lm2[pk]) return; lm2[pk] = { ver: j.version || "", dir: d, RT: ro,
+                    name: j.name || pk, system: j.system === true, sd: ro === "/sd/apps" }; }); } function RID(pkg) { var out = null;
+    W(function (d, j) { if (!out && (j.packageName || bn(d)) === pkg) out = d; }); return out; } function RSH(pkg, keep) { W(function (d, j) {
+        if (d !== keep && j.packageName === pkg) FS.removeDirectory(d); }); } function CBP(pkg) {
+    for (var i = 0; i < ap.length; i++) if (ap[i].pkg === pkg) return ap[i]; return null; } function SI(j) { var lo = lm2[j.pkg];
+    if ((j.api || 1) > API) return { code: "api", bd: "API " + j.api, col: T.warn };
+    if (NP && NPS(j)) return { code: "hw", bd: "PSRAM", col: T.warn };
+    if (!lo) return { code: "new", bd: "Novo", col: T.ok };
+    // local a frente do hub nao vira "Atualizar" (downgrade)
+    if (cmpV(j.ver, lo.ver) <= 0) { if (du[j.pkg]) return { code: "dep", bd: "Engine", col: T.warn };
+        return { code: "inst", bd: "Instalado", col: T.textDim }; }
+    return { code: "upd", bd: "Atualizar", col: T.warn }; } function RFS() { SCA(); SDU(); PSD(); uc = 0; for (var i = 0; i < ap.length; i++) {
+        var c = SI(ap[i]).code; if (c === "upd" || c === "dep") uc++; }
+    // chaves pre-computadas: o sort nativo do Duktape e preventyield
+    A.list.sort(ap, function (j) { var c = SI(j).code; return (c === "upd" || c === "dep" ? "0" : "1") + String(j.name || "?").toLowerCase(); }); var seen = {}, k;
+    ct = ["Todos"]; for (k = 0; k < ap.length; k++) { var ctg = ap[k].cat || "Apps"; if (!seen[ctg]) { seen[ctg] = 1; ct.push(ctg); } } ct = ["Todos"].concat(ct.slice(1).sort()); ds++; BVW(); }
+function FDI() { di = null; if (!Net.isConnected()) return; var d = null; try { d = gd(); } catch (e) { d = null; } if (d) di = d; } function IIS() {
+    var out = []; for (var pk in lm2) if (lm2.hasOwnProperty(pk)) { out.push(CBP(pk) || { pkg: pk, name: lm2[pk].name, ver: lm2[pk].ver, cat: "Apps", api: 1 });
+    } A.list.sort(out, function (a) { return String(a.name).toLowerCase(); }); return out; }
 
-// pasta onde o pkg vive hoje (na ordem do launcher) ou null.
-function resolveInstalledDir(pkg) {
-    var roots = ["/local/apps", "/sd/apps"];
-    for (var r = 0; r < 2; r++) {
-        var root = roots[r];
-        if (!FS.isDirectory(root)) continue;
-        var list = FS.listDir(root);
-        for (var i = 0; i < list.length; i++) {
-            var dir = list[i];
-            if (!FS.isDirectory(dir)) continue;
-            var body = FS.readTextFile(dir + "/app.json");
-            if (!body) continue;
-            var doc = null;
-            try { doc = JSON.parse(body); } catch (e2) { doc = null; }
-            if (doc && (doc.packageName || baseName(dir)) === pkg) return dir;
-        }
-    }
-    return null;
-}
+// ---- catalogo --------------------------------------------------------------
+function ETI(pk, e) { return { pkg: pk, metaUrl: e.meta || "", appUrl: e.app || "", name: e.name || "", desc: e.description || "",
+             author: e.author || "Desconhecido", ver: e.version || "1.0.0", api: e.api || 1, cat: e.category || "Apps", icon: e.icon || "", changelog: e.changelog || "",
+             size: e.size || 0, md5: e.md5 || "", req: e.requires || [], files: e.files || null, nfiles: e.nfiles || 0, deps: e.deps || null, zip: e.zip || null }; }
+// campos que o catalogo compacto nao traz (descricao/autor/changelog/
+// permissoes) vem do app.json no detalhe/install — 1 request por app visto.
+function FIM(j) { var m = gj(j.metaUrl); if (!m) return null; j.desc = m.description || j.desc || ""; j.author = m.author || j.author || "Desconhecido";
+    j.changelog = m.changelog || j.changelog || ""; j.perms = m.permissions || []; if (!j.files && m.files) j.files = m.files; if (!j.deps && m.deps) j.deps = m.deps;
+    if ((!j.req || !j.req.length) && m.requires) j.req = m.requires; j.fetched = 1; return j; } function FAP() { var out = [], s = q2.toLowerCase();
+    for (var i = 0; i < ap.length; i++) { if (cc !== "Todos" && (ap[i].cat || "Apps") !== cc) continue; if (s && (String(ap[i].name || "").toLowerCase().indexOf(s) < 0 &&
+                  String(ap[i].desc || "").toLowerCase().indexOf(s) < 0)) continue; out.push(ap[i]); } return out; }
 
-// remove copias sombreadas do pkg (duplicatas de installs antigos);
-// keepDir e a pasta que o launcher executa.
-function removeShadowed(pkg, keepDir) {
-    var roots = ["/local/apps", "/sd/apps"];
-    for (var r = 0; r < 2; r++) {
-        var root = roots[r];
-        if (!FS.isDirectory(root)) continue;
-        var list = FS.listDir(root);
-        for (var i = 0; i < list.length; i++) {
-            var dir = list[i];
-            if (dir === keepDir || !FS.isDirectory(dir)) continue;
-            var body = FS.readTextFile(dir + "/app.json");
-            if (!body) continue;
-            var doc = null;
-            try { doc = JSON.parse(body); } catch (e2) { doc = null; }
-            if (doc && doc.packageName === pkg) FS.removeDirectory(dir);
-        }
-    }
-}
+// Catalogo compacto: 14 campos TSV e rodape "#end N" (truncamento do
+// Net.get). O hub de hoje responde 404 e o load cai no JSON.
+function PDF(s) { if (!s) return null; var o = {}, p = String(s).split(";"), i, k; for (i = 0; i < p.length; i++) { k = p[i].split("=");
+        if (k[1]) o[k[0]] = k[1]; } return o; } function PCC(b) { if (!b) return null; var l = String(b).split("\n"), i, f, e, o = [];
+    if (l.length < 3 || l[0].indexOf("#pkg\tname\tversion\tapi\tcategory")) return null; var z = l[l.length - 1];
+    if (z.indexOf("#end\t")) return null; var n = parseInt(z.substring(5), 10); if (!(n >= 0)) return null;
+    for (i = 1; i < l.length - 1; i++) { f = l[i].split("\t"); if (f.length < 14 || !f[0] || f[0].charAt(0) === "#") continue;
+        e = { meta: HB + "/store/apps/" + f[0] + "/app.json", app: HB + "/store/apps/" + f[0] + "/main.js", name: f[1], version: f[2],
+              api: +f[3] || 1, category: f[4] || "Apps", size: +f[5] || 0, md5: f[6], requires: f[7] ? f[7].split(",") : [], deps: PDF(f[8]), changelog: f[13] || "" };
+        if (f[9]) e.zip = { url: HB + "/store/apps/" + f[0] + "/app.zip", md5: f[9], size: +f[10] || 0 };
+        if (f[11] === "1") e.icon = HB + "/store/apps/" + f[0] + "/icon.png"; if (+f[12] > 0) e.nfiles = +f[12]; o.push({ pkg: f[0], e: e }); }
+    return o.length === n ? o : null; }
+// cache compacto: a lista/estado nao precisam de changelog/permissoes; o
+// detalhe busca o app.json quando abre (1 request por app visto). Na CYD o
+// texto encurta e o changelog nem entra (cache pequeno no /local apertado).
+function CTI(j) { var o = {}, ks = "pkg name ver api cat desc author icon size md5 metaUrl appUrl req files nfiles deps zip".split(" ");
+    for (var i = 0; i < ks.length; i++) o[ks[i]] = j[ks[i]]; o.desc = String(o.desc || "").substring(0, SM ? 80 : 160);
+    o.changelog = SM ? "" : String(o.changelog || "").substring(0, 400); return o; }
 
-function catalogByPkg(pkg) {
-    for (var i = 0; i < apps.length; i++) {
-        if (apps[i].pkg === pkg) return apps[i];
-    }
-    return null;
-}
+function LCA() { ap = []; cc = "Todos"; si = null; rm = "load"; cw = ""; ls = false; A.busy("Baixando catálogo..."); var ix = gj(IU); if (!ix || !ix.categories) {
+        em = "Falha no catálogo"; eh = "Verifique a internet."; return "err"; } nc = true; FDI(); var en = [], ci = ix.categories, all = false;
 
-// estado do app vs instalado: "new" | "upd" | "inst" | "api" | "dep" | "hw"
-function stateInfo(it) {
-    var loc = localMap[it.pkg];
-    if ((it.api || 1) > API) return { code: "api", txt: "API " + it.api, col: T.warn };
-    if (NO_PSRAM && needsPsram(it)) return { code: "hw", txt: "Requer PSRAM", col: T.warn };
-    if (!loc) return { code: "new", txt: "Novo", col: T.ok };
-    // so oferece update se o hub for MAIS NOVO: versao local mais nova (dev,
-    // imagem da flash a frente do hub) nao pode virar "Atualizar" (downgrade)
-    if (cmpV(it.ver, loc.ver) <= 0) {
-        // engine desatualizada (2.9.0): versao do app em dia, mas o range das
-        // deps resolve mais novo no hub do que o deps.json congelou no install
-        if (depUpd[it.pkg]) return { code: "dep", txt: "Engine", col: T.warn };
-        return { code: "inst", txt: "Instalado", col: T.textDim };
-    }
-    return { code: "upd", txt: "Atualizar", col: T.warn };
-}
+    // all.json so com PSRAM (~106 KB; Net.get corta em 32 KB). O cache velho
+    // sai antes do download (o caminho custa ~2x o catalogo em /local).
+    if (ci["Todos"] && PS) { ls = fsl(200 * 1024); if (ls) { D(CA); ls = fsl(128 * 1024); } A.busy("Baixando catálogo...");
+        var apath = "/local/appstore_all.json", aj = null, ok = false; ok = N(ci["Todos"], apath); if (ok) {
+            var b = FS.readTextFile(apath); D(apath); System.delay(1); if (b) { try { aj = JSON.parse(b); } catch (e3) { aj = null; } }
+        } else { D(apath); } if (aj && aj.apps) { all = true;
+            for (var pk in aj.apps) if (aj.apps.hasOwnProperty(pk) && aj.apps[pk] && aj.apps[pk].app) en.push({ pkg: pk, e: aj.apps[pk] }); } aj = null; }
+    // CYD: uma request por categoria; category >32 KB volta truncada e ganha
+    // o aviso "Catalogo incompleto" em vez de sumir em silencio.
+    if (!all) { var tot = 0, okc = 0, fail = []; for (var cn in ci) { if (!ci.hasOwnProperty(cn) || cn === "Todos") continue; tot++; A.busy("Categoria: " + cn);
+            var c = gj(ci[cn]); if (!c || !c.apps) { fail.push(cn); continue; } okc++;
+            for (var id in c.apps) if (c.apps.hasOwnProperty(id) && c.apps[id] && c.apps[id].app) en.push({ pkg: id, e: c.apps[id] }); }
+        if (en.length === 0 && tot > 0 && okc === 0) { em = "Falha no catálogo"; eh = ls ? "Pouco espaço em /local ou sem internet." : "Verifique a internet.";
+            return "err"; } if (fail.length) cw = "Catálogo incompleto: " + fail.join(", ") + (ls ? " (/local baixo)" : "") + "."; }
 
-function countUpdates() {
-    updCount = 0;
-    for (var i = 0; i < apps.length; i++) {
-        var c = stateInfo(apps[i]).code;
-        if (c === "upd" || c === "dep") updCount++;
-    }
-}
+    var seen = {}; for (var k = 0; k < en.length; k++) { var j = ETI(en[k].pkg, en[k].e); if (!j.name) continue; if (seen[j.pkg]) continue; seen[j.pkg] = 1;
+        ap.push(j); } System.delay(1); RFS(); if (ap.length) { System.delay(1); var arr = [], z; for (z = 0; z < ap.length; z++) arr.push(CTI(ap[z]));
+        var blob = JSON.stringify(arr), f = 0; arr = null; try { f = FS.getFreeSpace("/local"); } catch (e5) { f = 0; }
+        if ((f <= 0 || f > blob.length + 16384) && (!SM || blob.length < 32768)) FS.writeTextFile(CA, blob); blob = null; } return "list"; }
+function LCC() { var b = FS.readTextFile(CA); if (!b) return false; var a = null; try { a = JSON.parse(b); } catch (e) { a = null; }
+    if (!a || !a.length) return false; ap = a; System.delay(1); nc = Net.isConnected(); if (nc) { A.busy("Atualizações..."); FDI(); }
+    RFS(); si = null; return true; }
 
-// atualizacoes primeiro; empate = ordem alfabetica
-function sortByUpdate() {
-    // chaves PRE-COMPUTADAS: o sort nativo do Duktape roda em preventyield
-    // (a janela do exec-timeout nao renova entre comparacoes) e o stateInfo
-    // por comparacao derrubou o app com RangeError no device com a CPU
-    // disputada (no 4848 que retransmite a malha). O delay renova a janela
-    // para o lote de stateInfo do decorate; as chaves sujam o cache mas o
-    // JSON.stringify pula undefined
-    System.delay(1);
-    for (var i = 0; i < apps.length; i++) {
-        apps[i]._u = (stateInfo(apps[i]).code === "upd" ||
-                      stateInfo(apps[i]).code === "dep") ? 0 : 1;
-        apps[i]._n = (apps[i].name || "?").toLowerCase();
-    }
-    apps.sort(function (a, b) {
-        if (a._u !== b._u) return a._u - b._u;
-        return a._n < b._n ? -1 : (a._n > b._n ? 1 : 0);
-    });
-    for (var j = 0; j < apps.length; j++) { apps[j]._u = undefined; apps[j]._n = undefined; }
-}
+// ---- listas ----------------------------------------------------------------
+function CLS() { if (lc.key === vs) return lc.items; var it; if (tb === 0) it = FAP(); else if (tb === 1) { it = []; for (var i = 0; i < ap.length; i++) {
+            var c = SI(ap[i]).code; if (c === "upd" || c === "dep") it.push(ap[i]); } } else it = IIS(); lc.key = vs; lc.items = it; return it; }
+var IC = { Arcade: "play", Jogos: "play", System: "gear", Utilidades: "star", Audio: "play", Apps: "menu" };
+function SZB(n) { if (!n || n <= 0) return 0; return n <= 8192 ? 1 : n <= 16384 ? 2 : n <= 32768 ? 3 : 4; }
+function ROF(j) { var st = SI(j), lo = lm2[j.pkg], sub; if (tb === 1) { var d = du[j.pkg]; if (d) sub = "engine " + d.names[0] + " " + (d.have[d.names[0]] || "?") + " > " +
+                      d.resolved[d.names[0]] + (d.names.length > 1 ? "  (+" + (d.names.length - 1) + ")" : ""); else sub = "v" + (lo ? lo.ver : "?") + " > v" + j.ver;
+    } else if (tb === 2) { sub = "v" + (lo ? lo.ver : j.ver) + (lo && lo.sd ? " · SD" : "") + (lo && lo.system ? " · sistema" : ""); } else {
+        sub = "v" + j.ver + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""); }
+    return { label: j.name, sub: sub, icon: IC[j.cat] || "dot", j: j, bars: SZB(j.size), st: st }; }
+// linhas ricas: icone + nome/versao + badge de estado + barras de tamanho.
+function PRW(it, x, y, w, h, s) { var j = it.j, st = it.st, t = String(st.bd), bw = UI.measure(t, "caption") + 14;
+    if (bw > w - 84) bw = w - 84; var lw = w - 24 - bw - 6;
+    A.icons.draw(it.icon, x, y + Math.round((h - 16) / 2), 16, { color: st.col === T.textDim ? T.text : st.col });
+    UI.text(j.name, x + 22, y + 7, { role: "body", color: T.text, w: lw, lines: 1, bg: T.raised });
+    UI.text(it.sub, x + 22, y + 25, { role: "caption", color: T.textDim, w: it.bars > 0 ? w - 52 : w - 8, lines: 1, bg: T.raised });
+    UI.badge(t, x + w - bw, y + 7, { color: st.col, textColor: T.bg });
+    if (it.bars > 0) { var bx = x + w - 22, by = y + h - 8, bi; for (bi = 0; bi < 4; bi++) { var bh = 3 + bi * 3;
+            System.fillRect(bx + bi * 5, by - bh + 9, 3, bh, bi < it.bars ? T.accent : T.stroke); } } }
+var rl = A.list.make(function () { return vs; }, function () {
+    var it = CLS(), out = []; for (var i = 0; i < it.length; i++) out.push(ROF(it[i])); return out; }); function UN(pkg) {
+    var d = RID(pkg); if (!d) return false; if (typeof Storage !== "undefined" && Storage.clearFor) { try { Storage.clearFor(pkg); } catch (e) {} }
+    if (!FS.removeDirectory(d)) return false; System.rescanApps(); RFS(); return true; } function uf(j) { var lo = lm2[j.pkg]; if (!lo) return false;
+    var ok = UI.confirm("Desinstalar", "Remover " + j.name + "?", { yes: "Remover", danger: true });
+    if (ok && lo.system) ok = UI.confirm("App do sistema", "Confirma remover " + j.name + " definitivamente?", { yes: "Remover", danger: true });
+    if (ok && UN(j.pkg)) { UI.toast(j.name + " removido"); si = null; return true; } return false; }
 
-function refresh() {
-    scanLocalApps();
-    scanDepUpdates();
-    countUpdates();
-    sortByUpdate();
-    buildCats();
-    dataStamp++;  // invalida os caches de lista/chips (curList/chipsGeom)
-}
+// ---- permissoes ------------------------------------------------------------
+var PT = { fs: "Arquivos", net: "Internet", system: "Sistema", bluetooth: "Bluetooth", mic: "Microfone", camera: "Câmera", usb: "USB", input: "Teclado" };
+function pmt(ps) { if (!ps || !ps.length) return "nenhuma"; var out = []; for (var i = 0; i < ps.length; i++) out.push(PT[ps[i]] || String(ps[i])); return out.join(", ");
+} function CNS(j) { var ps = j.perms || []; if (!ps.length) return true; var ok = UI.confirm("Permissões", j.name + " pede: " + pmt(ps) + ".", { yes: "Continuar" }); if (ok) j.consented = 1; return ok; }
 
-// indice de deps do hub (deteccao de update de engine, 2.9.0): best-effort —
-// sem ele a loja funciona, so nao promove "Engine" na aba Atualizar.
-function fetchDepIndex() {
-    depIndex = null;
-    if (!Net.isConnected()) return;
-    var d = null;
-    try { d = fetchDepsMap(); } catch (eD) { d = null; }
-    if (d) depIndex = d;
-}
+// ---- UI: chrome ------------------------------------------------------------
+function FTY() { return L.bottom - 34; }
+// texto curto: tx(texto, x, y, cor, papel, largura, linhas, bg, alinhamento)
+function tx(s, x, y, c, r, w, n, b, a) { UI.text(s, x, y, { color: c, role: r, w: w || 0, lines: n || 1, bg: b === undefined ? T.bg : b, align: a }); }
+// header nativo + acoes (icone) a direita, com contador opcional. Devolve
+// "" | "back" | id da acao.
+function hd(t, back, acts) { if (UI.header(t, { back: !!back })) return "back"; if (!acts) return ""; for (var i = 0; i < acts.length; i++) {
+        var ax = 240 - 8 - (acts.length - i) * 32; var hit = UI.button("", ax, 6, 28, 28, { color: T.raised, id: "h" + acts[i].id });
+        A.icons.draw(acts[i].icon, ax + 6, 12, 16, { color: T.text });
+        if (acts[i].count > 0) UI.badge(acts[i].count > 9 ? "9+" : String(acts[i].count), ax + 18, 2, { color: T.err, textColor: T.bg });
+        if (hit) return acts[i].id; } return ""; } function TSB() {
+    var nt = UI.tabs(L.x, 44, L.w, 26, ["Loja", "Atualiz.", "Meus"], tb); if (nt !== tb) { tb = nt; si = null; PSD(); BVW();
+        for (var i = 0; i < 3; i++) UI.resetScroll("store" + i); UI.invalidate(); } }
+// categorias: segmentado com a atual (ou a proxima) + "..." para a lista.
+function PKC() { for (;;) { UI.invalidate(); UI.begin(T.bg); if (UI.header("Categorias", { back: true })) { UI.end(15); return ""; } var sel = -1;
+        for (var i = 0; i < ct.length; i++) if (ct[i] === cc) sel = i; var k = UI.list("cats", L.x, 46, L.w, FTY() - 50, ct, { selected: sel }); UI.end(15);
+        if (k >= 0) return ct[k]; } } function CTB(y) { var mid = cc === "Todos" ? (ct[1] || "Todos") : cc;
+    var i = UI.tabs(L.x, y, L.w, 22, ["Todos", mid, "..."], cc === "Todos" ? 0 : 1); if (i === 2) { var c = PKC(); UI.invalidate();
+        if (c && c !== cc) { cc = c; BVW(); UI.resetScroll("store0"); } return 1; } var w = i === 0 ? "Todos" : mid;
+    if (w !== cc) { cc = w; BVW(); UI.resetScroll("store0"); UI.invalidate(); } return 0; }
+// frame de download: COMPOE uma vez; pg() so atualiza barra/texto (o toolkit
+// compara assinatura e redesenha so esses slots — sem piscar no vidro).
+function dl(name, sub, bar) { UI.invalidate(); UI.begin(T.bg); UI.header("Baixando " + name, { back: false });
+    A.style.card(24, 84, L.w - 32, 112, { full: true, draw: function (q) {
+        UI.text(sub || "", q.x + (q.w >> 1), q.y + 8, { align: "center", role: "caption", color: T.textDim, w: q.w, lines: 1, bg: T.card });
+        if (bar !== false) UI.progress(L.x + 24, 136, L.w - 48, 10, 0);
+        UI.text("", 120, 154, { align: "center", role: "caption", color: T.textDim, id: "dlpct", bg: T.card });
+    }}); }
+function pg(g, t) { var p = 0, s = ""; if (t > 0) { p = Math.min(100, Math.floor(g * 100 / t)); s = p + "%"; } else { var k = Math.floor(g / 1024);
+        if (k > 0) { p = Math.min(100, 10 + (k % 9) * 10); s = k + " KB"; } } UI.progress(L.x + 24, 136, L.w - 48, 10, p);
+    UI.text(s, 120, 154, { align: "center", role: "caption", color: T.textDim, id: "dlpct", bg: T.card }); } function RT(n) { A._stack.length = 0; return n; }
 
-// itens da aba Meus apps: todo pkg instalado (do catalogo quando existir,
-// sintetico quando nao)
-function installedItems() {
-    var out = [];
-    for (var pkg in localMap) {
-        if (!localMap.hasOwnProperty(pkg)) continue;
-        var it = catalogByPkg(pkg);
-        if (!it) {
-            it = {
-                pkg: pkg, name: localMap[pkg].name, ver: localMap[pkg].ver,
-                desc: "", author: "", api: 1, appUrl: "", metaUrl: "",
-                icon: "", changelog: "", size: 0, md5: "", cat: "Apps"
-            };
-        }
-        out.push(it);
-    }
-    out.sort(function (a, b) {
-        var x = a.name.toLowerCase(), y = b.name.toLowerCase();
-        return x < y ? -1 : (x > y ? 1 : 0);
-    });
-    return out;
-}
+// ---- tela principal --------------------------------------------------------
+function HM(c) { var act = hd("App Store", false, [{ icon: q2 ? "close" : "search", id: "q" }, { icon: "check", id: "go", count: uc }]);
+    if (act === "q") { if (q2) { q2 = ""; BVW(); UI.resetScroll("store0"); UI.toast("Busca limpa"); UI.invalidate(); } else if (System.prompt) {
+            var s = System.prompt("Buscar app", "", {}); q2 = s ? String(s) : ""; BVW(); UI.resetScroll("store0"); UI.invalidate(); } } else if (act === "go") {
+        if (!nc) { UI.toast("Sem internet"); } else if (uc > 0) { UI.toast(uc + " atualizações: aplicando"); return "batch"; }
+        else { UI.toast("Recarregando catálogo"); return "load"; } } TSB();
+    var fy = FTY(), top = 74, items = CLS(), lb = L.bottom - 6;
+    if (tb === 0) { if (cw) { tx(cw, L.x, top, T.warn, "caption", L.w, 2); top += 24; }
+        else if (!nc) { tx("Sem internet: catálogo em cache", L.x, top, T.warn, "caption", L.w, 1); top += 16; }
+        else if (q2) { tx("Busca: " + q2, L.x, top, T.textDim, "caption", L.w, 1); top += 16; }
+        if (CTB(top)) return; top += 26; } else if (tb === 2) { var n = K(lm2);
+        tx(n + (n === 1 ? " app instalado" : " apps instalados"), L.x, top, T.textDim, "caption", L.w, 1); top += 16; lb = fy - 4; }
+    else if (uc > 0) lb = fy - 4;
+    var ly = top + 2, lh = lb - ly;
+    if (items.length && lh > 24) { var i = A.list.view("store" + tb, L.x, ly, L.w, lh, rl.rows(), { row: 46, paintRow: PRW });
+        if (i >= 0) { si = items[i]; return "detail"; }
+    } else if (!items.length) { var cy = (L.top + L.bottom) / 2;
+        tx(tb === 1 ? "Tudo em dia!" : tb === 2 ? "Nenhum app instalado" : (q2 ? "Nenhum resultado" : "Catálogo vazio"),
+           120, cy, T.text, "title", L.w, 1, T.bg, "center"); tx(tb === 1 ? "Volte depois." : tb === 2 ? "Instale um app na aba Loja."
+           : (cw ? "Catálogo parcial." : "Toque no check para recarregar."), 120, cy + 22, T.textDim, "caption", L.w, 2, T.bg, "center"); }
+    if (tb === 1 && uc > 0) { if (A.style.button("Atualizar tudo", L.x, fy, L.w, 30, { variant: "primary" })) return "batch"; }
+    else if (tb === 2) { var sd = ios(), noSd = sd && sf === 0;
+        if (A.style.button("Instalar em: " + (sd ? "SD" : "interno") + (noSd ? " (sem cartão!)" : ""), L.x, fy, L.w, 30, { variant: "ghost" })) {
+            SIO(!sd); UI.toast(sd ? "Instalar na memória interna" : "Instalar no cartão SD"); UI.invalidate(); } } }
 
-// ---- catalogo ---------------------------------------------------------------
-// ---- catalogo ---------------------------------------------------------------
-function entryToItem(pkg, e) {
-    return {
-        id: pkg, pkg: pkg,
-        metaUrl: e.meta || "",
-        appUrl: e.app || "",
-        name: e.name || "",
-        desc: e.description || "",
-        author: e.author || "Desconhecido",
-        ver: e.version || "1.0.0",
-        api: e.api || 1,
-        cat: e.category || "Apps",
-        icon: e.icon || "",
-        changelog: e.changelog || "",
-        size: e.size || 0,
-        md5: e.md5 || "",
-        published: e.published_at || "",
-        req: e.requires || [],
-        files: e.files || null,
-        nfiles: e.nfiles || 0,   // multi-arquivo no catalogo compacto
-        deps: e.deps || null,
-        zip: e.zip || null      // {url, size, md5} quando o hub serve o pacote
-    };
-}
+// ---- detalhe (folha) -------------------------------------------------------
+function DT(c) { var j = si; if (!j) return RT("home");
+    // descricao/changelog/permissoes frescos (o cache compacto nao traz);
+    // 1 request por app visto, com frame de busy antes
+    if (c.entered && j.metaUrl && !j.fetched && Net.isConnected()) { A.busy("Abrindo " + j.name); FIM(j); UI.invalidate(); return; }
+    if (UI.header(j.name, { back: true })) return A.BACK;
+    var lo = lm2[j.pkg], st = SI(j), conf = !!(lo && cmpV(j.ver, lo.ver) < 0), fy = FTY();
+    var sx = L.x, sw = L.w, top = 48, bh = fy - 6 - top;
+    A.style.card(sx, top, sw, bh, { full: c.full, r: 14, pad: 12, draw: function (q) {
+        System.fillRoundRect(sx + (sw >> 1) - 16, top + 5, 32, 4, 2, T.stroke);
+        var yy = q.y + 8;
+        if (c.full) System.fillGradient(q.x, yy, IS, IS, T.accent, T.accentD, 12);
+        UI.text(String(j.name || "?").charAt(0).toUpperCase(), q.x + (IS >> 1), yy + ((IS - UI.lineHeight("title")) >> 1), { align: "center", role: "title", color: T.onAccent, bg: T.accentD });
+        var tw = q.w - IS - 8, bw = UI.measure(st.bd, "caption") + 14;
+        UI.text(j.name, q.x + IS + 8, yy + 1, { role: "title", color: T.text, w: tw - bw - 4, lines: 1, bg: T.card });
+        UI.text((j.author || "Desconhecido") + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""), q.x + IS + 8, yy + 21, { role: "caption", color: T.textDim, w: tw, lines: 1, bg: T.card });
+        UI.text("v" + j.ver + (lo ? " · v" + lo.ver : ""), q.x + IS + 8, yy + 36, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
+        UI.badge(st.bd, q.x + q.w - bw, yy + 2, { color: st.col, textColor: T.bg });
+        var sy = yy + IS + 8, sh = top + bh - 16 - sy;
+        var off = UI.scrollBegin("det:" + j.pkg, q.x, sy, q.w, sh, 420), x = q.x, w = q.w, y = sy - off + 2;
+        tx("Permissões", x, y, T.textDim, "caption", 100, 1, T.card); tx(pmt(j.perms), x + w - 10, y, T.text, "caption", w - 110, 1, T.card, "right"); y += 27;
+        tx("Descrição", x, y, T.accent, "caption", 0, 1, T.card); y += 15;
+        y += UI.text(String(j.desc || "Sem descrição.").replace(/\n/g, " "), x, y, { role: "caption", color: T.textDim, w: w, lines: 4, bg: T.card }) + 6;
+        tx("Novidades", x, y, T.accent, "caption", 0, 1, T.card); y += 15;
+        y += UI.text(String(j.changelog || "Sem notas.").replace(/\n/g, " "), x, y, { role: "caption", color: T.textDim, w: w, lines: 8, bg: T.card });
+        if (conf) { y += 8; tx("Instalado v" + lo.ver + " é mais novo que o hub (v" + j.ver + ").", x, y, T.warn, "caption", w, 2, T.card); }
+        else if ((j.api || 1) > API) { y += 8; tx("Requer API " + j.api + " (aqui: " + API + ").", x, y, T.warn, "caption", w, 2, T.card); }
+        else if (st.code === "hw") { y += 8; tx("Exige PSRAM: a RAM interna não basta.", x, y, T.warn, "caption", w, 2, T.card); }
+        UI.scrollEnd(); } });
 
-function fillItemFromMeta(it) {
-    var m = fetchJSON(it.metaUrl);
-    if (!m) return null;
-    it.pkg = m.packageName || it.pkg;
-    it.name = m.name || it.id;
-    it.desc = m.description || "";
-    it.author = m.author || "Desconhecido";
-    it.ver = m.version || "1.0.0";
-    it.api = m.api || 1;
-    it.cat = m.category || "Apps";
-    it.req = m.requires || it.req || [];
-    it.files = m.files || it.files || null;
-    it.deps = m.deps || it.deps || null;
-    it.changelog = m.changelog || it.changelog || "";
-    return it;
-}
+    var can = !!j.appUrl && st.code !== "api" && st.code !== "hw";
+    if (can) { var lbl = st.code === "upd" ? "Atualizar" : st.code === "dep" ? "Atualizar engine" : st.code === "inst" ? "Reinstalar" : "Instalar";
+        if (A.style.button(lbl, L.x, fy, lo ? 108 : L.w, 30, { variant: "primary" })) {
+            if (conf && st.code === "inst" && !UI.confirm("Versão", "Local v" + lo.ver + " > hub v" + j.ver + ". Reinstalar a do hub?", { yes: "Reinstalar" })) return;
+            if (!lo && !CNS(j)) return; return st.code === "dep" ? "deps" : "install"; }
+        if (lo && A.style.button("Desinstalar", L.x + 116, fy, 108, 30, { variant: "danger" })) { if (uf(j)) return A.BACK; }
+    } else if (lo && A.style.button("Desinstalar", L.x, fy, L.w, 30, { variant: "danger" })) { if (uf(j)) return A.BACK; }
+    else if (!lo) A.style.button("Indisponível", L.x, fy, L.w, 30, { variant: "ghost", disabled: true }); }
 
-function buildCats() {
-    var seen = {};
-    cats = ["Todos"];
-    for (var i = 0; i < apps.length; i++) {
-        var c = apps[i].cat || "Apps";
-        if (!seen[c]) { seen[c] = 1; cats.push(c); }
-    }
-}
+// erro de rede/instalacao: overlay padrao do kit (OK) e tenta de novo; o X
+// da topbar do sistema continua saindo do app.
+function ERS() { A.error(em || "Erro", eh || ""); return rm === "install" ? "install" : "load"; }
+// sem Wi-Fi: A.wifiWait consulta Net.isConnected e tem Cancelar (sai).
+function WFS() { return A.wifiWait("Conecte o Wi-Fi para usar a loja.") ? "load" : A.BACK; }
 
-function filteredApps() {
-    var out = [];
-    var q = query.toLowerCase();
-    for (var i = 0; i < apps.length; i++) {
-        if (curCat !== "Todos" && (apps[i].cat || "Apps") !== curCat) continue;
-        if (q && ((apps[i].name || "").toLowerCase().indexOf(q) < 0 &&
-                  (apps[i].desc || "").toLowerCase().indexOf(q) < 0)) continue;
-        out.push(apps[i]);
-    }
-    return out;
-}
+// ---- instalacao ------------------------------------------------------------
+function PKF(j) { var out = [{ name: "main.js", url: j.appUrl, md5: j.md5 }], base = ""; if (j.appUrl) base = j.appUrl.substring(0, j.appUrl.lastIndexOf("/") + 1);
+    for (var n in (j.files || {})) { if (n === "icon.png" || n === "main.js" || n === "app.json") continue;
+        out.push({ name: n, url: base + n, md5: (j.files[n] || {}).md5 || "" }); } return out; }
+function PKT(j) { var n = j.size || 0, fn; for (fn in (j.files || {})) if (j.files.hasOwnProperty(fn)) n += (j.files[fn] || {}).size || 0; return n; }
+// Pacote unico (API 42): it.zip = {url,size,md5} do hub + System.installZip.
+// Qualquer ausencia cai no caminho por arquivo (firmware antigo ou zip ruim).
+function ZIPI(j) { if (!j || !j.zip || !j.zip.url || !j.zip.md5) return null; if (typeof System.installZip !== "function") return null; return j.zip; }
+function ZIPN(n) { n = String(n || ""); return n.length > 0 && n.length <= 40 && n.indexOf("/") < 0 && n.indexOf("..") < 0; }
 
-function updApps() {
-    var out = [];
-    for (var i = 0; i < apps.length; i++) {
-        var c = stateInfo(apps[i]).code;
-        if (c === "upd" || c === "dep") out.push(apps[i]);
-    }
-    return out;
-}
+// ---- atualizacao de engine -------------------------------------------------
+function SDU() { du = {}; if (!di) return; System.delay(1); for (var pk in lm2) if (lm2.hasOwnProperty(pk)) { var j = CBP(pk);
+        if (!j || !j.deps) continue; var have = null; try { have = JSON.parse(FS.readTextFile(lm2[pk].dir + "/deps.json")); } catch (e) { have = null; }
+        if (!have) continue; var fresh = resolveDeps(j.deps, di); if (!fresh) continue; var names = [], nm;
+        for (nm in fresh) if (fresh.hasOwnProperty(nm)) if (String(have[nm] || "") !== fresh[nm]) names.push(nm);
+        if (names.length) { names.sort(); du[pk] = { names: names, resolved: fresh, have: have }; } } }
+function DBO(res, ix) { var n = 0, nm; for (nm in res) if (res.hasOwnProperty(nm)) n += (ix[nm] && ix[nm][res[nm]] && ix[nm][res[nm]].size) || 0; return n; }
+function UD() { var j = si; if (!j) return "err"; em = ""; eh = ""; rm = "install"; wu = true; su = false;
+    if (!Net.isConnected()) { em = "Sem conexão WiFi"; return "err"; } dl(j.name, "dependências", false); System.delay(30);
+    // resolucao FRESCA: o snapshot do SDU pode ter ficado para tras
+    var ix = gd() || di; if (!ix) { em = "Índice de deps indisponível"; eh = j.name; return "err"; }
+    var res = resolveDeps(j.deps || {}, ix); if (!res) { em = "Dep indisponível"; eh = j.name; return "err"; }
+    var fl = 0; try { fl = FS.getFreeSpace("/local"); } catch (e) { fl = 0; } if (fl > 0 && fl < DBO(res, ix) + 8192) { em = "Sem espaço p/ deps"; eh = j.name; return "err"; }
+    var fail = idp(j, res, ix); if (fail) { em = fail; eh = j.name; return "err"; }
+    var d = lm2[j.pkg] ? lm2[j.pkg].dir : RID(j.pkg); if (!d || !FS.writeTextFile(d + "/deps.json", JSON.stringify(res))) {
+        em = "Erro no deps.json"; eh = j.name; return "err"; } System.rescanApps(); RFS(); return "done"; }
 
-// Catalogo compacto: /store/all.txt, 14 campos por linha (pkg, nome,
-// versao, api, categoria, size, md5, requires, deps, zip_md5, zip_size,
-// icon, nfiles, changelog). O rodape "#end N" detecta truncamento do
-// Net.get (32 KB sem PSRAM); qualquer falha cai no caminho JSON de sempre.
-function parseDepsField(s) {
-    if (!s) return null;
-    var out = {}, parts = String(s).split(";");
-    for (var i = 0; i < parts.length; i++) {
-        var kv = parts[i].split("=");
-        if (kv.length === 2 && kv[0] && kv[1]) out[kv[0]] = kv[1];
-    }
-    return out;
-}
-
-function parseCompactCatalog(body) {
-    if (!body) return null;
-    var lines = String(body).split("\n");
-    if (lines.length < 3) return null;
-    if (lines[0].indexOf("#pkg\tname\tversion\tapi\tcategory") !== 0) return null;
-    var last = lines[lines.length - 1];
-    if (last.indexOf("#end\t") !== 0) return null;
-    var expect = parseInt(last.substring(5), 10);
-    if (!(expect >= 0)) return null;
-    var out = [];
-    for (var i = 1; i < lines.length - 1; i++) {
-        var ln = lines[i];
-        if (!ln || ln.charAt(0) === "#") continue;
-        var f = ln.split("\t");
-        if (f.length < 14 || !f[0]) continue;
-        var pkg = f[0];
-        var e = {
-            meta: HUB_BASE + "/store/apps/" + pkg + "/app.json",
-            app: HUB_BASE + "/store/apps/" + pkg + "/main.js",
-            name: f[1],
-            version: f[2],
-            api: parseInt(f[3], 10) || 1,
-            category: f[4] || "Apps",
-            size: parseInt(f[5], 10) || 0,
-            md5: f[6],
-            requires: f[7] ? f[7].split(",") : [],
-            deps: parseDepsField(f[8]),
-            changelog: f[13] || ""
-        };
-        if (f[9]) {
-            e.zip = { url: HUB_BASE + "/store/apps/" + pkg + "/app.zip",
-                      md5: f[9], size: parseInt(f[10], 10) || 0 };
-        }
-        if (f[11] === "1") e.icon = HUB_BASE + "/store/apps/" + pkg + "/icon.png";
-        var nfiles = parseInt(f[12], 10) || 0;
-        if (nfiles > 0) e.nfiles = nfiles;  // multi-arquivo: files vem do meta
-        out.push({ pkg: pkg, e: e });
-    }
-    if (out.length !== expect) return null;  // truncou no meio
-    return out;
-}
-
-function loadCatalog() {
-    apps = [];
-    curCat = "Todos";
-    selIt = null;
-    retryMode = "load";
-    catWarn = "";
-    lowSpace = false;
-
-    drawLoading("Baixando catálogo...", "");
-    System.delay(30);
-    var idx = fetchJSON(INDEX_URL);
-    if (!idx || !idx.categories) {
-        errMsg = "Falha ao baixar o catálogo";
-        errHint = "Verifique a internet.";
-        return "err";
-    }
-    fetchDepIndex();
-
-    // atalho "Todos" (all.json): todos os apps em 1 request. O hub de hoje
-    // publica ~58 KB e o Net.getJSON CORTA em 32 KB (JSON.parse quebrado ->
-    // fetch nulo): o atalho nunca funcionava e o download truncado era pago
-    // em todo load. No PSRAM ele vai por Net.download + leitura do FS (sem
-    // teto, 1 request em vez de 5 categorias); sem PSRAM (ou total
-    // desconhecido) vai direto nas categorias, pedacos menores.
-    var entries = [];
-    var catsIdx = idx.categories;
-    var gotAll = false;
-
-    // Compacto primeiro: 1 request, ~10-20 KB (cabe no teto de 32 KB do
-    // Net.get) e sem JSON.parse. Hub antigo (404) ou truncamento cai no
-    // caminho all.json/categorias abaixo, sem regressao.
-    drawLoading("Baixando catálogo...", "todos os apps");
-    System.delay(30);
-    var compact = parseCompactCatalog(fetchText(ALL_TXT));
-    if (compact) { entries = compact; gotAll = true; }
-    compact = null;
-
-    if (!gotAll && catsIdx["Todos"] && HAS_PSRAM) {
-        // 2.9.1: o caminho do all.json custa ~2x o catalogo de /local (o
-        // download e o cache reescrito no fim). /local apertado (a bancada
-        // vive com <200 KB) derruba a escrita no meio, o load murcha para as
-        // categorias sem dizer por que e o arcade (>32 KB) some da lista: o
-        // cache velho (~1x catalogo) sai na frente — ele e reescrito no fim.
-        lowSpace = freeSpaceLow(200 * 1024);
-        if (lowSpace) {
-            try { FS.deleteFile(CACHE); } catch (eS0) {}
-            lowSpace = freeSpaceLow(128 * 1024);   // ainda apertado sem o cache
-        }
-        drawLoading("Baixando catálogo...", "todos os apps");
-        System.delay(30);
-        var allPath = "/local/appstore_all.json";
-        var all = null;
-        var allOk = false;
-        try { allOk = Net.download(hubUrl(catsIdx["Todos"]), allPath); } catch (eA) { allOk = false; }
-        if (allOk) {
-            var body = FS.readTextFile(allPath);
-            try { FS.deleteFile(allPath); } catch (eB) {}
-            // o parse do all.json (~58 KB no Duktape) conta na janela do
-            // exec-timeout: cede AQUI, antes do processamento da lista (um
-            // trecho so de parse+sort+stringify ja derrubou o app no device)
-            System.delay(1);
-            if (body) { try { all = JSON.parse(body); } catch (eC) { all = null; } }
-        } else {
-            try { FS.deleteFile(allPath); } catch (eD) {}
-        }
-        if (all && all.apps) {
-            gotAll = true;
-            for (var pkg in all.apps) {
-                if (!all.apps.hasOwnProperty(pkg)) continue;
-                if (all.apps[pkg] && all.apps[pkg].app) {
-                    entries.push({ pkg: pkg, e: all.apps[pkg] });
-                }
-            }
-        }
-        all = null;
-    }
-    if (!gotAll) {
-        var catTotal = 0, catOk = 0, catFail = [];
-        for (var cname in catsIdx) {
-            if (!catsIdx.hasOwnProperty(cname) || cname === "Todos") continue;
-            catTotal++;
-            drawLoading("Categoria: " + cname, "");
-            System.delay(30);
-            var cat = fetchJSON(catsIdx[cname]);
-            if (!cat || !cat.apps) { catFail.push(cname); continue; }
-            catOk++;
-            for (var id in cat.apps) {
-                if (!cat.apps.hasOwnProperty(id)) continue;
-                var e = cat.apps[id];
-                if (!e || !e.app) continue;
-                entries.push({ pkg: id, e: e });
-            }
-        }
-        if (entries.length === 0 && catTotal > 0 && catOk === 0) {
-            errMsg = "Falha ao baixar o catálogo";
-            errHint = lowSpace
-                ? "Pouco espaço livre em /local (desinstale apps) ou sem internet."
-                : "Verifique a internet.";
-            return "err";
-        }
-        if (catFail.length > 0) {
-            // Net.get/getJSON truncam em 32 KB (NET_MAX_BODY): categoria que
-            // cresceu demais (arcade ja passou) volta quebrada e sumiria da
-            // lista sem erro nenhum. Aviso na lista > app desaparecido.
-            catWarn = "Catálogo incompleto, não carregou: " + catFail.join(", ") +
-                      (lowSpace ? " (espaço em /local baixo)" : "") + ".";
-        }
-    }
-
-    var n = entries.length;
-    var seenPkg = {};
-    for (var k = 0; k < n; k++) {
-        var it = entryToItem(entries[k].pkg, entries[k].e);
-        // app que exige API futura ENTRA na lista com o estado "API": o
-        // detalhe explica que o firmware precisa atualizar. Filtrar aqui
-        // escondia o app e o dono nunca sabia por que ele nao aparecia.
-        if (!it.name && it.metaUrl) {
-            drawLoading("Carregando apps...", (k + 1) + "/" + n);
-            System.delay(30);
-            it = fillItemFromMeta(it);
-            if (!it) continue;
-        }
-        if (seenPkg[it.pkg]) continue;
-        seenPkg[it.pkg] = 1;
-        apps.push(it);
-    }
-
-    System.delay(1);   // refresh escaneia FS + ordena; cede antes do trecho
-    refresh();
-    if (apps.length > 0) {
-        System.delay(1);   // stringify do catalogo inteiro pro cache
-        // 2.9.1: o writeTextFile atomico so falha sem espaco (o cache velho
-        // fica), mas o .tmp abortado comeria o poco que resta — so escreve
-        // com folga conhecida; sem o cheque do firmware, escreve como sempre
-        var blob = JSON.stringify(apps);
-        var fCache = 0;
-        try { fCache = FS.getFreeSpace("/local"); } catch (eS1) { fCache = 0; }
-        if (fCache <= 0 || fCache > blob.length + 16384) {
-            FS.writeTextFile(CACHE, blob);
-        }
-    }
-    return "list";
-}
-
-function loadCache() {
-    var body = FS.readTextFile(CACHE);
-    if (!body) return false;
-    var arr = null;
-    try { arr = JSON.parse(body); } catch (e) { arr = null; }
-    if (!arr || !arr.length) return false;
-    apps = arr;
-    fetchDepIndex();     // engine: o cache do catalogo nao traz o indice
-    System.delay(1);   // parse de ~50 KB + refresh sem yield derrubam a janela
-    refresh();
-    selIt = null;
-    return true;
-}
-
-// ---- listas -----------------------------------------------------------------
-function curList() {
-    var key = dataStamp + "|" + curTab + "|" + curCat + "|" + query;
-    if (listCache.key === key) return listCache.items;
-    var items;
-    if (curTab === 0) items = filteredApps();
-    else if (curTab === 1) items = updApps();
-    else items = installedItems();
-    listCache.key = key;
-    listCache.items = items;
-    return items;
-}
-
-// remove o pacote instalado (sem UI de confirmacao — a tela pergunta antes)
-function uninstallApp(pkg) {
-    var dir = resolveInstalledDir(pkg);
-    if (!dir) return false;
-    // Storage privado do app (API 12): apaga junto — em firmware antigo o
-    // typeof segue undefined e so os arquivos sao removidos
-    if (typeof Storage !== "undefined" && Storage.clearFor) { try { Storage.clearFor(pkg); } catch (e) {} }
-    if (!FS.removeDirectory(dir)) return false;
-    System.rescanApps();
-    refresh();
-    return true;
-}
-
-// ---- UI (toolkit API 22) ------------------------------------------------------
-// Barra de abas no topo do canvas (a faixa do sistema fica acima). Frames
-// "avulsos" (carregando/baixando) desenham uma tela fora do laco de uma tela:
-// o present vem no proximo delay/download.
-var LX = 8, LW = 224;
-var TABS_Y = 6, TABS_H = 32;
-var BODY_Y = 46;
-
-function tabLabels() {
-    return ["Loja", updCount > 0 ? "Atualizar " + updCount : "Atualizar", "Instalados"];
-}
-// abas: devolve true quando a aba mudou (o chamador troca de lista)
-function tabsBar() {
-    var nt = UI.tabs(LX, TABS_Y, LW, TABS_H, tabLabels(), curTab);
-    if (nt !== curTab) {
-        curTab = nt;
-        selIt = null;
-        UI.invalidate();
-        return true;
-    }
-    return false;
-}
-function frameAlone() {
-    UI.invalidate();
-    UI.begin(T.bg);
-    UI.tabs(LX, TABS_Y, LW, TABS_H, tabLabels(), curTab);
-}
-function drawLoading(msg, sub) {
-    frameAlone();
-    UI.spinner(120, 128, 18);
-    UI.text(msg, 120, 160, { align: "center", w: LW });
-    if (sub) UI.text(sub, 120, 184, { role: "caption", align: "center", color: T.textDim, w: LW });
-}
-
-// ---- lista (3 abas) -------------------------------------------------------------
-function stateColor(code) {
-    if (code === "new") return T.ok;
-    if (code === "upd" || code === "dep" || code === "api" || code === "hw") return T.warn;
-    return T.textDim;
-}
-function rowOf(it) {
-    var st = stateInfo(it);
-    var lm = localMap[it.pkg];
-    var sub;
-    if (curTab === 1) {
-        var du = depUpd[it.pkg];
-        if (du) {
-            sub = "engine " + du.names[0] + " " + (du.have[du.names[0]] || "?") +
-                  " > " + du.resolved[du.names[0]] +
-                  (du.names.length > 1 ? "  (+" + (du.names.length - 1) + ")" : "");
-        } else {
-            sub = (lm ? "v" + lm.ver : "v?") + " > v" + it.ver + (it.changelog ? "  " + it.changelog.split("\n")[0] : "");
-        }
-    } else if (curTab === 2) {
-        sub = "v" + (lm ? lm.ver : it.ver) + (lm && lm.sd ? " · SD" : "") + (lm && lm.system ? " · sistema" : "");
-    } else {
-        sub = it.desc || ("v" + it.ver);
-    }
-    return { label: it.name, sub: sub, right: st.txt, rightColor: stateColor(st.code) };
-}
-var rowsCache = { key: null, rows: null };
-function curRows() {
-    var items = curList();
-    var key = listCache.key;
-    if (rowsCache.key === key) return rowsCache.rows;
-    var rows = [];
-    for (var i = 0; i < items.length; i++) rows.push(rowOf(items[i]));
-    rowsCache.key = key;
-    rowsCache.rows = rows;
-    return rows;
-}
-function countLine() {
-    if (curTab === 1) {
-        return updCount === 0 ? "Nenhuma atualização" :
-            updCount + (updCount === 1 ? " atualização disponível" : " atualizações disponíveis");
-    }
-    var n = 0;
-    for (var k in localMap) if (localMap.hasOwnProperty(k)) n++;
-    return n + (n === 1 ? " app instalado" : " apps instalados");
-}
-function screenList() {
-    UI.invalidate();
-    while (true) {
-        UI.begin(T.bg);
-        tabsBar();
-        var listY = BODY_Y, listH = 228;
-        if (curTab === 0) {
-            // busca + categoria (a categoria abre um seletor em lista)
-            if (UI.button(query ? query + "  x" : "Buscar", LX, BODY_Y, 100, 30,
-                          { style: query ? "primary" : "ghost" })) {
-                if (query) {
-                    query = "";
-                } else {
-                    var q = System.prompt("Buscar app", "", "");
-                    query = (q && String(q).length) ? String(q) : "";
-                }
-                UI.resetScroll("store0");
-                UI.invalidate();
-            }
-            if (UI.button(curCat, LX + 108, BODY_Y, LW - 108, 30, { style: "ghost" })) return "cats";
-            listY = BODY_Y + 38;
-            listH = 190;
-            if (catWarn) {
-                UI.text(catWarn, 120, BODY_Y + 40, { role: "caption", align: "center", color: T.warn });
-                listY = BODY_Y + 62;
-                listH = 166;
-            }
-        } else {
-            UI.text(countLine(), 120, BODY_Y + 2, { role: "caption", align: "center",
-                    color: (curTab === 1 && updCount) ? T.warn : T.textDim });
-            listY = BODY_Y + 22;
-            listH = 206;
-        }
-
-        var items = curList();
-        if (items.length === 0) {
-            var msg = curTab === 1 ? "Tudo em dia!" : (curTab === 2 ? "Nenhum app instalado" : "Nenhum app");
-            UI.text(msg, 120, listY + 50, { role: "title", align: "center" });
-            if (curTab === 1) UI.text("Volte depois para conferir novidades.", 120, listY + 84,
-                                      { role: "caption", align: "center", color: T.textDim });
-        } else {
-            var i = UI.list("store" + curTab, LX, listY, LW, listH, curRows(), { rowH: 50 });
-            if (i >= 0) {
-                selIt = items[i];
-                // catalogo compacto nao traz descricao/autor: busca o
-                // app.json no primeiro toque (1 request por app visto)
-                if (!selIt.desc && selIt.metaUrl) fillItemFromMeta(selIt);
-                return "detail";
-            }
-        }
-
-        // rodape
-        if (curTab === 0) {
-            if (UI.button("Recarregar catálogo", LX, 282, LW, 34, { style: "ghost" })) {
-                return Net.isConnected() ? "load" : "wifi";
-            }
-        } else if (curTab === 1) {
-            if (UI.button("Atualizar tudo", LX, 282, LW, 34, { disabled: updCount === 0 })) return "batch";
-        } else {
-            // 2.9.3: escolha do destino de instalacao. A mesma preferencia do
-            // Settings (install_sd no NVS); installOnSd() roda no ato do
-            // install, entao virar a chave aqui basta. Firmware sem escrita
-            // de setting cai no arquivo legado. Sem cartao, o rotulo avisa.
-            var sdOn = installOnSd();
-            var noSd = null;   // null = firmware sem o cheque de espaco
-            try { noSd = FS.getFreeSpace("/sd") <= 0; } catch (eSD) { noSd = null; }
-            if (UI.button("Instalar no: " + (sdOn ? "cartao SD" : "memoria interna") +
-                          (sdOn && noSd ? " (sem cartao!)" : ""),
-                          LX, 282, LW, 34, { style: "ghost" })) {
-                var want = sdOn ? "0" : "1";
-                var wrote = false;
-                if (System.setting) {
-                    try { wrote = System.setting("install_sd", want); } catch (eS2) { wrote = false; }
-                }
-                if (!wrote) {   // firmware antigo: o arquivo legado cobre
-                    if (want === "1") FS.writeTextFile(FLAG_SD, "1");
-                    else { try { FS.deleteFile(FLAG_SD); } catch (eS3) {} }
-                }
-                UI.invalidate();
-            }
-        }
-        UI.end();
-    }
-}
-// seletor de categoria da Loja
-function screenCats() {
-    UI.invalidate();
-    while (true) {
-        UI.begin(T.bg);
-        if (UI.header("Categoria", { back: true })) return "list";
-        var sel = -1;
-        for (var k = 0; k < cats.length; k++) if (cats[k] === curCat) sel = k;
-        var i = UI.list("cats", LX, BODY_Y, LW, 312 - BODY_Y, cats, { selected: sel });
-        if (i >= 0) {
-            curCat = cats[i];
-            UI.resetScroll("store0");
-            return "list";
-        }
-        UI.end();
-    }
-}
-
-// ---- detalhe ----------------------------------------------------------------
-function infoRow(label, value, y, col) {
-    UI.text(label, 84, y, { role: "caption", color: T.textDim });
-    UI.text(String(value), LX + LW - 10, y, { role: "caption", color: col || T.text, align: "right", w: 96 });
-}
-function doUninstallFlow(it) {
-    var lm = localMap[it.pkg];
-    if (!lm) return;
-    var ok = UI.confirm("Desinstalar", "Remover " + it.name + " do aparelho?", { yes: "Remover", danger: true });
-    if (ok && lm.system) {
-        ok = UI.confirm("App do sistema", "Confirma remover " + it.name + " definitivamente?",
-                        { yes: "Remover", danger: true });
-    }
-    if (ok && uninstallApp(it.pkg)) {
-        UI.toast(it.name + " removido");
-        selIt = null;
-    }
-}
-function screenDetail() {
-    if (!selIt) return "list";
-    UI.invalidate();
-    while (true) {
-        var full = UI.begin(T.bg);
-        var it = selIt;
-        var lm = localMap[it.pkg];
-        var st = stateInfo(it);
-        if (UI.header(it.name, { back: true })) return "list";
-
-        UI.card(LX, BODY_Y, LW, 92);
-        if (full) {
-            // icone do pacote instalado (cache do sistema) ou inicial
-            var ip = lm ? (lm.dir + "/icon.png") : "";
-            if (ip && FS.exists(ip) && typeof System.drawIcon === "function") {
-                System.drawIcon(ip, 14, BODY_Y + 14);
-            } else {
-                System.fillGradient(14, BODY_Y + 14, 60, 60, T.accent, T.accentD, 14);
-            }
-        }
-        if (!(lm && FS.exists(lm.dir + "/icon.png"))) {
-            UI.text((it.name || "?").substring(0, 1).toUpperCase(), 44, BODY_Y + 30,
-                    { role: "display", align: "center", color: T.onAccent, bg: T.accent });
-        }
-        infoRow("Autor", it.author || "-", BODY_Y + 10);
-        infoRow("Instalado", lm ? "v" + (lm.ver || "?") : "não", BODY_Y + 30);
-        infoRow("No hub", it.appUrl ? ("v" + it.ver + (it.size ? " · " + fmtKB(it.size) : "") +
-                                       (it.deps ? " + deps" : "")) : "-", BODY_Y + 50);
-        infoRow("Estado", st.txt, BODY_Y + 70, stateColor(st.code));
-        UI.cardEnd();
-
-        // descricao + novidades
-        var news = it.changelog && st.code !== "new" && st.code !== "api";
-        var y = BODY_Y + 102;
-        UI.text("Descrição", LX + 2, y, { role: "caption", color: T.accent });
-        y += 18 + UI.text(it.desc || "Sem descrição.", LX + 2, y + 18,
-                          { role: "caption", w: LW - 4, lines: news ? 3 : 6 });
-        if (news) {
-            UI.text("Novidades", LX + 2, y + 6, { role: "caption", color: T.accent });
-            UI.text(it.changelog.split("\n")[0], LX + 2, y + 24, { role: "caption", color: T.textDim, w: LW - 4, lines: 3 });
-        }
-
-        // acoes
-        var by = 272;
-        if (it.appUrl && (it.api || 1) > API) {
-            UI.text("Requer API " + it.api + " (sistema: " + API + ")", 120, by + 10,
-                    { role: "caption", align: "center", color: T.warn });
-        } else if (it.appUrl && st.code === "hw") {
-            UI.text("Incompatível: requer hardware com PSRAM", 120, by + 4, { role: "caption", align: "center", color: T.warn });
-            UI.text("(a RAM interna não basta para este app)", 120, by + 22, { role: "caption", align: "center", color: T.textDim });
-        } else if (it.appUrl) {
-            var lbl = st.code === "upd" ? "Atualizar"
-                    : (st.code === "dep" ? "Atualizar engine"
-                    : (st.code === "inst" ? "Reinstalar" : "Instalar"));
-            if (UI.button(lbl, LX, by, lm ? 108 : LW, 40)) {
-                return st.code === "dep" ? "deps" : "install";
-            }
-            if (lm && UI.button("Desinstalar", LX + 116, by, 108, 40, { style: "danger" })) {
-                doUninstallFlow(it);
-                if (!selIt) return "list";
-            }
-        } else if (lm) {
-            if (UI.button("Desinstalar", LX, by, LW, 40, { style: "danger" })) {
-                doUninstallFlow(it);
-                if (!selIt) return "list";
-            }
-        }
-        UI.end();
-    }
-}
-
-// ---- instalacao / atualizacao ----------------------------------------------
-// Progresso INCREMENTAL: drawDownload compoe a tela UMA vez e drawProgress so
-// alimenta UI.progress/UI.text — que se redesenham sozinhos quando o valor
-// muda (o toolkit compara a assinatura). Um redesenho de tela cheia por KB
-// sujava o quadro inteiro e, sem quadro (CYD), piscava o vidro.
-function drawDownload(name, sub, withBar) {
-    frameAlone();
-    UI.text("Baixando " + name + "...", 120, 104, { role: "title", align: "center", w: LW });
-    if (sub) UI.text(sub, 120, 136, { role: "caption", align: "center", color: T.textDim });
-    if (withBar !== false) UI.progress(LX + 24, 160, LW - 48, 14, 0);
-}
-// withBar so no download do main.js (unico com callback de progresso)
-function drawProgress(got, total) {
-    var pct = 0, txt = "";
-    if (total > 0) {
-        pct = Math.min(100, Math.floor(got * 100 / total));
-        txt = pct + "%";
-    } else {
-        var kb = Math.floor(got / 1024);
-        if (kb > 0) {
-            pct = Math.min(100, 10 + (kb % 9) * 10);
-            txt = kb + " KB";
-        }
-    }
-    UI.progress(LX + 24, 160, LW - 48, 14, pct);
-    UI.text(txt, 120, 186, { role: "caption", align: "center", color: T.textDim });
-}
-function drawBatch(k, n, name) {
-    frameAlone();
-    UI.text("Atualizando " + k + " de " + n, 120, 104, { role: "title", align: "center" });
-    UI.text(name, 120, 136, { align: "center", color: T.textDim, w: LW });
-    UI.progress(LX + 24, 166, LW - 48, 14, Math.round((k - 1) * 100 / n));
-    UI.text("não feche a loja", 120, 192, { role: "caption", align: "center", color: T.textDim });
-}
-
-// Tela de resultado generica: titulo colorido + linhas; botoes Voltar (e
-// "Sair agora" quando a propria loja se atualizou)
-function screenResult(title, col, lines, selfUpd) {
-    UI.invalidate();
-    while (true) {
-        UI.begin(T.bg);
-        UI.text(title, 120, 70, { role: "title", align: "center", color: col, w: LW });
-        var y = 108;
-        for (var i = 0; i < lines.length; i++) {
-            y += UI.text(lines[i].t, 120, y, { role: lines[i].r || "caption", align: "center",
-                                               color: lines[i].c || T.textDim, w: LW, lines: 2 }) + 6;
-        }
-        if (UI.button("Voltar", LX, 272, selfUpd ? 108 : LW, 40, { style: "ghost" })) {
-            curTab = 0;
-            UI.resetScroll("store0");
-            return "list";
-        }
-        if (selfUpd && UI.button("Sair agora", LX + 116, 272, 108, 40)) System.exitApp();
-        UI.end();
-    }
-}
-function screenBatchDone() {
-    var lines = [{ t: batchOk + (batchOk === 1 ? " app atualizado" : " apps atualizados") }];
-    for (var i = 0; i < batchFails.length && i < 4; i++) lines.push({ t: "falhou: " + batchFails[i], c: T.err });
-    if (selfUpdated) lines.push({ t: "A App Store se atualizou: saia e abra de novo", c: T.text, r: "body" });
-    return screenResult(batchFails.length === 0 ? "Tudo atualizado!" : "Terminado com falhas",
-                        batchFails.length === 0 ? T.ok : T.warn, lines, selfUpdated);
-}
-function screenDone() {
-    var it = selIt;
-    if (selfUpdated) {
-        return screenResult("App Store atualizada!", T.ok,
-                            [{ t: it.name, c: T.text, r: "title" }, { t: "Saia e abra de novo para rodar a v" + it.ver }], true);
-    }
-    var lm = localMap[it.pkg];
-    return screenResult(wasUpdate ? "Atualizado!" : "Instalado!", T.ok,
-                        [{ t: it.name, c: T.text, r: "title" },
-                         { t: "v" + it.ver + (lm && lm.sd ? " · no cartão SD" : "") },
-                         { t: "Pronto no launcher." }], false);
-}
-
-// ---- erro / sem WiFi --------------------------------------------------------
-function screenErr() {
-    UI.invalidate();
-    while (true) {
-        UI.begin(T.bg);
-        UI.text("Erro", 120, 64, { role: "caption", align: "center", color: T.err });
-        UI.text(errMsg, 120, 88, { role: "title", align: "center", w: LW, lines: 2 });
-        if (errHint) UI.text(errHint, 120, 150, { role: "caption", align: "center", color: T.textDim, w: LW, lines: 3 });
-        if (UI.button("Tentar de novo", LX, 220, LW, 40)) return retryMode === "install" ? "install" : "load";
-        if (UI.button("Voltar", LX, 270, LW, 40, { style: "ghost" })) return "list";
-        UI.end();
-    }
-}
-function screenWifi() {
-    UI.invalidate();
-    var lastCheck = 0;
-    while (true) {
-        UI.begin(T.bg);
-        UI.text("Wi-Fi desconectado", 120, 104, { role: "title", align: "center", color: T.warn });
-        UI.text("Conecte o Wi-Fi para usar a loja de apps. Esta tela segue sozinha quando a rede voltar.",
-                120, 140, { role: "caption", align: "center", color: T.textDim, w: LW, lines: 3 });
-        UI.spinner(120, 214, 14);
-        if (UI.button("Sair", LX, 272, LW, 40, { style: "ghost" })) System.exitApp();
-        if (System.millis() - lastCheck > 1500) {
-            lastCheck = System.millis();
-            if (Net.isConnected()) return "load";
-        }
-        UI.end();
-    }
-}
-
-// ---- instalacao (logica) ---------------------------------------------------
-// Update in-place: cada arquivo do pacote entra como <pkg>/<nome>.new
-// (staging dentro do proprio pacote), MD5 do catalogo conferido POR ARQUIVO
-// e o rename em LOTE so depois de 100% dos downloads ok — falha no meio
-// apaga os .new e a versao ativa continua a antiga. O pacote pode ter
-// modulos .js e assets (campo files do catalogo, hub 0.5.0); no fim,
-// arquivos que sairam do pacote sao removidos (update sem o asset nao deixa
-// orfao). A pasta alvo e a que o launcher executa (resolveInstalledDir) e
-// duplicatas sombreadas do mesmo pkg sao removidas no fim.
-function pkgFiles(it) {
-    // tudo que vem do hub: main.js + extras do files; icon.png tem tratamento
-    // proprio (nao-fatal) e fica fora. Sem files (catalogo antigo) = so main.
-    var out = [{ name: "main.js", url: it.appUrl, md5: it.md5 }];
-    var base = "";
-    if (it.appUrl) base = it.appUrl.substring(0, it.appUrl.lastIndexOf("/") + 1);
-    for (var n in (it.files || {})) {
-        if (n === "icon.png" || n === "main.js" || n === "app.json") continue;
-        out.push({ name: n, url: base + n, md5: (it.files[n] || {}).md5 || "" });
-    }
-    return out;
-}
-function pkgTotal(it) {
-    var t = it.size || 0;
-    for (var n in (it.files || {})) t += (it.files[n] || {}).size || 0;
-    return t;
-}
-// bytes da copia instalada: o update mantem a antiga no disco enquanto
-// baixa a nova (.new) — o pico e a soma das duas
-function installedBytes(dir) {
-    var total = 0;
-    try {
-        var list = FS.listDir(dir) || [];
-        for (var i = 0; i < list.length; i++) {
-            if (FS.isDirectory(list[i])) continue;  // pacotes sao flat
-            total += FS.getFileSize(list[i]) || 0;
-        }
-    } catch (e) { total = 0; }
-    return total;
-}
-// Pacote unico (API 42): o hub publica it.zip = {url, size, md5} quando o
-// servidor ja serve o app.zip. Exige checksum E o System.installZip do
-// firmware: qualquer ausencia cai no caminho por arquivo.
-function zipInfo(it) {
-    if (!it || !it.zip || !it.zip.url || !it.zip.md5) return null;
-    if (typeof System.installZip !== "function") return null;
-    return it.zip;
-}
-function zipNameOk(n) {
-    n = String(n || "");
-    return n.length > 0 && n.length <= 40 && n.indexOf("/") < 0 && n.indexOf("..") < 0;
-}
-function writeDepsFile(dir, resolved) {
-    var dj = [], dn;
-    for (dn in resolved) if (resolved.hasOwnProperty(dn)) {
-        dj.push('"' + dn + '":"' + resolved[dn] + '"');
-    }
-    return FS.writeTextFile(dir + "/deps.json", "{" + dj.join(",") + "}");
-}
-
-// ---- atualizacao de engine (2.9.0) -----------------------------------------
-// O deps.json gravado no install CONGELA as versoes resolvidas: quando o hub
-// publica minor/patch novo dentro do range, o app instalado nao ficava
-// sabendo. scanDepUpdates compara o congelado contra o indice do load e o
-// stateInfo expoe "dep" (a versao do app em si esta em dia). O update baixa
-// so as versoes novas pro cache /local/modules (o GC do launcher recolhe as
-// orfas) e regrava o deps.json — o app nem e reinstalado.
-function installedDeps(dir) {
-    var body = "";
-    try { body = FS.readTextFile(dir + "/deps.json"); } catch (e1) { return null; }
-    if (!body) return null;
-    try { return JSON.parse(body); } catch (e2) { return null; }
-}
-function scanDepUpdates() {
-    depUpd = {};
-    if (!depIndex) return;
-    System.delay(1);  // leituras de FS + resolve: cede a janela do exec-timeout
-    for (var pkg in localMap) {
-        if (!localMap.hasOwnProperty(pkg)) continue;
-        var it = catalogByPkg(pkg);
-        if (!it || !it.deps) continue;  // sem deps declaradas = nada a promover
-        var have = installedDeps(localMap[pkg].dir);
-        if (!have) continue;  // vendoring/install pre-deps: o update do app resolve
-        var fresh = resolveDeps(it.deps, depIndex);
-        if (!fresh) continue;  // hub sem versao que satisfaca: estado "inst"
-        var names = [], nm;
-        for (nm in fresh) if (fresh.hasOwnProperty(nm)) {
-            if (String(have[nm] || "") !== fresh[nm]) names.push(nm);
-        }
-        if (names.length) {
-            names.sort();
-            depUpd[pkg] = { names: names, resolved: fresh, have: have };
-        }
-    }
-}
-function updateDepsFlow() {
-    var it = selIt;
-    errMsg = ""; errHint = "";
-    retryMode = "install";
-    wasUpdate = true;   // tela de resultado: "Atualizado!"
-    selfUpdated = false;
-    if (!Net.isConnected()) { errMsg = "Sem conexão WiFi"; return "err"; }
-    drawDownload(it.name, "dependências", false);
-    System.delay(30);
-    // resolucao FRESCA contra o indice do hub: o snapshot do scanDepUpdates
-    // pode ter ficado para tras enquanto a loja ficou aberta
-    var index = fetchDepsMap();
-    if (!index) { errMsg = "Erro ao baixar dependências"; errHint = it.name; return "err"; }
-    var resolved = resolveDeps(it.deps || {}, index);
-    if (!resolved) { errMsg = "Dependência indisponível no hub"; errHint = it.name; return "err"; }
-    var depBytes = 0, nm;
-    for (nm in resolved) if (resolved.hasOwnProperty(nm)) {
-        depBytes += (index[nm][resolved[nm]].size) || 0;
-    }
-    var freeLocal = 0;
-    try { freeLocal = FS.getFreeSpace("/local"); } catch (e2) { freeLocal = 0; }
-    if (freeLocal > 0 && freeLocal < depBytes + 8192) { errMsg = "Sem espaço p/ dependências"; return "err"; }
-    var fail = installDeps(it, resolved, index);  // pula o que ja esta no cache
-    if (fail) { errMsg = fail; errHint = it.name; return "err"; }
-    var dir = localMap[it.pkg] ? localMap[it.pkg].dir : resolveInstalledDir(it.pkg);
-    if (!dir || !writeDepsFile(dir, resolved)) {
-        errMsg = "Erro ao gravar deps.json"; errHint = it.name; return "err";
-    }
-    System.rescanApps();
-    refresh();
-    return "done";
-}
-function installApp() {
-    var it = selIt;
-    if (it && stateInfo(it).code === "hw") {
-        // incompativel com esta placa: mesmo caminho das falhas de install
-        errMsg = "Incompatível com esta placa";
-        errHint = "Este app exige hardware com PSRAM (a RAM interna não basta para o runtime dele).";
-        return "err";
-    }
-    retryMode = "install";
-    var fail = "";
-    wasUpdate = stateInfo(it).code === "upd";
-    selfUpdated = false;
-
-    var dir = resolveInstalledDir(it.pkg);
-    if (!dir) dir = (installOnSd() ? "/sd/apps" : "/local/apps") + "/" + it.pkg;
-    var root = dirName(dir);
-    var zip = zipInfo(it);
-
-    if (!Net.isConnected()) {
-        fail = "Sem conexão WiFi";
-    } else {
-        // update: a copia ativa continua no disco enquanto a nova e baixada
-        var need = pkgTotal(it) + 16384;
-        if (zip) need += (zip.size || 0) + 8192;
-        if (FS.isDirectory(dir)) need += installedBytes(dir);
-        var free = 0;
-        try { free = FS.getFreeSpace(root); } catch (e) { free = 0; }
-        if (free > 0 && free < need) fail = "Sem espaço no disco";
-    }
-
-    var json = "", meta = null;
-    if (!fail && it.metaUrl) {
-        drawDownload(it.name, "app.json", false);
-        System.delay(30);
-        json = fetchText(it.metaUrl);
-        if (!json) fail = "Erro ao baixar app.json";
-        else { try { meta = JSON.parse(json); } catch (e5) { meta = null; } }
-    }
-
-    // Catalogo compacto nao traz files/requires: o app.json e a fonte deles
-    // no install. Multi-arquivo sem o meta = falha clara (nunca instalar so
-    // o main.js e deixar o app quebrado). O espaco e rechecado com os extras.
-    if (!fail && meta) {
-        var hadFiles = !!it.files;
-        if (!hadFiles && meta.files) it.files = meta.files;
-        if ((!it.req || !it.req.length) && meta.requires) it.req = meta.requires;
-        if (!hadFiles && it.files && free > 0) {
-            var extraBytes = 0, en;
-            for (en in it.files) if (it.files.hasOwnProperty(en)) {
-                extraBytes += (it.files[en] || {}).size || 0;
-            }
-            if (free < need + extraBytes) fail = "Sem espaço no disco";
-        }
-        if (it.nfiles > 0 && !it.files) fail = "Erro ao ler app.json";
-    }
-
-    // Deps compartilhadas (API 30): resolve os ranges do app.json baixado
-    // contra o indice do hub e alimenta o cache /local/modules ANTES dos
-    // arquivos do app — falha no meio so deixa modulo orfao no cache (o GC
-    // do launcher recolhe no proximo scan). Deps vivem sempre no /local,
-    // mesmo com o app indo para o SD.
-    var depIndex = null, depResolved = null;
-    if (!fail && meta) {
-        var wantDeps = meta.deps || null;
-        if (wantDeps) {
-            drawDownload(it.name, "dependências", false);
-            System.delay(30);
-            depIndex = fetchDepsMap();
-            if (!depIndex) fail = "Erro ao baixar dependências";
-            if (!fail) {
-                depResolved = resolveDeps(wantDeps, depIndex);
-                if (!depResolved) fail = "Dependência indisponível no hub";
-            }
-            if (depResolved) {
-                var depBytes = 0, dn;
-                for (dn in depResolved) if (depResolved.hasOwnProperty(dn)) {
-                    depBytes += (depIndex[dn][depResolved[dn]].size) || 0;
-                }
-                var freeLocal = 0;
-                try { freeLocal = FS.getFreeSpace("/local"); } catch (e7) { freeLocal = 0; }
-                if (freeLocal > 0 && freeLocal < depBytes + 8192) fail = "Sem espaço p/ dependências";
-            }
-        }
-    }
-    if (!fail && depResolved) fail = installDeps(it, depResolved, depIndex);
-
-    if (!fail && !FS.isDirectory(root) && !FS.mkdir(root)) fail = "Erro no disco";
-
-    // Pacote unico (API 42): 1 download + System.installZip troca
-    // /local/apps/<nome> inteiro (atomico: falha mantem a versao antiga).
-    // So no /local (o installZip nao escreve no SD), com nome valido e
-    // livre; o caminho por arquivo segue como fallback (firmware antigo,
-    // zip corrompido ou nome ocupado por outro pacote).
-    if (!fail && zip && !installOnSd() && dir.indexOf("/local/apps/") === 0 &&
-        zipNameOk(it.name)) {
-        var zdir = "/local/apps/" + it.name;
-        var zBusy = false;
-        if (FS.isDirectory(zdir)) {
-            var zj = null;
-            try { zj = JSON.parse(FS.readTextFile(zdir + "/app.json")); } catch (e0) { zj = null; }
-            zBusy = !!(zj && zj.packageName && zj.packageName !== it.pkg);
-        }
-        if (!zBusy) {
-            var zpath = "/local/appstore_install.zip";
-            drawDownload(it.name, "pacote", true);
-            System.delay(30);
-            var zok = false;
-            try {
-                zok = Net.download(hubUrl(zip.url), zpath, function (got, total) {
-                    drawProgress(got, total);
-                });
-            } catch (e1) { zok = false; }
-            var zmd = "";
-            if (zok) { try { zmd = FS.getFileMD5(zpath); } catch (e2) { zmd = ""; } }
-            if (zok && zmd === zip.md5) {
-                var zres = null;
-                try { zres = System.installZip(zpath, it.name); } catch (e3) { zres = null; }
-                try { FS.deleteFile(zpath); } catch (e4) {}
-                if (zres && zres.ok) {
-                    if (depResolved && !writeDepsFile(zdir, depResolved)) {
-                        errMsg = "Erro ao gravar deps.json";
-                        errHint = it.name;
-                        return "err";
-                    }
-                    try { removeShadowed(it.pkg, zdir); } catch (e5) {}
-                    System.rescanApps();
-                    refresh();
-                    if (it.pkg === STORE_PKG) selfUpdated = true;
-                    return "done";
-                }
-                // installZip recusou: limpa o staging que ele possa ter deixado
-                try { FS.removeDirectory(zdir + ".new"); } catch (e6) {}
-            } else {
-                try { FS.deleteFile(zpath); } catch (e7) {}
-            }
-        }
-    }
-
-    if (!fail && !FS.isDirectory(dir) && !FS.mkdir(dir)) fail = "Erro no disco";
-
-    var staged = [];
-    if (!fail) {
-        var files = pkgFiles(it);
-        for (var fi = 0; fi < files.length && !fail; fi++) {
-            var fe = files[fi];
-            var ftmp = dir + "/" + fe.name + ".new";
-            drawDownload(it.name, fe.name);  // chrome+barra uma vez por arquivo
-            System.delay(30);
-            var okDL = false;
-            try {
-                okDL = Net.download(hubUrl(fe.url), ftmp, function (got, total) {
-                    drawProgress(got, total);  // delta interno decide se desenha
-                });
-            } catch (e) { okDL = false; }
-            if (!okDL) { fail = "Erro ao baixar " + fe.name; break; }
-            if (fe.md5) {
-                var md = "";
-                try { md = FS.getFileMD5(ftmp); } catch (e2) { md = ""; }
-                if (md !== fe.md5) {
-                    try { FS.deleteFile(ftmp); } catch (e9) {}
-                    fail = "Verificação falhou (md5)";
-                    break;
-                }
-            }
-            staged.push({ tmp: ftmp, dst: dir + "/" + fe.name });
-        }
-        // app.json entra no MESMO lote: a versao nova so aparece no disco
-        // junto com os arquivos (o rename dele vem por ultimo)
-        if (!fail && json) {
-            var jtmp = dir + "/app.json.new";
-            if (!FS.writeTextFile(jtmp, json)) fail = "Erro ao gravar app.json";
-            else staged.push({ tmp: jtmp, dst: dir + "/app.json" });
-        }
-        if (fail) {
-            // nada de meia versao: .new fora e a ativa segue sendo a antiga
-            for (var si = 0; si < staged.length; si++) {
-                try { FS.deleteFile(staged[si].tmp); } catch (e3) {}
-            }
-            try { FS.deleteFile(dir + "/main.js.new"); } catch (e4) {}
-        }
-    }
-
-    if (!fail) {
-        for (var ri = 0; ri < staged.length && !fail; ri++) {
-            if (!FS.renameFile(staged[ri].tmp, staged[ri].dst))
-                fail = "Erro ao gravar " + baseName(staged[ri].dst);
-        }
-    }
-    // deps resolvidas (a fonte do require no device e do GC do launcher):
-    // gravado por ULTIMO — app + cache prontos, este e o commit do conjunto.
-    // Update sem deps deixa a limpeza de orfaos abaixo remover o antigo.
-    if (!fail && depResolved && !writeDepsFile(dir, depResolved)) {
-        fail = "Erro ao gravar deps.json";
-    }
-    if (!fail) {
-        if (it.icon) {
-            var iconTmp = dir + "/icon.png.new";
-            drawDownload(it.name, "icon.png", false);
-            System.delay(30);
-            var iconOk = false;
-            try { iconOk = Net.download(hubUrl(it.icon), iconTmp); } catch (e5) { iconOk = false; }
-            if (iconOk && FS.renameFile(iconTmp, dir + "/icon.png")) {
-                // icone novo no lugar; o rescan revalida o cache
-            } else {
-                try { FS.deleteFile(iconTmp); } catch (e6) {}
-            }
-        } else if (FS.exists(dir + "/icon.png")) {
-            FS.deleteFile(dir + "/icon.png");  // versao nova sem icone
-        }
-        // orfaos: a pasta e espelho do pacote — update que removeu um
-        // modulo/asset (ou .new de tentativa antiga) nao deixa lixo. O
-        // deps.json e do INSTALLER (versao resolvida das deps): mantido no
-        // update com deps, removido no update sem (o GC libera as versoes).
-        try {
-            var keep = { "app.json": 1, "main.js": 1, "icon.png": 1 };
-            for (var fn in (it.files || {})) keep[fn] = 1;
-            if (depResolved) keep["deps.json"] = 1;
-            var listing = FS.listDir(dir) || [];
-            for (var li = 0; li < listing.length; li++) {
-                var p = listing[li];
-                if (FS.isDirectory(p)) continue;
-                if (!keep[baseName(p)]) FS.deleteFile(p);
-            }
-        } catch (e7) {}
-    }
-
-    if (fail) {
-        errMsg = fail;
-        errHint = it.name;
-        return "err";
-    }
-    try { removeShadowed(it.pkg, dir); } catch (e8) {}
-    System.rescanApps();
-    refresh();
-    if (it.pkg === STORE_PKG) selfUpdated = true;
-    return "done";
-}
+function IA() { var j = si; if (!j) return "err"; if (SI(j).code === "hw") { em = "Incompatível com esta placa"; eh = "Este app exige PSRAM."; return "err"; }
+    rm = "install"; wu = SI(j).code === "upd"; su = false; var d = RID(j.pkg); if (!d) d = (ios() ? "/sd/apps" : "/local/apps") + "/" + j.pkg;
+    var RT = d.substring(0, d.lastIndexOf("/")), zip = ZIPI(j), fail = "", json = "", meta = null; if (!Net.isConnected()) fail = "Sem conexão WiFi";
+    if (!fail && ios() && sf === 0) fail = "Sem cartão SD";
+    // espaco antes do download: novo + copia ativa (staging .new convive) + zip
+    var need = PKT(j) + 16384 + (zip ? (zip.size || 0) + 8192 : 0); if (FS.isDirectory(d)) need += PKT(j);
+    var free = 0; try { free = FS.getFreeSpace(RT); } catch (e) { free = 0; } if (!fail && free > 0 && free < need) fail = "Sem espaço no disco";
+    // app.json primeiro: fonte de files/requires/permissoes no install (o
+    // catalogo compacto nao traz). Multi-arquivo sem meta = falha clara.
+    if (!fail && j.metaUrl) { dl(j.name, "app.json", false); System.delay(30); json = gt(j.metaUrl); if (!json) fail = "Erro no app.json";
+        else { try { meta = JSON.parse(json); } catch (e) { meta = null; } } }
+    var hadFiles = !!j.files; if (!fail && meta) { if (!j.files && meta.files) j.files = meta.files; if ((!j.req || !j.req.length) && meta.requires) j.req = meta.requires;
+        if (meta.permissions) j.perms = meta.permissions; if (j.nfiles > 0 && !j.files) fail = "app.json inválido";
+        if (!lm2[j.pkg] && !j.consented && !CNS(j)) fail = "Instalação cancelada";
+        if (!hadFiles && j.files && free > 0) { var extra = 0, en; for (en in j.files) if (j.files.hasOwnProperty(en)) extra += (j.files[en] || {}).size || 0;
+            if (free < need + extra) fail = "Sem espaço no disco"; } }
+    // deps primeiro: falha no meio so deixa modulo orfao no cache (o GC do
+    // launcher recolhe); deps vivem no /local, mesmo com app no SD.
+    var ix = null, dep = null; if (!fail && meta && meta.deps) { dl(j.name, "dependências", false); System.delay(30); ix = gd() || di;
+        if (!ix) fail = "Índice de deps indisponível"; else if (!(dep = resolveDeps(meta.deps, ix))) fail = "Dep indisponível";
+        if (dep) { var fl = 0; try { fl = FS.getFreeSpace("/local"); } catch (e) { fl = 0; }
+            if (fl > 0 && fl < DBO(dep, ix) + 8192) fail = "Sem espaço p/ deps"; } }
+    if (!fail && dep) fail = idp(j, dep, ix); if (!fail && !FS.isDirectory(RT) && !FS.mkdir(RT)) fail = "Erro no disco";
+    // pacote unico: so no /local (o installZip nao escreve no SD), nome valido
+    // e livre; falha do zip cai no caminho por arquivo.
+    if (!fail && PS && zip && !ios() && d.indexOf("/local/apps/") === 0 && ZIPN(j.name)) { var zdir = "/local/apps/" + j.name, zBusy = false;
+        if (FS.isDirectory(zdir)) { var zj = null; try { zj = JSON.parse(FS.readTextFile(zdir + "/app.json")); } catch (e0) { zj = null; }
+            zBusy = !!(zj && zj.packageName && zj.packageName !== j.pkg); }
+        if (!zBusy) { var zpath = "/local/appstore_install.zip"; dl(j.name, "pacote", true); System.delay(30); var zok = false;
+            try { zok = Net.download(HU(zip.url), zpath, function (g, t) { pg(g, t); }); } catch (e1) { zok = false; }
+            var zmd = zok ? M(zpath) : "";
+            if (zok && zmd === zip.md5) { var zr = null; try { zr = System.installZip(zpath, j.name); } catch (e3) { zr = null; } D(zpath);
+                if (zr && zr.ok) { if (dep && !FS.writeTextFile(zdir + "/deps.json", JSON.stringify(dep))) { em = "Erro no deps.json"; eh = j.name; return "err"; }
+                    try { RSH(j.pkg, zdir); } catch (e5) {} System.rescanApps(); RFS(); if (j.pkg === SP) su = true; return "done"; }
+                try { FS.removeDirectory(zdir + ".new"); } catch (e6) {} } else { D(zpath); } } }
+    if (!fail && !FS.isDirectory(d) && !FS.mkdir(d)) fail = "Erro no disco"; var st = [];
+    if (!fail) { var fs2 = PKF(j), fi, fe, tm, ok, md; for (fi = 0; fi < fs2.length && !fail; fi++) { fe = fs2[fi]; tm = d + "/" + fe.name + ".new";
+            dl(j.name, fe.name); System.delay(30); ok = false;
+            ok = N(fe.url, tm, function (g, t) { pg(g, t); });
+            if (!ok) { fail = "Erro ao baixar " + fe.name; break; } if (fe.md5) { md = M(tm);
+                if (md !== fe.md5) { D(tm); fail = "MD5 falhou"; break; } } st.push([tm, d + "/" + fe.name]); }
+        // app.json entra no MESMO lote: a versao nova so aparece com os arquivos
+        if (!fail && json) { var jt = d + "/app.json.new"; if (!FS.writeTextFile(jt, json)) fail = "Erro ao gravar app.json"; else st.push([jt, d + "/app.json"]); }
+        if (fail) { for (var x = 0; x < st.length; x++) { D(st[x][0]); } D(d + "/main.js.new"); } }
+    if (!fail) for (var r2 = 0; r2 < st.length && !fail; r2++) if (!FS.renameFile(st[r2][0], st[r2][1])) fail = "Erro ao gravar " + bn(st[r2][1]);
+    // deps por ULTIMO: app + cache prontos, este e o commit do conjunto
+    if (!fail && dep && !FS.writeTextFile(d + "/deps.json", JSON.stringify(dep))) fail = "Erro no deps.json"; if (!fail) { if (j.icon) {
+            var it2 = d + "/icon.png.new"; dl(j.name, "icon.png", false); System.delay(30); var iok = false;
+            try { iok = Net.download(HU(j.icon), it2); } catch (e) { iok = false; }
+            if (!(iok && FS.renameFile(it2, d + "/icon.png"))) { D(it2); }
+        } else if (FS.exists(d + "/icon.png")) FS.deleteFile(d + "/icon.png");
+        // orfaos: a pasta e espelho do pacote; update que removeu modulo/asset
+        // (ou .new de tentativa antiga) nao deixa lixo. deps.json e do installer.
+        try { var keep = { "app.json": 1, "main.js": 1, "icon.png": 1 }, fn2; for (fn2 in (j.files || {})) keep[fn2] = 1; if (dep) keep["deps.json"] = 1;
+            var l3 = FS.listDir(d) || []; for (var li = 0; li < l3.length; li++) if (!FS.isDirectory(l3[li]) && !keep[bn(l3[li])]) FS.deleteFile(l3[li]); } catch (e) {} }
+    if (fail) { em = fail; eh = j.name; return "err"; } try { RSH(j.pkg, d); } catch (e) {} System.rescanApps(); RFS(); if (j.pkg === SP) su = true;
+    return "done"; }
 
 // "Atualizar tudo": sequencial; a propria loja (self-update) vai por ultimo.
-// Guarda ITENS (nao indices): installApp -> refresh() reordena apps[] a cada
-// update, e indice guardado viraria ponteiro pro app errado.
-function updateAll() {
-    var order = [];
-    for (var i = 0; i < apps.length; i++) {
-        var c = stateInfo(apps[i]).code;
-        if (c === "upd" || c === "dep") order.push(apps[i]);
-    }
-    order.sort(function (a, b) {
-        return (a.pkg === STORE_PKG ? 1 : 0) - (b.pkg === STORE_PKG ? 1 : 0);
-    });
-    batchOk = 0;
-    batchFails = [];
-    selfUpdated = false;
-    for (var k = 0; k < order.length; k++) {
-        selIt = order[k];
-        drawBatch(k + 1, order.length, selIt.name);
-        System.delay(30);
-        errMsg = "";  // installApp so grava no fail: a linha do lote mostra o
-        var r = stateInfo(selIt).code === "dep" ? updateDepsFlow() : installApp();
-        if (r === "done") batchOk++;   // motivo de QUEM falhou
-        else batchFails.push(selIt.name +
-                             (errMsg ? " (" + errMsg + ")" : ""));
-    }
-    return "batchDone";
-}
+// Guarda ITENS (nao indices): IA -> RFS() reordena ap[].
+function UA() { var ord = []; for (var i = 0; i < ap.length; i++) { var c = SI(ap[i]).code; if (c === "upd" || c === "dep") ord.push(ap[i]); }
+    ord.sort(function (a, b) { return (a.pkg === SP ? 1 : 0) - (b.pkg === SP ? 1 : 0); }); bo = 0; bf = []; su = false; for (var k = 0; k < ord.length; k++) {
+        si = ord[k]; A.progress(Math.round(k * 100 / ord.length), "Atualizando " + (k + 1) + "/" + ord.length + ": " + si.name);
+        System.delay(20); em = "";
+        var r = SI(si).code === "dep" ? UD() : IA(); if (r === "done") bo++; else bf.push(si.name + (em ? " (" + em + ")" : "")); }
+    return "batchDone"; }
 
-function screenBatch() {
-    updateAll();
-    return "batchDone";
-}
+// ---- telas de fluxo --------------------------------------------------------
+function LDS(c) { return LCA() === "err" ? "err" : "home"; } function INS(c) { if (IA() !== "done") return "err"; if (su) {
+        A.ok("App Store atualizada!", [si.name, "Reabra para rodar a v" + si.ver]); return A.EXIT; } var lo = lm2[si.pkg];
+    A.ok(wu ? "Atualizado!" : "Instalado!", [si.name, "v" + si.ver + (lo && lo.sd ? " · no cartão SD" : ""), "Pronto no launcher."]); return RT("home"); }
+function DPS(c) { if (UD() !== "done") return "err"; A.ok("Engine atualizada", [si.name, "deps.json regravado."]);
+    return RT("home"); } function BTS(c) { UA(); var lines = [bo + (bo === 1 ? " app atualizado" : " apps atualizados")];
+    for (var i = 0; i < bf.length && i < 3; i++) lines.push("falhou: " + bf[i]); if (bf.length) A.error("Terminado com falhas", lines);
+    else A.ok("Tudo atualizado!", lines); if (su) { A.ok("App Store atualizada!", ["Saia e abra de novo."]); return A.EXIT; } return RT("home"); }
 
-// ---- fluxo principal --------------------------------------------------------
-// No harness (test/js_harness) nao entra no loop de telas: expoe as funcoes
-// puras e de instalacao para os checks de update/self-update.
-if (typeof __harness !== "undefined" && __harness.storeTest) {
-    __harness.storeTest({
-        cmpV: cmpV,
-        depRangeOk: depRangeOk,
-        resolveDeps: resolveDeps,
-        hubUrl: hubUrl,
-        hubToken: hubToken,
-        resetToken: function () { _hubTok = null; },
-        fetchText: fetchText,
-        stateInfo: stateInfo,
-        scanLocalApps: scanLocalApps,
-        resolveInstalledDir: resolveInstalledDir,
-        uninstallApp: uninstallApp,
-        updateAll: updateAll,
-        setDepIndex: function (idx) { depIndex = idx; },
-        depUpdates: function () { return depUpd; },
-        updateDepsFlow: updateDepsFlow,
-        updCount: function () { return updCount; },
-        refresh: refresh,
-        setCatalog: function (arr) {
-            apps = arr;
-            selIt = arr.length ? arr[0] : null;
-            refresh();
-        },
-        catalog: function () { return apps; },
-        installApp: installApp,
-        fmtKB: fmtKB,
-        parseCompactCatalog: parseCompactCatalog,
-        parseDepsField: parseDepsField,
-        cats: function () { return cats; },
-        setCat: function (c) { curCat = c; },
-        filtered: filteredApps,
-        installed: installedItems,
-        selfUpdatedFlag: function () { return selfUpdated; },
-        batchStats: function () { return { ok: batchOk, fails: batchFails }; },
-        select: function (pkg) {
-            var it = catalogByPkg(pkg);
-            if (it) selIt = it;
-            return it;
-        }
-    });
-} else {
-    var mode = loadCache() ? "list" : (Net.isConnected() ? "load" : "wifi");
-    while (true) {
-        if (mode === "wifi") mode = screenWifi();
-        else if (mode === "load") mode = loadCatalog();
-        else if (mode === "err") mode = screenErr();
-        else if (mode === "list") mode = screenList();
-        else if (mode === "cats") mode = screenCats();
-        else if (mode === "detail") mode = screenDetail();
-        else if (mode === "install") mode = installApp();
-        else if (mode === "deps") mode = updateDepsFlow();
-        else if (mode === "done") mode = screenDone();
-        else if (mode === "batch") mode = screenBatch();
-        else if (mode === "batchDone") mode = screenBatchDone();
-        else System.exitApp();  // "exit"
-    }
-}
+// ---- fluxo principal -------------------------------------------------------
+// No harness nao entra no A.run: expoe as funcoes puras e de instalacao para
+// os checks de update/self-update/deps (test/js_harness/run.js).
+if (typeof __harness !== "undefined" && __harness.storeTest) { __harness.storeTest({ cmpV: cmpV, depRangeOk: depRangeOk, resolveDeps: resolveDeps,
+        hubUrl: HU, hubToken: HT, resetToken: function () { _T = null; }, fetchText: gt, stateInfo: SI, scanLocalApps: SCA,
+        resolveInstalledDir: RID, uninstallApp: UN, updateAll: UA, setDepIndex: function (x) { di = x; },
+        depUpdates: function () { return du; }, updateDepsFlow: UD, updCount: function () { return uc; }, refresh: RFS,
+        setCatalog: function (a) { ap = a; si = a.length ? a[0] : null; RFS(); }, catalog: function () { return ap; }, installApp: IA, fmtKB: fk,
+        parseCompactCatalog: PCC, parseDepsField: PDF, cats: function () { return ct; }, setCat: function (c) { cc = c; BVW(); },
+        filtered: FAP, installed: IIS, selfUpdatedFlag: function () { return su; }, batchStats: function () { return { ok: bo, fails: bf }; },
+        select: function (pkg) { var j = CBP(pkg); if (j) si = j; return j; } }); } else { var f0; if (FS.exists(CA)) { A.busy("Abrindo catálogo...");
+        f0 = LCC() ? "home" : (Net.isConnected() ? "load" : "wifi"); } else f0 = Net.isConnected() ? "load" : "wifi";
+    A.run({ home: HM, load: LDS, wifi: WFS, err: ERS, detail: DT, install: INS, deps: DPS, batch: BTS },
+          f0, { fps: 20 }); }

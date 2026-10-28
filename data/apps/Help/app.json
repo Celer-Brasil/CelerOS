@@ -1,9 +1,9 @@
 {
   "name": "Help",
   "packageName": "celeros.help",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Central de ajuda: como usar o CelerOS, gestos, Wi-Fi, apps e notas de versao.",
+  "description": "Central de ajuda: como usar o CelerOS, gestos, Wi-Fi, apps, API, notas de versão e problemas comuns, com busca e ajuda online.",
   "type": "System",
   "category": "System",
   "api": 30,
@@ -16,7 +16,9 @@
     "celeros.app": "^1.0.0",
     "celeros.app.net": "^1.0.0",
     "celeros.app.text": "^1.0.0",
-    "celeros.app.list": "^1.0.0"
+    "celeros.app.list": "^1.0.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0"
   },
-  "changelog": "1.5.0 - migrado para o CelerKit (deps celeros.app.*): leitor rolavel e saneamento Latin-1 no celeros.app.text, rede no celeros.app.net (getJSON que nunca estoura + espera de Wi-Fi) e listas com cache por carimbo no celeros.app.list; indice online com cache de sessao (voltar de uma categoria nao refaz as buscas)\n1.4.0 - visual novo com o toolkit UI (API 22): listas e leitor com rolagem por inercia\n1.3.1 - keepAwake em milissegundos (texto corrigido)\n1.3.0 - topicos novos: loja/SDK celer.js e APIs 12-13 (timers, Storage, notify, playTone/playWav, volume, sensores)\n1.2.0 - ajuda online via GitHub"
+  "changelog": "2.0.0 - UI kit 2.0 (celeros.app.style/icons/list): hero card, botões tokenizados e listas ricas com ícones por seção; busca offline por título, resumo e corpo (System.prompt) com tela de resultados e estado vazio; conteúdo ampliado (gestos, Wi-Fi e rede, servidor web, Installer, notas de versão, OTA e problemas comuns); leitor segue no A.text.viewer e a ajuda online no A.net com índice cacheado\n1.5.0 - migrado para o CelerKit (deps celeros.app.*): leitor rolavel e saneamento Latin-1 no celeros.app.text, rede no celeros.app.net (getJSON que nunca estoura + espera de Wi-Fi) e listas com cache por carimbo no celeros.app.list; indice online com cache de sessao (voltar de uma categoria nao refaz as buscas)\n1.4.0 - visual novo com o toolkit UI (API 22): listas e leitor com rolagem por inercia\n1.3.1 - keepAwake em milissegundos (texto corrigido)\n1.3.0 - topicos novos: loja/SDK celer.js e APIs 12-13 (timers, Storage, notify, playTone/playWav, volume, sensores)\n1.2.0 - ajuda online via GitHub"
 }

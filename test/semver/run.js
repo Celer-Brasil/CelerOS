@@ -46,6 +46,19 @@ const RANGES = [
     ['^10.0.0', '9.9.9', false],
     ['^01.0.0', '1.0.0', true],      // zero a esquerda: numerico vale
     ['01.0.0', '1.0.0', false],      // ...mas exata e por string
+    // comparacao NUMERICA parte a parte: um parseInt/string-compare
+    // responderia false ("1.10.0" < "1.2.0" como string)
+    ['^1.2.0', '1.10.0', true],
+    ['^0.10.0', '0.9.0', false],
+    // pre-release e build metadata NAO satisfazem (gramatica da casa: so
+    // X.Y.Z puro — a loja rejeita na publicacao, o device nunca ve)
+    ['1.0.0', '1.0.0-beta', false],
+    ['^1.0.0', '1.5.0-beta', false],
+    ['1.0.0+build', '1.0.0', false],
+    ['^1.0.0', '1.5.0+meta', false],
+    ['1.0.0', '1.0.0 ', false],      // espaco colado: malformado
+    ['^1.0.0 ', '1.0.0', false],
+    ['1.0.0', '01.0.0', false],      // zero a esquerda na VERSAO: malformado
     // malformados: nada satisfaz (o parseInt(||0) antigo aceitava "1.2")
     ['1.2', '1.2.0', false],
     ['^1.2', '1.2.0', false],
@@ -133,6 +146,13 @@ const CLOSURES = [
         want: {},
         index: { a: { '1.0.0': {} } },
         esperado: {},
+    },
+    {
+        // pick por ordem NUMERICA: um string-compare escolheria 1.9.0
+        nome: 'S8 pick numerico entre minor multi-digito',
+        want: { p: '^1.0.0' },
+        index: { p: { '1.9.0': {}, '1.10.0': {} } },
+        esperado: { p: '1.10.0' },
     },
 ];
 

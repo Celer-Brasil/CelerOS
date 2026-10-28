@@ -1,91 +1,141 @@
-// CelerOS Help (Central de Ajuda) — app de sistema. Porte do HelpCenterUI.cpp
-// (commit 64ccfc8): menu Offline/Online, categorias e topicos offline (textos
-// originais resumidos em PT-BR) e ajuda online buscada no hub. Migrado para o
-// CelerKit (deps celeros.app.*): o leitor rolavel com saneamento Latin-1
-// virou A.text.viewer, a rede virou A.net (getJSON que nunca estoura) e as
-// listas usam cache por carimbo do A.list. A.run e dono do frame; X do
-// topbar sai.
+// CelerOS Help 2.0 (Central de Ajuda) — app de sistema. Conteudo offline em
+// secoes com topicos (CelerOS, gestos, Wi-Fi, apps, API, notas de versao e
+// problemas comuns), busca por texto e a ajuda online do hub. UI kit 2.0
+// (celeros.app.style/icons/list): hero card, botoes tokenizados e listas
+// ricas; o leitor rolavel e o A.text.viewer (saneamento Latin-1) e a rede e
+// o A.net (getJSON que nunca estoura + espera de Wi-Fi), com o indice online
+// cacheado na sessao. A.run e dono do frame.
 
 var A = require("celeros.app");
 require("celeros.app.net");
 require("celeros.app.text");
 require("celeros.app.list");
+require("celeros.app.style");
+require("celeros.app.icons");
 
 A.init();
+var T = A.T;
+var L = A.L;
 
-// ---- conteudo offline (porte do HelpCenterUI.cpp, PT-BR resumido) ----------
-var CATS = [
-    { name: "Primeiros Passos", topics: [
+// ---- conteudo offline -------------------------------------------------------
+var SEC = [
+    { n: "Primeiros Passos", i: "play", t: [
         { t: "O que é o CelerOS", d: "Visão do sistema",
-          c: "O CelerOS é um sistema operacional rápido e leve, feito para o ESP32. Traz loja de apps integrada, execução de apps JavaScript pelo cartão SD e uma interface fluida no toque." },
-        { t: "Como começar", d: "WiFi e cartão SD",
-          c: "Vá em Configurações > WiFi para conectar o aparelho. Se for instalar novos apps de usuário, insira um cartão SD formatado em FAT32." },
-        { t: "Tipos de app", d: "Sistema vs usuário",
-          c: "Apps de sistema (Configurações, Launcher) rodam em C++ integrado, com máxima velocidade. Apps de usuário rodam no runtime JavaScript, do cartão SD ou da memória local." }
+          c: "O CelerOS é um sistema rápido e leve para o ESP32, com loja de apps, apps JavaScript no cartão SD ou na memória interna e interface fluida no toque." },
+        { t: "Como começar", d: "Wi-Fi e cartão SD",
+          c: "Abra Configurações > Wi-Fi para conectar. Para instalar apps de usuário, use um cartão SD em FAT32 com a pasta apps/." },
+        { t: "Tipos de app", d: "Sistema e usuário",
+          c: "Apps de sistema (Ajustes, Launcher) rodam em C++ integrado. Apps de usuário rodam no runtime JavaScript, do cartão SD ou da memória local." }
     ]},
-    { name: "Navegação Básica", topics: [
-        { t: "Tela inicial", d: "Visão da home",
-          c: "A tela inicial mostra os apps de sistema no topo e os seus apps de usuário instalados abaixo. Toque ou arraste a lista para navegar." },
+    { n: "Gestos e Navegação", i: "menu", t: [
+        { t: "Tela inicial", d: "Apps e launcher",
+          c: "Os apps de sistema ficam no topo e os de usuário abaixo. Toque para abrir e arraste a lista para navegar." },
         { t: "Abrir e fechar", d: "Toque e botão X",
-          c: "Toque no nome de um app para abri-lo. Para fechar um app em execução, toque no X do canto superior direito e volte ao launcher." }
+          c: "Toque no nome de um app para abri-lo. Para fechar, toque no X do canto superior direito e volte ao launcher." },
+        { t: "Bordas da tela", d: "Painéis rápidos",
+          c: "Arraste do topo: à esquerda os ajustes rápidos, no centro as notificações (X no cabeçalho) e à direita a barra superior do app." }
     ]},
-    { name: "Conectividade", topics: [
-        { t: "Conectar WiFi", d: "Config > WiFi",
-          c: "Vá em Configurações > WiFi. O aparelho escaneia as redes. Toque numa rede, digite a senha no teclado na tela e toque em Conectar. O aparelho reinicia para aplicar." }
+    { n: "Wi-Fi e Rede", i: "wifi", t: [
+        { t: "Conectar Wi-Fi", d: "Configurações > Wi-Fi",
+          c: "Em Configurações > Wi-Fi o aparelho escaneia as redes. Toque numa rede, digite a senha e confirme. O ESP32 usa 2,4 GHz." },
+        { t: "Sem rede", d: "Modo offline",
+          c: "Sem Wi-Fi continuam funcionando apps, relógio, alarmes e arquivos locais. Loja, ajuda online e atualizações precisam de rede." },
+        { t: "Servidor web", d: "Arquivos pelo navegador",
+          c: "O app Web Server liga um servidor na porta 80 com file manager, upload e OTA, protegido por login e senha. Abra http://IP-do-aparelho na mesma rede." }
     ]},
-    { name: "Loja e Apps", topics: [
+    { n: "Loja e Apps", i: "star", t: [
         { t: "App Store", d: "Instalar e atualizar",
-          c: "A App Store lista os apps do CelerOS Hub. Toque num app para ver a descrição, o changelog e o tamanho antes de instalar. Apps instalados mostram a versão local e ganham o botão Atualizar quando o hub tem versão nova." },
+          c: "A App Store lista os apps do hub. Toque para ver descrição, changelog e tamanho; apps instalados ganham Atualizar quando há versão nova." },
+        { t: "Instalar do cartão SD", d: "App Installer",
+          c: "Copie a pasta do app para /sd/apps e abra o Installer: ele mostra versão, tamanho e espaço livre, instala na memória ou no cartão e confere o MD5." },
         { t: "Criar seus apps", d: "SDK celer.js",
-          c: "O SDK do CelerOS (npm celer) cria o projeto, roda o lint, testa no emulador e publica na loja: celer.js new meuapp, depois dev, test e publish. Apps são JavaScript ES5 no espaço virtual 240x320." }
+          c: "O SDK (npm celer) cria o projeto, roda o lint, testa no emulador e publica na loja. Apps são JavaScript ES5 no espaço virtual 240x320." }
     ]},
-    { name: "APIs Recentes", topics: [
+    { n: "API e Recursos", i: "gear", t: [
         { t: "Timers e notificações", d: "API 12",
-          c: "Apps podem usar setTimeout e setInterval, gravar dados no Storage (NVS privado do app), desenhar em sprites fora da tela e avisar o usuário com System.notify (aparece no centro de notificações e na faixa do sistema) e System.playTone (melodia [[freq,ms],...])." },
+          c: "setTimeout/setInterval, Storage (NVS do app), sprites fora da tela, System.notify (centro de notificações) e System.playTone." },
         { t: "Sons e áudio", d: "API 12 e 13",
-          c: "System.playTone toca melodias curtas no alto-falante. System.playWav toca arquivos WAV PCM 16-bit (8 a 48 kHz) de /local ou /sd. System.setVolume e getVolume ajustam o volume geral (API 13)." },
+          c: "playTone toca melodias; playWav toca WAV PCM 16-bit de /local ou /sd; setVolume ajusta o volume. Placas sem áudio digital tocam só tons." },
         { t: "Sensores e relógio", d: "API 13",
-          c: "No watch, Sensors.accel le o acelerômetro, Sensors.steps conta passos e Sensors.temp a temperatura. System.getWeekday devolve o dia da semana, System.keepAwake(ms) segura a tela acordada por ms milissegundos (ou true/false) e o RTC mantém a hora entre reboots." }
+          c: "No watch, Sensors.accel, steps e temp. System.getWeekday dá o dia da semana e keepAwake(ms) mantém a tela ligada." }
     ]},
-    { name: "Problemas Comuns", topics: [
-        { t: "Tela preta", d: "Travamento em apps",
-          c: "Se um app travar ou ficar sem memória, o sistema mostra uma tela de erro: toque para voltar ao launcher. Em placas sem PSRAM (como a CYD), apps muito grandes podem não caber; a loja marca esses apps como Requer PSRAM." }
+    { n: "Notas de Versão", i: "info", t: [
+        { t: "CelerOS 2026.10", d: "UI 2.0 e CelerKit",
+          c: "Traz o CelerKit UI 2.0 (tokens, cards, listas ricas e ícones) nos apps de sistema, o Celer Studio, USB Host no devkit-S3 e o agente de frota. A CYD ganhou o perfil lite." },
+        { t: "Como atualizar", d: "OTA e cartão",
+          c: "Configurações > Atualização baixa o firmware pelo hub. O OTA troca só o sistema: para os apps use a App Store ou o flash_data.sh." }
+    ]},
+    { n: "Problemas Comuns", i: "alert", t: [
+        { t: "Tela preta", d: "App travado",
+          c: "Se um app travar, o sistema mostra uma tela de erro: toque para voltar ao launcher. Em placas sem PSRAM, apps grandes podem não caber." },
+        { t: "App não instala", d: "Pacote ou espaço",
+          c: "Confira o espaço livre no destino e o packageName no app.json (minúsculas, com ponto). Apps com dependências precisam do deps.json no pacote." }
     ]}
 ];
 
 // ---- estado ----------------------------------------------------------------
-var gato = 0;        // categoria offline aberta
+var gato = 0;        // secao offline aberta
 var ocats = null;    // indice online (cache da sessao): [{name,url}]
 var oarts = null;    // artigos da categoria online aberta
 var ocat = 0;
+var buscaQ = "";
+var buscaRes = [];
+var stampBusca = 0;
 
-// ---- listas com cache por carimbo (celeros.app.list) ------------------------
-// getStamp e barato (referencia/indice); build so roda quando muda.
-var linhasCat = A.list.make(function () { return CATS; }, function () {
+// ---- listas com cache por carimbo ------------------------------------------
+function plural(n) { return n + (n === 1 ? " tópico" : " tópicos"); }
+var linhasSec = A.list.make(function () { return SEC; }, function () {
     var out = [];
-    for (var i = 0; i < CATS.length; i++) {
-        var n = CATS[i].topics.length;
-        out.push({ label: CATS[i].name, sub: n + (n === 1 ? " tópico" : " tópicos") });
+    for (var i = 0; i < SEC.length; i++) {
+        out.push({ label: SEC[i].n, sub: plural(SEC[i].t.length), icon: SEC[i].i });
     }
     return out;
 });
 var linhasTop = A.list.make(function () { return gato; }, function () {
-    var tp = CATS[gato].topics, out = [];
-    for (var i = 0; i < tp.length; i++) out.push({ label: tp[i].t, sub: tp[i].d });
+    var tp = SEC[gato].t, out = [];
+    for (var i = 0; i < tp.length; i++) {
+        out.push({ label: tp[i].t, sub: tp[i].d, icon: SEC[gato].i });
+    }
+    return out;
+});
+var linhasRes = A.list.make(function () { return stampBusca; }, function () {
+    var out = [];
+    for (var i = 0; i < buscaRes.length; i++) {
+        out.push({ label: buscaRes[i].t, sub: buscaRes[i].s, icon: "search" });
+    }
     return out;
 });
 var linhasOcat = A.list.make(function () { return ocats; }, function () {
     var out = [];
-    for (var i = 0; i < ocats.length; i++) out.push({ label: ocats[i].name });
+    for (var i = 0; i < ocats.length; i++) out.push({ label: ocats[i].name, icon: "star" });
     return out;
 });
 var linhasOart = A.list.make(function () { return oarts; }, function () {
     var out = [];
-    for (var i = 0; i < oarts.length; i++) out.push({ label: oarts[i].title });
+    for (var i = 0; i < oarts.length; i++) out.push({ label: oarts[i].title, icon: "info" });
     return out;
 });
 
-// ---- busca online -----------------------------------------------------------
+// ---- busca offline ----------------------------------------------------------
+function buscarTudo() {
+    var termo = System.prompt("Buscar na ajuda", "", { nullOnCancel: true });
+    if (!termo) return false;
+    buscaQ = String(termo).toLowerCase();
+    buscaRes = [];
+    for (var i = 0; i < SEC.length && buscaRes.length < 20; i++) {
+        for (var j = 0; j < SEC[i].t.length && buscaRes.length < 20; j++) {
+            var tp = SEC[i].t[j];
+            var alvo = (tp.t + " " + tp.d + " " + tp.c).toLowerCase();
+            if (alvo.indexOf(buscaQ) >= 0) {
+                buscaRes.push({ t: tp.t, s: SEC[i].n, c: tp.c });
+            }
+        }
+    }
+    stampBusca++;
+    return true;
+}
+
+// ---- ajuda online -----------------------------------------------------------
 // UM frame de ocupado, Wi-Fi conferido (A.wifiWait deixa o usuario ligar a
 // rede) e getJSON que nunca estoura; null = aviso ja mostrado.
 var IDX_URL = "https://os.celer.tec.br/help/index.json";
@@ -100,35 +150,70 @@ function buscar(url, msg) {
 // ---- telas ------------------------------------------------------------------
 A.run({
     menu: function (c) {
-        var T = A.T;
         A.header("Central de Ajuda", { back: false });
-        UI.card(A.L.x, A.L.top, A.L.w, 64);
-        UI.text("Como usar o CelerOS:", A.L.x + 12, A.L.top + 10, { role: "title" });
-        UI.text("gestos, Wi-Fi, apps e mais.", A.L.x + 12, A.L.top + 38, { role: "caption", color: T.textDim });
-        UI.cardEnd();
-        if (UI.button("Ajuda Offline", A.L.x, A.L.top + 80, A.L.w, 44)) return "offline";
-        if (UI.button("Ajuda Online", A.L.x, A.L.top + 134, A.L.w, 44, { style: "ghost" })) return "online";
-        UI.text("A ajuda online lê a central no hub (precisa de Wi-Fi).", 120, A.L.top + 192,
-                { role: "caption", align: "center", color: T.textDim, w: A.L.w, lines: 2 });
+        A.style.card(L.x, L.top, L.w, 64, {
+            full: c.full, elev: 2, grad: true,
+            draw: function (r) {
+                A.icons.draw("info", r.x, r.y + 1, 20, { color: T.accent });
+                UI.text("Como usar o CelerOS", r.x + 28, r.y,
+                        { role: "title", color: T.text, bg: r.bg, lines: 1 });
+                UI.text("Gestos, Wi-Fi, apps e mais",
+                        r.x, r.y + 26,
+                        { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
+            }
+        });
+        if (A.style.button("Tópicos de ajuda", L.x, 124, L.w, 40)) return "secoes";
+        if (A.style.button("Ajuda Online", L.x, 172, L.w, 40, { variant: "secondary" })) return "online";
+        if (A.style.button("Buscar na ajuda", L.x, 220, L.w, 36, { variant: "ghost" })) {
+            if (buscarTudo()) return "resultados";
+        }
+        UI.text("Este conteúdo funciona offline; a ajuda online precisa de Wi-Fi.",
+                L.cx, 268, { role: "caption", align: "center", color: T.textDim, w: L.w, lines: 3 });
     },
-    offline: function (c) {
-        if (c.entered) UI.resetScroll("cat");
-        if (A.header("Ajuda Offline")) return A.BACK;
-        var i = UI.list("cat", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasCat.rows());
+    secoes: function (c) {
+        if (c.entered) UI.resetScroll("sec");
+        if (A.header("Tópicos de ajuda")) return A.BACK;
+        var i = A.list.view("sec", L.x, L.top, L.w, L.bottom - L.top, linhasSec.rows(),
+                            { row: 44 });
         if (i >= 0) { gato = i; return "topicos"; }
     },
     topicos: function (c) {
         if (c.entered) UI.resetScroll("top");
-        if (A.header(CATS[gato].name)) return A.BACK;
-        var tp = CATS[gato].topics;
-        var i = UI.list("top", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasTop.rows());
+        if (A.header(SEC[gato].n)) return A.BACK;
+        var tp = SEC[gato].t;
+        var i = A.list.view("top", L.x, L.top, L.w, L.bottom - L.top, linhasTop.rows(),
+                            { row: 48 });
         if (i >= 0) {
             var topico = tp[i];
-            // o viewer do kit nao invalida a 1a moldura (gap contornado
-            // aqui): sem isso, o spinner de um A.busy anterior queima no
-            // frame parcial de entrada
+            // o viewer do kit nao invalida a 1a moldura (spinner de um busy
+            // anterior queimaria no frame parcial de entrada)
             UI.invalidate();
-            A.text.viewer(topico.t, function () { return topico.c; });   // bloqueante
+            A.text.viewer(topico.t, function () { return topico.c; });
+        }
+    },
+    resultados: function (c) {
+        if (c.entered) UI.resetScroll("res");
+        if (A.header("Resultados", { sub: buscaRes.length + " de \"" + buscaQ + "\"" })) return A.BACK;
+        if (buscaRes.length === 0) {
+            A.style.card(L.x, L.top + 8, L.w, 112, {
+                full: c.full, elev: 1, grad: true,
+                draw: function (r) {
+                    A.icons.draw("search", L.cx - 11, r.y + 2, 22, { color: T.textDim });
+                    UI.text("Nada encontrado", L.cx, r.y + 34,
+                            { role: "title", align: "center", color: T.warn, bg: r.bg, w: r.w, lines: 1 });
+                    UI.text("Tente outra palavra. A busca cobre títulos, resumos e o texto dos tópicos.",
+                            L.cx, r.y + 66,
+                            { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 });
+                }
+            });
+            return;
+        }
+        var i = A.list.view("res", L.x, L.top, L.w, L.bottom - L.top, linhasRes.rows(),
+                            { row: 48 });
+        if (i >= 0) {
+            var r = buscaRes[i];
+            UI.invalidate();
+            A.text.viewer(r.t, function () { return r.c; });
         }
     },
     online: function (c) {
@@ -136,7 +221,7 @@ A.run({
         if (A.header("Ajuda Online")) return A.BACK;
         if (!ocats) {
             // indice com cache de sessao: voltar de uma categoria nao refaz
-            // as tres buscas (o menu refetchava a cada entrada)
+            // as buscas
             var d = buscar(IDX_URL, "Buscando índice...");
             if (!d) return A.BACK;
             var cs = d.categories || [], out = [];
@@ -147,7 +232,8 @@ A.run({
             ocats = out;
             UI.invalidate();
         }
-        var i2 = UI.list("ocat", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasOcat.rows());
+        var i2 = A.list.view("ocat", L.x, L.top, L.w, L.bottom - L.top, linhasOcat.rows(),
+                             { row: 44 });
         if (i2 >= 0) {
             var a = buscar(ocats[i2].url, "Carregando tópicos...");
             if (!a) return;
@@ -165,15 +251,16 @@ A.run({
     otopicos: function (c) {
         if (c.entered) UI.resetScroll("oart");
         if (A.header(ocats[ocat].name)) return A.BACK;
-        var i = UI.list("oart", A.L.x, A.L.top, A.L.w, A.L.bottom - A.L.top, linhasOart.rows());
+        var i = A.list.view("oart", L.x, L.top, L.w, L.bottom - L.top, linhasOart.rows(),
+                            { row: 44 });
         if (i >= 0) {
             var art = buscar(oarts[i].url, "Carregando artigo...");
             if (!art) return;
             var conteudo = (art.content === undefined || art.content === null)
                 ? "Conteúdo não encontrado." : String(art.content);
             var titulo = oarts[i].title;
-            UI.invalidate();   // ver nota do gap no leitor (topicos)
-            A.text.viewer(titulo, function () { return conteudo; });     // bloqueante
+            UI.invalidate();
+            A.text.viewer(titulo, function () { return conteudo; });
         }
     }
 }, "menu", { fps: 15 });

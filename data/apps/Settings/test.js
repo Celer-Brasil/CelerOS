@@ -4,7 +4,9 @@
 // (toggle NTP + seletor de fuso), Seguranca, Tela (aba de tempo de tela),
 // Atualizacao (check sem Wi-Fi -> aviso) e Sobre. Com __gate, o app sobe
 // pelo gate de PIN (bloqueante antes do A.run) aceitando '1234'. Usado por
-// `node tools/sdk/celer.js test|emu "data/apps/Settings"`.
+// `node tools/sdk/celer.js test|emu "data/apps/Settings"`. O flag
+// __noAppTaps (posto por um --events) deixa o teste de toques de fora para
+// o emulador dirigir so pelo --input.
 module.exports.wire = function (env) {
     if (env.__gate) {
         env.System.pinState = function () { return 1; };
@@ -12,7 +14,8 @@ module.exports.wire = function (env) {
         env.System.verifyPin = function (p) { return p === '1234' ? true : vp(p); };
         env.__harness.pushPrompt(['1234']);   // entra no menu; o voltar final sai
     }
-    // menu fixo: Wi-Fi, Aplicativos, Hora e fuso, Seguranca, Tela, Atualizacao, Sobre
+    // menu fixo: Wi-Fi, Aplicativos, Hora e fuso, Seguranca, Tela,
+    // Atualizacao, Sobre
     env.Sensors = {};
     env.System.getVolume = undefined;
     env.System.notifications = undefined;
@@ -23,32 +26,36 @@ module.exports.wire = function (env) {
         return i;
     };
     env.Net.isConnected = function () { return false; };
+    if (env.__noAppTaps) return;
 
     var t = env.__harness.tap;
-    // Wi-Fi (row 0): desenha card de estado; volta
+    // Wi-Fi (row 0): card de estado; volta
     t(120, 66);
     t(20, 20);
     // Aplicativos (row 1): lista + espaco livre; volta
     t(120, 102);
     t(20, 20);
-    // Hora e fuso (row 2): toggle NTP (198,144), seletor de fuso (row em 230),
-    // escolhe "UTC-11 Midway" (row 1 — o seletor fecha sozinho), volta p/ menu
+    // Hora e fuso (row 2): toggle NTP (linha 2 do form, y=144), seletor de
+    // fuso (linha 4 em y=212), escolhe "UTC-11 Midway" (linha 1 do picker em
+    // y=102 — o seletor fecha sozinho), volta p/ menu
     t(120, 138);
     t(198, 144);
-    t(120, 230);
+    t(120, 212);
     t(120, 102);
     t(20, 20);
     // Seguranca (row 3): tela do A.form; volta
     t(120, 174);
     t(20, 20);
-    // Tela (row 4): aba "1 min" do tempo de tela; volta
+    // Tela (row 4): "Tela apaga após" e a linha 2 do form (y=140); o choice
+    // cicla 30 s -> 1 min. volta
     t(120, 210);
-    t(123, 233);
+    t(120, 140);
+    t(120, 140);
     t(20, 20);
-    // Atualizacao (row 5): "Procurar atualizacao" sem Wi-Fi -> aviso; um tap
-    // neutro da tempo do estado "Sem conexao" desenhar antes do voltar
+    // Atualizacao (row 5): "Procurar atualizacao" (y=176) sem Wi-Fi -> aviso;
+    // um tap neutro da tempo do estado "Sem conexao" desenhar antes do voltar
     t(120, 246);
-    t(120, 154);
+    t(120, 176);
     t(120, 305);
     t(20, 20);
     // Sobre (row 6): lista de infos; volta ao menu

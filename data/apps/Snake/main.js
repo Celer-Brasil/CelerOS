@@ -1,51 +1,51 @@
-// CelerOS Snake — classico da cobrinha. ES5 puro (Duktape); placar, pausa e
-// fim de jogo do toolkit UI (API 22). Swipe do dedo para virar; toque pausa. A cobra acelera
-// a cada fruta e toda 5a fruta e dourada (+3, pisca e expira). Recorde
-// persistido em /local/config_snake_hi.txt. Sons via playTone quando o
-// firmware tem (API 12+). Desenho por celulas alteradas: zero flicker.
+// CelerOS Snake — classico da cobrinha no CelerKit UI 2.0. HUD em card
+// (placar, recorde e nivel), tabuleiro pintado em A.custom (redesenha so o
+// retangulo do campo; UI.custom nativo nas S3), pausa e fim de jogo em sheet,
+// swipe vira e toque pausa. Fruta dourada a cada 5 frutas (+3, pisca e
+// expira). Recorde persistido em /local/config_snake_hi.txt. ES5 (Duktape).
 
-var T = System.theme();
-var W = 240, H = 320;
+var A = require("celeros.app");
+require("celeros.app.style");
+require("celeros.app.widgets");
+A.init();
+var T = A.style.T;
+// nucleo antigo (hub 1.1.0) sem A.custom: cai no desenho direto do quadro
+var CUSTOM = !!(A.custom && A.custom.call);
 
 var CELL = 12;
-var COLS = 20;                  // 240 px
-var ROWS = 23;                  // 276 px
-var FX = 0;                     // x fisico do campo
-var FY = 32;                    // y do campo (sob o placar fino)
-var FW = COLS * CELL;
-var FH = ROWS * CELL;
+var COLS = Math.floor(A.L.w / CELL);            // 18 no 240x320
+var BY = 52;
+// linhas que cabem na area segura (20 no retangular; menos no watch redondo)
+var ROWS = Math.max(12, Math.min(20, Math.floor((A.L.bottom - BY - 14) / CELL)));
+var BW = COLS * CELL, BH = ROWS * CELL;
+var BX = A.L.x + Math.floor((A.L.w - BW) / 2);
 var HI_FILE = "/local/config_snake_hi.txt";
-var GOLD_EVERY = 5;             // fruta dourada a cada N frutas
-var GOLD_MS = 7000;             // validade da dourada
+var GOLD_EVERY = 5;
+var GOLD_MS = 7000;
 
-// Som: System.sfx (API 32) mistura o efeito por cima da trilha e NAO trava
-// o loop do jogo; firmware antigo cai no playTone (bloqueante)
+// Som: System.sfx (API 32) nao trava; firmware antigo cai no playTone
 var somFn = typeof System.sfx === "function" ? System.sfx :
             (typeof System.playTone === "function" ? System.playTone : null);
-var hasTone = somFn !== null;
-function tone(hz, ms) {          // playTone aceita melodia [[freq,ms],...]
-    if (hasTone) { try { somFn && somFn([[hz, ms]]); } catch (e) {} }
-}
-function tune(notes) {           // sequencia curta (ex.: recorde)
-    if (hasTone) { try { somFn && somFn(notes); } catch (e) {} }
-}
+function tone(hz, ms) { if (somFn) { try { somFn([[hz, ms]]); } catch (e) {} } }
+function tune(notes) { if (somFn) { try { somFn(notes); } catch (e) {} } }
 if (typeof System.keepAwake === "function") {
-    try { System.keepAwake(120000); } catch (e) {}  // partida sem apagar tela
+    try { System.keepAwake(120000); } catch (e0) {}
 }
 
 var hi = 0;
-var raw = FS.readTextFile(HI_FILE);
-if (raw) {
-    var p = parseInt(raw, 10);
-    if (!isNaN(p)) hi = p;
-}
+try {
+    var raw = FS.readTextFile(HI_FILE);
+    if (raw) { var p = parseInt(raw, 10); if (!isNaN(p)) hi = p; }
+} catch (e1) {}
 
-// ------------------------------------------------------------ estado ------
+// ---- estado ---------------------------------------------------------------
 var snake, dir, nextDir, food, gold, score, interval, state, growPending;
-var fruits, goldUntil, newRecord;
+var fruits, goldUntil, newRecord, tick, countUntil, lastTick;
+var sheetKind = 0, sheetOpen = false, sheetUntil = 0, wasBusy = false;
 
 function reset() {
-    snake = [{ x: 8, y: 11 }, { x: 7, y: 11 }, { x: 6, y: 11 }];
+    var x0 = Math.floor(COLS / 2), y0 = Math.floor(ROWS / 2);
+    snake = [{ x: x0, y: y0 }, { x: x0 - 1, y: y0 }, { x: x0 - 2, y: y0 }];
     dir = { dx: 1, dy: 0 };
     nextDir = null;
     score = 0;
@@ -55,27 +55,14 @@ function reset() {
     gold = null;
     goldUntil = 0;
     newRecord = false;
+    tick = 0;
     state = "count";
+    countUntil = System.millis() + 1500;
+    lastTick = System.millis();
     spawnFood();
-    drawBoard();
-    drawHeader();
-    drawFood();
+    UI.invalidate();
 }
-
-function countdown() {
-    for (var n = 3; n >= 1; n--) {
-        // id FIXO: o slot do UI.text apaga o numero anterior antes de pintar o
-        // novo; com id por numero (3/2/1) eram tres slots sobrepostos e os
-        // digitos empilhavam
-        UI.text(String(n), 120, 120, { role: "display", align: "center", color: T.accent, bg: T.bg, id: 1 });
-        System.delay(450);
-    }
-    // o numero ficaria pintado no campo (redesenho e por celula): limpa
-    System.fillRect(FX, FY, FW, FH, T.bg);
-    drawBoard();
-    drawFood();
-    state = "play";
-}
+function level() { return 1 + Math.floor((220 - interval) / 6); }
 
 function onSnake(x, y) {
     for (var i = 0; i < snake.length; i++) {
@@ -83,37 +70,25 @@ function onSnake(x, y) {
     }
     return false;
 }
-
-// livre = fora da cobra E fora da outra fruta (a normal nascia em cima da
-// dourada: comer uma apagava a outra do desenho e ela virava invisivel)
-function busy(x, y) {
+function busyCell(x, y) {
     return onSnake(x, y) || (food && food.x === x && food.y === y) ||
            (gold && gold.x === x && gold.y === y);
 }
-
 function freeCell() {
-    var tries = 0;
-    while (tries < 300) {
+    for (var tries = 0; tries < 300; tries++) {
         var x = Math.floor(Math.random() * COLS);
         var y = Math.floor(Math.random() * ROWS);
-        if (!busy(x, y)) return { x: x, y: y };
-        tries++;
+        if (!busyCell(x, y)) return { x: x, y: y };
     }
-    // campo quase cheio: primeira celula livre
     for (var j = 0; j < ROWS; j++) {
-        for (var i2 = 0; i2 < COLS; i2++) {
-            if (!busy(i2, j)) return { x: i2, y: j };
-        }
+        for (var i = 0; i < COLS; i++) if (!busyCell(i, j)) return { x: i, y: j };
     }
-    return null;  // venceu de verdade
+    return null;
 }
-
 function spawnFood() {
-    food = null;          // a fruta comida nao bloqueia a celula da nova
     food = freeCell();
-    if (!food) { saveHi(); state = "over"; }
+    if (!food) { state = "over"; openSheet(2); }
 }
-
 function spawnGold() {
     var c = freeCell();
     if (!c) return;
@@ -121,234 +96,209 @@ function spawnGold() {
     goldUntil = System.millis() + GOLD_MS;
 }
 
-// ------------------------------------------------------------- desenho ----
-function cellRect(x, y) {
-    return { x: FX + x * CELL + 1, y: FY + y * CELL + 1, w: CELL - 2, h: CELL - 2 };
-}
-
-function drawCell(x, y, col) {
-    var r = cellRect(x, y);
-    System.fillRoundRect(r.x, r.y, r.w, r.h, 3, col);
-}
-
-function clearCell(x, y) {
-    // Apaga a celula com 2 linhas de folga EMBAIXO: a fruta e um circulo e o
-    // firmware o desenha com raio medio (jsu) — em escala nao-inteira (4848:
-    // 2x horizontal, 1,5x vertical) ele passa 1px alem do retangulo da celula
-    // e a ultima linha do circulo vazava do apagamento (artefato de "linha"
-    // no lugar da fruta comida). Na ultima linha do campo a folga e cortada
-    // para nao comer o traco da borda.
-    System.fillRect(FX + x * CELL + 1, FY + y * CELL + 1, CELL - 2,
-                    y === ROWS - 1 ? CELL - 2 : CELL, T.bg);
-}
-
-function drawBoard() {
-    System.fillRect(FX, FY, FW, FH, T.bg);
-    System.drawRoundRect(FX, FY, FW, FH, 2, T.stroke);
-    for (var i = 0; i < snake.length; i++) {
-        drawCell(snake[i].x, snake[i].y, i === 0 ? T.ok : T.accent);
-    }
-}
-
-function drawFood() {
-    if (!food) return;
-    var r = cellRect(food.x, food.y);
-    System.fillSmoothCircle(r.x + r.w / 2, r.y + r.h / 2, (CELL - 4) / 2, T.err);
-}
-
-function drawGold(on) {
-    if (!gold) return;
-    if (on) {
-        var r = cellRect(gold.x, gold.y);
-        System.fillSmoothCircle(r.x + r.w / 2, r.y + r.h / 2, (CELL - 3) / 2, T.warn);
-    } else {
-        clearCell(gold.x, gold.y);
-    }
-}
-
-function level() {
-    return 1 + Math.floor((220 - interval) / 6);
-}
-
-function drawHeader() {
-    // o nome vive na faixa do sistema (retratil); aqui e so o placar.
-    // drawString direto (nao UI.text): o fillRect do fundo apagaria textos
-    // cuja assinatura nao mudou e o slot nao redesenharia
-    System.fillRect(0, 0, W, 28, T.card);
-    System.setTextColor(T.text, T.card);
-    System.drawString("Pontos " + score, 10, 8, 2);
-    System.setTextDatum(2);           // TR
-    System.setTextColor(score > 0 && score >= hi && newRecord ? T.ok : T.textDim, T.card);
-    System.drawString("Rec " + hi, W - 10, 10, 1);
-    System.setTextDatum(0);
-    System.setTextColor(T.textDim, T.card);
-    System.drawString("Nv " + level(), 132, 10, 1);
-    System.fillRect(0, 28, W, 2, T.accent);
-}
-
-function redrawField() {
-    drawBoard();
-    drawFood();
-    if (gold) drawGold(true);
-}
-
-// Fim de jogo: dialogo nativo; ao voltar, partida nova
-function gameOver(win) {
-    UI.alert(win ? "Você venceu!" : "Fim de jogo",
-             "Pontos: " + score + "  ·  Tamanho: " + snake.length + "  ·  " +
-             (newRecord ? "Novo recorde!" : "Recorde: " + hi), "Jogar de novo");
-}
-
-// Pausa (toque seco): seguir ou reiniciar
-function pauseMenu() {
-    var seguir = UI.confirm("Pausado", "Nível " + level() + "  ·  " + score + " pontos",
-                            { yes: "Seguir", no: "Reiniciar" });
-    if (seguir) {
-        redrawField();
-        state = "play";
-    } else {
-        System.fillScreen(T.bg);
-        reset();
-        countdown();
-    }
-}
-
 function saveHi() {
     if (score > hi) {
         hi = score;
         newRecord = true;
-        FS.writeTextFile(HI_FILE, String(hi));
+        try { FS.writeTextFile(HI_FILE, String(hi)); } catch (e) {}
         tune([[880, 90], [1320, 120]]);
     }
 }
 
-// ---------------------------------------------------------------- passo ---
+// ---- passo ----------------------------------------------------------------
+function die() {
+    tone(150, 220);
+    saveHi();
+    state = "over";
+    openSheet(2);
+}
 function step() {
     if (nextDir) {
-        // proibe reversao de 180 graus
         if (!(nextDir.dx === -dir.dx && nextDir.dy === -dir.dy)) dir = nextDir;
         nextDir = null;
     }
     var head = { x: snake[0].x + dir.dx, y: snake[0].y + dir.dy };
-
     if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) return die();
-    // a cauda anda junto: colidir com o corpo e valido (a cauda atual sai
-    // exceto se estiver crescendo — checagem simples contra o corpo inteiro)
     if (onSnake(head.x, head.y)) {
         var tail = snake[snake.length - 1];
         if (!(growPending === 0 && tail.x === head.x && tail.y === head.y)) return die();
     }
-
-    // fruta na celula da cabeca: apaga ANTES de desenhar a cabeca (antes a
-    // ordem apagava a cabeca recem-desenhada e deixava um buraco por um passo)
     var ate = 0;
-    if (food && head.x === food.x && head.y === food.y) {
-        ate = 1;
-    } else if (gold && head.x === gold.x && head.y === gold.y) {
-        ate = 3;
-    }
-    if (ate) clearCell(head.x, head.y);
+    if (food && head.x === food.x && head.y === food.y) ate = 1;
+    else if (gold && head.x === gold.x && head.y === gold.y) ate = 3;
 
     snake.unshift(head);
-    drawCell(head.x, head.y, T.ok);
-    if (snake.length > 1) drawCell(snake[1].x, snake[1].y, T.accent);
-
     if (ate > 0) {
         if (ate === 3) gold = null;
         fruits++;
         score += ate;
-        if (score > hi && !newRecord) {
-            newRecord = true;
-            drawHeader();
-        }
+        if (score > hi) newRecord = true;
         growPending += ate + 1;
         interval = Math.max(90, 220 - fruits * 6);
-        drawHeader();
         tone(ate === 3 ? 990 : 660, ate === 3 ? 70 : 45);
         if (fruits % GOLD_EVERY === 0 && !gold) spawnGold();
-        if (food && ate === 1) spawnFood();
-        if (!food) { saveHi(); state = "over"; return; }
-        drawFood();
-    }
-
-    // dourada pisca e expira
-    if (gold) {
-        if (System.millis() > goldUntil) {
-            drawGold(false);
-            gold = null;
-        } else {
-            drawGold(Math.floor(System.millis() / 220) % 2 === 0);
-        }
-    }
-
-    if (growPending > 0) {
+        if (ate === 1) spawnFood();
+    } else if (growPending > 0) {
         growPending--;
     } else {
-        var t2 = snake.pop();
-        drawCell(t2.x, t2.y, T.bg);
+        snake.pop();
     }
+    if (gold && System.millis() > goldUntil) gold = null;
+    tick++;
 }
 
-function die() {
-    tone(150, 220);
-    saveHi();
-    drawHeader();
-    state = "over";
-}
+// ---- desenho do tabuleiro (A.custom pinta tudo com System.*) ---------------
+function drawBoard(x, y, w, h) {
+    var now = System.millis();
+    System.fillRect(x, y, w, h, T.card);
+    System.drawRoundRect(x, y, w, h, 10, T.stroke);
 
-// -------------------------------------------------------------- entrada ---
-var press = null, lastP = null;
-
-function pollTouch() {
-    var t = System.getTouch();
-    if (t.touched) {
-        if (!press) { press = { x: t.x, y: t.y }; lastP = { x: t.x, y: t.y }; }
-        else { lastP.x = t.x; lastP.y = t.y; }
-        return false;
+    var i, cx, cy;
+    for (i = 0; i < snake.length; i++) {
+        cx = x + snake[i].x * CELL;
+        cy = y + snake[i].y * CELL;
+        System.fillRoundRect(cx + 1, cy + 1, CELL - 2, CELL - 2, 3,
+                             i === 0 ? T.ok : T.accent);
     }
-    if (press) {
-        var dx = lastP.x - press.x, dy = lastP.y - press.y;
-        press = null;
-        if (state === "play") {
-            if (Math.abs(dx) < 12 && Math.abs(dy) < 12) {
-                state = "pause";      // toque seco: pausa
-                return false;
-            }
-            if (Math.abs(dx) > Math.abs(dy)) nextDir = { dx: dx > 0 ? 1 : -1, dy: 0 };
-            else nextDir = { dx: 0, dy: dy > 0 ? 1 : -1 };
-        }
-        return true;  // gesto completo (usado no game over)
+    if (food) {
+        System.fillSmoothCircle(x + food.x * CELL + CELL / 2,
+                                y + food.y * CELL + CELL / 2, 4, T.err);
     }
-    return false;
-}
-
-// ------------------------------------------------------------------ main ---
-reset();
-countdown();
-
-var lastTick = System.millis();
-while (true) {
-    pollTouch();
-
+    if (gold && Math.floor(now / 220) % 2 === 0) {
+        System.fillSmoothCircle(x + gold.x * CELL + CELL / 2,
+                                y + gold.y * CELL + CELL / 2, 5, T.warn);
+    }
     if (state === "count") {
-        countdown();
-        lastTick = System.millis();
-    } else if (state === "play") {
-        var now = System.millis();
-        if (now - lastTick >= interval) {
-            lastTick = now;
-            step();
-        }
-    } else if (state === "pause") {
-        pauseMenu();
-        lastTick = System.millis();
-    } else if (state === "over") {
-        gameOver(snake.length >= COLS * ROWS);
-        System.fillScreen(T.bg);
-        reset();
-        countdown();
-        lastTick = System.millis();
+        var n = Math.ceil((countUntil - now) / 500);
+        if (n > 3) n = 3;
+        System.setTextDatum(5);                    // MC
+        System.setTextColor(T.accent, T.card);
+        System.drawString(String(n), x + w / 2, y + Math.round(h * .3), 4);
+        System.setTextDatum(0);
     }
-
-    System.delay(10);
 }
+
+// ---- sheets ----------------------------------------------------------------
+function openSheet(k) { sheetKind = k; sheetOpen = true; UI.invalidate(); }
+function closeSheet() {
+    sheetOpen = false;
+    sheetUntil = System.millis() + 260;
+    lastTick = System.millis();
+    UI.invalidate();
+}
+
+function pauseSheet(c) {
+    // full so com o sheet aberto: o veu apaga a base (fill opaco) e na saida
+    // o cartao tem de deslizar sobre o tabuleiro, nao sobre a tela limpa
+    return A.widgets.sheet("snk-pause",
+        { open: sheetOpen, full: c.full && sheetOpen, h: 210, title: "Pausado", dim: 38 },
+        function (r) {
+            UI.text("Nível " + level() + "  ·  " + score + " pontos",
+                    r.x, r.y, { role: "body", color: T.text, bg: r.bg, w: r.w, id: "pinfo" });
+            UI.text("recorde: " + hi, r.x, r.y + 18,
+                    { role: "caption", color: T.textDim, bg: r.bg, w: r.w, id: "phi" });
+            var go = A.style.button("Continuar", r.x, r.y + 48, r.w, 44);
+            if (sheetOpen && go) closeSheet();
+            var rs = A.style.button("Reiniciar", r.x, r.y + 100, r.w, 38, { variant: "ghost" });
+            if (sheetOpen && rs) {
+                reset();
+                closeSheet();
+            }
+        });
+}
+
+function overSheet(c) {
+    var win = snake.length >= COLS * ROWS;
+    return A.widgets.sheet("snk-over",
+        { open: sheetOpen, full: c.full && sheetOpen, h: 224, dim: 38,
+          title: win ? "Você venceu!" : "Fim de jogo" },
+        function (r) {
+            UI.text("Pontos: " + score, r.x, r.y,
+                    { role: "title", color: T.text, bg: r.bg, w: r.w, id: "oinfo" });
+            UI.text(newRecord ? "Novo recorde!" : "Recorde: " + hi, r.x, r.y + 20,
+                    { role: "caption", color: newRecord ? T.ok : T.textDim,
+                      bg: r.bg, w: r.w, id: "ohi" });
+            var ag = A.style.button("Jogar de novo", r.x, r.y + 54, r.w, 44);
+            if (sheetOpen && ag) {
+                reset();
+                closeSheet();
+            }
+            var ex = A.style.button("Sair", r.x, r.y + 106, r.w, 36, { variant: "ghost" });
+            if (sheetOpen && ex) {
+                System.exitApp();
+            }
+        });
+}
+
+// ---- tela ------------------------------------------------------------------
+reset();
+
+A.run({
+    main: function (c) {
+        var now = System.millis(), busy = sheetKind !== 0;
+
+        // HUD: placar / recorde / nivel (o teste do harness procura estes textos)
+        A.style.card(A.L.x, 6, A.L.w, 38, { full: c.full, r: 12, draw: function (r) {
+            UI.text("Pontos " + score, r.x, r.y,
+                    { role: "title", color: T.text, bg: r.bg, id: "pts" });
+            UI.text("Rec " + hi, r.x + r.w, r.y + 2,
+                    { role: "caption", align: "right", w: 90,
+                      color: newRecord ? T.ok : T.textDim, bg: r.bg, id: "hi" });
+            UI.text("Nv " + level() + "  ·  " +
+                    (state === "play" ? "jogando" : state === "count" ? "preparar" : "fim"),
+                    r.x, r.y + 14,
+                    { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1, id: "lvl" });
+        }});
+
+        // entrada (fora do sheet): swipe vira, toque pausa
+        if (!busy) {
+            var t = UI.touch();
+            if (t.released && state === "play") {
+                var dx = t.x - t.sx, dy = t.y - t.sy;
+                if (Math.abs(dx) < 12 && Math.abs(dy) < 12) {
+                    openSheet(1);            // toque seco: pausa
+                } else if (Math.abs(dx) > Math.abs(dy)) {
+                    nextDir = { dx: dx > 0 ? 1 : -1, dy: 0 };
+                } else {
+                    nextDir = { dx: 0, dy: dy > 0 ? 1 : -1 };
+                }
+            }
+            if (state === "count" && now >= countUntil) {
+                state = "play";
+                lastTick = now;
+            } else if (state === "play" && now - lastTick >= interval) {
+                lastTick = now;
+                step();
+            }
+        }
+
+        // tabuleiro (so repinta quando o passo/pisca muda; "p" congela no sheet)
+        var sig = busy ? "p" :
+            (state + "|" + tick + "|" + (gold ? Math.floor(now / 220) % 2 : 9) +
+             "|" + (state === "count" ? Math.ceil((countUntil - now) / 500) : 0));
+        if (CUSTOM) {
+            A.custom("snake", BX, BY, BW, BH, sig, drawBoard,
+                     { bg: T.card, clear: true });
+        } else {
+            drawBoard(BX, BY, BW, BH);
+        }
+
+        UI.text("deslize vira · toque pausa", 120, A.L.bottom - 8,
+                { role: "caption", align: "center", color: T.textDim,
+                  w: A.L.w, lines: 1, id: "hint" });
+
+        if (busy) {
+            var r = sheetKind === 1 ? pauseSheet(c) : overSheet(c);
+            if (r === "close") {
+                if (sheetKind === 2) reset();     // fechar o fim de jogo comeca outro
+                closeSheet();
+            }
+            if (!sheetOpen && now > sheetUntil) {
+                sheetKind = 0;
+                UI.invalidate();
+            }
+        }
+        if (wasBusy && !busy) UI.invalidate();
+        wasBusy = busy;
+    }
+}, "main", { fps: 30 });

@@ -2034,17 +2034,9 @@ function runInline(src, env) {
     check('placar desenhado', j.indexOf('Pontos 0') >= 0);
 })();
 
-// --- Arrasa! (hub_apps): corpo rigido nativo (API 33) no espelho JS --------
-// A bateria vive no proprio app (hub_apps/Arrasa/test.js, a mesma do
-// `celer.js test`): toques reais no canvas 480, mira e lance pelo elastico,
-// vitoria com estrelas no NVS, TNT/bomba/tripla.
-(function() {
-    console.log('Arrasa!:');
-    var wire = require(path.join(ROOT, 'hub_apps', 'Arrasa', 'test.js')).wire;
-    var r = runApp('hub_apps/Arrasa/main.js', wire);
-    check('bateria do app passa (test.js)', r.err === null, r.err || '');
-    check('chegou ao fim da bateria', joinLog(r.log).indexOf('[arrasa] bateria completa') >= 0);
-})();
+// --- Arrasa: a bateria do app saiu com a copia plana de hub_apps (os jogos
+// agora vivem so em studio_games/). O caminho P.rigid -> System.rigid* segue
+// coberto em test/sdk (bloco "SDK P.rigid") e o jogo roda em test/studio.
 
 // --- Physics Drop (hub_apps): verlet nativo (API 31) no stub ---------------
 // A bateria vive no proprio app (hub_apps/Physics Drop/test.js, a mesma do
@@ -4139,15 +4131,17 @@ function holdFrames(x, y, n) {
 (function() {
     console.log('Settings (tempo de tela):');
     var r = runApp('data/apps/Settings/main.js', function(env) {
-        // abre "Tela" (linha 4) e toca na aba "1 min" (3a de 5) do tempo de tela
+        // abre "Tela" (linha 4) e cicla a acao "Tela apaga apos" (3a linha do
+        // form CelerKit: 36 px a partir de A.L.top=48) duas vezes:
+        // Sempre -> 30 s -> 1 min
         env.__harness.tap(120, 210);
-        var ty = env.System.getAutoBrightness() !== null ? 192 : 140;
-        env.__harness.tap(123, ty + 24 + 17);
+        env.__harness.tap(123, 48 + 2 * 36 + 18);
+        env.__harness.tap(123, 48 + 2 * 36 + 18);
     });
     check('roda sem erro', r.err === null, r.err || '');
     var j = joinLog(r.log);
     check('linha do timeout desenha', j.indexOf('Tela apaga após') >= 0);
-    check('aba "1 min" aplica o tempo de tela', r.env.__scrTmo === 60000, 'tmo=' + r.env.__scrTmo);
+    check('acao "Tela apaga após" aplica o tempo de tela', r.env.__scrTmo === 60000, 'tmo=' + r.env.__scrTmo);
 })();
 
 (function() {

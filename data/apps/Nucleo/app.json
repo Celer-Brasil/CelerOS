@@ -1,17 +1,20 @@
 {
   "name": "Nucleo",
   "packageName": "celeros.nucleo",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Servicos do OS em segundo plano: check de atualizacao e relogio (API 42)",
+  "description": "Servicos do OS em segundo plano: check de atualizacao e relogio (API 42) com painel ao vivo",
   "api": 42,
   "system": true,
   "order": 1,
   "topbar": false,
-  "permissions": ["system"],
+  "permissions": [
+    "system"
+  ],
   "service": "service.js",
   "deps": {
-    "celeros.app": "^1.0.0"
+    "celeros.app": "^1.0.0",
+    "celeros.app.style": "^1.0.1"
   },
-  "changelog": "1.1.0 - migrado para o CelerKit (dep celeros.app): tela no A.run do kit, header com voltar no lugar do botao Fechar, layout A.L e cores do tema; service.js e policy.js ficam como estao de proposito (gates proprios de wifi/grace/24h no policy e versao notificada em chave compartilhada com a tela - estado compartilhado nao migra para as chaves svc.* do kit)\n1.0.1 - tela em 10 fps: UI.end(120) era clampado ao maximo de 60 e a tela estatica (que le Storage e wifiStatus por frame) rodava a 60 fps"
+  "changelog": "2.0.0 - painel 2.0 dos servicos de fundo: card do A.style em secoes com divisores, estado ao vivo (Wi-Fi, ultimo check do svchost lido do Storage, relogio grande com segundos, data/dia da semana, SNTP, fuso e uptime do servico), check manual com A.busy/toast e botao desabilitado sem rede; service.js e policy.js mantem exports, gates e cadencias (o resultado do check ja ia para Storage em last_check) e o app dispensa A.caps para caber no budget de 12 KB da CYD. 1.1.0 - migrado para o CelerKit (dep celeros.app): tela no A.run do kit, header com voltar no lugar do botao Fechar, layout A.L e cores do tema; service.js e policy.js ficam como estao de proposito (gates proprios de wifi/grace/24h no policy e versao notificada em chave compartilhada com a tela - estado compartilhado nao migra para as chaves svc.* do kit)"
 }

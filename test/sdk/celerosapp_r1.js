@@ -85,13 +85,26 @@ module.exports = function (check) {
     check('core: every(ms, chave) marca por chave', e1 === true && e2 === false && e3 === true,
           e1 + ',' + e2 + ',' + e3);
 
-    // overlays nao estouram; wifiWait devolve true com rede ligada
+    // overlays nao estouram; wifiWait devolve true com rede ligada e
+    // false com o toque no Cancelar (antes: check com condicao literal
+    // true — os overlays e os 2 caminhos do wifiWait nao afirmavam nada)
     c = fresh([]);
-    c.A.busy('testando');
-    c.A.progress(40, 'testando');
-    c.A.progress(-1, 'indeterminado');
-    c.env.Net.isConnected = function () { return true; };
-    check('core: overlays busy/progress desenham e wifiWait conecta', true, '');
+    var overlayOk = true;
+    try {
+        c.A.busy('testando');
+        c.A.progress(40, 'testando');
+        c.A.progress(-1, 'indeterminado');
+        c.env.Net.isConnected = function () { return true; };
+        overlayOk = c.A.wifiWait() === true;
+    } catch (e) { overlayOk = false; }
+    check('core: overlays busy/progress desenham e wifiWait conecta', overlayOk,
+          String(overlayOk));
+    c = fresh([]);
+    tap(c.env, 120, 280);   // botao Cancelar (70..170, 264..298)
+    var wifiOff = null;
+    try { wifiOff = c.A.wifiWait('esperando...'); } catch (e) { wifiOff = 'lancou: ' + e; }
+    check('core: wifiWait cancelavel (toque no Cancelar devolve false)',
+          wifiOff === false, String(wifiOff));
 
     // resultado: tap no OK (70..170, 264..298) fecha o laco
     c = fresh([]);

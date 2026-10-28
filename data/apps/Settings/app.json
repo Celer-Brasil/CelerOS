@@ -1,7 +1,7 @@
 {
   "name": "Settings",
   "packageName": "celeros.settings",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "author": "CelerOS",
   "description": "Configuracoes do sistema: Wi-Fi, apps, hora, seguranca (PIN nativo com salt + senha web), tela, atualizacao OTA e sobre.",
   "type": "System",
@@ -17,8 +17,13 @@
     "system"
   ],
   "deps": {
-    "celeros.app": "^1.0.0",
-    "celeros.app.form": "^1.0.0"
+    "celeros.app": "^1.1.0",
+    "celeros.app.style": "^1.0.1",
+    "celeros.app.icons": "^1.1.0",
+    "celeros.app.form": "^1.1.0",
+    "celeros.app.list": "^1.1.0",
+    "celeros.app.rows": "^1.0.0",
+    "celeros.app.caps": "^1.0.0"
   },
-  "changelog": "1.9.0 - migrado para o CelerKit (deps celeros.app.*): o laco de telas e o cabecalho sao do core (A.run/A.header; o app nao chama mais UI.begin/UI.end), Seguranca/Relogio/Notificacoes viraram telas do A.form, o fuso usa o seletor A.form.pick, o ajuste manual de hora mostra progresso entre os prompts (A.progress) e o gate de PIN e uma tela propria do A.run; verificacao e reset usam os overlays do kit\n1.8.0 - visual novo com o toolkit UI (API 22): listas com rolagem por inercia, toggles, sliders, abas e dialogos nativos\n1.7.0 - ajuste \"Sono profundo após\" (watch, API 19): deep sleep automatico com sentinela ULP (tecla PWR acorda)\n1.6.0 - pagina Relogio (watch, API 15): levantar p/ acordar, AOD, tempos de tela, meta de passos, WiFi ocioso\n1.5.0 - pagina Som (slider de volume + teste, API 13) e pagina Sensores ao vivo (watch, API 13)\n1.4.2 - tempo de tela e notificacoes"
+  "changelog": "2.0.0 - UI kit 2.0 e foco na CYD: menu e listas ricas no A.list.view (icones, sub, estado a direita), formularios de Hora/Seguranca/Relogio/Notificacoes no A.form.run com as linhas do A.rows (toggle/choice/picker), cards/botoes/divisores no A.style e icones vetoriais no A.icons; Aplicativos agora mede o tamanho de cada app e abre o app instalado (System.launchApp) alem de desinstalar; Wi-Fi mostra estado/IP/redes salvas e abre o app Wi-Fi; Tela ganha AOD (explica nas placas sem), Som explica a placa sem audio digital e o Sobre mostra placa/PSRAM/BT/mic/audio com o reset de fabrica no fim; A.caps decide o que esconder e o que explicar (sem BT/mic/PSRAM/audio nao some sem contexto)\n1.9.0 - migrado para o CelerKit (deps celeros.app.*): o laco de telas e o cabecalho sao do core (A.run/A.header; o app nao chama mais UI.begin/UI.end), Seguranca/Relogio/Notificacoes viraram telas do A.form, o fuso usa o seletor A.form.pick, o ajuste manual de hora mostra progresso entre os prompts (A.progress) e o gate de PIN e uma tela propria do A.run; verificacao e reset usam os overlays do kit\n1.8.0 - visual novo com o toolkit UI (API 22): listas com rolagem por inercia, toggles, sliders, abas e dialogos nativos\n1.7.0 - ajuste \"Sono profundo após\" (watch, API 19): deep sleep automatico com sentinela ULP (tecla PWR acorda)\n1.6.0 - pagina Relogio (watch, API 15): levantar p/ acordar, AOD, tempos de tela, meta de passos, WiFi ocioso\n1.5.0 - pagina Som (slider de volume + teste, API 13) e pagina Sensores ao vivo (watch, API 13)\n1.4.2 - tempo de tela e notificacoes"
 }

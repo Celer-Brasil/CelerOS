@@ -25,6 +25,11 @@ var lastCheckAt = 0;
 
 function doCheck() {
     var r = System.otaCheck();        // bloqueante: fetch do update.json
+    // resultado para o painel do app (o svchost nao tem UI): "-" = atualizado,
+    // "falha" = hub fora, versao = atualizacao disponivel. Escrita rara (1x
+    // por rodada de 24 h), sem desgaste do NVS.
+    if (!r || r.fetchFailed) Storage.set("last_check", "falha");
+    else Storage.set("last_check", r.available ? r.version : "-");
     if (!r || r.fetchFailed || !r.available) return;
     var noted = Storage.get("noted_ver", "");
     if (pol.shouldNotify(noted, r.version)) {

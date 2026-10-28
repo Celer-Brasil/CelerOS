@@ -1,19 +1,25 @@
 {
   "name": "Terminal",
   "packageName": "celeros.terminal",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "author": "CelerOS",
-  "description": "Shell estilo bash sobre o FS real: ls, cat, echo, mkdir, neofetch, js (eval) e mais. Teclado acoplado do OS (API 5).",
+  "description": "Shell estilo bash sobre o FS real: ls, cat, echo, mkdir, neofetch, js (eval) e mais. Teclado acoplado do OS (API 5), historico navegavel e paleta de comandos.",
   "type": "App",
   "category": "Utility",
   "api": 30,
-  "permissions": ["fs", "net", "system"],
+  "permissions": [
+    "fs",
+    "net",
+    "system"
+  ],
   "topbar": true,
   "deps": {
     "celeros.app": "^1.0.0",
-    "celeros.app.input": "^1.0.0",
     "celeros.app.history": "^1.0.0",
-    "celeros.app.text": "^1.0.0"
+    "celeros.app.input": "^1.0.1",
+    "celeros.app.text": "^1.0.1",
+    "celeros.app.style": "^1.0.1",
+    "celeros.app.widgets": "^1.0.0"
   },
-  "changelog": "1.5.0 - migrado para o CelerKit (deps celeros.app.*, api 30): laco de frames no A.run (celeros.app), teclado dockado + linha de digitacao com caret no celeros.app.input, historico de comandos no celeros.app.history (anel JSON na pasta privada do app; importa o config_term_hist.txt antigo na primeira execucao) e saida saneada no Latin-1 pelo celeros.app.text (caracteres fora das fontes somam em vez de virar glifo quebrado); cat de arquivo grande agora abre o leitor rolante em vez de cortar em 600 bytes\n1.4.2 - o comando exit nao imprime mais \"exit: erro: Error: app exit\": a saida do firmware e um Error marcado (celerExit), nao a string OS_EXIT, entao o catch do Terminal precisa relancar o objeto\n1.4.1 - api declarada 13, o nivel real dos comandos vol/battery/sensors (setVolume/getVolume/battery; antes declarava 7 e o aviso do lint discordava)\n1.4.0 - historico persistido (20 comandos, !! e !n reexecutam), comandos apps/vol/tone/battery/sensors\n1.3.0 - chips da faixa, wifi scan\n1.2.0 - js eval e neofetch"
+  "changelog": "2.0.0 - UI kit 2.0: header com acao, cartao da saida, chips de atalho (help/neofetch/df/free/date), paleta de comandos no sheet do A.widgets com abas Comandos/Historico (historico navegavel: toque numa linha executa o comando; !! e !n continuam) e saida rolavel com auto-scroll no fim (UI.scrollBegin/scrollTo/scrollEnd, gruda no fim ate arrastar para cima); todos os comandos e strings do CI preservados; o js avalia no escopo global do app (System/FS/Net/A/cw) via Function, o que deixa o jsmin encurtar os nomes locais; teclado acoplado e historico persistente seguem no celeros.app.input/history/text; guarda para o style do hub (1.0.1 sem A.style.custom) com o caminho de frame total. 1.5.0 - migrado para o CelerKit (deps celeros.app.*, api 30): laco de frames no A.run (celeros.app), teclado dockado + linha de digitacao com caret no celeros.app.input, historico de comandos no celeros.app.history (anel JSON na pasta privada do app; importa o config_term_hist.txt antigo na primeira execucao) e saida saneada no Latin-1 pelo celeros.app.text (caracteres fora das fontes somam em vez de virar glifo quebrado); cat de arquivo grande agora abre o leitor rolante em vez de cortar em 600 bytes. 1.4.2 - o comando exit nao imprime mais \"exit: erro: Error: app exit\": a saida do firmware e um Error marcado (celerExit), nao a string OS_EXIT, entao o catch do Terminal precisa relancar o objeto. 1.4.1 - api declarada 13, o nivel real dos comandos vol/battery/sensors. 1.4.0 - historico persistido (20 comandos, !! e !n reexecutam), comandos apps/vol/tone/battery/sensors. 1.3.0 - chips da faixa, wifi scan. 1.2.0 - js eval e neofetch"
 }

@@ -1,7 +1,7 @@
 {
   "name": "Qwen",
   "packageName": "celeros.qwen",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": "CelerOS",
   "description": "Assistente de voz: fale no microfone e leia a resposta",
   "type": "App",
@@ -11,12 +11,12 @@
   "icon": "qwen",
   "topbar": false,
   "deps": {
-    "celeros.app": "^1.0.0",
-    "celeros.app.text": "^1.0.0",
+    "celeros.app": "^1.1.0",
+    "celeros.app.style": "^1.0.0",
+    "celeros.app.icons": "^1.0.0",
+    "celeros.app.caps": "^1.0.0",
     "celeros.app.input": "^1.0.0",
-    "celeros.app.chat": "^1.0.0",
-    "celeros.app.data": "^1.0.0",
-    "celeros.app.net": "^1.0.0"
+    "celeros.app.chat": "^1.0.0"
   },
-  "changelog": "1.2.0 - migrado para o CelerKit (deps celeros.app.*): bolhas/rolagem no celeros.app.chat, linha de digitacao com teclado dockado no celeros.app.input, historico persistido no celeros.app.data (mesmo arquivo de antes) e saneamento Latin-1 no celeros.app.text; o pedido de IA (voz, provider openrouter) segue no app pois o celeros.app.ai ainda nao aceita content part de audio\n1.1.1 - AI.chat em try/catch: WiFi caindo entre o check e a chamada (ou chave removida) vira nota de erro e libera busy, em vez de derrubar o app\n1.1.0 - conversa em baloes e botao de voz redesenhado (toolkit UI, API 22)\n1.0.0 - primeira versao: voz no cao e no relogio, teclado nas placas com touch"
+  "changelog": "2.0.0 - UI kit 2.0 (deps celeros.app.style/icons/caps): cabecalho proprio com acoes (ABC do teclado e engrenagem), botao de voz com anel de tempo e nucleo pelo nivel, sheet de modelo e conversa (Qwen Omni/OpenRouter, contexto e limpar/cancelar) e estados claros (gravando/pensando/sem rede); sem microfone o botao fica desabilitado e explicado, com o teclado aberto no boot (CYD/devkit); historico segue no mesmo arquivo do appData e o cao mantem a interface 4x6 do pad capacitivo\n1.2.0 - migrado para o CelerKit (deps celeros.app.*): bolhas/rolagem no celeros.app.chat, linha de digitacao com teclado dockado no celeros.app.input, historico persistido no celeros.app.data (mesmo arquivo de antes) e saneamento Latin-1 no celeros.app.text; o pedido de IA (voz, provider openrouter) segue no app pois o celeros.app.ai ainda nao aceita content part de audio\n1.1.1 - AI.chat em try/catch: WiFi caindo entre o check e a chamada (ou chave removida) vira nota de erro e libera busy, em vez de derrubar o app\n1.1.0 - conversa em baloes e botao de voz redesenhado (toolkit UI, API 22)\n1.0.0 - primeira versao: voz no cao e no relogio, teclado nas placas com touch"
 }

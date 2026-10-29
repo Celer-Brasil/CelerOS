@@ -157,14 +157,20 @@ function LCC() { var b = FS.readTextFile(CA); if (!b) return false; var a = null
 // ---- listas ----------------------------------------------------------------
 function CLS() { if (lc.key === vs) return lc.items; var it; if (tb === 0) it = FAP(); else if (tb === 1) { it = []; for (var i = 0; i < ap.length; i++) {
             var c = SI(ap[i]).code; if (c === "upd" || c === "dep") it.push(ap[i]); } } else it = IIS(); lc.key = vs; lc.items = it; return it; }
-var IC = { Arcade: "play", Jogos: "play", System: "gear", Utilidades: "star", Audio: "play", Apps: "menu" };
+// icone por categoria do hub: as categorias REAIS do catalogo sao
+// Apps/Arcade/Aventura/Estrategia/Jogos/Simulation/System/Utility — o mapa
+// antigo so tinha 4 delas e o fallback "dot" pintava um ponto de 2 px na
+// maioria das linhas (Utility e a maior categoria do catalogo).
+var IC = { Apps: "menu", Arcade: "play", Aventura: "play", Estrategia: "play",
+           Jogos: "play", Simulation: "star", System: "gear", Utility: "star",
+           Utilidades: "star", Audio: "play" };
 function SZB(n) { if (!n || n <= 0) return 0; return n <= 8192 ? 1 : n <= 16384 ? 2 : n <= 32768 ? 3 : 4; }
 function ROF(j) { var st = SI(j), lo = lm2[j.pkg], sub; if (tb === 1) { var d = du[j.pkg]; if (d) sub = "engine " + d.names[0] + " " + (d.have[d.names[0]] || "?") + " > " +
                       d.resolved[d.names[0]] + (d.names.length > 1 ? "  (+" + (d.names.length - 1) + ")" : ""); else sub = "v" + (lo ? lo.ver : "?") + " > v" + j.ver;
     } else if (tb === 2) { sub = "v" + (lo ? lo.ver : j.ver) + (lo && lo.sd ? " · SD" : "") + (lo && lo.system ? " · sistema" : "") +
                       (PIN(j.pkg) ? " · travado" : ""); } else {
         sub = "v" + j.ver + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""); }
-    return { label: j.name, sub: sub, icon: IC[j.cat] || "dot", j: j, bars: SZB(j.size), st: st }; }
+    return { label: j.name, sub: sub, icon: IC[j.cat] || "menu", j: j, bars: SZB(j.size), st: st }; }
 // linhas ricas: icone + nome/versao + badge de estado + barras de tamanho.
 function PRW(it, x, y, w, h, s) { var j = it.j, st = it.st, t = String(st.bd), bw = UI.measure(t, "caption") + 14;
     if (bw > w - 84) bw = w - 84; var lw = w - 24 - bw - 6;
@@ -266,7 +272,7 @@ function DT(c) { var j = si; if (!j) return RT("home");
         var tw = q.w - IS - 8, bw = UI.measure(st.bd, "caption") + 14;
         UI.text(j.name, q.x + IS + 8, yy + 1, { role: "title", color: T.text, w: tw - bw - 4, lines: 1, bg: T.card });
         UI.text((j.author || "Desconhecido") + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""), q.x + IS + 8, yy + 21, { role: "caption", color: T.textDim, w: tw, lines: 1, bg: T.card });
-        UI.text("v" + j.ver + (lo ? " · v" + lo.ver : ""), q.x + IS + 8, yy + 36, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
+        UI.text("v" + j.ver + (lo && lo.ver !== j.ver ? " · instalado v" + lo.ver : ""), q.x + IS + 8, yy + 36, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
         UI.badge(st.bd, q.x + q.w - bw, yy + 2, { color: st.col, textColor: T.bg });
         var sy = yy + IS + 8, sh = top + bh - 16 - sy;
         var off = UI.scrollBegin("det:" + j.pkg, q.x, sy, q.w, sh, 420), x = q.x, w = q.w, y = sy - off + 2;

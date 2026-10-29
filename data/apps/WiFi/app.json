@@ -1,7 +1,7 @@
 {
   "name": "WiFi",
   "packageName": "celeros.wifi",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": "CelerOS",
   "description": "Configurador de WiFi: escaneia as redes com varredura animada, lista rica com sinal e cadeado, detalhes em sheet, senha no teclado do sistema, conexão com progresso, estado/reconexão e portal cativo pelo navegador.",
   "type": "System",
@@ -22,5 +22,5 @@
     "celeros.app.list": "^1.1.0",
     "celeros.app.caps": "^1.0.0"
   },
-  "changelog": "2.0.0 - UI kit 2.0: card de estado ao vivo (conectado/IP/redes salvas, desconectar e reconexao automatica), varredura animada (radar) antes do Net.wifiScan bloqueante, lista rica do A.list com barras de sinal e cadeado, sheet de detalhes proprio (sinal/seguranca/conectar), senha no teclado do sistema, conexao com A.progress, mensagens de erro claras e o portal cativo do System.wifiPortal* em tela propria; A.caps deixa a CYD no modo leve (sombra menor) e o style do hub (1.0.1) cai no caminho de frame total no radar; sem A.widgets no fecho (o sheet proprio cabe no budget de 22 KB). 1.0.0 - primeira versao: veio da tela nativa WifiSetupScreen (main/Launcher/Screens.cpp), que saiu do firmware"
+  "changelog": "2.0.1 - separador da mensagem de varredura e do sub das redes vira ponto medio (o hifen lia como parte do texto)\n2.0.0 - UI kit 2.0: card de estado ao vivo (conectado/IP/redes salvas, desconectar e reconexao automatica), varredura animada (radar) antes do Net.wifiScan bloqueante, lista rica do A.list com barras de sinal e cadeado, sheet de detalhes proprio (sinal/seguranca/conectar), senha no teclado do sistema, conexao com A.progress, mensagens de erro claras e o portal cativo do System.wifiPortal* em tela propria; A.caps deixa a CYD no modo leve (sombra menor) e o style do hub (1.0.1) cai no caminho de frame total no radar; sem A.widgets no fecho (o sheet proprio cabe no budget de 22 KB). 1.0.0 - primeira versao: veio da tela nativa WifiSetupScreen (main/Launcher/Screens.cpp), que saiu do firmware"
 }

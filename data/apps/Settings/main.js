@@ -247,18 +247,39 @@ function dirBytes(p, lvl) {
     }
     return tot;
 }
-function collectApps(dir, out, sd) {
-    var list = FS.listDir(dir);
-    if (!list) return;
-    for (var i = 0; i < list.length; i++) {
-        var p = list[i];
+// catalogo varrido em FATIAS: com dezenas de apps no cartao a varredura
+// inteira passava do slice do executor (1 s) e o app MORRIA ao abrir a lista
+// (RangeError "execution timeout" — o sintoma era o toque em Aplicativos
+// "nao fazer nada" e voltar pro menu/launcher). A maquina de estados drena
+// alguns apps por quadro; o frame entre as fatias e a cedida que renova a
+// janela. dirBytes por app e o custo real: fica na fatia dele.
+var SCAN = null;
+function scanStart() {
+    SCAN = { dirs: ["/local/apps", "/sd/apps"], di: 0, list: null, i: 0,
+             sd: false, out: [], done: false };
+}
+// devolve o catalogo pronto (e para o scan) ou null (continua no proximo frame)
+function scanStep(budget) {
+    var n = 0;
+    while (n < budget && !SCAN.done) {
+        if (SCAN.list === null) {
+            if (SCAN.di >= SCAN.dirs.length) { SCAN.done = true; break; }
+            SCAN.sd = SCAN.di === 1;
+            SCAN.list = FS.listDir(SCAN.dirs[SCAN.di]) || [];
+            SCAN.i = 0;
+            SCAN.di++;
+            continue;                 // abrir o diretorio nao gasta a cota
+        }
+        if (SCAN.i >= SCAN.list.length) { SCAN.list = null; continue; }
+        var p = SCAN.list[SCAN.i++];
         if (!FS.isDirectory(p)) continue;
         var jp = p + "/app.json";
         if (!FS.exists(jp)) continue;
+        n++;
         var meta = {};
         try { meta = JSON.parse(FS.readTextFile(jp)) || {}; } catch (e) { meta = {}; }
-        out.push({
-            dir: p, sd: sd,
+        SCAN.out.push({
+            dir: p, sd: SCAN.sd,
             name: meta.name || basename(p),
             pkg: meta.packageName || "",
             ver: meta.version || "",
@@ -268,12 +289,16 @@ function collectApps(dir, out, sd) {
             size: dirBytes(p, 0)
         });
     }
+    if (!SCAN.done) return null;
+    A.list.sort(SCAN.out, function (a) { return a.name.toLowerCase(); });
+    return SCAN.out;
 }
-function scanApps() {
-    var out = [];
-    collectApps("/local/apps", out, false);
-    collectApps("/sd/apps", out, true);
-    A.list.sort(out, function (a) { return a.name.toLowerCase(); });
+// varredura completa de uma vez (pos-desinstalar, ja dentro do busy): cede
+// entre as fatias — sem isso o slice de 1 s matava o app aqui tambem
+function scanAppsNow() {
+    scanStart();
+    var out = null;
+    while (!(out = scanStep(3))) System.delay(1);
     return out;
 }
 function buildAppsRows() {
@@ -294,10 +319,17 @@ function buildAppsRows() {
     return a;
 }
 function scrApps(c) {
-    if (c.entered) {
-        A.busy("Lendo aplicativos...");
-        AA = scanApps();
+    if (c.entered) scanStart();
+    if (!SCAN.done) {                     // fatias: 3 apps por quadro
+        if (A.header("Aplicativos")) return A.BACK;
+        var lote = scanStep(3);
+        // aviso na area da lista (o card de espaco continua no topo)
+        UI.text("Lendo aplicativos... " + SCAN.out.length,
+                LX, TOP + 68, { role: "caption", color: T.textDim, w: LW, lines: 1 });
+        if (!lote) return;                // proximo quadro continua
+        AA = lote;
         AR = buildAppsRows();
+        UI.invalidate();                  // layout novo: apaga o aviso do scan
     }
     if (A.header("Aplicativos")) return A.BACK;
     A.style.card(LX, TOP, LW, 52, {
@@ -357,7 +389,7 @@ function askUninstall(ap) {
     else FS.deleteFile(ap.dir);
     System.rescanApps();
     UI.toast(ap.name + " removido");
-    AA = scanApps();
+    AA = scanAppsNow();
     AR = buildAppsRows();
     return true;
 }

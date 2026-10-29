@@ -352,18 +352,24 @@ A.run({
             var canStart = nOut >= 1;
             // o disabled do botao so repinta no quadro total: invalida na troca
             if (canStart !== startReady) { startReady = canStart; UI.invalidate(); }
-            A.style.card(8, 44, 224, 94, { full: c.full, draw: function (r) {
+            // bloco de texto EMPILHADO pela altura que o UI.text devolve: os
+            // offsets fixos (r.y, +22, +44) eram do vidro pequeno e no 4848 —
+            // onde a fonte title tem 28 px virtuais — o paragrafo caia em cima
+            // do titulo e a segunda legenda em cima da primeira
+            A.style.card(8, 40, 224, 124, { full: c.full, draw: function (r) {
                 custom("pot", r.x, r.y - 2, 64, 70, "l" + (nOut + 1), c.full,
                        function (x, y, w2, h2) { drawPotato(x + 30, y + 32, 26, false); });
-                UI.text("Roda de " + (nOut + 1), r.x + 66, r.y,
-                        { role: "title", bg: r.bg, w: r.w - 66, lines: 1, id: "sala" });
-                UI.text("Abram o app nos aparelhos com rádio", r.x + 66, r.y + 22,
-                        { role: "caption", color: T.textDim, bg: r.bg, w: r.w - 66, lines: 2, id: "sala2" });
+                var ty = r.y;
+                ty += UI.text("Roda de " + (nOut + 1), r.x + 66, ty,
+                              { role: "body", bg: r.bg, w: r.w - 66, lines: 1, id: "sala" }) + 3;
+                ty += UI.text("Abram o app nos aparelhos com rádio", r.x + 66, ty,
+                              { role: "caption", color: T.textDim, bg: r.bg, w: r.w - 66,
+                                lines: 2, id: "sala2" }) + 3;
                 UI.text("O pavio é secreto: só quem segura sabe quanto falta.",
-                        r.x + 66, r.y + 44, { role: "caption", color: T.textDim,
-                                              bg: r.bg, w: r.w - 66, lines: 3, id: "sala3" });
+                        r.x + 66, ty, { role: "caption", color: T.textDim,
+                                        bg: r.bg, w: r.w - 66, lines: 3, id: "sala3" });
             }});
-            A.list.view("roda", 8, 144, 224, 120, roundList.rows(),
+            A.list.view("roda", 8, 170, 224, 96, roundList.rows(),
                         { row: 38, panel: true, rowR: 7 });
             if (A.style.button("Começar", 8, 272, 224, 40,
                                { icon: "play", disabled: !canStart })) startRound();

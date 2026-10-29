@@ -546,7 +546,10 @@ function wifiFrame(c) {
         if (!nm) { note("WiFi: cancelado", 6000); return A.BACK; }
         return wifiSend(nm, true);
     } else if (k >= 0) {
-        return wifiSend(wifiNets[k][0], wifiNets[k][2] === 1);
+        // truthy, igual ao rotulo da linha de cima ("protegida"/"aberta"): o
+        // robo manda 1/0, mas o === 1 aqui divergia do rotulo — um produtor
+        // futuro mandando true/"1" mostraria protegida e pularia a senha
+        return wifiSend(wifiNets[k][0], !!wifiNets[k][2]);
     }
     pollLink(null);
     if (!CelerLink.status().connected) { note("conexão perdida", 6000); return A.BACK; }

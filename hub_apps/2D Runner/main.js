@@ -581,6 +581,12 @@ function simula(dt) {
         pPut(playerX, playerY + playerBob + 26, 0, 20, _TRAIL_O);
     }
     fxTick(dt);
+    // QUADRO TOTAL na area da pista: a pista inteira rola todo quadro
+    // (distance) e as faixas do asfalto + emissores deixavam restos quando a
+    // camada suja apagava so as caixas dos sprites — era o "artefato ao
+    // mover". O fundo e um slot ja cozido: repintar o recorte inteiro e um
+    // copySprite, mais barato que dezenas de restauros parciais.
+    if (E.dirty && E.dirty.full) E.dirty.full();
 }
 
 function desenhaHeroi() {
@@ -872,7 +878,10 @@ E.run({
     fim: {
         static: true,
         fps: 30,
-        enter: function () { fxClear(); },
+        // camada suja DESLIGADA ao sair do jogo: ela ficava ligada com o
+        // recorte da pista e repintava a estrada por cima do card de fim
+        // (so o botao Sair aparecia solto no meio do asfalto)
+        enter: function () { fxClear(); if (E.dirty) E.dirty.off(); },
         draw: function () {
             E.gfx.gradient(0, 0, W, H, TK.surface, TK.bg, { screen: true });
             var act = E.ui.gameOver({ title: "BATEU", score: score, best: hi,

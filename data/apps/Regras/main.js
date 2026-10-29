@@ -198,6 +198,9 @@ function salvarNova() {
     if (!gatilho || !tipo) { UI.toast("Escolha o gatilho e a ação"); return false; }
     if (tipo === "guardar" && !chave) { UI.toast("Falta a chave"); return false; }
     if (tipo === "enviar" && !destino) { UI.toast("Falta o destino"); return false; }
+    // cancelar o prompt da mensagem deixava valor null: a regra era salva
+    // "sem ação (ignorada)" e o dono só descobria na lista
+    if (tipo === "notificar" && !valor) { UI.toast("Falta a mensagem"); return false; }
     var r = { quando: gatilho };
     if (tipo === "notificar") r.notificar = valor;
     else if (tipo === "guardar") r.guardar = { chave: chave, valor: valor };

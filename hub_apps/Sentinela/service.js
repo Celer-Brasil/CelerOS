@@ -14,11 +14,24 @@ var KINDS = { m: "movimento", s: "barulho", p: "pânico", v: "vigia sumiu" };
 
 var guards = {};             // id -> {name, armed, at, missing}
 var seen = {};               // "origem:n" e "v:id" já tratados
+var SEEN_MAX = 64;           // teto do dedup: cada alarme novo cria uma chave
+var seenQ = [];              // chaves na ordem de entrada (evicta a mais antiga)
 var alarmN = parseInt(Storage.get("n", "0"), 10) || 0;
 var wasOpen = true;
 var wasActive = false;       // malha ligada no giro anterior
 
 function nameOf(id) { return guards[id] ? guards[id].name : id; }
+
+// Marca a chave como vista. false = ja vista (dup). O seen e tetrado nas
+// SEEN_MAX ultimas chaves: sem isso o mapa cresce um "origem:n" por alarme
+// para sempre (heap do servico na CYD e pequeno).
+function mark(key) {
+    if (seen[key]) return false;
+    seen[key] = true;
+    seenQ.push(key);
+    if (seenQ.length > SEEN_MAX) delete seen[seenQ.shift()];
+    return true;
+}
 
 function ring(zone, kind) {
     System.notify("Sentinela", zone + ": " + (KINDS[kind] || kind));
@@ -46,13 +59,11 @@ function onMsg(m, now) {
     } else if (op === "!") {
         var dot = a.indexOf(".");
         var key = m.from + ":" + a.substring(0, dot);
-        if (seen[key]) return;
-        seen[key] = true;
+        if (!mark(key)) return;
         var kind = a.charAt(dot + 1);
         if (kind === "v") {
             var who = a.substring(dot + 2);
-            if (seen["v:" + who]) return;          // outra central já avisou
-            seen["v:" + who] = true;
+            if (!mark("v:" + who)) return;         // outra central já avisou
             if (guards[who]) guards[who].missing = true;
             ring(nameOf(who), "v");
         } else {
@@ -69,7 +80,7 @@ function watchdog(now) {
         var g = guards[id];
         if (g.armed && !g.missing && now - g.at > 16000) {
             g.missing = true;
-            if (!seen["v:" + id]) { seen["v:" + id] = true; raiseMissing(id, now); }
+            if (mark("v:" + id)) raiseMissing(id, now);
         }
     }
 }

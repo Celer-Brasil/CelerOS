@@ -85,7 +85,7 @@ function doScan() {
     }
     if (fail) msg = "Falha ao buscar redes. Toque em Buscar.";
     else if (!nets.length) msg = "Nenhuma rede por perto.";
-    else msg = nets.length + (nets.length === 1 ? " rede" : " redes") + " - toque para conectar";
+    else msg = nets.length + (nets.length === 1 ? " rede" : " redes") + " · toque para conectar";
     rows.drop();          // SSIDs/RSSI novos: o cache por carimbo nao adivinha
     UI.invalidate();
 }
@@ -190,7 +190,7 @@ var rows = A.list.make(function () {
         for (var i = 0; i < nets.length; i++) {
             var n = nets[i];
             r.push({ label: n.ssid,
-                     sub: (n.secure ? "protegida" : "aberta") + " - " + n.rssi + " dBm",
+                     sub: (n.secure ? "protegida" : "aberta") + " · " + n.rssi + " dBm",
                      icon: n.secure ? "lock" : "wifi",
                      bars: A.list.bars(n.rssi), value: i });
         }

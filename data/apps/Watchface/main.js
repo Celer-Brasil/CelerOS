@@ -271,9 +271,13 @@ function readState() {
     n.unread = HAS_UNREAD ? System.unreadNotifications() : 0;
     n.alarm = "";
     if (HAS_ALARMS) {
-        var l = System.alarms(), best = 0;
+        // servico de alarmes pode vir vazio (boot sem Alarms): sem guard o
+        // laco do proximo alarme derrubava o relogio com TypeError
+        var l = System.alarms();
+        if (!l || !l.length) l = [];
+        var best = 0;
         for (var i = 0; i < l.length; i++) {
-            if (l[i].next > 0 && (best === 0 || l[i].next < best)) {
+            if (l[i] && l[i].next > 0 && (best === 0 || l[i].next < best)) {
                 best = l[i].next;
                 n.alarm = pad2(l[i].hour) + ":" + pad2(l[i].minute);
             }
@@ -358,6 +362,10 @@ function trunc(s, font, maxW) {
 var cur = null;    // estado deste frame para os pintores
 
 function paintStatus(x, y, w, h, n) {
+    // sem bateria, sem notificacao e sem alarme nao ha o que mostrar: a
+    // pilula saia VAZIA no 4848 (placa sem bateria) e virava uma caixa solta
+    // no topo do mostrador
+    if (!batteryText(n) && !(n.unread > 0) && !n.alarm) return;
     pill(x, y, w, h, 10);
     var px = x + 9, cy = y + Math.round(h / 2);
     var bt = batteryText(n);

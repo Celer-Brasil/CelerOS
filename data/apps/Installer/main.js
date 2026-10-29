@@ -58,6 +58,9 @@ function validPkg(pkg) {
     if (pkg.length === 0) return false;
     if (pkg.indexOf(" ") !== -1) return false;
     if (pkg.indexOf(".") === -1) return false;
+    // o pkg vira pasta (dest/stage/old): barra ou ".." escaparia de apps/
+    if (pkg.indexOf("/") !== -1 || pkg.indexOf("\\") !== -1) return false;
+    if (pkg.indexOf("..") !== -1) return false;
     return pkg === pkg.toLowerCase();
 }
 // comparacao numerica parte a parte ("1.10.0" > "1.9.0"); sem o semver do

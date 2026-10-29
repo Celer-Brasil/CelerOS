@@ -84,9 +84,13 @@ function linha(i, off, full) {
         UI.invalidate();
         return;
     }
-    // toque fora da chave abre a edicao
+    // toque so na parte VISIVEL da linha: o scroll corta no TOP/LIST_BOT e,
+    // sem o corte, tap na faixa do botao de baixo acertava o pedaco fora do
+    // viewport de uma linha meio rolada e abria o editor
     var t = UI.touch();
-    if (t.tap && t.x >= X && t.x <= X + W - 56 && t.y >= y && t.y <= y + ROW_H) {
+    var vy0 = y > TOP ? y : TOP;
+    var vy1 = y + ROW_H < LIST_BOT ? y + ROW_H : LIST_BOT;
+    if (t.tap && t.x >= X && t.x <= X + W - 56 && t.y >= vy0 && t.y <= vy1) {
         ed = { id: a.id, hour: a.hour, minute: a.minute, days: a.days,
                label: a.label, enabled: !!a.enabled };
         ed.opts = labelOpts(ed.label);

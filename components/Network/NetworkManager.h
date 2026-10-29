@@ -363,6 +363,13 @@ private:
      */
     void setState(NetworkState newState);
 
+    // _stats e _connectionStartTime sao escritos por TRES tasks (bg de
+    // reconexao, sys_evt e a chamadora de connect/disconnect): incremento e
+    // leitura passam pela guarda _mutex (regioes de uma linha).
+    void bumpStat(uint32_t NetworkManagerStats::*field);   /**< _stats.field += 1 sob a guarda */
+    void closeUptime();                                    /**< acumula _connectionStartTime em uptimeSeconds e zera */
+    uint32_t markConnectionStart();                        /**< _connectionStartTime = agora sob a guarda; devolve o valor posto */
+
     /**
      * @brief Handle WiFi state change events.
      */

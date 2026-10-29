@@ -209,11 +209,27 @@ bool init() {
     if (s_inited) return true;
     if (psa_crypto_init() != PSA_SUCCESS) return false;
     // seqs: comecam na reserva gravada (tudo abaixo dela pode ter sido usado
-    // antes do reboot) e ja reservam o bloco seguinte
+    // antes do reboot) e ja reservam o bloco seguinte. Reserva no NVS corrompida
+    // perto do teto NAO da wrap 1x: a soma cruza o fim do espaco e gravaria de
+    // volta uma reserva pequena — o reboot seguinte recomecaria do zero e o
+    // nonce do CCM se repetia. Clampa no teto (o nextSeq*/reserve* recusam la)
+    // e loga uma vez; init roda uma vez por boot.
     s_seqMesh = loadU32("cn3_seqm");
     s_seqNow = loadU32("cn3_seqn");
-    s_resMesh = s_seqMesh + K_SEQ_BLOCK;
-    s_resNow = s_seqNow + K_SEQ_BLOCK;
+    if (s_seqMesh > netframe::SEQ_MAX - K_SEQ_BLOCK) {
+        s_resMesh = netframe::SEQ_MAX;
+        ESP_LOGW(TAG, "reserva da malha no NVS em %u: acima do teto seguro, clampo em %u",
+                 (unsigned)s_seqMesh, (unsigned)s_resMesh);
+    } else {
+        s_resMesh = s_seqMesh + K_SEQ_BLOCK;
+    }
+    if (s_seqNow > 0xFFFFFFFFu - K_SEQ_BLOCK) {
+        s_resNow = 0xFFFFFFFFu;
+        ESP_LOGW(TAG, "reserva ESP-NOW no NVS em %u: acima do teto seguro, clampo no fim",
+                 (unsigned)s_seqNow);
+    } else {
+        s_resNow = s_seqNow + K_SEQ_BLOCK;
+    }
     saveU32("cn3_seqm", s_resMesh);
     saveU32("cn3_seqn", s_resNow);
     // matilha provisionada? (nome + netKey + adminKey no NVS)
@@ -353,6 +369,14 @@ uint32_t nextSeqMesh() {
 
 uint32_t nextSeqNow() {
     portENTER_CRITICAL(&s_seqMux);
+    // Esgotamento do seq 32-bit: devolve 0 SEM avancar (0 nunca e alocado —
+    // o primeiro valor daqui e 1). O wrap reusaria o nonce do CCM (quebra de
+    // sigilo/autenticidade) e a janela anti-replay engolia o trafego; mesmo
+    // contrato do reserveSeqMesh: o chamador (DataLink::send) recusa o envio.
+    if (s_seqNow >= 0xFFFFFFFFu) {
+        portEXIT_CRITICAL(&s_seqMux);
+        return 0;
+    }
     const uint32_t v = ++s_seqNow;
     portEXIT_CRITICAL(&s_seqMux);
     return v;
@@ -363,10 +387,17 @@ void persistTick() {
     // nunca alcanca a reserva gravada antes do proximo tick
     if (!s_inited) return;
     if (s_seqMesh + K_SEQ_BLOCK / 2 >= s_resMesh) {
-        s_resMesh = s_seqMesh + K_SEQ_BLOCK;
-        saveU32("cn3_seqm", s_resMesh);
+        // mesmo cuidado do now: perto do teto a reserva congela (o
+        // reserveSeqMesh recusa) em vez de gravar valor alem do fim do espaco
+        if (s_seqMesh <= netframe::SEQ_MAX - K_SEQ_BLOCK) {
+            s_resMesh = s_seqMesh + K_SEQ_BLOCK;
+            saveU32("cn3_seqm", s_resMesh);
+        }
     }
-    if (s_seqNow + K_SEQ_BLOCK / 2 >= s_resNow) {
+    if (s_seqNow <= 0xFFFFFFFFu - K_SEQ_BLOCK && s_seqNow + K_SEQ_BLOCK / 2 >= s_resNow) {
+        // a soma nova nao pode cruzar o fim do espaco: um wrap gravava no NVS
+        // uma reserva pequena e o reboot seguinte recomecaria do zero (nonce
+        // repetido). Congela no teto; o nextSeqNow recusa ao chegar la.
         s_resNow = s_seqNow + K_SEQ_BLOCK;
         saveU32("cn3_seqn", s_resNow);
     }

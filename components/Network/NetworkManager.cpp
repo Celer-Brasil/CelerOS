@@ -188,6 +188,50 @@ void NetworkManager::setState(NetworkState newState) {
     onStateChanged.trigger(oldState, newState);
 }
 
+// Contadores de _stats: incrementados por 3 tasks (bg, sys_evt, chamadora);
+// ++ solto em uint32 era leitura-modifica-escrita concorrente (incremento
+// perdido) e corrida de dados. Regiao de uma linha sob a guarda.
+void NetworkManager::bumpStat(uint32_t NetworkManagerStats::*field) {
+    if (_mutex == nullptr) {
+        _stats.*field += 1;
+        return;
+    }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _stats.*field += 1;
+    xSemaphoreGive(_mutex);
+}
+
+// Fecha a janela de uptime: acumula (agora - _connectionStartTime) em
+// uptimeSeconds e zera o inicio. Mesma guarda do bumpStat (o getStats le os
+// dois juntos).
+void NetworkManager::closeUptime() {
+    if (_mutex == nullptr) {
+        if (_connectionStartTime > 0) {
+            _stats.uptimeSeconds += (nowSeconds() - _connectionStartTime);
+            _connectionStartTime = 0;
+        }
+        return;
+    }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    if (_connectionStartTime > 0) {
+        _stats.uptimeSeconds += (nowSeconds() - _connectionStartTime);
+        _connectionStartTime = 0;
+    }
+    xSemaphoreGive(_mutex);
+}
+
+uint32_t NetworkManager::markConnectionStart() {
+    const uint32_t start = nowSeconds();
+    if (_mutex == nullptr) {
+        _connectionStartTime = start;
+        return start;
+    }
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    _connectionStartTime = start;
+    xSemaphoreGive(_mutex);
+    return start;
+}
+
 // Alvo da reconexao: veja o contrato no header. Regioes curtas (so os dois
 // assigns), mesmo padrao de guarda null-safe do resto da classe.
 void NetworkManager::setLastTarget(const std::string& ssid, const std::string& password) {
@@ -231,13 +275,13 @@ ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& pa
     ErrorCode err = _wifiConnection->connect(ssid, password, false);
 
     if (err == CommonErrorCodes::None) {
-        _stats.totalConnections++;
-        _connectionStartTime = nowSeconds();
+        bumpStat(&NetworkManagerStats::totalConnections);
+        const uint32_t connectedAt = markConnectionStart();
 
         // Save credentials if requested
         if (saveOnSuccess) {
             KnownNetwork network(ssid.c_str(), password.c_str());
-            network.lastConnected = _connectionStartTime;
+            network.lastConnected = connectedAt;
             network.lastRssi = _wifiConnection->getRSSI();
             NetworkCredentialStore::instance().saveNetwork(network);
         } else {
@@ -247,7 +291,7 @@ ErrorCode NetworkManager::connect(const std::string& ssid, const std::string& pa
 
         ESP_LOGI(TAG, "Connected to %s", ssid.c_str());
     } else {
-        _stats.failedConnections++;
+        bumpStat(&NetworkManagerStats::failedConnections);
         setState(NetworkState::Disconnected);
         ESP_LOGE(TAG, "Failed to connect to %s: %s", ssid.c_str(), err.description());
     }
@@ -277,7 +321,7 @@ ErrorCode NetworkManager::connectToKnown() {
         return CommonErrorCodes::WifiScanFailed;
     }
 
-    _stats.scanCount++;
+    bumpStat(&NetworkManagerStats::scanCount);
 
     // Convert to ScannedNetwork vector
     std::vector<ScannedNetwork> scannedNetworks;
@@ -323,11 +367,7 @@ ErrorCode NetworkManager::disconnect() {
     ESP_LOGI(TAG, "Disconnecting...");
 
     // Update uptime stats
-    if (_connectionStartTime > 0) {
-        uint32_t now = nowSeconds();
-        _stats.uptimeSeconds += (now - _connectionStartTime);
-        _connectionStartTime = 0;
-    }
+    closeUptime();
 
     _wifiConnection->disconnect();
     setState(NetworkState::Disconnected);
@@ -355,7 +395,7 @@ ErrorCode NetworkManager::reconnect() {
     }
 
     ESP_LOGI(TAG, "Reconnecting to %s...", ssid.c_str());
-    _stats.reconnections++;
+    bumpStat(&NetworkManagerStats::reconnections);
 
     return connect(ssid, password, false);
 }
@@ -426,7 +466,7 @@ ErrorCode NetworkManager::startScan(bool blocking) {
     }
 
     setState(NetworkState::Scanning);
-    _stats.scanCount++;
+    bumpStat(&NetworkManagerStats::scanCount);
 
     if (blocking) {
         wifi_ap_record_t ap_list[20];
@@ -473,7 +513,17 @@ std::vector<ScannedNetwork> NetworkManager::getLastScanResults() const {
 // ========== State Queries ==========
 
 NetworkState NetworkManager::getState() const {
-    return _state;
+    if (_mutex == nullptr) {
+        return _state;  // construtor sem mutex: nada a proteger
+    }
+    // _state e escrito sob a guarda (setState) e lido por 3 tasks (bg, sys_evt
+    // e chamadora): leitura fora da guarda corria contra a escrita. O trigger
+    // do onStateChanged roda DEPOIS do give, entao nenhum handler chega aqui
+    // com a guarda tomada (sem recursao).
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    NetworkState s = _state;
+    xSemaphoreGive(_mutex);
+    return s;
 }
 
 bool NetworkManager::isConnected() const {
@@ -499,14 +549,25 @@ std::string NetworkManager::getIpAddress() const {
 }
 
 NetworkManagerStats NetworkManager::getStats() const {
-    NetworkManagerStats stats = _stats;
-    
-    // Update uptime if currently connected
-    if (_connectionStartTime > 0) {
-        uint32_t now = nowSeconds();
-        stats.uptimeSeconds += (now - _connectionStartTime);
+    if (_mutex == nullptr) {
+        return _stats;
     }
-    
+    // Copia sob a guarda: _stats e _connectionStartTime sao escritos por 3
+    // tasks (bg, sys_evt, chamadora) — o incremento solto e a leitura
+    // concorrente perdiam contadores e liam o inicio de conexao pela metade.
+    NetworkManagerStats stats;
+    uint32_t connStart = 0;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    stats = _stats;
+    connStart = _connectionStartTime;
+    xSemaphoreGive(_mutex);
+
+    // Update uptime if currently connected
+    if (connStart > 0) {
+        uint32_t now = nowSeconds();
+        stats.uptimeSeconds += (now - connStart);
+    }
+
     return stats;
 }
 
@@ -564,7 +625,13 @@ ErrorCode NetworkManager::startBackgroundTask() {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     if (_backgroundTask != nullptr) {
-        ESP_LOGW(TAG, "Task de fundo antiga ainda saindo; criando assim mesmo");
+        // A task velha so termina quando _backgroundTaskRunning cai; subir
+        // outra re-armando a flag RESSUSCITAVA a velha (o laco dela nunca
+        // mais saia) e, quando ela por fim saisse, zerava o handle da nova
+        // (o stop seguinte voltava na hora). Recusa limpa: quando a velha
+        // sair (handle zera sozinha), o proximo start() funciona.
+        ESP_LOGW(TAG, "Task de fundo antiga ainda saindo; start recusado");
+        return CommonErrorCodes::OperationFailed;
     }
 
     ESP_LOGI(TAG, "Starting background task...");
@@ -686,7 +753,7 @@ void NetworkManager::backgroundTaskFunc(void* param) {
         uint32_t timeSinceLastScan = now - self->_lastScanTime;
 
         // Don't do anything if we're currently in the middle of scanning or connecting
-        if (self->_state == NetworkState::Scanning || self->_state == NetworkState::Connecting) {
+        if (self->getState() == NetworkState::Scanning || self->getState() == NetworkState::Connecting) {
             bgDelay(self->_backgroundTaskRunning, 1000);  // Wait a bit and check again
             continue;
         }
@@ -783,7 +850,7 @@ void NetworkManager::performBackgroundScan() {
     ESP_LOGD(TAG, "Performing background scan...");
 
     // Don't interrupt if we're in the middle of something
-    if (_state == NetworkState::Connecting || _state == NetworkState::Scanning) {
+    if (getState() == NetworkState::Connecting || getState() == NetworkState::Scanning) {
         return;
     }
 
@@ -798,7 +865,7 @@ void NetworkManager::performBackgroundScan() {
         return;
     }
 
-    _stats.scanCount++;
+    bumpStat(&NetworkManagerStats::scanCount);
 
     // Update scan results
     absorbScanResults(ap_list, count);
@@ -832,7 +899,7 @@ void NetworkManager::checkForBetterNetwork() {
                 NetworkInfo oldNetwork = currentNetwork;
                 
                 setState(NetworkState::Roaming);
-                _stats.roamingEvents++;
+                bumpStat(&NetworkManagerStats::roamingEvents);
 
                 // Atualiza _last* no inicio do roam, como o connect() faz: um
                 // reconnect() manual depois do roam A->B dar certo usaria a
@@ -891,7 +958,7 @@ void NetworkManager::tryReconnect() {
         ESP_LOGI(TAG, "Trying to reconnect to %s", lastSsid.c_str());
         ErrorCode err = connect(lastSsid, lastPassword, false);
         if (err == CommonErrorCodes::None) {
-            _stats.reconnections++;
+            bumpStat(&NetworkManagerStats::reconnections);
             return;
         }
     }
@@ -912,7 +979,7 @@ void NetworkManager::onWifiStateChanged(WifiConnection* conn, WiFiConnectionStat
         case WiFiConnectionState::Idle:
             // Don't change to Disconnected if we're actually still connected
             // This can happen after a scan completes while connected
-            if (_state != NetworkState::Roaming && !_wifiConnection->isConnected()) {
+            if (getState() != NetworkState::Roaming && !_wifiConnection->isConnected()) {
                 setState(NetworkState::Disconnected);
             } else if (_wifiConnection->isConnected()) {
                 // Restore Connected state after scan
@@ -958,7 +1025,7 @@ void NetworkManager::onWifiConnected(WifiConnection* conn, const WiFiConnectionE
         _activeNetwork = info;
         xSemaphoreGive(_mutex);
     }
-    _connectionStartTime = nowSeconds();
+    markConnectionStart();
 
     // Update credential store
     NetworkCredentialStore::instance().updateLastConnected(event.ssid);
@@ -979,13 +1046,9 @@ void NetworkManager::onWifiDisconnected(WifiConnection* conn, const WiFiConnecti
     }
 
     // Update uptime stats
-    if (_connectionStartTime > 0) {
-        uint32_t now = nowSeconds();
-        _stats.uptimeSeconds += (now - _connectionStartTime);
-        _connectionStartTime = 0;
-    }
+    closeUptime();
 
-    if (_state != NetworkState::Roaming) {
+    if (getState() != NetworkState::Roaming) {
         setState(NetworkState::Disconnected);
     }
 }
@@ -1015,7 +1078,7 @@ void NetworkManager::onWifiScanCompleted(WifiConnection* conn, const WiFiScanRes
 void NetworkManager::onWifiAuthFailed(WifiConnection* conn, const std::string& ssid, ErrorCode error) {
     ESP_LOGW(TAG, "WiFi auth failed for %s: %s", ssid.c_str(), error.description());
 
-    _stats.failedConnections++;
+    bumpStat(&NetworkManagerStats::failedConnections);
     setState(NetworkState::Disconnected);
 }
 

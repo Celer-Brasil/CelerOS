@@ -78,6 +78,8 @@ const Net* byNid(uint8_t nid);
 uint32_t nextSeqMesh();
 // n seqs CONSECUTIVOS (fragmentos e copias de uma mensagem): devolve o 1o
 uint32_t reserveSeqMesh(uint32_t n);
+// 0 = seq 32-bit esgotado (nunca e alocado legitimo): o chamador recusa o
+// envio em vez de reusar o nonce do CCM (mesmo contrato do reserveSeqMesh)
 uint32_t nextSeqNow();
 void persistTick();
 

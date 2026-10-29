@@ -380,6 +380,14 @@ bool send(const uint8_t mac[6], uint8_t kind, uint16_t sid, uint32_t token, uint
     }
     // seq sob s_txLock: a ordem no ar segue a do seq (a janela do RPL agradece)
     const uint32_t nseq = NetKeys::nextSeqNow();
+    if (nseq == 0) {
+        // seq 32-bit esgotado (0 nunca e alocado): enviar reusaria o nonce do
+        // CCM. Recusa, como o reserveSeqMesh recusa na malha — o chamador ve
+        // false e reaprega (o envio so volta com rede nova/reboot).
+        s_txFail++;
+        xSemaphoreGive(s_txLock);
+        return false;
+    }
     uint8_t* f = s_txFrame;  // sob s_txLock
     f[0] = MAGIC0;
     f[1] = MAGIC1;

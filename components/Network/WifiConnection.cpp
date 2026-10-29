@@ -631,7 +631,22 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
 }
 
 WiFiScanResult WifiConnection::getLastScanResults() const {
-    return _lastScanResult;
+    WiFiScanResult copy;
+    copy.count = 0;      // a struct nao tem init default: campos numericos
+    copy.success = false;  // saem com lixo de pilha no caminho vazio
+    if (_scanMutex == nullptr) {
+        return copy;
+    }
+    // Copia sob a guarda, com teto curto (o scan bloqueante segura o mutex
+    // durante o varrimento do radio — ate ~9 s): sem a guarda, a copia do
+    // vector corria contra o clear/push_back do SCAN_DONE async e virava
+    // use-after-free. Ocupado = devolve vazio em vez de correr o risco.
+    if (xSemaphoreTake(_scanMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return copy;
+    }
+    copy = _lastScanResult;
+    xSemaphoreGive(_scanMutex);
+    return copy;
 }
 
 void WifiConnection::processScanResults(WiFiScanResult& result) {
@@ -796,16 +811,22 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                 if (!self->_blockingScan) {
                     // Reset scan in progress flag only for async scans.
                     // lockScan() le a flag sob _scanMutex: limpa sob a guarda
-                    // (0 ms: nunca bloquear a task de eventos).
-                    if (self->_scanMutex != nullptr) {
-                        xSemaphoreTake(self->_scanMutex, 0);
-                    }
-                    self->_scanInProgress = false;
-                    if (self->_scanMutex != nullptr) {
+                    // (0 ms: nunca bloquear a task de eventos). SO com o take
+                    // bem-sucedido: mutex FreeRTOS nao tem dono, e o give sem
+                    // take (retorno do xSemaphoreTake ignorado) liberava o
+                    // lock de um scan bloqueante em outra task — dois scans
+                    // no radio escrevendo _lastScanResult juntos. Take
+                    // falhou = scan alhures guarda o lock e consome o
+                    // resultado (o esp_wifi_scan_stop dele descarta a lista).
+                    bool nosso = false;
+                    if (self->_scanMutex != nullptr &&
+                        xSemaphoreTake(self->_scanMutex, 0) == pdTRUE) {
+                        self->_scanInProgress = false;
                         xSemaphoreGive(self->_scanMutex);
+                        nosso = true;
                     }
 
-                    if (self->_state == WiFiConnectionState::Scanning) {
+                    if (nosso && self->_state == WiFiConnectionState::Scanning) {
                         self->processScanResults(self->_lastScanResult);
                         self->setState(WiFiConnectionState::Idle);
                         self->onScanCompleted.trigger(self, self->_lastScanResult);

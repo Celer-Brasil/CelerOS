@@ -630,7 +630,11 @@ int onPairAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void*
     ESP_LOGW(TAG, "%s errado (%d/%d)", len == 6 ? "codigo de pareamento" : "desafio do bond",
              s_pairFails, K_PAIR_MAX_FAILS);
     if (!s_pairPending) {
-        // desafio falhou: cai no pareamento por codigo (mostra na tela)
+        // desafio falhou: cai no pareamento por codigo (mostra na tela).
+        // O codigo TEM que nascer aqui: no caminho do bond ele nunca foi
+        // gerado (genPairCode so roda no CONNECT sem bond) — a tela mostrava
+        // vazio e o write de 6 digitos caia no s_pairCode[0]=='\0' sempre.
+        genPairCode();
         s_pairPending = true;
         s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
     }
@@ -1593,6 +1597,10 @@ void CelerLink::info(Info* out) {
     // alguem so com o MAC): cai no codigo, que aparece na tela.
     if (s_pairRequired && !s_isCentral && s_connActive && !s_pairVerified && !s_pairPending &&
         (int32_t)(xTaskGetTickCount() - s_pairDeadline) >= 0) {
+        // Carencia do bond venceu sem resposta valida: cai no codigo — que
+        // precisa existir (no caminho do bond o genPairCode do CONNECT nao
+        // rodou; sem isto o par via o codigo vazio e nenhum digitado valia).
+        genPairCode();
         s_pairPending = true;
         s_pairDeadline = xTaskGetTickCount() + pdMS_TO_TICKS(K_PAIR_TIMEOUT_MS);
         ESP_LOGI(TAG, "sem resposta ao desafio: aguardando codigo");

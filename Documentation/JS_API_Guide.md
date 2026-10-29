@@ -578,7 +578,7 @@ Asks the launcher to rescan `/local/apps` and `/sd/apps`. Call after installing/
 Asks the launcher to open another app by `packageName` (a path or folder name also works) and ends the current app through the same clean exit as `exitApp()` — the launcher consumes the request once the app exits. The target app's permission consent still applies. Main use case: **watchface plugins** — the widget line an app installs on the watch opens the source app when tapped (see the *Watchface-Plugins* wiki page).
 
 #### `System.openWifiSetup()`
-Pushes the native WiFi setup screen. Since JS apps run synchronously, call `System.exitApp()` right after — the setup screen takes over when the script yields.
+Opens the WiFi setup app (`celeros.wifi`, API 52) — it exits the caller through the same clean path as `System.launchApp()`, so there is nothing else to call. See §12.4b for the `System.wifiPortal*` surface the app drives.
 
 #### `System.present()`
 Shows the automatic frame buffer on the glass now (no-op without it). Only needed in loops that never call `delay()`/`getTouch()`.
@@ -673,13 +673,19 @@ The WiFi setup screen is now the `WiFi` app (`packageName: celeros.wifi`, in
 `data/apps/WiFi`) — it left the firmware in API 52. On boards with a display it
 drives the same AP + captive portal the native screen used:
 
-- `System.wifiPortalStart()` → Boolean — brings up the AP + captive portal
-  (non-blocking).
-- `System.wifiPortalPoll()` → `{state, detail}` — `state` is `0` waiting,
-  `1` connecting, `2` connected, `3` failed; `detail` carries the connected
-  SSID/IP when available. Call it from the loop.
-- `System.wifiPortalStop()` — tears the AP down (STA is preserved if connected).
-- `System.wifiPortalSsid()` → String — SSID of the AP to show on screen.
+#### `System.wifiPortalStart()` (API 52)
+→ Boolean — brings up the AP + captive portal (non-blocking).
+
+#### `System.wifiPortalPoll()` (API 52)
+→ `{state, detail}` — `state` is `0` waiting, `1` connecting, `2` connected,
+`3` failed; `detail` carries the connected SSID/IP when available. Call it
+from the loop.
+
+#### `System.wifiPortalStop()` (API 52)
+Tears the AP down (STA is preserved if connected).
+
+#### `System.wifiPortalSsid()` (API 52)
+→ String — SSID of the AP to show on screen.
 
 Requires the `system` capability. Feature-detect with
 `typeof System.wifiPortalStart === "function"`: headless builds and builds

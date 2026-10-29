@@ -78,13 +78,32 @@ Cada placa usa um diretório de build próprio (`build/`, `build-cyd/`,
 `build-watch/`, `build-dog/`, `build-devkit/`) com o seu `sdkconfig` em
 cache — assim dá para alternar alvos sem reconfigurar.
 
+As duas placas sem tela seguem a mesma forma (sem a pilha de vídeo no
+binário):
+
+```bash
+# Devkit ESP32-S3 headless (USB Host)
+idf.py -B build-devkit-s3 -DSDKCONFIG=build-devkit-s3/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/devkit-s3/sdkconfig.defaults" \
+  -DCELEROS_BOARD=devkit-s3 set-target esp32s3
+idf.py -B build-devkit-s3 build flash -p /dev/ttyACM0 monitor
+
+# ESP32-CAM (nó de câmera)
+idf.py -B build-cam -DSDKCONFIG=build-cam/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/esp32-cam/sdkconfig.defaults" \
+  -DCELEROS_BOARD=esp32-cam set-target esp32
+idf.py -B build-cam build flash -p /dev/ttyUSB0 monitor
+```
+
+(`cyd-vspi` compila como a CYD, com `-DCELEROS_BOARD=cyd-vspi`.)
+
 ## Partição de dados (LittleFS)
 
 `data/` (apps de sistema, ícones e demos) vira a imagem da partição
 `littlefs`, montada em `/local`:
 
 ```bash
-tools/flash_data.sh smartdisplay /dev/ttyUSB0   # ou: cyd|spotpear-dog|waveshare-watch|devkit <porta>
+tools/flash_data.sh smartdisplay /dev/ttyUSB0   # ou: cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit|devkit-s3|esp32-cam <porta>
 ```
 
 O script precisa do ambiente IDF exportado (`IDF_PATH`) e usa o

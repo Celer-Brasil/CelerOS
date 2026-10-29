@@ -27,7 +27,19 @@ development.
 
 ## What's new
 
-Firmware 1.11.6 — the fleet round (JS API level 50):
+Firmware 1.13.0 — the CelerKit round (JS API level 52):
+
+* **CelerKit UI 2.0** — factory and hub apps rewritten on the `celeros.app` kit (`style`/`icons`/`widgets`/`rows`/`list`/`form`/`caps`): App Store 3.0, Settings, Installer (transactional install with rollback) and 14+ more apps ([app development guide](/Celer-Brasil/CelerOS/wiki/App-Development-Guide)).
+* **WiFi became a JS app** — `System.openWifiSetup()` now launches `celeros.wifi` 2.0.0, which drives the native captive portal through `System.wifiPortal*`; the `AI` object became a build option (`CELEROS_JS_AI`, off on the CYD). (API 52)
+* **Native UI extras on S3** — `UI.custom`, `UI.clip`/`UI.unclip` and `UI.extras` (`CELEROS_UI_EXTRAS`): the firmware clears/clips an app-declared area and repaints it only on a full frame or signature change ([JS API](/Celer-Brasil/CelerOS/wiki/JS-API)).
+* **Games as native Studio projects** — Detona!, Arrasa!, Lenda de Celer and Supernova are scenes/tilemaps in `studio_games/` (single source; the flat `hub_apps/` copies were removed), with the Celer Studio program mode (`runtime:"app"`) and AI copilot alongside.
+
+Firmware 1.12.0, before that — the forensics round (JS API level 51):
+
+* **Crash forensics** — crash.txt + crash screen/QR on glass boards, the agent reporting firmware crashes, WiFi passwords encrypted at rest (AES-CCM), USB MSC on the watch and app session telemetry.
+* **Glass state** — `System.isScreenOn()`/`System.screenState()` (API 51); the game engine sleeps with the screen (`E.onSleep`/`E.onWake`).
+
+Firmware 1.11.6, before that — the fleet round (JS API level 50):
 
 * **Signed OTA** — `update.json` carries an ECDSA P-256 signature over `version`, `api_version`, `firmware_sha256` and `variant`; the firmware verifies it against the embedded public key and the stream SHA-256 before switching slots. HTTPS manifests without a valid signature are refused. The private key stays outside the repository.
 * **Fleet agent** — `celeros.agent` (system app) runs a background service with heartbeat and commands for signed OTA, app updates, self-update, reboot, sync and diagnostics; `caps.ota_signed` tells a control plane whether the device verifies signatures ([fleet agent](/Celer-Brasil/CelerOS/wiki/Fleet-Agent)).
@@ -86,7 +98,7 @@ the sidebar has the Portuguese translations.
 ## Feature summary
 
 * **JavaScript app runtime** — interactive ES5 apps run natively on Duktape
-  (API level 50): canvas-style drawing, touch and the coupled on-screen
+  (API level 52): canvas-style drawing, touch and the coupled on-screen
   keyboard, file system, HTTP/JSON networking.
 * **On-device AI & voice** — `AI.chat()` talks to DeepSeek or OpenRouter
   from any app (async, TLS, function calling; keys stay outside the JS

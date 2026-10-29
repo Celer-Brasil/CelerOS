@@ -232,10 +232,10 @@ places.
 
 | Project | Version | Scenes | Extras | JS | Assets |
 |---------|---------|--------|--------|----|--------|
-| `studio_games/Detona` | 1.2.0 | 10 | 9 | 68.3 KB | 131.6 KB |
-| `studio_games/Arrasa` | 2.1.0 | 13 | 14 | 81.5 KB | 66.8 KB |
-| `studio_games/Lenda de Celer` | 2.2.0 | 23 | 12 | 115.3 KB | 245.7 KB |
-| `studio_games/Supernova` | 3.1.0 | 5 | 8 | 32.8 KB | 192.7 KB |
+| `studio_games/Detona` | 1.2.4 | 10 | 9 | 68.3 KB | 131.6 KB |
+| `studio_games/Arrasa` | 2.1.3 | 13 | 14 | 81.5 KB | 66.8 KB |
+| `studio_games/Lenda de Celer` | 2.2.4 | 23 | 12 | 115.3 KB | 245.7 KB |
+| `studio_games/Supernova` | 3.1.2 | 5 | 8 | 32.8 KB | 192.7 KB |
 
 (Sizes measured 2026-10-27 with the minified pipeline — `studio build`.)
 

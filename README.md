@@ -15,7 +15,20 @@ development.
 
 ## What's new
 
-Firmware 1.11.6 — the fleet round (JS API level 50):
+Firmware 1.13.0 — the CelerKit round (JS API level 52):
+
+* **CelerKit UI 2.0** — factory and hub apps rewritten on the `celeros.app` kit (`style`, `icons`, `widgets`, `rows`, `list`, `form`, `caps`): App Store 3.0 (1,648 → 437 lines), Settings 2.0, Installer 2.0 (transactional install — `.new` staging, per-file MD5, batch rename with rollback), Terminal, Snake and 14 more hub apps; on the watch six apps now fit the round glass, and the devkit-s3 USB apps ride the kit too.
+* **WiFi became a JS app** — the native setup screen left the firmware: `System.openWifiSetup()` now launches `celeros.wifi` 2.0.0, which drives the native captive portal through the new `System.wifiPortalStart/Poll/Stop/Ssid` calls, and `Net.wifiConnect` arms auto-reconnect on success. The `AI` object became a build option (Kconfig `CELEROS_JS_AI`, off on the CYD) — feature-detect with `typeof AI`. (API 52)
+* **Native UI extras on S3** — `UI.custom(id, x, y, w, h, sig, draw)`, the `UI.clip`/`UI.unclip` stack and `UI.extras` (Kconfig `CELEROS_UI_EXTRAS`, S3 only): the firmware clears and clips an app-declared area and only repaints it on a full frame or when the signature changes. On the CYD the kit falls back to the base path with the same API.
+* **Games are native Studio projects** — Detona! 1.2.4, Arrasa! 2.1.3, Lenda de Celer 2.2.4 and Supernova 3.1.2 live as scenes/tilemaps/entities in `studio_games/` (the single source; the old flat `hub_apps/` copies were removed), with menus on `celeros.game.ui` 1.4 (E.ui.menuBox/menuCard) and sprite slots exposing `E.spr.id` (spr 1.7.3).
+* **Celer Studio program mode** — `runtime:"app"` projects build Kui-screen apps with zero engine deps (CYD-sized), the built-in AI copilot (`studio ai`) edits the project, scripts export typed props, and the factory data image ships minified so the 4 MB boards fit the whole kit.
+
+Firmware 1.12.0, before that — the forensics round (JS API level 51):
+
+* **Crash forensics** — a firmware crash keeps a RAM snapshot in RTC memory and writes `crash.txt`, and on glass boards draws a crash screen with QR; the Celer Agent reports firmware crashes to the cloud. WiFi passwords are now encrypted at rest (AES-CCM), the watch gained USB MSC "pen drive" mode, and app sessions log telemetry to `apps.log`.
+* **Glass state for apps** — `System.isScreenOn()` and `System.screenState()` ("on|dim|aod|off", API 51): the game engine pauses update/draw while the screen is dark and repaints on wake (`E.onSleep`/`E.onWake`).
+
+Firmware 1.11.6, before that — the fleet round (JS API level 50):
 
 * **Signed OTA** — the `update.json` manifest now carries an ECDSA P-256 signature over `version`, `api_version`, `firmware_sha256` and `variant`; the device verifies it against the public key embedded in the firmware and still checks the stream SHA-256 before switching the boot partition. HTTPS manifests without a valid signature are refused, and the private key never enters the repository. On the bench a 1.11.5 board accepted a signed 1.11.6 manifest; 1.11.6 refused a newer manifest with a bad signature without downloading the firmware and stayed on the running version.
 * **Fleet agent** — the new `celeros.agent` system app runs a background service (svchost, API 50): heartbeat with firmware/API/apps/capabilities, and commands for signed OTA, app updates, self-update, reboot, sync and diagnostics. App packages come from the hub with MD5 checked before `System.installZip`, the command queue survives reboots, and a manifest the firmware rejects is reported as a failed command instead of "no update". The heartbeat declares `caps.ota_signed`, so a control plane knows whether the device verifies ECDSA manifest signatures.

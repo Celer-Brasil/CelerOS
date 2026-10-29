@@ -526,7 +526,7 @@ E.ui.toast("Salvo!", { type: "ok" });                 // queue of 3, slide/fade
 E.ui.hud({ score: 1200, best: 3000, lives: 2, maxLives: 3, time: "1:20" });
 ```
 
-`E.ui.hud` draws a top bar with shortcuts (`score/best/lives/coins/time/level`) and/or `left`/`right` arrays of `{ icon, text, color }`. It is **memoized**: on a dirty layer it draws muted and only repaints when the signature changes or something erases its box (the old `hudKey` pattern, built in). `E.ui.anim(key, target, ms, ease)` returns an eased 0..1 used by modal/sheet; `E.ui.animReset(key)` resets it.
+`E.ui.hud` draws a top bar with shortcuts (`score/best/lives/coins/time/level`) and/or `left`/`right` arrays of `{ icon, text, color }`; `x/y/w/h` move/resize the bar and `bg`/`lifeColor`/`coinColor`/`scoreColor`/`timeColor` recolor it (game.ui 1.3.2 — all of it enters the memo signature). It is **memoized**: on a dirty layer it draws muted and only repaints when the signature changes or something erases its box (the old `hudKey` pattern, built in). `E.ui.anim(key, target, ms, ease)` returns an eased 0..1 used by modal/sheet; `E.ui.animReset(key)` resets it.
 
 ### Limitations
 
@@ -1219,6 +1219,9 @@ Second batch from the `deki-engine` study (the first chapter lives in
 - **Hierarchy** (§14g): `celeros.game.node` + `pai: "#name"` in scenes.
 - **Slot generation** (`E.slots.gen`): a recycled id never draws new art under
   an old name — spr refuses and warns once.
+- **Slot id** (`E.spr.id(name)`, spr 1.7.3): returns the hardware slot id of
+  a sprite (0 if absent) — the game blits a baked board straight with
+  `System.blitSprite`/`System.drawSprite`, without poking `_slots`.
 - **Budget** (`E.slots.fit(w, h)`): estimated physical bytes (16-bit, falling
   back to 8) against `maxAllocRAM`/`freePSRAM`; **advisory** (the host/emulator
   has no PSRAM and says no). `create`'s failure message now carries the budget

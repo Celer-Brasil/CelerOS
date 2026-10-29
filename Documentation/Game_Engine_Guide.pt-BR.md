@@ -527,7 +527,7 @@ E.ui.toast("Salvo!", { type: "ok" });                 // fila de 3, slide/fade
 E.ui.hud({ score: 1200, best: 3000, lives: 2, maxLives: 3, time: "1:20" });
 ```
 
-`E.ui.hud` desenha uma barra no topo com atalhos (`score/best/lives/coins/time/level`) e/ou arrays `left`/`right` de `{ icon, text, color }`. É **memoizado**: na camada suja desenha mudo e só repinta quando a assinatura muda ou algo apaga a caixa (o antigo padrão `hudKey`, embutido). `E.ui.anim(key, target, ms, ease)` devolve 0..1 com easing, usado por modal/sheet; `E.ui.animReset(key)` reinicia.
+`E.ui.hud` desenha uma barra no topo com atalhos (`score/best/lives/coins/time/level`) e/ou arrays `left`/`right` de `{ icon, text, color }`; `x/y/w/h` movem/redimensionam a barra e `bg`/`lifeColor`/`coinColor`/`scoreColor`/`timeColor` a recolorizam (game.ui 1.3.2 — tudo entra na assinatura do memo). É **memoizado**: na camada suja desenha mudo e só repinta quando a assinatura muda ou algo apaga a caixa (o antigo padrão `hudKey`, embutido). `E.ui.anim(key, target, ms, ease)` devolve 0..1 com easing, usado por modal/sheet; `E.ui.animReset(key)` reinicia.
 
 ### Limitações
 
@@ -1215,6 +1215,9 @@ no `DekiEngine_Estudo.pt-BR.md`). Tudo aditivo; declare `^1.6.0` no core,
 - **Hierarquia** (§14g): `celeros.game.node` + `pai: "#nome"` na cena.
 - **Geração de slot** (`E.slots.gen`): um id reciclado não desenha arte nova
   por um nome velho — o spr recusa e avisa 1x.
+- **Id do slot** (`E.spr.id(nome)`, spr 1.7.3): devolve o id do slot de
+  hardware do sprite (0 se ausente) — o jogo blita um tabuleiro gravado
+  direto com `System.blitSprite`/`System.drawSprite`, sem ler `_slots`.
 - **Orçamento** (`E.slots.fit(w, h)`): bytes físicos estimados (16 bits,
   caindo para 8) contra `maxAllocRAM`/`freePSRAM`; **advisory** (o host/emulador
   não tem PSRAM e diz não). A mensagem de falha do `create` passou a dizer o

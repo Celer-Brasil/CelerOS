@@ -12,7 +12,7 @@ code, and the hub resolves/installs everything on install.
 
 | Dependency | Gives |
 |---|---|
-| `celeros.game` (core 1.4) | scenes + loop, input (multitouch API 43), gfx, camera, math, timers/tweens/seq, groups/pools, dirty layer, audio (music + sfx tables), save (NVS) |
+| `celeros.game` (core 1.7) | scenes + loop, input (multitouch API 43), gfx, camera, math, timers/tweens/seq, groups/pools, dirty layer, audio (music + sfx tables), save (NVS), screen sleep hooks (`E.onSleep`/`E.onWake`, API 51), culling and node hierarchy (`celeros.game.node`) |
 | `celeros.game.fx` | particles, popText, flash, rings, stars, emitters, trails, parallax |
 | `celeros.game.spr` | PNG sprites in hardware slots, spritesheets (`sheet`/`grid`), `stamp` with scale, flipbooks (`anim`, directional clips) |
 | `celeros.game.tilemap` | dirty-cell tilemaps, solid queries, baked-room rendering |

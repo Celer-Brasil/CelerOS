@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-25
-**Commit:** main @ API 50 (Celer Studio + svchost com Net/OTA + agente de frota celeros.agent)
+**Updated:** 2026-10-27
+**Commit:** main @ API 53 (App Store 3.1 com atualizacao automatica 02:00 e trava de versao, janela de rede do servico)
 **Branch:** main
 
 ## OVERVIEW
@@ -22,8 +22,8 @@ CelerOS/
 │   └── studio/      # Celer Studio: projeto/cena/prefab/meta + GUI + build ES5 (own AGENTS.md)
 ├── test/            # js_harness + meshsim (multi-node mesh) + app_lint fixtures + sdk/studio tests + host C++ + celerctl sim (own AGENTS.md)
 ├── wiki/            # GitHub wiki sources, published by CI (own AGENTS.md)
-├── updates/         # OTA channel dirs: esp32/, smartdisplay_4848S040/, spotpear_zzpet/, waveshare_amoled206/
-├── Documentation/   # JS_API_Guide + App_Development_Guide + Studio_Guide (EN + .pt-BR)
+├── updates/         # OTA channel dirs: esp32/ (cyd + cyd-vspi), esp32-cam/, devkit/, devkit-s3/, smartdisplay_4848S040/, spotpear_zzpet/, waveshare_amoled206/
+├── Documentation/   # JS_API_Guide + App_Development_Guide + App_Kit_Guide + Game_Engine_Guide + Studio_Guide (EN + .pt-BR)
 ├── include/, lib/   # stale PlatformIO placeholders, unused
 └── partitions_{16MB,4MB,32MB}.csv
 ```
@@ -33,7 +33,7 @@ CelerOS/
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
 | Multitouch (fingers, injector, `System.getTouches`, `celerctl mtap`) | `main/AGENTS.md` "TOUCH PIPELINE" | primary = oldest finger; system chrome consumes ONLY the primary; call ONE of `getTouch`/`getTouches` per loop |
-| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 49) |
+| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 53) |
 | Change system edge gestures / panels | `main/Launcher/WatchPanels.*` + `main/Runtime/JSBindings.cpp` | the gesture map lives TWICE (native hook `edgeGestureHook` + in-app `pollWatchEdges`) and must stay in sync; see both AGENTS.md |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
@@ -68,7 +68,7 @@ CelerOS/
 | `Event<Args...>` | template | `components/Utility` | type-erased core; single static mutex; handlers only set flags |
 | `ErrorCode` | registry type | `components/ErrorCodes` | fallible return type (not esp_err_t) |
 
-Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink (UART, or log-only hook on USB-native boards) -> USBDevice -> Buttons -> ScreenPower -> PowerPolicy -> TimeManager -> Alarms -> WebManager::startAsync -> CelerKernel::init -> LauncherUI -> Navigator::begin -> WatchPanels::init (+ PhoneLink::init on the watch) -> push launcher (or the board's homeApp).
+Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink (UART, or log-only hook on USB-native boards) -> USBDevice -> Buttons -> ScreenPower -> PowerPolicy -> TimeManager -> Alarms -> CelerKernel::init -> LauncherUI (+ applyAutostart) -> AppServices::init (svchost) -> WebManager::startAsync -> Navigator::begin -> WatchPanels::init (+ PhoneLink::init on the watch) -> push launcher (or the board's homeApp).
 
 ## WORKFLOW (HOW WE WORK HERE)
 - **Human and AI pair on the same tree, often in parallel.** Re-read a file right before editing it and run `git status` before staging. Files that changed under you mid-task are the other side's in-flight work: leave them uncommitted and mention them in your report.
@@ -84,7 +84,7 @@ Boot order: Board::init -> ScreenCapture::init -> FileSystem::init -> SerialLink
 ## CONVENTIONS
 - Board selected via CMake cache `-DCELEROS_BOARD=smartdisplay|cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit|devkit-s3|esp32-cam` (default smartdisplay; any other value is FATAL_ERROR). See `boards/AGENTS.md` for the differences.
 - Version lives in TWO places: root `CMakeLists.txt` `project(CelerOS VERSION x)` and `main/CMakeLists.txt` `CELEROS_VERSION`. Keep them in sync.
-- Subsystems compile out per board via Kconfig (the dormant remainder of the old shared `esp_components` lib left the tree in 2026-10; git tag `archive/esp_components` keeps it): `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_BLUETOOTH`, `CELEROS_PHONE_LINK` (watch), `CELEROS_USB_NATIVE` (watch), `CELEROS_LINK_ON_USJ` (dog), `CELEROS_USB_HOST` (devkit-s3: USB Host + the JS `USB` object), `CELEROS_UI` (off on headless boards — devkit, devkit-s3, esp32-cam — the whole display stack leaves the binary), `CELEROS_AUDIO` (digital I2S audio: playWav/QOA, playMusic, sfx, TTS feed — the analog LEDC tone stays on every board), `CELEROS_MIC` (capture I2S + `Mic` object; dog, watch), `CELEROS_JS_PHYSICS` (native verlet; feature-detected by the physics dep). Off-flags keep the JS contracts with inline header stubs; the **CYD lite profile** turns audio/mic/physics/web-server off (the OTA slot gate is back at 64KB) — see `boards/cyd/sdkconfig.defaults` and `boards/AGENTS.md` "FEATURE MENU".
+- Subsystems compile out per board via Kconfig (the dormant remainder of the old shared `esp_components` lib left the tree in 2026-10; git tag `archive/esp_components` keeps it): `CELEROS_WEB_SERVER`, `CELEROS_SD_CARD`, `CELEROS_JS_GPIO`, `CELEROS_BLUETOOTH`, `CELEROS_PHONE_LINK` (watch), `CELEROS_USB_NATIVE` (watch), `CELEROS_LINK_ON_USJ` (dog), `CELEROS_USB_HOST` (devkit-s3: USB Host + the JS `USB` object), `CELEROS_UI` (off on headless boards — devkit, devkit-s3, esp32-cam — the whole display stack leaves the binary), `CELEROS_UI_EXTRAS` (API 52 `UI.custom`/`UI.clip`/`UI.extras`; default on S3, off on the CYD), `CELEROS_AUDIO` (digital I2S audio: playWav/QOA, playMusic, sfx, TTS feed — the analog LEDC tone stays on every board), `CELEROS_MIC` (capture I2S + `Mic` object; dog, watch), `CELEROS_JS_AI` (the `AI` LLM/TTS object, default y — off on the CYD, feature-detect with `typeof AI`), `CELEROS_JS_PHYSICS` (native verlet; feature-detected by the physics dep). Off-flags keep the JS contracts with inline header stubs; the **CYD lite profile** turns audio/mic/physics/web-server/AI off (the OTA slot gate is back at 64KB) — see `boards/cyd/sdkconfig.defaults` and `boards/AGENTS.md` "FEATURE MENU".
 - Built with `-fno-exceptions` and an ES5-lean Duktape (`components/duktape/celeros_duk_config.yaml`) whose builtins live in ROM (base heap ~8KB); JS bindings are lightfuncs. A `std::string`/`new` that cannot grow **aborts** the device: on the no-PSRAM path use malloc/realloc (see `HttpClient::setBodySink`, `CelerKernel` source loader).
 - CYD runs **unicore** with `CONFIG_ESP32_IRAM_AS_8BIT_ACCESSIBLE_MEMORY`: the free IRAM holds the app source during compile, the TLS buffers, and Duktape overflow past a 24KB DRAM reserve. Tasks must not be pinned to core 1 (use `portNUM_PROCESSORS - 1`).
 - The littlefs partition has CSV subtype `spiffs` but is mounted as LittleFS at `/local`. The SD card is at `/sd`. Boards may overlay (`boards/<b>/data/`) or exclude (`data-exclude.txt`) apps from the factory image — see `tools/flash_data.sh`.
@@ -123,7 +123,7 @@ idf.py -B build -DSDKCONFIG=build/sdkconfig \
 idf.py -B build build flash -p /dev/ttyUSB0 monitor
 # Other boards: same shape, build-<b>/ dir, boards/<b>/sdkconfig.defaults, -DCELEROS_BOARD=<b>, set-target esp32|esp32s3
 
-tools/flash_data.sh [smartdisplay|cyd|spotpear-dog|waveshare-watch|devkit|devkit-s3] [PORT]  # LittleFS data partition (needs IDF env)
+tools/flash_data.sh [smartdisplay|cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit|devkit-s3|esp32-cam] [PORT]  # LittleFS data partition (needs IDF env)
 python3 tools/celerctl.py devices|shell|push|pull|logcat|apps install ...   # over UART/CDC
 python3 tools/celerctl.py top -w                                             # profiling: CPU% por task, heap, app, fps (KL_STATS)
 python3 tools/celerctl.py ota push build/CelerOS.bin                        # OTA without esptool (the watch's path)

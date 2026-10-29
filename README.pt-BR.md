@@ -16,7 +16,20 @@ desenvolvimento.
 
 ## Novidades
 
-Firmware 1.11.6 — a rodada da frota (API JS nível 50):
+Firmware 1.13.0 — a rodada do CelerKit (API JS nível 52):
+
+* **CelerKit UI 2.0** — apps de fábrica e do hub reescritos sobre o kit `celeros.app` (`style`, `icons`, `widgets`, `rows`, `list`, `form`, `caps`): App Store 3.0 (1.648 → 437 linhas), Settings 2.0, Installer 2.0 (instalação transacional — staging `.new`, MD5 por arquivo, rename em lote com rollback), Terminal, Snake e mais 14 apps do hub; no watch seis apps agora cabem no vidro redondo, e os apps USB do devkit-s3 também subiram no kit.
+* **WiFi virou app JS** — a tela nativa de configuração saiu do firmware: `System.openWifiSetup()` agora abre o `celeros.wifi` 2.0.0, que dirige o portal cativo nativo pelas novas chamadas `System.wifiPortalStart/Poll/Stop/Ssid`, e o `Net.wifiConnect` arma reconexão automática no sucesso. O objeto `AI` virou opção de build (Kconfig `CELEROS_JS_AI`, desligado na CYD) — apps testam com `typeof AI`. (API 52)
+* **Extras nativos de UI nas S3** — `UI.custom(id, x, y, w, h, sig, draw)`, a pilha `UI.clip`/`UI.unclip` e `UI.extras` (Kconfig `CELEROS_UI_EXTRAS`, só S3): o firmware limpa e recorta uma área declarada pelo app e só a repinta no quadro total ou quando a assinatura muda. Na CYD o kit usa o caminho base com a mesma API.
+* **Jogos viram projetos nativos do Studio** — Detona! 1.2.4, Arrasa! 2.1.3, Lenda de Celer 2.2.4 e Supernova 3.1.2 vivem como cenas/tilemaps/entidades em `studio_games/` (fonte única; as antigas cópias planas em `hub_apps/` foram removidas), com menus no `celeros.game.ui` 1.4 (E.ui.menuBox/menuCard) e slots de sprite expondo `E.spr.id` (spr 1.7.3).
+* **Modo programa do Celer Studio** — projetos `runtime:"app"` geram apps de telas Kui sem dependência de engine (cabem na CYD), o copiloto de IA embutido (`studio ai`) edita o projeto, scripts exportam props tipados e a imagem de dados de fábrica vai minificada para as placas de 4 MB caberem o kit inteiro.
+
+Firmware 1.12.0, antes disso — a rodada da forense (API JS nível 51):
+
+* **Forense de crash** — um crash do firmware guarda um retrato da RAM na RTC e escreve `crash.txt`, e nas placas com vidro desenha uma tela de crash com QR; o Celer Agent reporta crashes do firmware ao cloud. A senha do WiFi passou a ser cifrada em repouso (AES-CCM), o watch ganhou modo pen drive USB (MSC) e as sessões de app registram telemetria no `apps.log`.
+* **Estado do vidro para apps** — `System.isScreenOn()` e `System.screenState()` ("on|dim|aod|off", API 51): o motor de jogo pausa update/draw com a tela apagada e repinta no acordar (`E.onSleep`/`E.onWake`).
+
+Firmware 1.11.6, antes disso — a rodada da frota (API JS nível 50):
 
 * **OTA assinado** — o manifesto `update.json` passa a carregar uma assinatura ECDSA P-256 sobre `version`, `api_version`, `firmware_sha256` e `variant`; o aparelho confere contra a chave pública embutida no firmware e continua validando o SHA-256 do stream antes de trocar o slot de boot. Manifesto HTTPS sem assinatura válida é recusado, e a chave privada nunca entra no repositório. Na bancada, uma placa 1.11.5 aceitou um manifesto 1.11.6 assinado; a 1.11.6 recusou um manifesto mais novo com assinatura ruim sem baixar o firmware e permaneceu na versão.
 * **Agente de frota** — o novo app de sistema `celeros.agent` roda um serviço em background (svchost, API 50): heartbeat com firmware/API/apps/capacidades e comandos de OTA assinado, atualização de apps, self-update, reboot, sync e diagnostics. Os pacotes vêm do hub com MD5 conferido antes do `System.installZip`, a fila de comandos sobrevive a reboots e um manifesto recusado pelo firmware vira falha no ack, não "sem atualização". O heartbeat declara `caps.ota_signed`, para o plano de controle saber se o aparelho valida a assinatura ECDSA.

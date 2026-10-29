@@ -5,11 +5,14 @@
 CelerOS system apps are **JavaScript** (ES5, Duktape) and live in the
 LittleFS partition, mounted at `/local` — the firmware carries only the
 core. That cut ~330 KB from the CYD image and became the house standard:
-the 14 apps in `data/apps/` are all JS (App Store, Barebone, Chat IA, HTTP
-Demo, Help, Installer, Matilha, Qwen, Settings, Snake, Terminal, Touch
-Test, Watchface, Web Server) — Matilha (API 27) is the pack panel: mesh
+the 18 apps in `data/apps/` are all JS (App Store, Barebone, Celer Agent,
+Chat IA, HTTP Demo, Help, Installer, Matilha, Nucleo, Qwen, Regras,
+Settings, Snake, Terminal, Touch Test, Watchface, Web Server, WiFi) —
+Matilha (API 27) is the pack panel: mesh
 toggle, members with roles, direct messages and the roaming music
-handoff. Boards can add their own on top (overlay): Dog Face
+handoff; WiFi (`celeros.wifi`, API 52) is the WiFi setup app the firmware
+opens through `System.openWifiSetup()`. Boards can add their own on top
+(overlay): Dog Face
 on the dog; Alarmes, Atividade, Celular, Clima, Musica and Timer on the
 watch.
 

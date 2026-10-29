@@ -26,7 +26,19 @@ desenvolvimento.
 
 ## Novidades
 
-Firmware 1.11.6 — a rodada da frota (API JS nível 50):
+Firmware 1.13.0 — a rodada do CelerKit (API JS nível 52):
+
+* **CelerKit UI 2.0** — apps de fábrica e do hub reescritos sobre o kit `celeros.app` (`style`/`icons`/`widgets`/`rows`/`list`/`form`/`caps`): App Store 3.0, Settings, Installer (instalação transacional com rollback) e mais de 14 apps ([guia de apps](/Celer-Brasil/CelerOS/wiki/Guia-de-Apps)).
+* **WiFi virou app JS** — `System.openWifiSetup()` agora abre o `celeros.wifi` 2.0.0, que dirige o portal cativo nativo por `System.wifiPortal*`; o objeto `AI` virou opção de build (`CELEROS_JS_AI`, desligado na CYD). (API 52)
+* **Extras nativos de UI nas S3** — `UI.custom`, `UI.clip`/`UI.unclip` e `UI.extras` (`CELEROS_UI_EXTRAS`): o firmware limpa/recorta uma área declarada pelo app e só a repinta no quadro total ou quando a assinatura muda ([API JS](/Celer-Brasil/CelerOS/wiki/API-JS)).
+* **Jogos como projetos nativos do Studio** — Detona!, Arrasa!, Lenda de Celer e Supernova são cenas/tilemaps em `studio_games/` (fonte única; as cópias planas em `hub_apps/` foram removidas), ao lado do modo programa do Celer Studio (`runtime:"app"`) e do copiloto de IA.
+
+Firmware 1.12.0, antes disso — a rodada da forense (API JS nível 51):
+
+* **Forense de crash** — crash.txt + tela/QR de crash nas placas com vidro, o agente reportando crashes do firmware, senha do WiFi cifrada em repouso (AES-CCM), USB MSC no watch e telemetria de sessão de app.
+* **Estado do vidro** — `System.isScreenOn()`/`System.screenState()` (API 51); o motor de jogo dorme com a tela (`E.onSleep`/`E.onWake`).
+
+Firmware 1.11.6, antes disso — a rodada da frota (API JS nível 50):
 
 * **OTA assinado** — o `update.json` carrega uma assinatura ECDSA P-256 sobre `version`, `api_version`, `firmware_sha256` e `variant`; o firmware confere contra a chave pública embutida e o SHA-256 do stream antes de trocar de slot. Manifesto HTTPS sem assinatura válida é recusado. A chave privada fica fora do repositório.
 * **Agente de frota** — o app de sistema `celeros.agent` roda um serviço em background com heartbeat e comandos de OTA assinado, atualização de apps, self-update, reboot, sync e diagnostics; `caps.ota_signed` informa ao plano de controle se o aparelho valida assinatura ([agente de frota](/Celer-Brasil/CelerOS/wiki/Agente-de-Frota)).
@@ -85,7 +97,7 @@ traduções ficam na seção **Português (BR)**.
 ## Funcionalidades em resumo
 
 * **Runtime de apps JavaScript** — apps interativos em ES5 rodam nativamente
-  via Duktape (API nível 50): desenho estilo canvas, toque e teclado na tela
+  via Duktape (API nível 52): desenho estilo canvas, toque e teclado na tela
   acoplado, sistema de arquivos e rede HTTP/JSON.
 * **IA e voz no aparelho** — `AI.chat()` conversa com a DeepSeek ou a
   OpenRouter de qualquer app (assíncrono, TLS, function calling; as chaves

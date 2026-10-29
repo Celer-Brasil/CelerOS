@@ -52,14 +52,17 @@ tag (or the upstream repo).
 2. `UI::init(w, h)` — display and the virtual 240x320 layout
 3. `FileSystem::init` — LittleFS at `/local`, SD at `/sd`
 4. `SerialLink` → `USBDevice` — the `celerctl` channel
-5. `Backlight` → `TimeManager` (NTP/timezone) → `WebManager::startAsync`
-6. `CelerKernel::init` — the Duktape heap
-7. `LauncherUI` (or touch calibration on the CYD's first boot) and
-   `kui::Navigator::begin` + push of the launcher
+5. `Backlight` → `TimeManager` (NTP/timezone) → `Alarms` → `CelerKernel::init` — the Duktape heap
+6. `AppServices` (the svchost) → `WebManager::startAsync` (touch
+   calibration runs here on the CYD's first boot)
+7. `LauncherUI` and `kui::Navigator::begin` + `WatchPanels`, then push
+   of the launcher (or the board's home app)
 
 The main loop runs on the main task: `Navigator::tick()`,
-`WebManager::tick()` (deferred reboot after a web OTA), `TimeManager::tick()`,
-`delay(5)`.
+`WebManager::tick()` (deferred reboot after a web OTA),
+`TimeManager::tick()`, the power/screen ticks and
+`delay(PowerPolicy::loopDelayMs())` — JS apps pump the same ticks from
+`System.present()`.
 
 ## The JavaScript runtime
 
@@ -72,7 +75,7 @@ The main loop runs on the main task: `Navigator::tick()`,
   Duktape), with a blocking `while` loop and `System.delay()`.
 * All geometry is drawn in virtual 240x320 coordinates and scaled by
   `UI::sx()/sy()` — apps never see physical pixels.
-* The **API level** (`System.getAPILevel()`, currently 20) is the
+* The **API level** (`System.getAPILevel()`, currently 52) is the
   feature-detection contract for apps. History: 1 base
   (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps in JS · 5 docked
   keyboard · 6 custom topbar + streaming `Net.download` · 7 RGB LED, light
@@ -88,7 +91,14 @@ The main loop runs on the main task: `Navigator::tick()`,
   17 `System.button()` (headless devkit) · 18 `AI` (async chat,
   DeepSeek/OpenRouter) · 19 `Mic.*` (16 kHz WAV recording, `mic`
   permission) · 20 function calling (`toolCalls`) + `WakeWord.*`
-  (on-device "Hi Celer").
+  (on-device "Hi Celer") · 22 the `UI.*` toolkit · 23 multi-file apps
+  with `require()` · 28 native canvas + sprite pool · 30–33 shared deps
+  (`deps.json`), native verlet physics, sfx mixing, rigid bodies ·
+  42 single app.zip package · 43 multitouch (`System.getTouches`) ·
+  48 USB Host + the OS input bus · 49 `Net.request` with headers +
+  `System.epoch()` · 50 background services with network/OTA (svchost) ·
+  51 screen state (`System.isScreenOn`/`screenState`) · 52 WiFi setup as
+  a JS app (`celeros.wifi`) + optional `AI` build + S3 UI extras.
 * An optional Duktape debugger (`CONFIG_CELEROS_JS_DEBUGGER`, default on
   the ESP32-S3 targets) exposes breakpoints/step/eval over the celerctl
   channel (`celerctl debug`).

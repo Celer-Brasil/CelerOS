@@ -79,13 +79,32 @@ Each board uses its own build directory (`build/`, `build-cyd/`,
 `build-watch/`, `build-dog/`, `build-devkit/`) with its cached `sdkconfig`
 — that way you can switch targets without reconfiguring.
 
+The two headless boards follow the same shape (no display stack in the
+binary):
+
+```bash
+# Headless ESP32-S3 devkit (USB Host)
+idf.py -B build-devkit-s3 -DSDKCONFIG=build-devkit-s3/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/devkit-s3/sdkconfig.defaults" \
+  -DCELEROS_BOARD=devkit-s3 set-target esp32s3
+idf.py -B build-devkit-s3 build flash -p /dev/ttyACM0 monitor
+
+# ESP32-CAM (camera node)
+idf.py -B build-cam -DSDKCONFIG=build-cam/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/esp32-cam/sdkconfig.defaults" \
+  -DCELEROS_BOARD=esp32-cam set-target esp32
+idf.py -B build-cam build flash -p /dev/ttyUSB0 monitor
+```
+
+(`cyd-vspi` builds like the CYD with `-DCELEROS_BOARD=cyd-vspi`.)
+
 ## The data partition (LittleFS)
 
 `data/` (system apps, icons and demos) becomes the image of the `littlefs`
 partition, mounted at `/local`:
 
 ```bash
-tools/flash_data.sh smartdisplay /dev/ttyUSB0   # or: cyd|spotpear-dog|waveshare-watch|devkit <port>
+tools/flash_data.sh smartdisplay /dev/ttyUSB0   # or: cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit|devkit-s3|esp32-cam <port>
 ```
 
 The script needs the IDF environment exported (`IDF_PATH`) and uses the

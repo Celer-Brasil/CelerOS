@@ -792,9 +792,10 @@ de permissões do app de destino continua valendo. Caso de uso principal:
 abre o app de origem ao toque (veja a página *Watchface-Plugins* da wiki).
 
 #### `System.openWifiSetup()`
-Empurra a tela nativa de configuração de WiFi. Como os apps JS rodam de
-forma síncrona, chame `System.exitApp()` logo em seguida — a tela de setup
-assume quando o script cede.
+Abre o app de configuração de WiFi (`celeros.wifi`, API 52) — sai do app
+chamador pela mesma porta do `System.launchApp()`, então não precisa chamar
+mais nada. Veja a §12.4b para a superfície `System.wifiPortal*` que o app
+dirige.
 
 #### `System.present()`
 Mostra o frame buffer automático no vidro agora (no-op sem ele). Só é
@@ -948,12 +949,18 @@ A tela de WiFi agora é o app `WiFi` (`packageName: celeros.wifi`, em
 `data/apps/WiFi`) — ela saiu do firmware na API 52. Nas placas com vidro o app
 dirige o mesmo AP + captive portal que a tela nativa usava:
 
-- `System.wifiPortalStart()` → Boolean — sobe o AP + portal (não bloqueia).
-- `System.wifiPortalPoll()` → `{state, detail}` — `state` é `0` aguardando,
-  `1` conectando, `2` conectado, `3` falhou; `detail` traz o SSID/IP conectado
-  quando há. Chame no laço.
-- `System.wifiPortalStop()` — derruba o AP (o STA conectado é preservado).
-- `System.wifiPortalSsid()` → String — SSID do AP para mostrar na tela.
+#### `System.wifiPortalStart()` (API 52)
+→ Boolean — sobe o AP + portal (não bloqueia).
+
+#### `System.wifiPortalPoll()` (API 52)
+→ `{state, detail}` — `state` é `0` aguardando, `1` conectando, `2` conectado,
+`3` falhou; `detail` traz o SSID/IP conectado quando há. Chame no laço.
+
+#### `System.wifiPortalStop()` (API 52)
+Derruba o AP (o STA conectado é preservado).
+
+#### `System.wifiPortalSsid()` (API 52)
+→ String — SSID do AP para mostrar na tela.
 
 Exige a capability `system`. Faça feature-detect com
 `typeof System.wifiPortalStart === "function"`: builds headless e builds sem o

@@ -82,14 +82,17 @@ toque resistivo), então a experiência é visivelmente mais simples:
 * **Mais lenta.** Um redesenho de tela cheia é limitado pelo SPI de 40 MHz
   (~31 ms); apps grandes levam 1–2 s compilando ao abrir (Settings, App Store).
 * **Memória apertada.** Um app recebe ~220 KB de RAM interna (parte em IRAM,
-  mais lenta); o teto prático é um `main.js` de ~60 KB, e apps grandes levam
-  alguns segundos para abrir. Apps maiores aparecem como "Requer PSRAM" na
-  loja.
+  mais lenta); o teto aplicado é um pacote de **64 KB minificados** (main +
+  módulos + deps), e apps grandes levam alguns segundos para abrir. Apps
+  maiores declaram `"requires": ["psram"]` e aparecem como "Requer PSRAM"
+  na loja.
 * **Toque resistivo.** Pede um toque mais firme e calibração no primeiro
   boot; os alvos são pequenos (ícones de 48 px, barra superior de 20 px).
   Também dá para operar a tela pelo navegador com o
   [espelho de tela ao vivo](/Celer-Brasil/CelerOS/wiki/Interface-Web).
-* **Sem cartão SD** por enquanto (o slot divide o barramento do display).
+* **microSD no barramento compartilhado.** O slot funciona (`/sd`, CS=5),
+  mas divide o HSPI do TFT — tráfego de SD e de display arbitram; a
+  variante CYD-VSPI vem com SD desligado (hardware não validado).
 
 **Periféricos da placa usados pelo sistema:** LED RGB no verso
 (`System.led`), sensor de luz ao lado da tela (`System.lightLevel` e brilho

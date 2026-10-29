@@ -12,7 +12,7 @@ instala tudo na instalação.
 
 | Dependência | Entrega |
 |---|---|
-| `celeros.game` (core 1.4) | cenas + loop, entrada (multitoque API 43), gfx, câmera, math, timers/tweens/seq, grupos/pools, camada suja, áudio (música + tabelas de sfx), save (NVS) |
+| `celeros.game` (core 1.7) | cenas + loop, entrada (multitoque API 43), gfx, câmera, math, timers/tweens/seq, grupos/pools, camada suja, áudio (música + tabelas de sfx), save (NVS), ganchos de tela apagada (`E.onSleep`/`E.onWake`, API 51), culling e hierarquia de nós (`celeros.game.node`) |
 | `celeros.game.fx` | partículas, popText, flash, anéis, estrelas, emissores, trails, parallax |
 | `celeros.game.spr` | sprites PNG em slots de hardware, spritesheets (`sheet`/`grid`), `stamp` com escala, flipbooks (`anim`, clipes direcionais) |
 | `celeros.game.tilemap` | tilemaps de células sujas, consultas de solidez, sala gravada em sprite |

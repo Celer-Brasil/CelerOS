@@ -84,13 +84,16 @@ simpler:
 * **Slower.** A full-screen redraw is bound by the 40 MHz SPI bus (~31 ms);
   big apps take 1–2 s to compile when they open (Settings, App Store).
 * **Tight memory.** An app gets ~220 KB of internal RAM (part of it slower
-  IRAM); the practical ceiling is a `main.js` of ~60 KB, and big apps take a
-  few seconds to open. Bigger apps are marked "Requer PSRAM" in the store.
+  IRAM); the enforced ceiling is a **64 KB minified** package (main +
+  modules + deps), and big apps take a few seconds to open. Bigger apps
+  declare `"requires": ["psram"]` and are marked "Requer PSRAM" in the store.
 * **Resistive touch.** It needs a firmer press and a calibration on first
   boot; targets are small (48 px icons, 20 px top bar). You can also drive
   the screen from the browser with the
   [live screen mirror](/Celer-Brasil/CelerOS/wiki/Web-Interface).
-* **No SD card** for now (the slot shares the display bus).
+* **microSD on the shared bus.** The slot works (`/sd`, CS=5) but shares
+  the TFT's HSPI, so SD traffic and display traffic arbitrate; the CYD-VSPI
+  variant ships with SD off (hardware unvalidated).
 
 **Board peripherals used by the system:** RGB LED on the back
 (`System.led`), light sensor next to the screen (`System.lightLevel` and

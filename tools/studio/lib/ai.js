@@ -337,7 +337,18 @@ async function plan(dir, prompt, opts) {
         }
         const r = await askFn({ messages: messages, config: cfg, model: opts.model,
                                 maxTokens: opts.maxTokens, timeoutMs: opts.timeoutMs });
-        const parsed = parsePlan(r.content);
+        let parsed;
+        try {
+            parsed = parsePlan(r.content);
+        } catch (eParse) {
+            // resposta fora do JSON (prosa do modelo) e a falha MAIS comum:
+            // lancada na hora queimava o maxSteps inteiro sem dar ao modelo a
+            // chance de corrigir (so erro de validacao/guard repetia)
+            lastError = { code: eParse.code || 'ai.json', message: eParse.message,
+                          diagnostics: [] };
+            messages.push({ role: 'assistant', content: r.content });
+            continue;
+        }
         say = parsed.say || say;
         messages.push({ role: 'assistant', content: r.content });
         guard(parsed.ops, opts);

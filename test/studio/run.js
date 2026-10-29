@@ -71,23 +71,35 @@ function loadData(dir) {
     return require(file);
 }
 
-function httpJson(port, method, url, body) {
+// httpJson com status: a maioria dos checks so quer o corpo; os de HTTP
+// (origin/status) precisam do codigo tambem
+function httpJsonFull(port, method, url, body, headers) {
     return new Promise((resolve, reject) => {
         const data = body ? Buffer.from(JSON.stringify(body)) : null;
         const req = http.request({ host: '127.0.0.1', port, method, path: url,
-                                   headers: data ? { 'Content-Type': 'application/json',
-                                                     'Content-Length': data.length } : {} },
+                                   headers: Object.assign({},
+                                       data ? { 'Content-Type': 'application/json',
+                                                'Content-Length': data.length } : {},
+                                       headers || {}) },
             (res) => {
                 const parts = [];
                 res.on('data', (d) => parts.push(d));
                 res.on('end', () => {
-                    try { resolve(JSON.parse(Buffer.concat(parts).toString('utf8'))); }
-                    catch (e) { reject(e); }
+                    let j = null;
+                    try { j = JSON.parse(Buffer.concat(parts).toString('utf8')); } catch (e) {}
+                    resolve({ status: res.statusCode, json: j });
                 });
             });
         req.on('error', reject);
         if (data) req.write(data);
         req.end();
+    });
+}
+
+function httpJson(port, method, url, body) {
+    return httpJsonFull(port, method, url, body).then((r) => {
+        if (!r.json) throw new Error('resposta nao-JSON');
+        return r.json;
     });
 }
 
@@ -130,6 +142,15 @@ let atlasGuid = null;
     check('asset.set atualiza pivot/key/anims/hitbox', aa.meta.settings.key === '#ff00ff' &&
         aa.meta.settings.pivot[1] === 1 && aa.meta.settings.anims.idle.length === 2 &&
         aa.meta.settings.hitbox[2] === 16);
+
+    // grade gigante (typo no inspetor) nao pode passar: o proximo
+    // describe/snapshot expandia cols*rows regioes e OOMava o processo
+    let gridFail = null;
+    try {
+        applyOps(base, [{ op: 'asset.set', asset: a.guid,
+                          settings: { mode: 'grid', cols: 100000000, rows: 100000000, tw: 8, th: 8 } }], {});
+    } catch (e) { gridFail = e.code; }
+    check('asset.set recusa grade gigante', gridFail === 'asset.grid', String(gridFail));
 })();
 
 (function () {
@@ -224,6 +245,19 @@ let atlasGuid = null;
     const t3 = Project.open(base).scene('Fase 1').tilemaps[0];
     check('tilemap.set redimensiona preservando o canto e nasce vazio',
         t3.cols === 8 && t3.data.length === 40 && t3.data[0] === 2 && t3.data[39] === -1);
+    // teto de grade: cols/rows gigantes OOMavam o processo no new Array/resize
+    let tmFail = null;
+    try {
+        applyOps(base, [{ op: 'tilemap.add', scene: 'Fase 1', tileset: atlasGuid,
+                          cols: 40000, rows: 40000, cell: 16 }], {});
+    } catch (e) { tmFail = e.code; }
+    check('tilemap.add recusa grade gigante', tmFail === 'op.args', String(tmFail));
+    tmFail = null;
+    try {
+        applyOps(base, [{ op: 'tilemap.set', scene: 'Fase 1', tilemap: tm.id,
+                          cols: 60000, rows: 60000 }], {});
+    } catch (e) { tmFail = e.code; }
+    check('tilemap.set recusa redimensionar para grade gigante', tmFail === 'schema.range', String(tmFail));
     applyOps(base, [
         { op: 'scene.set', scene: 'Fase 1', settings: { data: { a: 1, b: 2 } }, replace: ['data'] },
         { op: 'scene.set', scene: 'Fase 1', settings: { data: { a: 9 } }, replace: ['data'] },
@@ -313,6 +347,31 @@ let atlasGuid = null;
         check('merge: campo do componente vence o default e preserva irmaos',
             merged.vel === 99 && merged.nome === 'x' && merged.faixa === 8 &&
             merged.extra === 1, JSON.stringify(merged));
+    })();
+
+    // refs de ui.image (fields.asset): o delete simples recusa com asset.inuse
+    // e o force limpa o componente — antes so sprite/script/clips contavam
+    (function () {
+        console.log('Studio refs de ui.image:');
+        const dir = tmpDir('uiimg');
+        Project.init(dir, { app: true, name: 'Img T', pkg: 'br.celer.imgt' });
+        const png = path.join(dir, 'in.png');
+        fs.writeFileSync(png, encodePng(8, 8, Buffer.alloc(8 * 8 * 3), false));
+        const g = applyOps(dir, [{ op: 'asset.import', src: png, importer: 'sprite',
+                                   name: 'fundo' }], {}).results[0].asset.guid;
+        applyOps(dir, [{ op: 'entity.create', scene: 'Principal', fid: 'e_img', name: 'Img',
+                         components: [{ id: 'c_img', type: 'ui.image',
+                                        fields: { asset: g, w: 32, h: 32 } }] }], {});
+        let code = null;
+        try { applyOps(dir, [{ op: 'asset.delete', asset: g }], {}); }
+        catch (e) { code = e.code; }
+        check('delete de ui.image em uso recusa com asset.inuse', code === 'asset.inuse', String(code));
+        applyOps(dir, [{ op: 'asset.delete', asset: g, force: true }], {});
+        const e = Project.open(dir).scene('Principal').entities.find((x) => x.fid === 'e_img');
+        check('force remove o componente ui.image pendurado',
+            e && (e.components || []).length === 0,
+            JSON.stringify(e && e.components));
+        fs.rmSync(dir, { recursive: true, force: true });
     })();
 
 // --------------------------------------------------------------- build -----
@@ -880,6 +939,27 @@ let built = null;
         JSON.stringify(jsonNoMeta(sa)) === JSON.stringify(jsonNoMeta(sb)));
     const st = await httpJson(port, 'GET', '/api/state');
     check('state responde describe + build', st.ok === true && !!st.describe && !!st.describe.project);
+    check('describe.project.editor presente (grade/diagnostico da GUI)',
+        !!st.describe.project.editor && st.describe.project.editor.grid >= 1,
+        JSON.stringify(st.describe.project.editor));
+
+    // CSRF/HTTP: o POST aceita text/plain (sem preflight), entao a origem e
+    // a unica barreira; "null" (pagina file://) nao pode passar
+    const oEvil = await httpJsonFull(port, 'POST', '/api/command', { ops: [{ op: 'scene.create', name: 'Evil' }] },
+                                     { Origin: 'http://evil.example' });
+    const oNull = await httpJsonFull(port, 'POST', '/api/command', { ops: [{ op: 'scene.create', name: 'Evil' }] },
+                                     { Origin: 'null' });
+    check('origem estranha e Origin null recusadas (403)',
+        oEvil.status === 403 && oNull.status === 403 &&
+        !Project.open(b).sceneList().some((s) => s.name === 'Evil'),
+        JSON.stringify([oEvil.status, oNull.status]));
+    const eRef = await httpJsonFull(port, 'POST', '/api/command',
+                                    { ops: [{ op: 'entity.create', scene: 'zzz', name: 'X' }] });
+    const eDeploy = await httpJsonFull(port, 'POST', '/api/command', { cmd: 'deploy', noBuild: true });
+    check('erro de lote/pedido e 400 (nao 500)',
+        eRef.status === 400 && eDeploy.status === 400 &&
+        eRef.json.error.code === 'ref.scene' && eDeploy.json.error.code === 'deploy.nobuild',
+        JSON.stringify([eRef.status, eDeploy.status]));
     await new Promise((resolve) => srv.close(resolve));
 
     // ------------------------------------------------------ legado -----
@@ -1155,8 +1235,21 @@ let built = null;
             !fs.existsSync(path.join(aiDir, 'Assets', 'Scenes', 'Ajustes.scene.json')));
         const applied = await A.plan(aiDir, 'crie uma tela', { ask: fakeAsk, config: cfg });
         check('ia: aplica quando nao e dry-run',
-            !!applied.result && fs.existsSync(path.join(aiDir, 'Assets', 'Scenes', 'Ajustes.scene.json')),
+            !!applied.result && fs.existsSync(path.join(aiDir, 'Assets/Scenes/Ajustes.scene.json')),
             JSON.stringify(applied.result && applied.result.changed));
+
+        // resposta FORA do JSON (prosa do modelo) e a falha mais comum: tem de
+        // repetir dentro do maxSteps, nao derrubar o pedido na primeira rodada
+        let proseCalls = 0;
+        const proseAsk = async () => {
+            proseCalls++;
+            return { content: proseCalls === 1
+                ? 'desculpa, nao consegui montar o JSON'
+                : '{"say":"criei","ops":[{"op":"scene.create","name":"Prosa"}]}' };
+        };
+        const retried = await A.plan(aiDir, 'crie uma tela', { ask: proseAsk, dryRun: true, config: cfg });
+        check('ia: refaz o lote quando a resposta nao e JSON', retried.steps === 2 && proseCalls === 2,
+              'steps=' + retried.steps + ' calls=' + proseCalls);
 
         // HTTP: provedor falso local -> /api/command {cmd:"ai"}
         const provider = http.createServer((req, res) => {

@@ -326,8 +326,12 @@ class Project {
             const prefix = st.prefix !== undefined && st.prefix !== ''
                 ? st.prefix : (m.importer === 'tileset' ? '' : asset.name);
             let i = 0;
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
+            // meta editado a mao com cols/rows gigantes nao pode OOMar o
+            // processo (describe/snapshot/validate chamam regions()); o teto
+            // e o mesmo do setAssetSettings e o validate pleno recusa depois
+            const maxCells = 4096;
+            for (let r = 0; r < rows && out.length < maxCells; r++) {
+                for (let c = 0; c < cols && out.length < maxCells; c++) {
                     out.push({ name: prefix + i, x: c * tw, y: r * th, w: tw, h: th, c, r });
                     i++;
                 }
@@ -636,6 +640,10 @@ class Project {
                 startScene: this.data.startScene,
                 deps: this.data.deps || {},
                 build: this.data.build || {},
+                // editor.grid/snap/debug/prof: o inspetor le daqui (grade do
+                // viewport e diagnostico E.debug/E.prof); sem isso a GUI
+                // mostrava sempre o default e nunca o estado real do projeto
+                editor: this.data.editor || { grid: 8, snap: true, debug: false, prof: false },
                 // campos de publicacao/editaveis no painel Projeto
                 author: this.data.author || '',
                 description: this.data.description || '',

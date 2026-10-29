@@ -229,6 +229,12 @@ function setAssetSettings(project, asset, patch) {
         if (!st.rows) st.rows = 1;
         if (!st.tw) st.tw = st.w || 1;
         if (!st.th) st.th = st.h || 1;
+        // grade gigante (typo no inspetor) passava aqui e o proximo
+        // describe/snapshot OOMava o Studio expandindo regioes/tiles
+        if (st.cols * st.rows > 4096) {
+            F.fail('asset.grid', 'grade ' + st.cols + 'x' + st.rows +
+                   ' passa de 4096 regioes (use um PNG maior ou tiles menores)');
+        }
     }
     if (st.mode === 'regions' && !st.regions) st.regions = {};
     if (meta.importer === 'tileset' && !Array.isArray(st.tiles)) {

@@ -543,7 +543,11 @@ function makeUI(env, opts) {
             labels = Array.isArray(labels) ? labels.slice(0, 8).map(str) : [];
             const n = labels.length;
             if (!n) return sel;
-            const segW = Math.floor(w / n);
+            // w < n (ou negativo) dava segW 0 e o hit-test dividia por zero —
+            // mesmo guard do JsUi.cpp (la o xtensa rebootava; aqui sel ia a
+            // -Infinity e a aba sumia para sempre)
+            let segW = Math.floor(w / n);
+            if (segW < 1) segW = 1;
             if (t.tap && inR(t.sx, t.sy, x, y, w, h)) {
                 const i = Math.min(n - 1, Math.floor((t.sx - x) / segW));
                 if (tapIn(x, y, w, h)) sel = i;
@@ -667,6 +671,12 @@ function makeUI(env, opts) {
             setClipRect(r);
             try {
                 draw(x, y, w, h);
+            } catch (e) {
+                // needDraw marcou o slot como desenhado antes do callback: um
+                // draw que quebrou deixaria a area velha/limpada ate o proximo
+                // frame total — desmarca e repropaga (espelho do JsUi.cpp)
+                sl.drawn = false;
+                throw e;
             } finally {
                 if (saved) setClipRect(saved); else clearClipRect();
             }

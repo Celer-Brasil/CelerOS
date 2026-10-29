@@ -692,6 +692,11 @@ const OPS = {
         }
         const cols = op.cols | 0, rows = op.rows | 0;
         if (cols < 1 || rows < 1) F.fail('op.args', 'tilemap.add exige cols/rows >= 1');
+        // teto de grade: 40000x40000 passava e o `new Array(cols*rows)` OOMava
+        // o processo inteiro (GUI/CLI no mesmo host) antes de qualquer validate
+        if (cols > 512 || rows > 512) {
+            F.fail('op.args', 'tilemap.add: cols/rows vao ate 512 (recebi ' + cols + 'x' + rows + ')');
+        }
         const cell = op.cell !== undefined ? +op.cell : 16;
         if (!(cell > 0)) F.fail('op.args', 'cell deve ser > 0');
         const data = Array.isArray(op.data) ? op.data.slice() : new Array(cols * rows).fill(0);
@@ -725,6 +730,12 @@ const OPS = {
         const oldData = tm.data, oldSolids = tm.solids;
         for (const k of ['cols', 'rows', 'cell', 'ox', 'oy', 'layer', 'data', 'solids', 'autotile']) {
             if (op[k] !== undefined) tm[k] = F.deepClone(op[k]);
+        }
+        // mesmo teto do tilemap.add: o resize abaixo itera cols*rows para
+        // preservar o canto, e uma grade gigante travava/OOMava aqui
+        if (!(tm.cols >= 1 && tm.cols <= 512) || !(tm.rows >= 1 && tm.rows <= 512)) {
+            F.fail('schema.range', 'cols/rows do tilemap devem ser 1..512 (recebi ' +
+                   tm.cols + 'x' + tm.rows + ')');
         }
         if (op.tileset) {
             const asset = project.asset(op.tileset);
@@ -815,6 +826,12 @@ function collectRefs(obj, refs) {
             for (const k of ['sprite', 'script']) {
                 if (typeof f[k] === 'string' && f[k]) refs.add(f[k].split('#')[0]);
             }
+            // ui.image guarda a imagem em fields.asset (runtime app): sem isso
+            // o delete simples falhava com ref.missing (validate) em vez do
+            // asset.inuse amigavel, e o force deixava a referencia pendurada
+            if (c.type === 'ui.image' && typeof f.asset === 'string' && f.asset) {
+                refs.add(f.asset.split('#')[0]);
+            }
             if (f.clips) walkRefs(f.clips, refs);
         }
     }
@@ -844,6 +861,14 @@ function referenced(project, guid) {
         }
         if (st.music) {
             const a = project.asset(st.music);
+            if (a) refs.add(a.guid);
+        }
+        // scripts da tela (runtime app): settings.scripts guarda GUID ou nome;
+        // sem isso o asset.delete do script passava e o build quebrava com
+        // ref.missing (a GUI tambem nao contava, entao dizia "nao usado")
+        for (const ref of st.scripts || []) {
+            if (typeof ref !== 'string') continue;
+            const a = project.asset(ref);
             if (a) refs.add(a.guid);
         }
     }
@@ -895,6 +920,7 @@ function stripRefs(obj, guid, resolve) {
                 const f = c.fields || {};
                 if (c.type === 'sprite' && refGuid(f.sprite) === guid) { changed = true; continue; }
                 if (c.type === 'script' && refGuid(f.script) === guid) { changed = true; continue; }
+                if (c.type === 'ui.image' && refGuid(f.asset) === guid) { changed = true; continue; }
                 if (c.type === 'anim') {
                     if (f.meta && refGuid(f.meta) === guid) { delete f.meta; changed = true; }
                     if (f.clips && typeof f.clips === 'object') {

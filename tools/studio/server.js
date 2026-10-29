@@ -208,8 +208,10 @@ function startStudio(opts) {
             return;
         }
         const origin = req.headers.origin;
-        if (origin && String(origin) !== 'http://' + host && String(origin) !== 'null') {
-            // o Play roda no mesmo host: origem diferente nao e nossa
+        if (origin) {
+            // "null" (pagina file:// ou iframe sandboxed) tambem e rejeitado:
+            // o POST de ops aceita qualquer Content-Type (text/plain nao gera
+            // preflight), entao a pagina maliciosa local escreveria no projeto
             const o = (() => { try { return new URL(String(origin)).host; } catch (e) { return ''; } })();
             if (o !== host) {
                 sendText(res, 403, 'origem nao permitida');
@@ -308,6 +310,9 @@ function startStudio(opts) {
                 for (const rel of p.files.keys()) if (/\.(json|meta)$/.test(rel)) p.markDirty(rel);
                 out = { ok: true, changed: p.saveDirty() };
             } else if (body.cmd === 'run') {
+                // run reconstroi o build dir: com o preview vivo ele serviria
+                // arquivos pela metade do swap (build e deploy ja param o play)
+                if (play) stopPlay();
                 const r = runProject(projectDir, { ms: body.ms, out: body.out, frames: body.frames, seed: body.seed });
                 out = Object.assign({}, r, { url: r.ok ? '/api/run.png?t=' + Date.now() : null });
             } else if (body.cmd === 'play') {
@@ -408,11 +413,14 @@ function startStudio(opts) {
             try {
                 if (!res.headersSent) {
                     // erro do cliente (corpo/op malformada) e 400, nao 500
-                    let status = e.http || 500;
-                    if (status === 500 && e.code && /^(ops?|rev|undo|redo|ai|script\.props)\./.test(e.code)) {
-                        // copiloto: chave ausente/lote recusado sao erro do
-                        // pedido; falha do provedor (rede/HTTP) e 502
-                        status = (e.code === 'ai.net' || e.code === 'ai.http') ? 502 : 400;
+                    let status = e.http || 0;
+                    if (!status) {
+                        if (e.code === 'ai.net' || e.code === 'ai.http') status = 502;
+                        // StudioError e sempre fault do pedido/lote (ref.*,
+                        // schema.*, deploy.nobuild, asset.inuse...): sem isso
+                        // "cena inexistente" voltava 500 e o chamador achava
+                        // que o servidor quebrou
+                        else status = (e instanceof F.StudioError) ? 400 : 500;
                     }
                     sendJson(res, status, { ok: false, error: { code: e.code || 'server', message: e.message,
                                                              hint: e.hint, diagnostics: e.diagnostics || null } });

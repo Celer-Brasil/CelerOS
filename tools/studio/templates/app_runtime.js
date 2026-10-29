@@ -199,7 +199,7 @@ function studioAppBoot(data, bases) {
             } else if (c.t === 'data') {
                 ent.data = c.fields || {};
             } else if (c.t === 'ai') {
-                ent.ai.push({ k: c.k, f: c.f || {}, last: 0, busy: false });
+                ent.ai.push({ k: c.k, f: c.f || {}, busy: false, t0: 0 });
             }
         }
         return ent;
@@ -437,6 +437,7 @@ function studioAppBoot(data, bases) {
     function aiOut(s, ent, a, ok, content, detail) {
         var f = a.f;
         a.busy = false;
+        a.t0 = 0;
         if (f.busyKey) setSt(s, f.busyKey, false);
         if (f.outKey && ok) setSt(s, f.outKey, content || '');
         if (f.errorKey) setSt(s, f.errorKey, ok ? '' : (detail || 'falha'));
@@ -558,7 +559,15 @@ function studioAppBoot(data, bases) {
             // o disparo e de uso unico: limpa antes de chamar (o script pode
             // setar de novo no evento ai:done)
             s.st[f.trigger] = false;
-            if (a.busy) continue;
+            // watchdog: callback do firmware que nunca chega nao pode prender
+            // a.busy para sempre (o trigger e single-shot, a tela morria muda)
+            if (a.busy) {
+                if (a.t0 && S.millis && S.millis() - a.t0 > 60000) {
+                    aiOut(s, ent, a, false, '', 'IA timeout (60s sem resposta)');
+                }
+                continue;
+            }
+            a.t0 = S.millis ? S.millis() : 0;
             if (a.k === 'chat') aiChat(s, ent, a);
             else if (a.k === 'speak') aiSpeak(s, ent, a);
             else if (a.k === 'vision') aiVision(s, ent, a);
@@ -732,15 +741,22 @@ function studioAppBoot(data, bases) {
         }
         if (cardOpen) { UI.cardEnd(); cardOpen = false; }
         // passada 2: widgets customizados (dependem de UI.touch nao consumido)
-        var tr = UI.touch ? UI.touch() : null;
-        if (tr) {
-            var used = false;
-            for (i = 0; i < s.ents.length && !used; i++) {
-                var ent2 = s.ents[i];
-                for (j = 0; j < ent2.comps.length && !used; j++) {
-                    c = ent2.comps[j];
-                    if (c.t === 'ui' && (c.k === 'field' || c.k === 'mic.record')) {
-                        used = drawCustom(s, ent2, c, tr, used);
+        var tr = (UI.touch ? UI.touch() : null) ||
+                 { down: false, tap: false, released: false, moved: false, x: -1, y: -1 };
+        var used = false;
+        for (i = 0; i < s.ents.length; i++) {
+            var ent2 = s.ents[i];
+            for (j = 0; j < ent2.comps.length; j++) {
+                c = ent2.comps[j];
+                if (c.t === 'ui' && (c.k === 'field' || c.k === 'mic.record')) {
+                    if (drawCustom(s, ent2, c, tr, false) && !used) {
+                        // o toque foi consumido, mas os widgets DEPOIS deste
+                        // continuam sendo desenhados: o curto-circuito antigo
+                        // apagava todo widget custom seguinte no quadro do
+                        // toque (piscada a cada tap com 2+ campos)
+                        used = true;
+                        tr = { down: false, tap: false, released: false,
+                               moved: false, x: -1, y: -1 };
                     }
                 }
             }

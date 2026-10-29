@@ -507,7 +507,7 @@ function renderProjectInspector(box) {
       { value: 'legacy', label: 'legado (bridge)' },
     ], (v) => {
       if (v === (prj.runtime || 'studio')) return;
-      if (!confirm('Trocar o runtime para "' + v + '"?\\n\\nComponentes do outro modo passam a dar ' +
+      if (!confirm('Trocar o runtime para "' + v + '"?\n\nComponentes do outro modo passam a dar ' +
                    'erro de validacao (ui.* so no app, sprite/anim so no jogo).')) return;
       set({ runtime: v });
     })),
@@ -559,14 +559,14 @@ function renderSceneInspector(box, sc) {
   const st = sc.settings || {};
   box.appendChild(el('div', { class: 'insp-section' }, [
     el('h4', { text: 'CENA' }),
-    field('nome', text(sc.name, (v) => ops([{ op: 'scene.rename', scene: sc.guid, name: v }]))),
+    field('nome', text(sc.name, (v) => ops([{ op: 'scene.rename', scene: sc.guid, name: v }]).catch(() => {}))),
     field('cor de fundo', color(st.bg || '#000000', (v) => sceneSetting(sc, { bg: v }))),
     field('fps', num(st.fps === undefined ? 30 : st.fps, (v) => sceneSetting(sc, { fps: v }), 1)),
     isAppMode() ? null : field('estatica', check(st.static, (v) => sceneSetting(sc, { static: v }))),
     el('div', { class: 'rowbtns' }, [
       el('button', {
         class: 'mini', text: sc.guid === S.snap.describe.project.startScene ? 'cena inicial ✓' : 'definir inicial',
-        onclick: () => ops([{ op: 'scene.start', scene: sc.guid }]),
+        onclick: () => ops([{ op: 'scene.start', scene: sc.guid }]).catch(() => {}),
       }),
       el('button', {
         class: 'mini', text: 'excluir cena',
@@ -576,7 +576,7 @@ function renderSceneInspector(box, sc) {
           ops([{ op: 'scene.delete', scene: sc.guid }]).then((r) => {
             S.sceneGuid = null; S.sel = { kind: 'scene', id: null, comp: null };
             if (r.snapshot) setSnapshot(r.snapshot, {}); else loadSnapshot({});
-          });
+          }).catch(() => {});
         },
       }),
     ]),
@@ -614,7 +614,9 @@ function renderSceneInspector(box, sc) {
           onclick: () => {
             const next = sids.slice();
             next.splice(i, 1);
-            sceneSetting(sc, { scripts: next });
+            // renderInspector: o keepInspector do sceneSetting deixava a
+            // linha removida na lista (e o seletor de add preso no valor)
+            sceneSetting(sc, { scripts: next }).then(renderInspector).catch(() => {});
           },
         }),
       ]));
@@ -622,7 +624,7 @@ function renderSceneInspector(box, sc) {
     const scriptAssets = (S.snap.describe.assets || []).filter((a) => a.kind === 'script');
     secApp.appendChild(select('', [{ value: '', label: '+ script da tela...' }].concat(
       scriptAssets.map((a) => ({ value: a.guid, label: a.name }))),
-      (v) => { if (v) sceneSetting(sc, { scripts: sids.concat([v]) }); }));
+      (v) => { if (v) sceneSetting(sc, { scripts: sids.concat([v]) }).then(renderInspector).catch(() => {}); }));
     box.appendChild(secApp);
   }
 
@@ -669,7 +671,7 @@ function renderSceneInspector(box, sc) {
         if (c < 1 || r < 1) { log('cols/rows invalidos', 'err'); return; }
         const data = new Array(c * r).fill(0);
         const solids = new Array(c * r).fill(false);
-        ops([{ op: 'tilemap.add', scene: sc.guid, tileset: tsSel.value, cols: c, rows: r, cell: Number(cell.value) || 16, data, solids }]);
+        ops([{ op: 'tilemap.add', scene: sc.guid, tileset: tsSel.value, cols: c, rows: r, cell: Number(cell.value) || 16, data, solids }]).catch(() => {});
       },
     }));
   } else {
@@ -689,16 +691,17 @@ function renderSceneInspector(box, sc) {
 }
 
 function projectSet(patch) {
-  ops([{ op: 'project.set', ...patch }], { keepInspector: true });
+  ops([{ op: 'project.set', ...patch }], { keepInspector: true }).catch(() => {});
 }
 
 function sceneSetting(sc, patch, replace) {
   const op = { op: 'scene.set', scene: sc.guid, settings: patch };
   if (replace) op.replace = replace;
-  ops([op], { keepInspector: true });
+  return ops([op], { keepInspector: true });
 }
 function cameraSetting(sc, patch) {
-  ops([{ op: 'scene.set', scene: sc.guid, settings: { camera: patch } }], { keepInspector: true });
+  ops([{ op: 'scene.set', scene: sc.guid, settings: { camera: patch } }],
+      { keepInspector: true }).catch(() => {});
 }
 
 function spriteOptions() {
@@ -806,7 +809,7 @@ function renderEntityInspector(box, sc, e) {
         class: 'mini', text: 'x', title: 'remover componente',
         onclick: () => {
           if (!confirm('Remover componente ' + c.type + '?')) return;
-          ops([{ op: 'component.remove', scene: sc.guid, entity: e.fid, component: c.id }]);
+          ops([{ op: 'component.remove', scene: sc.guid, entity: e.fid, component: c.id }]).catch(() => {});
         },
       }),
     ]);
@@ -854,7 +857,7 @@ function renderEntityInspector(box, sc, e) {
           patch[name] = v;
           if (first && (!cur || !anims[cur])) patch.current = first;
           ops([{ op: 'component.set', scene: sc.guid, entity: e.fid, component: c.id,
-                 fields: patch }], { keepInspector: true });
+                 fields: patch }], { keepInspector: true }).catch(() => {});
           return;
         }
         compSet(sc, e, c, name, v);
@@ -882,7 +885,7 @@ function renderEntityInspector(box, sc, e) {
       if (!a) { log('crie ou importe um script antes', 'err'); addSel.value = ''; return; }
       fields.script = a.guid;
     }
-    ops([{ op: 'component.add', scene: sc.guid, entity: e.fid, type: type, fields: fields }]);
+    ops([{ op: 'component.add', scene: sc.guid, entity: e.fid, type: type, fields: fields }]).catch(() => {});
   });
   box.appendChild(el('div', { class: 'insp-section' }, [
     el('h4', { text: 'COMPONENTES' }),
@@ -890,7 +893,7 @@ function renderEntityInspector(box, sc, e) {
     el('div', { class: 'rowbtns' }, [
       el('button', {
         class: 'mini', text: 'duplicar',
-        onclick: () => ops([{ op: 'entity.duplicate', scene: sc.guid, entity: e.fid }]),
+        onclick: () => ops([{ op: 'entity.duplicate', scene: sc.guid, entity: e.fid }]).catch(() => {}),
       }),
       el('button', {
         class: 'mini', text: 'criar prefab',
@@ -909,7 +912,7 @@ function renderEntityInspector(box, sc, e) {
           if (!confirm('Excluir "' + e.name + '"?')) return;
           ops([{ op: 'entity.delete', scene: sc.guid, entity: e.fid }]).then(() => {
             S.sel = { kind: 'scene', id: null, comp: null }; renderHierarchy(); renderInspector(); draw();
-          });
+          }).catch(() => {});
         },
       }),
     ]),
@@ -1043,7 +1046,8 @@ function tilePalette(a, tm) {
 
 function renderTilemapInspector(box, sc, tm) {
   const tilesets = (S.snap.describe.assets || []).filter((a) => a.kind === 'tileset' || a.kind === 'sprite-sheet');
-  const set = (patch) => ops([{ op: 'tilemap.set', scene: sc.guid, tilemap: tm.id, ...patch }], { keepInspector: true });
+  const set = (patch) => ops([{ op: 'tilemap.set', scene: sc.guid, tilemap: tm.id, ...patch }],
+                             { keepInspector: true }).catch(() => {});
   box.appendChild(el('div', { class: 'insp-section' }, [
     el('h4', { text: 'TILEMAP ' + tm.id }),
     field('tileset', select(tm.tileset, tilesets.map((a) => ({ value: a.guid, label: a.name })), (v) => set({ tileset: v }))),
@@ -1073,7 +1077,7 @@ function renderTilemapInspector(box, sc, tm) {
           S.tile.active = false;
           ops([{ op: 'tilemap.remove', scene: sc.guid, tilemap: tm.id }]).then(() => {
             S.sel = { kind: 'scene', id: null, comp: null }; renderHierarchy(); renderInspector(); draw();
-          });
+          }).catch(() => {});
         },
       }),
     ]),
@@ -1095,6 +1099,7 @@ function assetUsage(guid) {
       const f = c.fields || {};
       if (c.type === 'sprite' && refGuid(f.sprite) === guid) hit = true;
       if (c.type === 'script' && refGuid(f.script) === guid) hit = true;
+      if (c.type === 'ui.image' && refGuid(f.asset) === guid) hit = true;
       if (c.type === 'anim') {
         if (f.meta && refGuid(f.meta) === guid) hit = true;
         const clips = f.clips || {};
@@ -1108,7 +1113,12 @@ function assetUsage(guid) {
   for (const sc of Object.values(S.snap.scenes || {})) {
     let hit = false;
     for (const tm of sc.tilemaps || []) if (tm.tileset === guid) hit = true;
-    for (const ref of (sc.settings && sc.settings.assets) || []) if (refGuid(ref) === guid) hit = true;
+    const st = (sc.settings || {});
+    for (const ref of st.assets || []) if (refGuid(ref) === guid) hit = true;
+    // musica e scripts da tela (runtime app) tambem seguram o asset: sem
+    // isso o rodape dizia "nao usado no build" e o delete recusava depois
+    if (refGuid(st.music) === guid) hit = true;
+    for (const ref of st.scripts || []) if (refGuid(ref) === guid) hit = true;
     for (const e of sc.entities || []) if (useEntity(e)) hit = true;
     if (hit) scenes.push(sc.name);
   }
@@ -1215,7 +1225,7 @@ function renderAssetInspector(box, a) {
   const usage = assetUsage(a.guid);
   box.appendChild(el('div', { class: 'insp-section' }, [
     el('h4', { text: (KIND_LABEL[a.kind] || a.kind).toUpperCase() }),
-    field('nome', text(a.name, (v) => ops([{ op: 'asset.rename', asset: a.guid, name: v }]))),
+    field('nome', text(a.name, (v) => ops([{ op: 'asset.rename', asset: a.guid, name: v }]).catch(() => {}))),
     field('guid', el('input', { type: 'text', value: a.guid, disabled: 'disabled' })),
     field('arquivo', el('input', { type: 'text', value: a.path, disabled: 'disabled' })),
     field('importer', el('input', { type: 'text', value: a.importer, disabled: 'disabled' })),
@@ -1228,7 +1238,7 @@ function renderAssetInspector(box, a) {
 
   if (['sprite', 'sprite-sheet', 'tileset'].includes(a.kind)) {
     const st = a.settings || {};
-    const set = (patch) => ops([{ op: 'asset.set', asset: a.guid, settings: patch }], { keepInspector: true });
+    const set = (patch) => ops([{ op: 'asset.set', asset: a.guid, settings: patch }], { keepInspector: true }).catch(() => {});
     box.appendChild(el('div', { class: 'insp-section' }, [
       el('h4', { text: 'FATIAMENTO' }),
       field('modo', select(st.mode || 'single', [
@@ -1274,7 +1284,7 @@ function renderAssetInspector(box, a) {
     if (a.kind === 'tileset') box.appendChild(tilesetSolidsSection(a, set));
   } else if (a.kind === 'audio') {
     const st = a.settings || {};
-    const set = (patch) => ops([{ op: 'asset.set', asset: a.guid, settings: patch }], { keepInspector: true });
+    const set = (patch) => ops([{ op: 'asset.set', asset: a.guid, settings: patch }], { keepInspector: true }).catch(() => {});
     box.appendChild(el('div', { class: 'insp-section' }, [
       el('h4', { text: 'AUDIO' }),
       field('loop', check(st.loop, (v) => set({ loop: v }))),
@@ -1304,7 +1314,7 @@ function renderAssetInspector(box, a) {
                    x: Math.round(m.w / 2), y: Math.round(m.h / 2), z: 0 }]).then((r) => {
               const e = r.results && r.results[0] && r.results[0].entity;
               if (e) selectEntity(e.fid);
-            });
+            }).catch(() => {});
           },
         }),
       ]),
@@ -1640,7 +1650,11 @@ function entityBounds(e) {
       return { x: (t.x || 0) - r, y: (t.y || 0) - r, w: r * 2, h: r * 2 };
     }
     if (p.shape.shape === 'line') {
-      return { x: (t.x || 0), y: (t.y || 0), w: p.shape.x2 || 0, h: p.shape.y2 || 0 };
+      // x2/y2 negativos: sem normalizar, w/h negativos invertiam a caixa de
+      // selecao e o hitTest nunca pegava a entidade pelo lado certo
+      const x = (t.x || 0) + Math.min(0, p.shape.x2 || 0);
+      const y = (t.y || 0) + Math.min(0, p.shape.y2 || 0);
+      return { x: x, y: y, w: Math.abs(p.shape.x2 || 0), h: Math.abs(p.shape.y2 || 0) };
     }
     return { x: (t.x || 0) - (p.shape.w || 0) / 2, y: (t.y || 0) - (p.shape.h || 0) / 2,
              w: p.shape.w || 0, h: p.shape.h || 0 };
@@ -2280,7 +2294,13 @@ function hitTest(w) {
 
 // ---------------------------------------------------------------- ops ------
 
-async function ops(list, opts) {
+// fila de ops: dita rapido (setas, gizmo, color picker com debounce) dispara
+// varios POSTs em paralelo e a resposta LENTA aplicava um snapshot VELHO por
+// cima do novo (rev do GUI menor que a do disco). Serializando, cada lote
+// parte do estado do anterior, como no servidor.
+let opQueue = Promise.resolve();
+
+async function doOps(list, opts) {
   opts = opts || {};
   try {
     const body = { ops: list };
@@ -2300,12 +2320,21 @@ async function ops(list, opts) {
   }
 }
 
+function ops(list, opts) {
+  const p = opQueue.then(() => doOps(list, opts));
+  opQueue = p.catch(() => {});
+  return p;
+}
+
 function entitySet(sc, e, patch) {
-  ops([{ op: 'entity.set', scene: sc.guid, entity: e.fid, ...patch }], { keepInspector: true });
+  // fire-and-forget: o logError do ops() ja mostrou a falha; sem o catch o
+  // rejection ficava solto e ruidoso no console a cada erro de validacao
+  ops([{ op: 'entity.set', scene: sc.guid, entity: e.fid, ...patch }],
+      { keepInspector: true }).catch(() => {});
 }
 function compSet(sc, e, c, name, value) {
   ops([{ op: 'component.set', scene: sc.guid, entity: e.fid, component: c.id, field: name, value }],
-      { keepInspector: true });
+      { keepInspector: true }).catch(() => {});
 }
 
 // --------------------------------------------------------------- build -----
@@ -2725,6 +2754,7 @@ async function aiSend(fixMode) {
       (r.steps > 1 ? '   [' + r.steps + ' tentativas]' : '') });
     AI.pending = r.ops && r.ops.length ? { ops: r.ops, result: r.result } : null;
     AI.image = null;             // anexo consumido: nao reenviar no proximo prompt
+    $('#aiPrompt').value = '';   // enviado: campo limpo (2o clique nao reenvia)
     if (r.snapshot) setSnapshot(r.snapshot, {});
     if (r.usage) log('ia: ' + (r.usage.total_tokens || '?') + ' tokens', 'dim');
   } catch (e) {
@@ -2759,7 +2789,19 @@ async function aiApply() {
 // aceita input_audio wav; MediaRecorder do browser so da webm/ogg)
 function recordWav(ms) {
   return new Promise((resolve, reject) => {
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    // getUserMedia pode ficar pendido para sempre (permissao ignorada,
+    // dispositivo preso): sem teto, AI.busy ficava true e a GUI travada
+    let settled = false;
+    let stream = null;
+    const guard = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (stream) { try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {} }
+      reject(new Error('microfone sem resposta do navegador (60s); permita o acesso e tente de novo'));
+    }, 60000);
+    navigator.mediaDevices.getUserMedia({ audio: true }).then((st) => {
+      if (settled) { try { st.getTracks().forEach((t) => t.stop()); } catch (e) {} return; }
+      stream = st;
       const AC = window.AudioContext || window.webkitAudioContext;
       const ctx = new AC();
       const src = ctx.createMediaStreamSource(stream);
@@ -2776,6 +2818,9 @@ function recordWav(ms) {
       src.connect(node);
       node.connect(ctx.destination);
       setTimeout(() => {
+        clearTimeout(guard);
+        if (settled) return;
+        settled = true;
         node.disconnect(); src.disconnect();
         stream.getTracks().forEach((t) => t.stop());
         const rate = ctx.sampleRate;
@@ -2804,7 +2849,10 @@ function recordWav(ms) {
         for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
         resolve(btoa(bin));
       }, ms);
-    }).catch(reject);
+    }).catch((e) => {
+      clearTimeout(guard);
+      if (!settled) { settled = true; reject(e); }
+    });
   });
 }
 
@@ -2863,9 +2911,11 @@ function wireEvents() {
   $('#btnNewScene').onclick = async () => {
     const name = prompt('nome da nova cena:', 'Nova cena');
     if (!name) return;
-    const r = await ops([{ op: 'scene.create', name }]);
-    const sc = ((r.snapshot && r.snapshot.describe.scenes) || []).find((x) => x.name === name);
-    if (sc) { S.sceneGuid = sc.guid; S.sel = { kind: 'scene', id: null, comp: null }; setSnapshot(r.snapshot, {}); }
+    try {
+      const r = await ops([{ op: 'scene.create', name }]);
+      const sc = ((r.snapshot && r.snapshot.describe.scenes) || []).find((x) => x.name === name);
+      if (sc) { S.sceneGuid = sc.guid; S.sel = { kind: 'scene', id: null, comp: null }; setSnapshot(r.snapshot, {}); }
+    } catch (e) { /* logError do ops() ja mostrou */ }
   };
   $('#projName').onclick = selectProject;
   $('#hierSearch').addEventListener('input', (ev) => { S.hierFilter = ev.target.value; renderHierarchy(); });
@@ -2891,10 +2941,12 @@ function wireEvents() {
     if (isAppMode()) {
       for (const e of sc.entities || []) z = Math.max(z, (e.z || 0) + 1);
     }
-    const r = await ops([{ op: 'entity.create', scene: sc.guid, name: 'Entidade',
-                           x: Math.round(m.w / 2), y: Math.round(m.h / 2), z: z }]);
-    const e = r.results && r.results[0] && r.results[0].entity;
-    if (e) selectEntity(e.fid);
+    try {
+      const r = await ops([{ op: 'entity.create', scene: sc.guid, name: 'Entidade',
+                             x: Math.round(m.w / 2), y: Math.round(m.h / 2), z: z }]);
+      const e = r.results && r.results[0] && r.results[0].entity;
+      if (e) selectEntity(e.fid);
+    } catch (e) { /* logError do ops() ja mostrou */ }
   };
   $('#fileInput').addEventListener('change', (ev) => {
     const files = Array.from(ev.target.files || []);
@@ -2944,7 +2996,7 @@ function wireEvents() {
       if (e) ops([{ op: 'entity.duplicate', scene: sc.guid, entity: e.fid }]).then((r) => {
         const dup = r.results && r.results[0] && r.results[0].entity;
         if (dup) selectEntity(dup.fid);
-      });
+      }).catch(() => {});
     }
     if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
       const key = ev.key.toLowerCase();
@@ -2982,11 +3034,15 @@ function wireEvents() {
         ops([{ op: 'entity.delete', scene: sc.guid, entity: e.fid }]).then(() => {
           S.sel = { kind: 'scene', id: null, comp: null };
           renderHierarchy(); renderInspector(); draw();
-        });
+        }).catch(() => {});
       }
     }
     if (ev.key === 'Escape') {
       $('#modal').hidden = true;
+      // digitando num campo (inspetor/IA/console): fecha o modal, mas nao
+      // descarta a selecao — o usuario so quer desfazer o foco, e perder a
+      // entidade selecionada no meio de uma edicao custa cliques
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       S.sel = { kind: 'scene', id: null, comp: null };
       renderHierarchy(); renderInspector(); draw();
     }
@@ -3095,12 +3151,20 @@ function wireEvents() {
   }, { passive: false });
 
   cv.addEventListener('dragover', (ev) => {
-    if (S.dragAsset || (ev.dataTransfer && ev.dataTransfer.types.indexOf('text/plain') >= 0)) {
+    const types = Array.from((ev.dataTransfer && ev.dataTransfer.types) || []);
+    // Files tambem: sem preventDefault, soltar um PNG no viewport deixava o
+    // navegador NAVEGAR para o arquivo e a GUI inteira era descarregada
+    if (S.dragAsset || types.indexOf('text/plain') >= 0 || types.indexOf('Files') >= 0) {
       ev.preventDefault();
       ev.dataTransfer.dropEffect = 'copy';
     }
   });
-  cv.addEventListener('drop', (ev) => { if (S.tab === 'scene') dropAssetAt(ev); });
+  cv.addEventListener('drop', (ev) => {
+    if (S.tab !== 'scene') return;
+    const files = Array.from((ev.dataTransfer && ev.dataTransfer.files) || []);
+    if (files.length) { ev.preventDefault(); importFiles(files); return; }
+    dropAssetAt(ev);
+  });
 
   new ResizeObserver(() => draw()).observe($('#sceneWrap'));
 

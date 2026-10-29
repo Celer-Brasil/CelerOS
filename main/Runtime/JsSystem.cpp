@@ -210,11 +210,23 @@ void JSBindings::appWait(duk_context *ctx, int ms) {
     // grande (Detona, 4848) cada varredura levava ~40 ms e virava um quadro
     // perdido por segundo; o GC voluntario do Duktape (DUK_USE_VOLUNTARY_GC)
     // segue rodando pelas alocacoes e o piso de heap continua forcando
+    // Sem PSRAM, 1x a cada 5 s: o piso de heap abaixo cobre a pressao real
+    // e a varredura de 1 s custava um soluço por segundo na CYD.
+    // O maior bloco livre e um tlsf_walk sobre o heap inteiro com o lock
+    // tomado (O(blocos)); antes rodava a CADA delay/UI.end. Agora a sonda
+    // roda no maximo a cada 100 ms e o resultado fica cacheado.
     static uint32_t lastGcMs = 0;
-    static const uint32_t kGcEveryMs = Board::profile().hasPsram ? 10000 : 1000;
-    if (t0 - lastGcMs > kGcEveryMs || ESP.getMaxAllocHeap() < 24 * 1024) {
+    static uint32_t lastProbeMs = 0;
+    static bool heapTight = false;
+    static const uint32_t kGcEveryMs = Board::profile().hasPsram ? 10000 : 5000;
+    if (t0 - lastProbeMs >= 100) {
+        lastProbeMs = t0;
+        heapTight = ESP.getMaxAllocHeap() < 24 * 1024;
+    }
+    if (t0 - lastGcMs > kGcEveryMs || heapTight) {
         duk_gc(ctx, 0);
         lastGcMs = t0;
+        heapTight = false;  // re-sonda na proxima janela, nao a cada quadro
     }
     if (ms > 30000) ms = 30000;  // teto de 30 s (antes delay(60000) nao esperava NADA)
     if (ms > 0) {

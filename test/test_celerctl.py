@@ -428,6 +428,13 @@ class FakeDevice:
         if getattr(self, "event_on_read", False):
             # o gateway empurra um evento do no virtual no meio do pull
             self.push_event(b"\x01\xbb\x02\x01W\x00ping")
+        err = getattr(self, "read_error", None)
+        if err:
+            # device recusa a leitura (arquivo sumiu, FS ocupado): status 1
+            # com o motivo — o host TEM que mostrar o motivo, nao "frame
+            # inesperado durante pull"
+            self.reply(KL["READ"], err.encode() if isinstance(err, str) else err, 1)
+            return
         if self.read_held:
             # resposta atrasada finalmente sai (chegou ANTES da resposta nova:
             # o device responde na ordem dos pedidos)
@@ -488,6 +495,9 @@ class FakeDevice:
         z = p.index(b"\0")
         path = p[:z].decode()
         recursive = p[z + 1:] == b"\x01"
+        if path in getattr(self, "fail_delete", ()):
+            self.reply(KL["DELETE"], b"ocupado", 1)
+            return
         if recursive:
             for k in [k for k in self.files if k.startswith(path + "/")]:
                 del self.files[k]
@@ -916,6 +926,171 @@ class TestCanalHostil(unittest.TestCase):
         link.info()
         self.assertEqual(link.ser.timeout, 3.0)
 
+    def test_pull_com_erro_do_device_mostra_o_motivo(self):
+        # READ respondido com status 1 (arquivo sumiu, FS ocupado): o motivo
+        # do payload e o diagnostico — nao "frame inesperado durante pull"
+        # (que mandava cacar ruido de canal quando o problema era do FS)
+        link, dev = make_link()
+        link.hello()
+        dev.files["/local/sumiu.bin"] = b"x" * 100
+        dev.read_error = "arquivo sumiu no meio"
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            with self.assertRaises(C.CelerError) as ctx:
+                link.read_file("/local/sumiu.bin", path, progress=False)
+            self.assertIn("arquivo sumiu no meio", str(ctx.exception))
+        finally:
+            os.unlink(path)
+
+    def test_resposta_de_outro_comando_vira_erro_claro(self):
+        # resposta com cmd DIFERENTE do pedido (frame tardio apos uma
+        # ressincronizacao): xfer DEVOLVIA o frame e o chamador parseava
+        # payload trocado (info() ia fazer json.loads de "proto 2")
+        link, dev = make_link()
+        link.hello()
+        dev.op_02 = lambda p: dev.reply(KL["HELLO"], b"proto 2")
+        with self.assertRaises(C.CelerError) as ctx:
+            link.info()
+        self.assertIn("inesperada", str(ctx.exception))
+        self.assertIn("0x%02x" % KL["INFO"], str(ctx.exception))
+
+    def test_ctrl_c_no_push_manda_write_abort(self):
+        # Ctrl-C no meio do push: o WRITE_ABORT (o device remove o parcial)
+        # tinha que sair tambem — sem ele o arquivo ficava pela metade no FS
+        link, dev = make_link()
+        link.hello()
+        vistos = []
+        orig = dev.on_bytes
+
+        def espionando(data):
+            if len(data) > 1 and data[1] == KL["WRITE_ABORT"]:
+                vistos.append("abort")
+            orig(data)
+        dev.on_bytes = espionando
+
+        def kaboom(*a, **k):
+            raise KeyboardInterrupt()
+        link._pump_chunks = kaboom
+        path = tmpfile(b"x" * 100)
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                link.write_file(path, "/local/x.bin", progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(vistos, ["abort"])
+
+    def test_read_chunk_clampa_o_pedido_ao_frame_anunciado(self):
+        # cat/_app_meta/_read_remote_json pediam CHUNK fixo (4096): em device
+        # que anuncia chunk menor a resposta nao caberia no frame anunciado
+        link, dev = make_link(chunk=512)
+        link.hello()
+        self.assertEqual(link.max_chunk, 512)
+        dev.files["/local/pequeno.bin"] = b"d" * 900
+        pedidos = []
+        orig = dev.on_bytes
+
+        def espionando(data):
+            if data[1] == KL["READ"]:
+                corpo = data[8:] if dev.proto == 2 else data[4:]
+                z = corpo.index(b"\0")
+                pedidos.append(struct.unpack("<I", corpo[z + 5:z + 9])[0])
+            orig(data)
+        dev.on_bytes = espionando
+        data = link.read_chunk("/local/pequeno.bin", 0, 4096)
+        self.assertEqual(len(data), 507)  # 512 - 1 (status) - 4 (offset v2)
+        self.assertEqual(pedidos, [507])
+
+    def test_touch_coordenada_negativa_vira_erro_claro(self):
+        # x/y/delay vao como u16 no fio: -5 era struct.error com traceback
+        link, dev = make_link()
+        link.hello()
+        with self.assertRaises(C.CelerError):
+            link.touch([(True, -5, 100, 0)])
+
+
+class TestOpenLink(unittest.TestCase):
+    """open_link: o fallback do try_open e para o baud ALTO (device ficou
+    em 921600 apos um `dev` morto; o restore so vem no idle de 8s). Com -b
+    no default, repetir o 115200 era reabrir a mesma porta que falhou."""
+
+    def _fake_hostlink(self, bauds):
+        chamados = []
+
+        class FakeLink:
+            def __init__(self, port, timeout=3.0, baud=C.DEFAULT_BAUD,
+                         token=None, prompt=True):
+                self.port_arg = port
+                self.baud = baud
+                self.ser = type("S", (), {"baudrate": baud, "port": port,
+                                          "timeout": timeout})()
+                chamados.append(baud)
+
+            def hello(self):
+                # 1a tentativa (sempre 115200) nao responde: e o caso que o
+                # fallback existe para cobrir
+                if len(chamados) == 1:
+                    raise C.CelerError("timeout lendo do dispositivo")
+
+            def close(self):
+                pass
+
+        return FakeLink, chamados
+
+    def _open(self, baud):
+        FakeLink, chamados = self._fake_hostlink(bauds := [])
+        orig = C.HostLink
+        C.HostLink = FakeLink
+        try:
+            args = C.argparse.Namespace(port="/dev/ttyFAKE", token=None,
+                                        baud=baud, exec_timeout=None,
+                                        low_lines=False)
+            link = C.open_link(args)
+        finally:
+            C.HostLink = orig
+        return link, chamados
+
+    def test_fallback_vai_para_o_baud_alto_com_default(self):
+        link, chamados = self._open(C.DEFAULT_BAUD)
+        self.assertEqual(chamados, [C.DEFAULT_BAUD, 921600])
+        self.assertEqual(link.baud, 921600)
+
+    def test_fallback_respeita_o_baud_explicito(self):
+        link, chamados = self._open(9600)
+        self.assertEqual(chamados, [C.DEFAULT_BAUD, 9600])
+        self.assertEqual(link.baud, 9600)
+
+    def test_open_link_quieto_levanta_celererror(self):
+        # verify_ota_boot repete a sonda por ~60 s durante o reboot: o die()
+        # do open_link encerrava a conferencia na 1a tentativa sem resposta
+        # (SystemExit nao e CelerError, o laco de retry nao pegava)
+        class Morto:
+            def __init__(self, port, timeout=3.0, baud=C.DEFAULT_BAUD,
+                         token=None, prompt=True):
+                self.baud = baud
+                self.ser = type("S", (), {"baudrate": baud, "port": port,
+                                          "timeout": timeout})()
+
+            def hello(self):
+                raise C.CelerError("timeout lendo do dispositivo")
+
+            def close(self):
+                pass
+        orig = C.HostLink
+        C.HostLink = Morto
+        try:
+            args = C.argparse.Namespace(port="/dev/ttyFAKE", token=None,
+                                        baud=C.DEFAULT_BAUD, exec_timeout=None,
+                                        low_lines=False)
+            with self.assertRaises(C.CelerError):
+                C.open_link(args, quiet=True)
+            err = io.StringIO()
+            with redirect_stderr(err), self.assertRaises(SystemExit):
+                C.open_link(args)
+            self.assertIn("nao responde", err.getvalue())
+        finally:
+            C.HostLink = orig
+
 
 class TestOta(unittest.TestCase):
     """Quedas da OTA vistas na bancada (2026-10-07/08) contra o FakeDevice."""
@@ -960,6 +1135,25 @@ class TestOta(unittest.TestCase):
             dev.end_idempotent = False
         with self.assertRaises(C.OtaEndUnknown):
             self._ota(setup)
+
+    def test_ctrl_c_no_meio_da_ota_manda_abort(self):
+        # Ctrl-C depois do BEGIN: o OTA_ABORT tinha que sair do mesmo jeito —
+        # sem ele o device ficava "OTA em curso" e recusava o canal ate um
+        # begin futuro
+        link, dev = make_link()
+        link.hello()
+        link.ota_end_timeout = 0.3
+
+        def kaboom(*a, **k):
+            raise KeyboardInterrupt()
+        link._pump_chunks = kaboom
+        path = tmpfile(b"y" * 1000)
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                link.ota_write(path, progress=False)
+        finally:
+            os.unlink(path)
+        self.assertEqual(dev.ota_ops, ["BEGIN", "ABORT"])
 
     def test_stable_port_resolve_by_id(self):
         self.assertEqual(C.stable_port("192.168.0.9"), "192.168.0.9")
@@ -1751,6 +1945,31 @@ class TestAppsDeps(unittest.TestCase):
         self.assertIn("--yes", err.getvalue())
         # nada foi apagado
         self.assertIn("/local/modules/celeros.engine/1.2.2/celeros.engine.js", dev.files)
+
+    def test_apps_deps_gc_falha_numa_nao_aborta_o_resto(self):
+        # best-effort por orfa (mesmo contrato da poda do install): o device
+        # recusar UM delete nao pode matar o gc na metade — as seguintes
+        # ficam sem tentativa e o comando morre sem resumo
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        js = b"var M = {};"
+        dev.dirs["/local/modules"] = ["celeros.a", "celeros.b"]
+        dev.dirs["/local/modules/celeros.a"] = ["1.0.0"]
+        dev.dirs["/local/modules/celeros.b"] = ["1.0.0"]
+        dev.dirs["/local/apps"] = []
+        dev.files["/local/modules/celeros.a/1.0.0/celeros.a.js"] = js
+        dev.files["/local/modules/celeros.b/1.0.0/celeros.b.js"] = js
+        dev.fail_delete = {"/local/modules/celeros.a/1.0.0"}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            C._apps_deps(link, SimpleNamespace(gc=True, yes=True))
+        texto = out.getvalue()
+        self.assertIn("removida: celeros.b 1.0.0", texto)  # a falha nao travou o loop
+        self.assertIn("falharam: celeros.a 1.0.0", texto)
+        self.assertIn("/local/modules/celeros.a/1.0.0/celeros.a.js", dev.files)
+        self.assertNotIn("/local/modules/celeros.b/1.0.0/celeros.b.js", dev.files)
 
 
 class TestV2Phys(unittest.TestCase):
@@ -2580,6 +2799,63 @@ class TestAppsHint(unittest.TestCase):
         self.assertIn("celerctl apps run WebPass", out)
         self.assertIn("installzip /local/celeros_install.zip WebPass", dev.execs)
 
+    def test_installzip_deps_vao_com_o_token_do_device(self):
+        # dep privada via installzip: o indice vinha ANONIMO e a dep "nao
+        # existia" — o token do /local/hub_token.txt (o mesmo da loja) segue
+        # na chamada, como no apps install
+        import celerhub
+        from types import SimpleNamespace
+        import contextlib
+        link, dev = make_link()
+        link.hello()
+        dev.files["/local/hub_token.txt"] = b"tokdev\n"
+        urls = []
+        orig_http, orig_push = celerhub.http, C._push_dep_module
+        celerhub.http = lambda m, u, *a, **k: (urls.append(u), (200, {"deps": {
+            "celeros.game": {"1.0.0": {"url": "u", "md5": "", "size": 3}}}}))[1]
+        C._push_dep_module = lambda *a, **k: None
+        saved_env = os.environ.pop("CELER_HUB_TOKEN", None)
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                zp = Path(td) / "app.zip"
+                with zipfile.ZipFile(zp, "w") as z:
+                    z.writestr("app.json", json.dumps(
+                        {"name": "Zip", "deps": {"celeros.game": "^1.0.0"}}))
+                    z.writestr("main.js", "var x = 1;\n")
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    C._apps_installzip(link, SimpleNamespace(zipfile=str(zp),
+                                                             name=None))
+        finally:
+            celerhub.http = orig_http
+            C._push_dep_module = orig_push
+            if saved_env is not None:
+                os.environ["CELER_HUB_TOKEN"] = saved_env
+        self.assertTrue(any("token=tokdev" in u for u in urls), urls)
+
+    def test_pull_destino_arquivo_vira_erro_claro(self):
+        # destino existente que e ARQUIVO: any(iterdir()) estourava
+        # NotADirectoryError com traceback
+        link, dev = make_link()
+        link.hello()
+        self._populate(dev)
+        alvo = Path(tempfile.mkdtemp()) / "ocupado"
+        alvo.write_text("x", encoding="utf-8")
+        out, err, code = run_cli(["apps", "pull", "webpass", str(alvo)], link)
+        self.assertEqual(code, 1)
+        self.assertIn("nao e pasta", err)
+
+    def test_pull_do_device_para_diretorio_vira_erro_claro(self):
+        # `pull /local/x /pasta/` abria "wb" na pasta e morria em
+        # IsADirectoryError com cara de problema de conexao
+        link, dev = make_link()
+        link.hello()
+        dev.files["/local/a.bin"] = b"x"
+        pasta = tempfile.mkdtemp()
+        out, err, code = run_cli(["pull", "/local/a.bin", pasta], link)
+        self.assertEqual(code, 1)
+        self.assertIn("e um diretorio", err)
+
 
 class TestTokenVelho(unittest.TestCase):
     """Token do bridge velho (reflash/bridge reset): o cache e limpo, a
@@ -2734,6 +3010,7 @@ class TestDepsCompartilhadas(unittest.TestCase):
         out, err, code = run_cli(["apps", "deps", "--upgrade"], link)
         self.assertEqual(code, 0)
         self.assertIn("! Quebrado", out)
+        self.assertIn("sem resolucao no hub", out)  # e nao so o exit code ("1")
         lock = json.loads(dev.files["/local/apps/Bom/deps.json"].decode())
         self.assertEqual(lock, {"celeros.game": "1.3.0"})
 

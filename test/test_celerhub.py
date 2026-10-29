@@ -125,6 +125,25 @@ class TestPublishDepPreflight(unittest.TestCase):
             self.assertIn("sintaxe invalida", msg)
 
 
+class TestStripJsVazio(unittest.TestCase):
+    """O guard de saida enxuta VAZIA: a comparacao era `bytes > 0` — TypeError
+    exatamente no caso que o check existe para pegar (jsstrip comeu tudo),
+    com traceback em vez do die com o motivo."""
+
+    def test_saida_vazia_de_entrada_nao_vazia_morre_claro(self):
+        real = H.subprocess.run
+
+        def vazio(cmd, **k):
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+        H.subprocess.run = vazio
+        try:
+            msg = die_saida(lambda: H.strip_js(Path("qualquer.js"),
+                                               code=b"var a = 1;\n"))
+        finally:
+            H.subprocess.run = real
+        self.assertIn("jsstrip falhou", msg)
+
+
 class TestTetoPosStrip(unittest.TestCase):
     """A soma do teto conta o ENXUTO: main.js gordo de comentarios que
     enxuga abaixo do teto passa (antes morria com mensagem errada antes do
@@ -355,6 +374,101 @@ class TestPublishSnapshot(unittest.TestCase):
         self.assertIn(b"var A=1;", main)
 
 
+class TestPublishLote(unittest.TestCase):
+    """Lote multi-pasta e best-effort: UMA pasta ruim (validate, guarda de
+    arvore suja ou 409 do upload — o http() morre com SystemExit) NAO encerra
+    as demais, o resumo sai no fim e o exit code reflete a falha."""
+
+    def _pasta(self, td, nome, pacote, completa=True):
+        d = Path(td) / nome
+        d.mkdir()
+        if completa:
+            (d / "app.json").write_text(
+                json.dumps({"name": nome, "packageName": pacote,
+                            "version": "1.0.0", "api": 30, "author": "t",
+                            "description": "d"}), encoding="utf-8")
+            (d / "main.js").write_text("var A = 1;\n", encoding="utf-8")
+        return d
+
+    def test_lote_segue_apos_falha_e_exit_code_1(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            quebrada = self._pasta(td, "Quebrada", "celeros.quebrada",
+                                   completa=False)  # sem main.js: die no validate
+            boa = self._pasta(td, "Boa", "celeros.boa")
+            recusada = self._pasta(td, "Recusada", "celeros.recusada")
+            posts = []
+
+            def fake_http(method, url, token=None, data=None, headers=None,
+                          timeout=30):
+                if method == "GET":
+                    return 200, {"apps": {}, "deps": {}}
+                posts.append(data)
+                import io as _io
+                import zipfile as _zf
+                start = data.find(b"PK\x03\x04")
+                eocd = data.rfind(b"PK\x05\x06")
+                if start >= 0 and eocd > start:
+                    with _zf.ZipFile(_io.BytesIO(data[start:eocd + 22])) as z:
+                        doc = json.loads(z.read("app.json"))
+                    if doc.get("packageName") == "celeros.boa":
+                        return 200, {"package": "celeros.boa",
+                                     "version": "1.0.0", "size": 1,
+                                     "md5": "x", "store": {"apps": 1}}
+                # 409 do upload (versao repetida): o http() de verdade morre
+                # com die() — mesmo caminho de SystemExit que o lote engole
+                H.die("servidor recusou (409): versao 1.0.0 ja existe")
+                raise AssertionError("die nao volta")
+
+            args = SimpleNamespace(dry=False, force=False,
+                                   folders=[str(quebrada), str(boa),
+                                            str(recusada)],
+                                   no_strip=False, token="t", hub=None)
+            out = io.StringIO()
+            with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+                with patch.object(H, "http", side_effect=fake_http):
+                    with contextlib.redirect_stdout(out):
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            with self.assertRaises(SystemExit) as cm:
+                                H.cmd_publish(args)
+            texto = out.getvalue()
+            # exit code >= 1 (nao e mais o rc=0 morto)
+            self.assertEqual(cm.exception.code, 1)
+            # o lote seguiu APOS cada falha: a boa e a recusada foram as duas
+            # POSTadas mesmo com a 1a pasta quebrada (o 409 derruba so a dela)
+            self.assertEqual(len(posts), 2)
+            # ...a boa publicou...
+            self.assertIn("ok: celeros.boa v1.0.0", texto)
+            # ...e o resumo do lote fecha a conta
+            self.assertIn("lote terminou com 2 pasta(s) falhada(s) de 3",
+                          texto)
+    def test_lote_todo_bom_exit_0(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            a = self._pasta(td, "Aa", "celeros.aa")
+            b = self._pasta(td, "Bb", "celeros.bb")
+
+            def fake_http(method, url, token=None, data=None, headers=None,
+                          timeout=30):
+                if method == "GET":
+                    return 200, {"apps": {}, "deps": {}}
+                return 200, {"package": "x", "version": "1.0.0", "size": 1,
+                             "md5": "x", "store": {"apps": 1}}
+
+            args = SimpleNamespace(dry=False, force=False,
+                                   folders=[str(a), str(b)],
+                                   no_strip=False, token="t", hub=None)
+            out = io.StringIO()
+            with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+                with patch.object(H, "http", side_effect=fake_http):
+                    with contextlib.redirect_stdout(out):
+                        with self.assertRaises(SystemExit) as cm:
+                            H.cmd_publish(args)
+            self.assertEqual(cm.exception.code, 0)
+            self.assertEqual(out.getvalue().count("ok: "), 2)
+            self.assertNotIn("lote terminou", out.getvalue())
+
+
 class TestPublishPrivate(unittest.TestCase):
     """--private/--tenant injetam visibility/tenant na COPIA que sobe (o
     app.json do repo continua publico) e --tenant sem --private morre."""
@@ -554,6 +668,71 @@ class TestPublishHostil(unittest.TestCase):
             d = self._app(td, version="1.0.0\\u000a")
             msg = die_saida(lambda: H.validate(d, strip=True))
             self.assertIn("semver", msg)
+
+    def test_pasta_sem_appjson_morre_claro(self):
+        # sem app.json o read_bytes cru do snapshot estourava
+        # FileNotFoundError com traceback em vez da mensagem do validate
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "Vazia"
+            d.mkdir()
+            msg = die_saida(lambda: self._publish_dry(d))
+            self.assertIn("app.json", msg)
+
+    def test_lote_de_pastas_segue_apos_erro_e_sai_1(self):
+        # multi-pasta: UMA pasta ruim nao aborta o lote (o die do primeiro
+        # erro encerrava tudo com as demais sem tentativa) e o exit reflete
+        # a falha — o rc do fim era codigo morto, sempre 0
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            boa = Path(td) / "Boa"
+            boa.mkdir()
+            (boa / "app.json").write_text(
+                '{"name":"Boa","packageName":"celeros.boa","version":"1.0.0",'
+                '"api":30,"author":"t","description":"d"}', encoding="utf-8")
+            (boa / "main.js").write_text("var x = 1;\n", encoding="utf-8")
+            ruim = Path(td) / "Ruim"
+            ruim.mkdir()
+            args = SimpleNamespace(dry=True, force=False,
+                                   folders=[str(ruim), str(boa)],
+                                   no_strip=False, hub=None, token=None)
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                with self.assertRaises(SystemExit) as cm:
+                    H.cmd_publish(args)
+            self.assertEqual(cm.exception.code, 1)
+            self.assertIn("precisa conter app.json", err.getvalue())
+            self.assertIn("[dry] celeros.boa", out.getvalue())  # a boa seguiu
+
+    def test_anti_downgrade_le_o_catalogo_com_token(self):
+        # app privado nao existe no catalogo ANONIMO: o hub_ver vinha vazio e
+        # o downgrade dele passava batido no cliente (so descobria no 409)
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        d = Path(tempfile.mkdtemp()) / "Priv"
+        d.mkdir()
+        (d / "app.json").write_text(
+            '{"name":"Priv","packageName":"celeros.privdown","version":"1.0.0",'
+            '"api":30,"author":"t","description":"d"}', encoding="utf-8")
+        (d / "main.js").write_text("var p = 1;\n", encoding="utf-8")
+        gets = []
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            if method == "GET":
+                gets.append((url, token))
+                return 200, {"apps": {}, "deps": {}}
+            return 200, {"package": "celeros.privdown", "version": "1.0.0",
+                         "size": 1, "md5": "x", "store": {"apps": 1}}
+
+        args = SimpleNamespace(dry=False, force=False, folders=[str(d)],
+                               no_strip=False, token="tk", hub=None)
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            with patch.object(H, "http", side_effect=fake_http):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        H.cmd_publish(args)
+        self.assertEqual(cm.exception.code, 0)
+        self.assertTrue(any(u.endswith("/store/all.json") and t == "tk"
+                            for u, t in gets), gets)
 
     def test_deps_ciclicas_resolvem(self):
         # A depende de B e B de A: o fecho tem que devolver o par, nao pendurar

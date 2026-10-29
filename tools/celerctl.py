@@ -558,6 +558,12 @@ class HostLink:
                 if cmd_r == 0x00 or (payload_r and payload_r[0] == 1):
                     raise CelerError(payload_r[1:].decode("utf-8", "replace") or
                                      "erro no dispositivo")
+                if cmd_r != cmd:
+                    # resposta de OUTRO comando (frame tardio apos uma
+                    # ressincronizacao): devolver aqui era o chamador
+                    # parseando payload trocado como se fosse seu
+                    raise CelerError(f"resposta inesperada (cmd 0x{cmd_r:02x}, "
+                                     f"esperava 0x{cmd:02x})")
                 return cmd_r, payload_r
             except CelerError as e:
                 last_err = e
@@ -821,6 +827,10 @@ class HostLink:
         return {"dir": bool(body[1]), "size": size, "mtime": mtime}
 
     def read_chunk(self, path, offset, want):
+        # o pedido nao pode passar do que a resposta cabe no frame anunciado
+        # (status + offset u32 em v2 + dados): cat/_app_meta/_read_remote_json
+        # pediam CHUNK fixo e estouravam em device que anuncia chunk menor
+        want = min(want, self.max_chunk - 1 - (4 if self.proto == 2 else 0))
         req = path.encode() + b"\0" + struct.pack("<II", offset, want)
         _, payload = self.xfer(KL["READ"], req, timeout=10.0)
         body = payload[1:]
@@ -959,8 +969,10 @@ class HostLink:
                                                  f"push {os.path.basename(remote_path)}" if progress else None)
                 end_payload = struct.pack("<II", crc, total) if self.proto == 2 else b""
                 _, payload = self.xfer(KL["WRITE_END"], end_payload, timeout=10.0)
-            except (CelerError, serial.SerialException):
+            except (CelerError, serial.SerialException, KeyboardInterrupt):
                 # aborta a escrita: o device remove o arquivo parcial
+                # (Ctrl-C no meio do push TAMBEM: sem o ABORT o parcial
+                # ficava no FS ate a proxima escrita ao mesmo caminho)
                 try:
                     self.xfer(KL["WRITE_ABORT"], b"", timeout=2.0, retries=0)
                 except (CelerError, serial.SerialException):
@@ -1044,6 +1056,13 @@ class HostLink:
                     last_frame = time.monotonic()
                     if self.proto == 1 and inflight and inflight[0][3] >= inflight[0][2]:
                         inflight.pop(0)
+                elif cmd == KL["READ"] and payload and payload[0] == 1:
+                    # erro do device no meio do pull (arquivo sumiu, leitura
+                    # falhou): o motivo ve no payload — resposta de status
+                    # NAO e "frame inesperado" (antes a mensagem errada mandava
+                    # cacar ruido de canal quando o problema era do FS)
+                    raise CelerError("pull: " + (payload[1:].decode("utf-8", "replace")
+                                                 or "erro de leitura no dispositivo"))
                 elif cmd in PUSH_CMDS:
                     self.push_queue.append((cmd, payload))
                     last_frame = time.monotonic()
@@ -1164,9 +1183,11 @@ class HostLink:
                 payload = self._ota_end(end_payload)
         except OtaEndUnknown:
             raise  # o END pode ter sido aplicado: NAO aborta (marcaria nada, mas confunde)
-        except (CelerError, serial.SerialException):
+        except (CelerError, serial.SerialException, KeyboardInterrupt):
             # cancela a escrita da particao: um begin futuro tambem aborta,
-            # mas o estado nao fica pendurado ate lah
+            # mas o estado nao fica pendurado ate lah (Ctrl-C incluido —
+            # sem o ABORT o device ficava "OTA em curso" e recusava o canal
+            # ate um begin futuro)
             try:
                 self.xfer(KL["OTA_ABORT"], b"", timeout=2.0, retries=0)
             except (CelerError, serial.SerialException):
@@ -1254,6 +1275,13 @@ class HostLink:
         sai quando ha finger != 0 — firmware velho entende o de 7."""
         if not 1 <= len(samples) <= 16:
             raise CelerError("gesto deve ter 1..16 amostras")
+        for s in samples:
+            # x/y/delay vao como u16 no fio: coordenada negativa era
+            # struct.error com traceback (o -5 do tap "saiu da tela")
+            if not (0 <= s[1] <= 0xFFFF and 0 <= s[2] <= 0xFFFF
+                    and 0 <= s[3] <= 0xFFFF):
+                raise CelerError("amostra fora da faixa u16 (x, y, delay ms): "
+                                 "%r" % (s,))
         multi = any(len(s) > 4 and s[4] for s in samples)
         payload = bytes([len(samples)])
         for s in samples:
@@ -1429,8 +1457,16 @@ def find_net_devices(timeout=1.5):
 _REASONS = ("OTA em curso", "em uso por outro processo", "sessao ativa em outro canal")
 
 
-def open_link(args):
+def open_link(args, quiet=False):
     reason = []
+
+    def falha(msg):
+        # quiet=True: sobe como CelerError para o chamador decidir (o
+        # verify_ota_boot repete a sonda por ~60 s durante o reboot — o die
+        # aqui matava a conferencia na 1a tentativa sem resposta)
+        if quiet:
+            raise CelerError(msg)
+        die(msg)
 
     def try_open(port):
         """Abre e faz hello; cai para o baud alto se a sessao anterior
@@ -1464,7 +1500,14 @@ def open_link(args):
             link.close()
         if is_net_addr(port):
             return None
-        fallback = getattr(args, "baud", None) or 921600
+        # o ponto do fallback e o baud ALTO (o probe() tenta 115200 e
+        # 921600 pelo mesmo motivo): um `dev` morto ha <8s deixa o device
+        # em 921600 e o restore so vem no idle. Com -b no default, repetir
+        # o 115200 era reabrir a MESMA porta que acabou de falhar — a placa
+        # ficava inalcancavel para todo comando ate o idle devolver o baud.
+        fallback = getattr(args, "baud", None)
+        if not fallback or fallback == DEFAULT_BAUD:
+            fallback = 921600
         link = HostLink(port, timeout=3.0, baud=fallback)
         try:
             link.hello()
@@ -1477,7 +1520,7 @@ def open_link(args):
         port = resolve_port(args.port)
         link = try_open(port)
         if link is None:
-            die(reason[0] if reason else f"{args.port} nao responde ao protocolo HostLink")
+            falha(reason[0] if reason else f"{args.port} nao responde ao protocolo HostLink")
     else:
         devices = find_devices()
         if devices:
@@ -1498,9 +1541,9 @@ def open_link(args):
             # o motivo da recusa ("OTA em curso", "em uso por outro processo",
             # "sessao ativa em outro canal") e a mensagem acionavel: sem ela
             # o usuario procurava um problema de protocolo que nao existia
-            die(reason[0] if reason else
-                f"{devices[0][0].device if devices else 'device'} nao responde "
-                "ao protocolo HostLink")
+            falha(reason[0] if reason else
+                  f"{devices[0][0].device if devices else 'device'} nao responde "
+                  "ao protocolo HostLink")
     if getattr(args, "baud", None) and args.baud != DEFAULT_BAUD and link.ser.baudrate == DEFAULT_BAUD:
         link.set_baud(args.baud)
     if getattr(args, "exec_timeout", None):
@@ -2459,6 +2502,9 @@ def cmd_push(args):
 
 
 def cmd_pull(args):
+    if os.path.isdir(args.local):
+        die(f"{args.local} e um diretorio; passe o caminho do ARQUIVO de "
+            "destino (era IsADirectoryError com cara de problema de conexao)")
     link = open_link(args)
     try:
         link.read_file(args.remote, args.local)
@@ -2771,7 +2817,10 @@ def verify_ota_boot(args, part, wait_s=60):
     said = False
     while time.monotonic() < deadline:
         try:
-            link = open_link(args)
+            # quiet: a sonda falhar durante o reboot e o CASO do laco — o die
+            # do open_link encerrava a conferencia na 1a tentativa sem
+            # resposta em vez de repetir
+            link = open_link(args, quiet=True)
             try:
                 info = link.info()
             finally:
@@ -4329,7 +4378,10 @@ def _apps_installzip(link, args):
     if meta.get("deps"):
         hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
         dest = f"/local/apps/{nome}"
-        resolved = _install_shared_deps(link, meta["deps"], hub, local=False)
+        # token de leitura igual ao apps install: dep PRIVADA no installzip
+        # saia do indice anonimo ("nao esta no hub") sem nenhuma dica
+        resolved = _install_shared_deps(link, meta["deps"], hub, local=False,
+                                        token=_hub_token(args, link))
         with tempfile.TemporaryDirectory() as td:
             dj = Path(td) / "deps.json"
             dj.write_text(json.dumps(resolved), encoding="utf-8")
@@ -4393,8 +4445,16 @@ def _apps_deps(link, args):
         if not args.yes:
             die("apps deps --gc remove versoes orfas do device; confirme com --yes")
         removed = 0
+        falhas = []
         for name, ver in orfas:
-            link.delete(f"/local/modules/{name}/{ver}", recursive=True)
+            try:
+                link.delete(f"/local/modules/{name}/{ver}", recursive=True)
+            except CelerError as e:
+                # best-effort, como a poda do install: o device responde
+                # status 1 ate para caminho em uso — abortar AQUI deixava as
+                # orfas seguintes sem tentativa e o gc morria na metade
+                falhas.append(f"{name} {ver}")
+                continue
             print(f"removida: {name} {ver}")
             removed += 1
             # nome sem versoes sobrando: tira a pasta vazia junto
@@ -4403,7 +4463,9 @@ def _apps_deps(link, args):
                     link.delete(f"/local/modules/{name}", recursive=True)
                 except CelerError:
                     pass
-        print(f"gc: {removed} versao(oes) orfa(s) removida(s) de /local/modules")
+        nota = (f"; falharam: {', '.join(falhas)} (re-tenta no proximo gc)"
+                if falhas else "")
+        print(f"gc: {removed} versao(oes) orfa(s) removida(s) de /local/modules{nota}")
     else:
         print(f"({len(orfas)} orfa(s); limpe com: apps deps --gc --yes)")
 
@@ -4440,10 +4502,12 @@ def _apps_deps_upgrade(link, args):
                 continue
             try:
                 novo = celerhub.resolve_dep_ranges(meta["deps"], index)
-            except SystemExit as e:
-                # resolve_dep_ranges die() com o motivo; o app fica de fora
-                # da rodada (lock atual continua valendo) sem abortar os outros
-                print(f"! {a['name']}: {e}")
+            except SystemExit:
+                # resolve_dep_ranges die() com o motivo no STDERR; o app fica
+                # de fora da rodada (lock atual continua valendo) sem abortar
+                # os outros — o {e} aqui imprimia so o codigo de saida ("1")
+                print(f"! {a['name']}: sem resolucao no hub (motivo no erro "
+                      "acima)")
                 continue
             atual = _read_remote_json(link, f"{base}/{a['name']}/deps.json")
             atual = {str(k): str(v) for k, v in atual.items()} \
@@ -4569,6 +4633,14 @@ def cmd_apps(args):
         elif args.action == "store":
             _apps_store(link, args)
         elif args.action == "pull":
+            # destino invalido morre ANTES da busca (pre-condicao local: nao
+            # gasta o canal nem baixa pela metade) — e destino-ARQUIVO era
+            # NotADirectoryError com traceback no any(iterdir())
+            out_dir = Path(args.dest) if args.dest else Path(args.name)
+            if out_dir.exists() and not out_dir.is_dir():
+                die(f"{out_dir} existe e nao e pasta (escolha outro destino)")
+            if out_dir.is_dir() and any(out_dir.iterdir()):
+                die(f"{out_dir} ja existe e nao esta vazia")
             # procura o app em /local/apps e depois /sd/apps
             target = None
             for candidate_base in ("/local/apps", "/sd/apps"):
@@ -4578,9 +4650,6 @@ def cmd_apps(args):
                     break
             if target is None:
                 _app_not_found(link, args.name, "pull")
-            out_dir = Path(args.dest) if args.dest else Path(args.name)
-            if out_dir.exists() and any(out_dir.iterdir()):
-                die(f"{out_dir} ja existe e nao esta vazia")
             out_dir.mkdir(parents=True, exist_ok=True)
             n = _pull_tree(link, target, out_dir)
             print(f"baixado: {target} -> {out_dir} ({n} arquivos)")

@@ -339,7 +339,12 @@ def strip_js(path: Path, code: bytes | None = None, reserved=None, legacy=False)
     finally:
         if td is not None:
             td.cleanup()
-    if out.returncode != 0 or (not out.stdout and (code if code is not None else path.stat().st_size) > 0):
+    # entrada nao-vazia que enxuta para VAZIO e falha de strip (o jsstrip
+    # comeu tudo): a comparacao era `bytes > 0` — TypeError exatamente no
+    # caso que o check existe para pegar, em vez do die com o motivo
+    enxutou_vazio = (not out.stdout and
+                     (len(code) if code is not None else path.stat().st_size) > 0)
+    if out.returncode != 0 or enxutou_vazio:
         die(f"jsstrip falhou em {path.name}: {out.stderr.decode('utf-8', 'replace').strip()}")
     if out.stderr:
         # aviso de fallback (jsmin recusou) nao pode virar silencio
@@ -678,16 +683,33 @@ def cmd_deps_status(args):
 # ----------------------------------------------------------------- publish -
 def cmd_publish(args):
     tok = "" if args.dry else token_or_die(args)  # dry roda offline
-    # versao publicada no hub: base do anti-downgrade local (o hub reforca)
+    # versao publicada no hub: base do anti-downgrade local (o hub reforca).
+    # COM o token: app privado nao existe no catalogo anonimo e o downgrade
+    # dele passava batido aqui (so descobria no 409 do upload)
     hub_ver = {}
     hub_deps = None
     if not args.dry:
-        _, data = http("GET", f"{hub_url(args)}/store/all.json")
+        try:
+            _, data = http("GET", f"{hub_url(args)}/store/all.json",
+                           token=tok or None)
+        except SystemExit:
+            # catalogo com token recusado (token invalido/expirado): cai para
+            # o anonimo — o anti-downgrade local e conveniencia (apps privados
+            # ficam de fora nessa rodada) e o hub reforca no upload mesmo assim
+            _, data = http("GET", f"{hub_url(args)}/store/all.json")
         hub_ver = {pkg: a.get("version", "0.0.0")
                    for pkg, a in data.get("apps", {}).items()}
-    rc = 0
-    for folder in args.folders:
+
+    def uma_pasta(folder):
+        """Publica UMA pasta do lote; devolve True. die() de dentro (validate,
+        guarda de arvore suja, anti-downgrade...) sobe como SystemExit para o
+        chamador seguir com as demais pastas."""
+        nonlocal hub_deps
         folder = Path(folder).expanduser().resolve()
+        if not (folder / "app.json").is_file() or not (folder / "main.js").is_file():
+            # antes do read_bytes cru: sem isto era FileNotFoundError com
+            # traceback em vez da mensagem do validate
+            die(f"{folder}: precisa conter app.json e main.js")
         # SNAPSHOT de app.json/main.js: UMA leitura cada, ANTES de tudo —
         # validate, guarda de arvore suja, tetos e zip trabalham sobre os
         # MESMOS bytes (a bancada anda em voo: app.json trocado no meio do
@@ -799,7 +821,7 @@ def cmd_publish(args):
             ndeps = f" + {len(deps)} dep(s)" if deps else ""
             print(f"[dry] {meta['packageName']} v{meta['version']} "
                   f"({js_sum}B de .js{ndeps}{nextra}) ok")
-            continue
+            return True
 
         with tempfile.TemporaryDirectory() as td:
             zpath = Path(td) / "app.zip"
@@ -837,6 +859,24 @@ def cmd_publish(args):
         print(f"ok: {out.get('package')} v{out.get('version')} publicado "
               f"({out.get('size', '?')}B, md5 {str(out.get('md5', '?'))[:8]}..., "
               f"{out.get('store', {}).get('apps')} apps no catalogo)")
+        return True
+
+    rc = 0
+    falhas = 0
+    for folder in args.folders:
+        try:
+            uma_pasta(folder)
+        except SystemExit as e:
+            # UMA pasta ruim nao aborta o lote: as demais seguem (o die de
+            # dentro ja imprimiu o motivo) e o exit reflete a falha — o rc
+            # daqui era codigo morto (sempre 0) e o 1o erro encerrava tudo
+            falhas += 1
+            rc = e.code if isinstance(e.code, int) and e.code else 1
+    if falhas:
+        # resumo do lote: as mensagens de cada pasta rolaram na saida, mas o
+        # rc so faz sentido acompanhado do placar
+        print(f"erro: lote terminou com {falhas} pasta(s) falhada(s) "
+              f"de {len(args.folders)}")
     sys.exit(rc)
 
 

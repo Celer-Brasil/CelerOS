@@ -4,7 +4,7 @@
   "studio": "0.1.0",
   "name": "Detona!",
   "packageName": "celeros.detona",
-  "version": "1.2.2",
+  "version": "1.2.4",
   "author": "CelerOS",
   "description": "Remake NATIVO do Detona no Celer Studio: 3 mundos, 6 fases em tilemaps editaveis, soldado em 4 direcoes, 3 tipos de inimigo + Rei Slime, itens e explosoes do text2d, menus com o kit de UI 1.3, joystick de arraste e progressao salva.",
   "type": "Game",
@@ -23,7 +23,7 @@
     "celeros.game.ui": "^1.3.0",
     "celeros.mesh": "^1.0.1"
   },
-  "changelog": "1.2.2: duelo — morrer do meu lado agora fecha o round (a janela de 0,9 s corria em codigo morto e a partida travava/omitia a derrota); dm do rival DENTRO da janela = EMPATE nos dois aparelhos; o host so abre o round seguinte com o round fechado (nao pula mais round sem contar).\n1.2.1: corrige textos que passavam do vidro de 480: o subtitulo do titulo virou duas linhas, o lobby do duelo usa frases do tamanho da tela (o nome do aparelho encolhe para caber) e o COMO JOGAR cabe inteiro no modal (texto no papel small, com quebra medida). Sem mudanca de jogabilidade.\n1.2.0: modos SOBREVIVENCIA (ondas infinitas com recorde) e DUELO 1x1 pela malha CelerNet (lobby por heartbeat, convite/aceite, melhor de 3, arena pelo seed do host, posicao/bomba/morte sincronizadas) portados da 0.10.x; 1.1.0: refeito com UI 1.3 e text2d",
+  "changelog": "1.2.4: menu do titulo no E.ui.menuCard (engine 1.4): card com altura derivada dos 4 itens e ancorado no rodape com margem — o card fixo de 250 px em y=206 deixava o COMO JOGAR fora do vidro de 480; a linha de status do HUD nao cai mais metade para fora do vidro. Sem mudanca de jogabilidade.\n1.2.3: duelo — rival que some da malha (presenca) ou desiste encerra a PARTIDA com o overlay RIVAL SAIU/VOCE SAIU (antes o host reabria round sem fim e o convidado esperava o host para sempre); sair no meio do round pela pausa agora avisa o rival ('dq'); eventos de rede do round velho (pos/bomba/detone) descartados no reset. Sobrevivencia nao engorda mais o array de inimigos a cada onda. Efeitos do E.fx desenhados de verdade (o draw da cena nao chamava E.fx.draw: explosoes, anel e flash nao apareciam) e os jingles viram melodia (a lista solta tocava um tom unico de 72 Hz).\n1.2.2: duelo — morrer do meu lado agora fecha o round (a janela de 0,9 s corria em codigo morto e a partida travava/omitia a derrota); dm do rival DENTRO da janela = EMPATE nos dois aparelhos; o host so abre o round seguinte com o round fechado (nao pula mais round sem contar).\n1.2.1: corrige textos que passavam do vidro de 480: o subtitulo do titulo virou duas linhas, o lobby do duelo usa frases do tamanho da tela (o nome do aparelho encolhe para caber) e o COMO JOGAR cabe inteiro no modal (texto no papel small, com quebra medida). Sem mudanca de jogabilidade.\n1.2.0: modos SOBREVIVENCIA (ondas infinitas com recorde) e DUELO 1x1 pela malha CelerNet (lobby por heartbeat, convite/aceite, melhor de 3, arena pelo seed do host, posicao/bomba/morte sincronizadas) portados da 0.10.x; 1.1.0: refeito com UI 1.3 e text2d",
   "canvas": {
     "w": 480,
     "h": 480,

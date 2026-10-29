@@ -1,6 +1,6 @@
 # Arrasa! - Celer Studio (nativo)
 
-Fonte única (2.1.1): o hub publica o build deste projeto desde a consolidação
+Fonte única (2.1.3): o hub publica o build deste projeto desde a consolidação
 de 2026-10-27 — a antiga cópia plana em `hub_apps/` foi removida.
 `Titulo` -> `Mapa` -> `Fase 1..10` -> `Fim`, controlador em
 `Assets/Scripts/arrasa.js` (física `P.rigid` do `celeros.physics`).

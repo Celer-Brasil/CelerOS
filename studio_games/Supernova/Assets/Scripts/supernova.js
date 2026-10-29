@@ -714,10 +714,16 @@ function drawTitle(s, E) {
     if (E.spr.has('nave')) E.spr.stamp('nave', W / 2, 150, BIG_SHIP);
     E.gfx.text('SUPERNOVA', W / 2, 262, LOGO_TXT);
     E.gfx.text('10 ondas  ·  chefe em 3 fases  ·  modo infinito', W / 2, 300, SUB_TXT);
-    var c = E.ui.card(40, 318, W - 80, 150);
-    if (E.ui.button('CAMPANHA', c.x, c.y, c.w - 110, 58, BTN_CAMP)) s.act = 'camp';
-    E.ui.badge('REC ' + s.best, c.x + c.w - 100, c.y + 11, { w: 100, color: OURO, textColor: 0x0000 });
-    if (E.ui.button('INFINITO', c.x, c.y + 70, c.w, 44, BTN_ENDL)) s.act = 'endless';
+    // Menu no helper da engine (ancorado no rodape, altura dos itens): o card
+    // fixo em y=318 com 150 deixava o INFINITO cortado pelo vidro de 480.
+    // O chip de recorde vai como badge da linha primaria.
+    var MITEMS = [
+        { label: 'CAMPANHA', value: 'camp', icon: 'play', badge: 'REC ' + s.best,
+          badgeColor: OURO, badgeTextColor: 0x0000 },
+        { label: 'INFINITO', value: 'endless', icon: 'refresh' }
+    ];
+    var mpick = E.ui.menuCard(MITEMS);
+    if (mpick) s.act = mpick;
 }
 
 function drawEnd(s, E) {
@@ -800,6 +806,9 @@ function drawGame(s, E) {
     if (s.superT > 0) {
         E.gfx.circle(W / 2, H / 2, (0.55 - s.superT) * 900, CIANO, RING_O);
     }
+    // particulas/flash/popText do E.fx: o draw da cena e quem desenha —
+    // antes explosoes, anel do chefe, flash e aviso de drop nao apareciam
+    if (E.fx) E.fx.draw();
     // chefe: barra no alto
     if (s.boss && E.ui) {
         E.ui.progress(W / 2 - 110, 14, 220, 12, s.boss.hp / s.boss.maxhp, BOSS_BAR);

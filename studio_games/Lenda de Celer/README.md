@@ -1,6 +1,6 @@
 # Lenda de Celer - Celer Studio (nativo)
 
-Fonte única (2.2.2): o hub publica o build deste projeto desde a consolidação
+Fonte única (2.2.4): o hub publica o build deste projeto desde a consolidação
 de 2026-10-27 — a antiga cópia plana em `hub_apps/` foi removida.
 `Titulo` -> 20 salas (`Campo x,y`, `Casa 0,0`, `Templo x,y`) -> `Vitoria`/`Fim`,
 controlador em `Assets/Scripts/lenda.js`.

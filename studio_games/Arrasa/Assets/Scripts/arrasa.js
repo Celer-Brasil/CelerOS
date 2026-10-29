@@ -813,12 +813,20 @@ function drawTitle(s, E) {
         E.spr.stamp(ART[A_GOB], 400, 214, BIG2);
         E.spr.stamp(ART[SHOT_ART.pedra], 120, 214, BIG2);
     }
-    var c = E.ui.card(40, 270, W - 80, 190);
-    var bx = c.x;
-    bx += E.ui.badge('10 FASES', bx, c.y) + 8;
-    E.ui.badge(totalStars(s) + '/30', bx, c.y, { color: C(0xFFC83C), textColor: 0x0000 });
-    if (E.ui.button('JOGAR', c.x, c.y + 44, c.w, 58, BTN_PLAY)) s.act = 'play';
-    if (E.ui.button('COMO JOGAR', c.x, c.y + 112, c.w, 42, BTN_HOW)) s.act = 'how';
+    // Menu no helper da engine (altura derivada dos itens, ancorado no
+    // rodape): card fixo de 190 px em y=270 com botoes de 58/42 ficava
+    // gigante no vidro de 480 e o COMO JOGAR raspava o rodape.
+    var MITEMS = [
+        { label: 'JOGAR', value: 'play', icon: 'play' },
+        { label: 'COMO JOGAR', value: 'how' }
+    ];
+    var mbox = E.ui.menuBox(MITEMS);
+    var bx = mbox.x + mbox.pad;
+    bx += E.ui.badge('10 FASES', bx, mbox.y - 30) + 8;
+    E.ui.badge(totalStars(s) + '/30', bx, mbox.y - 30,
+               { color: C(0xFFC83C), textColor: 0x0000 });
+    var mpick = E.ui.menuCard(MITEMS);
+    if (mpick) s.act = mpick;
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY, buttons: HOW_BTNS });
         if (r !== null) s.act = 'howClose';
@@ -957,6 +965,9 @@ function drawGame(s, E) {
         if (v.kind === 'boom') { if (E.spr.has(BOOM[f])) E.spr.stamp(BOOM[f], v.x, v.y, OPT_ART); }
         else if (s.art) E.spr.stamp(ART[A_PUFF + f], v.x, v.y, OPT_ART);
     }
+    // particulas/flash do E.fx (estouro da pedra, TNT, fagulhas do poder):
+    // o draw da cena e quem desenha — antes nada disso aparecia
+    if (E.fx) E.fx.draw();
     drawHud(s, E);
     if (s.msg) E.gfx.text(s.msg, W / 2, 100, MSG_TXT);
     if (s.paused) {

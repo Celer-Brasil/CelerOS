@@ -56,6 +56,17 @@ function C(hex) {
     return ((hex >> 19) & 31) << 11 | ((hex >> 10) & 63) << 5 | ((hex >> 3) & 31);
 }
 
+// jingle de notas MIDI -> melodia do System.sfx ([[hz, ms], ...]). O sfx
+// numerico avulso do E.audio e UM tom [freq, ms]: a lista solta [72, 76, 79]
+// tocava so 72 Hz por 76 ms (rumble inaudivel) em vez do arpejo
+function jingle(notes, ms) {
+    var out = [];
+    for (var i = 0; i < notes.length; i++) {
+        out.push([Math.round(440 * Math.pow(2, (notes[i] - 69) / 12)), ms]);
+    }
+    return out;
+}
+
 var DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 var CELL = 32;
 var COLS = 15, ROWS = 13;
@@ -146,6 +157,10 @@ function netReset() {
     NET.envioMsg = ''; NET.vistos = {}; NET.pendIr = null;
     NET.ultC = -1; NET.ultR = -1; NET.lastSeq = -1; NET.ack = -1;
     NET.mortePend = false;
+    // eventos do round velho nao podem vazar para a partida nova (bomba
+    // fantasma no spawn, rival teleportado para a celula de antes)
+    NET.rivalPos = null; NET.rivalBomba = null;
+    NET.rivalDetona = false; NET.rivalDrop = null;
 }
 
 function netConvidar(id) {
@@ -198,8 +213,12 @@ function netIrArena() {
 function netEncerra(res) {
     if (NET.fase === 'off' || NET.fase === 'fim') return;
     if (!NET.res) NET.res = res;
-    NET.fase = 'round';
     NET.envioMsg = '';
+    // rival saiu da malha (presenca) ou desistiu ('dq'): a PARTIDA inteira
+    // acaba — antes ficava em 'round' e o host reabria round sem fim (o
+    // 'ds' nunca era ackado) enquanto o convidado esperava o host para sempre
+    if (res === 'saiu' || res === 'desisti') { NET.fase = 'fim'; return; }
+    NET.fase = 'round';
     if (res === 'venci') NET.ganhos++;
     else if (res === 'perdi') NET.perdidos++;
 }
@@ -351,6 +370,9 @@ function waveType(onda) {
 
 function startWave(s, onda) {
     s.onda = onda;
+    // descarta os corpos das ondas anteriores: no sobrevivencia o array so
+    // crescia (mortos ficavam para sempre e o laco engordava a cada onda)
+    s.enemies = aliveEnemies(s);
     // a onda 1 e a populacao da propria fase (as caixas ainda fecham a
     // arena); das seguintes em diante o spawner enche os corredores abertos
     var n = onda === 1 ? 0 : clamp(2 + Math.floor(onda / 2), 2, 8);
@@ -363,7 +385,7 @@ function startWave(s, onda) {
     }
     s.msg = 'ONDA ' + onda;
     s.msgT = 1.6;
-    if (s.E.audio) s.E.audio.sfx([72, 76, 79], { gap: 70 });
+    if (s.E.audio) s.E.audio.sfx(jingle([72, 76, 79], 70));
     if (placed === 0) s.waveGap = 0.6;   // arena cheia: tenta de novo
 }
 
@@ -600,6 +622,7 @@ function startGame(s, ctx) {
     s.joyX0 = 0;
     s.joyY0 = 0;
     s.joyMoved = false;
+    s.joyDir = null;       // direcao latched (re-centro so na troca)
     s.uiTouch = null;      // toque que comecou num botao nao vira joystick
     s.hudForce = true;     // primeiro HUD da cena (o mundo fica em outro clip)
     bakeBoard(s, E);
@@ -739,7 +762,12 @@ function stepDir(s, dir) {
 }
 
 function placeBomb(s) {
-    if (s.done || s.lost || s.paused || s.moving > 0) return;
+    // SEM guarda de `s.moving`: gx/gy ja sao a celula de DESTINO (step()
+    // atualiza a logica antes da arte), entao plantar no meio do passo cai
+    // na celula certa. Com a guarda, apertar BOMBA andando era descartado em
+    // silencio — na pratica o botao "nao funcionava" (o jogador quase sempre
+    // esta andando quando quer soltar a bomba).
+    if (s.done || s.lost || s.paused) return;
     if (s.bombs.length >= s.maxBombs) return;
     if (bombAt(s, s.gx, s.gy)) return;
     s.bombs.push({ c: s.gx, r: s.gy, t: 1.6, range: s.range,
@@ -747,7 +775,7 @@ function placeBomb(s) {
     if (s.mode === 'duel') {
         netSend('db' + netSeq() + ',' + s.gx + ',' + s.gy + ',' + s.range);
     }
-    if (s.E.audio) s.E.audio.sfx([62, 55], { gap: 30 });
+    if (s.E.audio) s.E.audio.sfx(jingle([62, 55], 30));
 }
 
 function detonateRemote(s) {
@@ -810,7 +838,7 @@ function explode(s, b) {
                              shape: 'spark' });
         E.fx.ring(px, py, { speed: 260, color: s.theme.flame2 });
     }
-    if (E.audio) E.audio.sfx([50, 55, 60, 55], { gap: 40 });
+    if (E.audio) E.audio.sfx(jingle([50, 55, 60, 55], 40));
     // dano imediato das celulas de fogo
     for (var i = 0; i < s.flames.length; i++) {
         var f = s.flames[i];
@@ -857,7 +885,7 @@ function hitEnemiesAt(s, c, r, owner) {
                 { n: 10, color: 0x07E0, speed: 100, life: 0.4 });
             if (e.data.type === 'boss') s.bossDead = true;
         } else {
-            if (s.E.audio) s.E.audio.sfx([70, 74], { gap: 30 });
+            if (s.E.audio) s.E.audio.sfx(jingle([70, 74], 30));
         }
     }
 }
@@ -943,7 +971,7 @@ function applyDrop(s, kind) {
     else if (kind === 'shield') s.shield = true;
     else if (kind === 'life') s.lives = clamp(s.lives + 1, 1, 5);
     s.score += 25;
-    if (s.E.audio) s.E.audio.sfx([72, 76, 79, 84], { gap: 30 });
+    if (s.E.audio) s.E.audio.sfx(jingle([72, 76, 79, 84], 30));
     if (s.E.fx) s.E.fx.popText(center(s.gx), center(s.gy) - 10, ITEM_NAME[kind] || kind,
                                { color: 0xFFE0 });
 }
@@ -953,12 +981,12 @@ function hurtPlayer(s) {
     if (s.shield) {
         s.shield = false;
         s.invuln = 1.4;
-        if (s.E.audio) s.E.audio.sfx([76, 72], { gap: 30 });
+        if (s.E.audio) s.E.audio.sfx(jingle([76, 72], 30));
         return;
     }
     s.lives--;
     s.invuln = 2.0;
-    if (s.E.audio) s.E.audio.sfx([60, 55, 48], { gap: 40 });
+    if (s.E.audio) s.E.audio.sfx(jingle([60, 55, 48], 40));
     if (s.E.fx) s.E.fx.flash(0xF800, 140);
     if (s.lives <= 0) {
         s.lives = 0;
@@ -1004,7 +1032,7 @@ function checkExit(s) {
     s.E.data.score = s.score;
     if (s.E.audio) {
         s.E.audio.stop();
-        s.E.audio.sfx([72, 76, 79, 84, 79, 84], { gap: 90 });
+        s.E.audio.sfx(jingle([72, 76, 79, 84, 79, 84], 90));
     }
 }
 
@@ -1045,7 +1073,16 @@ function gameUpdate(s, E, ctx, dt) {
         if (act === 'resume') {
             s.paused = false;
             s.hudForce = true;   // o modal cobriu a faixa do HUD
-        } else if (act === 'map') ctx.go('Mapa');
+        } else if (act === 'map') {
+            // sair no meio do duelo avisa o rival ('dq' = desistencia no
+            // protocolo; antes ele so descobria pelo timeout de presenca)
+            if (s.mode === 'duel' && NET.rival &&
+                (NET.fase === 'jogando' || NET.fase === 'round')) {
+                netSend('dq');
+                netEncerra('saiu');
+            }
+            ctx.go('Mapa');
+        }
         return;
     }
     if (s.msgT > 0) { s.msgT -= dt; if (s.msgT <= 0) s.msg = ''; }
@@ -1067,9 +1104,12 @@ function gameUpdate(s, E, ctx, dt) {
     if (s.uiTouch) {
         if (!E.input.down) s.uiTouch = null;
     } else if (E.input.down) {
-        // joystick flutuante: o toque assenta a base e o delta desde ela
-        // escolhe a direcao; step() tem o cadeado de movimento, entao
-        // segurar anda casa a casa sem engatilhar de novo
+        // Controle por TRACO: o dedo anda e cada passo re-ancora a base nele.
+        // O modelo antigo (base cravada no pouso) obrigava a arrastar o dedo
+        // de volta por cima da base para virar — perto de uma quina/borda nao
+        // sobrava espaco e o personagem "nao obedecia". Agora: arrasto curto
+        // = um passo, arrasto continuado = caminhada continua, parar o dedo
+        // = parar (sem runaway), e virar e so puxar para o outro lado.
         if (!s.joyOn) {
             s.joyOn = true;
             // base dentro do tabuleiro: o circulo nao invade o HUD nem o vidro
@@ -1081,8 +1121,17 @@ function gameUpdate(s, E, ctx, dt) {
         var jd = Math.abs(jdx) > Math.abs(jdy) ? Math.abs(jdx) : Math.abs(jdy);
         if (jd > JOY_DEAD) {
             s.joyMoved = true;
-            if (Math.abs(jdx) > Math.abs(jdy)) stepDir(s, jdx > 0 ? 'right' : 'left');
-            else stepDir(s, jdy > 0 ? 'down' : 'up');
+            var dir = Math.abs(jdx) > Math.abs(jdy) ? (jdx > 0 ? 'right' : 'left')
+                                                    : (jdy > 0 ? 'down' : 'up');
+            var gx0 = s.gx, gy0 = s.gy;
+            stepDir(s, dir);
+            // andou de verdade: ancora no dedo (o proximo passo sai com outro
+            // traco curto). Bloqueado na parede a ancora fica, entao insistir
+            // na direcao continua valendo quando o caminho abrir.
+            if (s.gx !== gx0 || s.gy !== gy0) {
+                s.joyX0 = clamp(E.input.x, JOY_R, s.W - JOY_R);
+                s.joyY0 = clamp(E.input.y, JOY_R, BOARD_H - JOY_R);
+            }
         }
     } else {
         s.joyOn = false;
@@ -1225,11 +1274,16 @@ function drawDuelOverlay(s, E) {
     if (E.dirty.unclip) E.dirty.unclip();
     var btns = NET.fase === 'fim'
         ? [{ label: 'Lobby', value: 'lobby', icon: 'menu' }] : null;
+    // partida encerrada por saida: mostra o motivo, nao um placar que nao
+    // existiu (0 x 0 virava "PERDEU O DUELO")
+    var tituloFim = (NET.res === 'saiu' || NET.res === 'desisti')
+        ? duelTitle(NET.res)
+        : (NET.ganhos > NET.perdidos ? 'VENCEU O DUELO!' : 'PERDEU O DUELO');
     var body = NET.ganhos + ' x ' + NET.perdidos +
         (NET.rival ? '  ·  ' + NET.rival.nome : '') +
         (NET.fase === 'fim' ? '' : (NET.host ? '  ·  proximo round...' : '  ·  aguardando o host'));
     var r = E.ui.modal('duelround', {
-        title: NET.fase === 'fim' ? (NET.ganhos > NET.perdidos ? 'VENCEU O DUELO!' : 'PERDEU O DUELO') : duelTitle(NET.res),
+        title: NET.fase === 'fim' ? tituloFim : duelTitle(NET.res),
         body: body, dismiss: false, buttons: btns,
     });
     if (r !== null) s.act = r;
@@ -1367,17 +1421,25 @@ function drawTitle(s, E) {
     E.gfx.text('sobrevivencia: onda ' + E.save.num('sobre.onda', 0), W / 2, 142, SUB_TXT);
     // elenco em escala 3 (cena estatica: o afim so roda no repaint)
     if (hasArt(E, ART[0])) {
-        E.spr.stamp(ART[0], 92, 200, OPT_BIG);
-        E.spr.stamp(ART[ITEM_ART.bomb], 388, 204, OPT_BIG);
+        E.spr.stamp(ART[0], 92, 178, OPT_BIG);
+        E.spr.stamp(ART[ITEM_ART.bomb], 388, 182, OPT_BIG);
     }
-    var c = E.ui.card(40, 206, W - 80, 250);
-    var bx = c.x;
-    bx += E.ui.badge('RECORDE ' + s.best, bx, c.y, { color: C(0xFFC83C), textColor: 0x0000 }) + 8;
-    E.ui.badge('FASE ' + clamp(s.unlocked, 1, 6) + '/6', bx, c.y);
-    if (E.ui.button('JOGAR', c.x, c.y + 36, c.w, 56, BTN_BIG)) s.act = 'play';
-    if (E.ui.button('SOBREVIVENCIA', c.x, c.y + 102, c.w, 44, BTN_SEC)) s.act = 'survive';
-    if (E.ui.button('DUELO', c.x, c.y + 152, c.w, 44, BTN_SEC)) s.act = 'duel';
-    if (E.ui.button('COMO JOGAR', c.x, c.y + 202, c.w, 40, BTN_SEC)) s.act = 'how';
+    // Menu no helper da engine (altura derivada dos itens, ancorado no
+    // rodape): o card fixo de 250 px em y=206 empurrava o COMO JOGAR para
+    // fora do vidro de 480 e os botoes de 56/44 liam gigantes.
+    var MITEMS = [
+        { label: 'JOGAR', value: 'play', icon: 'play' },
+        { label: 'SOBREVIVENCIA', value: 'survive' },
+        { label: 'DUELO', value: 'duel' },
+        { label: 'COMO JOGAR', value: 'how' }
+    ];
+    var mbox = E.ui.menuBox(MITEMS);
+    var bx = mbox.x + mbox.pad;
+    bx += E.ui.badge('RECORDE ' + s.best, bx, mbox.y - 30,
+                     { color: C(0xFFC83C), textColor: 0x0000 }) + 8;
+    E.ui.badge('FASE ' + clamp(s.unlocked, 1, 6) + '/6', bx, mbox.y - 30);
+    var mpick = E.ui.menuCard(MITEMS);
+    if (mpick) s.act = mpick;
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', contentH: 224,
                                     buttons: HOW_BTNS }, function (cr) {
@@ -1503,6 +1565,13 @@ function drawGame(s, E) {
         if (art) E.spr.stamp(ART[ITEM_ART[d.kind]], center(d.c), center(d.r) - bob, OPT_ART);
         else E.gfx.circle(center(d.c), center(d.r), 9, 0xFFE0, RED_DOT);
     }
+    // O Jogador e entidade da CENA (o engine a desenha ANTES deste draw):
+    // re-stampa aqui para ele ficar por cima da bomba quando esta no mesmo
+    // tile — antes a bomba recem-plantada escondia o personagem, que parecia
+    // ter desaparecido. Respeita o pisca da invulnerabilidade (active).
+    if (art && s.player && s.player.active !== false && s.player.spr) {
+        E.spr.stamp(s.player.spr, Math.round(s.player.x), Math.round(s.player.y), OPT_ART);
+    }
     // joystick
     if (s.joyOn && E.input.down) {
         E.gfx.circle(s.joyX0, s.joyY0, JOY_R, C(0x2A3A5A), JOY_RING);
@@ -1526,6 +1595,9 @@ function drawGame(s, E) {
         E.gfx.text('REI SLIME', 240, 24, BOSS_TXT);
     }
     if (s.msg) E.gfx.text(s.msg, s.W / 2, BOARD_H - 20, MSG_TXT);
+    // particulas/flash do E.fx: o draw da cena e quem desenha (burst, ring,
+    // flash e popText das explosoes/itens nunca apareciam)
+    if (E.fx) E.fx.draw();
 
     // HUD e botoes: memoizados fora da camada suja
     drawHud(s, E);
@@ -1610,7 +1682,11 @@ function drawHud(s, E) {
         E.gfx.text(Math.ceil(s.timeLeft) + ' s', 236, y0 + 7, HUD_R);
         E.ui.icon('clock', 168, y0 + 6, 16, { color: HUD_R.color });
     }
-    var cy = y0 + 46, x = 4;
+    // linha de status SEMPRE dentro do vidro: y0+46 fixo com o tabuleiro de
+    // 416 deixava os icones (16 px) metade para fora do 4848 (a faixa do HUD
+    // tem 64 px e a linha caia em 462..486)
+    var cy = Math.min(y0 + 46, s.H - 18);
+    var x = 4;
     if (s.art) {
         x = hudStat(E, x, cy, ITEM_ART.life, 'x' + s.lives, C(0xFF8B8B));
         x = hudStat(E, x, cy, ITEM_ART.bomb, '' + s.maxBombs, th.hudTxt);

@@ -1,6 +1,6 @@
 # Detona! - Celer Studio (nativo)
 
-Fonte única (1.2.2): o hub publica o build deste projeto desde a consolidação
+Fonte única (1.2.4): o hub publica o build deste projeto desde a consolidação
 de 2026-10-27 — a antiga cópia plana em `hub_apps/` foi removida. cada tela
 e fase é uma cena do Studio e o controlador é `Assets/Scripts/detona.js`.
 

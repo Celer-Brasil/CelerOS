@@ -4,7 +4,7 @@
   "studio": "0.1.0",
   "name": "Lenda de Celer",
   "packageName": "celeros.lenda",
-  "version": "2.2.2",
+  "version": "2.2.4",
   "author": "CelerOS",
   "description": "Remake NATIVO da Lenda de Celer no Celer Studio: as 20 salas ASCII (Campo, Gruta do Sabio e Templo) viram cenas com tilemap editavel e spawns como entidades. Espada, bomba, bumerangue, baus, Sabio, loja de cristais, paredes rachadas, guardiao com fases, save automatico, HUD e controles de toque.",
   "type": "Game",
@@ -22,7 +22,7 @@
     "celeros.game.tilemap": "^1.3.0",
     "celeros.game.ui": "^1.3.0"
   },
-  "changelog": "2.2.2: o botao SAIR do titulo funciona (chamava um ctx.exit que nao existe; agora usa E.quit e volta ao launcher) e o icone \"swap\" inexistente (desenhava um ponto) virou \"refresh\" no botao de item.\n2.2.1: seletor de save cabe no vidro: o VOLTAR nascia em y=443 e o rodape saia cortado; card, slots e botao reorganizados dentro de 480 px. Sem mudanca de jogabilidade.\n2.2.0: 3 slots de save com seletor (sala, cristais, minutos e quedas), troca do item B no menu de pausa e contagem de jornada/quedas; migra o save unico antigo para o slot 1",
+  "changelog": "2.2.4: menu do titulo no E.ui.menuCard (engine 1.4) — card ancorado no rodape com margem segura; o SAIR nao raspa mais o vidro de 480. Sem mudanca de jogabilidade.\n2.2.3: bomba volta a causar 2 de dano (o golpe contra inimigos corria DENTRO do laco 3x3 de celulas e aplicava o mesmo dano ate 9 vezes: uma bomba so derrubava o Guardiao); fagulhas/flash do E.fx desenhados de verdade (o draw da cena nao chamava E.fx.draw).\n2.2.2: o botao SAIR do titulo funciona (chamava um ctx.exit que nao existe; agora usa E.quit e volta ao launcher) e o icone \"swap\" inexistente (desenhava um ponto) virou \"refresh\" no botao de item.\n2.2.1: seletor de save cabe no vidro: o VOLTAR nascia em y=443 e o rodape saia cortado; card, slots e botao reorganizados dentro de 480 px. Sem mudanca de jogabilidade.\n2.2.0: 3 slots de save com seletor (sala, cristais, minutos e quedas), troca do item B no menu de pausa e contagem de jornada/quedas; migra o save unico antigo para o slot 1",
   "canvas": {
     "w": 480,
     "h": 480,

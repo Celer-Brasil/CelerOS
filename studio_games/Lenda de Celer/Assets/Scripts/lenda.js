@@ -854,10 +854,12 @@ function boom(s, E, x, y) {
                 saveState(s);
             }
         }
-        for (var e = s.enemies.length - 1; e >= 0; e--) {
-            var en = s.enemies[e];
-            if (en.hp > 0 && dist2(en.x, en.y, x, y) < 44 * 44) hitEnemy(s, E, en, 2);
-        }
+    }
+    // dano FORA do laco de celulas: dentro dele o 3x3 aplicava o mesmo
+    // golpe ate 9 vezes (2 de dano cada) e uma bomba so matava o Guardiao
+    for (var e = s.enemies.length - 1; e >= 0; e--) {
+        var en = s.enemies[e];
+        if (en.hp > 0 && dist2(en.x, en.y, x, y) < 44 * 44) hitEnemy(s, E, en, 2);
     }
     if (dist2(s.hx, s.hy, x, y) < 44 * 44) hurtHero(s, E, 1);
 }
@@ -994,10 +996,16 @@ function drawTitle(s, E) {
     E.gfx.text('LENDA DE CELER', W / 2, 266, LOGO_TXT);
     E.gfx.text('a pedra do templo despertou', W / 2, 300, SUB_TXT);
     if (s.pick) { drawSlots(s, E); return; }
-    var c = E.ui.card(40, 318, W - 80, 152);
-    if (E.ui.button('JOGAR', c.x, c.y, c.w, 46, BTN_NEW)) s.act = 'pick';
-    if (E.ui.button('AJUDA', c.x, c.y + 54, c.w, 40, BTN_HOW)) s.act = 'how';
-    if (E.ui.button('SAIR', c.x, c.y + 102, c.w, 40, BTN_CONT)) s.act = 'exit';
+    // Menu no helper da engine: altura derivada dos itens e ancorado no
+    // rodape. O card fixo (152 px em y=318) deixava o SAIR raspando o vidro
+    // de 480, com os botoes de 46/40 lendo grandes demais.
+    var MITEMS = [
+        { label: 'JOGAR', value: 'pick', icon: 'play' },
+        { label: 'AJUDA', value: 'how' },
+        { label: 'SAIR', value: 'exit' }
+    ];
+    var mpick = E.ui.menuCard(MITEMS);
+    if (mpick) s.act = mpick;
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY, buttons: HOW_BTNS });
         if (r !== null) s.act = 'howClose';
@@ -1099,6 +1107,9 @@ function drawGame(s, E) {
     }
     drawSword(s, E);
     if (s.art) drawFx(s, E);
+    // particulas/flash do E.fx (burst do golpe, fagulhas da bomba, flash do
+    // dano): o draw da cena e quem desenha — antes nada disso aparecia
+    if (E.fx) E.fx.draw();
     // HUD e botoes: memoizados fora da camada suja
     drawHud(s, E);
     // joystick: base assentada no toque + botao deslocado pelo diferencial

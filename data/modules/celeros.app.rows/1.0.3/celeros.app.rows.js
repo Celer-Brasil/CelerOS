@@ -10,11 +10,19 @@
 
 
 
+
+
+
+
+
+
+
+
 var A = require('celeros.app');
 var S = System;
 
 A.rows = {
-version: '1.0.0',
+version: '1.0.3',
 
 
 formRow: function (r, x, y, w, h, st) {
@@ -25,16 +33,18 @@ var lh = UI.lineHeight('body');
 var cap = UI.lineHeight('caption');
 var rw = r.k === 'toggle' ? 50
 : r.k === 'gauge' ? 88
-: r.k === 'stepper' ? 96
+: r.k === 'stepper' ? 112
 : (r.k === 'choice' || r.k === 'picker' || r.k === 'info') ? 120
 : 0;
 var lw = w - 8 - rw;
 if (lw < 8) lw = 8;
-UI.text(String(r.label === undefined ? '' : r.label), x,
-y + Math.round(r.sub ? h * .24 : (h - lh) / 2),
+
+
+var ty = y + Math.round((h - (r.sub ? lh + 1 + cap : lh)) / 2);
+UI.text(String(r.label === undefined ? '' : r.label), x, ty,
 { role: 'body', color: dis ? T.textDim : T.text, w: lw, lines: 1 });
 if (r.sub) {
-UI.text(String(r.sub), x, y + Math.round(h * .55),
+UI.text(String(r.sub), x, ty + lh + 1,
 { role: 'caption', color: T.textDim, w: lw, lines: 1 });
 }
 if (r.k === 'toggle') {
@@ -54,7 +64,11 @@ r.color === undefined ? T.accent : r.color);
 }
 } else if (r.k === 'stepper') {
 var sv = r.get();
-if (UI.button('-', x + w - 92, y + 2, 28, h - 4, { style: 'ghost' })) {
+
+
+
+
+if (UI.button('-', x + w - 108, y + 2, 28, h - 4, { style: 'ghost' })) {
 var n1 = sv - r.step;
 if (n1 < r.min) n1 = r.min;
 r.set(n1);
@@ -64,11 +78,18 @@ var n2 = sv + r.step;
 if (n2 > r.max) n2 = r.max;
 r.set(n2);
 }
-UI.text(String(r.fmt ? r.fmt(sv) : sv), x + w - 64,
+
+
+
+UI.text(String(r.fmt ? r.fmt(sv) : sv), x + w - 56,
 y + Math.round((h - lh) / 2),
-{ role: 'body', align: 'center', color: T.text, w: 32, lines: 1 });
+{ role: 'body', align: 'center', color: T.text, w: 44, lines: 1 });
 } else if (r.k === 'choice') {
-UI.text(String(r.opts[r.get() % r.opts.length]), x + w - 8,
+
+
+var co = r.opts || [], cv = r.get() | 0;
+var ci = co.length ? ((cv % co.length) + co.length) % co.length : 0;
+UI.text(String(co[ci] === undefined ? '' : co[ci]), x + w - 8,
 y + Math.round((h - cap) / 2),
 { role: 'caption', align: 'right', color: T.textDim,
 w: 112, lines: 1 });

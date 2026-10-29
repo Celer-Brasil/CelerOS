@@ -260,6 +260,19 @@ declare namespace E {
         menu(items: (string | MenuItem)[], o?: {
             x?: number; y?: number; w?: number; row?: number; primary?: boolean;
         }): any;
+        /** geometria do menu de titulo (altura derivada dos itens, ancorado no
+         * rodape). Scratch: vale ate a proxima chamada de menuBox/menuCard. */
+        menuBox(items: (string | MenuItem)[], o?: {
+            x?: number; w?: number; y?: number; bottom?: number; gap?: number;
+            h1?: number; h2?: number; pad?: number;
+        }): { x: number; y: number; w: number; h: number;
+              pad: number; h1: number; h2: number; gap: number };
+        /** menu de titulo com card por tras: devolve o value/label tocado, ou null */
+        menuCard(items: (string | MenuItem)[], o?: {
+            x?: number; w?: number; y?: number; bottom?: number; gap?: number;
+            h1?: number; h2?: number; pad?: number;
+            bg?: number; r?: number; elev?: number;
+        }): any;
         /** lista com rolagem/inercia, secoes, icones e painter custom */
         list(o: UiListOpts): ListState;
         /** texto datilografado; choices viram botoes; sound = blip */

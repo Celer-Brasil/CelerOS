@@ -16,6 +16,14 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme) por baixo dos tokens.
 //
+// 1.4.0: E.ui.menuBox/menuCard — menu de titulo com a altura DERIVADA dos
+// itens e ancorado no rodape com margem: os cards por jogo (px absolutos)
+// deixavam o ultimo botao fora do vidro no 4848 e, com E.U=2, tudo ficava
+// grande demais. Os quatro jogos do Studio adotam este menu.
+// 1.3.3: anim com ms 0 chegava no alvo (ficava presa no valor antigo para
+// sempre); progress/ring/slider a prova de NaN (o guard `x < 0` deixava NaN
+// passar); E.init zera o estado de UI do jogo anterior no mesmo processo
+// (rolagem/animacao/toast/assinatura do HUD vazavam entre E.init).
 // 1.3.2: a assinatura do HUD memoizado leva geometria (x/y/w/h) e as cores
 // (bg/life/coin/score/time): mudar so cor/posicao repinta em vez de servir
 // HUD velho (a caixa movida nunca apagava a anterior).
@@ -119,6 +127,7 @@ var _txs = { ts: 'body', align: 'center', valign: undefined, color: 0, screen: t
 var _bt = { ts: 'body', color: 0, align: 'center', valign: 'middle', fit: 0, screen: true };
 var _mn = { y: undefined, x: undefined, w: undefined, row: undefined, primary: undefined };
 var _mOp = { variant: 'secondary', icon: undefined, disabled: false };
+var _mb = { x: 0, y: 0, w: 0, h: 0, pad: 0, h1: 0, h2: 0, gap: 0 };
 var _dimO = { screen: true, bg: undefined };
 var _arrow = { color: 0, screen: true };
 var _wM = { font: 0, size: 0 };
@@ -448,7 +457,7 @@ function dialogInput(d, o, x, y, w, h) {
 // ------------------------------------------------------------ E.ui ---------
 
 E.ui = {
-    version: '1.3.2',
+    version: '1.4.0',
     tokens: TK,
 
     // patch de tokens (aceita '#rrggbb'); guarda para reaplicar se o E.theme
@@ -770,7 +779,7 @@ E.ui = {
         var kr = o.kr === undefined ? Math.round(9 * E.U) : o.kr;
         var id = o.id || 'slider';
         var t = (value - min) / (max - min);
-        if (t < 0) t = 0; if (t > 1) t = 1;
+        if (!(t >= 0)) t = 0; if (t > 1) t = 1;
         if (!E.input.down) { if (_sOn === id) _sOn = null; }
         if (E.input.justDown && downIn(x, y, w, h, kr)) _sOn = id;
         if (_sOn === id && E.input.down) {
@@ -950,7 +959,9 @@ E.ui = {
     progress: function (x, y, w, h, frac, o) {
         ensure();
         o = o || EMPTY;
-        var f = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
+        // guard a prova de NaN: `frac < 0` deixava NaN passar (o mesmo caso
+        // do game.world/grid) e a barra morria sem pintar nem fundo novo
+        var f = !(frac >= 0) ? 0 : (frac > 1 ? 1 : frac);
         var r = o.r === undefined ? h / 2 : o.r;
         _bo.screen = true; _bo.r = r; _bo.fill = true; _bo.bw = 0;
         _bo.stroke = undefined; _bo.grad = undefined; _bo.elev = 0;
@@ -974,7 +985,8 @@ E.ui = {
         ensure();
         o = o || EMPTY;
         var th = o.th === undefined ? Math.round(5 * E.U) : o.th;
-        var f = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
+        // idem progress: NaN no frac passava pelo `frac < 0`
+        var f = !(frac >= 0) ? 0 : (frac > 1 ? 1 : frac);
         E.gfx.arc(cx, cy, Math.max(0, r - th), r, 0, 360,
                   o.bg === undefined ? TK.surface3 : o.bg, _ia);
         if (f > 0.005) {
@@ -1039,6 +1051,73 @@ E.ui = {
                             rowH - Math.round(4 * E.U), _mOp)) {
                 picked = it.value !== undefined ? it.value : it.label;
             }
+        }
+        return picked;
+    },
+
+    // Menu de TITULO: bloco compacto ancorado no rodape, com card por tras e
+    // margem segura. Nasceu do passe visual no 4848 (480x480): cada jogo
+    // posicionava os botoes em px absolutos e o ultimo caia fora da tela
+    // (quatro botoes de 40-58 px + pad passavam de 480) e, com U=2, tudo
+    // ficava gigante. Aqui a ALTURA sai dos itens (primario mais alto, os
+    // demais iguais, gap entre eles, pad em volta) e o card e ancorado no
+    // rodape: cabe em qualquer vidro e o visual fica o mesmo nos quatro
+    // jogos. Items: string ou {label, value, variant, icon, badge, disabled,
+    // danger}. o: {x, w, y, bottom, gap, h1, h2, pad, bg, r, elev}.
+    // Devolve o value (ou label) do item tocado neste quadro, ou null.
+    menuBox: function (items, o) {
+        ensure();
+        o = o || EMPTY;
+        var n = items ? items.length : 0;
+        var x = o.x === undefined ? Math.round(16 * E.U) : o.x;
+        var w = o.w === undefined ? E.W - 2 * x : o.w;
+        var gap = o.gap === undefined ? Math.round(4 * E.U) : o.gap;
+        var h1 = o.h1 === undefined ? Math.round(22 * E.U) : o.h1;
+        var h2 = o.h2 === undefined ? Math.round(18 * E.U) : o.h2;
+        var pad = o.pad === undefined ? Math.round(6 * E.U) : o.pad;
+        var bottom = o.bottom === undefined ? Math.round(8 * E.U) : o.bottom;
+        var h = pad * 2 + h1 + (n > 1 ? (n - 1) * (h2 + gap) : 0);
+        var y = o.y === undefined ? E.H - bottom - h : o.y;
+        if (y + h > E.H) y = E.H - h;    // nunca passa do vidro
+        if (y < 0) y = 0;
+        _mb.x = x; _mb.y = y; _mb.w = w; _mb.h = h;
+        _mb.pad = pad; _mb.h1 = h1; _mb.h2 = h2; _mb.gap = gap;
+        return _mb;
+    },
+
+    menuCard: function (items, o) {
+        ensure();
+        o = o || EMPTY;
+        var n = items ? items.length : 0;
+        if (!n) return null;
+        var b = E.ui.menuBox(items, o);
+        var c = E.ui.card(b.x, b.y, b.w, b.h,
+                          { pad: b.pad, r: o.r, bg: o.bg, elev: o.elev });
+        var by = c.y, picked = null;
+        for (var i = 0; i < n; i++) {
+            var it = typeof items[i] === 'string' ? { label: items[i] } : items[i];
+            var bh = i === 0 ? b.h1 : b.h2;
+            var variant = it.disabled ? 'secondary'
+                        : (it.danger ? 'danger'
+                        : (it.variant || (i === 0 ? 'primary' : 'secondary')));
+            // chip na linha: o botao ENCOLHE para o chip caber ao lado — com
+            // o botao de largura cheia o rotulo (centrado) ficava por baixo
+            // do badge (o "CAMPANHA" do Supernova virava "CAMPA..").
+            var bgw = it.badge ? Math.round(44 * E.U) : 0;
+            var bwid = bgw ? c.w - bgw - b.gap : c.w;
+            _mOp.variant = variant;
+            _mOp.icon = it.icon;
+            _mOp.disabled = !!it.disabled;
+            if (E.ui.button(it.label, c.x, by, bwid, bh, _mOp)) {
+                picked = it.value !== undefined ? it.value : it.label;
+            }
+            if (bgw) {
+                var bgh = Math.round(18 * E.U);
+                E.ui.badge(it.badge, c.x + bwid + b.gap,
+                           by + Math.round((bh - bgh) / 2),
+                           { w: bgw, color: it.badgeColor, textColor: it.badgeTextColor });
+            }
+            by += bh + b.gap;
         }
         return picked;
     },
@@ -1635,6 +1714,10 @@ E.ui = {
                 a.t = 0;
                 a.d = ms === undefined ? 180 : ms;
                 a.e = ease || 'outCubic';
+                // 1.3.3: ms 0 (ou negativo) nunca entrava no passo (a.d > 0)
+                // e a chave ficava presa no valor ANTIGO para sempre — modal
+                // com {ms: 0} nao abria. Duracao nula = chega no alvo.
+                if (!(a.d > 0)) a.v = target;
             }
         }
         if (a.d > 0 && a.t < a.d) {
@@ -1735,6 +1818,28 @@ E.ui = {
         if (mudo) E.dirty._mute--;
         return h;
     }
+};
+
+// E.init de outro app no MESMO processo (o comentario do theme() vale aqui:
+// o require vive enquanto a sessao) nao pode herdar o estado de UI do
+// anterior: rolagem/inercia e animacoes sao keyed por id ("scroll", "modal"
+// se repetem entre jogos), a fila de toast do jogo velho continuar
+// desenhando e chamando E.redraw() e o HUD com assinatura igual servia o
+// memo de quem ja saiu. No device cada app tem heap propria; aqui o reset
+// e de graca.
+var _coreInit = E.init;
+E.init = function (opts) {
+    var r = _coreInit(opts);
+    var k;
+    for (k in _scrolls) if (_scrolls.hasOwnProperty(k)) delete _scrolls[k];
+    for (k in E.ui._anims) if (E.ui._anims.hasOwnProperty(k)) delete E.ui._anims[k];
+    E.ui._toasts.length = 0;
+    E.ui._toast.msg = null;
+    E.ui._toast.until = 0;
+    E.ui._hudSig = '\u0000';
+    E.ui._hudBB = null;
+    _tapUsed = false;
+    return r;
 };
 
 // overlay do toast (fila): relogio REAL (a pausa congela os ticks, nao o

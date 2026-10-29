@@ -22,6 +22,8 @@
 // sao RECONSTRUIDAS depois de cada acao (o cb pode mudar tudo); toggle e
 // choice aplicam sozinhos. Linhas cruas do UI.list passam direto.
 //
+// 1.1.2: choice sem opts (ou indice negativo) nao corrompia mais a escolha:
+// o tap fazia set(NaN) (x % 0) e a linha mostrava "undefined".
 // 1.1.0: gauge/stepper/card; A.form.run usa A.list.view quando presente
 // (precisa do pintor celeros.app.rows para as linhas ricas) e cai no
 // UI.list nativo se nao houver. A dependencia nova e celeros.app.list.
@@ -56,8 +58,12 @@ function rowsOf(rows) {
             out.push({ label: r.label, right: on ? 'Sim' : 'Não',
                        rightColor: on ? T.ok : T.textDim });
         } else if (r.k === 'choice') {
+            // idem rows: indice negativo e opts vazio/ausente nao viram
+            // "undefined" no right da linha
             var v = r.get() | 0;
-            out.push({ label: r.label, right: r.opts[v % r.opts.length] });
+            var co = r.opts || [];
+            var ci = co.length ? ((v % co.length) + co.length) % co.length : 0;
+            out.push({ label: r.label, right: co[ci] === undefined ? '' : co[ci] });
         } else if (r.k === 'picker') {
             out.push({ label: r.label, right: r.items[r.get()] || '', sub: r.sub });
         } else if (r.k === 'gauge' || r.k === 'stepper') {
@@ -72,7 +78,7 @@ function rowsOf(rows) {
 }
 
 A.form = {
-    version: '1.1.1',
+    version: '1.1.2',
 
     // ---- construtores de linha ---------------------------------------------
     info: function (label, value, color) {
@@ -145,7 +151,8 @@ A.form = {
                     if (sv > r.max) sv = r.max;
                     if (sv < r.min) sv = r.min;
                     r.set(sv);
-                } else if (r && r.k === 'choice') {
+                } else if (r && r.k === 'choice' && r.opts && r.opts.length) {
+                    // sem opts o set() recebia NaN e a escolha corrompia
                     r.set(((r.get() | 0) + 1) % r.opts.length);
                     refresh = true;
                 } else if (r && r.k === 'picker') {

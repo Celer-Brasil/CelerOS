@@ -18,6 +18,11 @@
 // A.list.sort(itens, keyFn) ordena ASC com a chave calculada UMA vez
 // (desc = true inverte). A.list.badge('ok'|'warn'|'err'|'dim') devolve a cor.
 //
+// 1.1.2: linha de duas linhas (rotulo+legenda) medida pelas FONTES: o par
+// saia de fracoes do rowH (.24/.55) e a legenda era pintada por cima do
+// rotulo nas linhas curtas (Regras pedia 32, o A.form 36); agora o rotulo
+// empilha em cima da legenda e o rowH minimo sobe para o par caber.
+// 1.1.1: sort(desc) estavel (o reverse quebrava a ordem de chaves iguais).
 // 1.1.0: A.list.view(id, x,y,w,h, items, o): lista RICA desenhada em JS
 // sobre UI.card + UI.scrollBegin (icone/secao/sub/right/badge/bars, painter
 // custom e widget nativo por linha). A UI.list nativa continua para o caso
@@ -26,7 +31,7 @@
 var A = require('celeros.app');
 
 A.list = {
-    version: '1.1.0',
+    version: '1.1.2',
 
     // cache por carimbo: getStamp() roda TODO frame (tem que ser barato);
     // build() so roda quando o carimbo muda
@@ -49,24 +54,19 @@ A.list = {
         var n = items.length;
         var keys = new Array(n);
         for (var i = 0; i < n; i++) keys[i] = String(keyFn(items[i]));
-        // insertion sort estavel (listas de apps sao dezenas, nao milhares)
+        // insertion sort estavel (listas de apps sao dezenas, nao milhares);
+        // desc = comparador invertido — o reverse depois do sort perdia a
+        // estabilidade (chaves iguais saiam na ordem contraria da original)
         for (var a = 1; a < n; a++) {
             var it = items[a], k = keys[a];
             var b = a - 1;
-            while (b >= 0 && keys[b] > k) {
+            while (b >= 0 && (desc ? keys[b] < k : keys[b] > k)) {
                 keys[b + 1] = keys[b];
                 items[b + 1] = items[b];
                 b--;
             }
             keys[b + 1] = k;
             items[b + 1] = it;
-        }
-        if (desc) {
-            for (var c = 0, d = n - 1; c < d; c++, d--) {
-                var tmp = items[c];
-                items[c] = items[d];
-                items[d] = tmp;
-            }
         }
         return items;
     },
@@ -102,6 +102,22 @@ A.list = {
         var S = System;
         var T = (A.style && A.style.T) || A.T || S.theme() || {};
         var rowH = o.row === undefined ? 36 : o.row;
+        if (rowH < 1) rowH = 1;
+        var lh = UI.lineHeight('body');
+        var cap = UI.lineHeight('caption');
+        var two = lh + 1 + cap;   // rotulo + 1 px de respiro + legenda
+        // duas linhas precisam de `two`: as fracoes fixas do rowH pintavam
+        // a legenda em cima do rotulo quando a linha era curta (Regras 32,
+        // A.form 36). Varre so quando a linha pedida nao cabe — lista sem
+        // legenda nao paga nada.
+        if (rowH < two + 2) {
+            for (var z = 0; z < items.length; z++) {
+                if (items[z] && typeof items[z] === 'object' && items[z].sub) {
+                    rowH = two + 2;
+                    break;
+                }
+            }
+        }
         var pad = o.pad === undefined ? 6 : o.pad;
         var panel = o.panel !== false;
         var panelBg = o.panelBg === undefined ? T.card : o.panelBg;
@@ -159,13 +175,14 @@ A.list = {
                     rw = UI.measure(String(it.badge), 'caption') + 22;
                 else if (it.bars >= 0) rw = 26;
                 var lw = sw - (tx - sx) - 8 - rw;
-                var lh = UI.lineHeight('body');
                 var sub = it.sub !== undefined && it.sub !== '';
-                UI.text(String(it.label === undefined ? '' : it.label), tx,
-                        ry + Math.round(sub ? rowH * .24 : (rowH - lh) / 2),
+                // rotulo e legenda EMPILHADOS pela altura real das fontes e
+                // centrados no par (a legenda nunca encosta no rotulo)
+                var ty = ry + Math.round((rowH - (sub ? two : lh)) / 2);
+                UI.text(String(it.label === undefined ? '' : it.label), tx, ty,
                         { role: 'body', color: color, w: lw, lines: 1 });
                 if (sub) {
-                    UI.text(String(it.sub), tx, ry + Math.round(rowH * .55),
+                    UI.text(String(it.sub), tx, ty + lh + 1,
                             { role: 'caption', color: T.textDim, w: lw, lines: 1 });
                 }
                 if (it.right !== undefined) {

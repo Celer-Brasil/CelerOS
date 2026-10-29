@@ -54,7 +54,7 @@ module.exports = function (check) {
 
     // ================================================================ style
     var c = fresh(['style']);
-    check('style: version e tokens vivos', c.A.style.version === '1.1.0' &&
+    check('style: version e tokens vivos', c.A.style.version === '1.1.1' &&
           c.A.style.T.radius === 10 && c.A.style.T.card !== undefined);
     c.A.style.preset('flat');
     check('style: preset flat (raio 6, sem sombra/gradiente)',
@@ -201,6 +201,47 @@ module.exports = function (check) {
     });
     check('rows: gauge/stepper desenham no list.view sem erro', painted === -1,
           String(painted));
+
+    // ---- regressao: linha de DUAS linhas (rotulo + legenda) empilhada
+    // As fracoes .24/.55 do rowH punham a legenda em cima do rotulo nas
+    // linhas curtas (Regras 32, A.form 36) — no 4848 o corpo mede 19 e a
+    // legenda 14 no espaco virtual. O shim padrao mede 8/8 e nao reproduz
+    // o bug, entao aqui as metricas do 4848 entram na mao.
+    function doisTextos(mods, rowH, formRow) {
+        var cx = fresh(mods, function (env) {
+            env.System.fontHeight = function (font) { return font === 1 ? 14 : 19; };
+            env.__txt = [];
+            var ot = env.UI.text;
+            env.UI.text = function (s, x, y, o) {
+                env.__txt.push({ s: String(s), y: y });
+                return ot.apply(env.UI, arguments);
+            };
+        });
+        frames(cx, 4, function () {
+            var o = { row: rowH };
+            if (formRow) o.paintRow = cx.A.rows.formRow;
+            cx.A.list.view('d2', 20, 60, 200, 120,
+                           formRow ? [{ k: 'action', label: 'R', sub: 'S' }]
+                                   : [{ label: 'R', sub: 'S' }], o);
+        });
+        var achar = function (s) {
+            for (var i = 0; i < cx.env.__txt.length; i++) {
+                if (cx.env.__txt[i].s === s) return cx.env.__txt[i].y;
+            }
+            return null;
+        };
+        return { lab: achar('R'), sub: achar('S') };
+    }
+    [32, 36, undefined].forEach(function (rh) {
+        var r = doisTextos(['style', 'icons', 'list'], rh);
+        check('list.view: legenda ABAIXO do rotulo (row ' + (rh || 'auto') + ')',
+              r.lab !== null && r.sub !== null && r.sub - r.lab >= 19,
+              JSON.stringify([r.lab, r.sub]));
+    });
+    var fr = doisTextos(['style', 'icons', 'list', 'form', 'rows'], 36, true);
+    check('rows.formRow: legenda ABAIXO do rotulo (row 36)',
+          fr.lab !== null && fr.sub !== null && fr.sub - fr.lab >= 19,
+          JSON.stringify([fr.lab, fr.sub]));
 
     // ================================================================ d.ts + size
     var dts = {};

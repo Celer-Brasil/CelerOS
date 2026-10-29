@@ -28,6 +28,8 @@
 
 
 
+
+
 var A = require('celeros.app');
 require('celeros.app.list');
 
@@ -56,8 +58,12 @@ var on = !!r.get();
 out.push({ label: r.label, right: on ? 'Sim' : 'Não',
 rightColor: on ? T.ok : T.textDim });
 } else if (r.k === 'choice') {
+
+
 var v = r.get() | 0;
-out.push({ label: r.label, right: r.opts[v % r.opts.length] });
+var co = r.opts || [];
+var ci = co.length ? ((v % co.length) + co.length) % co.length : 0;
+out.push({ label: r.label, right: co[ci] === undefined ? '' : co[ci] });
 } else if (r.k === 'picker') {
 out.push({ label: r.label, right: r.items[r.get()] || '', sub: r.sub });
 } else if (r.k === 'gauge' || r.k === 'stepper') {
@@ -72,7 +78,7 @@ return out;
 }
 
 A.form = {
-version: '1.1.1',
+version: '1.1.2',
 
 
 info: function (label, value, color) {
@@ -145,7 +151,8 @@ var sv = r.get() + r.step;
 if (sv > r.max) sv = r.max;
 if (sv < r.min) sv = r.min;
 r.set(sv);
-} else if (r && r.k === 'choice') {
+} else if (r && r.k === 'choice' && r.opts && r.opts.length) {
+
 r.set(((r.get() | 0) + 1) % r.opts.length);
 refresh = true;
 } else if (r && r.k === 'picker') {

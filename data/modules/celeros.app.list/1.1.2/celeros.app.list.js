@@ -24,10 +24,14 @@
 
 
 
+
+
+
+
 var A = require('celeros.app');
 
 A.list = {
-version: '1.1.1',
+version: '1.1.2',
 
 
 
@@ -98,6 +102,22 @@ o = o || {};
 var S = System;
 var T = (A.style && A.style.T) || A.T || S.theme() || {};
 var rowH = o.row === undefined ? 36 : o.row;
+if (rowH < 1) rowH = 1;
+var lh = UI.lineHeight('body');
+var cap = UI.lineHeight('caption');
+var two = lh + 1 + cap;
+
+
+
+
+if (rowH < two + 2) {
+for (var z = 0; z < items.length; z++) {
+if (items[z] && typeof items[z] === 'object' && items[z].sub) {
+rowH = two + 2;
+break;
+}
+}
+}
 var pad = o.pad === undefined ? 6 : o.pad;
 var panel = o.panel !== false;
 var panelBg = o.panelBg === undefined ? T.card : o.panelBg;
@@ -155,13 +175,14 @@ else if (it.badge !== undefined)
 rw = UI.measure(String(it.badge), 'caption') + 22;
 else if (it.bars >= 0) rw = 26;
 var lw = sw - (tx - sx) - 8 - rw;
-var lh = UI.lineHeight('body');
 var sub = it.sub !== undefined && it.sub !== '';
-UI.text(String(it.label === undefined ? '' : it.label), tx,
-ry + Math.round(sub ? rowH * .24 : (rowH - lh) / 2),
+
+
+var ty = ry + Math.round((rowH - (sub ? two : lh)) / 2);
+UI.text(String(it.label === undefined ? '' : it.label), tx, ty,
 { role: 'body', color: color, w: lw, lines: 1 });
 if (sub) {
-UI.text(String(it.sub), tx, ry + Math.round(rowH * .55),
+UI.text(String(it.sub), tx, ty + lh + 1,
 { role: 'caption', color: T.textDim, w: lw, lines: 1 });
 }
 if (it.right !== undefined) {

@@ -19,6 +19,8 @@
 
 
 
+
+
 var A = require('celeros.app');
 require('celeros.app.style');
 require('celeros.app.icons');
@@ -58,7 +60,7 @@ return t.down && t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h;
 }
 
 A.widgets = {
-version: '1.0.1',
+version: '1.0.2',
 
 
 
@@ -171,7 +173,9 @@ ring: function (cx, cy, r, frac, o) {
 o = o || {};
 var T = A.style.T;
 var th = o.th === undefined ? 5 : o.th;
-var f = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
+
+
+var f = !(frac >= 0) ? 0 : (frac > 1 ? 1 : frac);
 S.fillArc(cx, cy, Math.max(0, r - th), r, 0, 360,
 o.bg === undefined ? T.raised : o.bg);
 if (f > 0.005) {

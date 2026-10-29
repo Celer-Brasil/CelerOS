@@ -108,7 +108,7 @@ mix(bg, 0x0000, 0.12 * i));
 
 
 A.style = {
-version: '1.1.0',
+version: '1.1.1',
 T: T,
 
 
@@ -180,7 +180,11 @@ var el = o.elev === undefined ? T.shadow : o.elev;
 if (el > 0) shadow(x, y, w, h, r, el, bg);
 }
 UI.card(x, y, w, h, { color: bg, radius: r, stroke: stroke });
-if (o.full && (o.grad === undefined ? T.grad : o.grad)) {
+
+
+
+
+if (o.full && (o.grad === undefined ? (T.grad && !o.draw) : o.grad)) {
 S.fillGradient(x, y, w, h, mix(bg, 0xFFFF, 0.06), bg, r);
 if (stroke) S.drawRoundRect(x, y, w, h, r, T.stroke);
 }

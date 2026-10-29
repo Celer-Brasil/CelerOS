@@ -22,6 +22,8 @@ require('celeros.app.path');
 
 
 
+
+
 function nomeSeguro(n) {
 var s = String(n === undefined || n === null ? '' : n);
 return s.length > 0 && s !== '.' && s !== '..' && s.indexOf('/') < 0 &&
@@ -29,7 +31,7 @@ s.indexOf('\\') < 0 && s.indexOf('..') < 0;
 }
 
 A.fsx = {
-version: '1.0.2',
+version: '1.0.3',
 
 
 
@@ -98,7 +100,13 @@ ok = !!Net.download(fe.url, ftmp, function (got, total) {
 if (onStep) onStep(fe.name, got, total);
 });
 } catch (e) { ok = false; }
-if (!ok) { fail = 'Erro ao baixar ' + fe.name; break; }
+if (!ok) {
+
+
+try { FS.deleteFile(ftmp); } catch (e9) { }
+fail = 'Erro ao baixar ' + fe.name;
+break;
+}
 if (fe.md5 && A.fsx.md5(ftmp) !== fe.md5) {
 try { FS.deleteFile(ftmp); } catch (e2) { }
 fail = 'Verificacao falhou (md5)';

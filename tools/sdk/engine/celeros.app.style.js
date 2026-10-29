@@ -108,7 +108,7 @@ function shadow(x, y, w, h, r, n, bg) {
 
 // ----------------------------------------------------------- A.style ------
 A.style = {
-    version: '1.1.0',
+    version: '1.1.1',
     T: T,
     // capacidade: UI.custom/clip nativos (S3, API 52). Na CYD fica false e
     // o A.style.custom usa o caminho base (frame total + assinatura).
@@ -180,7 +180,11 @@ A.style = {
             if (el > 0) shadow(x, y, w, h, r, el, bg);
         }
         UI.card(x, y, w, h, { color: bg, radius: r, stroke: stroke });
-        if (o.full && (o.grad === undefined ? T.grad : o.grad)) {
+        // O gradiente PADRAO nao entra em card com conteudo pintado pelo app
+        // (o.draw): os UI.text de dentro limpam o slot com a cor `bg` chapa
+        // e cada texto virava um retangulo mais claro que o topo do card (no
+        // 4848, onde T.grad e true). `grad: true` explicito continua valendo.
+        if (o.full && (o.grad === undefined ? (T.grad && !o.draw) : o.grad)) {
             S.fillGradient(x, y, w, h, mix(bg, 0xFFFF, 0.06), bg, r);
             if (stroke) S.drawRoundRect(x, y, w, h, r, T.stroke);
         }

@@ -22,6 +22,8 @@ require('celeros.app.path');
 // nome de arquivo do pacote aceito: so o NOME (nada de "/" nem "..") — o
 // catalogo do hub e dado de fora e "<dir>/../../local/modules/x.new" sairia
 // da pasta do app
+// 1.0.3: falha de download no stage apaga o .new parcial (o contrato de
+// limpeza so cobria os arquivos ja conferidos).
 function nomeSeguro(n) {
     var s = String(n === undefined || n === null ? '' : n);
     return s.length > 0 && s !== '.' && s !== '..' && s.indexOf('/') < 0 &&
@@ -29,7 +31,7 @@ function nomeSeguro(n) {
 }
 
 A.fsx = {
-    version: '1.0.2',
+    version: '1.0.3',
 
     // bytes livres no drive (default "/local"; use "/sd" no cartao). O
     // binding exige o drive (JsFs.cpp): chamar sem argumento lancava e o
@@ -98,7 +100,13 @@ A.fsx = {
                     if (onStep) onStep(fe.name, got, total);
                 });
             } catch (e) { ok = false; }
-            if (!ok) { fail = 'Erro ao baixar ' + fe.name; break; }
+            if (!ok) {
+                // o contrato e "qualquer falha apaga os .new": o parcial do
+                // download quebrou fora do staged[] e ficava no disco
+                try { FS.deleteFile(ftmp); } catch (e9) { /* nada a apagar */ }
+                fail = 'Erro ao baixar ' + fe.name;
+                break;
+            }
             if (fe.md5 && A.fsx.md5(ftmp) !== fe.md5) {
                 try { FS.deleteFile(ftmp); } catch (e2) { /* nada a apagar */ }
                 fail = 'Verificacao falhou (md5)';

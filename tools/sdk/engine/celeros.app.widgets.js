@@ -16,6 +16,8 @@
 //       title: "Opcoes" }, function (r) { ... });
 //   if (s === "close") cfgOpen = false;
 //
+// 1.0.2: ring a prova de NaN no frac (o guard `frac < 0` deixava NaN passar
+// e o arco morria sem pintar).
 // 1.0.0: primeira versao (header/acoes, button/iconButton, ring, sheet,
 // stepper, segmented).
 
@@ -58,7 +60,7 @@ function pressIn(x, y, w, h) {
 }
 
 A.widgets = {
-    version: '1.0.1',
+    version: '1.0.2',
 
     // botao com icone (o A.style.button delega para ca quando ha icone).
     // Sem icone o caminho nativo do style (UI.button) e melhor: ele tem
@@ -171,7 +173,9 @@ A.widgets = {
         o = o || {};
         var T = A.style.T;
         var th = o.th === undefined ? 5 : o.th;
-        var f = frac < 0 ? 0 : (frac > 1 ? 1 : frac);
+        // guard a prova de NaN: `frac < 0` deixava NaN passar e o arco
+        // sumia sem pintar (mesmo padrao consertado no game.ui/world/grid)
+        var f = !(frac >= 0) ? 0 : (frac > 1 ? 1 : frac);
         S.fillArc(cx, cy, Math.max(0, r - th), r, 0, 360,
                   o.bg === undefined ? T.raised : o.bg);
         if (f > 0.005) {

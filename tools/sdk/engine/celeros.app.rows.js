@@ -8,13 +8,21 @@
 //   require("celeros.app.rows");
 //   A.form.run("Ajustes", function () { return [ ... ]; });
 //
+// 1.0.3: stepper legivel: align:'center' centra NO x (nao na caixa), entao
+// o valor era desenhado em cima do botao "-" e lia-se "-100%"; agora o
+// centro e o MEIO entre os botoes (x+w-56) com o "-" recuado 16 px.
+// 1.0.2: rotulo e legenda EMPILHADOS pela altura real das fontes (as
+// fracoes .24/.55 do rowH jogavam a legenda por cima do rotulo nas linhas
+// de 36 do A.form).
+// 1.0.1: choice a prova de indice negativo/opts vazio (`r.opts[-1]` e
+// `x % 0` mostravam "undefined" na linha).
 // 1.0.0: primeira versao.
 
 var A = require('celeros.app');
 var S = System;
 
 A.rows = {
-    version: '1.0.0',
+    version: '1.0.3',
 
     // pintor de linha do form: (r, x, y, w, h, state)
     formRow: function (r, x, y, w, h, st) {
@@ -25,16 +33,18 @@ A.rows = {
         var cap = UI.lineHeight('caption');
         var rw = r.k === 'toggle' ? 50
                : r.k === 'gauge' ? 88
-               : r.k === 'stepper' ? 96
+               : r.k === 'stepper' ? 112
                : (r.k === 'choice' || r.k === 'picker' || r.k === 'info') ? 120
                : 0;
         var lw = w - 8 - rw;
         if (lw < 8) lw = 8;
-        UI.text(String(r.label === undefined ? '' : r.label), x,
-                y + Math.round(r.sub ? h * .24 : (h - lh) / 2),
+        // rotulo e legenda empilhados pela altura real das fontes (com 1 px
+        // de respiro): o par fica centrado e a legenda nao encosta no rotulo
+        var ty = y + Math.round((h - (r.sub ? lh + 1 + cap : lh)) / 2);
+        UI.text(String(r.label === undefined ? '' : r.label), x, ty,
                 { role: 'body', color: dis ? T.textDim : T.text, w: lw, lines: 1 });
         if (r.sub) {
-            UI.text(String(r.sub), x, y + Math.round(h * .55),
+            UI.text(String(r.sub), x, ty + lh + 1,
                     { role: 'caption', color: T.textDim, w: lw, lines: 1 });
         }
         if (r.k === 'toggle') {
@@ -54,7 +64,11 @@ A.rows = {
             }
         } else if (r.k === 'stepper') {
             var sv = r.get();
-            if (UI.button('-', x + w - 92, y + 2, 28, h - 4, { style: 'ghost' })) {
+            // valor entre os dois botoes: a caixa de 32 do 1.0.2 nao cabia
+            // "100%" na fonte body do vidro grande e o texto VAZAVA sobre o
+            // "-" e o "+" (a linha lia "-100%" num pill so). 48 de caixa
+            // (x+w-80..x+w-32) com o "-" recuado para x+w-108
+            if (UI.button('-', x + w - 108, y + 2, 28, h - 4, { style: 'ghost' })) {
                 var n1 = sv - r.step;
                 if (n1 < r.min) n1 = r.min;
                 r.set(n1);
@@ -64,11 +78,18 @@ A.rows = {
                 if (n2 > r.max) n2 = r.max;
                 r.set(n2);
             }
-            UI.text(String(r.fmt ? r.fmt(sv) : sv), x + w - 64,
+            // align:'center' no toolkit centra NO x (o w so limita/ellipsiza):
+            // o valor tem que ser centrado no MEIO dos botoes, nao na borda
+            // da caixa — x+w-64 (1.0.2) ficava metade sobre o "-"
+            UI.text(String(r.fmt ? r.fmt(sv) : sv), x + w - 56,
                     y + Math.round((h - lh) / 2),
-                    { role: 'body', align: 'center', color: T.text, w: 32, lines: 1 });
+                    { role: 'body', align: 'center', color: T.text, w: 44, lines: 1 });
         } else if (r.k === 'choice') {
-            UI.text(String(r.opts[r.get() % r.opts.length]), x + w - 8,
+            // indice negativo (`-1 % 3` = -1) e opts vazio/ausente mostravam
+            // "undefined"; modulo tem que dobrar e opts vazio vira texto vazio
+            var co = r.opts || [], cv = r.get() | 0;
+            var ci = co.length ? ((cv % co.length) + co.length) % co.length : 0;
+            UI.text(String(co[ci] === undefined ? '' : co[ci]), x + w - 8,
                     y + Math.round((h - cap) / 2),
                     { role: 'caption', align: 'right', color: T.textDim,
                       w: 112, lines: 1 });

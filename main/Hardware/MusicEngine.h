@@ -108,8 +108,14 @@ inline bool compile(const Song& in, uint32_t rate, Compiled& out) {
     }
     if (out.nTracks == 0 || out.loopSamples == 0) return false;
     uint32_t loops = in.loops < 1 ? 1 : (in.loops > kMaxLoops ? kMaxLoops : in.loops);
-    const uint32_t totalMs = (uint32_t)(((uint64_t)out.loopSamples * loops * 1000) / rate);
-    if (totalMs > kMaxTotalMs) loops = kMaxTotalMs * rate / 1000 / out.loopSamples;
+    // Teto de 120 s em AMOSTRAS, conta em u64: kMaxTotalMs * rate estoura u32
+    // a 44,1 kHz (120000 x 44100 = 5,29e9 > 2^32) e o corte saia errado nas
+    // placas sem codec (cao/SmartDisplay) — trilha de ~11 s tocava 1 volta
+    // em vez das 8 pedidas. A 16 kHz (codec/watch) o resultado nao muda.
+    const uint64_t budgetSamples = (uint64_t)kMaxTotalMs * rate / 1000;
+    if ((uint64_t)out.loopSamples * loops > budgetSamples) {
+        loops = (uint32_t)(budgetSamples / out.loopSamples);
+    }
     if (loops < 1) loops = 1;
     out.loops = (uint8_t)loops;
     out.totalSamples = out.loopSamples * loops;

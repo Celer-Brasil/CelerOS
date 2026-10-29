@@ -226,7 +226,7 @@ void tick(bool inApp) {
     uint32_t now = millis();
     bool wasDown1 = s_b1.down, wasDown2 = s_b2.down;
     poll(s_b1, now, onShort1, onLong1, inApp);
-    // PWR (b2): curto = acorda a tela (notePress); segurado ~2 s dorme.
+    // PWR (b2): curto = acorda a tela (notePress); segurado ~1,2 s dorme.
     poll(s_b2, now, nullptr, pwrLong, inApp);
     if ((!wasDown1 && s_b1.down) || (!wasDown2 && s_b2.down)) notePress();
 }

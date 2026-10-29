@@ -4,8 +4,9 @@
 #include "Boards/Board.h"
 
 // Controle de brilho do backlight (porte do BrightnessScreen do
-// satisfaction-hub, adaptado ao CelerOS). Nivel 5-100 persistido em
-// /local/brightness.txt.
+// satisfaction-hub, adaptado ao CelerOS). Nivel 5-100 persistido no NVS
+// ("brightness", via Settings; o comentario de /local/brightness.txt era do
+// porte original).
 //
 //   SmartDisplay 4" (S3): tft.setBrightness() do LovyanGFX, que aciona o
 //   Light_PWM do GPIO38 — sem tocar em canal LEDC na mao.

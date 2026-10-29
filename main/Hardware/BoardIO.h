@@ -15,7 +15,7 @@
 // Mapa de canais LEDC (baixa velocidade), unico no firmware:
 //   0..2  analogWrite dos apps (Compat)       timers 0/1
 //   servos do System.gpio.servo: ver abaixo (50 Hz; ate 5 canais)
-//   4..5  LED RGB                              timer 1 (5 kHz, 8 bits)
+//   3..5  LED RGB                              timer 1 (5 kHz, 8 bits)
 //   6     tom (System.beep na CYD, LEDC)       timer 2
 //   7     backlight (LovyanGFX Light_PWM)      timer 3 (no ESP32 fica no
 //                                              bloco de alta velocidade)

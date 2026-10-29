@@ -15,234 +15,11 @@
 #include <cstdio>
 #include <algorithm>
 
-// HTML template for the configuration page
-static const char* HTML_TEMPLATE = R"rawhtml(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>%s</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh; padding: 20px;
-        }
-        .container { 
-            max-width: 400px; margin: 0 auto; 
-            background: white; border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; padding: 24px; text-align: center;
-        }
-        .header h1 { font-size: 24px; margin-bottom: 8px; }
-        .header p { opacity: 0.9; font-size: 14px; }
-        .content { padding: 24px; }
-        .network-list { 
-            max-height: 200px; overflow-y: auto;
-            border: 1px solid #e0e0e0; border-radius: 8px;
-            margin-bottom: 16px;
-        }
-        .network { 
-            padding: 12px 16px; cursor: pointer;
-            border-bottom: 1px solid #f0f0f0;
-            display: flex; justify-content: space-between;
-            align-items: center; transition: background 0.2s;
-        }
-        .network:hover { background: #f5f5f5; }
-        .network:last-child { border-bottom: none; }
-        .network.selected { background: #e8f0fe; }
-        .network-name { font-weight: 500; }
-        .network-signal { 
-            font-size: 12px; color: #666;
-            display: flex; align-items: center; gap: 4px;
-        }
-        .signal-icon { font-size: 16px; }
-        .form-group { margin-bottom: 16px; }
-        label { display: block; margin-bottom: 6px; font-weight: 500; color: #333; }
-        input[type="text"], input[type="password"] {
-            width: 100%; padding: 12px 16px;
-            border: 2px solid #e0e0e0; border-radius: 8px;
-            font-size: 16px; transition: border-color 0.2s;
-        }
-        input:focus { outline: none; border-color: #667eea; }
-        .btn {
-            width: 100%; padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; border: none; border-radius: 8px;
-            font-size: 16px; font-weight: 600; cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102,126,234,0.4); }
-        .btn:active { transform: translateY(0); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
-        .btn-scan { 
-            background: #f5f5f5; color: #333; margin-bottom: 16px;
-        }
-        .btn-scan:hover { background: #e8e8e8; box-shadow: none; }
-        .status { 
-            margin-top: 16px; padding: 12px; border-radius: 8px;
-            text-align: center; font-size: 14px; display: none;
-        }
-        .status.error { background: #fde8e8; color: #c53030; display: block; }
-        .status.success { background: #e8fde8; color: #2f855a; display: block; }
-        .status.info { background: #e8f4fd; color: #2b6cb0; display: block; }
-        .loading { display: none; text-align: center; padding: 20px; }
-        .spinner {
-            width: 40px; height: 40px; margin: 0 auto 12px;
-            border: 3px solid #f3f3f3; border-top: 3px solid #667eea;
-            border-radius: 50%; animation: spin 1s linear infinite;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>%s</h1>
-            <p>%s</p>
-        </div>
-        <div class="content">
-            <div id="main-form">
-                <button class="btn btn-scan" onclick="scanNetworks()">Buscar Redes</button>
-                <div class="network-list" id="network-list">
-                    <div style="padding: 20px; text-align: center; color: #666;">
-                        Clique em "Buscar Redes" para ver redes disponíveis
-                    </div>
-                </div>
-                <form id="wifi-form" onsubmit="return connectWifi(event)">
-                    <div class="form-group">
-                        <label for="ssid">Nome da Rede (SSID)</label>
-                        <input type="text" id="ssid" name="ssid" required placeholder="Selecione ou digite">
-                    </div>
-                    <div class="form-group">
-                        <label for="password">Senha</label>
-                        <input type="password" id="password" name="password" placeholder="Senha da rede">
-                    </div>
-                    <button type="submit" class="btn" id="connect-btn">Conectar</button>
-                </form>
-                <div id="status" class="status"></div>
-            </div>
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <p>Conectando...</p>
-            </div>
-        </div>
-    </div>
-    <script>
-        let selectedNetwork = null;
-        
-        function scanNetworks() {
-            document.getElementById('network-list').innerHTML = 
-                '<div style="padding: 20px; text-align: center;"><div class="spinner"></div>Buscando...</div>';
-            
-            fetch('/scan')
-                .then(r => r.json())
-                .then(data => {
-                    const list = document.getElementById('network-list');
-                    if (data.networks.length === 0) {
-                        list.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Nenhuma rede encontrada</div>';
-                        return;
-                    }
-                    // Linhas por DOM + textContent (nao innerHTML): o SSID vem
-                    // cru do /scan e nome de rede nao e HTML — nada a escapar,
-                    // UTF-8 inteiro e sem injecao via nome malicioso
-                    list.innerHTML = '';
-                    data.networks.forEach(n => {
-                        const row = document.createElement('div');
-                        row.className = 'network';
-                        const name = document.createElement('span');
-                        name.className = 'network-name';
-                        name.textContent = n.ssid;
-                        const sig = document.createElement('span');
-                        sig.className = 'network-signal';
-                        const icon = document.createElement('span');
-                        icon.className = 'signal-icon';
-                        icon.textContent = getSignalIcon(n.rssi);
-                        sig.appendChild(icon);
-                        sig.appendChild(document.createTextNode(' ' + n.rssi + ' dBm'));
-                        row.appendChild(name);
-                        row.appendChild(sig);
-                        row.addEventListener('click', function () {
-                            selectNetwork(n.ssid, n.rssi, this);
-                        });
-                        list.appendChild(row);
-                    });
-                })
-                .catch(e => {
-                    document.getElementById('network-list').innerHTML = 
-                        '<div style="padding: 20px; text-align: center; color: #c53030;">Erro ao buscar redes</div>';
-                });
-        }
-        
-        function getSignalIcon(rssi) {
-            if (rssi > -50) return '📶';
-            if (rssi > -70) return '📶';
-            return '📶';
-        }
-        
-        function selectNetwork(ssid, rssi, el) {
-            document.querySelectorAll('.network').forEach(n => n.classList.remove('selected'));
-            el.classList.add('selected');
-            document.getElementById('ssid').value = ssid;
-            selectedNetwork = ssid;
-        }
-        
-        function connectWifi(e) {
-            e.preventDefault();
-            const ssid = document.getElementById('ssid').value;
-            const password = document.getElementById('password').value;
-
-            if (!ssid) {
-                showStatus('Por favor, selecione ou digite uma rede', 'error');
-                return false;
-            }
-
-            document.getElementById('main-form').style.display = 'none';
-            document.getElementById('loading').style.display = 'block';
-
-            // O /connect apenas entrega as credenciais ao dispositivo; o
-            // resultado real chega pelo poll de /status (quem conecta e o app)
-            fetch('/connect', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: `ssid=${encodeURIComponent(ssid)}&password=${encodeURIComponent(password)}`
-            }).catch(() => {});
-
-            if (window._pollTimer) clearInterval(window._pollTimer);
-            window._pollTimer = setInterval(() => {
-                fetch('/status').then(r => r.json()).then(d => {
-                    if (d.state == 'connected') {
-                        clearInterval(window._pollTimer); window._pollTimer = null;
-                        document.getElementById('loading').style.display = 'none';
-                        document.getElementById('main-form').style.display = 'block';
-                        showStatus(`Conectado! IP: ${d.ip}`, 'success');
-                    } else if (d.state == 'failed') {
-                        clearInterval(window._pollTimer); window._pollTimer = null;
-                        document.getElementById('loading').style.display = 'none';
-                        document.getElementById('main-form').style.display = 'block';
-                        showStatus('Falha na conexão — confira a senha e tente de novo', 'error');
-                    }
-                }).catch(() => {});
-            }, 1000);
-
-            return false;
-        }
-        
-        function showStatus(msg, type) {
-            const status = document.getElementById('status');
-            status.textContent = msg;
-            status.className = 'status ' + type;
-        }
-    </script>
-</body>
-</html>
-)rawhtml";
+// Pagina de configuracao: components/Network/captive_portal.html, gzipada no
+// build (CMakeLists) e servida com Content-Encoding: gzip — ~10 KB de texto
+// cru viravam ~3 KB, e cada GET / deixa de copiar a pagina para o heap.
+extern const uint8_t portal_gz_start[] asm("_binary_captive_portal_html_gz_start");
+extern const uint8_t portal_gz_end[] asm("_binary_captive_portal_html_gz_end");
 
 CaptivePortal::CaptivePortal() :
     _state(CaptivePortalState::Stopped),
@@ -603,6 +380,24 @@ esp_err_t sendStr(httpd_req_t* req, const char* type, const char* body, size_t l
     return httpd_resp_send(req, body, len);
 }
 
+// Escapa para string JSON so os metacaracteres (" \\ e controles); UTF-8
+// passa inteiro (a pagina insere via textContent).
+void appendJsonEscaped(std::string& out, const std::string& in) {
+    for (unsigned char c : in) {
+        if (c == '"') {
+            out += "\\\"";
+        } else if (c == '\\') {
+            out += "\\\\";
+        } else if (c < 0x20) {
+            char esc[8];
+            snprintf(esc, sizeof(esc), "\\u%04x", (unsigned)c);
+            out += esc;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+}
+
 } // namespace
 
 bool CaptivePortal::startHttpServer() {
@@ -634,9 +429,9 @@ bool CaptivePortal::startHttpServer() {
         .uri = "/",
         .method = HTTP_GET,
         .handler = [](httpd_req_t* req) -> esp_err_t {
-            CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
-            std::string html = portal->generateHtml();
-            sendStr(req, "text/html", html.c_str(), html.length());
+            httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+            sendStr(req, "text/html", (const char*)portal_gz_start,
+                    (size_t)(portal_gz_end - portal_gz_start));
             return ESP_OK;
         },
         .user_ctx = self
@@ -764,9 +559,17 @@ bool CaptivePortal::startHttpServer() {
                 case PortalConnState::Failed:     s = "failed"; break;
                 default: break;
             }
-            char buf[96];
-            snprintf(buf, sizeof(buf), "{\"state\":\"%s\",\"ip\":\"%s\"}", s, ip);
-            sendStr(req, "application/json", buf, HTTPD_RESP_USE_STRLEN);
+            // title/device: a pagina e estatica e le os dois daqui no load
+            std::string json = "{\"state\":\"";
+            json += s;
+            json += "\",\"ip\":\"";
+            json += ip;
+            json += "\",\"title\":\"";
+            appendJsonEscaped(json, portal->_config.title);
+            json += "\",\"device\":\"";
+            appendJsonEscaped(json, portal->_config.deviceName);
+            json += "\"}";
+            sendStr(req, "application/json", json.c_str(), json.length());
             return ESP_OK;
         },
         .user_ctx = self
@@ -815,34 +618,6 @@ void CaptivePortal::stopHttpServer() {
     }
 }
 
-std::string CaptivePortal::generateHtml() {
-    // HTML template is about 5200 bytes, buffer needs extra space
-    std::string html(HTML_TEMPLATE);
-    
-    // Replace placeholders manually (snprintf had buffer issues)
-    size_t pos;
-    
-    // First %s - title in <title> tag
-    pos = html.find("%s");
-    if (pos != std::string::npos) {
-        html.replace(pos, 2, _config.title);
-    }
-    
-    // Second %s - title in h1
-    pos = html.find("%s");
-    if (pos != std::string::npos) {
-        html.replace(pos, 2, _config.title);
-    }
-    
-    // Third %s - device name in p
-    pos = html.find("%s");
-    if (pos != std::string::npos) {
-        html.replace(pos, 2, _config.deviceName);
-    }
-    
-    return html;
-}
-
 std::string CaptivePortal::generateScanJson() {
     std::string json = "{\"networks\":[";
 
@@ -857,19 +632,7 @@ std::string CaptivePortal::generateScanJson() {
         // toque-para-conectar enviava o SSID mutilado. UTF-8 valido passa
         // inteiro (JSON aceita); a pagina insere via textContent.
         json += "{\"ssid\":\"";
-        for (unsigned char c : network.first) {
-            if (c == '"') {
-                json += "\\\"";
-            } else if (c == '\\') {
-                json += "\\\\";
-            } else if (c < 0x20) {
-                char esc[8];
-                snprintf(esc, sizeof(esc), "\\u%04x", (unsigned)c);
-                json += esc;
-            } else {
-                json += static_cast<char>(c);
-            }
-        }
+        appendJsonEscaped(json, network.first);
         char entry[24];
         snprintf(entry, sizeof(entry), "\",\"rssi\":%d}", network.second);
         json += entry;

@@ -234,11 +234,6 @@ private:
     static void dnsTaskFunc(void* param);
 
     /**
-     * @brief Generate HTML page.
-     */
-    std::string generateHtml();
-
-    /**
      * @brief Generate scan results JSON.
      */
     std::string generateScanJson();

@@ -1,14 +1,14 @@
 {
   "name": "Batata Quente",
   "packageName": "celeros.batataquente",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": "CelerOS",
   "description": "Batata quente de verdade entre aparelhos: a batata voa pela malha CelerNet de mão em mão (quantos saltos precisar), o pavio é secreto e os bipes aceleram. Quem estiver segurando quando estourar queima. Abra em 2 ou mais aparelhos com Bluetooth.",
   "type": "Game",
   "category": "Arcade",
   "api": 30,
   "permissions": [],
-  "changelog": "2.0.0 - UI 2.0 (CelerKit): header com ajuda, batata desenhada por primitivas com o pavio em anel (só quem segura vê o tempo restante), card da roda com quem está com a batata, lista rica com as queimadas e botões grandes de Começar/Passar; tela de fim de rodada com BUM e contagem para a próxima; portão de malha redesenhado e aviso claro em placa sem Bluetooth (CYD); protocolo de handoff (bh/bs/bp/bk/bx), reenvio de 3,5 s e bipes inalterados\n1.1.3 - placa sem Bluetooth (sem CelerNet) nao derruba mais o app: os envios da malha passam por uma deteccao unica e o inicio da partida avisa 'Placa sem malha (Bluetooth)'\n1.1.2 - o pavio nao queima de uma vez o tempo em que a malha caiu (quadro longo vira no maximo 250 ms) e o LED laranja apaga quando a batata sai da mao por um 'peguei' de outro\n1.1.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: roda por presenca do app (bh), passe por unicast com o pavio restante (bp), confirmacao por broadcast que serve de ACK (bk), reenvio em 3,5 s e batata que volta apos 3 tentativas, placar de queimadas",
+  "changelog": "2.0.1 - bloco de texto empilhado pela altura que o UI.text devolve: os offsets fixos (r.y, +22, +44) eram do vidro pequeno e no 4848, onde a fonte title mede 28 px virtuais, o paragrafo caia em cima do titulo e a segunda legenda em cima da primeira\n2.0.0 - UI 2.0 (CelerKit): header com ajuda, batata desenhada por primitivas com o pavio em anel (só quem segura vê o tempo restante), card da roda com quem está com a batata, lista rica com as queimadas e botões grandes de Começar/Passar; tela de fim de rodada com BUM e contagem para a próxima; portão de malha redesenhado e aviso claro em placa sem Bluetooth (CYD); protocolo de handoff (bh/bs/bp/bk/bx), reenvio de 3,5 s e bipes inalterados\n1.1.3 - placa sem Bluetooth (sem CelerNet) nao derruba mais o app: os envios da malha passam por uma deteccao unica e o inicio da partida avisa 'Placa sem malha (Bluetooth)'\n1.1.2 - o pavio nao queima de uma vez o tempo em que a malha caiu (quadro longo vira no maximo 250 ms) e o LED laranja apaga quando a batata sai da mao por um 'peguei' de outro\n1.1.1 - som pelo System.sfx quando o firmware tem (API 32): o efeito toca sem travar o jogo e por cima da musica; firmware antigo segue no playTone; 1.1.0 - o boilerplate de malha (gate/me/poll) vira dep celeros.mesh do hub (API 30)\n1.0.0 - primeira versao: roda por presenca do app (bh), passe por unicast com o pavio restante (bp), confirmacao por broadcast que serve de ACK (bk), reenvio em 3,5 s e batata que volta apos 3 tentativas, placar de queimadas",
   "deps": {
     "celeros.app": "^1.0.0",
     "celeros.app.style": "^1.0.0",

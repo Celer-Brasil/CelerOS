@@ -33,11 +33,17 @@ static const BoardProfile s_profile = {
     .mic = {},
     .strips = {},               // sem fitas WS2812
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
-    // 1/3: UART0 (console/celerctl do CH340); 6..11: SPI flash do modulo
-    // (o IDF ja reserva no boot, mas o perfil documenta e cobre um boot
-    // atipico — nunca sao GPIO de app).
-    .gpioDeniedMask = (1ULL << 1) | (1ULL << 3) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
-                      (1ULL << 9) | (1ULL << 10) | (1ULL << 11),
+    // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
+    // recusam): 1/3: UART0 (console/celerctl do CH340); 6..11: SPI flash do
+    // modulo (o IDF ja reserva no boot, mas o perfil documenta e cobre um boot
+    // atipico); 2/12/13/14/15: HSPI do TFT (DC/SCK/MOSI/MISO/CS) — o SD roda
+    // no MESMO bus (CS=5); 25/32/33/39: touch XPT2046 (bus proprio no VSPI);
+    // 21: backlight. Um requirePin em qualquer desses mata video/cartao/toque.
+    .gpioDeniedMask = (1ULL << 1) | (1ULL << 2) | (1ULL << 3) | (1ULL << 5) |
+                      (1ULL << 6) | (1ULL << 7) | (1ULL << 8) | (1ULL << 9) |
+                      (1ULL << 10) | (1ULL << 11) | (1ULL << 12) | (1ULL << 13) |
+                      (1ULL << 14) | (1ULL << 15) | (1ULL << 21) | (1ULL << 25) |
+                      (1ULL << 32) | (1ULL << 33) | (1ULL << 39),
 };
 
 void init() {

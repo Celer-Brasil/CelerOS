@@ -85,13 +85,20 @@ static const BoardProfile s_profile = {
     .ulpArm = WatchUlp::arm,   // sentinela ULP no deep sleep: PEK acorda,
     .ulpWake = WatchUlp::wake, // raise filtrado e VBAT (ulp/ulp_main.c)
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
-    // I2C0 (14/15) e o barramento do touch FT3168, do PMU AXP2101, do RTC
-    // PCF85063 e do IMU QMI8658: um app reconfigurando-o derruba os quatro.
-    // 16 e o MCLK do codec (ES8311/ES7210 + canal do mic): tomado por um app,
-    // o audio e o microfone morrem ate rebootar. 19/20 sao o USB OTG nativo
-    // (CDC do celerctl); 43/44 a UART0 de fallback.
-    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 14) | (1ULL << 15) | (1ULL << 16) | (1ULL << 19) |
-                      (1ULL << 20) | (1ULL << 43) | (1ULL << 44),  // 33..37: DQ4..7/DQS da PSRAM octal (S3R8)
+    // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
+    // recusam): 1/2/3/17: SD em SPI3 (cs/sck/miso/mosi); 4..8/11/12: painel
+    // AMOLED QSPI (SDIO0..3, RST, SCLK, CS); 14/15: I2C0 do touch FT3168, do
+    // PMU AXP2101, do RTC PCF85063 e do IMU QMI8658 (um app reconfigurando-o
+    // derruba os quatro); 16: MCLK do codec (ES8311/ES7210); 19/20: USB OTG
+    // nativo (CDC do celerctl); 40/41/45: I2S do audio (ES8311), 42: ASDOUT
+    // do mic, 46: PA do amp; 43/44: UART0 de fallback; 33..37: DQ4..7/DQS da
+    // PSRAM octal (S3R8).
+    .gpioDeniedMask = (1ULL << 1) | (1ULL << 2) | (1ULL << 3) | (1ULL << 4) |
+                      (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
+                      (1ULL << 11) | (1ULL << 12) | (1ULL << 14) | (1ULL << 15) |
+                      (1ULL << 16) | (1ULL << 17) | (1ULL << 19) | (1ULL << 20) |
+                      0x3E00000000ULL | (1ULL << 40) | (1ULL << 41) | (1ULL << 42) |
+                      (1ULL << 43) | (1ULL << 44) | (1ULL << 45) | (1ULL << 46),
 };
 
 void init() {

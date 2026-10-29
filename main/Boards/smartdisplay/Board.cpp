@@ -170,8 +170,14 @@ static const BoardProfile s_profile = {
     .mic = {},
     .strips = {},
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
-    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 43) | (1ULL << 44) | (1ULL << 19) | (1ULL << 20) |
-                      (1ULL << 45),  // 33..37: DQ4..7/DQS da PSRAM octal (N16R8); 43/44: UART0 (console/celerctl + conector); 19/45: I2C do touch GT911; 20: linha G1 do RGB (e D+ do USB OTG, que nunca existe aqui)
+    // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
+    // recusam): 0..21 (0x3FFFFF) = painel RGB (D0..D15 = 0,3..15,20; DE/VS/HS/
+    // PCLK = 18/17/16/21), I2S do alto-falante (1/2/40 — reles L1..L3 na
+    // variante Y) e I2C do touch GT911 (19/45); 33..48 (0x1FFFE00000000) =
+    // DQ4..7/DQS da PSRAM octal (33..37, N16R8), backlight (38), CS do 3-wire
+    // do painel (39), SD (41/42/47/48 — SCK/MOSI compartilhados com o 3-wire),
+    // UART0 (43/44, console/celerctl) e G3 do RGB (46).
+    .gpioDeniedMask = 0x3FFFFFULL | 0x1FFFE00000000ULL,
 };
 #else
 static const BoardProfile s_profile = {
@@ -192,8 +198,9 @@ static const BoardProfile s_profile = {
     .mic = {},
     .strips = {},  // sem fitas WS2812
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
-    .gpioDeniedMask = 0x3E00000000ULL | (1ULL << 43) | (1ULL << 44) | (1ULL << 19) | (1ULL << 20) |
-                      (1ULL << 45),  // 33..37: DQ4..7/DQS da PSRAM octal (N16R8); 43/44: UART0 (console/celerctl + conector); 19/45: I2C do touch GT911; 20: linha G1 do RGB (e D+ do USB OTG, que nunca existe aqui)
+    // Igual a variante com rele (comentario acima): painel RGB, I2S (aqui o
+    // alto-falante de verdade), touch, PSRAM octal, SD e UART0.
+    .gpioDeniedMask = 0x3FFFFFULL | 0x1FFFE00000000ULL,
 };
 #endif
 

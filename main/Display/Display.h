@@ -74,8 +74,12 @@ inline const lgfx::IFont* CelerFont(uint8_t font) {
             // so a tela grande pede 6 para texto (UI::font(4)); na CYD fica
             // a nativa e a DejaVu40 nem entra no binario
             if constexpr (BoardTraits::largeUi) return &celer::fonts::DejaVu40;
-            return lgfx::fontdata[font];
-        default: return lgfx::fontdata[font];
+            return &lgfx::fonts::Font6;
+        // Sem lgfx::fontdata[]: indexar a tabela linkava TODAS as fontes dela
+        // (Font2 + Font4 nativas, ~7 KB) mesmo com 2/4 mapeadas para DejaVu.
+        case 7: return &lgfx::fonts::Font7;
+        case 8: return &lgfx::fonts::Font8;
+        default: return &lgfx::fonts::Font0;  // 0/3/5 (e o resto) = GLCD
     }
 }
 

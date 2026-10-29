@@ -38,8 +38,10 @@ CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
 CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
 
-# Diagnostico: habilita ESP_LOGV do LovyanGFX (tag LGFX) p/ debug do touch I2C
-CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE=y
+# Teto de log = nivel padrao: ESP_LOGD/V nao entram no binario nem custam
+# o teste de nivel em runtime nos caminhos quentes dos drivers. Para depurar
+# (ex.: ESP_LOGV do LovyanGFX no touch I2C) suba o teto so no build local.
+CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
 
 # OTA dev via HTTP puro na LAN (tools/ota_server.py) exige alem disso o
 # opt-in /local/ota_allow_http.txt no aparelho (guard no OtaManager); HTTPS

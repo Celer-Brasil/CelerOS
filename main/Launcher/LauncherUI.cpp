@@ -363,10 +363,15 @@ void LauncherUI::scanLocalApps() {
 
     // Ordem do grid: apps de sistema primeiro pelo campo "order" do
     // app.json; apps comuns depois, na ordem de descobertura (ordenacao
-    // estavel: empates mantem a ordem do scan).
+    // estavel: empates mantem a ordem do scan). Insercao a mao em vez de
+    // std::stable_sort: n ~ dezenas, e o merge sort custava ~1.6 KB de
+    // flash e um buffer temporario no heap.
     auto sortKey = [](const AppEntry& e) { return e.isSystem ? e.order : 1000; };
-    std::stable_sort(apps.begin(), apps.end(),
-                     [&](const AppEntry& x, const AppEntry& y) { return sortKey(x) < sortKey(y); });
+    for (size_t i = 1; i < apps.size(); i++) {
+        for (size_t j = i; j > 0 && sortKey(apps[j]) < sortKey(apps[j - 1]); j--) {
+            std::swap(apps[j], apps[j - 1]);
+        }
+    }
     apps.shrink_to_fit();  // sem folga do crescimento: a lista vive o boot inteiro
 
     gcSharedModules();

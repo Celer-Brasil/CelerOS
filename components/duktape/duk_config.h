@@ -3143,6 +3143,19 @@ extern duk_bool_t celer_exec_timeout_check(void *udata);
 #define DUK_USE_CACHE_CATCHER
 #endif
 
+/* Placas sem PSRAM (CYD, devkit, esp32-cam): fora o que so troca flash por
+ * velocidade em caminhos raros. Fastpaths de hex/base64 (Duktape.enc/dec,
+ * tabelas de 1 KB), verificacao paranoica de Date e o suporte exato a
+ * caracteres fora do BMP no FONTE (identificadores; strings seguem UTF-8
+ * inteiras). O slot OTA da CYD e o recurso escasso.
+ */
+#if !(defined(CONFIG_SPIRAM) && CONFIG_SPIRAM)
+#undef DUK_USE_HEX_FASTPATH
+#undef DUK_USE_BASE64_FASTPATH
+#undef DUK_USE_PARANOID_DATE_COMPUTATION
+#undef DUK_USE_SOURCE_NONBMP
+#endif
+
 /*
  *  You may add overriding #define/#undef directives below for
  *  customization.  You of course cannot un-#include or un-typedef

@@ -27,10 +27,20 @@ function strip(input) {
     let s = S_CODE, quote = 0, esc = false, star = false, blockNl = false, reClass = false;
     let slash = false, lineStart = true, space = false, last = 0;
     let word = '', wlen = 0;   // wlen -1: palavra longa demais (nao e keyword)
+    let dot = false;           // '.' visto: a palavra seguinte e propriedade (nao keyword)
 
     function emit(c) { out[n++] = c; }
     function endWord() {
         if (wlen === 0) return;
+        if (dot) {
+            // obj.return: a palavra vem depois de '.', e propriedade, nunca
+            // keyword — `obj.return / 2` e divisao, nao abre regex
+            dot = false;
+            last = 0x61;   // 'a'
+            wlen = 0;
+            word = '';
+            return;
+        }
         last = 0x61;   // 'a'
         if (wlen > 0 && KW.has(word)) last = 0x6b;   // 'k'
         wlen = 0;
@@ -130,6 +140,9 @@ function strip(input) {
             default:
                 code(c);
                 last = c;
+                // '.' marca que a proxima palavra e propriedade; qualquer outro
+                // pontuador desmarca (o flag nunca atravessa um token)
+                dot = (c === 0x2e);
         }
     }
     for (let i = 0; i < src.length; i++) step(src[i]);

@@ -50,7 +50,8 @@ module.exports = function (check) {
         evaldesliga: 'var valor = 1;\neval("valor = 2");\nmodule.exports = valor;\n',
         funcaointerna: 'function outer(n) {\n  function dobro(x) { return x * 2; }\n  var passo = dobro(n);\n  return passo + dobro(1);\n}\nmodule.exports = outer(3);\n',
         argumentos: 'function f() { var a = arguments.length; return a + arguments[0]; }\nmodule.exports = f(4, 5);\n',
-        recursaocomvar: 'var fib = function (n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };\nmodule.exports = fib(10);\n'
+        recursaocomvar: 'var fib = function (n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };\nmodule.exports = fib(10);\n',
+        kwprop: 'var o = { return: 3, typeof: 4 };\nmodule.exports = [o.return / 2, o.typeof / 2].join(",");\n'
     };
     var bad = [];
     for (var name of Object.keys(CASES)) {
@@ -120,6 +121,27 @@ module.exports = function (check) {
     }
     check('jsmin: corpus nao cresce vs jsstrip', grew.length === 0, grew.join(','));
     check('jsmin: strip do device e idempotente na saida', notIdem.length === 0, notIdem.join(','));
+
+    // ------------------------- jsstrip: keyword como propriedade x divisao --
+    // `obj.return / 2` e divisao (o token anterior e '.', logo "return" e
+    // propriedade, nao keyword) — o strip NAO pode abrir regex e engolir o
+    // resto da linha. Mesmos casos do test/cpp/run_tests.cpp (paridade
+    // byte a byte host x device).
+    var KWPROP = [
+        ['obj.return / 2 /* c */ + 1;', 'obj.return / 2 + 1;'],
+        ['obj.return / 2 // fim', 'obj.return / 2'],
+        ['q = a.case / 4; m = k.new / 8;', 'q = a.case / 4; m = k.new / 8;'],
+        ['a.b.return / 2', 'a.b.return / 2'],
+        ['obj.return / 2\n// fim\nvar y = 1;', 'obj.return / 2\n\nvar y = 1;'],
+        // return de verdade (declaracao, sem '.' antes) segue abrindo regex
+        ['return /a\\.b/.test(s); // c', 'return /a\\.b/.test(s);']
+    ];
+    var kwBad = [];
+    for (var kp of KWPROP) {
+        var gotKp = jsstrip.strip(Buffer.from(kp[0])).toString('utf8');
+        if (gotKp !== kp[1]) kwBad.push(JSON.stringify(kp[0]) + ': ' + JSON.stringify(gotKp) + ' x ' + JSON.stringify(kp[1]));
+    }
+    check('jsstrip: keyword propriedade nao abre regex (paridade device)', kwBad.length === 0, kwBad.join(' | '));
 
     // --------------------------------------- equivalencia de app no harness --
     // roda o app original e o minificado (main + extras, com reserved dos

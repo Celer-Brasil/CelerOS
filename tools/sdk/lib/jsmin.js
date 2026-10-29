@@ -283,6 +283,8 @@ function shortNumber(text) {
     let best = orig;
     const v = Number(orig);
     if (!isFinite(v)) return best;
+    // octal legado (sloppy): Number() le decimal — 010 era 8 e viraria 10
+    if (/^0[0-7]+$/.test(orig)) return best;
     // formas candidatas: inteiro curto, expoente, e sem o zero da esquerda
     const cands = [];
     if (Number.isInteger(v) && Math.abs(v) < 1e21) {

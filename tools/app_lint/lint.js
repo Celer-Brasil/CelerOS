@@ -112,6 +112,7 @@ const BANNED_GLOBALS = {
   Map: 'Map e ES6: nao existe no Duktape do CelerOS',
   Set: 'Set e ES6: nao existe no Duktape do CelerOS',
   WeakMap: 'WeakMap e ES6: nao existe no Duktape do CelerOS',
+  WeakSet: 'WeakSet e ES6: nao existe no Duktape do CelerOS',
   // require/module/exports SAIRAM daqui: require e global do firmware (API
   // 23, nivel pela regra "nivel"); module/exports sao parametros do wrapper
   // do require e entram como globais implicitos so nos .js de modulo
@@ -120,6 +121,32 @@ const BANNED_GLOBALS = {
   Buffer: 'Buffer e Node.js: nao existe no aparelho',
   global: 'global e Node.js: nao existe no aparelho',
   globalThis: 'globalThis e ES2020: nao existe no aparelho',
+};
+
+// Metodos ES6+ que o parser ES5 ACEITA (sao so identificadores) e o Duktape
+// lean do aparelho NAO tem: chamados, viram TypeError em runtime — e o
+// harness Node TEM todos, entao sem este check o app passava nos testes e
+// morria no device (a classe de buraco que o test/duk existe para pegar).
+// Lista POR PROVA: probe `typeof X` contra o duktape.c deste repo com a
+// mesma config do firmware — a prova e travada pelo test/duk/run.py
+// (se o Duktape/config subir e um deles passar a existir, o teste falha e
+// esta lista tem que ser revisada). O que o device TEM fica FORA: Object.assign,
+// Number.isInteger/parseFloat/parseInt, String.prototype.includes/startsWith/
+// endsWith/repeat, Math.trunc/sign/clz32/log2/log10/hypot/cbrt/imul, Array.isArray.
+const BANNED_STATIC_METHODS = {
+  Array: ['from', 'of'],
+  Object: ['values', 'entries', 'fromEntries', 'getOwnPropertyDescriptors'],
+  String: ['raw'],
+  Math: ['fround', 'sinh', 'cosh', 'tanh', 'expm1', 'log1p'],
+  Number: ['toInteger'],
+};
+// Metodos de prototype ausentes: checados quando o RECEPTOR e literal
+// ("ab".padStart(4), [1,2].find(...)) — receptor em variavel e opaco para o
+// lint (mesma limite do acesso computado por chave dinamica).
+const BANNED_PROTO_METHODS = {
+  String: ['padStart', 'padEnd', 'trimStart', 'trimEnd', 'replaceAll', 'normalize', 'at'],
+  Array: ['includes', 'find', 'findIndex', 'findLast', 'fill', 'copyWithin',
+          'keys', 'values', 'entries', 'flat', 'at'],
 };
 
 // ============================================================
@@ -555,6 +582,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
   const bareGlobalUses = [];          // globais nuas do firmware chamadas (require, ...)
   const optionalUse = {};             // raiz opcional -> node do primeiro uso
   const reported = new Set();         // chaves de diagnostico unicas
+  const polyfilled = new Set();       // "Array.from" com atribuicao no arquivo (polifill)
 
   const globalWhitelist = new Set(ES5_GLOBALS.concat(Object.keys(BANNED_GLOBALS)));
   for (const c of manifest.globalConsts) globalWhitelist.add(c.name);
@@ -726,6 +754,12 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
             d(t, 'aviso', 'var', "atribuicao sem var: '" + t.name + "' vira global (use var)");
           }
         }
+        // polifill declarado no proprio arquivo (if (!Array.from) Array.from = ...)
+        // isenta a chamada do check "es6": o app trata a ausencia no device
+        if (t.type === 'MemberExpression') {
+          const ch = memberChain(t);
+          if (ch && ch.parts.length >= 1) polyfilled.add(ch.root + '.' + ch.parts[0]);
+        }
         break;
       }
       case 'CallExpression':
@@ -734,6 +768,32 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
             (!node.callee.computed || litProp(node.callee) !== null) &&
             !node.arguments.some((a) => a.type === 'SpreadElement')) {
           const chain = memberChain(node.callee);
+          // metodo estatico ES6 ausente no device (Array.from, Object.values):
+          // o parser ES5 aceita e o aparelho explode TypeError na chamada
+          if (chain && BANNED_STATIC_METHODS[chain.root] && chain.parts.length >= 1 &&
+              !scopeHas(scopeAt, chain.root) && !implicitGlobals.has(chain.root) &&
+              !polyfilled.has(chain.root + '.' + chain.parts[0]) &&
+              BANNED_STATIC_METHODS[chain.root].indexOf(chain.parts[0]) >= 0) {
+            d(node, 'erro', 'es6', chain.root + '.' + chain.parts[0] +
+              ' nao existe no Duktape do aparelho (ES6): TypeError em runtime' +
+              ' (polifill com guard if (!' + chain.root + '.' + chain.parts[0] + ') isenta)');
+          }
+          // metodo de prototype ausente com receptor literal ("ab".padStart(4),
+          // [1,2].find(...)): a string/array literal PROVA o tipo do receptor
+          if (!chain) {
+            const prop = node.callee.property;
+            const meth = node.callee.computed
+              ? litProp(node.callee)
+              : (prop.type === 'Identifier' ? prop.name : null);
+            const recv = node.callee.object;
+            const tabela = (recv.type === 'Literal' && typeof recv.value === 'string')
+              ? BANNED_PROTO_METHODS.String
+              : (recv.type === 'ArrayExpression' ? BANNED_PROTO_METHODS.Array : null);
+            if (meth !== null && tabela && tabela.indexOf(meth) >= 0) {
+              d(node, 'erro', 'es6', '.' + meth + '() nao existe no Duktape do aparelho' +
+                ' (ES6): TypeError em runtime');
+            }
+          }
           if (chain && NAMESPACE_ROOTS.indexOf(chain.root) >= 0 &&
               !scopeHas(scopeAt, chain.root) && !implicitGlobals.has(chain.root)) {
             // report=false: a existencia e reportada no passo MemberExpression

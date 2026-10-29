@@ -100,6 +100,93 @@ int main(int argc, char** argv) {
 '''
 
 
+# ---- travanco da lista de builtins do app_lint (mesma prova) -------------
+# O tools/app_lint/lint.js bana metodos ES6 "ausentes no device" a partir da
+# MESMA probe (typeof X contra o duktape.c deste repo com a config do
+# firmware). Se o Duktape/config subir e um item da lista AUSENTE passar a
+# existir (ou um da lista PRESENTE sumir), o lint ficou mentindo — este teste
+# falha e a tabela do lint tem que ser revisada no mesmo commit.
+BUILTINS_AUSENTE = [
+    "Array.from", "Array.of",
+    "Object.values", "Object.entries", "Object.fromEntries",
+    "Object.getOwnPropertyDescriptors",
+    "String.raw",
+    "Math.fround", "Math.sinh", "Math.cosh", "Math.tanh", "Math.expm1",
+    "Math.log1p",
+    "Number.toInteger",
+    "Array.prototype.includes", "Array.prototype.find", "Array.prototype.findIndex",
+    "Array.prototype.findLast", "Array.prototype.fill", "Array.prototype.copyWithin",
+    "Array.prototype.keys", "Array.prototype.values", "Array.prototype.entries",
+    "Array.prototype.flat", "Array.prototype.at",
+    "String.prototype.padStart", "String.prototype.padEnd",
+    "String.prototype.trimStart", "String.prototype.trimEnd",
+    "String.prototype.replaceAll", "String.prototype.normalize",
+    "String.prototype.at",
+    "WeakSet", "Map", "Set", "WeakMap", "Promise", "Symbol",
+]
+# O lint NAO bana (sao suportados pelo build): se um deles sumir do device,
+# apps que o lint deixa passar comecam a quebrar em runtime.
+BUILTINS_PRESENTE = [
+    "Object.assign", "Object.setPrototypeOf", "Object.getOwnPropertySymbols",
+    "Number.isInteger", "Number.parseFloat", "Number.parseInt",
+    "Array.isArray",
+    "String.prototype.includes", "String.prototype.startsWith",
+    "String.prototype.endsWith", "String.prototype.repeat",
+    "String.fromCodePoint", "String.prototype.codePointAt",
+    "Math.trunc", "Math.sign", "Math.clz32", "Math.log2", "Math.log10",
+    "Math.hypot", "Math.cbrt", "Math.imul",
+    "JSON.stringify", "Date.now", "Function.prototype.bind",
+]
+
+BUILTINS_C = r'''
+#include <stdio.h>
+#include <string.h>
+#include "duktape.h"
+duk_bool_t celer_exec_timeout_check(void *udata) { (void)udata; return 0; }
+static const char *AUSENTE[] = { %S_AUSENTE% NULL };
+static const char *PRESENTE[] = { %S_PRESENTE% NULL };
+int main(void) {
+    duk_context *ctx = duk_create_heap_default();
+    int fails = 0;
+    for (int i = 0; AUSENTE[i]; i++) {
+        char buf[128];
+        snprintf(buf, sizeof buf, "typeof %s", AUSENTE[i]);
+        if (duk_peval_string(ctx, buf) != 0) { printf("FALHA: %s nao avalia\n", AUSENTE[i]); duk_pop(ctx); fails++; continue; }
+        if (strcmp(duk_get_string(ctx, -1), "undefined") != 0) {
+            printf("FALHA: %s EXISTE no device — atualize BANNED_* de tools/app_lint/lint.js\n", AUSENTE[i]);
+            fails++;
+        }
+        duk_pop(ctx);
+    }
+    for (int i = 0; PRESENTE[i]; i++) {
+        char buf[128];
+        snprintf(buf, sizeof buf, "typeof %s", PRESENTE[i]);
+        if (duk_peval_string(ctx, buf) != 0) { printf("FALHA: %s nao avalia\n", PRESENTE[i]); duk_pop(ctx); fails++; continue; }
+        if (strcmp(duk_get_string(ctx, -1), "undefined") == 0) {
+            printf("FALHA: %s SUMIU do device — apps lintados com ele quebram em runtime\n", PRESENTE[i]);
+            fails++;
+        }
+        duk_pop(ctx);
+    }
+    duk_destroy_heap(ctx);
+    printf("builtins: %d divergencia(s)\n", fails);
+    return fails ? 1 : 0;
+}
+'''
+
+
+def run_builtins(duk_o):
+    """Compila (rapido; duktape.o vem do cache) e roda a probe de builtins."""
+    inc = os.path.join(BUILD, 'inc')
+    drv = os.path.join(BUILD, 'builtins_test.c')
+    au = "".join('"%s", ' % s for s in BUILTINS_AUSENTE)
+    pr = "".join('"%s", ' % s for s in BUILTINS_PRESENTE)
+    open(drv, 'w').write(BUILTINS_C.replace('%S_AUSENTE%', au).replace('%S_PRESENTE%', pr))
+    exe = os.path.join(BUILD, 'builtins_test')
+    run(['gcc', '-std=c11', '-O0', '-w', '-I', inc, '-I', DUK, '-o', exe, drv, duk_o, '-lm'])
+    return run([exe])
+
+
 def extract_require():
     s = open(os.path.join(ROOT, 'main', 'Runtime', 'JsModules.cpp')).read()
     body = s[s.index('namespace {'):]
@@ -142,6 +229,21 @@ def main():
         hit = want in out
         print(('  PASS  ' if hit else '  FAIL  ') + 'require: ' + want)
         fails += 0 if hit else 1
+
+    # travanco da tabela de builtins do app_lint (a lista "ausente no device"
+    # tem que continuar verdadeira no build real deste repo)
+    print('Duktape real: builtins ES6 x tabela do app_lint')
+    bout = run_builtins(duk_o)
+    for line in bout.splitlines():
+        if line.startswith('FALHA:'):
+            fails += 1
+            print('  FAIL  ' + line[len('FALHA:'):].strip())
+        elif line.startswith('builtins:'):
+            n = int(line.split()[1])
+            print(('  PASS  ' if n == 0 else '  FAIL  ') +
+                  'tabela do lint bate com o device (%d metodos ausentes, %d presentes)' %
+                  (len(BUILTINS_AUSENTE), len(BUILTINS_PRESENTE)))
+
     print()
     if fails:
         print('FALHAS: %d' % fails)

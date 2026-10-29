@@ -38,6 +38,15 @@ const CASES = [
   { name: 'ok.js limpo', file: 'ok.js', expect: {} },
   { name: 'es6 rejeitado (sintaxe)', file: 'es6.js', expect: { 'erro:sintaxe': 1 } },
   {
+    // 11 chamadas em builtins ausentes no Duktape do device (probe do
+    // test/duk): 10 metodo + 1 global WeakSet. O que o device TEM
+    // (Object.assign, Number.isInteger, startsWith, repeat) e o polifill
+    // com guard NAO contam.
+    name: 'es6 rejeitado (runtime: builtins ausentes no device)',
+    file: 'es6_runtime.js',
+    expect: { 'erro:es6': 10, 'erro:global': 1 },
+  },
+  {
     name: 'funcoes/constantes inexistentes', file: 'api_inexistente.js',
     expect: { 'erro:api': 4, 'aviso:var': 2 },  // T e MAGNETA nao declarados no fixture
   },

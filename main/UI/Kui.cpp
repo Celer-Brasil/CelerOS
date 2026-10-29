@@ -664,10 +664,17 @@ void listRow(Canvas& c, const Rect& row, const char* label, const char* sub, con
     uint32_t color = enabled ? THEME_TEXT : THEME_TEXT_DIM;
     int maxW = rx - row.x - padX;
     if (sub && *sub) {
-        // duas linhas: rotulo acima do centro, legenda abaixo
-        c.text(c.ellipsize(label, f, maxW), row.x + padX, y + rh / 2 - UI::sy(1), f, color, BL_DATUM);
-        c.text(c.ellipsize(sub, type::caption(), maxW), row.x + padX, y + rh / 2 + UI::sy(2), type::caption(),
-               THEME_TEXT_DIM, TL_DATUM);
+        // duas linhas: rotulo e legenda EMPILHADOS pela altura real das
+        // fontes e centrados no par. O deslocamento em torno do centro
+        // (rotulo BL em rh/2-1, legenda TL em rh/2+2) encostava o rotulo na
+        // legenda quando a linha era curta (rowH < ~48) e o texto vazava
+        // para a linha vizinha.
+        const lgfx::IFont* cf = type::caption();
+        const int lh = c.fontHeight(f), cap = c.fontHeight(cf), gap = UI::sy(1);
+        const int ty = y + (rh - (lh + gap + cap)) / 2;
+        c.text(c.ellipsize(label, f, maxW), row.x + padX, ty, f, color, TL_DATUM);
+        c.text(c.ellipsize(sub, cf, maxW), row.x + padX, ty + lh + gap, cf, THEME_TEXT_DIM,
+               TL_DATUM);
     } else {
         c.text(c.ellipsize(label, f, maxW), row.x + padX, y + rh / 2, f, color, ML_DATUM);
     }
@@ -715,8 +722,18 @@ void dialog(Canvas& c, const Rect& card, const char* title, const char* body, co
     int r = UI::sx(12);
     c.fillRoundRect(card, r, THEME_CARD);
     c.drawRoundRect(card, r, THEME_STROKE);
-    c.text(c.ellipsize(title, type::title(), card.w - UI::sx(24)), card.x + card.w / 2, card.y + UI::sy(24),
-           type::title(), THEME_TEXT, MC_DATUM);
+    // Titulo do dialogo: "Permitir <app>?" com nome longo passava da largura
+    // do card e o ellipsize cortava no meio da palavra ("Permitir Web
+    // Serve.."). Antes de cortar, cai para a fonte de corpo, que cabe: o
+    // texto do titulo importa mais que o tamanho dele.
+    const int titleMaxW = card.w - UI::sx(24);
+    const lgfx::IFont* titleFont = type::title();
+    if (title && c.textWidth(title, titleFont) > titleMaxW) {
+        const lgfx::IFont* bodyFont = type::body();
+        if (c.textWidth(title, bodyFont) <= titleMaxW) titleFont = bodyFont;
+    }
+    c.text(c.ellipsize(title, titleFont, titleMaxW), card.x + card.w / 2, card.y + UI::sy(24),
+           titleFont, THEME_TEXT, MC_DATUM);
     if (body && *body) {
         // corpo em ate 2 linhas centradas em torno do meio do card
         auto lines = c.wrapText(body, type::body(), card.w - UI::sx(20), 2);
@@ -1523,8 +1540,14 @@ void Navigator::toast(const std::string& message, uint32_t color, uint32_t durat
         xSemaphoreGive(s_pendMux);
         return;
     }
-    s_toasts.push_back(t);
-    s_repaint = true;
+    // Mesmo teto da fila cross-task: o drain e de UM toast por durationMs e
+    // cada Toast aloca (std::string) — rajada no caminho da UI (notificacao
+    // do celular com o vidro apagado, erro de servico em laco) crescia sem
+    // fim e a RAM interna de uma placa sem PSRAM ia a ruina.
+    if (s_toasts.size() < 8) {
+        s_toasts.push_back(t);
+        s_repaint = true;
+    }
 }
 
 void Navigator::repaint() { s_repaint = true; }

@@ -1120,6 +1120,12 @@ static void multipartFeed(MultipartCtx& ctx, const char* data, size_t len) {
 // Consome o corpo inteiro de um POST multipart. firmwareRoute: POST /update
 // (qualquer parte com arquivo vai para o slot OTA); false: /api/upload
 // (filename absoluto e caminho no fs).
+// Teto do corpo multipart: o firmware de fabrica e ~2,5 MB e uploads de
+// arquivos ficam longe disso; um Content-Length gigante (ou infinito, pingando
+// byte a byte) mantinha o handler (e o httpd) preso drenando para sempre —
+// o mesmo DoS que o readBody fecha com o limite dele.
+constexpr size_t kMultipartMax = 16 * 1024 * 1024;
+
 static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg, bool firmwareRoute) {
     char ct[160];
     if (httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct)) != ESP_OK) {
@@ -1144,6 +1150,11 @@ static esp_err_t handleMultipart(httpd_req_t* req, const char* okMsg, bool firmw
     // com qualquer coisa (ou varreria o buffer sem achar nada)
     if (bval.empty() || bval.size() > 70) {
         sendText(req, 400, "Bad boundary");
+        return ESP_OK;
+    }
+
+    if (req->content_len > kMultipartMax) {
+        sendText(req, 413, "Body too large");
         return ESP_OK;
     }
 

@@ -164,6 +164,16 @@ static void testJsStrip() {
     CHECK(strip("y = (a)/2; z = arr[0]/2") == "y = (a)/2; z = arr[0]/2");
     CHECK(strip("s = 'it\\'s // ok'") == "s = 'it\\'s // ok'");
     CHECK(strip("a\n\n\nb") == "a\n\n\nb");                    // linhas vazias ficam
+    // palavra-chave como propriedade seguida de divisao: o token anterior e
+    // '.', entao e nome de propriedade, nao keyword — nao abre regex (mesmos
+    // casos do test/sdk/jsmin.js: paridade host x device byte a byte)
+    CHECK(strip("obj.return / 2 /* c */ + 1;") == "obj.return / 2 + 1;");
+    CHECK(strip("obj.return / 2 // fim") == "obj.return / 2");
+    CHECK(strip("q = a.case / 4; m = k.new / 8;") == "q = a.case / 4; m = k.new / 8;");
+    CHECK(strip("a.b.return / 2") == "a.b.return / 2");
+    CHECK(strip("obj.return / 2\n// fim\nvar y = 1;") == "obj.return / 2\n\nvar y = 1;");
+    // return de verdade (declaracao, sem '.' antes) segue abrindo regex
+    CHECK(strip("return /a\\.b/.test(s); // c") == "return /a\\.b/.test(s);");
 }
 
 // ------------------------------------------------------------------ HostFrame

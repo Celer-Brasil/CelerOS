@@ -448,12 +448,21 @@ duk_ret_t JSBindings::js_uiText(duk_context* ctx) {
     }
 
     lgfx::LGFXBase* g = gfx();
-    const int lh = g->fontHeight(f);
+    // Entrelinha de texto multi-linha: fontHeight() e o yAdvance da fonte GFX
+    // e fica ABAIXO da altura de tinta do glifo nas fontes do vidro grande —
+    // as linhas de um mesmo UI.text(lines:N) encostavam (a legenda de 3
+    // linhas do Batata Quente lia com as linhas sobrepostas no 4848). 12,5%
+    // de folga separa sem mudar o desenho de uma linha so.
+    const int fh = g->fontHeight(f);
+    const int lh = fh + (fh + 7) / 8;
     Slot& s = slot(rectId("text", x, y, optInt(ctx, 3, "id", 0), 0));
     uint32_t sig = fnv(str);
     sig = fnvInt((int)color, sig);
     sig = fnvInt((int)(intptr_t)f, sig);
-    sig = fnvInt(maxW * 16 + lines, sig);
+    // maxW e lines separados: "maxW * 16 + lines" colidia (maxW=1/lines=1
+    // == maxW=0/lines=17) e o widget pulava o redesenho com layout novo;
+    // o produto tambem podia estourar o int com w absurdo
+    sig = fnvInt(maxW, fnvInt(lines, sig));
     sig = fnvInt(datum, sig);
     bool clear = false;
     if (!needDraw(s, (int32_t)sig, &clear)) {
@@ -745,6 +754,14 @@ duk_ret_t JSBindings::js_uiList(duk_context* ctx) {
     const int n = duk_is_array(ctx, arr) ? (int)duk_get_length(ctx, arr) : 0;
     int rowH = optInt(ctx, 6, "rowH", 0);
     int selected = optInt(ctx, 6, "selected", -1);
+    // piso da linha de DUAS linhas (rotulo+legenda): corpo + legenda + 2.
+    // rowH explicito menor que isso era aceito e a linha pintava o rotulo
+    // em cima da legenda (e a legenda vazava para a linha seguinte).
+    int minH2 = 0;
+    if (tftInstance) {
+        minH2 = vH(gfx()->fontHeight(kui::type::body()) +
+                   gfx()->fontHeight(kui::type::caption())) + 2;
+    }
     if (rowH <= 0) {
         // 2 linhas quando algum item visivel tem legenda
         rowH = 36;
@@ -754,6 +771,16 @@ duk_ret_t JSBindings::js_uiList(duk_context* ctx) {
             duk_pop(ctx);
             if (hasSub) {
                 rowH = 48;
+                break;
+            }
+        }
+    } else if (rowH < minH2) {
+        for (int i = 0; i < n && i < 32; i++) {
+            ListItem it = readItem(ctx, arr, i);
+            bool hasSub = it.sub && *it.sub;
+            duk_pop(ctx);
+            if (hasSub) {
+                rowH = minH2;
                 break;
             }
         }
@@ -784,9 +811,12 @@ duk_ret_t JSBindings::js_uiList(duk_context* ctx) {
         duk_push_int(ctx, result);
         return 1;
     }
-    // assinatura: rolagem + press + selecao + conteudo das linhas visiveis
+    // assinatura: geometria/rowH (o slot e so pelo id: a lista em outra
+    // posicao/altura tem que redesenhar) + rolagem + press + selecao +
+    // conteudo das linhas visiveis
     const int first = scroll / rowH;
-    uint32_t sig = fnvInt(scroll, fnvInt(pressedRow, fnvInt(selected, fnvInt(n, 2166136261u))));
+    uint32_t sig = fnvInt(x, fnvInt(y, fnvInt(w, fnvInt(h, fnvInt(rowH, 2166136261u)))));
+    sig = fnvInt(scroll, fnvInt(pressedRow, fnvInt(selected, fnvInt(n, sig))));
     for (int i = first; i < n && (i - first) * rowH < h + rowH; i++) {
         ListItem it = readItem(ctx, arr, i);
         sig = fnv(it.right, fnv(it.sub, fnv(it.label, sig))) ^ (uint32_t)(it.bars + 1) ^ (it.enabled ? 0u : 64u);

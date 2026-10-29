@@ -156,8 +156,14 @@ void closeClient() {
     if (s_clientFd >= 0) {
         // Fecha sob o mutex de escrita: um send() em voo (logcat/debug de
         // outra task) nao pode ver o fd sumir no meio (nem reutilizado por
-        // um cliente novo logo depois — frames cruzando sessoes).
-        if (s_writeMutex != nullptr) xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(2000));
+        // um cliente novo logo depois — frames cruzando sessoes). Espera de
+        // verdade, sem desistir: o SO_SNDTIMEO limita cada send() a 2 s, entao
+        // o take no desespero (2000 ms) podia VENCER com o tcpWrite no meio do
+        // lote — o close() derrubava o fd sob ele e o reaccept devolvia o
+        // MESMO numero: o resto do frame de log saia no cliente NOVO (banner/
+        // auth corrompidos), exatamente o que o mutex existe para impedir.
+        while (s_writeMutex != nullptr && xSemaphoreTake(s_writeMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+        }
         const int fd = s_clientFd;
         s_clientFd = -1;
         if (fd >= 0) close(fd);

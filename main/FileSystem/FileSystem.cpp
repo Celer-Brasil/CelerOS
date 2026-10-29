@@ -24,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 
 static const char* FS_TAG = "celer.fs";
 
@@ -655,7 +656,13 @@ bool FileSystem::copyFile(const char* srcPath, const char* dstPath) {
     return ok;
 }
 
-int FileSystem::countFilesInDir(const char* dirPath) {
+// Teto de profundidade dos caminhadores recursivos: o mesmo motivo do
+// removeTreeDepth (arvore adversarial profunda — sideload no SD com LFN
+// longo — estourava a pilha do chamador; aqui cada nivel carrega strings).
+constexpr int kWalkMaxDepth = 24;
+
+static int countFilesInDirDepth(const char* dirPath, int depth) {
+    if (depth > kWalkMaxDepth) return 0;
     DIR* dir = opendir(dirPath);
     if (dir == nullptr) return 0;
 
@@ -678,11 +685,15 @@ int FileSystem::countFilesInDir(const char* dirPath) {
             std::string subPath = dirPath;
             if (!kstr::endsWith(subPath, "/")) subPath += "/";
             subPath += ent->d_name;
-            count += countFilesInDir(subPath.c_str());
+            count += countFilesInDirDepth(subPath.c_str(), depth + 1);
         }
     }
     closedir(dir);
     return count;
+}
+
+int FileSystem::countFilesInDir(const char* dirPath) {
+    return countFilesInDirDepth(dirPath, 0);
 }
 
 namespace {
@@ -692,7 +703,10 @@ struct CopyProgress {
     void (*cb)(int, int) = nullptr;
 };
 
-bool copyTree(const std::string& srcDir, const std::string& dstDir, CopyProgress& pr) {
+bool copyTree(const std::string& srcDir, const std::string& dstDir, CopyProgress& pr, int depth) {
+    // mesmo teto dos outros caminhadores (kWalkMaxDepth acima): arvore
+    // adversarial profunda nao pode estourar a pilha do chamador
+    if (depth > kWalkMaxDepth) return false;
     // mkdirs: o destino pode ser uma arvore nova inteira (backup/restaurar
     // para pasta que ainda nao existe) — o mkdir de um nivel so cobria o
     // ultimo componente
@@ -715,7 +729,7 @@ bool copyTree(const std::string& srcDir, const std::string& dstDir, CopyProgress
         } else isDir = false;
 
         if (isDir) {
-            ok = copyTree(src, dst, pr);
+            ok = copyTree(src, dst, pr, depth + 1);
         } else {
             ok = FileSystem::copyFile(src.c_str(), dst.c_str());
             if (!ok) ESP_LOGW(FS_TAG, "copia falhou: %s -> %s", src.c_str(), dst.c_str());
@@ -735,7 +749,7 @@ bool FileSystem::copyDirectory(const char* srcDir, const char* destDir, void (*p
     pr.total = countFilesInDir(srcDir);
     if (pr.total <= 0) pr.total = 1;
     pr.cb = progressCb;
-    return copyTree(srcDir, destDir, pr);
+    return copyTree(srcDir, destDir, pr, 0);
 }
 
 std::string FileSystem::parseJsonValue(const std::string& json, const char* key) {
@@ -970,6 +984,38 @@ bool FileSystem::sdScanBusy() {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Espaco do LittleFS com cache curto.
+//
+// esp_littlefs_info() conta os bytes usados com lfs_fs_traverse: uma varredura
+// do filesystem INTEIRO (~1 s num /local de 3,5 MB cheio) dentro da task da
+// UI. Um app que pede o espaco livre por quadro (card da lista de apps do
+// Settings) segurava a CPU nessa varredura sem ceder, o IDLE0 nao rodava e o
+// Task Watchdog REINICIAVA a placa (coredump 2026-10-28:
+// getFreeSpace -> esp_littlefs_info -> lfs_fs_traverse -> memcpy).
+// Total/usado sao os mesmos para todo chamador dentro do intervalo: cache de
+// 5 s + TWDT renovado antes da varredura, e o custo vira 1 varredura a cada
+// 5 s no lugar de uma por quadro.
+// ---------------------------------------------------------------------------
+static uint32_t s_lfsInfoAtMs = 0;      // 0 = nunca medido
+static size_t s_lfsTotal = 0, s_lfsUsed = 0;
+static constexpr uint32_t kLfsInfoTtlMs = 5000;
+
+static bool lfsSpaceInfo(size_t* total, size_t* used) {
+    uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000);
+    if (s_lfsInfoAtMs == 0 || (uint32_t)(nowMs - s_lfsInfoAtMs) > kLfsInfoTtlMs) {
+        size_t t = 0, u = 0;
+        esp_task_wdt_reset();           // varredura longa: nao morrer por ela
+        if (esp_littlefs_info("littlefs", &t, &u) != ESP_OK) return s_lfsInfoAtMs != 0;
+        s_lfsTotal = t;
+        s_lfsUsed = u;
+        s_lfsInfoAtMs = nowMs ? nowMs : 1;
+    }
+    *total = s_lfsTotal;
+    *used = s_lfsUsed;
+    return true;
+}
+
 uint64_t FileSystem::getTotalSpace(const char* drive) {
     if (drive == nullptr) return 0;
 #if CONFIG_CELEROS_SD_CARD
@@ -989,7 +1035,7 @@ uint64_t FileSystem::getTotalSpace(const char* drive) {
 #endif
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
-        if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
+        if (!lfsSpaceInfo(&total, &used)) return 0;
         return total;
     }
     return 0;
@@ -1007,7 +1053,7 @@ uint64_t FileSystem::getUsedSpace(const char* drive) {
 #endif
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
-        if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
+        if (!lfsSpaceInfo(&total, &used)) return 0;
         return used;
     }
     return 0;
@@ -1028,7 +1074,7 @@ uint64_t FileSystem::getFreeSpace(const char* drive) {
 #endif
     if (strncmp(drive, "/local", 6) == 0) {
         size_t total = 0, used = 0;
-        if (esp_littlefs_info("littlefs", &total, &used) != ESP_OK) return 0;
+        if (!lfsSpaceInfo(&total, &used)) return 0;
         return total > used ? (total - used) : 0;
     }
     return 0;

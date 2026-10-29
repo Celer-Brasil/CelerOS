@@ -404,7 +404,11 @@ duk_ret_t JSBindings::js_installZip(duk_context *ctx) {
     const char* zip = duk_require_string(ctx, 0);
     const char* nome = duk_require_string(ctx, 1);
     size_t nomeLen = strlen(nome);
-    if (nomeLen == 0 || nomeLen > 40 || strchr(nome, '/') != nullptr ||
+    // Nome com '.' inicial (".", ".foo"): o staging junta base+".new"/".old"
+    // e a troca atomica faria rename("<dest>/.") — semantico que depende do
+    // FS (o launcher ja pula entradas com ponto). ".." ja cai no teste abaixo.
+    if (nomeLen == 0 || nomeLen > 40 || nome[0] == '.' ||
+        strchr(nome, '/') != nullptr ||
         strchr(nome, '\\') != nullptr || strstr(nome, "..") != nullptr) {
         duk_error(ctx, DUK_ERR_TYPE_ERROR, "installZip: nome de pasta invalido");
     }
@@ -603,6 +607,13 @@ duk_ret_t JSBindings::js_wifiConnect(duk_context *ctx) {
     present();  // chamada bloqueante: o que o app desenhou aparece antes
     const char* ssid = duk_require_string(ctx, 0);
     const char* pass = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
+    // Teto ANTES da copia: connect recebe std::string (a conversao copia a
+    // string crua do duk; crescer sem excecao aborta o aparelho no heap
+    // apertado) e so valida 32/64 LA DENTRO. Teto = o mesmo de la (SSID 32,
+    // senha 64 — padrao WPA).
+    if (strlen(ssid) > 32 || strlen(pass) > 64) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "wifiConnect: SSID ate 32, senha ate 64");
+    }
     bool ok = WebManager::connect(ssid, pass);
     // Conexao feita pelo app tem que "pegar" como a da tela nativa: liga o
     // auto-reconnect (WebManager::enable era o passo que a WifiSetupScreen
@@ -1044,9 +1055,15 @@ duk_ret_t JSBindings::js_sfx(duk_context *ctx) {
 duk_ret_t JSBindings::js_notify(duk_context *ctx) {
     const char* title = duk_require_string(ctx, 0);
     const char* msg = duk_is_string(ctx, 1) ? duk_require_string(ctx, 1) : "";
+    // Teto ANTES da copia: push recebe std::string (crescer sem excecao
+    // aborta) e so trunca DEPOIS, com clean() — titulo 64, msg 160, o mesmo
+    // teto aqui. O servico da App Store notifica com metadado do hub: um
+    // titulo gigante nao pode derrubar o svchost das 02:00.
+    std::string t(title, strnlen(title, 64));
+    std::string m(msg, strnlen(msg, 160));
     // Kernel/Notifications (API 15): historico + toast + glance/bipe
     // respeitando o Nao Perturbe
-    Notifications::push(title, msg, "");
+    Notifications::push(t, m, "");
     return 0;
 }
 

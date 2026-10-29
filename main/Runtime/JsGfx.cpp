@@ -574,7 +574,11 @@ duk_ret_t JSBindings::js_setTextSize(duk_context *ctx) {
 duk_ret_t JSBindings::js_setTextDatum(duk_context *ctx) {
     if (!tftInstance) return 0;
     int d = duk_require_int(ctx, 0);
-    if (d < 0 || d > 10) d = 0;
+    // 3 e 7 NAO existem no textdatum_t do LovyanGFX (validos: 0,1,2,4,5,6,
+    // 8,9,10 — 16+ sao baseline): passavam direto e davam ancoragem
+    // indefinida no drawString. Fora da faixa vira TL, como jsFont faz com
+    // a fonte invalida.
+    if (d < 0 || d > 10 || d == 3 || d == 7) d = 0;
     gfx()->setTextDatum((textdatum_t)d);
     return 0;
 }

@@ -109,19 +109,24 @@ int pushResult(duk_context* ctx, const UsbHost::Result& r, bool withData, const 
     return 1;
 }
 
-// Chamada que espera o URB: no app cede o quadro (jsBlocking); no svchost so
-// renova a janela do executor. A entrada TAMBEM alimenta o TWDT (mesmo
-// padrao de Net.request/otaCheck no servico): o URB pode esperar o timeout
-// inteiro (5 s) sem nenhum outro ponto de cedida no caminho.
+// Entrada de chamada bloqueante ANTES de qualquer malloc: o present() roda
+// timers/AI e um erro de callback longjmpa para fora do binding — alocar
+// antes vazava o buffer (mesma licao do validateBytes abaixo: o que pode
+// lancar vem antes do recurso). No svchost so alimenta o TWDT (o present
+// reentraria o pump do app).
+void usbEnter() {
+    if (JSBindings::inService()) esp_task_wdt_reset();
+    else JSBindings::present();
+}
+
+// Chamada que espera o URB: roda DEPOIS do usbEnter (ver acima) e renova a
+// janela do executor no retorno — o URB pode esperar o timeout inteiro
+// (5 s) sem nenhum outro ponto de cedida no caminho.
 template <typename F>
 auto usbCall(F&& f) -> decltype(f()) {
-    if (JSBindings::inService()) {
-        esp_task_wdt_reset();
-        auto r = f();
-        CelerKernel::noteAppYield();
-        return r;
-    }
-    return jsBlocking(f);
+    auto r = f();
+    CelerKernel::noteAppYield();
+    return r;
 }
 
 const char* owner() { return s_appPkg.c_str(); }
@@ -240,6 +245,7 @@ duk_ret_t JSBindings::js_usbControlIn(duk_context *ctx) {
         jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, "USB.controlIn: len acima do limite");
     }
     const uint32_t timeout = optTimeout(ctx, 6);
+    usbEnter();  // present pode lancar: vem ANTES do malloc (nao vazar o buf)
     uint8_t* buf = (uint8_t*)malloc((size_t)len > 0 ? (size_t)len : 1);
     if (buf == nullptr) jsThrowMsg(ctx, DUK_ERR_ERROR, "USB.controlIn: sem RAM");
 
@@ -259,6 +265,7 @@ duk_ret_t JSBindings::js_usbControlOut(duk_context *ctx) {
     const uint16_t idx = requireU16(ctx, 4, "USB.controlOut: wIndex 0..65535");
     // valida ANTES do malloc: um elemento invalido lancaria com o buffer vivo
     validateBytes(ctx, 5, UsbHost::kMaxControl, "USB.controlOut: data 0..255");
+    usbEnter();  // present pode lancar: vem ANTES do malloc (nao vazar o buf)
     uint8_t* buf = (uint8_t*)malloc(UsbHost::kMaxControl);
     if (buf == nullptr) jsThrowMsg(ctx, DUK_ERR_ERROR, "USB.controlOut: sem RAM");
     const size_t len = readBytes(ctx, 5, buf, UsbHost::kMaxControl, "USB.controlOut: data 0..255");
@@ -277,6 +284,7 @@ duk_ret_t JSBindings::js_usbOut(duk_context *ctx) {
     if ((ep & 0x80) != 0) jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, "USB.out: endpoint IN (use USB.in)");
     // valida ANTES do malloc (mesmo motivo do controlOut)
     validateBytes(ctx, 2, UsbHost::kMaxTransfer, "USB.out: data 0..255");
+    usbEnter();  // present pode lancar: vem ANTES do malloc (nao vazar o buf)
     uint8_t* buf = (uint8_t*)malloc(UsbHost::kMaxTransfer);
     if (buf == nullptr) jsThrowMsg(ctx, DUK_ERR_ERROR, "USB.out: sem RAM");
     const size_t len = readBytes(ctx, 2, buf, UsbHost::kMaxTransfer, "USB.out: data 0..255");
@@ -296,6 +304,7 @@ duk_ret_t JSBindings::js_usbIn(duk_context *ctx) {
         jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, "USB.in: len fora do limite");
     }
     const uint32_t timeout = optTimeout(ctx, 3);
+    usbEnter();  // present pode lancar: vem ANTES do malloc (nao vazar o buf)
     uint8_t* buf = (uint8_t*)malloc((size_t)len);
     if (buf == nullptr) jsThrowMsg(ctx, DUK_ERR_ERROR, "USB.in: sem RAM");
     UsbHost::Result r = usbCall([&] {
@@ -325,6 +334,7 @@ duk_ret_t JSBindings::js_usbSendFile(duk_context *ctx) {
         if (v > 0) maxBytes = (size_t)v;
     }
     const uint32_t timeout = optTimeout(ctx, 4);
+    usbEnter();  // a espera do sendFile pode ser longa: quadro antes (app)
     UsbHost::Result r = usbCall([&] {
         return UsbHost::sendFile(addr, ep, path, maxBytes, timeout);
     });

@@ -17,8 +17,9 @@
 //
 // Heuristica de regex vs divisao: '/' abre regex quando o ultimo token
 // significativo nao e operando (identificador, numero, ')' ou ']') ou e uma
-// palavra-chave que precede expressao (return, typeof, ...). Strings e
-// regexes sao copiados byte a byte.
+// palavra-chave que precede expressao (return, typeof, ...). Palavra-chave
+// logo apos '.' e propriedade, nao keyword: `obj.return / 2` e divisao.
+// Strings e regexes sao copiados byte a byte.
 //
 // Header-only e sem dependencias do IDF: testado no host (test/cpp).
 // ============================================================================
@@ -65,6 +66,7 @@ private:
     char m_last = 0;            // ultimo token: 0 inicio, 'a' operando, 'k' keyword, ou pontuacao
     char m_word[12];
     int m_wlen = 0;             // -1: palavra longa demais (nao e keyword)
+    bool m_dot = false;         // '.' visto: a palavra seguinte e propriedade
 
     void emit(char c) {
         if (m_out) m_out[m_n] = c;
@@ -78,6 +80,14 @@ private:
 
     void endWord() {
         if (m_wlen == 0) return;
+        if (m_dot) {
+            // obj.return: a palavra vem depois de '.', e propriedade, nunca
+            // keyword — `obj.return / 2` e divisao, nao abre regex
+            m_dot = false;
+            m_last = 'a';
+            m_wlen = 0;
+            return;
+        }
         static const char* const kKw[] = {"return", "typeof", "case",   "do",         "else",
                                           "in",     "new",    "void",   "delete",     "throw",
                                           "instanceof"};
@@ -235,6 +245,9 @@ private:
             default:
                 code(c);
                 m_last = c;
+                // '.' marca que a proxima palavra e propriedade; qualquer outro
+                // pontuador desmarca (o flag nunca atravessa um token)
+                m_dot = (c == '.');
                 return;
         }
     }

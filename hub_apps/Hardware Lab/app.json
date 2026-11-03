@@ -1,0 +1,19 @@
+{
+  "name": "Hardware Lab",
+  "packageName": "celeros.hwlab",
+  "version": "1.0.0",
+  "api": 54,
+  "author": "CelerOS",
+  "type": "App",
+  "category": "Utility",
+  "description": "Bancada de hardware: servo, ponte H, LED/fita, botão com gestos e PCA9685 (16 canais I²C). Requer permissão GPIO; o I²C exige API 54.",
+  "deps": {
+    "celeros.app": "^1.0.0",
+    "celeros.app.form": "^1.0.0",
+    "celeros.hw": "^1.0.0"
+  },
+  "permissions": [
+    "gpio"
+  ],
+  "changelog": "1.0.0 - primeira versão: telas de servo (pino/ângulo/rampa/detach), ponte H EN+IN1/IN2 (velocidade/rampa/freio/roda livre), LED e fita WS2812 (pisca/breathe/rainbow), botão com debounce e gestos (click/duplo/longo/repeat) e I²C com scan + PCA9685 (16 canais, servo por canal, sleep/wake). Placa com bus de placa usa o bus do touch/PMU/OLED; CYD/devkit abrem os pinos na tela."
+}

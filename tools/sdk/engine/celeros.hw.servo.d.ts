@@ -16,6 +16,9 @@ declare namespace S {
         /** Ajuste fino em graus, somado antes do clamp. */
         offset?: number;
         invert?: boolean;
+        /** Servo de rotacao continua: speed() em volta de stopUs. */
+        continuous?: boolean;
+        stopUs?: number;
         /** Backend alternativo: recebe o pulso em us e devolve boolean. */
         write?: (us: number) => boolean;
         off?: () => boolean;
@@ -31,6 +34,10 @@ declare namespace S {
         writeUs(us: number): boolean;
         /** Rampa nao bloqueante (S.tick/HW.tick aplica os passos). */
         to(angle: number, ms?: number): boolean;
+        /** Rotacao continua: -100..100 em volta do stopUs (false no servo de posicao). */
+        speed(pct: number): boolean;
+        /** Sequencia [[angulo, ms], ...] (um passo por vez no tick). */
+        play(frames: Array<[number, number] | { angle: number; ms: number }>): boolean;
         stop(): Servo;
         /** Para o PWM e libera o canal (servo sem forca). */
         detach(): boolean;

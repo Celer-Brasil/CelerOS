@@ -1,15 +1,20 @@
 // celeros.hw.servo — servo de posicao (SG90/MG996R etc.) com calibracao,
-// rampa e poses. O PWM e o do firmware (System.gpio.servo, API 10): 50 Hz,
-// ate 5 canais LEDC, pulso 500..2500 us. A lib aceita angulo FRACIONARIO e
-// converte para us exato (o binding arredonda no fim), entao minUs/maxUs
-// funcionam dentro da faixa nativa.
+// rampa, poses e sequencias. O PWM e o do firmware: System.gpio.servo
+// (API 10, 500..2500 us) ou System.gpio.servoUs (API 55, 400..2600 us
+// exatos — calibracao de sail winch/servo de 270 graus). A lib aceita
+// angulo FRACIONARIO e converte para us; no backend antigo o proprio
+// binding arredonda no fim.
 //
 // Uso tipico:
 //   var S = require("celeros.hw.servo");
 //   var s = S.create({ pin: 12, minUs: 600, maxUs: 2400 });  // calibrado
 //   s.write(90);                 // posicao imediata
 //   s.to(180, 600);              // rampa de 600 ms (chamar S.tick() no laco)
+//   s.play([[0, 500], [180, 500], [90, 300]]);  // sequencia, um passo por vez
 //   s.detach();                  // servo sem forca
+//
+//   var c = S.create({ pin: 13, continuous: true });  // rotacao continua
+//   c.speed(50);                // -100..100 em volta do stopUs (default 1500)
 //
 //   var g = S.group([s1, s2]);
 //   g.pose([45, 90], 400);       // as duas em 400 ms
@@ -21,7 +26,7 @@
 // A placa precisa da permissao "gpio" (o objeto System.gpio nao existe sem
 // ela). ES5 (Duktape).
 
-var S = { version: '1.0.0' };
+var S = { version: '1.1.0' };
 
 var _all = [];
 
@@ -45,13 +50,15 @@ function _gpio() {
     return System.gpio;
 }
 
-// Backend nativo: o firmware mapeia angulo 0..180 em 500..2500 us. A
-// conversao inversa com fracao devolve o us pedido (o arredondamento e o
-// mesmo dos dois lados).
+// Backend nativo: servoUs (API 55) e o pulso exato 400..2600; no firmware
+// antigo (API 10) o servo mapeia angulo 0..180 em 500..2500 us. A conversao
+// inversa com fracao devolve o us pedido (o arredondamento e o mesmo dos
+// dois lados).
 function _native(pin) {
     var G = _gpio();
     return {
         write: function (us) {
+            if (typeof G.servoUs === 'function') return G.servoUs(pin, us);
             var angle = (us - 500) * 180 / 2000;
             if (angle < 0) angle = 0;
             if (angle > 180) angle = 180;
@@ -74,6 +81,11 @@ function Servo(o) {
     if (this.maxAngle === this.minAngle) this.maxAngle = this.minAngle + 1;
     this.offset = _num(o.offset, 0);
     this.invert = !!o.invert;
+    this.continuous = !!o.continuous;
+    // Rotacao continua: 1500 us (ou o stopUs calibrado) e o ponto de parada;
+    // speed(-100..100) anda em volta dele.
+    this.stopUs = _clamp(_num(o.stopUs, (this.minUs + this.maxUs) / 2),
+                         this.minUs, this.maxUs);
 
     if (typeof o.write === 'function') {
         this._write = o.write;
@@ -94,6 +106,8 @@ function Servo(o) {
     this._to = this._angle;
     this._t0 = 0;
     this._ms = 0;
+    this._queue = [];
+    this._seq = false;
 }
 
 // Angulo -> us (com offset/inversao e clamp).
@@ -154,27 +168,70 @@ Servo.prototype.to = function (angle, ms) {
     return true;
 };
 
+// Rotacao continua: -100 (minUs) .. 0 (stopUs) .. +100 (maxUs).
+Servo.prototype.speed = function (pct) {
+    if (!this.continuous) return false;
+    var p = _clamp(_num(pct, 0), -100, 100);
+    var span = p >= 0 ? (this.maxUs - this.stopUs) : (this.stopUs - this.minUs);
+    var us = this.stopUs + (p / 100) * span;
+    if (this.invert) us = this.minUs + this.maxUs - us;
+    return this.writeUs(us);
+};
+
+// Sequencia: [[angulo, ms], ...] (ou {angle, ms}); um passo por vez no tick.
+Servo.prototype.play = function (frames) {
+    if (!frames || !frames.length) {
+        this.stop();
+        return false;
+    }
+    this._queue = frames.slice();
+    this._seq = true;
+    this._nextSeqFrame(_now());
+    return true;
+};
+
+Servo.prototype._nextSeqFrame = function (now) {
+    while (this._seq && this._queue.length) {
+        var f = this._queue.shift();
+        var a = (f instanceof Array) ? f[0] : f.angle;
+        var ms = (f instanceof Array) ? f[1] : f.ms;
+        this.to(a, ms);
+        if (this._ramp) return;
+    }
+    this._seq = false;
+};
+
 Servo.prototype._tick = function (now) {
-    if (!this._ramp) return;
-    var t = (now - this._t0) / this._ms;
-    if (t >= 1) t = 1;
-    if (t < 0) t = 0;
-    var e = t * t * (3 - 2 * t);  // ease-in-out
-    var next = this._from + (this._to - this._from) * e;
-    // O PWM ja segura a posicao: so reescreve quando o angulo muda (ou no
-    // primeiro passo, que e o attach).
-    if (!this._written || Math.abs(next - this._angle) > 0.01)
-        this._applyUs(this.usOf(next));
-    if (t >= 1) this._ramp = false;
+    if (this._ramp) {
+        var t = (now - this._t0) / this._ms;
+        if (t >= 1) t = 1;
+        if (t < 0) t = 0;
+        var e = t * t * (3 - 2 * t);  // ease-in-out
+        var next = this._from + (this._to - this._from) * e;
+        // O PWM ja segura a posicao: so reescreve quando o angulo muda (ou no
+        // primeiro passo, que e o attach).
+        if (!this._written || Math.abs(next - this._angle) > 0.01)
+            this._applyUs(this.usOf(next));
+        if (t >= 1) {
+            this._ramp = false;
+            if (this._seq) this._nextSeqFrame(now);
+        }
+    } else if (this._seq) {
+        this._nextSeqFrame(now);
+    }
 };
 
 Servo.prototype.stop = function () {
     this._ramp = false;
+    this._seq = false;
+    this._queue = [];
     return this;
 };
 
 Servo.prototype.detach = function () {
     this._ramp = false;
+    this._seq = false;
+    this._queue = [];
     this._detached = true;
     var ok = this._offFn();
     this._written = false;

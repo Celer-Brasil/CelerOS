@@ -8,10 +8,13 @@ declare namespace M {
     const version: string;
 
     interface Opts {
-        /** Pino EN/PWM (analogWrite). */
-        pwm: number;
-        in1: number;
-        in2: number;
+        /** Modo EN + IN1/IN2 (1 PWM + 2 GPIOs). */
+        pwm?: number;
+        in1?: number;
+        in2?: number;
+        /** Modo 2 PWM (BTS7960/IBT-2): dois canais analogWrite. */
+        pwmA?: number;
+        pwmB?: number;
         invert?: boolean;
         /** Compensacao do ponto morto (0..255): 1% ja sai do lugar. */
         minDuty?: number;
@@ -20,6 +23,11 @@ declare namespace M {
     }
 
     interface Motor {
+        pwm: number;
+        in1: number;
+        in2: number;
+        pwmA: number;
+        pwmB: number;
         speed(pct: number): Motor;
         forward(pct: number): Motor;
         reverse(pct: number): Motor;

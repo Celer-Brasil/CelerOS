@@ -58,7 +58,7 @@ module.exports = function (check) {
 
         var t = setup();
         var S = t.req('celeros.hw.servo');
-        check('servo: exporta version e available', S.version === '1.0.0' && S.available() === true);
+        check('servo: exporta version e available', S.version === '1.1.0' && S.available() === true);
         var s = S.create({ pin: 12 });
         s.write(90);
         var last = t.rec.servo[t.rec.servo.length - 1];
@@ -109,7 +109,7 @@ module.exports = function (check) {
 
         var t = setup();
         var M = t.req('celeros.hw.motor');
-        check('motor: exporta version e available', M.version === '1.0.0' && M.available() === true);
+        check('motor: exporta version e available', M.version === '1.1.0' && M.available() === true);
         var m = M.create({ pwm: 18, in1: 19, in2: 20 });
         check('motor: create configura as 3 saidas e coast',
               t.rec.modes.length === 3 && t.rec.analog[0][1] === 0 &&
@@ -356,5 +356,129 @@ module.exports = function (check) {
         check('kit: HW.tick alimenta a rampa do servo',
               t.rec.servo.length >= 2 && usOfAngle(t.rec.servo[t.rec.servo.length - 1][1]) === 2500,
               JSON.stringify(t.rec.servo));
+    })();
+
+    // -------------------------------------- servoUs / continuo / sequencia --
+    (function () {
+        console.log('SDK hw.servo (API 55):');
+
+        var t = setup(function (env, rec) {
+            rec.servoUs = [];
+            env.System.gpio.servoUs = function (p, us) {
+                rec.servoUs.push([p, us]);
+                return true;
+            };
+        });
+        var S = t.req('celeros.hw.servo');
+        var s = S.create({ pin: 17, minUs: 400, maxUs: 2600 });
+        s.writeUs(400);
+        check('servo: servoUs usa o pulso exato de 400 us',
+              t.rec.servoUs.length === 1 && t.rec.servoUs[0][0] === 17 &&
+              t.rec.servoUs[0][1] === 400, JSON.stringify(t.rec.servoUs));
+        s.writeUs(2600);
+        check('servo: servoUs usa o pulso exato de 2600 us',
+              t.rec.servoUs[1][1] === 2600, JSON.stringify(t.rec.servoUs));
+
+        var c = S.create({ pin: 18, continuous: true, stopUs: 1500 });
+        c.speed(50);
+        check('servo: continuous speed(50) = 2000 us', c.us() === 2000, 'us=' + c.us());
+        c.speed(0);
+        check('servo: continuous speed(0) = stopUs', c.us() === 1500, 'us=' + c.us());
+        check('servo: speed em servo de posicao devolve false',
+              S.create({ pin: 19 }).speed(50) === false);
+
+        var q = S.create({ pin: 20 });
+        q.play([[0, 50], [180, 50]]);
+        S.tick(0);
+        S.tick(50);
+        S.tick(100);
+        check('servo: play encadeia as poses', q.angle() === 180 && q.us() === 2500,
+              'angle=' + q.angle() + ' us=' + q.us());
+    })();
+
+    // ------------------------------------------------------ motor 2 PWM --
+    (function () {
+        console.log('SDK hw.motor (2 PWM):');
+
+        var t = setup();
+        var M = t.req('celeros.hw.motor');
+        var b = M.create({ pwmA: 21, pwmB: 22 });
+        check('motor: 2 PWM configura os dois pinos', t.rec.modes.length === 2 &&
+              t.rec.modes[0][0] === 21 && t.rec.modes[1][0] === 22,
+              JSON.stringify(t.rec.modes));
+        t.rec.analog = [];
+        b.forward(50);
+        check('motor: 2 PWM forward liga A e zera B',
+              t.rec.analog.length === 2 && t.rec.analog[0][0] === 21 &&
+              t.rec.analog[0][1] === 128 && t.rec.analog[1][1] === 0,
+              JSON.stringify(t.rec.analog));
+        t.rec.analog = [];
+        b.reverse(50);
+        M.tick(150);
+        M.tick(300);
+        check('motor: 2 PWM reverse liga B e zera A',
+              t.rec.analog[t.rec.analog.length - 2][1] === 0 &&
+              t.rec.analog[t.rec.analog.length - 1][1] === 128,
+              JSON.stringify(t.rec.analog));
+        t.rec.analog = [];
+        b.brake();
+        check('motor: 2 PWM brake = os dois em 255',
+              t.rec.analog[0][1] === 255 && t.rec.analog[1][1] === 255,
+              JSON.stringify(t.rec.analog));
+    })();
+
+    // ------------------------------------------------------------ encoder --
+    (function () {
+        console.log('SDK hw.encoder:');
+
+        var t = setup();
+        var E = t.req('celeros.hw.encoder');
+        check('encoder: exporta version e available',
+              E.version === '1.0.0' && E.available() === true);
+        var e = E.create({ pinA: 18, pinB: 19 });
+        check('encoder: create devolve o id 0', e.id === 0);
+        t.env.__harness.encoderSet(0, 100);
+        check('encoder: read le a contagem', e.read() === 100, 'read=' + e.read());
+        t.rec.clock = 100;
+        check('encoder: speed = 1000 pulsos/s', e.speed(100) === 1000, 'speed=' + e.speed(100));
+        t.env.__harness.encoderSet(0, 120);
+        t.rec.clock = 200;
+        check('encoder: speed seguinte = 200 pulsos/s', e.speed(200) === 200, 'speed=' + e.speed(200));
+        t.env.__harness.encoderSet(0, 140);
+        t.rec.clock = 300;
+        check('encoder: rpm(20) = 600', Math.round(e.rpm(20, 300)) === 600,
+              'rpm=' + e.rpm(20, 300));
+
+        var e2 = E.create({ pinA: 20, pinB: 21, invert: true, scale: 2 });
+        t.env.__harness.encoderSet(e2.id, 50);
+        check('encoder: invert/scale aplicam no read', e2.read() === -100,
+              'read=' + e2.read());
+        check('encoder: reset zera a contagem', e2.reset() === true &&
+              t.env.__harness.encoderGet(e2.id) === 0);
+        e2.free();
+        check('encoder: free libera o id', e2.id === -1);
+    })();
+
+    // --------------------------------------------------------------- dht --
+    (function () {
+        console.log('SDK hw.dht:');
+
+        var t = setup();
+        var D = t.req('celeros.hw.dht');
+        check('dht: exporta version e available',
+              D.version === '1.0.0' && D.available() === true);
+        t.env.__harness.dhtSet(4, 22, { ok: true, temp: 23.5, humidity: 45.2 });
+        var r = D.read({ pin: 4, type: 22 });
+        check('dht: read pontual devolve temp/umidade', r.ok === true &&
+              r.temp === 23.5 && r.humidity === 45.2, JSON.stringify(r));
+        var d = D.create({ pin: 4, type: 22 });
+        d.read();
+        check('dht: instancia guarda a ultima leitura', d.ok() === true &&
+              d.temp() === 23.5 && d.humidity() === 45.2);
+        var miss = D.read({ pin: 5, type: 22 });
+        check('dht: sem sensor devolve ok=false e erro',
+              miss.ok === false && miss.error === 'sem resposta', JSON.stringify(miss));
+        t.env.__harness.dhtSet(4, 11, { ok: true, temp: 20, humidity: 60 });
+        check('dht: tipo 11 usa a entrada certa', D.read({ pin: 4, type: 11 }).temp === 20);
     })();
 };

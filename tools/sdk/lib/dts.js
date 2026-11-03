@@ -100,6 +100,13 @@ const RETURNS = {
     'System.i2c.read': 'number[] | null',
     'System.i2c.writeReg': 'boolean',
     'System.i2c.readReg': 'number[] | null',
+    // API 55: servoUs + encoder (PCNT) + DHT nativo
+    'System.gpio.servoUs': 'boolean',
+    'System.encoder.create': 'number',
+    'System.encoder.read': 'number | null',
+    'System.encoder.reset': 'boolean',
+    'System.encoder.free': 'boolean',
+    'System.dht.read': '{ ok: boolean; temp: number; humidity: number; error: string }',
 };
 
 // Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
@@ -131,6 +138,8 @@ const PARAM_TYPES = {
     // I2C (API 54): data sempre array de bytes 0..255
     'System.i2c.write.data': 'number[]',
     'System.i2c.writeReg.data': 'number[]',
+    'System.encoder.create.pullup': 'boolean',
+    'System.dht.read.type': 'number',
     'UI.measure.role': 'UITextRole',
     'UI.lineHeight.role': 'UITextRole',
     'UI.measureWrap.role': 'UITextRole',

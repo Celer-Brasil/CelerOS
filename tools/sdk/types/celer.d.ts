@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 54 — 381 funcoes.
+// API level 55 — 387 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -346,6 +346,9 @@ declare const System: {
         /** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: (API 10) */
         /** @permission "gpio" */
         servo(pin: number, angulo: number): any;
+        /** mesmo canal LEDC de 50 Hz do servo, mas com o pulso exato em microssegundos (400–2600). Use para servo calibrado fora do mapa 0–180 (sail wi (API 55) */
+        /** @permission "gpio" */
+        servoUs(pin: number, us: number): boolean;
         /** para o PWM no pino e libera o canal — o servo fica solto (sem torque de sustentação). Chame ao terminar um movimento para economizar energia (API 10) */
         /** @permission "gpio" */
         servoOff(pin: number): any;
@@ -388,6 +391,25 @@ declare const System: {
         /** leitura de registrador com i2c_master_transmit_receive (auto-incremento do chip). (API 54) */
         /** @permission "gpio" */
         readReg(addr: number, reg: number, len: number): number[] | null;
+    };
+    encoder: {
+        /** cria o encoder. -1 quando as quatro unidades PCNT estão ocupadas, os pinos são inválidos/negados ou o driver falhou. (API 55) */
+        /** @permission "gpio" */
+        create(pinA: number, pinB: number, pullup?: boolean): number;
+        /** lê o contador de hardware. Leia na taxa que quiser (10 ms é suficiente); a contagem não dá a volta em 32767. (API 55) */
+        /** @permission "gpio" */
+        read(id: number): number | null;
+        /** zera a contagem mantendo o encoder ativo (base do delta de um laço de velocidade). (API 55) */
+        /** @permission "gpio" */
+        reset(id: number): boolean;
+        /** desabilita a unidade e libera o slot PCNT. Idempotente. (API 55) */
+        /** @permission "gpio" */
+        free(id: number): boolean;
+    };
+    dht: {
+        /** faz uma leitura (bloqueante ~20 ms na primeira chamada; depois usa o cache). ok=false sem sensor/checksum; o app pode tentar de novo depois  (API 55) */
+        /** @permission "gpio" */
+        read(pin: number, type?: number): { ok: boolean; temp: number; humidity: number; error: string };
     };
 };
 

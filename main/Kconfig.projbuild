@@ -234,6 +234,26 @@ config CELEROS_JS_I2C
       System.i2c fica undefined e a dep celeros.hw.pca9685 nao funciona
       (feature-detect).
 
+config CELEROS_JS_ENCODER
+    bool "API System.encoder (encoder A/B no PCNT, API 55)"
+    default y
+    help
+      create/read/reset/free de encoders incrementais de quadratura no
+      perimetro PCNT do ESP32/S3 (4 unidades): a contagem e do hardware,
+      sem polling de GPIO no interpretador. Usado pela dep
+      celeros.hw.encoder (motor com realimentacao). Desligado, o objeto
+      System.encoder nao existe (typeof).
+
+config CELEROS_JS_DHT
+    bool "API System.dht (DHT11/DHT22 nativo, API 55)"
+    default y
+    help
+      Leitura de temperatura/umidade do DHT11/DHT22 com o protocolo de
+      microssegundos no C++ (janela critica curta): o app recebe
+      {ok, temp, humidity, error} pronto. Cache de 1 s/2 s por (pino,
+      tipo) para nao martelar o sensor. Desligado, o objeto System.dht
+      nao existe (typeof).
+
 config CELEROS_JS_CAMERA
     bool "API Camera para apps (driver esp32-camera + decodificador quirc)"
     default n

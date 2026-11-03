@@ -52,6 +52,10 @@ function makeEnv() {
     var i2cOpen = null;          // {port,sda,scl,hz}
     var i2cDevs = {};            // addr -> { regs: {} }
     var i2cWrites = [];          // log: {addr, reg, data} para os testes
+
+    // ---- Encoder (API 55): contagem em memoria + DHT fake ----
+    var encoders = [];           // {a,b,count} por id PCNT
+    var dhtDevices = {};         // "pin:type" -> {ok,temp,humidity,error}
     function i2cInfo() {
         return i2cOpen ? { port: i2cOpen.port, sda: i2cOpen.sda,
                            scl: i2cOpen.scl, hz: i2cOpen.hz } : null;
@@ -876,6 +880,7 @@ function makeEnv() {
         // constantes iguais as do firmware (JsGpio): pinos/modos/niveis
         INPUT: 0, OUTPUT: 1, INPUT_PULLUP: 2, HIGH: 1, LOW: 0,
         servo: function(pin, angle) { log.push('[servo] ' + pin + '@' + angle); return true; },
+        servoUs: function(pin, us) { log.push('[servoUs] ' + pin + '@' + us); return true; },
         servoOff: function(pin) { log.push('[servo-off] ' + pin); return true; },
         pinMode: function() {}, digitalWrite: function() {}, digitalRead: function() { return 0; },
         analogRead: function() { return 0; }, analogWrite: function() {}, pulseIn: function() { return 0; }
@@ -934,6 +939,36 @@ function makeEnv() {
                 out.push(v === undefined ? 0 : v);
             }
             return out;
+        }
+    },
+    // API 55: encoder A/B no PCNT (contagem em memoria para os testes)
+    encoder: {
+        create: function(a, b, pullup) {
+            if (encoders.length >= 4) return -1;
+            encoders.push({ a: a, b: b, count: 0 });
+            return encoders.length - 1;
+        },
+        read: function(id) {
+            return (id >= 0 && id < encoders.length && encoders[id]) ? encoders[id].count : null;
+        },
+        reset: function(id) {
+            if (id < 0 || id >= encoders.length || !encoders[id]) return false;
+            encoders[id].count = 0;
+            return true;
+        },
+        free: function(id) {
+            if (id < 0 || id >= encoders.length || !encoders[id]) return false;
+            encoders[id] = null;
+            return true;
+        }
+    },
+    // API 55: DHT11/DHT22 fake por pino/tipo
+    dht: {
+        read: function(pin, type) {
+            var r = dhtDevices[pin + ':' + type];
+            if (!r) return { ok: false, temp: 0, humidity: 0, error: 'sem resposta' };
+            return { ok: !!r.ok, temp: r.temp || 0, humidity: r.humidity || 0,
+                     error: r.error || '' };
         }
     },
     lightLevel: function() { return 80; },
@@ -1707,6 +1742,20 @@ function makeEnv() {
     i2cWrites: function() { return i2cWrites; },
     i2cBegin: i2cInfo,
     i2cReset: function() { i2cOpen = null; i2cDevs = {}; i2cWrites = []; },
+    // API 55: injecao de contagem do encoder e leitura do DHT
+    encoderSet: function(id, count) {
+        if (id >= 0 && id < encoders.length && encoders[id]) encoders[id].count = count | 0;
+    },
+    encoderGet: function(id) {
+        return (id >= 0 && id < encoders.length && encoders[id]) ? encoders[id].count : null;
+    },
+    encoders: function() { return encoders.slice(); },
+    dhtSet: function(pin, type, r) {
+        dhtDevices[pin + ':' + type] = { ok: !!(r && r.ok), temp: (r && r.temp) || 0,
+                                         humidity: (r && r.humidity) || 0,
+                                         error: (r && r.error) || '' };
+    },
+    dhtClear: function() { dhtDevices = {}; },
     timersDropped: function () { return timersDropped; },
     addUsb: function(d) {
         var dev = usbNorm(d);

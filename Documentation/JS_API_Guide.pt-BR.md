@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 54
+### Nível de API: 55
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -521,6 +521,11 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
 - **Descrição:** move um servo hobby padrão (classe SG90) com PWM de 50 Hz (pulso de 500–2500 µs). O canal LEDC é alocado na primeira escrita do pino. Robôs: combine com o Celer Link — o app do controle envia comandos e o app do robô mapeia para as perninhas (`System.gpio.servo(13, 90)`).
 - **Nota:** os canais vêm dos canais LEDC que a placa deixa livres (nunca os do backlight, `System.beep` ou `System.led`); os canais 0..2 do `analogWrite` só entram como último recurso, com timer próprio. Sair do app solta todos os servos (sem torque de sustentação).
 
+#### `System.gpio.servoUs(pin, us)` (API 55)
+- **Parâmetros:** `pin` (Integer), `us` (Integer, 400 a 2600; travado)
+- **Retorna:** `Boolean` (`false` com pino de saída inválido ou sem canal livre)
+- **Descrição:** mesmo canal LEDC de 50 Hz do `servo`, mas com o **pulso exato em microssegundos** (400–2600). Use para servo calibrado fora do mapa 0–180 (sail winch, servo de 270°, ponto de parada de rotação contínua). A alocação do canal e a liberação na saída do app são as mesmas do `servo`.
+
 #### `System.battery()` (API 10)
 - **Retorna:** `Number` — tensão da **célula** em mV (leitura do pino já escalada pelo divisor da placa), ou `-1` se a placa não tem.
 - **Descricao:** leitura media de ADC com cache de ~2 s. No cão robótico SpotPear lê o divisor 2:1 da Li-ion no GPIO2 (~4100 mV na USB, ~3300 mV = vazia).
@@ -616,12 +621,14 @@ comuns sobre `System.gpio`/`System.i2c`. Todas são ES5 e exigem a permissão
 
 | Módulo | O que faz | API mínima |
 |--------|-----------|------------|
-| `celeros.hw.servo` | Servo com calibração min/max em µs, offset/invert, rampas não bloqueantes e poses em grupo | 10 |
-| `celeros.hw.motor` | Ponte H (EN + IN1/IN2): forward/reverse/brake/coast, ponto morto, reversão suave e par tank/arcade | 1 |
+| `celeros.hw.servo` | Servo com calibração min/max em µs (`servoUs` na API 55), offset/invert, rampas não bloqueantes, sequências e poses em grupo; `speed()` para rotação contínua | 10 |
+| `celeros.hw.motor` | Ponte H EN+IN1/IN2 ou 2 PWM (BTS7960): forward/reverse/brake/coast, ponto morto, reversão suave e par tank/arcade | 1 |
 | `celeros.hw.led` | LED simples/PWM, blink/breathe/pattern, RGB de status e fita WS2812 (rainbow) | 10 |
 | `celeros.hw.button` | Botão com debounce e eventos press/release/click/double/long/repeat (polling) | 12 |
 | `celeros.hw.pca9685` | PWM/servo de 16 canais do PCA9685 sobre `System.i2c` | 54 |
-| `celeros.hw` | Kit com os cinco módulos e um `tick`/`start` compartilhado | 54 |
+| `celeros.hw.encoder` | Encoder de quadratura A/B contado no hardware PCNT (contagem, velocidade, RPM) | 55 |
+| `celeros.hw.dht` | DHT11/DHT22 nativo (temperatura/umidade) | 55 |
+| `celeros.hw` | Kit com os cinco módulos básicos e um `tick`/`start` compartilhado | 54 |
 
 ```js
 var HW = require("celeros.hw");
@@ -642,9 +649,56 @@ timer. Em placa sem bus I²C de placa, crie o PCA9685 com pinos explícitos:
 `HW.pca9685.create({ addr: 0x40, sda: 22, scl: 27 })`.
 
 Limites: o `analogWrite` tem só 3 canais LEDC (8 bits, 5 kHz fixos), então
-cabem dois motores + um dimmer; o `System.gpio.servo` tem 5 canais; as fitas
-WS2812 têm no máximo 8 LEDs cada. O PCA9685 é o caminho para passar de cinco
-servos.
+cabem dois motores + um dimmer (ou um motor de 2 PWM); o `System.gpio.servo`
+tem 5 canais; as fitas WS2812 têm no máximo 8 LEDs cada. O PCA9685 é o
+caminho para passar de cinco servos. O kit `celeros.hw` fica com os cinco
+módulos básicos — `celeros.hw.encoder` e `celeros.hw.dht` são deps separadas
+(API mínima 55) para o kit continuar valendo em firmware antigo.
+
+---
+
+### Encoder (API 55)
+
+`System.encoder` conta um encoder incremental de quadratura A/B no
+**hardware PCNT**: o app lê o acumulado, sem polling de GPIO nem ISR em JS.
+Exige a permissão `gpio`. Quatro unidades (0..3); a contagem acumula além de
+±32767. Os pinos são entradas; `pullup` (default true) cobre encoder
+open-collector. As unidades são liberadas na saída do app.
+
+#### `System.encoder.create(pinA, pinB, pullup)` (API 55)
+- **Parâmetros:** `pinA` (Integer), `pinB` (Integer), `pullup` (Boolean, opcional, default true)
+- **Retorna:** `Integer` (id 0..3) ou `-1`
+- **Descrição:** cria o encoder. `-1` quando as quatro unidades PCNT estão ocupadas, os pinos são inválidos/negados ou o driver falhou.
+
+#### `System.encoder.read(id)` (API 55)
+- **Parâmetros:** `id` (Integer)
+- **Retorna:** `Integer` (contagem acumulada com sinal) ou `null`
+- **Descrição:** lê o contador de hardware. Leia na taxa que quiser (10 ms é suficiente); a contagem não dá a volta em 32767.
+
+#### `System.encoder.reset(id)` (API 55)
+- **Parâmetros:** `id` (Integer)
+- **Retorna:** `Boolean`
+- **Descrição:** zera a contagem mantendo o encoder ativo (base do delta de um laço de velocidade).
+
+#### `System.encoder.free(id)` (API 55)
+- **Parâmetros:** `id` (Integer)
+- **Retorna:** `Boolean`
+- **Descrição:** desabilita a unidade e libera o slot PCNT. Idempotente.
+
+### DHT11/DHT22 (API 55)
+
+`System.dht.read` lê um sensor DHT11/DHT22 de temperatura e umidade. O
+protocolo de microssegundos fica no firmware (janela crítica curta), então o
+JS só recebe os valores decodificados. Exige `gpio`. Alimente o módulo em
+**3,3 V** — um módulo alimentado em 5 V puxa a linha de dados para 5 V, o
+que não é tolerante no ESP32. O driver cacheia a última leitura por (pino,
+tipo) por 1 s (DHT11) / 2 s (DHT22), então chamar em loop não martela o
+sensor.
+
+#### `System.dht.read(pin, type)` (API 55)
+- **Parâmetros:** `pin` (Integer), `type` (Integer, 11 ou 22; default 22)
+- **Retorna:** `{ ok, temp, humidity, error }` — `temp` em °C, `humidity` em %, `error` é `"sem resposta"` / `"timeout"` / `"checksum"` / `""`
+- **Descrição:** faz uma leitura (bloqueante ~20 ms na primeira chamada; depois usa o cache). `ok=false` sem sensor/checksum; o app pode tentar de novo depois do intervalo mínimo.
 
 ---
 

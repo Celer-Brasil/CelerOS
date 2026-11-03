@@ -127,6 +127,12 @@ void JSBindings::appExitCleanup() {
 #if CONFIG_CELEROS_JS_I2C
     jsI2cReset();      // devices/bus que o app abriu (o bus da placa fica)
 #endif
+#if CONFIG_CELEROS_JS_ENCODER
+    jsEncoderReset();  // devolve as unidades PCNT do app
+#endif
+#if CONFIG_CELEROS_JS_DHT
+    jsDhtReset();      // leitura cacheada nao atravessa apps
+#endif
 #if CONFIG_CELEROS_JS_GPIO
     // Saidas do app (motor/ponte H, GPIO alto) voltam a LOW: o kernel ja
     // zerou LED/analogWrite/servos; aqui ficam os pinos de direcao.
@@ -1064,6 +1070,12 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #if CONFIG_CELEROS_JS_I2C
     jsI2cReset();      // bus de um app anterior (idempotente)
 #endif
+#if CONFIG_CELEROS_JS_ENCODER
+    jsEncoderReset();  // unidades PCNT de um app anterior
+#endif
+#if CONFIG_CELEROS_JS_DHT
+    jsDhtReset();      // cache do DHT de um app anterior
+#endif
 #if CONFIG_CELEROS_JS_GPIO
     jsGpioReleaseOutputs();  // rede de seguranca: saidas do app anterior
 #endif
@@ -1182,6 +1194,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
             {"analogWrite", js_analogWrite, 2},
             {"pulseIn", js_pulseIn, 3},
             {"servo", js_servo, 2},
+            {"servoUs", js_servoUs, 2},  // API 55: pulso exato 400..2600 us
             {"servoOff", js_servoOff, 1},
         };
         putFns(ctx, kFns1);
@@ -1216,6 +1229,33 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         };
         putFns(ctx, kFnsI2c);
         duk_put_prop_string(ctx, -2, "i2c");
+    }
+#endif
+
+#if CONFIG_CELEROS_JS_ENCODER
+    // System.encoder (API 55): encoder A/B no PCNT, contagem no hardware.
+    if (perm(celer::PERM_GPIO)) {
+        duk_push_object(ctx);
+        static const JsFn kFnsEncoder[] = {
+            {"create", js_encoderCreate, 3},
+            {"read", js_encoderRead, 1},
+            {"reset", js_encoderReset, 1},
+            {"free", js_encoderFree, 1},
+        };
+        putFns(ctx, kFnsEncoder);
+        duk_put_prop_string(ctx, -2, "encoder");
+    }
+#endif
+
+#if CONFIG_CELEROS_JS_DHT
+    // System.dht (API 55): DHT11/DHT22 nativo (protocolo de microssegundos).
+    if (perm(celer::PERM_GPIO)) {
+        duk_push_object(ctx);
+        static const JsFn kFnsDht[] = {
+            {"read", js_dhtRead, 2},
+        };
+        putFns(ctx, kFnsDht);
+        duk_put_prop_string(ctx, -2, "dht");
     }
 #endif
 

@@ -147,7 +147,17 @@ public:
     static duk_ret_t js_analogWrite(duk_context *ctx);
     static duk_ret_t js_pulseIn(duk_context *ctx);
     static duk_ret_t js_servo(duk_context *ctx);    // 50 Hz via LEDC (API 10)
+    static duk_ret_t js_servoUs(duk_context *ctx);  // pulso exato 400..2600 us (API 55)
     static duk_ret_t js_servoOff(duk_context *ctx);
+
+    // Encoder (API 55, JsEncoder.cpp): quadrature A/B no PCNT.
+    static duk_ret_t js_encoderCreate(duk_context *ctx);
+    static duk_ret_t js_encoderRead(duk_context *ctx);
+    static duk_ret_t js_encoderReset(duk_context *ctx);
+    static duk_ret_t js_encoderFree(duk_context *ctx);
+
+    // DHT (API 55, JsDht.cpp): DHT11/DHT22 nativo.
+    static duk_ret_t js_dhtRead(duk_context *ctx);
 
     // I2C generico (API 54, JsI2c.cpp): bus cru para as deps de hardware.
     static duk_ret_t js_i2cBegin(duk_context *ctx);

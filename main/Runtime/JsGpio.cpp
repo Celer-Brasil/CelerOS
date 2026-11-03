@@ -144,6 +144,20 @@ duk_ret_t JSBindings::js_servo(duk_context *ctx) {
     return 1;
 }
 
+// System.gpio.servoUs(pin, us) -> bool (API 55). Pulso exato de 400..2600 us:
+// a calibracao de servo fora da faixa 500..2500 (sail winch, rotacao
+// continua, servo de 270 graus) nao passa pelo mapa 0..180.
+duk_ret_t JSBindings::js_servoUs(duk_context *ctx) {
+    int pin = requirePin(ctx, 0, true);
+    int us = duk_require_int(ctx, 1);
+    if (us < 400) us = 400;
+    if (us > 2600) us = 2600;
+    const bool ok = BoardIO::servoWrite(pin, us);
+    if (ok) s_jsOutPins |= (1ULL << pin);
+    duk_push_boolean(ctx, ok ? 1 : 0);
+    return 1;
+}
+
 // System.gpio.servoOff(pin) -> bool. Para o PWM e libera o canal (o servo
 // fica solto, sem forca).
 duk_ret_t JSBindings::js_servoOff(duk_context *ctx) {

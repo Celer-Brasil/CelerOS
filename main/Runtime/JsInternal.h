@@ -54,6 +54,14 @@ void jsDepsSvcEnd();
 void jsPhysicsReset();
 // I2C generico (API 54, JsI2c.cpp): solta devices e o bus que o app abriu.
 void jsI2cReset();
+#if CONFIG_CELEROS_JS_ENCODER
+// Encoder por PCNT (API 55, JsEncoder.cpp): devolve as unidades no exit.
+void jsEncoderReset();
+#endif
+#if CONFIG_CELEROS_JS_DHT
+// DHT (API 55, JsDht.cpp): descarta a leitura cacheada entre apps.
+void jsDhtReset();
+#endif
 #if CONFIG_CELEROS_JS_GPIO
 // Saidas do System.gpio voltam a LOW na saida do app: motor/ponte H nao
 // continua girando sem dono (o analogWrite/servo ja sao zerados no kernel).

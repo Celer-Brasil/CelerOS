@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 54
+### API Level: 55
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -368,6 +368,11 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 - **Description:** drives a standard hobby servo (SG90 class) with a 50 Hz PWM (500–2500 µs pulse). The LEDC channel is allocated on the first write to a pin. Robots: pair it with the Celer Link — a remote app sends commands, the robot's app maps them to legs (`System.gpio.servo(13, 90)`).
 - **Note:** the channels come from the LEDC channels the board leaves free (never the backlight, `System.beep` or `System.led` ones); `analogWrite` channels 0..2 are only used as a last resort, on its own timer. Leaving the app releases every servo (no holding torque).
 
+#### `System.gpio.servoUs(pin, us)` (API 55)
+- **Parameters:** `pin` (Integer), `us` (Integer, 400 to 2600; clamped)
+- **Returns:** `Boolean` (`false` for an invalid output pin or no free channel)
+- **Description:** same 50 Hz LEDC channel as `servo`, but with the **exact pulse in microseconds** (400–2600). Use it for calibrated servos outside the 0–180 mapping (sail winch, 270° servo, continuous rotation stop point). The channel allocation and the app-exit release are the same as `servo`.
+
 #### `System.battery()` (API 10)
 - **Returns:** `Number` — **cell** voltage in mV (the pin reading already scaled by the board's divider), or `-1` if the board has none.
 - **Description:** averaged ADC reading with ~2 s cache. On the SpotPear robot dog it reads the 2:1 Li-ion divider on GPIO2 (~4100 mV on USB, ~3300 mV = empty).
@@ -463,12 +468,14 @@ actuators on top of `System.gpio`/`System.i2c`. All are ES5 and require the
 
 | Module | What it does | Min API |
 |--------|--------------|---------|
-| `celeros.hw.servo` | Servo with min/max µs calibration, offset/invert, non-blocking ramps and group poses | 10 |
-| `celeros.hw.motor` | H-bridge (EN + IN1/IN2): forward/reverse/brake/coast, deadband, soft reverse, tank/arcade pair | 1 |
+| `celeros.hw.servo` | Servo with min/max µs calibration (`servoUs` on API 55), offset/invert, non-blocking ramps, sequences and group poses; continuous-rotation `speed()` | 10 |
+| `celeros.hw.motor` | H-bridge EN+IN1/IN2 or 2-PWM (BTS7960): forward/reverse/brake/coast, deadband, soft reverse, tank/arcade pair | 1 |
 | `celeros.hw.led` | Simple/PWM LED, blink/breathe/pattern, status RGB and WS2812 strip (rainbow) | 10 |
 | `celeros.hw.button` | Debounced button with press/release/click/double/long/repeat events (polling) | 12 |
 | `celeros.hw.pca9685` | PCA9685 16-channel PWM/servo over `System.i2c` | 54 |
-| `celeros.hw` | Kit with the five modules and one shared `tick`/`start` | 54 |
+| `celeros.hw.encoder` | Quadrature A/B encoder counted in the PCNT hardware (count, speed, RPM) | 55 |
+| `celeros.hw.dht` | Native DHT11/DHT22 temperature/humidity | 55 |
+| `celeros.hw` | Kit with the five basic modules and one shared `tick`/`start` | 54 |
 
 ```js
 var HW = require("celeros.hw");
@@ -489,9 +496,55 @@ board without a board I²C bus, create the PCA9685 with explicit pins:
 `HW.pca9685.create({ addr: 0x40, sda: 22, scl: 27 })`.
 
 Limits: `analogWrite` has only 3 LEDC channels (8 bits, fixed 5 kHz), so two
-motors plus one dimmer fit; `System.gpio.servo` has 5 channels; the WS2812
-strips have at most 8 LEDs each. The PCA9685 is the way to go beyond five
-servos.
+motors plus one dimmer fit (or one 2-PWM motor); `System.gpio.servo` has 5
+channels; the WS2812 strips have at most 8 LEDs each. The PCA9685 is the way
+to go beyond five servos. The `celeros.hw` kit stays with the five basic
+modules — `celeros.hw.encoder` and `celeros.hw.dht` are separate deps (min API
+55) so apps on older firmware keep the kit working.
+
+---
+
+### Encoder (API 55)
+
+`System.encoder` counts an incremental quadrature encoder A/B in the
+**PCNT hardware**: the app reads the accumulated count, with no GPIO polling
+or ISR in JS. Requires the `gpio` permission. Four units (0..3); the count
+accumulates past ±32767. The pins are inputs; `pullup` (default true) covers
+open-collector encoders. Units are released at app exit.
+
+#### `System.encoder.create(pinA, pinB, pullup)` (API 55)
+- **Parameters:** `pinA` (Integer), `pinB` (Integer), `pullup` (Boolean, optional, default true)
+- **Returns:** `Integer` (id 0..3) or `-1`
+- **Description:** creates the encoder. `-1` when the four PCNT units are taken, the pins are invalid/denied, or the driver failed.
+
+#### `System.encoder.read(id)` (API 55)
+- **Parameters:** `id` (Integer)
+- **Returns:** `Integer` (signed accumulated count) or `null`
+- **Description:** reads the hardware counter. Poll it at your own rate (10 ms is fine); the count does not wrap at 32767.
+
+#### `System.encoder.reset(id)` (API 55)
+- **Parameters:** `id` (Integer)
+- **Returns:** `Boolean`
+- **Description:** clears the count, keeping the encoder running (the delta base of a speed loop).
+
+#### `System.encoder.free(id)` (API 55)
+- **Parameters:** `id` (Integer)
+- **Returns:** `Boolean`
+- **Description:** disables the unit and frees the PCNT slot. Idempotent.
+
+### DHT11/DHT22 (API 55)
+
+`System.dht.read` reads a DHT11/DHT22 temperature/humidity sensor. The
+microsecond protocol lives in the firmware (a short critical section), so JS
+only gets the decoded values. Requires `gpio`. Power the module from
+**3.3 V** — a 5 V-powered module pulls the data line to 5 V, which is not
+ESP32-safe. The driver caches the last reading per (pin, type) for 1 s
+(DHT11) / 2 s (DHT22), so calling it in a loop does not hammer the sensor.
+
+#### `System.dht.read(pin, type)` (API 55)
+- **Parameters:** `pin` (Integer), `type` (Integer, 11 or 22; default 22)
+- **Returns:** `{ ok, temp, humidity, error }` — `temp` in °C, `humidity` in %, `error` is `"sem resposta"` / `"timeout"` / `"checksum"` / `""`
+- **Description:** performs a read (blocking ~20 ms on the first call; cached afterwards). `ok=false` on a missing sensor/checksum; the app can retry after the minimum interval.
 
 ---
 

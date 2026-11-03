@@ -78,6 +78,14 @@ endif()
 if(CONFIG_CELEROS_JS_I2C)
     list(APPEND CELEROS_SRCS "Hardware/I2cBus.cpp" "Runtime/JsI2c.cpp")
 endif()
+# Encoder de quadratura (API 55): hardware PCNT, contagem fora do JS.
+if(CONFIG_CELEROS_JS_ENCODER)
+    list(APPEND CELEROS_SRCS "Hardware/Encoder.cpp" "Runtime/JsEncoder.cpp")
+endif()
+# DHT11/DHT22 (API 55): protocolo de microssegundos no C++.
+if(CONFIG_CELEROS_JS_DHT)
+    list(APPEND CELEROS_SRCS "Hardware/Dht.cpp" "Runtime/JsDht.cpp")
+endif()
 # Audio digital (I2S) — CELEROS_AUDIO: player WAV/QOA (PcmFeed do AI.speak
 # incluido), sintetizador chiptune e o decodificador QOA. O tom analogico
 # (LEDC) do BoardIO fica no build: e o caminho do System.playTone em toda
@@ -235,6 +243,7 @@ idf_component_register(
         driver
         esp_adc
         esp_driver_rmt
+        esp_driver_pcnt  # System.encoder (API 55): PCNT do encoder A/B
         esp_driver_touch_sens
         esp_driver_tsens
         esp_timer
@@ -348,7 +357,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.13.0"
-    CELEROS_API_LEVEL=54
+    CELEROS_API_LEVEL=55
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

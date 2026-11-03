@@ -657,7 +657,7 @@ módulos básicos — `celeros.hw.encoder` e `celeros.hw.dht` são deps separada
 
 ---
 
-### Encoder (API 55)
+### Encoder A/B (PCNT, API 55)
 
 `System.encoder` conta um encoder incremental de quadratura A/B no
 **hardware PCNT**: o app lê o acumulado, sem polling de GPIO nem ISR em JS.

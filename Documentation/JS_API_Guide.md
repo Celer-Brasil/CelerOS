@@ -504,7 +504,7 @@ modules — `celeros.hw.encoder` and `celeros.hw.dht` are separate deps (min API
 
 ---
 
-### Encoder (API 55)
+### Encoder A/B (PCNT, API 55)
 
 `System.encoder` counts an incremental quadrature encoder A/B in the
 **PCNT hardware**: the app reads the accumulated count, with no GPIO polling

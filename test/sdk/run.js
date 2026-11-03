@@ -2949,6 +2949,8 @@ require('./celerosapp_r1.js')(check);
 require('./celerosapp_r2.js')(check);
 require('./ui_parity.js')(check);
 require('./ui_extras.js')(check);
+// deps de hardware (API 54): servo, motor, LED, botao e PCA9685
+require('./hw_libs.js')(check);
 // jsmin: minificador do publish/deploy (mangle de locais + espaco minimo)
 require('./jsmin.js')(check);
 

@@ -299,5 +299,31 @@
   },
   "celeros.cloud": {
     "deps": {}
+  },
+  "celeros.hw.servo": {
+    "deps": {}
+  },
+  "celeros.hw.motor": {
+    "deps": {}
+  },
+  "celeros.hw.led": {
+    "deps": {}
+  },
+  "celeros.hw.button": {
+    "deps": {}
+  },
+  "celeros.hw.pca9685": {
+    "deps": {
+      "celeros.hw.servo": "^1.0.0"
+    }
+  },
+  "celeros.hw": {
+    "deps": {
+      "celeros.hw.servo": "^1.0.0",
+      "celeros.hw.motor": "^1.0.0",
+      "celeros.hw.led": "^1.0.0",
+      "celeros.hw.button": "^1.0.0",
+      "celeros.hw.pca9685": "^1.0.0"
+    }
   }
 }

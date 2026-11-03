@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 53
+### API Level: 54
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -389,6 +389,109 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 - **Parameters:** `pin` (Integer)
 - **Returns:** `Boolean**
 - **Description:** stops the PWM on the pin and frees the channel — the servo goes limp (no holding torque). Call it when a movement ends to save power.
+
+---
+
+### I²C bus (API 54)
+
+`System.i2c` gives apps a raw I²C master bus for external sensors and
+actuators. It requires the `gpio` permission. On boards that already have a
+board bus (SmartDisplay GT911 on 19/45, watch 15/14, robot dog OLED on 41/42)
+`System.i2c.begin()` **adopts** the bus the touch/PMU/OLED opened at boot; the
+other boards take explicit pins with `beginAt`. The device protocol lives in
+the JS deps (e.g. `celeros.hw.pca9685`), not in the firmware.
+
+- Addresses are 7-bit (`0x08..0x77`); data is an array of numbers `0..255`
+  (Duktape is lean, no `Uint8Array`); max 128 bytes per transfer.
+- Invalid arguments throw `RangeError`; a NACK returns `false` (writes) or
+  `null` (reads). `scan()` returns the addresses that answered.
+- The app may call `end()`; at app exit the firmware removes the devices and
+  closes a bus the app created, but never the board bus.
+
+#### `System.i2c.begin()` (API 54)
+- **Parameters:** none
+- **Returns:** `{port, sda, scl, hz}` or `null` when the board has no board bus
+- **Description:** opens/adopts the board I²C bus from the board profile. On the CYD/devkit boards use `beginAt` instead.
+
+#### `System.i2c.beginAt(sda, scl, hz)` (API 54)
+- **Parameters:** `sda` (Integer), `scl` (Integer), `hz` (Integer, 10000..1000000)
+- **Returns:** `{port, sda, scl, hz}` or `null`
+- **Description:** opens a bus on explicit pins (created by the app and closed by `end()`/app exit). If the pins are the board's own pair, adopts the existing bus. A pin denied to apps is rejected with `RangeError`.
+
+#### `System.i2c.end()` (API 54)
+- **Parameters:** none
+- **Returns:** `Boolean`
+- **Description:** removes the devices this app added and closes the bus only if the app created it. The board bus (touch/PMU/OLED) stays alive. Idempotent.
+
+#### `System.i2c.pins()` (API 54)
+- **Parameters:** none
+- **Returns:** `{port, sda, scl, hz}` or `null`
+- **Description:** describes the board bus so an app can pre-fill a pin picker; `null` on boards without one.
+
+#### `System.i2c.scan()` (API 54)
+- **Parameters:** none
+- **Returns:** `Integer[]` (addresses that answered, ascending)
+- **Description:** probes `0x08..0x77` with `i2c_master_probe`. A stuck bus can make it take seconds; the binding yields the executor window every 16 addresses.
+
+#### `System.i2c.write(addr, data)` (API 54)
+- **Parameters:** `addr` (Integer, 0x08..0x77), `data` (Integer[], 1..128 bytes 0..255)
+- **Returns:** `Boolean`
+- **Description:** raw write (`i2c_master_transmit`).
+
+#### `System.i2c.read(addr, len)` (API 54)
+- **Parameters:** `addr` (Integer), `len` (Integer, 1..128)
+- **Returns:** `Integer[]` or `null` on NACK
+- **Description:** raw read (`i2c_master_receive`).
+
+#### `System.i2c.writeReg(addr, reg, data)` (API 54)
+- **Parameters:** `addr` (Integer), `reg` (Integer 0..255), `data` (Integer[], 1..128)
+- **Returns:** `Boolean`
+- **Description:** writes `reg` followed by the bytes (the usual register write; the chip's auto-increment handles `data` longer than one byte).
+
+#### `System.i2c.readReg(addr, reg, len)` (API 54)
+- **Parameters:** `addr` (Integer), `reg` (Integer), `len` (Integer, 1..128)
+- **Returns:** `Integer[]` or `null` on NACK
+- **Description:** register read using `i2c_master_transmit_receive` (the chip's auto-increment).
+
+---
+
+### Hardware libraries (`celeros.hw.*`)
+
+Hub deps (declare them in `app.json.deps`, API 30+) that package the common
+actuators on top of `System.gpio`/`System.i2c`. All are ES5 and require the
+`gpio` permission; the app declares the permission, the dep never does.
+
+| Module | What it does | Min API |
+|--------|--------------|---------|
+| `celeros.hw.servo` | Servo with min/max µs calibration, offset/invert, non-blocking ramps and group poses | 10 |
+| `celeros.hw.motor` | H-bridge (EN + IN1/IN2): forward/reverse/brake/coast, deadband, soft reverse, tank/arcade pair | 1 |
+| `celeros.hw.led` | Simple/PWM LED, blink/breathe/pattern, status RGB and WS2812 strip (rainbow) | 10 |
+| `celeros.hw.button` | Debounced button with press/release/click/double/long/repeat events (polling) | 12 |
+| `celeros.hw.pca9685` | PCA9685 16-channel PWM/servo over `System.i2c` | 54 |
+| `celeros.hw` | Kit with the five modules and one shared `tick`/`start` | 54 |
+
+```js
+var HW = require("celeros.hw");
+var servo = HW.servo.create({ pin: 12, minUs: 600, maxUs: 2400 });
+var motor = HW.motor.create({ pwm: 18, in1: 19, in2: 20, minDuty: 40 });
+var led = HW.led.create({ pin: 4 });
+var button = HW.button.create({ pin: 0 });   // to GND, internal pull-up
+
+button.on("click", function () { servo.to(180, 400); });
+button.on("long", function () { motor.brake(); });
+led.blink(500);
+HW.start(10);           // ONE setInterval feeds ramps/effects/buttons
+```
+
+Non-blocking effects need `HW.tick()` (or the kit's `start`). Apps that already
+have a loop can call `HW.tick()` once per frame instead of using a timer. On a
+board without a board I²C bus, create the PCA9685 with explicit pins:
+`HW.pca9685.create({ addr: 0x40, sda: 22, scl: 27 })`.
+
+Limits: `analogWrite` has only 3 LEDC channels (8 bits, fixed 5 kHz), so two
+motors plus one dimmer fit; `System.gpio.servo` has 5 channels; the WS2812
+strips have at most 8 LEDs each. The PCA9685 is the way to go beyond five
+servos.
 
 ---
 

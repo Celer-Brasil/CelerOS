@@ -32,6 +32,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},               // sem fitas WS2812
+    .i2c = {},                  // sem bus de placa: app usa System.i2c.beginAt
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
     // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
     // recusam): 1/3: UART0 (console/celerctl do CH340); 6..11: SPI flash do

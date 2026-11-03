@@ -47,6 +47,7 @@ static const BoardProfile s_profile = {
     // e master nos mesmos clocks do codec (MCLK pelo campo i2s.mclk acima).
     .mic = {.ws = 45, .bck = 41, .din = 42},
     .strips = {},
+    .i2c = {.port = 0, .sda = 15, .scl = 14, .hz = 400000},  // FT3168/PMU/RTC/IMU
     .batteryPin = -1,        // bateria vem do AXP2101 pelo hook abaixo
     .batteryScalePct = 100,
     .touchPad = -1,

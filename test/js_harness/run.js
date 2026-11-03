@@ -46,6 +46,17 @@ function makeEnv() {
     var LIMIT = 200000;
     var env = {};
 
+    // ---- I2C (API 54): bus em memoria. Devices = { regs: {reg: byte} };
+    // writeReg/readReg auto-incrementam o registrador como o PCA9685 (e a
+    // maioria dos chips). NACK = endereco inexistente (false/null).
+    var i2cOpen = null;          // {port,sda,scl,hz}
+    var i2cDevs = {};            // addr -> { regs: {} }
+    var i2cWrites = [];          // log: {addr, reg, data} para os testes
+    function i2cInfo() {
+        return i2cOpen ? { port: i2cOpen.port, sda: i2cOpen.sda,
+                           scl: i2cOpen.scl, hz: i2cOpen.hz } : null;
+    }
+
     // Relogio de parede: 27/09/2026 10:32:00 (domingo) no tick 0 e ANDA com
     // o clock virtual — apps de relogio/alarme veem o tempo passar como no
     // device. Partes em UTC do Date: deterministico em qualquer host.
@@ -869,6 +880,62 @@ function makeEnv() {
         pinMode: function() {}, digitalWrite: function() {}, digitalRead: function() { return 0; },
         analogRead: function() { return 0; }, analogWrite: function() {}, pulseIn: function() { return 0; }
     },
+    // API 54: bus I2C em memoria (devices com registradores e auto-incremento)
+    i2c: {
+        begin: function() {
+            if (!i2cOpen) i2cOpen = { port: 0, sda: 22, scl: 27, hz: 400000 };
+            return i2cInfo();
+        },
+        beginAt: function(sda, scl, hz) {
+            if (i2cOpen) {
+                if (i2cOpen.sda !== sda || i2cOpen.scl !== scl) return null;
+                return i2cInfo();
+            }
+            i2cOpen = { port: 0, sda: sda, scl: scl, hz: hz || 400000 };
+            return i2cInfo();
+        },
+        end: function() { i2cOpen = null; i2cDevs = {}; return true; },
+        pins: function() { return { port: 0, sda: 22, scl: 27, hz: 400000 }; },
+        scan: function() {
+            var out = [];
+            for (var a in i2cDevs) if (i2cDevs.hasOwnProperty(a)) out.push(+a);
+            out.sort(function(x, y) { return x - y; });
+            return out;
+        },
+        write: function(addr, data) {
+            var dev = i2cDevs[addr];
+            if (!dev) return false;
+            i2cWrites.push({ addr: addr, reg: data.length ? data[0] : 0, data: data.slice() });
+            // escrita crua [reg, b0, b1...] auto-incrementa como writeReg
+            if (data.length > 1)
+                for (var i = 1; i < data.length; i++)
+                    dev.regs[(data[0] + i - 1) & 0xFF] = data[i] & 0xFF;
+            return true;
+        },
+        read: function(addr, len) {
+            if (!i2cDevs[addr]) return null;
+            var out = [];
+            for (var i = 0; i < len; i++) out.push(0);
+            return out;
+        },
+        writeReg: function(addr, reg, data) {
+            var dev = i2cDevs[addr];
+            if (!dev) return false;
+            i2cWrites.push({ addr: addr, reg: reg, data: data.slice() });
+            for (var i = 0; i < data.length; i++) dev.regs[(reg + i) & 0xFF] = data[i] & 0xFF;
+            return true;
+        },
+        readReg: function(addr, reg, len) {
+            var dev = i2cDevs[addr];
+            if (!dev) return null;
+            var out = [];
+            for (var i = 0; i < len; i++) {
+                var v = dev.regs[(reg + i) & 0xFF];
+                out.push(v === undefined ? 0 : v);
+            }
+            return out;
+        }
+    },
     lightLevel: function() { return 80; },
     // temperatura do chip: 30C com sensor presente (o firmware considera
     // 53.33 = sensor ausente — hasTemperatureSensor acompanha o valor)
@@ -1628,6 +1695,18 @@ function makeEnv() {
 
     env.__harness = {
     log: log,
+    // API 54: devices do bus I2C em memoria
+    i2cAdd: function(addr, regs) {
+        var r = {};
+        if (regs) for (var k in regs) if (regs.hasOwnProperty(k)) r[k & 0xFF] = regs[k] & 0xFF;
+        i2cDevs[addr] = { regs: r };
+        return addr;
+    },
+    i2cRemove: function(addr) { delete i2cDevs[addr]; },
+    i2cRegs: function(addr) { return i2cDevs[addr] ? i2cDevs[addr].regs : null; },
+    i2cWrites: function() { return i2cWrites; },
+    i2cBegin: i2cInfo,
+    i2cReset: function() { i2cOpen = null; i2cDevs = {}; i2cWrites = []; },
     timersDropped: function () { return timersDropped; },
     addUsb: function(d) {
         var dev = usbNorm(d);

@@ -52,6 +52,13 @@ void jsDepsSvcEnd();
 // Verlet nativo (API 31, JsPhysics.cpp): mundos do app anterior saem no
 // init do proximo (malloc incluso). Chamado pelo JSBindings::init.
 void jsPhysicsReset();
+// I2C generico (API 54, JsI2c.cpp): solta devices e o bus que o app abriu.
+void jsI2cReset();
+#if CONFIG_CELEROS_JS_GPIO
+// Saidas do System.gpio voltam a LOW na saida do app: motor/ponte H nao
+// continua girando sem dono (o analogWrite/servo ja sao zerados no kernel).
+void jsGpioReleaseOutputs();
+#endif
 #if CONFIG_CELEROS_JS_GAME_ACCEL
 // Corpo rigido nativo (API 33, JsRigid.cpp): mesmo ciclo do verlet.
 void jsRigidReset();

@@ -73,6 +73,11 @@ set(CELEROS_SRCS
 if(CONFIG_CELEROS_JS_GPIO)
     list(APPEND CELEROS_SRCS "Runtime/JsGpio.cpp")
 endif()
+# I2C generico (API 54): bus cru para apps + helper que adota o I2C0 do
+# touch/PMU/OLED. O protocolo dos devices (PCA9685 etc.) e dep JS.
+if(CONFIG_CELEROS_JS_I2C)
+    list(APPEND CELEROS_SRCS "Hardware/I2cBus.cpp" "Runtime/JsI2c.cpp")
+endif()
 # Audio digital (I2S) — CELEROS_AUDIO: player WAV/QOA (PcmFeed do AI.speak
 # incluido), sintetizador chiptune e o decodificador QOA. O tom analogico
 # (LEDC) do BoardIO fica no build: e o caminho do System.playTone em toda
@@ -343,7 +348,7 @@ endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CELEROS_VERSION="1.13.0"
-    CELEROS_API_LEVEL=53
+    CELEROS_API_LEVEL=54
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

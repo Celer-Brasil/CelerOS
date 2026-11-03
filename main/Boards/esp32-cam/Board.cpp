@@ -46,6 +46,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},
+    .i2c = {},   // sem bus de placa (o SCCB da camera nao e um bus generico)
     // OV2640 no DVP (mapa AI-Thinker) + LED de flash no GPIO4 (Camera.led)
     .camera = {
         .pwdn = 32, .reset = -1, .xclk = 0,

@@ -169,6 +169,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},
+    .i2c = {.port = 0, .sda = 19, .scl = 45, .hz = 400000},  // GT911
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
     // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
     // recusam): 0..21 (0x3FFFFF) = painel RGB (D0..D15 = 0,3..15,20; DE/VS/HS/
@@ -197,6 +198,7 @@ static const BoardProfile s_profile = {
     .servo = {},
     .mic = {},
     .strips = {},  // sem fitas WS2812
+    .i2c = {.port = 0, .sda = 19, .scl = 45, .hz = 400000},  // GT911
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
     // Igual a variante com rele (comentario acima): painel RGB, I2S (aqui o
     // alto-falante de verdade), touch, PSRAM octal, SD e UART0.

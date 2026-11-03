@@ -124,6 +124,14 @@ void JSBindings::appExitCleanup() {
 #if CONFIG_CELEROS_JS_CAMERA
     cameraAppReset();  // sensor, framebuffers retidos e quirc voltam ao heap
 #endif
+#if CONFIG_CELEROS_JS_I2C
+    jsI2cReset();      // devices/bus que o app abriu (o bus da placa fica)
+#endif
+#if CONFIG_CELEROS_JS_GPIO
+    // Saidas do app (motor/ponte H, GPIO alto) voltam a LOW: o kernel ja
+    // zerou LED/analogWrite/servos; aqui ficam os pinos de direcao.
+    jsGpioReleaseOutputs();
+#endif
     if (s_hwTouched) {
         s_hwTouched = false;
         Backlight::setAuto(s_launchAuto, false);
@@ -1053,6 +1061,12 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();    // mundos rigidos nativos (API 33)
 #endif
+#if CONFIG_CELEROS_JS_I2C
+    jsI2cReset();      // bus de um app anterior (idempotente)
+#endif
+#if CONFIG_CELEROS_JS_GPIO
+    jsGpioReleaseOutputs();  // rede de seguranca: saidas do app anterior
+#endif
 
     // Sessao de teclado acoplado de um app anterior (saiu sem keypadClose)
 #if CONFIG_CELEROS_UI
@@ -1180,6 +1194,28 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         duk_push_int(ctx, LOW); duk_put_prop_string(ctx, -2, "LOW");
 
         duk_put_prop_string(ctx, -2, "gpio");
+    }
+#endif
+
+#if CONFIG_CELEROS_JS_I2C
+    // System.i2c (API 54): bus cru para as deps de hardware (PCA9685 e
+    // qualquer sensor I2C futuro). Mesma permissao do gpio; sem ela o
+    // objeto nao existe (o app testa typeof).
+    if (perm(celer::PERM_GPIO)) {
+        duk_push_object(ctx);
+        static const JsFn kFnsI2c[] = {
+            {"begin", js_i2cBegin, 0},
+            {"beginAt", js_i2cBeginAt, 3},
+            {"end", js_i2cEnd, 0},
+            {"pins", js_i2cPins, 0},
+            {"scan", js_i2cScan, 0},
+            {"write", js_i2cWrite, 2},
+            {"read", js_i2cRead, 2},
+            {"writeReg", js_i2cWriteReg, 3},
+            {"readReg", js_i2cReadReg, 3},
+        };
+        putFns(ctx, kFnsI2c);
+        duk_put_prop_string(ctx, -2, "i2c");
     }
 #endif
 

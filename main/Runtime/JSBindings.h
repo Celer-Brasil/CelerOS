@@ -149,6 +149,17 @@ public:
     static duk_ret_t js_servo(duk_context *ctx);    // 50 Hz via LEDC (API 10)
     static duk_ret_t js_servoOff(duk_context *ctx);
 
+    // I2C generico (API 54, JsI2c.cpp): bus cru para as deps de hardware.
+    static duk_ret_t js_i2cBegin(duk_context *ctx);
+    static duk_ret_t js_i2cBeginAt(duk_context *ctx);
+    static duk_ret_t js_i2cEnd(duk_context *ctx);
+    static duk_ret_t js_i2cPins(duk_context *ctx);
+    static duk_ret_t js_i2cScan(duk_context *ctx);
+    static duk_ret_t js_i2cWrite(duk_context *ctx);
+    static duk_ret_t js_i2cRead(duk_context *ctx);
+    static duk_ret_t js_i2cWriteReg(duk_context *ctx);
+    static duk_ret_t js_i2cReadReg(duk_context *ctx);
+
     // Display Bindings - Drawing
     static duk_ret_t js_fillScreen(duk_context *ctx);
     static duk_ret_t js_fillRect(duk_context *ctx);

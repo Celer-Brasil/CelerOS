@@ -36,6 +36,7 @@ static const BoardProfile s_profile = {
     .mic = {.ws = 4, .bck = 5, .din = 6},
     // Fitas WS2812: corpo (GPIO8) e segunda fita (GPIO48), 4 LEDs cada.
     .strips = {.count = 2, .pins = {8, 48}, .ledsPerStrip = 4},
+    .i2c = {.port = 0, .sda = 41, .scl = 42, .hz = 100000},  // OLED SH1106
     .batteryPin = 2,   // divisor 2:1 no ADC1_CH1 (~2066 mV no pino sob USB)
     .batteryScalePct = 200,  // System.battery() devolve a tensao da celula
     .touchPad = 10,    // pad capacitivo: 1 toque = tap, segurar = hold

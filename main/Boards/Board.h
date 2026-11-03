@@ -69,6 +69,18 @@ struct LedStrips {
     int ledsPerStrip = 0;  // max 8 (RMT sem DMA: 24 simbolos por LED)
 };
 
+// Barramento I2C da placa (touch/PMU/RTC/OLED). sda < 0 = placa sem bus de
+// placa; nesse caso o app abre um com System.i2c.beginAt(sda, scl, hz).
+// Nos 3 perfis com bus (SmartDisplay/watch/dog) o driver do touch/OLED ja
+// abriu no boot: System.i2c.begin() adota esse handle e so acrescenta os
+// devices do app (ver Hardware/I2cBus.h).
+struct I2cPins {
+    int8_t port = -1;
+    int8_t sda = -1;
+    int8_t scl = -1;
+    uint32_t hz = 400000;
+};
+
 // Camera OV2640 no barramento DVP da placa (AI-Thinker ESP32-CAM). pin_xclk
 // < 0 = placa sem camera. O LED de flash do sensor (quando ha) fica aqui
 // para Camera.led()/scanQR({led}) — nao no struct led (e atuator do sensor,
@@ -99,6 +111,7 @@ struct BoardProfile {
     ServoPins servo;         // servos da placa (perfil p/ apps de robo); count = 0 = nao ha
     MicI2sPins mic;          // microfone I2S (System.micLevel); ws < 0 = nao ha
     LedStrips strips;        // fitas WS2812 (System.neopixel); count = 0 = nao ha
+    I2cPins i2c;             // bus I2C da placa (System.i2c); sda < 0 = nao ha
     CameraPins camera = {};  // sensor OV2640 (Camera.*, API 35); vazio = nao ha
     int batteryPin = -1;     // divisor de bateria no ADC (System.battery); -1 = nao ha
     int batteryScalePct = 100;  // mV da bateria = mV no pino * scale / 100 (divisor 2:1 = 200)

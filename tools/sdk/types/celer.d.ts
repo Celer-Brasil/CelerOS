@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 53 — 372 funcoes.
+// API level 54 — 381 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -12,6 +12,8 @@ interface CelerTheme {
 interface TouchPoint { x: number; y: number; touched: boolean; }
 
 interface TouchState { id: number; x: number; y: number; size: number; }
+
+interface I2CBus { port: number; sda: number; scl: number; hz: number; }
 
 type UITextRole = "caption" | "body" | "title" | "display";
 interface UITextOpts {
@@ -357,6 +359,35 @@ declare const System: {
         HIGH: number;
         /** constante */
         LOW: number;
+    };
+    i2c: {
+        /** abre/adota o bus I²C do perfil da placa. Na CYD/devkit use beginAt. (API 54) */
+        /** @permission "gpio" */
+        begin(): I2CBus | null;
+        /** abre um bus em pinos explícitos (criado pelo app e fechado por end()/saída). Se os pinos forem o par da placa, adota o bus existente. Pino n (API 54) */
+        /** @permission "gpio" */
+        beginAt(sda: number, scl: number, hz: number): I2CBus | null;
+        /** remove os devices que este app adicionou e fecha o bus só se o app o criou. O bus da placa (touch/PMU/OLED) continua vivo. Idempotente. (API 54) */
+        /** @permission "gpio" */
+        end(): boolean;
+        /** descreve o bus da placa para o app pré-preencher um seletor de pinos; null em placa sem bus. (API 54) */
+        /** @permission "gpio" */
+        pins(): I2CBus | null;
+        /** sonda 0x08..0x77 com i2c_master_probe. Um bus travado pode levar segundos; o binding renova a janela do executor a cada 16 endereços. (API 54) */
+        /** @permission "gpio" */
+        scan(): number[];
+        /** escrita crua (i2c_master_transmit). (API 54) */
+        /** @permission "gpio" */
+        write(addr: number, data: number[]): boolean;
+        /** leitura crua (i2c_master_receive). (API 54) */
+        /** @permission "gpio" */
+        read(addr: number, len: number): number[] | null;
+        /** escreve reg seguido dos bytes (escrita de registrador; o auto-incremento do chip cobre data com mais de um byte). (API 54) */
+        /** @permission "gpio" */
+        writeReg(addr: number, reg: number, data: number[]): boolean;
+        /** leitura de registrador com i2c_master_transmit_receive (auto-incremento do chip). (API 54) */
+        /** @permission "gpio" */
+        readReg(addr: number, reg: number, len: number): number[] | null;
     };
 };
 

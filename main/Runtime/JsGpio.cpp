@@ -38,6 +38,11 @@
 // Dog Face parava na primeira passada com "GPIO 17 invalido". Reserva feita
 // por nos nao conta; a do boot (flash/PSRAM) segue barrando.
 static uint64_t s_jsPins = 0;
+// Pinos que o app configurou como SAIDA (pinMode/digitalWrite/analogWrite/
+// servo): voltam a LOW no fim do app (jsGpioReleaseOutputs) para motor/ponte
+// H nao continuar girando sem dono. s_jsPins NAO e resetado por app (cache
+// das reservas LEDC do proprio runtime — ver acima).
+static uint64_t s_jsOutPins = 0;
 
 static int requirePin(duk_context *ctx, duk_idx_t idx, bool output) {
     int pin = duk_require_int(ctx, idx);
@@ -66,6 +71,7 @@ duk_ret_t JSBindings::js_pinMode(duk_context *ctx) {
     int pin = requirePin(ctx, 0, false);
     int mode = duk_require_int(ctx, 1);
     pinMode(pin, mode);
+    if (mode == OUTPUT) s_jsOutPins |= (1ULL << pin);
     return 0;
 }
 
@@ -73,6 +79,7 @@ duk_ret_t JSBindings::js_digitalWrite(duk_context *ctx) {
     int pin = requirePin(ctx, 0, true);
     int val = duk_require_int(ctx, 1);
     digitalWrite(pin, val);
+    s_jsOutPins |= (1ULL << pin);
     return 0;
 }
 
@@ -94,6 +101,7 @@ duk_ret_t JSBindings::js_analogWrite(duk_context *ctx) {
     int pin = requirePin(ctx, 0, true);
     int val = duk_require_int(ctx, 1);
     analogWrite(pin, val);
+    s_jsOutPins |= (1ULL << pin);
     return 0;
 }
 
@@ -130,7 +138,9 @@ duk_ret_t JSBindings::js_servo(duk_context *ctx) {
     double angle = duk_require_number(ctx, 1);
     if (!(angle >= 0)) angle = 0;  // NaN tambem
     if (angle > 180) angle = 180;
-    duk_push_boolean(ctx, BoardIO::servoWrite(pin, (int)(500 + angle * 2000.0 / 180.0 + 0.5)) ? 1 : 0);
+    const bool ok = BoardIO::servoWrite(pin, (int)(500 + angle * 2000.0 / 180.0 + 0.5));
+    if (ok) s_jsOutPins |= (1ULL << pin);
+    duk_push_boolean(ctx, ok ? 1 : 0);
     return 1;
 }
 
@@ -139,4 +149,16 @@ duk_ret_t JSBindings::js_servo(duk_context *ctx) {
 duk_ret_t JSBindings::js_servoOff(duk_context *ctx) {
     duk_push_boolean(ctx, BoardIO::servoOff(duk_require_int(ctx, 0)) ? 1 : 0);
     return 1;
+}
+
+// Chamado no fim do app (e no init do proximo, como rede de seguranca): toda
+// saida que o JS configurou volta a LOW. O kernel ja zerou LED/analogWrite/
+// servos antes; aqui ficam os pinos de direcao da ponte H e qualquer GPIO
+// que o app deixou alto. Pinos do sistema nunca entram (gpioDeniedMask).
+void jsGpioReleaseOutputs() {
+    if (s_jsOutPins == 0) return;
+    for (int pin = 0; pin < 64; pin++) {
+        if (s_jsOutPins & (1ULL << pin)) digitalWrite(pin, 0);
+    }
+    s_jsOutPins = 0;
 }

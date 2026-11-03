@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 53
+### Nível de API: 54
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -542,6 +542,109 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
 - **Parâmetros:** `pin` (Integer)
 - **Retorna:** `Boolean**
 - **Descrição:** para o PWM no pino e libera o canal — o servo fica solto (sem torque de sustentação). Chame ao terminar um movimento para economizar energia.
+
+---
+
+### Barramento I²C (API 54)
+
+`System.i2c` entrega ao app um barramento I²C master cru para sensores e
+atuadores externos. Exige a permissão `gpio`. Nas placas que já têm um bus de
+placa (GT911 da SmartDisplay em 19/45, watch em 15/14, OLED do cão em 41/42)
+`System.i2c.begin()` **adota** o bus que o touch/PMU/OLED abriu no boot; as
+demais placas usam pinos explícitos com `beginAt`. O protocolo do device mora
+nas deps JS (ex.: `celeros.hw.pca9685`), não no firmware.
+
+- Endereços de 7 bits (`0x08..0x77`); dados como array de números `0..255`
+  (o Duktape é enxuto, sem `Uint8Array`); teto de 128 bytes por transferência.
+- Argumento inválido lança `RangeError`; NACK devolve `false` (escritas) ou
+  `null` (leituras). `scan()` devolve os endereços que responderam.
+- O app pode chamar `end()`; na saída o firmware remove os devices e fecha um
+  bus que o app criou, nunca o bus da placa.
+
+#### `System.i2c.begin()` (API 54)
+- **Parâmetros:** nenhum
+- **Retorna:** `{port, sda, scl, hz}` ou `null` quando a placa não tem bus de placa
+- **Descrição:** abre/adota o bus I²C do perfil da placa. Na CYD/devkit use `beginAt`.
+
+#### `System.i2c.beginAt(sda, scl, hz)` (API 54)
+- **Parâmetros:** `sda` (Integer), `scl` (Integer), `hz` (Integer, 10000..1000000)
+- **Retorna:** `{port, sda, scl, hz}` ou `null`
+- **Descrição:** abre um bus em pinos explícitos (criado pelo app e fechado por `end()`/saída). Se os pinos forem o par da placa, adota o bus existente. Pino negado aos apps é recusado com `RangeError`.
+
+#### `System.i2c.end()` (API 54)
+- **Parâmetros:** nenhum
+- **Retorna:** `Boolean`
+- **Descrição:** remove os devices que este app adicionou e fecha o bus só se o app o criou. O bus da placa (touch/PMU/OLED) continua vivo. Idempotente.
+
+#### `System.i2c.pins()` (API 54)
+- **Parâmetros:** nenhum
+- **Retorna:** `{port, sda, scl, hz}` ou `null`
+- **Descrição:** descreve o bus da placa para o app pré-preencher um seletor de pinos; `null` em placa sem bus.
+
+#### `System.i2c.scan()` (API 54)
+- **Parâmetros:** nenhum
+- **Retorna:** `Integer[]` (endereços que responderam, em ordem)
+- **Descrição:** sonda `0x08..0x77` com `i2c_master_probe`. Um bus travado pode levar segundos; o binding renova a janela do executor a cada 16 endereços.
+
+#### `System.i2c.write(addr, data)` (API 54)
+- **Parâmetros:** `addr` (Integer, 0x08..0x77), `data` (Integer[], 1..128 bytes 0..255)
+- **Retorna:** `Boolean`
+- **Descrição:** escrita crua (`i2c_master_transmit`).
+
+#### `System.i2c.read(addr, len)` (API 54)
+- **Parâmetros:** `addr` (Integer), `len` (Integer, 1..128)
+- **Retorna:** `Integer[]` ou `null` em NACK
+- **Descrição:** leitura crua (`i2c_master_receive`).
+
+#### `System.i2c.writeReg(addr, reg, data)` (API 54)
+- **Parâmetros:** `addr` (Integer), `reg` (Integer 0..255), `data` (Integer[], 1..128)
+- **Retorna:** `Boolean`
+- **Descrição:** escreve `reg` seguido dos bytes (escrita de registrador; o auto-incremento do chip cobre `data` com mais de um byte).
+
+#### `System.i2c.readReg(addr, reg, len)` (API 54)
+- **Parâmetros:** `addr` (Integer), `reg` (Integer), `len` (Integer, 1..128)
+- **Retorna:** `Integer[]` ou `null` em NACK
+- **Descrição:** leitura de registrador com `i2c_master_transmit_receive` (auto-incremento do chip).
+
+---
+
+### Bibliotecas de hardware (`celeros.hw.*`)
+
+Deps do hub (declare em `app.json.deps`, API 30+) que empacotam os atuadores
+comuns sobre `System.gpio`/`System.i2c`. Todas são ES5 e exigem a permissão
+`gpio`; o app declara a permissão, a dep nunca declara.
+
+| Módulo | O que faz | API mínima |
+|--------|-----------|------------|
+| `celeros.hw.servo` | Servo com calibração min/max em µs, offset/invert, rampas não bloqueantes e poses em grupo | 10 |
+| `celeros.hw.motor` | Ponte H (EN + IN1/IN2): forward/reverse/brake/coast, ponto morto, reversão suave e par tank/arcade | 1 |
+| `celeros.hw.led` | LED simples/PWM, blink/breathe/pattern, RGB de status e fita WS2812 (rainbow) | 10 |
+| `celeros.hw.button` | Botão com debounce e eventos press/release/click/double/long/repeat (polling) | 12 |
+| `celeros.hw.pca9685` | PWM/servo de 16 canais do PCA9685 sobre `System.i2c` | 54 |
+| `celeros.hw` | Kit com os cinco módulos e um `tick`/`start` compartilhado | 54 |
+
+```js
+var HW = require("celeros.hw");
+var servo = HW.servo.create({ pin: 12, minUs: 600, maxUs: 2400 });
+var motor = HW.motor.create({ pwm: 18, in1: 19, in2: 20, minDuty: 40 });
+var led = HW.led.create({ pin: 4 });
+var button = HW.button.create({ pin: 0 });   // para GND, pull-up interno
+
+button.on("click", function () { servo.to(180, 400); });
+button.on("long", function () { motor.brake(); });
+led.blink(500);
+HW.start(10);           // UM setInterval alimenta rampas/efeitos/botoes
+```
+
+Efeitos não bloqueantes precisam de `HW.tick()` (ou do `start` do kit). Apps
+que já têm laço podem chamar `HW.tick()` uma vez por quadro em vez de usar
+timer. Em placa sem bus I²C de placa, crie o PCA9685 com pinos explícitos:
+`HW.pca9685.create({ addr: 0x40, sda: 22, scl: 27 })`.
+
+Limites: o `analogWrite` tem só 3 canais LEDC (8 bits, 5 kHz fixos), então
+cabem dois motores + um dimmer; o `System.gpio.servo` tem 5 canais; as fitas
+WS2812 têm no máximo 8 LEDs cada. O PCA9685 é o caminho para passar de cinco
+servos.
 
 ---
 

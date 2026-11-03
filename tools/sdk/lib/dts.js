@@ -90,6 +90,16 @@ const RETURNS = {
     'Input.key': 'boolean',
     'Input.poll': '{ key: number; mods: number; down: boolean } | null',
     'Input.pointer': '{ x: number; y: number; buttons: number }',
+    // I2C generico (API 54): bus cru para as deps de hardware
+    'System.i2c.begin': 'I2CBus | null',
+    'System.i2c.beginAt': 'I2CBus | null',
+    'System.i2c.end': 'boolean',
+    'System.i2c.pins': 'I2CBus | null',
+    'System.i2c.scan': 'number[]',
+    'System.i2c.write': 'boolean',
+    'System.i2c.read': 'number[] | null',
+    'System.i2c.writeReg': 'boolean',
+    'System.i2c.readReg': 'number[] | null',
 };
 
 // Tipos de argumento por funcao (objetos de opcoes do toolkit UI)
@@ -118,6 +128,9 @@ const PARAM_TYPES = {
     'UI.confirm.opts': '{ yes?: string; no?: string; danger?: boolean }',
     'UI.alert.ok': 'string',
     'System.rigidState.buf': 'number[]',   // API 34: array do quadro anterior (preenchido no lugar)
+    // I2C (API 54): data sempre array de bytes 0..255
+    'System.i2c.write.data': 'number[]',
+    'System.i2c.writeReg.data': 'number[]',
     'UI.measure.role': 'UITextRole',
     'UI.lineHeight.role': 'UITextRole',
     'UI.measureWrap.role': 'UITextRole',
@@ -189,7 +202,13 @@ const PARAM_TYPES = {
 
 // Args que o guia documenta como obrigatorios mesmo quando o binding tolera
 // a ausencia (UI.custom sem draw devolve false em vez de lancar)
-const REQUIRED_PARAMS = new Set(['UI.custom.draw']);
+const REQUIRED_PARAMS = new Set([
+    'UI.custom.draw',
+    // I2C (API 54): o parser infere min=1/2 pelo duk_require_* do addr/reg,
+    // mas o binding valida o array com readBytes (0 bytes nao existe)
+    'System.i2c.write.data',
+    'System.i2c.writeReg.data',
+]);
 
 // Nomes de argumento que indicam string (o restante e number: a API e
 // majoritariamente numerica — coordenadas, cores, tamanhos, ids). Compostos
@@ -352,6 +371,9 @@ function generate() {
     out.push('');
     // API 43: multi-dedo (System.getTouches) — primario primeiro
     out.push('interface TouchState { id: number; x: number; y: number; size: number; }');
+    out.push('');
+    // API 54: bus I2C generico (System.i2c.begin/beginAt/pins)
+    out.push('interface I2CBus { port: number; sda: number; scl: number; hz: number; }');
     out.push('');
     out.push('type UITextRole = "caption" | "body" | "title" | "display";');
     out.push('interface UITextOpts {');

@@ -222,6 +222,18 @@ config CELEROS_JS_GPIO
       pinMode/digitalWrite/digitalRead/analogRead/analogWrite/pulseIn para
       apps JS. Desligado, System.gpio fica undefined (apps podem testar).
 
+config CELEROS_JS_I2C
+    bool "API System.i2c para apps (barramento I2C generico)"
+    default y
+    help
+      begin/beginAt/end/pins/scan/read/write/writeReg/readReg (API 54) para
+      apps JS. Nos 3 perfis com I2C de placa (SmartDisplay 19/45, watch
+      15/14, cao 41/42) begin() adota o bus que o touch/PMU/OLED ja abriu;
+      nas demais placas o app abre com beginAt(sda, scl, hz). O protocolo
+      dos devices mora nas deps JS (ex.: celeros.hw.pca9685). Desligado,
+      System.i2c fica undefined e a dep celeros.hw.pca9685 nao funciona
+      (feature-detect).
+
 config CELEROS_JS_CAMERA
     bool "API Camera para apps (driver esp32-camera + decodificador quirc)"
     default n

@@ -45,11 +45,17 @@ static const BoardProfile s_profile = {
     .buttonPin = 0,       // BOOT (o buttonToApp sem pin era inerte: nada lia o botao)
     .headless = true,     // sem vidro: splash pulado, getInfo().hasDisplay = false
     .buttonToApp = true,  // BOOT e input do app; longo sai, curto no launcher relanca o homeApp
-    // 19/20: USB-OTG (host); 26..32: flash SPI do modulo; 33..37: DQ4..7/DQS
-    // da PSRAM octal; 43/44: UART0 (console/celerctl). Bit n = GPIO n.
-    .gpioDeniedMask = (1ULL << 19) | (1ULL << 20) |
-                      (0x3FFCULL << 24) |  // 26..37
-                      (1ULL << 43) | (1ULL << 44),
+    // 19/20: USB-OTG/USJ — negados SO quando alguma pilha USB entra no
+    // build. Num firmware sem host e sem USJ (ex.: CelerBot com o console
+    // na UART0 e o PCA no I2C), os dois ficam livres para o app.
+    // 26..32: flash SPI do modulo; 33..37: DQ4..7/DQS da PSRAM octal;
+    // 43/44: UART0 (console/celerctl). Bit n = GPIO n.
+    .gpioDeniedMask =
+#if CONFIG_CELEROS_USB_HOST || CONFIG_CELEROS_LINK_ON_USJ || CONFIG_CELEROS_USB_NATIVE
+        (1ULL << 19) | (1ULL << 20) |
+#endif
+        (0x3FFCULL << 24) |  // 26..37
+        (1ULL << 43) | (1ULL << 44),
 };
 
 void init() {

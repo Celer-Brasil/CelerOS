@@ -23,10 +23,14 @@ data/
 └── icons/<id>.png # GERADO por tools/make_icons.py (RGBA quantizado p/ RGB565)
 ```
 
-[`hub_apps/`](hub_apps) — 13 apps hoje (2048, Breakout, Calculator,
-Previsao, System Info, **Celer Remote** e outros) — segue o mesmo layout,
+[`hub_apps/`](hub_apps) — 27 apps hoje (2048, 2D Runner, Bench Fisica,
+Breakout, Calculator, Campo Minado, **Celer Remote**, Clock, Coral,
+Cronometro, Cube 3D, Gravador, **Hardware Lab**, LED Controller, Mural,
+Physics Drop, Pong Duplo, Previsao, Quiz IA, Sentinela, Sonar, System Info,
+Tic Tac Toe, USB Devices, USB Printer, USB Storage e Batata Quente) — segue o
+mesmo layout,
 mas é publicado no hub em vez de virar imagem de fábrica. O Celer Remote
-(API 11) é a vitrine de robótica: escaneia CelerOS
+(API 30) é a vitrine de robótica: escaneia CelerOS
 próximos pelo Celer Link (BLE), conecta e pilota um robô com D-pad mostrando
 a telemetria dele — referência completa de `CelerLink` +
 `System.gpio.servo`.

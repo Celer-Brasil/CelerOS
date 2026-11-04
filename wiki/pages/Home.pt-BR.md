@@ -26,12 +26,13 @@ desenvolvimento.
 
 ## Novidades
 
-Firmware 1.13.0 — a rodada do CelerKit (API JS nível 52):
+Firmware 1.13.0 — a rodada do CelerKit (API JS níveis 52–55):
 
 * **CelerKit UI 2.0** — apps de fábrica e do hub reescritos sobre o kit `celeros.app` (`style`/`icons`/`widgets`/`rows`/`list`/`form`/`caps`): App Store 3.0, Settings, Installer (instalação transacional com rollback) e mais de 14 apps ([guia de apps](/Celer-Brasil/CelerOS/wiki/Guia-de-Apps)).
 * **WiFi virou app JS** — `System.openWifiSetup()` agora abre o `celeros.wifi` 2.0.0, que dirige o portal cativo nativo por `System.wifiPortal*`; o objeto `AI` virou opção de build (`CELEROS_JS_AI`, desligado na CYD). (API 52)
 * **Extras nativos de UI nas S3** — `UI.custom`, `UI.clip`/`UI.unclip` e `UI.extras` (`CELEROS_UI_EXTRAS`): o firmware limpa/recorta uma área declarada pelo app e só a repinta no quadro total ou quando a assinatura muda ([API JS](/Celer-Brasil/CelerOS/wiki/API-JS)).
 * **Jogos como projetos nativos do Studio** — Detona!, Arrasa!, Lenda de Celer e Supernova são cenas/tilemaps em `studio_games/` (fonte única; as cópias planas em `hub_apps/` foram removidas), ao lado do modo programa do Celer Studio (`runtime:"app"`) e do copiloto de IA.
+* **Bancada de hardware** — barramento I2C genérico para apps (`System.i2c`, API 54) com os drivers em bibliotecas compartilhadas `celeros.hw.*` (servo, motor, LED, botão, PCA9685; encoder A/B no PCNT e DHT11/DHT22 na API 55), `System.gpio.servoUs` para calibração fina e a janela de rede do serviço `System.wifiWake` (API 53). O app de referência é o **Hardware Lab** do hub.
 
 Firmware 1.12.0, antes disso — a rodada da forense (API JS nível 51):
 

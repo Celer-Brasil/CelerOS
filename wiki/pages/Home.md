@@ -27,12 +27,13 @@ development.
 
 ## What's new
 
-Firmware 1.13.0 — the CelerKit round (JS API level 52):
+Firmware 1.13.0 — the CelerKit round (JS API levels 52–55):
 
 * **CelerKit UI 2.0** — factory and hub apps rewritten on the `celeros.app` kit (`style`/`icons`/`widgets`/`rows`/`list`/`form`/`caps`): App Store 3.0, Settings, Installer (transactional install with rollback) and 14+ more apps ([app development guide](/Celer-Brasil/CelerOS/wiki/App-Development-Guide)).
 * **WiFi became a JS app** — `System.openWifiSetup()` now launches `celeros.wifi` 2.0.0, which drives the native captive portal through `System.wifiPortal*`; the `AI` object became a build option (`CELEROS_JS_AI`, off on the CYD). (API 52)
 * **Native UI extras on S3** — `UI.custom`, `UI.clip`/`UI.unclip` and `UI.extras` (`CELEROS_UI_EXTRAS`): the firmware clears/clips an app-declared area and repaints it only on a full frame or signature change ([JS API](/Celer-Brasil/CelerOS/wiki/JS-API)).
 * **Games as native Studio projects** — Detona!, Arrasa!, Lenda de Celer and Supernova are scenes/tilemaps in `studio_games/` (single source; the flat `hub_apps/` copies were removed), with the Celer Studio program mode (`runtime:"app"`) and AI copilot alongside.
+* **Hardware bench round** — a generic I2C bus for apps (`System.i2c`, API 54) with the protocol living in the shared `celeros.hw.*` driver libraries (servo, motor, LED, button, PCA9685; PCNT quadrature encoder and DHT11/DHT22 on API 55), `System.gpio.servoUs` for fine calibration, and the service network window `System.wifiWake` (API 53). The reference app is **Hardware Lab** on the hub.
 
 Firmware 1.12.0, before that — the forensics round (JS API level 51):
 

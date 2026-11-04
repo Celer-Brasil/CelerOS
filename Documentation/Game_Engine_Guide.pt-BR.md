@@ -10,7 +10,7 @@ A **CelerGame** é a game engine 2D do CelerOS, entregue como uma **família de 
 | **`celeros.game.fx`** | ~13 KB | partículas, bursts/ondas, texto flutuante, flash, campo de estrelas, **emissores contínuos, rastros, parallax** |
 | **`celeros.game.spr`** | ~16 KB | sprites PNG em slots nativos com painter de fallback, flipbooks, **spritesheet (1 PNG, N regiões nomeadas)**, metadados de arte (`E.spr.meta`) |
 | **`celeros.game.tilemap`** | ~4 KB | grade de células sujas p/ cenários procedurais grandes |
-| **`celeros.game.ui`** | ~55 KB | **kit de UI 1.3**: tokens + 4 presets, 24 ícones vetoriais (os 12 comuns vêm do `celeros.ui.icons`, compartilhado com os apps), layout (stack/grid/card), 12+ widgets, listas ricas, scroll genérico, modal/sheet, toasts em fila, HUD memoizado, diálogos com escolhas e as telas de título/pausa/fim prontas |
+| **`celeros.game.ui`** | ~55 KB | **kit de UI 1.4**: tokens + 4 presets, 24 ícones vetoriais (os 12 comuns vêm do `celeros.ui.icons`, compartilhado com os apps), layout (stack/grid/card), 12+ widgets, listas ricas, scroll genérico, modal/sheet, toasts em fila, HUD memoizado, diálogos com escolhas, as telas de título/pausa/fim prontas e o menu de título de altura derivada (`E.ui.menuBox`/`menuCard`) |
 | **`celeros.engine`** | shim (0,2 KB) | a **família inteira montada** — a API pré-modularidade (1.2.x) num `require` só; jogos existentes seguem funcionando sem mudança |
 | **`celeros.physics`** (opcional) | ~7 KB | corda/pano por Verlet nativo (`P.verletFast`, API 31) e corpos rígidos (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | arenas estilo bomberman + BFS de perseguição, tabelas de melodias sfx, boilerplate CelerNet (mesma família, módulos à parte) |
@@ -435,9 +435,23 @@ var a = E.ui.pause({});            // 'resume' | 'restart' | 'quit'
 var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
 ```
 
-## 14b-2. Kit de UI 1.3: estilo, layout e widgets
+## 14b-2. Kit de UI 1.4: estilo, layout e widgets
 
-O `celeros.game.ui` 1.3 vira o antigo módulo de menu/lista/diálogo em um kit immediate-mode completo. Continua ES5, desenha com `screen: true` e usa o tema do firmware como base. Ele monta em cima das primitivas do core 1.7: `E.color`, `E.gfx.shadow/dim/divider/star`, borda espessa (`bw`), gradientes (`grad`) e `outline` de texto. Desde a 1.3.1 os 12 ícones comuns (`dot play back close check gear wifi star search menu heart info alert`) vêm do `celeros.ui.icons` 1.0.0 — a mesma tabela sem dependências que o `celeros.app.icons` usa nos apps — e os 12 extras (`pause stop plus minus chevron* sound* music home clock lock trash edit refresh download upload`) ficam no kit de jogo. O `test/sdk/ui_parity.js` trava presets e ícones compartilhados iguais entre as duas famílias.
+O `celeros.game.ui` 1.4 vira o antigo módulo de menu/lista/diálogo em um kit immediate-mode completo. Continua ES5, desenha com `screen: true` e usa o tema do firmware como base. Ele monta em cima das primitivas do core 1.7: `E.color`, `E.gfx.shadow/dim/divider/star`, borda espessa (`bw`), gradientes (`grad`) e `outline` de texto. Desde a 1.3.1 os 12 ícones comuns (`dot play back close check gear wifi star search menu heart info alert`) vêm do `celeros.ui.icons` 1.0.0 — a mesma tabela sem dependências que o `celeros.app.icons` usa nos apps — e os 12 extras (`pause stop plus minus chevron* sound* music home clock lock trash edit refresh download upload`) ficam no kit de jogo. O `test/sdk/ui_parity.js` trava presets e ícones compartilhados iguais entre as duas famílias.
+
+### Menu de título de altura derivada (1.4.0)
+
+Os cards de título posicionados à mão (px absolutos por jogo) deixavam o último botão fora do vidro no 480x480 e, com `E.U` 2, deixavam tudo grande demais. O `E.ui.menuBox` calcula a geometria a partir dos itens e ancora no rodapé com margem; o `E.ui.menuCard` desenha a mesma caixa com um card por trás e devolve o value/label tocado:
+
+```js
+var pick = E.ui.menuCard([
+  { label: "JOGAR", icon: "play" },
+  { label: "CAMPANHA", value: "camp", badge: 3 },   // chip: badge 0 e valor legitimo
+  { label: "AJUSTES", value: "cfg", variant: "secondary" }
+], { bottom: 8 });            // devolve 'JOGAR' | 'camp' | 'cfg' | null
+```
+
+O primeiro item usa `h1` (22·U, primary por padrão) e os demais `h2` (18·U); `x/w/y/bottom/gap/pad/bg/r/elev` são ajustáveis e a caixa nunca sai do vidro (`y` é limitado). O `menuBox` sozinho devolve o rect (`{x,y,w,h,pad,h1,h2,gap}`) para quem desenha o próprio painel — é geometria de rascunho, vale até a próxima chamada de `menuBox`/`menuCard`. Desde a 1.4.1 um modal/sheet aberto no mesmo quadro **reserva** o tap para si: os widgets desenhados por baixo não engolem mais o toque do "Entendi" de um diálogo sobre um menu.
 
 ### Tokens e presets
 

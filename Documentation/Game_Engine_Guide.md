@@ -10,7 +10,7 @@
 | **`celeros.game.fx`** | ~13 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
 | **`celeros.game.spr`** | ~16 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
 | **`celeros.game.tilemap`** | ~4 KB | grid of dirty cells for big procedural scenarios |
-| **`celeros.game.ui`** | ~55 KB | **UI kit 1.3**: tokens + 4 presets, 24 vector icons (the 12 common ones shared with apps via `celeros.ui.icons`), layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs with choices and the ready title/pause/game-over screens |
+| **`celeros.game.ui`** | ~55 KB | **UI kit 1.4**: tokens + 4 presets, 24 vector icons (the 12 common ones shared with apps via `celeros.ui.icons`), layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs, the ready title/pause/game-over screens and the derived-height title menu (`E.ui.menuBox`/`menuCard`) |
 | **`celeros.engine`** | shim (0.2 KB) | the **whole family assembled** — the pre-modularity API (1.2.x) in one `require`; existing games keep working unchanged |
 | **`celeros.physics`** (optional) | ~7 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | bomberman-style arenas + BFS chase flow, sfx melody tables, CelerNet boilerplate (same family, unrelated modules) |
@@ -434,9 +434,23 @@ var a = E.ui.pause({});            // 'resume' | 'restart' | 'quit'
 var b = E.ui.gameOver({ score: s, best: hi, isNew: novo });  // 'again' | 'quit'
 ```
 
-## 14b-2. UI kit 1.3: style, layout and widgets
+## 14b-2. UI kit 1.4: style, layout and widgets
 
-`celeros.game.ui` 1.3 turns the old menu/list/dialog module into a full immediate-mode kit. It is still ES5, draws with `screen: true`, and uses the firmware theme as the base. It builds on the core 1.7 primitives: `E.color`, `E.gfx.shadow/dim/divider/star`, thick borders (`bw`), gradients (`grad`) and text `outline`. Since 1.3.1 the 12 common icons (`dot play back close check gear wifi star search menu heart info alert`) come from `celeros.ui.icons` 1.0.0 — the same dependency-free table `celeros.app.icons` uses for apps — while the 12 extras (`pause stop plus minus chevron* sound* music home clock lock trash edit refresh download upload`) stay in the game kit. `test/sdk/ui_parity.js` locks the presets and shared icons equal between the two families.
+`celeros.game.ui` 1.4 turns the old menu/list/dialog module into a full immediate-mode kit. It is still ES5, draws with `screen: true`, and uses the firmware theme as the base. It builds on the core 1.7 primitives: `E.color`, `E.gfx.shadow/dim/divider/star`, thick borders (`bw`), gradients (`grad`) and text `outline`. Since 1.3.1 the 12 common icons (`dot play back close check gear wifi star search menu heart info alert`) come from `celeros.ui.icons` 1.0.0 — the same dependency-free table `celeros.app.icons` uses for apps — while the 12 extras (`pause stop plus minus chevron* sound* music home clock lock trash edit refresh download upload`) stay in the game kit. `test/sdk/ui_parity.js` locks the presets and shared icons equal between the two families.
+
+### Title menu with derived height (1.4.0)
+
+Hand-placed title cards (absolute px per game) put the last button off the glass on 480x480 and, with `E.U` 2, made everything oversized. `E.ui.menuBox` computes the geometry from the items and anchors it to the bottom with a margin; `E.ui.menuCard` draws the same box with a card behind it and returns the tapped value/label:
+
+```js
+var pick = E.ui.menuCard([
+  { label: "JOGAR", icon: "play" },
+  { label: "CAMPANHA", value: "camp", badge: 3 },   // chip: badge 0 is a real value
+  { label: "AJUSTES", value: "cfg", variant: "secondary" }
+], { bottom: 8 });            // returns 'JOGAR' | 'camp' | 'cfg' | null
+```
+
+The first item uses `h1` (22·U, primary by default) and the rest `h2` (18·U); `x/w/y/bottom/gap/pad/bg/r/elev` are overridable, and the box never leaves the glass (`y` is clamped). `menuBox` alone returns the rect (`{x,y,w,h,pad,h1,h2,gap}`) for games that draw their own panel — it is scratch geometry, valid until the next `menuBox`/`menuCard` call. Since 1.4.1 a modal/sheet open in the same frame **reserves** the tap for itself: the widgets drawn under it no longer swallow the tap of the "Entendi" button of a dialog over a menu.
 
 ### Tokens and presets
 

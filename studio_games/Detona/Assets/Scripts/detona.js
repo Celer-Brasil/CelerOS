@@ -196,6 +196,14 @@ function netInicioRound() {
     NET.ack = -1;
     NET.seq = 1;
     NET.lastSeq = -1;
+    // eventos do round velho nao entram na arena nova (o 'dp' do golpe que
+    // decidiu o round anterior teleportava o rival no spawn do seguinte)
+    NET.ultC = -1;
+    NET.ultR = -1;
+    NET.rivalPos = null;
+    NET.rivalBomba = null;
+    NET.rivalDetona = false;
+    NET.rivalDrop = null;
     NET.fase = 'jogando';
     NET.envioMsg = 'ds' + NET.seed + ',' + NET.round;
     NET.envioAte = (typeof System !== 'undefined' ? System.millis() : 0) + 2200;
@@ -305,6 +313,20 @@ function netMsg(m) {
             NET.seq = 1;
             NET.lastSeq = -1;
             NET.mortePend = false;
+            // o CONVIDADO abria o round novo carregando o estado do anterior:
+            // `res` velho ('perdi') fazia o 'dm' do host cair no ramo de
+            // EMPATE (o placar divergia do host e a partida travava esperando
+            // um 'ds' que nunca vinha) e a minha propria morte nao concedia
+            // mais nada (o guard `!NET.res` do duelRoundTick barrava). Os
+            // eventos do round velho tambem nao podem vazar para a arena nova.
+            NET.res = null;
+            NET.ack = -1;
+            NET.ultC = -1;
+            NET.ultR = -1;
+            NET.rivalPos = null;
+            NET.rivalBomba = null;
+            NET.rivalDetona = false;
+            NET.rivalDrop = null;
             netSend('dy' + round);
             logDuelo('round ' + round + ' (seed ' + NET.seed + ')');
             netIrArena();
@@ -694,7 +716,9 @@ function titleUpdate(s, E) {
     } else if (a === 'how') {
         s.how = true;
         E.redraw();
-    } else if (a === 'howClose') {
+    } else if (a === 'howClose' || a === 'dismiss') {
+        // 'dismiss' = tap fora do card (o modal devolve e ninguem tratava: o
+        // COMO JOGAR ficava preso aberto)
         s.how = false;
         E.redraw();
     }
@@ -1434,12 +1458,14 @@ function drawTitle(s, E) {
         { label: 'COMO JOGAR', value: 'how' }
     ];
     var mbox = E.ui.menuBox(MITEMS);
+    var mpick = E.ui.menuCard(MITEMS);
+    if (mpick) s.act = mpick;
+    // chips DEPOIS do card: desenhados antes, a borda do card cortava a base
+    // dos badges no meio (o arredondamento de baixo sumia)
     var bx = mbox.x + mbox.pad;
     bx += E.ui.badge('RECORDE ' + s.best, bx, mbox.y - 30,
                      { color: C(0xFFC83C), textColor: 0x0000 }) + 8;
     E.ui.badge('FASE ' + clamp(s.unlocked, 1, 6) + '/6', bx, mbox.y - 30);
-    var mpick = E.ui.menuCard(MITEMS);
-    if (mpick) s.act = mpick;
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', contentH: 224,
                                     buttons: HOW_BTNS }, function (cr) {

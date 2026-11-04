@@ -687,7 +687,9 @@ function updateTitle(s, E, ctx) {
     } else if (a === 'how') {
         s.how = true;
         E.redraw();
-    } else if (a === 'howClose') {
+    } else if (a === 'howClose' || a === 'dismiss') {
+        // 'dismiss' = tap fora do card (o modal devolve e ninguem tratava: o
+        // COMO JOGAR ficava preso aberto)
         s.how = false;
         E.redraw();
     }
@@ -821,12 +823,14 @@ function drawTitle(s, E) {
         { label: 'COMO JOGAR', value: 'how' }
     ];
     var mbox = E.ui.menuBox(MITEMS);
+    var mpick = E.ui.menuCard(MITEMS);
+    if (mpick) s.act = mpick;
+    // chips DEPOIS do card: desenhados antes, a borda do card cortava a base
+    // dos badges no meio (o arredondamento de baixo sumia)
     var bx = mbox.x + mbox.pad;
     bx += E.ui.badge('10 FASES', bx, mbox.y - 30) + 8;
     E.ui.badge(totalStars(s) + '/30', bx, mbox.y - 30,
                { color: C(0xFFC83C), textColor: 0x0000 });
-    var mpick = E.ui.menuCard(MITEMS);
-    if (mpick) s.act = mpick;
     if (s.how) {
         var r = E.ui.modal('how', { title: 'COMO JOGAR', body: HOW_BODY, buttons: HOW_BTNS });
         if (r !== null) s.act = 'howClose';

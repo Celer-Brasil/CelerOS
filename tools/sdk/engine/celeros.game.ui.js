@@ -16,6 +16,11 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme) por baixo dos tokens.
 //
+// 1.4.1: modal/sheet sao a camada de CIMA do quadro: o tap que chega com um
+// deles aberto nao e mais reivindicado pelo widget desenhado por baixo (o
+// jogo desenha antes do modal; o "Entendi" do COMO JOGAR do Detona caia no
+// DUELO que ficava atras e abria o lobby). E.ui.menuCard/menuBox documentados
+// no d.ts com badge/badgeColor/badgeTextColor.
 // 1.4.0: E.ui.menuBox/menuCard — menu de titulo com a altura DERIVADA dos
 // itens e ancorado no rodape com margem: os cards por jogo (px absolutos)
 // deixavam o ultimo botao fora do vidro no 4848 e, com E.U=2, tudo ficava
@@ -164,8 +169,19 @@ var _SN_LB = ['Sim', 'Nao'];
 // botoes sobrepostos dispararem). Sem tap, libera para o proximo.
 var _tapUsed = false;
 var _sOn = null;
+// camada de CIMA (modal/sheet): o jogo desenha ANTES deles no mesmo quadro,
+// entao o tap que chega com o modal aberto era reivindicado pelo primeiro
+// botao de baixo — o "Entendi" do COMO JOGAR do Detona caia no DUELO
+// desenhado por tras e abria o lobby. O modal deixa a marca no fim do
+// proprio desenho e a camada de baixo passa a vez; o quadro sem tap zera a
+// marca (todo tap tem um quadro de press antes, entao ela nunca sobra para
+// o toque seguinte) e `_inOver` libera os widgets do proprio modal.
+var _over = false;
+var _inOver = 0;
 function tapFree() {
-    if (!E.input.tap) { _tapUsed = false; return false; }
+    if (!E.input.tap) { _tapUsed = false; _over = false; return false; }
+    if (_tapUsed) return true;
+    if (_over && !_inOver) return true;   // reservado ao modal/sheet do quadro
     return _tapUsed;
 }
 function tapIn(x, y, w, h, pad) {
@@ -457,7 +473,7 @@ function dialogInput(d, o, x, y, w, h) {
 // ------------------------------------------------------------ E.ui ---------
 
 E.ui = {
-    version: '1.4.0',
+    version: '1.4.1',
     tokens: TK,
 
     // patch de tokens (aceita '#rrggbb'); guarda para reaplicar se o E.theme
@@ -1102,8 +1118,10 @@ E.ui = {
                         : (it.variant || (i === 0 ? 'primary' : 'secondary')));
             // chip na linha: o botao ENCOLHE para o chip caber ao lado — com
             // o botao de largura cheia o rotulo (centrado) ficava por baixo
-            // do badge (o "CAMPANHA" do Supernova virava "CAMPA..").
-            var bgw = it.badge ? Math.round(44 * E.U) : 0;
+            // do badge (o "CAMPANHA" do Supernova virava "CAMPA.."). `badge: 0`
+            // e legitimo (contador zerado) e `it.badge ?` escondia o chip.
+            var bgw = it.badge === undefined || it.badge === null
+                    ? 0 : Math.round(44 * E.U);
             var bwid = bgw ? c.w - bgw - b.gap : c.w;
             _mOp.variant = variant;
             _mOp.icon = it.icon;
@@ -1384,13 +1402,16 @@ E.ui = {
     // (a animacao e keyed). drawFn(contentRect) desenha o miolo custom.
     modal: function (id, o, drawFn) {
         ensure();
-        if (!E.input.tap) _tapUsed = false;
+        if (!E.input.tap) { _tapUsed = false; _over = false; }
         o = o || EMPTY;
         id = id || 'modal';
         var open = o.open === undefined ? true : !!o.open;
         var p = E.ui.anim(id, open ? 1 : 0, o.ms === undefined ? 180 : o.ms,
                           o.ease || 'outCubic');
-        if (!open && p <= 0.001) return null;
+        if (!open && p <= 0.001) { _over = false; return null; }
+        // daqui para baixo e camada de cima: os widgets do modal enxergam o
+        // tap mesmo com a marca `_over` ligada pelos quadros anteriores
+        _inOver++;
         var W = E.W, H = E.H;
         _dimO.screen = true;
         _dimO.bg = o.bg === undefined ? TK.bg : o.bg;
@@ -1473,19 +1494,22 @@ E.ui = {
         // o modal esta no TOPO: consome qualquer tap (inclusive dentro do
         // card fora de um botao) para a camada de baixo nao reagir
         if (open && E.input.tap) _tapUsed = true;
+        _inOver--;
+        _over = true;
         return act;
     },
 
     // bottom sheet com veu/handle; devolve 'close' (tap fora) ou null
     sheet: function (id, o, drawFn) {
         ensure();
-        if (!E.input.tap) _tapUsed = false;
+        if (!E.input.tap) { _tapUsed = false; _over = false; }
         o = o || EMPTY;
         id = id || 'sheet';
         var open = o.open === undefined ? true : !!o.open;
         var p = E.ui.anim(id, open ? 1 : 0, o.ms === undefined ? 200 : o.ms,
                           o.ease || 'outCubic');
-        if (!open && p <= 0.001) return null;
+        if (!open && p <= 0.001) { _over = false; return null; }
+        _inOver++;             // idem modal: camada de cima do quadro
         var W = E.W, H = E.H;
         var h = o.h === undefined ? Math.round(H * 0.5) : o.h;
         var y = H - h * p;
@@ -1526,9 +1550,13 @@ E.ui = {
         if (open && o.dismiss !== false && !_tapUsed && E.input.tap &&
             !hitRect(0, y, W, h)) {
             _tapUsed = true;
+            _inOver--;
+            _over = true;
             return 'close';
         }
         if (open && E.input.tap) _tapUsed = true;
+        _inOver--;
+        _over = true;
         return null;
     },
 

@@ -383,6 +383,14 @@ function updateTitle(s, E, ctx) {
         return;
     }
     if (a === 'delNo') { s.delSlot = null; E.redraw(); return; }
+    // tap FORA do card: o modal devolve 'dismiss' (dismiss: true) e ninguem
+    // tratava — o confirm ficava preso aberto
+    if (a === 'dismiss') {
+        if (s.delSlot) s.delSlot = null;
+        else s.how = false;
+        E.redraw();
+        return;
+    }
     if (a === 'new') newGame(E, ctx);
     else if (a === 'cont') {
         var st2 = slotState(E, s.slot) || newState();
@@ -1041,8 +1049,13 @@ function drawSlots(s, E) {
         var del = { x: c.x + c.w - 52, y: y, w: 46, h: 50 };
         E._btns.push(hit);
         E._btns.push(del);
-        if (E.input.tap && E.hit(del) && st) { s.act = 'del:' + n; return; }
-        if (E.input.tap && E.hit(hit)) { s.act = 'slot:' + n; return; }
+        // o confirm de apagar fica EM CIMA dos slots: E.hit e geometria pura
+        // (nao consome o tap), entao o toque no "Apagar" tambem caia no card
+        // do slot por baixo — apagava e abria o save errado no mesmo toque
+        if (!s.delSlot) {
+            if (E.input.tap && E.hit(del) && st) { s.act = 'del:' + n; return; }
+            if (E.input.tap && E.hit(hit)) { s.act = 'slot:' + n; return; }
+        }
     }
     if (E.ui.button('VOLTAR', W / 2 - 80, sy + 3 * 56 + 5, 160, 40, BTN_CONT)) s.act = 'pickClose';
     if (s.delSlot) {

@@ -1925,6 +1925,82 @@ function depsSize(nomes) {
         });
     check('menu: item disabled nao pega o tap', r.dis === null, JSON.stringify(r.dis));
 
+    // menuBox/menuCard (game.ui 1.4): altura derivada dos itens, ancorada no
+    // rodape, e o tap devolve o value. 240x320: U=1, pad 6, h1 22, h2 18,
+    // gap 4 -> 3 itens medem 78 e nascem em y=234 (220+... = H-8-78).
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var box = null, pego = null, q = 0;' +
+        'var IT = [{ label: "Jogar", value: "j" }, { label: "Opcoes", value: "o" },' +
+        '          { label: "Sair", value: "s", disabled: true }];' +
+        'E.run({ s: { update: function () {' +
+        '  if (++q === 3) { box = E.ui.menuBox(IT); __harness.tap(120, 275); }' +
+        '  if (q > 30) E.quit();' +
+        '}, draw: function () { var v = E.ui.menuCard(IT); if (v) pego = v; } } }, "s");' +
+        '__harness.grab("mc", [box && [box.x, box.y, box.w, box.h, box.pad, box.h1,' +
+        '  box.h2, box.gap], pego]);');
+    check('menuCard: altura derivada dos itens e tap devolve o value',
+          r.mc[0] && r.mc[0].join() === [16, 234, 208, 78, 6, 22, 18, 4].join() &&
+          r.mc[1] === 'o', JSON.stringify(r.mc));
+
+    // menuCard: item disabled nao pega e o 2o item fica embaixo do 1o
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var pego = null, q = 0;' +
+        'var IT = [{ label: "Um" }, { label: "Dois", disabled: true }];' +
+        'E.run({ s: { update: function () {' +
+        '  if (++q === 3) __harness.tap(120, 297);' +     // 2o item (disabled)
+        '  if (q > 30) E.quit();' +
+        '}, draw: function () { var v = E.ui.menuCard(IT); if (v) pego = v; } } }, "s");' +
+        '__harness.grab("mcd", pego);');
+    check('menuCard: item disabled nao pega o tap', r.mcd === null, JSON.stringify(r.mcd));
+
+    // menuCard com badge: o botao encolhe para o chip caber; o tap no chip
+    // nao dispara o item e o tap no botao dispara
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var chip = null, botao = null, chipV = null, q = 0;' +
+        'var IT = [{ label: "CAMPANHA", value: "c", badge: "REC 9" }];' +
+        'E.run({ s: { update: function () {' +
+        '  if (++q === 3) __harness.tap(196, 295);' +    // sobre o chip
+        '  if (q === 10) { chip = chipV; __harness.tap(100, 295); }' +  // botao
+        '  if (q > 30) E.quit();' +
+        '}, draw: function () {' +
+        '  var v = E.ui.menuCard(IT);' +
+        '  if (v) { if (q <= 10) chipV = v; else botao = v; }' +
+        '} } }, "s");' +
+        '__harness.grab("mcb", [chip, botao]);');
+    check('menuCard: chip nao dispara e o botao encolhido dispara',
+          r.mcb[0] === null && r.mcb[1] === 'c', JSON.stringify(r.mcb));
+
+    // modal e camada de CIMA: o tap no botao do modal nao vaza para o menu
+    // desenhado ANTES dele no mesmo quadro (o "Entendi" do COMO JOGAR do
+    // Detona abria o DUELO que ficava atras) e o menu volta a responder
+    // depois que o modal fecha.
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var IT = [{ label: "Jogar", value: "j" }, { label: "Opcoes", value: "o" },' +
+        '          { label: "Nao", value: "n" }];' +
+        'var vazou = null, depois = null, mod = null, aberto = true, q = 0;' +
+        'E.run({ s: { update: function () {' +
+        '  if (++q === 3) __harness.tap(120, 176);' +   // botao do modal (card 110..200)
+        '  if (q === 9) { aberto = false; __harness.tap(120, 125); }' +   // 1o item do menu
+        '  if (q > 40) E.quit();' +
+        '}, draw: function () {' +
+        '  var v = E.ui.menuCard(IT, { y: 110 });' +
+        '  if (v) { if (q < 9) vazou = v; else depois = v; }' +
+        '  if (aberto) { var m = E.ui.modal("m", { ms: 0, dismiss: false,' +
+        '    buttons: [{ label: "Entendi", value: "ok" }] }); if (m !== null) mod = m; }' +
+        '} } }, "s");' +
+        '__harness.grab("mfoco", [vazou, mod, depois]);');
+    check('modal: tap no botao nao vaza para o menu de baixo (e o menu volta depois)',
+          r.mfoco[0] === null && r.mfoco[1] === 'ok' && r.mfoco[2] === 'j',
+          JSON.stringify(r.mfoco));
+
     // list: arrasto rola e o tap pega a linha CERTA com o scroll
     r = runSnippet(
         'var E = require("celeros.game.ui");' +

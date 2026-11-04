@@ -12,6 +12,10 @@ declare namespace E {
         icon?: string;
         /** primary|secondary|ghost|danger|success */
         variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'success';
+        /** chip na linha do menuCard (o botao encolhe para ele caber) */
+        badge?: string | number;
+        badgeColor?: number;
+        badgeTextColor?: number;
     }
 
     interface ListItem {

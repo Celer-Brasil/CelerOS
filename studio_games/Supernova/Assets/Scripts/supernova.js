@@ -454,8 +454,11 @@ function fireSuper(s, E) {
         E.fx.flash(CIANO, 260, { full: true });
         E.fx.burst(s.W / 2, s.H / 2, { n: 40, color: CIANO, speed: 260, life: 0.7 });
     }
-    if (E.audio) E.audio.sfx([90, 140, 220, 330, 494, 740, 1109],
-        { gap: 0 });
+    // E.audio.sfx espera [[hz, ms], ...]: a lista SOLTA [90, 140, ...] virava
+    // um tom unico (o firmware le um par por entrada — saia 90 Hz por 140 ms)
+    // e o estrondo da SUPERNOVA ficava um rumble em vez da varredura
+    if (E.audio) E.audio.sfx([[90, 50], [140, 50], [220, 50], [330, 60],
+                              [494, 60], [740, 70], [1109, 90]]);
     s.msg = 'SUPERNOVA!';
     s.msgT = 1.2;
 }

@@ -2843,6 +2843,7 @@ static void testAppZipAdversarial() {
 // troca com rollback.
 #include "../../main/Utils/AppPackage.h"
 #include "../../main/Utils/InstallMarker.h"
+#include <filesystem>
 
 static bool existsPathSt(const char* p) {
     struct stat st;
@@ -2929,6 +2930,233 @@ static void testAppPackage() {
     }
     CHECK(!installZip(zpath, dest, &res));
     CHECK(slurpZip("/tmp/celeros_zt/pkg/main.js") == (const char*)JS2);
+}
+
+// ------------------------------------------------ AppPackage: recuperacao
+// Queda de energia entre os renames da troca: o boot seguinte tem que devolver
+// a ultima versao que rodou. Cobre os quatro estados possiveis do staging.
+static void writeTextSt(const std::string& path, const char* text) {
+    FILE* f = fopen(path.c_str(), "w");
+    if (f == nullptr) return;
+    fputs(text, f);
+    fclose(f);
+}
+
+static void makeAppSt(const std::string& dir, const char* js) {
+    mkdir(dir.c_str(), 0755);
+    writeTextSt(dir + "/app.json", "{\"name\":\"X\",\"packageName\":\"x\",\"version\":\"1.0.0\"}");
+    writeTextSt(dir + "/main.js", js);
+}
+
+static void testAppPackageRecover() {
+    using namespace celer::apppkg;
+    namespace fs = std::filesystem;
+    const fs::path root = "/tmp/celeros_rec";
+    fs::remove_all(root);
+    const std::string apps = (root / "apps").string();
+    const std::string stage = apps + "/.install";
+    mkdir(root.string().c_str(), 0755);
+    mkdir(apps.c_str(), 0755);
+    mkdir(stage.c_str(), 0755);
+
+    // 1. queda entre rename(dest->.old) e rename(.new->dest): o .old volta
+    //    (ultima versao que rodou); o .new nao confirmado e descartado
+    makeAppSt(stage + "/A.old", "var v = 'antigo';\n");
+    makeAppSt(stage + "/A.new", "var v = 'novo';\n");
+    Recovery r = recover(apps.c_str());
+    CHECK(r.restored == 1 && r.dropped == 1);
+    CHECK(existsPathSt((apps + "/A/main.js").c_str()));
+    CHECK(slurpZip((apps + "/A/main.js").c_str()) == "var v = 'antigo';\n");
+    CHECK(!existsPathSt((stage + "/A.old").c_str()) && !existsPathSt((stage + "/A.new").c_str()));
+
+    // 2. troca concluida, so o .old sobrou: limpa sem tocar no destino
+    mkdir(stage.c_str(), 0755);
+    makeAppSt(apps + "/B", "var v = 'b';\n");
+    makeAppSt(stage + "/B.old", "var v = 'velho';\n");
+    r = recover(apps.c_str());
+    CHECK(r.completed == 1);
+    CHECK(slurpZip((apps + "/B/main.js").c_str()) == "var v = 'b';\n");
+    CHECK(!existsPathSt((stage + "/B.old").c_str()));
+
+    // 3. extracao incompleta (.new sozinho, sem destino): descarta
+    mkdir(stage.c_str(), 0755);
+    makeAppSt(stage + "/C.new", "var v = 'c';\n");
+    r = recover(apps.c_str());
+    CHECK(r.dropped == 1);
+    CHECK(!existsPathSt((apps + "/C").c_str()) && !existsPathSt((stage + "/C.new").c_str()));
+
+    // 4. .new de tentativa antiga com destino ja no lugar: descarta o .new
+    mkdir(stage.c_str(), 0755);
+    makeAppSt(apps + "/D", "var v = 'd';\n");
+    makeAppSt(stage + "/D.new", "var v = 'd2';\n");
+    r = recover(apps.c_str());
+    CHECK(r.dropped == 1);
+    CHECK(slurpZip((apps + "/D/main.js").c_str()) == "var v = 'd';\n");
+
+    // 5. journal e idempotencia: o segundo boot nao acha mais nada
+    mkdir(stage.c_str(), 0755);
+    writeTextSt(stage + "/journal.txt", "base=E\nphase=swap\n");
+    r = recover(apps.c_str());
+    CHECK(r.restored == 0 && r.completed == 0 && r.dropped == 0);
+    CHECK(!existsPathSt((stage + "/journal.txt").c_str()));
+
+    // 6. installZip resolve o staging pendente ANTES de apagar o .old: o app
+    //    antigo nao pode sumir por causa da instalacao nova
+    mkdir(stage.c_str(), 0755);
+    makeAppSt(stage + "/F.old", "var v = 'antigo';\n");
+    const char* meta = "{\"name\":\"F\",\"packageName\":\"f\",\"version\":\"2.0.0\"}";
+    ZipTEntry z1[] = {
+        {"app.json", (const uint8_t*)meta, (uint32_t)strlen(meta), false, false},
+        {"main.js", (const uint8_t*)"var v = 'novo';\n", 16, false, false},
+    };
+    const std::string zpath = (root / "f.zip").string();
+    CHECK(buildZip(zpath.c_str(), z1, 2));
+    Result res;
+    CHECK(installZip(zpath.c_str(), (apps + "/F").c_str(), &res));
+    CHECK(res.ok);
+    CHECK(slurpZip((apps + "/F/main.js").c_str()) == "var v = 'novo';\n");
+    CHECK(!existsPathSt((stage + "/F.old").c_str()));
+}
+
+// ------------------------------------------- AppPackage: update em trial
+// App de sistema atualizado guarda a versao anterior ate a nova abrir limpa;
+// boot instavel (ou erro no primeiro lancamento) devolve a que rodava.
+static void testAppPackageTrial() {
+    using namespace celer::apppkg;
+    namespace fs = std::filesystem;
+    const fs::path root = "/tmp/celeros_trial";
+    fs::remove_all(root);
+    const std::string apps = (root / "apps").string();
+    mkdir(root.string().c_str(), 0755);
+    mkdir(apps.c_str(), 0755);
+    const std::string dest = apps + "/Sys";
+    const std::string zpath = (root / "sys.zip").string();
+    const std::string zplain = (root / "plain.zip").string();
+
+    auto buildSys = [&](const char* ver, const char* js) {
+        const std::string meta =
+            std::string("{\"name\":\"Settings\",\"packageName\":\"celeros.settings\","
+                        "\"version\":\"") + ver + "\",\"system\":true}";
+        ZipTEntry es[] = {
+            {"app.json", (const uint8_t*)meta.c_str(), (uint32_t)meta.size(), false, false},
+            {"main.js", (const uint8_t*)js, (uint32_t)strlen(js), false, false},
+        };
+        return buildZip(zpath.c_str(), es, 2);
+    };
+    Result res;
+
+    // v1: primeira instalacao de app de sistema nao tem o que reverter
+    CHECK(buildSys("1.0.0", "var v = 1;\n"));
+    CHECK(installZip(zpath.c_str(), dest.c_str(), &res));
+    CHECK(!trialPending(dest.c_str()));
+
+    // v2: guarda .old + marcador de trial
+    CHECK(buildSys("2.0.0", "var v = 2;\n"));
+    CHECK(installZip(zpath.c_str(), dest.c_str(), &res));
+    CHECK(trialPending(dest.c_str()));
+    CHECK(slurpZip((dest + "/main.js").c_str()) == "var v = 2;\n");
+
+    // boot anterior instavel: volta a v1
+    Recovery r = recover(apps.c_str(), true);
+    CHECK(r.reverted == 1 && r.revertedName[0] != '\0');
+    CHECK(slurpZip((dest + "/main.js").c_str()) == "var v = 1;\n");
+    CHECK(!trialPending(dest.c_str()));
+
+    // v2 de novo; boot estavel mantem o trial aguardando o primeiro lançamento
+    CHECK(buildSys("2.0.0", "var v = 2;\n"));
+    CHECK(installZip(zpath.c_str(), dest.c_str(), &res));
+    r = recover(apps.c_str(), false);
+    CHECK(r.pending == 1 && r.reverted == 0);
+    CHECK(slurpZip((dest + "/main.js").c_str()) == "var v = 2;\n");
+    CHECK(trialPending(dest.c_str()));
+
+    // primeiro lancamento limpo confirma e libera o .old
+    CHECK(commitTrial(dest.c_str()));
+    CHECK(!trialPending(dest.c_str()));
+    CHECK(slurpZip((dest + "/main.js").c_str()) == "var v = 2;\n");
+
+    // v3 + erro no primeiro lancamento: revert na hora
+    CHECK(buildSys("3.0.0", "var v = 3;\n"));
+    CHECK(installZip(zpath.c_str(), dest.c_str(), &res));
+    CHECK(trialPending(dest.c_str()));
+    CHECK(revertTrial(dest.c_str()));
+    CHECK(slurpZip((dest + "/main.js").c_str()) == "var v = 2;\n");
+    CHECK(!trialPending(dest.c_str()));
+
+    // app comum: update NAO guarda .old (LittleFS da CYD e apertado)
+    const std::string dest2 = apps + "/Plain";
+    auto buildPlain = [&](const char* ver, const char* js) {
+        const std::string meta =
+            std::string("{\"name\":\"Plain\",\"packageName\":\"p.plain\",\"version\":\"") + ver +
+            "\"}";
+        ZipTEntry es[] = {
+            {"app.json", (const uint8_t*)meta.c_str(), (uint32_t)meta.size(), false, false},
+            {"main.js", (const uint8_t*)js, (uint32_t)strlen(js), false, false},
+        };
+        return buildZip(zplain.c_str(), es, 2);
+    };
+    CHECK(buildPlain("1.0.0", "var v = 'p1';\n"));
+    CHECK(installZip(zplain.c_str(), dest2.c_str(), &res));
+    CHECK(buildPlain("2.0.0", "var v = 'p2';\n"));
+    CHECK(installZip(zplain.c_str(), dest2.c_str(), &res));
+    CHECK(!trialPending(dest2.c_str()));
+    CHECK(!existsPathSt((apps + "/.install/Plain.old").c_str()));
+    CHECK(slurpZip((dest2 + "/main.js").c_str()) == "var v = 'p2';\n");
+
+    // system: true FORA do caminho de reparo tambem nao guarda .old
+    const std::string dest3 = apps + "/Other";
+    auto buildOther = [&](const char* ver, const char* js) {
+        const std::string meta =
+            std::string("{\"name\":\"Other\",\"packageName\":\"x.other\",\"version\":\"") + ver +
+            "\",\"system\":true}";
+        ZipTEntry es[] = {
+            {"app.json", (const uint8_t*)meta.c_str(), (uint32_t)meta.size(), false, false},
+            {"main.js", (const uint8_t*)js, (uint32_t)strlen(js), false, false},
+        };
+        return buildZip(zplain.c_str(), es, 2);
+    };
+    CHECK(buildOther("1.0.0", "var v = 'o1';\n"));
+    CHECK(installZip(zplain.c_str(), dest3.c_str(), &res));
+    CHECK(buildOther("2.0.0", "var v = 'o2';\n"));
+    CHECK(installZip(zplain.c_str(), dest3.c_str(), &res));
+    CHECK(!trialPending(dest3.c_str()));
+    CHECK(!existsPathSt((apps + "/.install/Other.old").c_str()));
+}
+
+// Politica de atualizacao (API 56): o "quando" saiu do Nucleo/policy.js para
+// o UpdateService nativo. Mesmos gates e mesma semver tolerante do JS.
+static void testUpdatePolicy() {
+    using celer::UpdatePolicyState;
+    UpdatePolicyState st;
+    st.wifiConnected = true;
+    st.graceOk = true;
+    st.intervalOk = true;
+    CHECK(celer::updateShouldCheck(st));
+    st.appOpen = true; CHECK(!celer::updateShouldCheck(st)); st.appOpen = false;
+    st.busy = true; CHECK(!celer::updateShouldCheck(st)); st.busy = false;
+    st.shell = true; CHECK(!celer::updateShouldCheck(st)); st.shell = false;
+    st.wifiConnected = false; CHECK(!celer::updateShouldCheck(st)); st.wifiConnected = true;
+    st.graceOk = false; CHECK(!celer::updateShouldCheck(st)); st.graceOk = true;
+    st.intervalOk = false; CHECK(!celer::updateShouldCheck(st)); st.intervalOk = true;
+    CHECK(celer::updateShouldCheck(st));
+
+    CHECK(celer::updateSemverGreater("1.2.3", "1.2.2"));
+    CHECK(!celer::updateSemverGreater("1.2.3", "1.2.3"));
+    CHECK(!celer::updateSemverGreater("1.2.3", "1.2.4"));
+    CHECK(celer::updateSemverGreater("2.0.0", "1.9.9"));
+    CHECK(!celer::updateSemverGreater("1.0.0", "1.0.10"));  // 10 > 9, nao string
+    CHECK(celer::updateSemverGreater("1.0.10", "1.0.9"));
+    CHECK(!celer::updateSemverGreater("v1.2.3", "1.2.3"));  // 'v' ignorado
+    CHECK(!celer::updateSemverGreater("1.0.0-rc1", "1.0.0"));
+    CHECK(!celer::updateSemverGreater("junk", "0.0.0"));
+
+    CHECK(celer::updateShouldNotify("", "1.0.0"));
+    CHECK(!celer::updateShouldNotify("1.0.0", "1.0.0"));
+    CHECK(celer::updateShouldNotify("1.0.0", "1.0.1"));
+    CHECK(!celer::updateShouldNotify("1.0.0", "0.9.9"));
+    CHECK(!celer::updateShouldNotify("1.0.0", ""));
+    CHECK(!celer::updateShouldNotify("1.0.0", nullptr));
+    CHECK(celer::updateShouldNotify(nullptr, "1.0.0"));
 }
 
 static void testUsbDesc() {
@@ -3056,6 +3284,8 @@ int main() {
     testAppZip();
     testAppZipAdversarial();
     testAppPackage();
+    testAppPackageRecover();
+    testAppPackageTrial();
     testInstallMarker();
     testUsbDesc();
     if (g_failed == 0) {

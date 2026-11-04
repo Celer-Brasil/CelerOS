@@ -38,6 +38,8 @@
 #include "Kernel/AppServices.h"
 #include "Kernel/DeviceStats.h"
 #include "Kernel/CrashRecord.h"
+#include "Kernel/BootGuard.h"
+#include "Utils/AppPackage.h"
 #if CONFIG_CELEROS_UI
 #include "Settings/TouchCalibrator.h"
 #endif
@@ -163,6 +165,10 @@ static void celerSetup() {
     // Forense de crash: o wrap do esp_panic_handler grava causa/backtrace em
     // RAM RTC. Quanto antes, mais do boot ele cobre.
     CrashRecord::installPanicHook();
+    // Contador de boots (RAM RTC): 3 boots sem chegar ao launcher = modo
+    // seguro. Antes de Board::init, porque o que derruba o boot pode estar
+    // em qualquer lugar da inicializacao.
+    BootGuard::noteBoot();
     // NimBLE em INFO dispara "GATT procedure initiated" a cada notify (o
     // link vivo manda um ~1,6 s): afogava ring e kern.log. WARN basta — os
     // erros reais do host continuam aparecendo (bancada 2026-10-05)
@@ -200,6 +206,29 @@ static void celerSetup() {
     // Registro do crash anterior vira linha em /local/log/crash.txt (o agente
     // de frota reporta; em placas sem vidro e o UNICO registro visivel)
     CrashRecord::consumeAndLog();
+
+    // Instalacao de app interrompida (queda de energia entre os renames da
+    // troca): devolve a ultima versao que rodou antes do scan do launcher.
+    // Roda DEPOIS do FS e ANTES de qualquer leitura de /apps. Um update de
+    // app de sistema em trial e revertido se o boot anterior nao estabilizou.
+    char revertedName[40] = "";
+    {
+        const bool unstable = BootGuard::lastBootUnstable();
+        const celer::apppkg::Recovery l = celer::apppkg::recover("/local/apps", unstable);
+        const celer::apppkg::Recovery s = celer::apppkg::recover("/sd/apps", unstable);
+        const int total = l.restored + l.completed + l.dropped + l.reverted + l.pending +
+                          s.restored + s.completed + s.dropped + s.reverted + s.pending;
+        if (total > 0) {
+            celer_log_printf("[boot] .install: local r=%d c=%d d=%d rev=%d pend=%d | "
+                             "sd r=%d c=%d d=%d rev=%d pend=%d\n",
+                             l.restored, l.completed, l.dropped, l.reverted, l.pending,
+                             s.restored, s.completed, s.dropped, s.reverted, s.pending);
+        }
+        if (l.reverted && l.revertedName[0])
+            snprintf(revertedName, sizeof(revertedName), "%s", l.revertedName);
+        else if (s.reverted && s.revertedName[0])
+            snprintf(revertedName, sizeof(revertedName), "%s", s.revertedName);
+    }
 #if CONFIG_CELEROS_USB_MSC
     // 'reboot msc': flag one-shot (NVS) consumida aqui; usbMscMode nunca
     // retorna (sai por reboot quando o usuario segura o botao)
@@ -323,6 +352,23 @@ static void celerSetup() {
     ramStage("phone");
 #if CONFIG_CELEROS_UI
     kui::Navigator::push(&s_launcher);
+    // Modo seguro (3 boots sem estabilizar): a casa/autostart NAO foi aberta
+    // (LauncherUI::applyAutostart) para o aparelho nao voltar ao app que
+    // derruba o boot. O aviso diz como sair.
+    if (BootGuard::safeMode()) {
+        kui::Navigator::toast(
+            i18n::TR("Modo seguro: casa e autostart desativados. Reinicie para voltar ao normal.",
+                     "Safe mode: home and autostart disabled. Restart to return to normal."),
+            THEME_WARN, 6000);
+    }
+    if (revertedName[0]) {
+        char msg[96];
+        snprintf(msg, sizeof(msg),
+                 i18n::TR("Atualização de %s revertida: o app não abriu.",
+                          "Update of %s reverted: the app did not start."),
+                 revertedName);
+        kui::Navigator::toast(msg, THEME_WARN, 6000);
+    }
 #endif
     currentState = STATE_LAUNCHER;
 

@@ -10,6 +10,7 @@
 #include "../Kernel/AppRunner.h"
 #include "../Kernel/AppServices.h"
 #include "../Kernel/Core/CelerKernel.h"
+#include "../Kernel/BootGuard.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Display/Layout.h"
 #include "../Display/Theme.h"
@@ -183,11 +184,19 @@ bool LauncherUI::launchHome() {
 }
 
 void LauncherUI::applyAutostart() {
+    // Modo seguro (3 boots sem chegar ao launcher): a casa/autostart pode ser
+    // justamente o app que derruba o boot — nao reabre neste boot. O aviso e
+    // dado pelo main.cpp depois do push do launcher.
+    if (BootGuard::safeMode()) {
+        celer_log_println("[launcher] modo seguro: autostart/casa desativados");
+        return;
+    }
     launchHome();
 }
 
 void LauncherUI::idleHomeTick() {
 #if CONFIG_CELEROS_UI
+    if (BootGuard::safeMode()) return;  // nao reabre a casa no modo seguro
     // So placas com casa nativa (watch, cao): o launcher ocioso volta para
     // ela — no watch e o que mantem o AOD (so existe com o watchface aberto).
     if (Board::profile().homeApp == nullptr) return;
@@ -244,6 +253,10 @@ void LauncherUI::scanLocalApps() {
             bool isFolder = false, system = false, topbar = false;
             int order = 100;
             uint32_t appEntryPerms = 0xFFFFFFFFu;  // .js avulso: sem app.json = tudo
+            std::string appMain = "main.js";       // entry do app.json (API 56)
+            std::string appVersion;                // App.info().version
+            int appApi = 0;                        // App.info().api (0 = nao declara)
+            bool appApiInvalid = false;            // "api" presente e ilegivel
 
             if (entries[i].isDir) {
                 std::string appJsonPath = entries[i].path;

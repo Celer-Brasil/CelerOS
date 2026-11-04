@@ -36,6 +36,38 @@ struct Result {
  *  <destDir> <-> <destDir>.new via <destDir>.old com rollback. */
 bool installZip(const char* zipPath, const char* destDir, Result* out);
 
+// Resultado da recuperacao de uma instalacao interrompida (queda de energia
+// entre os renames da troca) ou de um update em trial.
+struct Recovery {
+    int restored = 0;   // .old devolvido ao lugar (o destino tinha sumido)
+    int completed = 0;  // troca ja concluida; so sobrou o .old (limpo)
+    int dropped = 0;    // .new de tentativa nao confirmada (removido)
+    int reverted = 0;   // update de app de sistema revertido (boot instavel)
+    int pending = 0;    // trial aguardando o primeiro lancamento limpo
+    char revertedName[40] = {};  // primeiro app revertido (para o aviso)
+};
+
+/** Recupera <appsDir>/.install depois de uma instalacao interrompida.
+ *  Idempotente e seguro para rodar em todo boot, DEPOIS do FileSystem::init
+ *  e ANTES do scan do launcher. Regra conservadora: se o destino sumiu e
+ *  existe um .old, ele volta (ultima versao que ja rodou); o .new de uma
+ *  troca nao confirmada nunca e promovido — a loja tenta de novo.
+ *  Journal (best-effort) em .install/journal.txt e so diagnostico.
+ *
+ *  `lastBootUnstable`: o boot anterior nao chegou a estabilizar. Com um
+ *  trial pendente (update de app de sistema ainda nao confirmado), isso
+ *  reverte para a versao anterior; sem a flag, o trial so e mantido. */
+Recovery recover(const char* appsDir, bool lastBootUnstable = false);
+
+// ---- Update de app de sistema com health check -------------------------
+// installZip guarda o .old de um app "system": true e grava <base>.trial.
+// O runtime confirma no primeiro lancamento limpo (commitTrial) ou reverte
+// na hora se o app falhar (revertTrial). Sem nenhum dos dois, o proximo boot
+// decide pelo estado do boot anterior (recover).
+bool trialPending(const char* destDir);
+bool commitTrial(const char* destDir);   // remove .old e o marcador
+bool revertTrial(const char* destDir);   // devolve o .old e remove o marcador
+
 }  // namespace celer::apppkg
 
 #endif  // APP_PACKAGE_H

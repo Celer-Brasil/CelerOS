@@ -40,6 +40,7 @@
 // main.cpp: confirmacao do slot OTA apos 30s de boot sao
 void confirmPendingOta();
 
+#include "BootGuard.h"
 namespace {
 
 #if CONFIG_CELEROS_UI
@@ -152,6 +153,9 @@ const CelerServices::Service kServices[] = {
 #endif
     {"buttons", svcButtons, CelerServices::ALWAYS},
     {"screenpower", svcScreenPower, CelerServices::ALWAYS},
+    // ALWAYS: o contador de boots estabiliza mesmo com app/casa aberto; se
+    // ficasse no celerLoop, um home-app que derruba o boot nunca zeraria.
+    {"bootguard", [](bool) { BootGuard::tick(); }, CelerServices::ALWAYS},
     {"idlehome", svcIdleHome, CelerServices::LOOP},
 #if CONFIG_CELEROS_UI
     {"alarmscreen", svcAlarmScreen, CelerServices::LOOP},

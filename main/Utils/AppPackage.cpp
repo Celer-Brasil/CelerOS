@@ -1,14 +1,16 @@
 #include "AppPackage.h"
 
 #include "AppZip.h"
-#include "JsonMap.h"
+#include "AppManifest.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <mutex>
+#include <vector>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -118,7 +120,200 @@ bool makeParentOf(const std::string& base, const char* rel, std::string* outFile
     return true;
 }
 
+// Instalacoes concorrentes (shell, svchost, web), a recuperacao de boot e o
+// health check de update compartilham o mesmo staging: um mutex so.
+std::mutex s_installMux;
+
+std::string trialPath(const std::string& stage, const std::string& base) {
+    return stage + "/" + base + ".trial";
+}
+
+// Apps de INTERFACE do caminho de reparo/atualizacao: sao os que, quebrados,
+// tiram do usuario a saida (a Loja nao abre, as Configuracoes nao abrem, o
+// WiFi nao configura). So eles guardam o .old do update em trial — manter
+// copia de TODO app system:true encheria o LittleFS da CYD (768 KB) depois de
+// um lote da Loja. Servicos (Nucleo/Agente) nunca passam pelo runFile, entao
+// um trial deles ficaria pendente para sempre.
+bool criticalTrialApp(const std::string& id) {
+    return id == "celeros.appstore" || id == "celeros.settings" ||
+           id == "celeros.installer" || id == "celeros.wifi";
+}
+
+// Marcador do update em trial (app de sistema). A EXISTENCIA e o estado; o
+// conteudo e so diagnostico.
+void writeTrial(const std::string& stage, const std::string& base) {
+    FILE* f = fopen(trialPath(stage, base).c_str(), "w");
+    if (f == nullptr) return;
+    fprintf(f, "base=%s\n", base.c_str());
+    fclose(f);
+}
+
+// Confirma o trial: a versao nova abriu limpa. Remove a copia anterior.
+bool commitTrialLocked(const std::string& dest) {
+    const size_t slash = dest.find_last_of('/');
+    if (slash == std::string::npos) return false;
+    const std::string parent = dest.substr(0, slash);
+    const std::string base = dest.substr(slash + 1);
+    const std::string stage = parent + "/.install";
+    const std::string trial = trialPath(stage, base);
+    if (!existsPath(trial.c_str())) return false;
+    rmRf(stage + "/" + base + ".old");
+    unlink(trial.c_str());
+    rmdir(stage.c_str());
+    return true;
+}
+
+// Reverte o trial: devolve o .old (versao que ja rodava) e descarta a nova.
+// Troca em tres passos com volta atras, para uma falha no meio nao perder
+// as duas copias.
+bool revertTrialLocked(const std::string& dest) {
+    const size_t slash = dest.find_last_of('/');
+    if (slash == std::string::npos) return false;
+    const std::string parent = dest.substr(0, slash);
+    const std::string base = dest.substr(slash + 1);
+    const std::string stage = parent + "/.install";
+    const std::string trial = trialPath(stage, base);
+    const std::string oldDir = stage + "/" + base + ".old";
+    if (!existsPath(trial.c_str()) || !existsPath(oldDir.c_str())) return false;
+    if (!existsPath(dest.c_str())) {
+        // A troca nem publicou a versao nova: so devolve a antiga.
+        if (rename(oldDir.c_str(), dest.c_str()) != 0) return false;
+        unlink(trial.c_str());
+        rmdir(stage.c_str());
+        return true;
+    }
+    const std::string bad = stage + "/" + base + ".bad";
+    rmRf(bad);
+    if (rename(dest.c_str(), bad.c_str()) != 0) return false;
+    if (rename(oldDir.c_str(), dest.c_str()) != 0) {
+        rename(bad.c_str(), dest.c_str());  // desfaz a primeira troca
+        return false;
+    }
+    rmRf(bad);
+    unlink(trial.c_str());
+    rmdir(stage.c_str());
+    return true;
+}
+
+// Recuperacao de <root>/.install (chamada com s_installMux preso).
+Recovery recoverLocked(const std::string& root, bool lastBootUnstable) {
+    Recovery rec;
+    const std::string stage = root + "/.install";
+    if (!isDirPath(stage.c_str())) return rec;
+
+    std::vector<std::string> olds, news, trials, bads;
+    DIR* d = opendir(stage.c_str());
+    if (d == nullptr) return rec;
+    struct dirent* e;
+    while ((e = readdir(d)) != nullptr) {
+        const std::string n(e->d_name);
+        if (n.size() <= 4) continue;  // ".old"/".new" no minimo com nome
+        const std::string suffix = n.substr(n.size() - 4);
+        const std::string base = n.substr(0, n.size() - 4);
+        if (suffix == ".old") olds.push_back(base);
+        else if (suffix == ".new") news.push_back(base);
+        else if (suffix == ".bad") bads.push_back(base);
+        else if (n.size() > 6 && n.compare(n.size() - 6, 6, ".trial") == 0)
+            trials.push_back(n.substr(0, n.size() - 6));
+    }
+    closedir(d);
+
+    // Trial primeiro: o .old de um update nao confirmado nao e "sobra".
+    for (const auto& base : trials) {
+        const std::string dest = root + "/" + base;
+        const std::string oldDir = stage + "/" + base + ".old";
+        if (!existsPath(oldDir.c_str())) {
+            unlink(trialPath(stage, base).c_str());  // orfao: nada a reverter
+            continue;
+        }
+        if (!existsPath(dest.c_str())) {
+            // Queda entre os dois renames: a versao nova nao chegou a existir
+            // no destino; volta a antiga.
+            if (rename(oldDir.c_str(), dest.c_str()) == 0) {
+                rec.restored++;
+                if (rec.revertedName[0] == '\0')
+                    snprintf(rec.revertedName, sizeof(rec.revertedName), "%s", base.c_str());
+            }
+            unlink(trialPath(stage, base).c_str());
+            continue;
+        }
+        if (lastBootUnstable) {
+            // O boot anterior nao chegou a estabilizar com a versao nova:
+            // devolve a que rodava.
+            if (revertTrialLocked(dest)) {
+                rec.reverted++;
+                if (rec.revertedName[0] == '\0')
+                    snprintf(rec.revertedName, sizeof(rec.revertedName), "%s", base.c_str());
+            }
+        } else {
+            rec.pending++;  // aguarda o primeiro lancamento limpo
+        }
+        olds.erase(std::remove(olds.begin(), olds.end(), base), olds.end());
+    }
+
+    // .old sem trial: se o destino sumiu, e a ultima copia que rodou.
+    for (const auto& base : olds) {
+        if (existsPath(trialPath(stage, base).c_str())) continue;  // revert falhou
+        const std::string dest = root + "/" + base;
+        const std::string oldDir = stage + "/" + base + ".old";
+        if (existsPath(dest.c_str())) {
+            if (rmRf(oldDir)) rec.completed++;  // troca concluida: so a sobra
+        } else if (rename(oldDir.c_str(), dest.c_str()) == 0) {
+            rec.restored++;  // queda entre os dois renames: volta o antigo
+        }
+    }
+    // .new so e promovido pelo installZip, que validou o pacote inteiro.
+    for (const auto& base : news) {
+        if (rmRf(stage + "/" + base + ".new")) rec.dropped++;
+    }
+    // .bad e sobra de um revert interrompido (a versao ruim ja saiu do ar).
+    for (const auto& base : bads) rmRf(stage + "/" + base + ".bad");
+
+    unlink((stage + "/journal.txt").c_str());  // diagnostico, nao estado
+    rmdir(stage.c_str());                      // so sai se vazio
+    return rec;
+}
+
+// Journal best-effort: se a queda for entre os dois renames, o proximo boot
+// ve "swap". O estado real esta nos diretorios — o journal nunca e a unica
+// fonte (por isso a recuperacao varre o staging em vez de confiar nele).
+void writeJournal(const std::string& stage, const std::string& base, const char* phase) {
+    FILE* j = fopen((stage + "/journal.txt").c_str(), "w");
+    if (j == nullptr) return;
+    fprintf(j, "base=%s\nphase=%s\n", base.c_str(), phase);
+    fclose(j);
+}
+
 }  // namespace
+
+Recovery recover(const char* appsDir, bool lastBootUnstable) {
+    if (appsDir == nullptr) return Recovery{};
+    std::lock_guard<std::mutex> lock(s_installMux);
+    return recoverLocked(std::string(appsDir), lastBootUnstable);
+}
+
+bool trialPending(const char* destDir) {
+    if (destDir == nullptr) return false;
+    std::lock_guard<std::mutex> lock(s_installMux);
+    const std::string dest(destDir);
+    const size_t slash = dest.find_last_of('/');
+    if (slash == std::string::npos) return false;
+    const std::string stage = dest.substr(0, slash) + "/.install";
+    const std::string base = dest.substr(slash + 1);
+    return existsPath(trialPath(stage, base).c_str());
+}
+
+bool commitTrial(const char* destDir) {
+    if (destDir == nullptr) return false;
+    std::lock_guard<std::mutex> lock(s_installMux);
+    return commitTrialLocked(std::string(destDir));
+}
+
+bool revertTrial(const char* destDir) {
+    if (destDir == nullptr) return false;
+    std::lock_guard<std::mutex> lock(s_installMux);
+    return revertTrialLocked(std::string(destDir));
+}
 
 bool installZip(const char* zipPath, const char* destDir, Result* out) {
 #ifndef CELER_HOST_TEST
@@ -126,7 +321,6 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
 #endif
     // Shell e svchost podem instalar ao mesmo tempo (NVS/servico): um staging
     // compartilhado fazia um apagar o do outro. Serializa a instalacao.
-    static std::mutex s_installMux;
     std::lock_guard<std::mutex> installLock(s_installMux);
     Result r;
     if (out) *out = r;
@@ -139,6 +333,12 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
     const std::string parent = slash == std::string::npos ? std::string(".") : dest.substr(0, slash);
     const std::string base = slash == std::string::npos ? dest : dest.substr(slash + 1);
     const std::string stage = parent + "/.install";
+    // Uma instalacao anterior interrompida e resolvida ANTES de apagar
+    // qualquer .old (o rmRf abaixo podia destruir a unica copia do app).
+    recoverLocked(parent, false);
+    // Um trial pendente desta base e superado pela versao nova: confirma o
+    // anterior (remove o .old) antes de abrir espaco para o proximo.
+    commitTrialLocked(dest);
     if (!mkdirP(stage)) return false;
     const std::string newDir = stage + "/" + base + ".new";
     const std::string oldDir = stage + "/" + base + ".old";
@@ -167,6 +367,9 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
 
     // 2. Extracao em <dest>.new
     if (ok) {
+        // Journal so depois do pacote validado: uma recusa de validacao nao
+        // deixa "extract" pendente no staging.
+        writeJournal(stage, base, "extract");
         // Staging limpo: se o .new de uma tentativa anterior nao pode ser
         // removido, seguir em frente publicaria arquivos velhos misturados
         // com o pacote novo (mkdirP devolve true so por a pasta existir)
@@ -190,38 +393,49 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
         if (ok && strcmp(e.name, "app.json") == 0) appJsonPath = file;
     }
 
-    // 3. O entry declarado no app.json tem que existir no pacote
+    // 3. Contrato do app.json: o entry declarado existe e o manifesto passa
+    //    pelas MESMAS regras do runtime (AppManifest). `system` + packageName
+    //    decidem se o update ganha health check (guarda o .old para reverter).
+    bool trialApp = false;
     if (ok) {
         std::string appJson;
         ok = !appJsonPath.empty() && readSmall(appJsonPath.c_str(), &appJson, 16 * 1024);
         if (ok) {
-            JsonStringPair pairs[8];
-            int np = parseJsonStringMap(appJson, pairs, 8);
-            std::string entry = "main.js";
-            for (int i = 0; i < np; i++) {
-                if (pairs[i].key == "main" && !pairs[i].value.empty()) entry = pairs[i].value;
-            }
-            ok = entry.find('/') == std::string::npos && entry.find("..") == std::string::npos &&
-                 existsPath((newDir + "/" + entry).c_str());
+            const celer::AppManifest mf = celer::parseAppManifest(appJson);
+            trialApp = mf.isSystem && criticalTrialApp(mf.id);
+            ok = !mf.mainInvalid && existsPath((newDir + "/" + mf.main).c_str());
         }
     }
 
     // 4. Troca com rollback: dest -> .old, .new -> dest; qualquer falha
     //    devolve o app antigo inteiro.
     if (ok) {
+        writeJournal(stage, base, "swap");  // a queda aqui e recuperada no boot
         rmRf(oldDir);
-        bool hadOld = existsPath(dest.c_str());
+        const bool hadOld = existsPath(dest.c_str());
         if (hadOld && rename(dest.c_str(), oldDir.c_str()) != 0) {
             ok = false;
         } else if (rename(newDir.c_str(), dest.c_str()) != 0) {
             if (hadOld) rename(oldDir.c_str(), dest.c_str());  // rollback
             ok = false;
         }
-        // sobra de .old nao invalida a instalacao
-        if (ok) rmRf(oldDir);
+        if (ok) {
+            if (trialApp && hadOld) {
+                // App do caminho de reparo atualizado: guarda a versao
+                // anterior ate a nova abrir limpa (commitTrial) ou falhar
+                // (revertTrial). O boot tambem decide: instavel = volta o .old.
+                writeTrial(stage, base);
+            } else {
+                // App comum: a loja reinstala; guardar copia so consumiria o
+                // LittleFS apertado da CYD.
+                rmRf(oldDir);
+            }
+        }
     }
 
     if (!ok) rmRf(newDir);  // dest/.old ficam intactos
+    unlink((stage + "/journal.txt").c_str());  // sucesso ou rollback: nada pendente
+    rmdir(stage.c_str());   // staging vazio sai; com resto, o proximo boot limpa
     z.close();
     appzip::freeReader(zp);
     r.ok = ok;

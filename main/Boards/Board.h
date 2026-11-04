@@ -71,14 +71,18 @@ struct LedStrips {
 
 // Barramento I2C da placa (touch/PMU/RTC/OLED). sda < 0 = placa sem bus de
 // placa; nesse caso o app abre um com System.i2c.beginAt(sda, scl, hz).
-// Nos 3 perfis com bus (SmartDisplay/watch/dog) o driver do touch/OLED ja
-// abriu no boot: System.i2c.begin() adota esse handle e so acrescenta os
-// devices do app (ver Hardware/I2cBus.h).
+// Nos 2 perfis com bus sobre o i2c_master do IDF (SmartDisplay/watch) o
+// driver do touch ja abriu no boot: System.i2c.begin() adota esse handle e
+// so acrescenta os devices do app (ver Hardware/I2cBus.h). No cao o OLED e
+// escrito pelo proprio LovyanGFX (HAL de registradores, sem driver IDF):
+// rawDriver = true marca o bus como nao adotavel e a porta como fechada ao
+// app — dois masters no mesmo controlador corrompem os dois lados.
 struct I2cPins {
     int8_t port = -1;
     int8_t sda = -1;
     int8_t scl = -1;
     uint32_t hz = 400000;
+    bool rawDriver = false;  // bus movido por driver proprio (LGFX): nao adota
 };
 
 // Camera OV2640 no barramento DVP da placa (AI-Thinker ESP32-CAM). pin_xclk

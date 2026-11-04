@@ -36,7 +36,11 @@ static const BoardProfile s_profile = {
     .mic = {.ws = 4, .bck = 5, .din = 6},
     // Fitas WS2812: corpo (GPIO8) e segunda fita (GPIO48), 4 LEDs cada.
     .strips = {.count = 2, .pins = {8, 48}, .ledsPerStrip = 4},
-    .i2c = {.port = 0, .sda = 41, .scl = 42, .hz = 100000},  // OLED SH1106
+    // I2C0 do OLED SH1106: escrito pelo proprio LovyanGFX (Bus_I2C poe os
+    // registradores na mao — driver novo do IDF nunca abre handle aqui).
+    // rawDriver = true: System.i2c.begin()/beginAt(41,42) recusam (o app que
+    // criasse outro master nessa porta derrubava OLED e transacoes).
+    .i2c = {.port = 0, .sda = 41, .scl = 42, .hz = 100000, .rawDriver = true},
     .batteryPin = 2,   // divisor 2:1 no ADC1_CH1 (~2066 mV no pino sob USB)
     .batteryScalePct = 200,  // System.battery() devolve a tensao da celula
     .touchPad = 10,    // pad capacitivo: 1 toque = tap, segurar = hold

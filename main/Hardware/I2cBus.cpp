@@ -88,6 +88,13 @@ bool begin(int sda, int scl, uint32_t hz, Info* out) {
     const BoardProfile& profile = Board::profile();
     const bool boardPair = (sda == profile.i2c.sda && scl == profile.i2c.scl);
 
+    // Bus de placa movido por driver PROPRIO (LGFX do cao escreve os
+    // registradores do OLED; i2c_master nunca abre handle la): nao ha o que
+    // adotar e criar OUTRO master na mesma porta derruba os dois lados (o
+    // LGFX limpa os int_raw que o driver novo espera a cada STOP). Recusa o
+    // par da placa inteiro — a outra porta com esses pinos roubaria o GPIO.
+    if (boardPair && profile.i2c.rawDriver) return false;
+
     // Portas candidatas: a do perfil (quando sao os pinos dela) e a outra.
     int candidates[2] = {-1, -1};
     int n = 0;
@@ -100,6 +107,9 @@ bool begin(int sda, int scl, uint32_t hz, Info* out) {
 
     for (int i = 0; i < n; i++) {
         const int port = candidates[i];
+        // Porta de placa com driver proprio: nunca criamos nem adotamos aqui,
+        // mesmo com pinos diferentes (o controlador inteiro e do OLED).
+        if (profile.i2c.rawDriver && port == profile.i2c.port) continue;
         i2c_master_bus_handle_t existing = nullptr;
         const bool exists = busExists(port, &existing);
         // Bus ja aberto com OUTROS pinos: nao ha como conferir os pinos pelo

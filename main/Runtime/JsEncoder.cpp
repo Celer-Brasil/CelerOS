@@ -27,7 +27,16 @@ int requirePin(duk_context* ctx, duk_idx_t idx) {
     const int pin = duk_require_int(ctx, idx);
     const bool valid = pin >= 0 && pin < 64 && GPIO_IS_VALID_GPIO(pin);
     const uint64_t bit = valid ? (1ULL << pin) : 0;
-    if (!valid || esp_gpio_is_reserved(bit) || (Board::profile().gpioDeniedMask & bit)) {
+    // Reserva do PROPRIO runtime nao barra (JsGpio::requirePin, bancada
+    // 2026-10-02): o esp_gpio_reserve do LEDC nao tem unreserve — servo no
+    // pino em outro app deixava encoder.create falhando ate o reboot.
+#if CONFIG_CELEROS_JS_GPIO
+    const bool own = jsGpioOwnPin(pin);
+#else
+    const bool own = false;  // sem System.gpio nao ha LEDC de JS no pino
+#endif
+    if (!valid || (!own && esp_gpio_is_reserved(bit)) ||
+        (Board::profile().gpioDeniedMask & bit)) {
         char msg[64];
         snprintf(msg, sizeof(msg), "GPIO %d invalido para encoder", pin);
         jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, msg);

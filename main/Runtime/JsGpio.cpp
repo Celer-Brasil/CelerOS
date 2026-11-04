@@ -176,3 +176,14 @@ void jsGpioReleaseOutputs() {
     }
     s_jsOutPins = 0;
 }
+
+// Pino que o PROPRIO runtime reservou (API 55): o ledc_channel_config chama
+// esp_gpio_reserve e o IDF nao tem unreserve — ledc_stop/servoOff/servosOff
+// deixam a marca para sempre. O requirePin daqui isenta as marcas (s_jsPins);
+// o requirePin do JsEncoder/JsDht nao enxerga este static — sem o mesmo
+// tratamento, encoder/DHT num pino que ja foi servo/analogWrite na SESSAO
+// falhava com "reservado" ate o reboot (mesma armadilha do 2o servo, bancada
+// 2026-10-02).
+bool jsGpioOwnPin(int pin) {
+    return pin >= 0 && pin < 64 && (s_jsPins & (1ULL << pin)) != 0;
+}

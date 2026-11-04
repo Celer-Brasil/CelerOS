@@ -3,17 +3,23 @@
 // ============================================================================
 // I2cBus — barramento I2C generico para apps (API 54, System.i2c).
 //
-// O firmware ja tem I2C0 em tres placas: GT911 da SmartDisplay (19/45),
-// FT3168/PMU/RTC/IMU do watch (15/14) e SH1106 do cao (41/42). O driver novo
-// do IDF (driver/i2c_master.h, IDF 6.1) serializa as transacoes por bus; este
-// helper ADOTA o bus que o touch/OLED ja abriu e so acrescenta os devices do
-// app (touch/PMU continuam funcionando).
+// O firmware ja tem I2C0 em duas placas sobre o driver novo do IDF
+// (driver/i2c_master.h, IDF 6.1): GT911 da SmartDisplay (19/45) e
+// FT3168/PMU/RTC/IMU do watch (15/14). O driver serializa as transacoes por
+// bus; este helper ADOTA o bus que o touch ja abriu e so acrescenta os
+// devices do app (touch/PMU continuam funcionando).
+//
+// No cao o OLED SH1106 (41/42) e escrito pelo proprio LovyanGFX (HAL de
+// registradores — nada registrado no i2c_master): I2cPins::rawDriver = true
+// e begin()/beginAt() recusam a porta do perfil (dois masters no mesmo
+// controlador corrompem os dois lados). O app usa beginAt em outros pinos e
+// cai na I2C1.
 //
 // Placa sem bus de placa (CYD/devkit/devkit-s3/esp32-cam) chama begin() com
 // pinos explicitos; nesse caso o bus e criado por nos e apagado no end().
-// O runtime JS roda na task do app — sem mutex proprio. No cao o LGFX escreve
-// o OLED na MESMA task (nao ha concorrencia); no watch o touch roda em task
-// propria, mas o bus_lock_mux do IDF serializa os devices do driver.
+// O runtime JS roda na task do app — sem mutex proprio; no watch o touch
+// roda em task propria, mas o bus_lock_mux do IDF serializa os devices do
+// driver.
 // ============================================================================
 
 #include <stddef.h>

@@ -66,6 +66,11 @@ void jsDhtReset();
 // Saidas do System.gpio voltam a LOW na saida do app: motor/ponte H nao
 // continua girando sem dono (o analogWrite/servo ja sao zerados no kernel).
 void jsGpioReleaseOutputs();
+// Pino que o proprio runtime reservou (LEDC do servo/analogWrite — API 55):
+// o esp_gpio_reserve do driver LEDC nao tem unreserve, entao a marca fica
+// na sessao inteira; encoder/DHT no mesmo pino de um servo passado precisam
+// da isencao (a do requirePin do JsGpio e o s_jsPins local).
+bool jsGpioOwnPin(int pin);
 #endif
 #if CONFIG_CELEROS_JS_GAME_ACCEL
 // Corpo rigido nativo (API 33, JsRigid.cpp): mesmo ciclo do verlet.

@@ -88,18 +88,21 @@ static const BoardProfile s_profile = {
     .homeApp = "celeros.watchface",  // o relogio e a casa do watch
     // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
     // recusam): 1/2/3/17: SD em SPI3 (cs/sck/miso/mosi); 4..8/11/12: painel
-    // AMOLED QSPI (SDIO0..3, RST, SCLK, CS); 14/15: I2C0 do touch FT3168, do
-    // PMU AXP2101, do RTC PCF85063 e do IMU QMI8658 (um app reconfigurando-o
-    // derruba os quatro); 16: MCLK do codec (ES8311/ES7210); 19/20: USB OTG
-    // nativo (CDC do celerctl); 40/41/45: I2S do audio (ES8311), 42: ASDOUT
-    // do mic, 46: PA do amp; 43/44: UART0 de fallback; 33..37: DQ4..7/DQS da
-    // PSRAM octal (S3R8).
+    // AMOLED QSPI (SDIO0..3, RST, SCLK, CS); 9: RST do touch FT3168 e 38: INT
+    // dele (um pinMode/digitalWrite em qualquer um mata o toque ate rebootar);
+    // 14/15: I2C0 do touch, do PMU AXP2101, do RTC PCF85063 e do IMU QMI8658
+    // (um app reconfigurando-o derruba os quatro); 16: MCLK do codec
+    // (ES8311/ES7210); 19/20: USB OTG nativo (CDC do celerctl); 21: INT1 do
+    // QMI8658 (raise-to-wake e wake do deep sleep por EXT1); 40/41/45: I2S do
+    // audio (ES8311), 42: ASDOUT do mic, 46: PA do amp; 43/44: UART0 de
+    // fallback; 33..37: DQ4..7/DQS da PSRAM octal (S3R8).
     .gpioDeniedMask = (1ULL << 1) | (1ULL << 2) | (1ULL << 3) | (1ULL << 4) |
                       (1ULL << 5) | (1ULL << 6) | (1ULL << 7) | (1ULL << 8) |
-                      (1ULL << 11) | (1ULL << 12) | (1ULL << 14) | (1ULL << 15) |
-                      (1ULL << 16) | (1ULL << 17) | (1ULL << 19) | (1ULL << 20) |
-                      0x3E00000000ULL | (1ULL << 40) | (1ULL << 41) | (1ULL << 42) |
-                      (1ULL << 43) | (1ULL << 44) | (1ULL << 45) | (1ULL << 46),
+                      (1ULL << 9) | (1ULL << 11) | (1ULL << 12) | (1ULL << 14) |
+                      (1ULL << 15) | (1ULL << 16) | (1ULL << 17) | (1ULL << 19) |
+                      (1ULL << 20) | (1ULL << 21) | 0x3E00000000ULL | (1ULL << 38) |
+                      (1ULL << 40) | (1ULL << 41) | (1ULL << 42) | (1ULL << 43) |
+                      (1ULL << 44) | (1ULL << 45) | (1ULL << 46),
 };
 
 void init() {

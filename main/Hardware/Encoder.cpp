@@ -77,6 +77,13 @@ int create(int pinA, int pinB, bool pullup) {
         gpio_set_pull_mode((gpio_num_t)pinA, GPIO_PULLUP_ONLY);
         gpio_set_pull_mode((gpio_num_t)pinB, GPIO_PULLUP_ONLY);
     }
+    // Entrada EXPLICITA: o pcnt_new_channel so liga o input-enable (FUN_IE) —
+    // o driver de saida de um pino que o app anterior deixou em OUTPUT
+    // (pinMode/digitalWrite do JS; jsGpioReleaseOutputs baixa o nivel, nao o
+    // diretorio) segue ativo e prende a leitura no proprio nivel. O
+    // gpio_set_direction(INPUT) desliga a saida do pad.
+    gpio_set_direction((gpio_num_t)pinA, GPIO_MODE_INPUT);
+    gpio_set_direction((gpio_num_t)pinB, GPIO_MODE_INPUT);
 
     if (pcnt_unit_enable(unit) != ESP_OK) {
         pcnt_del_channel(chan);

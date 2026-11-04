@@ -944,9 +944,12 @@ function makeEnv() {
     // API 55: encoder A/B no PCNT (contagem em memoria para os testes)
     encoder: {
         create: function(a, b, pullup) {
-            if (encoders.length >= 4) return -1;
-            encoders.push({ a: a, b: b, count: 0 });
-            return encoders.length - 1;
+            // mesmo findFree do firmware: free(id) devolve o slot — o id
+            // voltava crescente no harness e 0..3 no aparelho
+            for (var i = 0; i < 4; i++) {
+                if (!encoders[i]) { encoders[i] = { a: a, b: b, count: 0 }; return i; }
+            }
+            return -1;
         },
         read: function(id) {
             return (id >= 0 && id < encoders.length && encoders[id]) ? encoders[id].count : null;
@@ -957,8 +960,10 @@ function makeEnv() {
             return true;
         },
         free: function(id) {
-            if (id < 0 || id >= encoders.length || !encoders[id]) return false;
-            encoders[id] = null;
+            // firmware: id 0..3 devolve SEMPRE true (Encoder::free e no-op
+            // sem unidade; id 0..3 sem create tambem) — idempotente no d.ts
+            if (id < 0 || id >= 4) return false;
+            if (encoders[id]) encoders[id] = null;
             return true;
         }
     },

@@ -822,12 +822,20 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                     if (self->_scanMutex != nullptr &&
                         xSemaphoreTake(self->_scanMutex, 0) == pdTRUE) {
                         self->_scanInProgress = false;
+                        if (self->_state == WiFiConnectionState::Scanning) {
+                            // processa SOB a guarda: e AQUI que _lastScanResult
+                            // e reescrito (clear/push_back/sort) e o
+                            // getLastScanResults copia sob a MESMA guarda —
+                            // solto fora dela, a copia corria contra esta
+                            // escrita (use-after-free, o que a guarda so no
+                            // leitor nao impedia).
+                            self->processScanResults(self->_lastScanResult);
+                            nosso = true;
+                        }
                         xSemaphoreGive(self->_scanMutex);
-                        nosso = true;
                     }
 
-                    if (nosso && self->_state == WiFiConnectionState::Scanning) {
-                        self->processScanResults(self->_lastScanResult);
+                    if (nosso) {
                         self->setState(WiFiConnectionState::Idle);
                         self->onScanCompleted.trigger(self, self->_lastScanResult);
                     }

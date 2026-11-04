@@ -430,6 +430,10 @@ bool CaptivePortal::startHttpServer() {
         .method = HTTP_GET,
         .handler = [](httpd_req_t* req) -> esp_err_t {
             httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+            // Mesmo motivo do sendGzipHtml do WebManager: sem Cache-Control o
+            // navegador cacheia heuristically (nao ha validator) e o telefone
+            // podia exibir a pagina do portal de um firmware anterior.
+            httpd_resp_set_hdr(req, "Cache-Control", "no-store");
             sendStr(req, "text/html", (const char*)portal_gz_start,
                     (size_t)(portal_gz_end - portal_gz_start));
             return ESP_OK;
@@ -444,7 +448,14 @@ bool CaptivePortal::startHttpServer() {
         .method = HTTP_GET,
         .handler = [](httpd_req_t* req) -> esp_err_t {
             CaptivePortal* portal = static_cast<CaptivePortal*>(req->user_ctx);
-            portal->scanNetworks();
+            // Falha do scan (radio ocupado por outro scan/reconexao, erro do
+            // driver) vira 500: a pagina mostra "Erro ao buscar redes" e o
+            // usuario tenta de novo. Antes o erro saia como lista vazia e a
+            // pagina dizia "Nenhuma rede encontrada" — mentira que faz o
+            // usuario desistir de configurar com o AP no ar.
+            if (portal->scanNetworks() < 0) {
+                return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Scan failed");
+            }
             std::string json = portal->generateScanJson();
             sendStr(req, "application/json", json.c_str(), json.length());
             return ESP_OK;
@@ -467,17 +478,29 @@ bool CaptivePortal::startHttpServer() {
             // o teto antigo recusava senha legitima com 413.
             char buf[512];
             if (req->content_len >= sizeof(buf)) {
-                // Drena o que vier (corpo pequeno por definicao da rota) para
-                // nao deixar bytes no meio da conexao keep-alive do httpd.
+                // Drena ate um orcamento curto para nao deixar bytes no meio da
+                // conexao keep-alive do httpd. content_len e do CLIENTE: drenar
+                // o corpo inteiro prendia a task do httpd (unica, atende todos
+                // os handlers) por um POST arbitrariamente grande — o portal
+                // parava de responder /status e /scan ate o corpo acabar.
+                constexpr size_t kDrainMax = 4096;
                 char sink[128];
-                size_t left = req->content_len;
-                while (left > 0) {
-                    int n = httpd_req_recv(req, sink, left < sizeof(sink) ? left : sizeof(sink));
+                size_t drained = 0;
+                while (drained < req->content_len && drained < kDrainMax) {
+                    size_t want = req->content_len - drained;
+                    if (want > sizeof(sink)) want = sizeof(sink);
+                    if (want > kDrainMax - drained) want = kDrainMax - drained;
+                    int n = httpd_req_recv(req, sink, want);
                     if (n <= 0) break;  // cliente sumiu / timeout do httpd
-                    left -= (size_t)n;
+                    drained += (size_t)n;
                 }
                 httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Payload too large");
-                return ESP_FAIL;
+                // Sobrou corpo: ESP_FAIL fecha a sessao (o resto e descartado);
+                // ESP_OK aqui envenenaria a proxima requisicao keep-alive.
+                if (drained < req->content_len) {
+                    return ESP_FAIL;
+                }
+                return ESP_OK;
             }
             size_t received = 0;
             while (received < req->content_len) {

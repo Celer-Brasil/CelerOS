@@ -181,6 +181,25 @@
             selectedNetwork = ssid;
         }
         
+        function stopPolling() {
+            if (window._pollTimer) {
+                clearInterval(window._pollTimer);
+                window._pollTimer = null;
+            }
+        }
+
+        // Volta ao formulario com o erro. Sem isto o spinner girava para
+        // SEMPRE quando o /connect era recusado (corpo acima do teto do
+        // dispositivo = 413) ou morria na rede: as credenciais nunca chegavam,
+        // o /status ficava em "idle" (estado que o poll nao trata) e o usuario
+        // achava que o aparelho estava conectando.
+        function connectFailed(msg) {
+            stopPolling();
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('main-form').style.display = 'block';
+            showStatus(msg, 'error');
+        }
+
         function connectWifi(e) {
             e.preventDefault();
             const ssid = document.getElementById('ssid').value;
@@ -200,21 +219,31 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                 body: `ssid=${encodeURIComponent(ssid)}&password=${encodeURIComponent(password)}`
-            }).catch(() => {});
+            }).then(r => {
+                if (!r.ok) connectFailed('O aparelho recusou as credenciais (HTTP ' + r.status + '). Tente de novo');
+            }).catch(() => {
+                connectFailed('Sem resposta do aparelho. Tente de novo');
+            });
 
-            if (window._pollTimer) clearInterval(window._pollTimer);
+            // Teto do poll: o hospedeiro conecta com timeout de 15 s e desiste
+            // aos 30 s (watchdog dele); 40 s sem resposta = ninguem vai
+            // reportar (ex.: a tela de setup do aparelho saiu) e o spinner
+            // mentiria "Conectando..." indefinidamente.
+            let ticks = 0;
+            stopPolling();
             window._pollTimer = setInterval(() => {
+                if (++ticks > 40) {
+                    connectFailed('O aparelho não respondeu a tempo. Tente de novo');
+                    return;
+                }
                 fetch('/status').then(r => r.json()).then(d => {
                     if (d.state == 'connected') {
-                        clearInterval(window._pollTimer); window._pollTimer = null;
+                        stopPolling();
                         document.getElementById('loading').style.display = 'none';
                         document.getElementById('main-form').style.display = 'block';
                         showStatus(`Conectado! IP: ${d.ip}`, 'success');
                     } else if (d.state == 'failed') {
-                        clearInterval(window._pollTimer); window._pollTimer = null;
-                        document.getElementById('loading').style.display = 'none';
-                        document.getElementById('main-form').style.display = 'block';
-                        showStatus('Falha na conexão — confira a senha e tente de novo', 'error');
+                        connectFailed('Falha na conexão — confira a senha e tente de novo');
                     }
                 }).catch(() => {});
             }, 1000);

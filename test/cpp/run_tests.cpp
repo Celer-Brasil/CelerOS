@@ -7,6 +7,7 @@
 #include "../../main/Utils/SemVer.h"
 #include "../../main/Utils/AppPerms.h"
 #include "../../main/Utils/AppManifest.h"
+#include "../../main/Utils/UpdatePolicy.h"
 #include "../../main/Utils/JsStrip.h"
 #include "../../main/USBDevice/HostFrame.h"
 #include "../../main/Utils/AlarmCalc.h"
@@ -3286,6 +3287,7 @@ int main() {
     testAppPackage();
     testAppPackageRecover();
     testAppPackageTrial();
+    testUpdatePolicy();
     testInstallMarker();
     testUsbDesc();
     if (g_failed == 0) {

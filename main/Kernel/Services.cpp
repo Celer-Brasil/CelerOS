@@ -41,6 +41,8 @@
 void confirmPendingOta();
 
 #include "BootGuard.h"
+#include "UpdateService.h"
+
 namespace {
 
 #if CONFIG_CELEROS_UI
@@ -176,6 +178,12 @@ const CelerServices::Service kServices[] = {
     // orcamento de ms para nao roubar o vidro do app em foreground.
     {"appsvc", [](bool inApp) { AppServices::tick(inApp); }, CelerServices::ALWAYS},
 #endif
+    // Politica de atualizacao NATIVA (API 56): o "quando" saiu do service.js
+    // do Nucleo, que o OTA de firmware nao atualiza. Depois do appsvc de
+    // proposito: se o Nucleo antigo ainda checar, o cache de 5 min do
+    // OtaManager evita a segunda TLS. ALWAYS porque o gate interno e que
+    // decide (app aberto/shell/OTA); LOOP congelaria com a casa aberta.
+    {"updatesvc", [](bool) { UpdateService::tick(); }, CelerServices::ALWAYS},
 #if CONFIG_CELEROS_UI
     {"notificationalert", svcNotificationAlert, CelerServices::ALWAYS},
 #endif

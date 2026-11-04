@@ -52,7 +52,11 @@ public:
 
     // Baixa e interpreta o update.json. Retorna true se ha atualizacao
     // disponivel (resultado completo em "info").
-    static bool checkForUpdates();
+    // useCache (default): devolve o resultado do check anterior se ele
+    // terminou ha menos de 5 min, sem abrir outra TLS. Assim o UpdateService
+    // nativo e o Nucleo antigo (service.js) nao checam o hub duas vezes na
+    // mesma rodada; um check manual dentro da janela ve o resultado recente.
+    static bool checkForUpdates(bool useCache = true);
 
     // Flashea o firmware da URL no slot OTA inativo com validacao de
     // checksum (esp_ota_end) antes de ativa-lo. onProgress recebe

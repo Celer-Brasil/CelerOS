@@ -274,6 +274,33 @@ bool JSBindings::storageClearPackage(const std::string& pkg) {
     return ok;
 }
 
+// Ponte NATIVA para a Storage de um pacote (API 56): o UpdateService grava
+// last_check/noted_ver no namespace do Nucleo — as chaves que o painel do
+// app ja le — sem depender do service.js dele. Mesmos limites do JS.
+bool JSBindings::storageSetFor(const std::string& pkg, const char* key, const char* value) {
+    if (pkg.empty() || key == nullptr || key[0] == '\0') return false;
+    const char* v = value ? value : "";
+    const size_t len = strlen(v);
+    if (len > 4096) return false;
+    return nvsPut(pkgNamespace(pkg), key, v, len);
+}
+
+std::string JSBindings::storageGetFor(const std::string& pkg, const char* key) {
+    std::string out;
+    if (pkg.empty() || key == nullptr || key[0] == '\0') return out;
+    nvs_handle_t h;
+    if (nvs_open(pkgNamespace(pkg).c_str(), NVS_READONLY, &h) != ESP_OK) return out;
+    size_t len = 0;
+    if (nvs_get_blob(h, key, nullptr, &len) != ESP_OK || len == 0 || len > 4096) {
+        nvs_close(h);
+        return out;
+    }
+    out.resize(len);
+    if (nvs_get_blob(h, key, &out[0], &len) != ESP_OK) out.clear();
+    nvs_close(h);
+    return out;
+}
+
 // clearFor(pkg): apaga o Storage de OUTRO app (desinstalacao pela loja).
 // Capability "system": um app comum nao pode apagar o dado de terceiros.
 duk_ret_t JSBindings::js_storageClearFor(duk_context *ctx) {

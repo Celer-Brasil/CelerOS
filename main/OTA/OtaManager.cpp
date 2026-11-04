@@ -37,12 +37,15 @@ namespace {
 // TLS vivos.
 std::atomic<bool> s_busy{false};
 
-// Agendamento do check automatico, consumido pelo servico "updcheck" no
-// loop principal (celerLoop/present). A (re)conexao e detectada por
-// SONDA do estado (nao por evento): o servico roda a cada tick, a
-// transicao desconectado->conectado ancora o grace de 1 min e dispensa a
-// inscricao no onStateChanged (um handler a menos, zero problema de
-// ordenacao no boot).
+// Instante (millis) do ultimo check CONCLUIDO. Cache de 5 min: o
+// UpdateService nativo e o Nucleo antigo (service.js) checam na mesma janela;
+// sem isto seriam duas TLS no hub por rodada (e duas na RAM da CYD).
+std::atomic<uint32_t> s_lastCheckMs{0};
+constexpr uint32_t kCheckCacheMs = 5 * 60 * 1000;
+
+// Guarda da task de progresso do performUpdate. O AGENDAMENTO do check
+// automatico agora e do UpdateService nativo (Kernel/UpdateService.cpp); o
+// antigo servico "updcheck" saiu e o Nucleo/JS virou painel.
 std::atomic<bool> s_taskRunning{false};
 
 // Id fixo da nota de update: o push com extId != 0 SUBSTITUI a nota anterior
@@ -161,7 +164,16 @@ static bool verifyManifestSignature(const std::string& canonical,
     return ok;
 }
 
-bool OtaManager::checkForUpdates() {
+bool OtaManager::checkForUpdates(bool useCache) {
+    if (useCache) {
+        const uint32_t last = s_lastCheckMs.load();
+        if (last != 0 && (int32_t)(millis() - last) >= 0 &&
+            (int32_t)(millis() - last) < (int32_t)kCheckCacheMs) {
+            ESP_LOGI("celer.ota", "check: resultado de ha %u ms (cache)",
+                     (unsigned)(millis() - last));
+            return info.available;
+        }
+    }
     // Guarda compartilhada: outro check/instalacao em curso devolve o
     // resultado corrente (fresco: so pode ter sido escrito ha poucos s)
     bool freeSlot = false;
@@ -170,6 +182,7 @@ bool OtaManager::checkForUpdates() {
         return info.available;
     }
     const bool available = runCheck();
+    s_lastCheckMs = millis();
     s_busy = false;
     return available;
 }

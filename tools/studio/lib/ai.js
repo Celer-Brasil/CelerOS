@@ -188,7 +188,9 @@ function buildContext(project, opts) {
                 ? project.regions(a).map((r) => r.name) : undefined,
         })),
         ops: opsHelp(),
-        limits: { deps: 8, extras: 16, jsKB: (p.requires || []).indexOf('psram') >= 0 ? 1024 : 48 },
+        // jsKB: mesmo teto do build/hub (MAX_MAIN_JS = 64KB sem psram). Era 48
+        // e o modelo era instruido a um teto que ninguem cobra
+        limits: { deps: 8, extras: 16, jsKB: (p.requires || []).indexOf('psram') >= 0 ? 1024 : 64 },
     };
     return ctx;
 }
@@ -351,18 +353,22 @@ async function plan(dir, prompt, opts) {
         }
         say = parsed.say || say;
         messages.push({ role: 'assistant', content: r.content });
-        guard(parsed.ops, opts);
         try {
+            // guard DENTRO do laco: lote grande demais ou op destrutiva sem
+            // --allow-delete tambem e coisa que o modelo corrige quando ve o
+            // erro (antes o throw saia da funcao e queimava as tentativas)
+            guard(parsed.ops, opts);
             const res = applyOps(dir, parsed.ops, { dryRun: !!opts.dryRun, ifRev: opts.ifRev });
             return { ok: true, say: say, ops: parsed.ops, result: res,
                      steps: step + 1, usage: r.usage || null, dryRun: !!opts.dryRun };
         } catch (e) {
-            lastError = { code: e.code || 'error', message: e.message,
+            lastError = { code: e.code || 'error', message: e.message, hint: e.hint,
                           diagnostics: (e.diagnostics || []).slice(0, 10) };
         }
     }
     throw new F.StudioError('ai.failed', 'nao consegui um lote valido: ' + (lastError ? lastError.message : 'sem resposta'),
-                            { diagnostics: lastError ? lastError.diagnostics : null, say: say });
+                            { diagnostics: lastError ? lastError.diagnostics : null,
+                              hint: lastError ? lastError.hint : undefined, say: say });
 }
 
 // corrige o que a validacao aponta (o "consertar build" da GUI)

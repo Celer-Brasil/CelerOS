@@ -342,7 +342,11 @@ const OPS = {
             transform: defaultTransform(op),
             components: [],
         };
-        if (op.prefab) {
+        // `prefab` aqui e ambiguo: container() ja o consumiu como o prefab
+        // de destino. Dentro de um prefab, instanciar o MESMO prefab gerava
+        // auto-referencia (build: "prefab aninhado demais") e os `components`
+        // pedidos eram descartados em silencio — so a cena instancia
+        if (op.prefab && kind === 'scene') {
             const pf = project.prefab(op.prefab);
             if (!pf) F.fail('ref.prefab', 'prefab inexistente: ' + op.prefab);
             e.prefab = pf.guid;
@@ -642,6 +646,11 @@ const OPS = {
         if (asset.prefab) project.markDirty(target);
         project.markDirty(target + '.meta');
         const oldName = asset.name;
+        // regioes ANTES do rename: o prefixo default (e a regiao unica da
+        // imagem single) carrega o nome do asset, entao renomear trocava
+        // `guid#atlas0` por `guid#folha0` e toda ref quebrava
+        const oldRegions = asset.kind === 'sprite' || asset.kind === 'sprite-sheet' ||
+            asset.kind === 'tileset' ? project.regions(asset).map((r) => r.name) : null;
         asset.relPath = target;
         asset.absPath = project.resolveInside(target);
         asset.metaPath = target + '.meta';
@@ -650,6 +659,25 @@ const OPS = {
         asset.name = path.posix.basename(target, ext);
         if (project.byName.get(oldName) === asset) project.byName.delete(oldName);
         project.byName.set(asset.name, asset);
+        if (oldName !== asset.name) {
+            const regionMap = new Map();
+            if (oldRegions) {
+                const now = project.regions(asset).map((r) => r.name);
+                for (let i = 0; i < oldRegions.length && i < now.length; i++) {
+                    if (oldRegions[i] !== now[i]) regionMap.set(oldRegions[i], now[i]);
+                }
+            }
+            for (const sc of project.sceneByGuid.values()) {
+                if (renameAssetRefs(project, sc, asset, oldName, asset.name, regionMap)) {
+                    project.writeScene(sc);
+                }
+            }
+            for (const pf of project.prefabByGuid.values()) {
+                if (renameAssetRefs(project, pf, asset, oldName, asset.name, regionMap)) {
+                    project.writePrefab(pf);
+                }
+            }
+        }
         return { asset: { guid: asset.guid, name: asset.name, path: asset.relPath } };
     },
 
@@ -817,41 +845,71 @@ const OPS = {
     },
 };
 
-// refs de assets em uma cena/prefab (para asset.delete)
-function collectRefs(obj, refs) {
+// campos do catalogo que guardam referencia de asset (sprite/script/meta de
+// anim/imagem do widget): o catalogo e a fonte unica, entao um campo novo
+// (ou outro tipo de asset) entra aqui sem lista paralela para esquecer
+const ASSET_FIELD_TYPES = ['sprite', 'script', 'asset', 'tilemap-tileset'];
+function assetFieldsOf(type) {
+    const cat = SC.componentCatalog()[type];
+    if (!cat || !cat.fields) return [];
+    return Object.keys(cat.fields).filter((k) => ASSET_FIELD_TYPES.indexOf(cat.fields[k].type) >= 0);
+}
+
+// refs de assets em uma cena/prefab (para asset.delete). `resolve` converte
+// nome -> asset: uma ref por NOME ("heroi", "atlas#1") vale tanto quanto o
+// GUID, entao sem resolver a comparacao com o guid do asset apagado falhava
+// e o delete simples caia em ref.missing (validate) em vez de asset.inuse
+function collectRefs(obj, refs, resolve) {
+    const add = (ref) => {
+        if (typeof ref !== 'string' || !ref) return;
+        const head = ref.split('#')[0];
+        const a = resolve ? resolve(head) : null;
+        refs.add(a ? a.guid : head);
+    };
+    const addComponentRefs = (type, f) => {
+        for (const k of assetFieldsOf(type)) add(f[k]);
+        if (f.clips) walkRefs(f.clips, refs, add);
+    };
     for (const e of obj.entities || []) {
         if (e.prefab) refs.add(e.prefab);
-        for (const c of e.components || []) {
-            const f = c.fields || {};
-            for (const k of ['sprite', 'script']) {
-                if (typeof f[k] === 'string' && f[k]) refs.add(f[k].split('#')[0]);
+        for (const c of e.components || []) addComponentRefs(c.type, c.fields || {});
+        // overrides de instancia patcham campos do componente do prefab (uma
+        // troca de sprite por instancia aponta para um asset que o prefab nao
+        // conhece): sem isso o delete passava e o build falhava depois
+        for (const target of Object.keys(e.overrides || {})) {
+            const ov = e.overrides[target] || {};
+            if (!ov.components) continue;
+            const pf = resolve ? resolve(e.prefab) : null;
+            const base = pf && pf.prefab
+                ? (pf.prefab.entities || []).find((x) => x.fid === target) : null;
+            for (const cid of Object.keys(ov.components)) {
+                const patch = ov.components[cid] || {};
+                const tc = base ? (base.components || []).find((c) => c.id === cid) : null;
+                // componente do prefab desconhecido: so GUID (sem tipo nao da
+                // para distinguir uma ref por nome de um texto qualquer)
+                if (tc) addComponentRefs(tc.type, patch);
+                else walkRefs(patch, refs, add);
             }
-            // ui.image guarda a imagem em fields.asset (runtime app): sem isso
-            // o delete simples falhava com ref.missing (validate) em vez do
-            // asset.inuse amigavel, e o force deixava a referencia pendurada
-            if (c.type === 'ui.image' && typeof f.asset === 'string' && f.asset) {
-                refs.add(f.asset.split('#')[0]);
-            }
-            if (f.clips) walkRefs(f.clips, refs);
         }
     }
-    for (const tm of obj.tilemaps || []) if (tm.tileset) refs.add(tm.tileset.split('#')[0]);
+    for (const tm of obj.tilemaps || []) add(tm.tileset);
     return refs;
 }
 
-function walkRefs(v, refs) {
+function walkRefs(v, refs, add) {
     if (typeof v === 'string') {
-        if (/^[0-9a-f]{32}(#.*)?$/.test(v)) refs.add(v.split('#')[0]);
+        if (/^[0-9a-f]{32}(#.*)?$/.test(v)) (add || ((x) => refs.add(x)))(v.split('#')[0]);
         return;
     }
-    if (Array.isArray(v)) { for (const x of v) walkRefs(x, refs); return; }
-    if (v && typeof v === 'object') { for (const k in v) walkRefs(v[k], refs); }
+    if (Array.isArray(v)) { for (const x of v) walkRefs(x, refs, add); return; }
+    if (v && typeof v === 'object') { for (const k in v) walkRefs(v[k], refs, add); }
 }
 
 function referenced(project, guid) {
     const refs = new Set();
-    for (const sc of project.sceneByGuid.values()) collectRefs(sc, refs);
-    for (const pf of project.prefabByGuid.values()) collectRefs(pf, refs);
+    const resolve = (ref) => project.asset(ref);
+    for (const sc of project.sceneByGuid.values()) collectRefs(sc, refs, resolve);
+    for (const pf of project.prefabByGuid.values()) collectRefs(pf, refs, resolve);
     // settings.assets/music guardam GUID ou nome; collectRefs so ve GUID
     for (const sc of project.sceneByGuid.values()) {
         const st = sc.settings || {};
@@ -881,30 +939,145 @@ function refGuid(value) {
     return /^[0-9a-f]{32}$/.test(head) ? head : null;
 }
 
+// troca refs ao asset renomeado numa cena/prefab: o NOME quando a ref vem por
+// nome (byName perdeu o antigo: a validacao do lote quebraria com ref.missing)
+// e as REGIOES quando o padrao de nome carrega o nome do asset (sprite-sheet
+// com prefixo default vira `guid#folha0`; imagem unica tem a regiao = nome).
+// `regionMap` = nome antigo -> nome novo por indice.
+function renameAssetRefs(project, obj, asset, oldName, newName, regionMap) {
+    let changed = false;
+    const swap = (ref) => {
+        if (typeof ref !== 'string' || !ref) return ref;
+        const i = ref.indexOf('#');
+        const head = i < 0 ? ref : ref.slice(0, i);
+        const mine = head === asset.guid || head === oldName || head === newName;
+        if (!mine) return ref;
+        let h = head === oldName ? newName : head;
+        let region = i < 0 ? null : ref.slice(i + 1);
+        if (regionMap && region && regionMap.has(region)) region = regionMap.get(region);
+        const out = region === null ? h : h + '#' + region;
+        if (out !== ref) changed = true;
+        return out;
+    };
+    const swapValue = (holder, key) => {
+        if (!holder) return;
+        const v = holder[key];
+        if (typeof v === 'string') {
+            const n = swap(v);
+            if (n !== v) holder[key] = n;
+        } else if (v && typeof v === 'object' && mapRefDeep(v, swap)) changed = true;
+    };
+    for (const e of obj.entities || []) {
+        for (const c of e.components || []) {
+            const f = c.fields || {};
+            for (const k of assetFieldsOf(c.type)) swapValue(f, k);
+            if (f.clips) swapValue(c.fields, 'clips');
+        }
+        // override de instancia: so os campos de asset do componente do
+        // prefab (um id de componente com o mesmo nome nao pode ser trocado)
+        for (const target of Object.keys(e.overrides || {})) {
+            const ov = e.overrides[target] || {};
+            if (!ov.components) continue;
+            const pf = project.asset(e.prefab);
+            const base = pf && pf.prefab
+                ? (pf.prefab.entities || []).find((x) => x.fid === target) : null;
+            for (const cid of Object.keys(ov.components)) {
+                const patch = ov.components[cid] || {};
+                const tc = base ? (base.components || []).find((c) => c.id === cid) : null;
+                if (!tc) continue;
+                for (const k of assetFieldsOf(tc.type)) swapValue(patch, k);
+            }
+        }
+    }
+    const st = obj.settings;
+    if (st) {
+        for (const k of ['assets', 'scripts']) {
+            if (!Array.isArray(st[k])) continue;
+            for (let i = 0; i < st[k].length; i++) {
+                const n = swap(st[k][i]);
+                if (n !== st[k][i]) { st[k][i] = n; changed = true; }
+            }
+        }
+        swapValue(st, 'music');
+    }
+    for (const tm of obj.tilemaps || []) if (tm) swapValue(tm, 'tileset');
+    return changed;
+}
+
+// percorre arrays/objetos trocando strings por `fn`; true se algo mudou
+function mapRefDeep(v, fn) {
+    let changed = false;
+    if (Array.isArray(v)) {
+        for (let i = 0; i < v.length; i++) {
+            const x = v[i];
+            if (typeof x === 'string') {
+                const n = fn(x);
+                if (n !== x) { v[i] = n; changed = true; }
+            } else if (x && typeof x === 'object' && mapRefDeep(x, fn)) changed = true;
+        }
+        return changed;
+    }
+    if (v && typeof v === 'object') {
+        for (const k of Object.keys(v)) {
+            const x = v[k];
+            if (typeof x === 'string') {
+                const n = fn(x);
+                if (n !== x) { v[k] = n; changed = true; }
+            } else if (x && typeof x === 'object' && mapRefDeep(x, fn)) changed = true;
+        }
+    }
+    return changed;
+}
+
+// true quando `ref` (GUID, GUID#regiao ou NOME) aponta para o asset `guid`
+function isRefTo(ref, guid, resolve) {
+    if (refGuid(ref) === guid) return true;
+    if (typeof ref !== 'string' || !ref) return false;
+    const a = resolve ? resolve(ref.split('#')[0]) : null;
+    return !!(a && a.guid === guid);
+}
+
+// remove refs ao asset de dentro de uma estrutura (clips de override)
+function stripRefDeep(v, isRef) {
+    let changed = false;
+    if (Array.isArray(v)) {
+        for (let i = v.length - 1; i >= 0; i--) {
+            if (typeof v[i] === 'string' && isRef(v[i])) { v.splice(i, 1); changed = true; }
+            else if (v[i] && typeof v[i] === 'object' && stripRefDeep(v[i], isRef)) changed = true;
+        }
+        return changed;
+    }
+    if (v && typeof v === 'object') {
+        for (const k of Object.keys(v)) {
+            if (typeof v[k] === 'string' && isRef(v[k])) { delete v[k]; changed = true; }
+            else if (v[k] && typeof v[k] === 'object' && stripRefDeep(v[k], isRef)) changed = true;
+        }
+    }
+    return changed;
+}
+
 // remove de uma cena/prefab toda referencia ao asset (asset.delete --force).
 // Sem isso o lote falhava na validacao de ref orfa e o `force` nunca
 // funcionava para um asset realmente usado.
 function stripRefs(obj, guid, resolve) {
     let changed = false;
+    const isRef = (ref) => isRefTo(ref, guid, resolve);
     if (obj.settings) {
         const st = obj.settings;
         if (Array.isArray(st.assets)) {
-            const keep = st.assets.filter((ref) => {
-                const a = resolve(ref);
-                return !(a && a.guid === guid);
-            });
+            const keep = st.assets.filter((ref) => !isRef(ref));
             if (keep.length !== st.assets.length) { st.assets = keep; changed = true; }
         }
-        if (st.music) {
-            const a = resolve(st.music);
-            if (a && a.guid === guid) { delete st.music; changed = true; }
+        if (st.music && isRef(st.music)) { delete st.music; changed = true; }
+        // scripts da TELA (runtime app): sem isto o force deixava a ref
+        // pendurada e a validacao derrubava o proprio delete
+        if (Array.isArray(st.scripts)) {
+            const keep = st.scripts.filter((ref) => !isRef(ref));
+            if (keep.length !== st.scripts.length) { st.scripts = keep; changed = true; }
         }
     }
     if (Array.isArray(obj.tilemaps)) {
-        const keep = obj.tilemaps.filter((tm) => {
-            const a = tm && resolve(tm.tileset);
-            return !(a && a.guid === guid);
-        });
+        const keep = obj.tilemaps.filter((tm) => !(tm && isRef(tm.tileset)));
         if (keep.length !== obj.tilemaps.length) { obj.tilemaps = keep; changed = true; }
     }
     if (Array.isArray(obj.entities)) {
@@ -914,20 +1087,37 @@ function stripRefs(obj, guid, resolve) {
         });
         obj.entities = keep;
         for (const e of keep) {
+            // override de instancia que aponta para o asset: sem limpar, o
+            // sprite some so no build (o validate nao olha o VALOR do patch)
+            for (const target of Object.keys(e.overrides || {})) {
+                const ov = e.overrides[target] || {};
+                if (!ov.components) continue;
+                for (const cid of Object.keys(ov.components)) {
+                    const patch = ov.components[cid] || {};
+                    for (const k of Object.keys(patch)) {
+                        if (typeof patch[k] === 'string' && isRef(patch[k])) { delete patch[k]; changed = true; }
+                        else if (patch[k] && typeof patch[k] === 'object' && stripRefDeep(patch[k], isRef)) {
+                            changed = true;
+                        }
+                    }
+                    if (!Object.keys(patch).length) { delete ov.components[cid]; changed = true; }
+                }
+                if (!Object.keys(ov.components).length) { delete ov.components; changed = true; }
+                if (!Object.keys(ov).length) { delete e.overrides[target]; changed = true; }
+            }
             if (!Array.isArray(e.components)) continue;
             const comps = [];
             for (const c of e.components) {
                 const f = c.fields || {};
-                if (c.type === 'sprite' && refGuid(f.sprite) === guid) { changed = true; continue; }
-                if (c.type === 'script' && refGuid(f.script) === guid) { changed = true; continue; }
-                if (c.type === 'ui.image' && refGuid(f.asset) === guid) { changed = true; continue; }
                 if (c.type === 'anim') {
-                    if (f.meta && refGuid(f.meta) === guid) { delete f.meta; changed = true; }
+                    // o meta sai mas os clips (frames inline) ficam: apagar o
+                    // componente inteiro levaria a animacao do autor junto
+                    if (f.meta && isRef(f.meta)) { delete f.meta; changed = true; }
                     if (f.clips && typeof f.clips === 'object') {
                         for (const name of Object.keys(f.clips)) {
                             const clip = f.clips[name] || {};
                             if (!Array.isArray(clip.frames)) continue;
-                            const frames = clip.frames.filter((fr) => refGuid(fr) !== guid);
+                            const frames = clip.frames.filter((fr) => !isRef(fr));
                             if (frames.length !== clip.frames.length) {
                                 clip.frames = frames;
                                 changed = true;
@@ -939,6 +1129,9 @@ function stripRefs(obj, guid, resolve) {
                         changed = true;
                         continue;
                     }
+                } else if (assetFieldsOf(c.type).some((k) => isRef(f[k]))) {
+                    changed = true;
+                    continue;
                 }
                 comps.push(c);
             }

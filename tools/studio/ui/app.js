@@ -734,7 +734,14 @@ function compInput(def, val, onChange) {
     const s = el('select');
     s.appendChild(el('option', { value: '', text: '(nenhum)' }));
     for (const g of spriteOptions()) s.appendChild(g);
-    s.value = val || '';
+    // ref por NOME ("heroi#0") nao casa com nenhuma option e o select caia no
+    // "(nenhum)" enquanto o componente continuava apontando para o sprite
+    const ref = val || '';
+    s.value = ref;
+    if (ref && s.value !== ref) {
+      s.appendChild(el('option', { value: ref, text: ref + ' (atual)' }));
+      s.value = ref;
+    }
     s.addEventListener('change', () => onChange(s.value));
     return s;
   }
@@ -1093,32 +1100,48 @@ function refGuid(ref) { return ref ? String(ref).split('#')[0] : ''; }
 
 function assetUsage(guid) {
   const scenes = [], prefabs = [];
+  // GUID, GUID#regiao ou NOME (o asset() do inspetor resolve os tres, e o
+  // asset.delete do barramento conta os tres: o rodape nao pode mentir)
+  const isRef = (ref) => {
+    if (!ref) return false;
+    const head = refGuid(ref);
+    if (head === guid) return true;
+    const a = asset(head);
+    return !!(a && a.guid === guid);
+  };
   const useEntity = (e) => {
     let hit = e.prefab === guid;
     for (const c of e.components || []) {
       const f = c.fields || {};
-      if (c.type === 'sprite' && refGuid(f.sprite) === guid) hit = true;
-      if (c.type === 'script' && refGuid(f.script) === guid) hit = true;
-      if (c.type === 'ui.image' && refGuid(f.asset) === guid) hit = true;
-      if (c.type === 'anim') {
-        if (f.meta && refGuid(f.meta) === guid) hit = true;
-        const clips = f.clips || {};
-        for (const k in clips) {
-          for (const fr of (clips[k].frames || [])) if (refGuid(fr) === guid) hit = true;
-        }
+      if (isRef(f.sprite)) hit = true;
+      if (isRef(f.script)) hit = true;
+      if (isRef(f.asset)) hit = true;
+      if (isRef(f.meta)) hit = true;
+      const clips = f.clips || {};
+      for (const k in clips) {
+        for (const fr of (clips[k].frames || [])) if (isRef(fr)) hit = true;
+      }
+    }
+    // override de instancia de prefab: um sprite trocado so na instancia
+    // tambem segura o asset (e o force do barramento limpa esse patch)
+    for (const target of Object.keys(e.overrides || {})) {
+      const ov = e.overrides[target] || {};
+      for (const cid of Object.keys(ov.components || {})) {
+        const patch = ov.components[cid] || {};
+        for (const k of Object.keys(patch)) if (isRef(patch[k])) hit = true;
       }
     }
     return hit;
   };
   for (const sc of Object.values(S.snap.scenes || {})) {
     let hit = false;
-    for (const tm of sc.tilemaps || []) if (tm.tileset === guid) hit = true;
+    for (const tm of sc.tilemaps || []) if (isRef(tm.tileset)) hit = true;
     const st = (sc.settings || {});
-    for (const ref of st.assets || []) if (refGuid(ref) === guid) hit = true;
+    for (const ref of st.assets || []) if (isRef(ref)) hit = true;
     // musica e scripts da tela (runtime app) tambem seguram o asset: sem
     // isso o rodape dizia "nao usado no build" e o delete recusava depois
-    if (refGuid(st.music) === guid) hit = true;
-    for (const ref of st.scripts || []) if (refGuid(ref) === guid) hit = true;
+    if (isRef(st.music)) hit = true;
+    for (const ref of st.scripts || []) if (isRef(ref)) hit = true;
     for (const e of sc.entities || []) if (useEntity(e)) hit = true;
     if (hit) scenes.push(sc.name);
   }
@@ -3018,6 +3041,12 @@ function wireEvents() {
           if (ev.key === 'ArrowRight') patch.x += step;
           if (ev.key === 'ArrowUp') patch.y -= step;
           if (ev.key === 'ArrowDown') patch.y += step;
+          // otimista: a fila de ops serializa, mas o snapshot (de onde o
+          // patch e lido) so volta no fim da resposta — N setas rapidas
+          // mandavam N vezes o MESMO x e a entidade andava um passo
+          ent.transform = t;
+          t.x = patch.x;
+          t.y = patch.y;
           entitySet(sc, ent, { transform: patch });
           ev.preventDefault();
         }

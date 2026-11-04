@@ -558,12 +558,27 @@ function generateAppMain(project) {
 }
 
 // tamanho que o deploy vai empacotar: minificado (jsmin) com o mesmo
-// criterio por arquivo — modulo (qualquer != main.js) tem o topo manglado.
-// Sem o `reserved` dos irmaos aqui: medir MAIOR que o pacote real e o lado
-// seguro do teto (o deploy recalcula com o reserved de verdade).
-function stripSize(src, name) {
+// criterio por arquivo — modulo (qualquer != main.js) tem o topo manglado e
+// os nomes que os irmaos leem como globais ficam de fora do mangle. O
+// `reserved` e o MESMO conjunto do deploy: sem ele o build manglava esses
+// nomes e media MENOR que o pacote real (o teto de 64KB passava por baixo,
+// ao contrario do que dizia o comentario antigo)
+function reservedGlobals(buildDir, files) {
+    const reserved = new Set();
+    for (const name of files) {
+        if (!/\.js$/.test(name) || name === 'main.js') continue;
+        try {
+            const names = jsmin.freeNames(fs.readFileSync(path.join(buildDir, name))).names;
+            for (const n of names) reserved.add(n);
+        } catch (e) { /* sintaxe quebrada: o app_lint acusa depois */ }
+    }
+    return reserved;
+}
+
+function stripSize(src, name, reserved) {
     try {
-        return Buffer.byteLength(jsmin.minify(src, { top: name && name !== 'main.js' }).code, 'utf8');
+        return Buffer.byteLength(jsmin.minify(src, { top: name && name !== 'main.js',
+                                                    reserved: reserved }).code, 'utf8');
     } catch (e) {
         try { return Buffer.byteLength(strip(src), 'utf8'); }
         catch (e2) { return Buffer.byteLength(src, 'utf8'); }
@@ -679,11 +694,12 @@ function buildLegacy(project, check, warnings, buildDir) {
     if (extras >= 14) warnings.push({ code: 'package.extras', path: 'pacote', message: extras + ' extras (limite 16)' });
 
     const jsFiles = ['main.js'].concat(scriptFiles);
+    const reserved = reservedGlobals(buildDir, jsFiles);
     let jsTotal = 0;
     const jsSizes = {};
     for (const f of jsFiles) {
         const src = fs.readFileSync(path.join(buildDir, f), 'utf8');
-        const n = stripSize(src, f);
+        const n = stripSize(src, f, reserved);
         jsSizes[f] = n;
         jsTotal += n;
         if (n > 256 * 1024) failBuild(f + ' tem ' + (n / 1024).toFixed(1) + 'KB (limite do require 256KB)');
@@ -869,11 +885,12 @@ function buildProject(dir, opts) {
 
     // JS enxuto (mesmo criterio do hub)
     const jsFiles = ['main.js'].concat(dataFiles).concat(plan.scripts.map((s) => s.file));
+    const reserved = reservedGlobals(buildDir, jsFiles);
     let jsTotal = 0;
     const jsSizes = {};
     for (const f of jsFiles) {
         const src = fs.readFileSync(path.join(buildDir, f), 'utf8');
-        const n = stripSize(src, f);
+        const n = stripSize(src, f, reserved);
         jsSizes[f] = n;
         jsTotal += n;
         if (n > 256 * 1024) failBuild(f + ' tem ' + (n / 1024).toFixed(1) + 'KB (limite do require 256KB)');

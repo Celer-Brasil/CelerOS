@@ -154,7 +154,10 @@ function describeData(project) {
         limits: {
             deps: 8, depsUsed: deps,
             extras: 16, assetKB: 128, assetsKB: 256,
-            jsKB: psram ? 1024 : 48, requiresPsram: psram,
+            // jsKB = MAX_MAIN_JS do hub/app_lint (soma dos .js enxutos sem
+            // psram): era 48 e o painel pintava 100% vermelho num app de
+            // 50KB que o proprio build aceita (o build usa 64KB)
+            jsKB: psram ? 1024 : 64, requiresPsram: psram,
             depsRequired: runtime === 'app' ? 0 : (runtime === 'legacy' ? 1 : 3),
         },
         rules: {

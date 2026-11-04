@@ -384,7 +384,13 @@ function studioBoot(E, data) {
         var music = def.music && A[def.music];
         if (music && typeof S.playWav === 'function' &&
             E.spr && E.spr.bases && E.spr.bases.length) {
-            try { S.playWav(E.spr.bases[0] + music.f); } catch (e) {}
+            // playWav DEVOLVE false (arquivo ausente) em vez de lancar: com
+            // bases[0] fixo a musica ficava muda quando o app estava em
+            // /sd/apps (o sprite loader tenta todas as bases, a musica nao)
+            var mbases = E.spr.bases;
+            for (var mbi = 0; mbi < mbases.length; mbi++) {
+                try { if (S.playWav(mbases[mbi] + music.f)) break; } catch (eMus) {}
+            }
         }
 
         // start() depois de TODAS as entidades/tilemaps: o controlador da

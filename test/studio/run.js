@@ -877,6 +877,87 @@ let built = null;
         win.res === 'perdi' && win.perdidos === 1 && win.fase === 'round',
         JSON.stringify(win));
 
+    // game.ui 1.4.1: modal e camada de cima. O "Entendi" do COMO JOGAR
+    // (y~348..424) fica POR CIMA do DUELO (372..408) no titulo do Detona;
+    // antes o botao de baixo reivindicava o tap e abria o lobby do duelo.
+    let hStage = 0;
+    const how = {};
+    runAppFolder(detona.dir, {
+        render: false, stopAtMs: 3000, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            const H = env.__harness;
+            env.System.delay = function (ms) {
+                const s = H.detona;
+                if (hStage === 0 && s && s.ctx) { hStage = 1; H.tap(240, 434); }
+                else if (hStage === 1 && s && s.how) {
+                    hStage = 2;
+                    H.tap(240, 386);           // centro do "Entendi" do modal
+                } else if (hStage === 2 && s && !s.how) {
+                    hStage = 3;
+                    how.fechou = true;
+                    how.scene = s.E.sceneName;
+                    how.screen = s.screen;
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Detona: Entendi do COMO JOGAR fecha o modal (nao abre o DUELO de baixo)',
+        how.fechou === true && how.scene === 'titulo' && how.screen === 'title',
+        JSON.stringify(how));
+
+    // Detona 1.2.5: o CONVIDADO zera o estado POR ROUND no 'ds' do host.
+    // Sem isso o `res` velho ('perdi' do round 1) fazia o 'dm' do host no
+    // round 2 cair no ramo de EMPATE (placar divergia e a partida travava).
+    let gStage = 0;
+    let gT = 0;
+    const gst = {};
+    runAppFolder(detona.dir, {
+        render: false, stopAtMs: 11000, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            const H = env.__harness;
+            env.System.delay = function (ms) {
+                const s = H.detona, now = env.System.millis();
+                if (gStage === 0 && s && s.ctx) { gStage = 1; H.tap(240, 380); }
+                else if (gStage === 1 && s && s.screen === 'duel') {
+                    gStage = 2;
+                    // convidado, direto no estado do protocolo (o lobby ja
+                    // tem teste proprio): round 1 comeca pelo 'ds' do host
+                    s.net.host = false;
+                    s.net.fase = 'aguarda';
+                    s.net.rival = { id: 'A001', nome: 'Celer-A' };
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'ds100000,1' });
+                } else if (gStage === 2 && s && s.mode === 'duel' && s.net.round === 1) {
+                    gStage = 3;
+                    gT = now;
+                    s.lives = 0; s.lost = true; s.done = true;
+                    s.morteT = 0.9; s.net.mortePend = true;
+                } else if (gStage === 3 && now - gT > 1200 && s) {
+                    gStage = 4;
+                    gst.r1 = s.net.res;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'ds100001,2' });
+                } else if (gStage === 4 && s && s.net.round === 2 && s.mode === 'duel' && !s.lost) {
+                    gStage = 5;
+                    gT = now;
+                    gst.resNovoRound = s.net.res;
+                } else if (gStage === 5 && now - gT > 600 && s) {
+                    gStage = 6;
+                    s.netIn({ from: 'A001', fromName: 'Celer-A', msg: 'dm1' });
+                    gst.res = s.net.res;
+                    gst.placar = s.net.ganhos + '/' + s.net.perdidos;
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Detona duelo: convidado abre o round novo com res/eventos zerados',
+        gst.r1 === 'perdi' && gst.resNovoRound === null,
+        JSON.stringify(gst));
+    check('Detona duelo: dm do host no round 2 conta VITORIA do convidado',
+        gst.res === 'venci' && gst.placar === '1/1', JSON.stringify(gst));
+
     // Lenda 2.2: 3 slots de save com estatisticas (o 0.x tinha um save so).
     const lendaSave = path.join(ROOT, 'studio_games', 'Lenda de Celer');
     const lendaB = buildProject(lendaSave, {});
@@ -909,6 +990,39 @@ let built = null;
         JSON.stringify(slots));
     check('Lenda: jornada conta tempo e quedas', slots.ms > 0 && slots.falls === 0,
         JSON.stringify([slots.ms, slots.falls]));
+
+    // Lenda 2.2.5: o confirm APAGAR SAVE e modal sobre os cards de slot. Os
+    // cards usam E.hit (geometria pura, nao consome o tap): o toque no
+    // "Apagar" (centro 338,297) tambem caia no card do slot 1 e o drawSlots
+    // dava `return` antes de desenhar o modal — apagava e abria o save.
+    let delStage = 0;
+    const del = {};
+    runAppFolder(lendaB.dir, {
+        render: false, stopAtMs: 4000, microsBias: 1, seed: 7,
+        events: (env) => {
+            const orig = env.System.delay;
+            const H = env.__harness;
+            env.System.delay = function (ms) {
+                const s = H.lenda, now = env.System.millis();
+                if (delStage === 0 && s && s.ctx) { delStage = 1; H.tap(240, 342); }
+                else if (delStage === 1 && s && s.pick) { delStage = 2; s.delSlot = 1; }
+                else if (delStage === 2 && s && s.delSlot && now > 0) {
+                    delStage = 3;
+                    H.tap(338, 297);           // "Apagar" do confirm
+                } else if (delStage === 3 && now > 2500 && s) {
+                    delStage = 4;
+                    del.scene = s.E.sceneName;
+                    del.pick = s.pick;
+                    del.delSlot = s.delSlot;
+                    del.quit = !!s.E._quit;
+                }
+                return orig.call(env.System, ms);
+            };
+        },
+    });
+    check('Lenda: Apagar do confirm nao cai no card do slot por baixo',
+        del.scene === 'titulo' && del.pick === true && del.delSlot === null,
+        JSON.stringify(del));
 })();
 
 // --------------------------------------------------------- CLI x HTTP ------
@@ -1251,6 +1365,22 @@ let built = null;
         check('ia: refaz o lote quando a resposta nao e JSON', retried.steps === 2 && proseCalls === 2,
               'steps=' + retried.steps + ' calls=' + proseCalls);
 
+        // guard (maxOps/destrutiva) tambem e erro do MODELO: repetir dentro do
+        // maxSteps com o motivo, em vez de derrubar o pedido na 1a rodada
+        let guardCalls = 0;
+        const guardAsk = async () => {
+            guardCalls++;
+            if (guardCalls === 1) {
+                const ops = [];
+                for (let i = 0; i < 45; i++) ops.push({ op: 'scene.create', name: 'G' + i });
+                return { content: JSON.stringify({ say: 'muitas', ops: ops }) };
+            }
+            return { content: '{"say":"ok","ops":[{"op":"scene.create","name":"GuardOk"}]}' };
+        };
+        const guardPlan = await A.plan(aiDir, 'crie uma tela', { ask: guardAsk, dryRun: true, config: cfg });
+        check('ia: guard de maxOps refaz o lote (nao derruba na 1a)',
+              guardPlan.steps === 2 && guardCalls === 2, 'steps=' + guardPlan.steps + ' calls=' + guardCalls);
+
         // HTTP: provedor falso local -> /api/command {cmd:"ai"}
         const provider = http.createServer((req, res) => {
             req.on('data', () => {});
@@ -1304,6 +1434,273 @@ let built = null;
 
         fs.rmSync(aiDir, { recursive: true, force: true });
     }
+
+    // ------------------------------------------------- refs de asset ------
+    // Toda forma de referencia vale para o asset.delete: GUID, GUID#regiao e
+    // NOME ("heroi") — project.asset() resolve os tres, entao o delete tem de
+    // contar as tres (senao o lote cai no ref.missing do validate em vez do
+    // asset.inuse amigavel, e o --force nao consegue apagar).
+    (function () {
+        console.log('Studio refs de asset (nome/meta/script de tela/override):');
+        const dir = tmpDir('refs');
+        Project.init(dir, { name: 'Refs', pkg: 'br.celer.refs' });
+        const atlas = path.join(dir, 'atlas.png');
+        makeAtlas(atlas);
+        const gs = applyOps(dir, [{ op: 'asset.import', src: atlas, importer: 'sprite-sheet',
+                                    name: 'sheets', grid: '2x2', tw: 32, th: 32 }], {})
+            .results[0].asset.guid;
+        const gb = applyOps(dir, [{ op: 'asset.import', src: atlas, importer: 'sprite',
+                                    name: 'fundo' }], {}).results[0].asset.guid;
+
+        // 1) sprite referenciado por NOME
+        applyOps(dir, [{ op: 'entity.create', scene: 'Principal', fid: 'e_nome', name: 'N',
+                         components: [{ id: 'c_nome', type: 'sprite', fields: { sprite: 'fundo' } }] }], {});
+        let code = null;
+        try { applyOps(dir, [{ op: 'asset.delete', asset: gb }], {}); } catch (e) { code = e.code; }
+        check('delete de sprite referenciado por NOME recusa com asset.inuse',
+            code === 'asset.inuse', String(code));
+        let forceCode = null;
+        try { applyOps(dir, [{ op: 'asset.delete', asset: gb, force: true }], {}); }
+        catch (e) { forceCode = e.code; }
+        const eNome = Project.open(dir).scene('Principal').entities.find((x) => x.fid === 'e_nome');
+        check('force apaga sprite referenciado por NOME e limpa o componente',
+            forceCode === null && !!eNome && (eNome.components || []).length === 0 && !Project.open(dir).asset(gb),
+            String(forceCode));
+
+        // 2) anim.meta (asset de metadados)
+        applyOps(dir, [{ op: 'asset.set', asset: gs, settings: { anims: { idle: [0, 1] }, fps: { idle: 4 } } }], {});
+        applyOps(dir, [{ op: 'entity.create', scene: 'Principal', fid: 'e_anim', name: 'A',
+                         components: [{ id: 'c_anim', type: 'anim', fields: { meta: gs, current: 'idle' } }] }], {});
+        code = null;
+        try { applyOps(dir, [{ op: 'asset.delete', asset: gs }], {}); } catch (e) { code = e.code; }
+        check('delete com anim.meta recusa com asset.inuse', code === 'asset.inuse', String(code));
+        forceCode = null;
+        try { applyOps(dir, [{ op: 'asset.delete', asset: gs, force: true }], {}); }
+        catch (e) { forceCode = e.code; }
+        check('force apaga asset de anim.meta', forceCode === null && !Project.open(dir).asset(gs), String(forceCode));
+
+        // 3) scripts da TELA (settings.scripts) no runtime app
+        const appDir = tmpDir('refapp');
+        Project.init(appDir, { app: true, name: 'RefApp', pkg: 'br.celer.refapp' });
+        const sc1 = applyOps(appDir, [{ op: 'script.set', name: 'tela',
+            content: 'exports.start = function (ctx) {};\n' }], {}).results[0].asset;
+        applyOps(appDir, [{ op: 'scene.set', scene: 'Principal', settings: { scripts: [sc1.guid] } }], {});
+        code = null;
+        try { applyOps(appDir, [{ op: 'asset.delete', asset: sc1.guid }], {}); } catch (e) { code = e.code; }
+        check('delete de script da tela recusa com asset.inuse', code === 'asset.inuse', String(code));
+        forceCode = null;
+        try { applyOps(appDir, [{ op: 'asset.delete', asset: sc1.guid, force: true }], {}); }
+        catch (e) { forceCode = e.code; }
+        const st = Project.open(appDir).scene('Principal').settings || {};
+        check('force apaga script da tela e limpa settings.scripts',
+            forceCode === null && Array.isArray(st.scripts) && st.scripts.length === 0 &&
+            !Project.open(appDir).asset(sc1.guid), String(forceCode));
+
+        // 4) override de instancia de prefab
+        const d2 = tmpDir('refpf');
+        Project.init(d2, { name: 'RefPf', pkg: 'br.celer.refpf' });
+        const png = path.join(d2, 'a.png');
+        fs.writeFileSync(png, encodePng(8, 8, Buffer.alloc(8 * 8 * 3), false));
+        const ga = applyOps(d2, [{ op: 'asset.import', src: png, importer: 'sprite', name: 'A' }], {})
+            .results[0].asset.guid;
+        const gb2 = applyOps(d2, [{ op: 'asset.import', src: png, importer: 'sprite', name: 'B' }], {})
+            .results[0].asset.guid;
+        applyOps(d2, [
+            { op: 'prefab.create', name: 'PF' },
+            { op: 'entity.create', prefab: 'PF', fid: 'p1', name: 'P',
+              components: [{ id: 'cc', type: 'sprite', fields: { sprite: ga } }] },
+            { op: 'prefab.instance', scene: 'Principal', prefab: 'PF', fid: 'inst' },
+            { op: 'prefab.override', scene: 'Principal', entity: 'inst', target: 'p1',
+              component: 'cc', fields: { sprite: gb2 } },
+        ], {});
+        code = null;
+        try { applyOps(d2, [{ op: 'asset.delete', asset: gb2 }], {}); } catch (e) { code = e.code; }
+        check('delete de sprite usado so em override de prefab recusa com asset.inuse',
+            code === 'asset.inuse', String(code));
+        forceCode = null;
+        try { applyOps(d2, [{ op: 'asset.delete', asset: gb2, force: true }], {}); }
+        catch (e) { forceCode = e.code; }
+        let builds = null;
+        try { buildProject(d2, {}); builds = 'ok'; } catch (e) { builds = e.code + ': ' + e.message; }
+        check('force limpa o override e o build volta a passar',
+            forceCode === null && builds === 'ok', String(forceCode) + ' / ' + builds);
+
+        // 5) entity.create DENTRO de prefab mantem os componentes (o `prefab`
+        // do op e o container; antes ele tambem virava auto-instanciacao e os
+        // components eram descartados em silencio)
+        const pf = Project.open(d2).prefab('PF');
+        const pe = (pf.entities || []).find((x) => x.fid === 'p1');
+        check('entity.create em prefab mantem components e nao vira instancia de si',
+            !!pe && (pe.components || []).length === 1 && !pe.prefab,
+            JSON.stringify(pe && { comps: (pe.components || []).length, prefab: pe.prefab }));
+
+        // 6) rename: refs por NOME acompanham, e as regioes com o nome do
+        // asset (sprite-sheet com prefixo default / imagem unica) tambem
+        const sina = applyOps(dir, [{ op: 'asset.import', src: atlas, importer: 'sprite',
+                                      name: 'solo' }], {}).results[0].asset.guid;
+        const fig = applyOps(dir, [{ op: 'asset.import', src: atlas, importer: 'sprite-sheet',
+                                     name: 'figs', grid: '2x2', tw: 32, th: 32 }], {}).results[0].asset.guid;
+        applyOps(dir, [{ op: 'entity.create', scene: 'Principal', fid: 'e_ren', name: 'R',
+                         components: [
+                             { id: 'c_ren1', type: 'sprite', fields: { sprite: 'solo#solo' } },
+                             { id: 'c_ren2', type: 'sprite', fields: { sprite: fig + '#figs1' } },
+                         ] }], {});
+        let renErr = null;
+        try {
+            applyOps(dir, [{ op: 'asset.rename', asset: sina, name: 'chao' }], {});
+            applyOps(dir, [{ op: 'asset.rename', asset: fig, name: 'quadros' }], {});
+        } catch (e) { renErr = e.code + ': ' + e.message; }
+        const eRen = Project.open(dir).scene('Principal').entities.find((x) => x.fid === 'e_ren');
+        const refsRen = (eRen && eRen.components || []).map((c) => c.fields.sprite);
+        check('rename de asset usado atualiza ref por nome e regiao',
+            renErr === null && refsRen[0] === 'chao#chao' && refsRen[1] === fig + '#quadros1' &&
+            validateProject(Project.open(dir), {}).errors.length === 0,
+            String(renErr) + ' / ' + JSON.stringify(refsRen));
+
+        for (const x of [dir, appDir, d2]) fs.rmSync(x, { recursive: true, force: true });
+    })();
+
+    // ------------------------------------- pacote enxuto = pacote medido --
+    // O teto de 64KB (soma dos .js enxutos) e medido no build e empacotado no
+    // deploy: os dois numeros tem de ser os MESMOS (medir sem o `reserved` dos
+    // irmaos media MENOR que o app.zip), e o pacote minificado tem de rodar no
+    // harness (minificador novo do SDK x Duktape).
+    (function () {
+        console.log('Studio pacote enxuto:');
+        const dir = tmpDir('min');
+        Project.init(dir, { name: 'Min', pkg: 'br.celer.min' });
+        const atlas = path.join(dir, 'a.png');
+        makeAtlas(atlas);
+        const g = applyOps(dir, [{ op: 'asset.import', src: atlas, importer: 'tileset',
+                                   name: 'mapa', grid: '2x2', tw: 32, th: 32 }], {}).results[0].asset.guid;
+        applyOps(dir, [
+            { op: 'script.set', name: 'anda', content:
+              'var passo = 40;\nexports.props = { vel: 60 };\n' +
+              'exports.update = function (dt, ctx) { ctx.entity.x += (this.fields.vel || passo) * dt; };\n' },
+            { op: 'entity.create', scene: 'Principal', fid: 'e_map', name: 'Mapa',
+              components: [{ id: 'c_map', type: 'sprite', fields: { sprite: g + '#0' } }] },
+            { op: 'component.add', scene: 'Principal', entity: 'e_map', type: 'script',
+              fields: { script: 'anda' } },
+            { op: 'tilemap.add', scene: 'Principal', tileset: g, cols: 4, rows: 4, cell: 32,
+              data: new Array(16).fill(0) },
+        ], {});
+        const built = buildProject(dir, {});
+        const dep = deployProject(dir, { noBuild: true, out: path.join(dir, '.studio/deploy/min.zip') });
+        check('build mede o MESMO tamanho enxuto do deploy',
+            built.jsBytes === dep.js.after, built.jsBytes + ' x ' + dep.js.after);
+        // teto sem psram: um programa (runtime app) nao declara psram
+        const appLim = tmpDir('minapp');
+        Project.init(appLim, { app: true, name: 'MinApp', pkg: 'br.celer.minapp' });
+        check('describe declara o teto real de JS sem psram (64KB)',
+            require('../../tools/studio/studio.js').describe(appLim).limits.jsKB === 64);
+
+        // o pacote que sai do zip (minificado) tem de rodar: extrai e roda
+        const entries = readZip(fs.readFileSync(dep.zip));
+        const unz = tmpDir('minunz');
+        for (const e of entries) {
+            const abs = path.join(unz, e.name);
+            fs.mkdirSync(path.dirname(abs), { recursive: true });
+            fs.writeFileSync(abs, e.data);
+        }
+        const run = runAppFolder(unz, { render: true, stopAtMs: 400, seed: 7, microsBias: 1 });
+        check('app minificado do deploy roda no harness', !run.err, String(run.err || '').slice(0, 200));
+        for (const x of [dir, unz, appLim]) fs.rmSync(x, { recursive: true, force: true });
+    })();
+
+    // ---------------------------------- runtime app: fila do quadro ------
+    // O present() do firmware roda DENTRO do UI.end e entrega os callbacks
+    // assincronos (IA/timers) ali. O harness entrega por timer (que cai no
+    // getTouch do quadro seguinte), entao o contrato do device e simulado
+    // chamando o callback de dentro do System.delay — que e o UI.end.
+    (function () {
+        console.log('Studio runtime app (fila do quadro):');
+        const dir = tmpDir('evt');
+        Project.init(dir, { app: true, name: 'Evt', pkg: 'br.celer.evt' });
+        applyOps(dir, [{ op: 'scene.create', name: 'Outra' }], {});
+        const sc = applyOps(dir, [{ op: 'script.set', name: 'tela', content:
+            'exports.start = function (ctx) { ctx.set("go", true); };\n' +
+            'exports.event = function (n, v, ctx) {\n' +
+            '    System.print("EV " + n + " " + (v && v.ok));\n' +
+            '    if (n === "ai:done") ctx.go("Outra");\n' +
+            '};\n' }], {})
+            .results[0].asset.guid;
+        const sc2 = applyOps(dir, [{ op: 'script.set', name: 'outra', content:
+            'exports.update = function (dt, ctx) { System.print("T2 " + ctx.scene.title); };\n' }], {})
+            .results[0].asset.guid;
+        applyOps(dir, [
+            { op: 'project.set', permissions: ['net'] },
+            { op: 'scene.set', scene: 'Principal', settings: { scripts: [sc], data: { go: false } } },
+            { op: 'scene.set', scene: 'Outra', settings: { scripts: [sc2] } },
+            { op: 'entity.create', scene: 'Principal', fid: 'e_ai', name: 'Fala', x: 10, y: 200,
+              components: [{ id: 'c_ai', type: 'ai.speak', fields: { trigger: 'go', text: 'oi' } }] },
+        ], {});
+        const b = buildProject(dir, {});
+        const r = runAppFolder(b.dir, {
+            render: false, stopAtMs: 600, seed: 7, microsBias: 1,
+            events: (env) => {
+                // no device o callback da IA chega no present() de dentro do
+                // appWait (UI.end); aqui ele e chamado do proprio delay
+                const origSpeak = env.AI.speak;
+                env.AI.speak = function (opts, cb) {
+                    let done = false;
+                    const origDelay = env.System.delay;
+                    env.System.delay = function (ms) {
+                        env.System.delay = origDelay;
+                        if (!done) { done = true; cb({ ok: true, content: 'fala' }); }
+                        return origDelay.call(env.System, ms);
+                    };
+                    return origSpeak.call(env.AI, opts, function () {});
+                };
+            },
+        });
+        const log = (r.log || []).join('\n');
+        check('evento e ctx.go de callback entregue no UI.end valem no quadro seguinte',
+            /EV ai:done true/.test(log) && /T2 Outra/.test(log), log.slice(0, 400));
+        fs.rmSync(dir, { recursive: true, force: true });
+    })();
+
+    // ------------------------------------- musica do app instalado em /sd ---
+    // playWav devolve false (nao lanca) quando o arquivo nao esta naquela
+    // base: tentar so /local/apps deixava a tela muda no app instalado no
+    // cartao (as imagens ja procuravam todas as bases).
+    (function () {
+        console.log('Studio musica por base:');
+        const dir = tmpDir('mus');
+        Project.init(dir, { app: true, name: 'Mus', pkg: 'br.celer.mus' });
+        const wav = path.join(dir, 'som.wav');
+        // RIFF/WAVE minimo (o importer so copia/valida a extensao)
+        const hdr = Buffer.alloc(44);
+        hdr.write('RIFF', 0); hdr.writeUInt32LE(36, 4); hdr.write('WAVE', 8);
+        hdr.write('fmt ', 12); hdr.writeUInt32LE(16, 16); hdr.writeUInt16LE(1, 20);
+        hdr.writeUInt16LE(1, 22); hdr.writeUInt32LE(16000, 24); hdr.writeUInt32LE(32000, 28);
+        hdr.writeUInt16LE(2, 32); hdr.writeUInt16LE(16, 34);
+        hdr.write('data', 36); hdr.writeUInt32LE(0, 40);
+        fs.writeFileSync(wav, hdr);
+        const g = applyOps(dir, [{ op: 'asset.import', src: wav, importer: 'audio', name: 'som' }], {})
+            .results[0].asset.guid;
+        applyOps(dir, [
+            { op: 'project.set', permissions: ['fs'] },
+            { op: 'scene.set', scene: 'Principal', settings: { music: g } },
+        ], {});
+        const b = buildProject(dir, {});
+        const played = [];
+        const r = runAppFolder(b.dir, {
+            render: false, stopAtMs: 200, seed: 7, microsBias: 1,
+            events: (env) => {
+                // device: nada em /local (app no cartao), /sd tem o arquivo
+                env.System.playWav = function (p) {
+                    const ok = String(p).indexOf('/sd/apps/') === 0 ||
+                               String(p).indexOf('/local/') !== 0;
+                    if (ok) played.push(p);
+                    return ok;
+                };
+            },
+        });
+        check('musica toca pela base do cartao quando /local nao tem o arquivo',
+            r.err === null && played.length >= 1 && played[played.length - 1].indexOf('/sd/apps/') === 0,
+            JSON.stringify(played.slice(-2)));
+        fs.rmSync(dir, { recursive: true, force: true });
+    })();
 
     // limpeza
     for (const d of [base, a, b, legApp, legProj]) fs.rmSync(d, { recursive: true, force: true });

@@ -76,9 +76,16 @@ function studioAppBoot(data, bases) {
     // drawPNG devolve false quando o caminho nao existe (o device sempre tem
     // /local/apps/<pkg>/; o cartao usa /sd/apps/<pkg>/). Resolve a base uma
     // vez por asset e cacheia: tentar 8 caminhos por quadro custa caro.
-    function drawImage(a, x, y) {
+    // `retry` (quadro total) reabre a busca depois de uma falha cacheada —
+    // sem isso um cartao que monta depois deixaria a imagem sumida para sempre
+    // e sem o cache de falha o widget quebrava em TODO quadro de desenho
+    function drawImage(a, x, y, retry) {
         if (!a || !a.f || typeof S.drawPNG !== 'function') return false;
         var b = baseCache[a.n];
+        if (b === null) {
+            if (!retry) return false;
+            b = undefined;
+        }
         if (b !== undefined) return S.drawPNG(b + a.f, x, y);
         for (var i = 0; i < BASES.length; i++) {
             if (S.drawPNG(BASES[i] + a.f, x, y)) {
@@ -86,7 +93,7 @@ function studioAppBoot(data, bases) {
                 return true;
             }
         }
-        baseCache[a.n] = '';
+        baseCache[a.n] = null;
         return false;
     }
 
@@ -315,7 +322,7 @@ function studioAppBoot(data, bases) {
         if (!s._fullFrame && ent._imgX === ent.x && ent._imgY === ent.y) return;
         ent._imgX = ent.x;
         ent._imgY = ent.y;
-        drawImage(f.asset, ent.x, ent.y);
+        drawImage(f.asset, ent.x, ent.y, !!s._fullFrame);
     }
 
     function widgetBadge(s, ent, c) {
@@ -636,9 +643,13 @@ function studioAppBoot(data, bases) {
         // musica da tela (uma vez na entrada, como no runtime de jogo)
         if (s.music && A[s.music] && typeof S.playWav === 'function') {
             var a = A[s.music];
+            // playWav devolve false com arquivo ausente (nao lanca): tentar
+            // so a primeira base deixava a musica muda no app instalado em
+            // /sd/apps, e gravar a base no cache mentia o caminho
             for (var b = 0; b < BASES.length; b++) {
-                try { S.playWav(BASES[b] + a.f); baseCache[a.n] = BASES[b]; break; }
-                catch (ePlay) { /* tenta a proxima base */ }
+                try {
+                    if (S.playWav(BASES[b] + a.f)) { baseCache[a.n] = BASES[b]; break; }
+                } catch (ePlay) { /* tenta a proxima base */ }
             }
         }
     }
@@ -794,10 +805,6 @@ function studioAppBoot(data, bases) {
     go(startKey, undefined);
 
     while (!quit && cur) {
-        events.length = 0;
-        pendingGo = null;
-        pendingBack = false;
-
         var full = UI.begin(cur.bg);
         if (cur.header && UI.header(cur.title, { sub: cur.sub, back: stack.length > 0 })) {
             pendingBack = true;
@@ -812,6 +819,12 @@ function studioAppBoot(data, bases) {
 
         if (events.length) {
             for (var ei = 0; ei < events.length; ei++) dispatch(cur, events[ei]);
+            // consome DEPOIS de despachar: callbacks assincronos (IA/timers)
+            // rodam no present() do firmware DENTRO do UI.end e empurram para
+            // a mesma fila; limpar no topo do laco perdia o ai:done (o app so
+            // via o evento se o callback caísse antes do dispatch, que e o que
+            // o harness com piso de 10ms faz — no device nao)
+            events.length = 0;
         }
         // persistencia debounced: NVS nao pode levar escrita por quadro
         if (cur.persist && cur.dirtyPersist && now - cur.lastSave > 1000) {

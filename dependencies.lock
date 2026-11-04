@@ -7,7 +7,7 @@ dependencies:
       type: service
     version: 7.4.3
   espressif/esp-nn:
-    component_hash: 3b3411b0e4ad1717a72870fde9f9b67cef6f3f97491cc64fcfc1910a8fd8a246
+    component_hash: 8411b307e5bb3618df19fe442f7ca5d5a8cb488f5010d9070eb14d80257aa140
     dependencies:
     - name: idf
       require: private
@@ -15,9 +15,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.4.1
+    version: 1.4.2
   espressif/esp-tflite-micro:
-    component_hash: bdb2625ed976d5b861177cdc295abc6738724f84f4c7c60fc58c721d2b30bed6
+    component_hash: dfc88325b37855744c8a2da15f34ee6fe084e7a39ccdbfaac99cf063cd9d65c3
     dependencies:
     - name: espressif/esp-nn
       registry_url: https://components.espressif.com
@@ -29,7 +29,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.4.1
+    version: 1.4.2
   espressif/esp_tinyusb:
     component_hash: 0ff29f6113c4922691b3d7eee2f29af5fb98b799ef8b198a2956328f7c2296a9
     dependencies:

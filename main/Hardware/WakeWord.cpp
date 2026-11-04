@@ -30,8 +30,8 @@
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"  // xTaskCreatePinnedToCoreWithCaps
 #include "esp_heap_caps.h"
-#include "tensorflow/lite/core/c/common.h"
-#include "tensorflow/lite/schema/schema_generated.h"  // tflite::GetModel
+#include "tensorflow/lite/micro/c/common.h"  // 1.4.x: core/c mudou p/ micro/c
+#include "tensorflow/lite/micro/schema/schema_generated.h"  // tflite::GetModel
 #include "tensorflow/lite/micro/micro_allocator.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"

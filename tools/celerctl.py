@@ -1029,6 +1029,7 @@ class HostLink:
                     cmd = None
                 if cmd == KL["READ"] and payload and payload[0] == 0:
                     body = payload[1:]
+                    n_ped = None
                     if self.proto == 2:
                         (off,) = struct.unpack("<I", body[:4])
                         body = body[4:]
@@ -1036,6 +1037,7 @@ class HostLink:
                             if off in done:
                                 continue  # resposta duplicada (reenvio apos timeout): descarta
                             raise CelerError(f"READ voltou offset {off} fora da janela")
+                        n_ped = pend[off]
                     else:
                         # v1 sem offset na resposta: as respostas chegam na
                         # ORDEM dos pedidos (dispatch serializado no device),
@@ -1048,6 +1050,19 @@ class HostLink:
                         ent = inflight[0]
                         off = ent[0]
                         ent[3] += 1
+                        n_ped = ent[1]
+                    # o frame tem que trazer EXATAMENTE o pedido: o device so
+                    # corta em EOF, entao resposta curta no meio = o arquivo
+                    # mudou entre o stat e a leitura (ou o FS serviu um inode
+                    # velho). Antes o `done` marcava o trecho do TAMANHO
+                    # PEDIDO e o pull terminava "completo" com o arquivo local
+                    # truncado/zerado (corrupcao calada).
+                    esperado = min(n_ped, total - off)
+                    if len(body) != esperado:
+                        raise CelerError(
+                            f"pull: resposta curta em {remote_path}+{off} "
+                            f"({len(body)} de {esperado} bytes) — o arquivo "
+                            f"mudou no device durante a leitura; repita o pull")
                     pend.pop(off, None)
                     f.seek(off)
                     f.write(body)
@@ -3577,15 +3592,18 @@ def _apps_store(link, args):
     with tempfile.TemporaryDirectory() as td:
         src = Path(td) / dir_name
         src.mkdir()
-        # o app.json servido pelo hub leva os campos COMPUTADOS (size, md5,
-        # published_at, publisher, zip): o lint local os recusa ("nunca
-        # setar a mao"), entao o install tira antes de gravar
+        # o app.json servido pelo hub leva os campos COMPUTADOS (files, size,
+        # md5, published_at, publisher, zip): o lint local os recusa ("nunca
+        # setar a mao") e o celerhub validate tambem — entao o install tira
+        # antes de gravar. `files` ficava para tras: o app.json do device
+        # carregava o mapa size/md5 da versao do hub (e um `apps pull` +
+        # `celerhub publish` daquele app morria em "files e computado")
         meta_raw = _http_get(_hub_url(hub, entry["meta"], token))
         try:
             meta = json.loads(meta_raw.decode("utf-8"))
         except ValueError:
             die("app.json do hub invalido")
-        for k in ("md5", "size", "published_at", "publisher", "zip"):
+        for k in ("files", "md5", "size", "published_at", "publisher", "zip"):
             meta.pop(k, None)
         (src / "app.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

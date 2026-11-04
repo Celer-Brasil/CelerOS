@@ -943,6 +943,66 @@ class TestCanalHostil(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_pull_resposta_curta_no_meio_nao_passa_por_completo(self):
+        # READ volta com MENOS bytes que o pedido no meio do arquivo (ele
+        # encolheu entre o stat e a leitura, ou o FS serviu inode velho): o
+        # `done` marcava o trecho com o tamanho PEDIDO, o `got` final fechava
+        # em total e o pull terminava "ok" com o arquivo local truncado —
+        # corrupcao calada (o local ficava com o lixo/zeros do trecho)
+        link, dev = make_link()
+        link.hello()
+        dados = bytes(range(256)) * 100  # 25600 B, 7 chunks de 4091
+        dev.files["/local/encurta.bin"] = dados
+        orig = dev.op_05
+        lidos = {"n": 0}
+
+        def encurtando(p):
+            lidos["n"] += 1
+            if lidos["n"] == 2:
+                z = p.index(b"\0")
+                off, want = struct.unpack("<II", p[z + 1:z + 9])
+                dev.reply(KL["READ"], struct.pack("<I", off) + dados[off:off + 10])
+                return
+            orig(p)
+        dev.op_05 = encurtando
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            with self.assertRaises(C.CelerError) as ctx:
+                link.read_file("/local/encurta.bin", path, progress=False)
+            self.assertIn("resposta curta", str(ctx.exception))
+        finally:
+            os.unlink(path)
+
+    def test_pull_v1_resposta_curta_no_meio_nao_passa_por_completo(self):
+        # mesmo caso no caminho legado: o tamanho pedido vem da entrada em voo
+        # (a resposta v1 nao traz offset)
+        link, dev = make_link(proto=1)
+        link.hello(force_v1=True)
+        want = C.CHUNK - 1
+        dados = bytes((i * 7) & 0xFF for i in range(2 * want + 100))
+        dev.files["/local/encurta1.bin"] = dados
+        orig = dev.op_05
+        lidos = {"n": 0}
+
+        def encurtando(p):
+            lidos["n"] += 1
+            if lidos["n"] == 2:
+                z = p.index(b"\0")
+                off, want_n = struct.unpack("<II", p[z + 1:z + 9])
+                dev.reply(KL["READ"], dados[off:off + 10])
+                return
+            orig(p)
+        dev.op_05 = encurtando
+        fd, path = tempfile.mkstemp()
+        os.close(fd)
+        try:
+            with self.assertRaises(C.CelerError) as ctx:
+                link.read_file("/local/encurta1.bin", path, progress=False)
+            self.assertIn("resposta curta", str(ctx.exception))
+        finally:
+            os.unlink(path)
+
     def test_resposta_de_outro_comando_vira_erro_claro(self):
         # resposta com cmd DIFERENTE do pedido (frame tardio apos uma
         # ressincronizacao): xfer DEVOLVIA o frame e o chamador parseava
@@ -2002,6 +2062,15 @@ class TestAppsStore(unittest.TestCase):
         appjson = {
             "name": "Demo", "packageName": "celeros.demo", "version": "1.0.0",
             "api": 33, "deps": {"celeros.engine": "^9.9.0"},
+            # igual ao app.json que o HUB serve de verdade: os campos
+            # computados viajam junto (o install tem que tirar antes de
+            # gravar, senao o device fica com um app.json que o
+            # celerhub.validate recusa para sempre)
+            "files": {"lib.js": {"size": len(lib),
+                                 "md5": hashlib.md5(lib).hexdigest()}},
+            "md5": hashlib.md5(main).hexdigest(), "size": len(main),
+            "published_at": "2026-10-01T00:00:00", "publisher": "t",
+            "zip": "/store/apps/celeros.demo/app.zip",
         }
         rota = {
             "/store/all.json": json.dumps({"apps": {
@@ -2110,6 +2179,13 @@ class TestAppsStore(unittest.TestCase):
             self.assertIn(f"/local/apps/Demo/{rel}", dev.files)
         self.assertEqual(dev.files["/local/apps/Demo/main.js"], self.main)
         self.assertEqual(dev.files["/local/apps/Demo/lib.js"], self.lib)
+        # app.json do device sem os campos COMPUTADOS do hub (files/md5/size/
+        # published_at/publisher/zip): `files` ficava para tras e o app.json
+        # instalado era recusado por qualquer celerhub validate depois
+        meta_inst = json.loads(dev.files["/local/apps/Demo/app.json"])
+        for computado in ("files", "md5", "size", "published_at", "publisher", "zip"):
+            self.assertNotIn(computado, meta_inst)
+        self.assertEqual(meta_inst["packageName"], "celeros.demo")
         # deps: modulo no cache publico + deps.json apontando a versao
         self.assertIn("/local/modules/celeros.engine/9.9.9/celeros.engine.js", dev.files)
         self.assertEqual(json.loads(dev.files["/local/apps/Demo/deps.json"]),

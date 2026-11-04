@@ -17,8 +17,10 @@
 // numeros 0..255 (Duktape lean, sem Uint8Array); teto de 128 B por
 // transferencia. Mesma permissao do System.gpio ("gpio").
 //
-// O bus da placa (touch/PMU/OLED) ja nasce no boot: begin() ADOTA o handle
-// existente em vez de recriar (ver Hardware/I2cBus.h).
+// O bus da placa sobre o i2c_master (touch SmartDisplay/watch) ja nasce no
+// boot: begin() ADOTA o handle existente em vez de recriar. No cao o bus do
+// OLED e do proprio LGFX (I2cPins::rawDriver): begin()/beginAt(pinos da
+// placa)/pins() recusam (ver Hardware/I2cBus.h).
 // ============================================================================
 
 namespace {
@@ -144,8 +146,13 @@ duk_ret_t JSBindings::js_i2cBeginAt(duk_context* ctx) {
     }
     const BoardProfile& bp = Board::profile();
     const bool boardPair = (sda == bp.i2c.sda && scl == bp.i2c.scl);
-    requirePin(ctx, 0, bp, boardPair);
-    requirePin(ctx, 1, bp, boardPair);
+    // O par da placa so passa pelo gpioDeniedMask quando o bus e ADOTAVEL
+    // (i2c_master do touch: os pinos ja nascem reservados pelo driver). No
+    // cao (rawDriver) os mesmos pinos sao negados como no System.gpio —
+    // abrir ali criaria um segundo master na porta do OLED.
+    const bool adoptablePair = boardPair && !bp.i2c.rawDriver;
+    requirePin(ctx, 0, bp, adoptablePair);
+    requirePin(ctx, 1, bp, adoptablePair);
     if (hz < 10000) hz = 10000;
     if (hz > 1000000) hz = 1000000;
     I2cBus::Info info;
@@ -167,7 +174,10 @@ duk_ret_t JSBindings::js_i2cEnd(duk_context* ctx) {
 // System.i2c.pins() -> {port,sda,scl,hz} | null (bus do perfil da placa)
 duk_ret_t JSBindings::js_i2cPins(duk_context* ctx) {
     const I2cPins& bp = Board::profile().i2c;
-    if (bp.sda < 0 || bp.scl < 0) {
+    // rawDriver (OLED do cao): o bus existe, mas NAO e recurso de app —
+    // devolver o par aqui preencheria um seletor com pinos que o beginAt
+    // recusa em seguida.
+    if (bp.sda < 0 || bp.scl < 0 || bp.rawDriver) {
         duk_push_null(ctx);
         return 1;
     }

@@ -174,6 +174,26 @@ static void testJsStrip() {
     CHECK(strip("obj.return / 2\n// fim\nvar y = 1;") == "obj.return / 2\n\nvar y = 1;");
     // return de verdade (declaracao, sem '.' antes) segue abrindo regex
     CHECK(strip("return /a\\.b/.test(s); // c") == "return /a\\.b/.test(s);");
+    // propriedade de nome longo (> 11 bytes estoura o buffer da palavra):
+    // o '.' vale para ESSA palavra e o `return` da linha seguinte nao herda o
+    // flag — com o flag vivo o regex virava comentario e o app nao compilava
+    CHECK(strip("o.propriedadeComNomeLongo\nreturn / \\//.test(s);") ==
+          "o.propriedadeComNomeLongo\nreturn / \\//.test(s);");
+    // ')' de if/while/for/with/switch/catch devolve posicao de STATEMENT, onde
+    // '/' abre regex; o ')' de expressao continua divisao
+    CHECK(strip("if (a) /a  b/.test(s); // c") == "if (a) /a  b/.test(s);");
+    CHECK(strip("while (a) / \\//.test(s);") == "while (a) / \\//.test(s);");
+    CHECK(strip("for (;;) /a  b/.test(s);") == "for (;;) /a  b/.test(s);");
+    CHECK(strip("switch (x) { case /a  b/: break; }") == "switch (x) { case /a  b/: break; }");
+    CHECK(strip("if ((a) / 2) x = 1;") == "if ((a) / 2) x = 1;");
+    CHECK(strip("if (a) (b) / 2;") == "if (a) (b) / 2;");
+    CHECK(strip("x = (a + b) / 2; // c") == "x = (a + b) / 2;");
+    // '++'/'--' adjacentes deixam um operando atras: o '/' e divisao
+    CHECK(strip("x = a++ / 2; // c") == "x = a++ / 2;");
+    CHECK(strip("x = a-- / 2 /* c */ + 1;") == "x = a-- / 2 + 1;");
+    CHECK(strip("x = a++ / 2; s = \"a\\/b\";") == "x = a++ / 2; s = \"a\\/b\";");
+    // '++' separado por espaco e SOMA unaria: o regex depois abre de novo
+    CHECK(strip("x = a + +/q/.test(s);") == "x = a + +/q/.test(s);");
 }
 
 // ------------------------------------------------------------------ HostFrame

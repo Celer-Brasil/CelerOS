@@ -16,15 +16,23 @@
 // leitura (test/cpp confere contra as duas passadas em todos os apps).
 //
 // Heuristica de regex vs divisao: '/' abre regex quando o ultimo token
-// significativo nao e operando (identificador, numero, ')' ou ']') ou e uma
-// palavra-chave que precede expressao (return, typeof, ...). Palavra-chave
-// logo apos '.' e propriedade, nao keyword: `obj.return / 2` e divisao.
+// significativo nao e operando (identificador, numero, ')' de EXPRESSAO ou
+// ']') ou e uma palavra-chave que precede expressao (return, typeof, ...).
+// Tres refinamentos, cada um nascido de bug real (o strip comia codigo e o
+// erro so aparecia na execucao, longe da causa):
+//   - palavra-chave logo apos '.' e propriedade, nao keyword:
+//     `obj.return / 2` e divisao;
+//   - o ')' de if/while/for/with/switch/catch devolve posicao de STATEMENT
+//     (pilha de parenteses), entao `if (a) /re/.test(s)` abre regex — sem
+//     isso `/a  b/` virava `/a b/` e `/ \//` virava comentario;
+//   - '++'/'--' adjacentes deixam um operando atras: `a++ / 2` e divisao.
 // Strings e regexes sao copiados byte a byte.
 //
 // Header-only e sem dependencias do IDF: testado no host (test/cpp).
 // ============================================================================
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 namespace celer {
@@ -34,7 +42,10 @@ public:
     explicit JsStripper(char* out = nullptr) : m_out(out) {}
 
     void feed(const char* in, size_t n) {
-        for (size_t i = 0; i < n; i++) step(in[i]);
+        for (size_t i = 0; i < n; i++) {
+            step(in[i]);
+            m_prev = in[i];
+        }
     }
 
     // Fim do fonte: descarrega '/' e espaco pendentes. Devolve o total.
@@ -67,6 +78,32 @@ private:
     char m_word[12];
     int m_wlen = 0;             // -1: palavra longa demais (nao e keyword)
     bool m_dot = false;         // '.' visto: a palavra seguinte e propriedade
+    char m_prev = 0;            // byte anterior no fonte (deteccao de ++ / --)
+    // pilha de '(': bit d = o parenteses na profundidade d e cabeca de
+    // controle (if/while/for/with/switch/catch). Fixa e sem alocacao: o
+    // stripper roda no device, e profundidade acima do teto cai no caso
+    // conservador (expressao, divisao).
+    static const int kParenMax = 32;
+    uint32_t m_headBits = 0;
+    int m_parenDepth = 0;
+
+    void pushParen(bool head) {
+        if (m_parenDepth < kParenMax) {
+            if (head) {
+                m_headBits |= (1u << m_parenDepth);
+            } else {
+                m_headBits &= ~(1u << m_parenDepth);
+            }
+        }
+        if (m_parenDepth < 1000000) m_parenDepth++;
+    }
+
+    bool popParen() {
+        if (m_parenDepth <= 0) return false;
+        m_parenDepth--;
+        if (m_parenDepth >= kParenMax) return false;
+        return (m_headBits >> m_parenDepth) & 1u;
+    }
 
     void emit(char c) {
         if (m_out) m_out[m_n] = c;
@@ -80,24 +117,35 @@ private:
 
     void endWord() {
         if (m_wlen == 0) return;
-        if (m_dot) {
-            // obj.return: a palavra vem depois de '.', e propriedade, nunca
-            // keyword — `obj.return / 2` e divisao, nao abre regex
-            m_dot = false;
-            m_last = 'a';
-            m_wlen = 0;
-            return;
-        }
-        static const char* const kKw[] = {"return", "typeof", "case",   "do",         "else",
-                                          "in",     "new",    "void",   "delete",     "throw",
-                                          "instanceof"};
+        // palavra depois de '.' e propriedade, nunca keyword — `obj.return / 2`
+        // e divisao. O flag vale para ESTA palavra e morre aqui, inclusive
+        // quando ela estourou o buffer (m_wlen -1, nome longo): deixar m_dot
+        // vivo fazia a palavra SEGUINTE (o `return` depois de uma propriedade
+        // longa) ser lida como propriedade e o `/re/` dela como divisao — o
+        // regex virava comentario e o app nao compilava.
+        const bool prop = m_dot;
+        m_dot = false;
         m_last = 'a';
-        if (m_wlen > 0) {
+        if (m_wlen > 0 && !prop) {
+            static const char* const kKw[] = {"return", "typeof", "case",   "do",         "else",
+                                              "in",     "new",    "void",   "delete",     "throw",
+                                              "instanceof"};
+            // palavras que esperam '(' de cabeca de controle: o ')' delas
+            // devolve posicao de STATEMENT, onde '/' abre regex
+            static const char* const kHead[] = {"if", "while", "for", "with", "switch", "catch"};
             m_word[m_wlen] = 0;
             for (const char* kw : kKw) {
                 if (strcmp(m_word, kw) == 0) {
                     m_last = 'k';
                     break;
+                }
+            }
+            if (m_last == 'a') {
+                for (const char* kw : kHead) {
+                    if (strcmp(m_word, kw) == 0) {
+                        m_last = 'c';
+                        break;
+                    }
                 }
             }
         }
@@ -214,14 +262,9 @@ private:
             code(c);
             return;
         }
-        if (m_wlen != 0) {
-            if (m_wlen < 0) {
-                m_wlen = 0;
-                m_last = 'a';
-            } else {
-                endWord();
-            }
-        }
+        // palavra pendente: endWord() classifica e morre com ela (inclusive o
+        // caso de nome longo, m_wlen -1, que tambem limpa m_dot)
+        if (m_wlen != 0) endWord();
 
         switch (c) {
             case ' ':
@@ -242,9 +285,29 @@ private:
                 m_quote = c;
                 m_esc = false;
                 return;
+            case '(':
+                code(c);
+                // cabeca de controle (if/while/for/...): o ')' dela devolve
+                // posicao de STATEMENT — la um '/' abre regex
+                pushParen(m_last == 'c');
+                m_last = c;
+                m_dot = false;
+                return;
+            case ')':
+                code(c);
+                m_last = popParen() ? 'k' : c;
+                m_dot = false;
+                return;
             default:
                 code(c);
-                m_last = c;
+                // '++'/'--' ADJACENTES: o operando acabou, entao o proximo '/'
+                // e divisao (a++ / 2) — nunca regex. O prefixo (++a) tambem
+                // termina em operando, entao 'a' e seguro nos dois casos.
+                if ((c == '+' || c == '-') && m_prev == c) {
+                    m_last = 'a';
+                } else {
+                    m_last = c;
+                }
                 // '.' marca que a proxima palavra e propriedade; qualquer outro
                 // pontuador desmarca (o flag nunca atravessa um token)
                 m_dot = (c == '.');

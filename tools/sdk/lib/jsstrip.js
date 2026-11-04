@@ -4,6 +4,15 @@
 // todas as quebras de linha (o "line N" do Duktape continua batendo com o
 // fonte). Opera em bytes (Buffer) para dar exatamente a saida do C++.
 //
+// Regex x divisao (heuristica, igual nos dois lados): '/' abre regex quando o
+// token anterior nao e operando — identificador/numero, ')' de EXPRESSAO ou
+// ']'. Tres refinamentos que o firmware ganhou por bug real: palavra depois de
+// '.' e PROPRIEDADE (`obj.return / 2` e divisao, nao regex); o ')' de
+// if/while/for/with/switch/catch devolve posicao de statement, entao
+// `if (a) /re/.test(s)` abre regex (pilha de parenteses); e '++'/'--'
+// adjacentes deixam um operando atras, entao `a++ / 2` e divisao. Qualquer
+// mudanca aqui tem que ir junto no JsStrip.h (test/cpp compara byte a byte).
+//
 // Uso: o `celerhub publish-dep` sobe a dep ja enxuta (o hub mede o .js
 // recebido no teto de compile; o aparelho enxuga do mesmo jeito antes de
 // compilar, entao o tamanho medido passa a ser o custo REAL em RAM) e o
@@ -13,6 +22,10 @@
 
 const KW = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'new', 'void',
                     'delete', 'throw', 'instanceof']);
+// palavras que esperam '(' de cabeca de controle: o ')' delas devolve uma
+// POSICAO DE STATEMENT, onde '/' abre regex (`if (a) /re/.test(s)`), enquanto
+// o ')' de uma expressao devolve operando (divisao)
+const KW_HEAD = new Set(['if', 'while', 'for', 'with', 'switch', 'catch']);
 const S_CODE = 0, S_STR = 1, S_LINE = 2, S_BLOCK = 3, S_REGEX = 4;
 
 function isIdent(c) {
@@ -28,21 +41,31 @@ function strip(input) {
     let slash = false, lineStart = true, space = false, last = 0;
     let word = '', wlen = 0;   // wlen -1: palavra longa demais (nao e keyword)
     let dot = false;           // '.' visto: a palavra seguinte e propriedade (nao keyword)
+    let prevC = -1;            // byte anterior no FONTE (deteccao de ++ / --)
+    // pilha de '(': headBits[d] = o parenteses na profundidade d e cabeca de
+    // if/while/for/with/switch/catch. Mesmo teto do C++ (kParenMax): acima
+    // dele o caso conservador e expressao (divisao) — a paridade byte a byte
+    // host x device depende dos dois lados desistirem na MESMA profundidade.
+    const PAREN_MAX = 32;
+    const headBits = [];
+    let parenDepth = 0;
 
     function emit(c) { out[n++] = c; }
     function endWord() {
         if (wlen === 0) return;
-        if (dot) {
-            // obj.return: a palavra vem depois de '.', e propriedade, nunca
-            // keyword — `obj.return / 2` e divisao, nao abre regex
-            dot = false;
-            last = 0x61;   // 'a'
-            wlen = 0;
-            word = '';
-            return;
-        }
+        // palavra depois de '.' e propriedade, nunca keyword — `obj.return / 2`
+        // e divisao. O flag vale para ESTA palavra (property) e morre aqui,
+        // inclusive quando a palavra estourou o buffer (wlen -1, nome longo):
+        // deixar `dot` vivo fazia a palavra SEGUINTE (o `return` depois de uma
+        // propriedade longa) ser lida como propriedade e o `/re/` dela como
+        // divisao — o regex virava comentario e o app nao compilava.
+        const prop = dot;
+        dot = false;
         last = 0x61;   // 'a'
-        if (wlen > 0 && KW.has(word)) last = 0x6b;   // 'k'
+        if (wlen > 0 && !prop) {
+            if (KW.has(word)) last = 0x6b;              // 'k'
+            else if (KW_HEAD.has(word)) last = 0x63;     // 'c'
+        }
         wlen = 0;
         word = '';
     }
@@ -50,6 +73,16 @@ function strip(input) {
         if (last === 0 || last === 0x6b) return true;
         if (last === 0x61 || last === 0x29 || last === 0x5d) return false;
         return true;
+    }
+    function pushParen(head) {
+        if (parenDepth < PAREN_MAX) headBits[parenDepth] = head;
+        if (parenDepth < 1000000) parenDepth++;
+    }
+    function popParen() {
+        if (parenDepth <= 0) return false;
+        parenDepth--;
+        if (parenDepth >= PAREN_MAX) return false;
+        return !!headBits[parenDepth];
     }
     function code(c) {
         if (space && !lineStart) emit(0x20);
@@ -117,10 +150,7 @@ function strip(input) {
             code(c);
             return;
         }
-        if (wlen !== 0) {
-            if (wlen < 0) { wlen = 0; last = 0x61; }
-            else endWord();
-        }
+        if (wlen !== 0) endWord();
         switch (c) {
             case 0x20: case 0x09: case 0x0d:
                 if (!lineStart) space = true;
@@ -137,15 +167,31 @@ function strip(input) {
                 quote = c;
                 esc = false;
                 return;
+            case 0x28:   // '('
+                code(c);
+                // cabeca de controle (if/while/for/...): o ')' dela devolve
+                // posicao de STATEMENT — la um '/' abre regex
+                pushParen(last === 0x63);
+                last = c;
+                dot = false;
+                return;
+            case 0x29:   // ')'
+                code(c);
+                last = popParen() ? 0x6b : c;
+                dot = false;
+                return;
             default:
                 code(c);
-                last = c;
+                // '++'/'--' ADJACENTES: o operando acabou, entao o proximo '/'
+                // e divisao (a++ / 2) — nunca regex. O prefixo (++a) tambem
+                // termina em operando, entao 'a' e seguro nos dois casos.
+                last = ((c === 0x2b || c === 0x2d) && prevC === c) ? 0x61 : c;
                 // '.' marca que a proxima palavra e propriedade; qualquer outro
                 // pontuador desmarca (o flag nunca atravessa um token)
                 dot = (c === 0x2e);
         }
     }
-    for (let i = 0; i < src.length; i++) step(src[i]);
+    for (let i = 0; i < src.length; i++) { step(src[i]); prevC = src[i]; }
     endWord();
     if (slash) { slash = false; code(0x2f); }
     return out.subarray(0, n);

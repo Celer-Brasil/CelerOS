@@ -18,6 +18,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const ENGINE = path.join(ROOT, 'tools', 'sdk', 'engine');
 const MODULES = path.join(ROOT, 'data', 'modules');
 const jsstrip = require(path.join(__dirname, 'lib', 'jsstrip.js'));
+const jsmin = require(path.join(__dirname, 'lib', 'jsmin.js'));
 const check = process.argv.includes('--check');
 
 // versao canonica de cada modulo da arvore (o literal unico gateado pelo sdk)
@@ -98,8 +99,19 @@ for (const { app, resolvido } of planos) {
         const ver = resolvido[nome];
         referenciadas[nome + '@' + ver] = 1;
         const dst = path.join(MODULES, nome, ver, nome + '.js');
-        const corpo = jsstrip.strip(
-            fs.readFileSync(path.join(ENGINE, nome + '.js'), 'utf8')).toString('utf8');
+        // mesmo pipeline do publish-dep (jsstrip --min --top): a copia de
+        // fabrica tem que ser byte-identica ao que o hub serve. `strip` puro
+        // era 12-30% maior e a imagem da CYD vive no limite de blocos.
+        // O loader envolve o modulo em function(module,exports,require), entao
+        // o topo e local e pode manglar (igual ao que sobe no publish).
+        const fonte = fs.readFileSync(path.join(ENGINE, nome + '.js'), 'utf8');
+        let corpo;
+        try {
+            corpo = jsmin.minify(fonte, { top: true }).code;
+        } catch (e) {
+            console.error('aviso: jsmin falhou em ' + nome + ': ' + e.message + ' (usando jsstrip)');
+            corpo = jsstrip.strip(fonte).toString('utf8');
+        }
         const tem = fs.existsSync(dst) && fs.readFileSync(dst, 'utf8') === corpo;
         if (!tem) {
             acao.push('modulo ' + nome + '@' + ver);

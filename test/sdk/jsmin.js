@@ -51,7 +51,10 @@ module.exports = function (check) {
         funcaointerna: 'function outer(n) {\n  function dobro(x) { return x * 2; }\n  var passo = dobro(n);\n  return passo + dobro(1);\n}\nmodule.exports = outer(3);\n',
         argumentos: 'function f() { var a = arguments.length; return a + arguments[0]; }\nmodule.exports = f(4, 5);\n',
         recursaocomvar: 'var fib = function (n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); };\nmodule.exports = fib(10);\n',
-        kwprop: 'var o = { return: 3, typeof: 4 };\nmodule.exports = [o.return / 2, o.typeof / 2].join(",");\n'
+        kwprop: 'var o = { return: 3, typeof: 4 };\nmodule.exports = [o.return / 2, o.typeof / 2].join(",");\n',
+        // regex seguida de palavra: sem o espaco as letras viram FLAGS
+        // (`/x/instanceof` = regex invalida) e o jsmin recusava o arquivo
+        regexinstanceof: 'var r = /x/ instanceof RegExp;\nmodule.exports = r + ":" + (/y/ in {});\n'
     };
     var bad = [];
     for (var name of Object.keys(CASES)) {
@@ -122,7 +125,7 @@ module.exports = function (check) {
     check('jsmin: corpus nao cresce vs jsstrip', grew.length === 0, grew.join(','));
     check('jsmin: strip do device e idempotente na saida', notIdem.length === 0, notIdem.join(','));
 
-    // ------------------------- jsstrip: keyword como propriedade x divisao --
+    // ------------------- jsstrip: keyword como propriedade x regex x divisao --
     // `obj.return / 2` e divisao (o token anterior e '.', logo "return" e
     // propriedade, nao keyword) — o strip NAO pode abrir regex e engolir o
     // resto da linha. Mesmos casos do test/cpp/run_tests.cpp (paridade
@@ -134,7 +137,28 @@ module.exports = function (check) {
         ['a.b.return / 2', 'a.b.return / 2'],
         ['obj.return / 2\n// fim\nvar y = 1;', 'obj.return / 2\n\nvar y = 1;'],
         // return de verdade (declaracao, sem '.' antes) segue abrindo regex
-        ['return /a\\.b/.test(s); // c', 'return /a\\.b/.test(s);']
+        ['return /a\\.b/.test(s); // c', 'return /a\\.b/.test(s);'],
+        // propriedade de nome longo (> 11 bytes: o buffer de palavra estoura e
+        // a classificacao continua): o '.' vale para ESSA palavra, o `return`
+        // da linha seguinte nao herda o flag (antes o regex virava comentario)
+        ['o.propriedadeComNomeLongo\nreturn / \\//.test(s);', 'o.propriedadeComNomeLongo\nreturn / \\//.test(s);'],
+        // ')' de if/while/for/with/switch/catch devolve posicao de STATEMENT,
+        // onde '/' abre regex — sem isso `/a  b/` virava `/a b/` (semantica) e
+        // `/ \\//` virava comentario (SyntaxError no aparelho)
+        ['if (a) /a  b/.test(s); // c', 'if (a) /a  b/.test(s);'],
+        ['while (a) / \\//.test(s);', 'while (a) / \\//.test(s);'],
+        ['for (;;) /a  b/.test(s);', 'for (;;) /a  b/.test(s);'],
+        // ... e o ')' de EXPRESSAO continua divisao
+        ['if ((a) / 2) x = 1;', 'if ((a) / 2) x = 1;'],
+        ['if (a) (b) / 2;', 'if (a) (b) / 2;'],
+        ['x = (a + b) / 2; // c', 'x = (a + b) / 2;'],
+        // '++'/'--' adjacentes deixam operando: divisao, nao regex (o regex
+        // falso copiava o comentario junto e ele reaparecia como codigo)
+        ['x = a++ / 2; // c', 'x = a++ / 2;'],
+        ['x = a-- / 2 /* c */ + 1;', 'x = a-- / 2 + 1;'],
+        ['x = a++ / 2; s = "a\\/b";', 'x = a++ / 2; s = "a\\/b";'],
+        // '++' separado por espaco e SOMA unaria: o regex depois abre de novo
+        ['x = a + +/q/.test(s);', 'x = a + +/q/.test(s);']
     ];
     var kwBad = [];
     for (var kp of KWPROP) {
@@ -142,6 +166,71 @@ module.exports = function (check) {
         if (gotKp !== kp[1]) kwBad.push(JSON.stringify(kp[0]) + ': ' + JSON.stringify(gotKp) + ' x ' + JSON.stringify(kp[1]));
     }
     check('jsstrip: keyword propriedade nao abre regex (paridade device)', kwBad.length === 0, kwBad.join(' | '));
+
+    // ------------------------- jsstrip: invariante de TOKENS no corpus real --
+    // A propriedade que vale para todo o strip (e o jsstrip: a saida tem que
+    // reparsear na MESMA sequencia de tokens do fonte; comparar bytes nao
+    // pega `/a  b/` -> `/a b/` nem comentario comido. Roda sobre main.js e
+    // modulos dos apps de fabrica, da loja e das deps JS.
+    var tokFiles = [];
+    (function walk(rel) {
+        var d = path.join(ROOT, rel);
+        var ents;
+        try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+        for (var e of ents) {
+            if (e.name === '.studio' || e.name === '.git' || e.name === 'vendor') continue;
+            var p = path.join(d, e.name);
+            if (e.isDirectory()) walk(rel + '/' + e.name);
+            else if (/\.js$/.test(e.name)) tokFiles.push(p);
+        }
+    })('data/apps');
+    ['hub_apps', 'tools/sdk/engine'].forEach(function (rel) {
+        var d = path.join(ROOT, rel);
+        var ents = [];
+        try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { return; }
+        for (var e of ents) {
+            if (e.isDirectory()) walk2(path.join(d, e.name));
+            else if (/\.js$/.test(e.name)) tokFiles.push(path.join(d, e.name));
+        }
+        function walk2(dir) {
+            for (var e2 of fs.readdirSync(dir, { withFileTypes: true })) {
+                var p2 = path.join(dir, e2.name);
+                if (e2.name === '.studio' || e2.name === '.git') continue;
+                if (e2.isDirectory()) walk2(p2);
+                else if (/\.js$/.test(e2.name)) tokFiles.push(p2);
+            }
+        }
+    });
+    var acorn = require(path.join(ROOT, 'tools', 'app_lint', 'vendor', 'acorn.js'));
+    function stripTokens(src) {
+        var tt = [];
+        acorn.parse(src, { ecmaVersion: 5, onToken: tt });
+        return tt.map(function (t) { return (t.type && t.type.label) + ':' + src.slice(t.start, t.end); });
+    }
+    var tokBad = [], tokN = 0;
+    for (var tf of tokFiles) {
+        var fsrc = fs.readFileSync(tf, 'utf8');
+        var wa, wb;
+        try { wa = stripTokens(fsrc); } catch (e) { continue; }   // fora do ES5 (ferramenta host)
+        var fout = jsstrip.strip(Buffer.from(fsrc)).toString('utf8');
+        try { wb = stripTokens(fout); } catch (e2) {
+            tokBad.push(path.relative(ROOT, tf) + ': saida nao parseia');
+            continue;
+        }
+        if (wa.length !== wb.length) {
+            tokBad.push(path.relative(ROOT, tf) + ': ' + wa.length + ' tokens -> ' + wb.length);
+            continue;
+        }
+        for (var ti = 0; ti < wa.length; ti++) {
+            if (wa[ti] !== wb[ti]) {
+                tokBad.push(path.relative(ROOT, tf) + ': token ' + ti + ' ' + wa[ti] + ' -> ' + wb[ti]);
+                break;
+            }
+        }
+        tokN++;
+    }
+    check('jsstrip: mesma sequencia de tokens no corpus real (' + tokN + ' arquivos)',
+        tokBad.length === 0 && tokN > 50, tokBad.slice(0, 5).join(' | '));
 
     // --------------------------------------- equivalencia de app no harness --
     // roda o app original e o minificado (main + extras, com reserved dos

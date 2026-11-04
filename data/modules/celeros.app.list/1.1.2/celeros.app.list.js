@@ -28,64 +28,64 @@
 
 
 
-var A = require('celeros.app');
+var A=require('celeros.app');
 
-A.list = {
-version: '1.1.2',
+A.list={
+version:'1.1.2',
 
 
 
-make: function (getStamp, build) {
-var cache = null;
-return {
-rows: function () {
-var stamp = getStamp();
-if (cache && cache.stamp === stamp) return cache.rows;
-cache = { stamp: stamp, rows: build() || [] };
-return cache.rows;
+make:function(pa,ja){
+var u=null;
+return{
+rows:function(){
+var ca=pa();
+if(u&&u.stamp===ca)return u.rows;
+u={stamp:ca,rows:ja()||[]};
+return u.rows;
 },
-drop: function () { cache = null; }
+drop:function(){u=null;}
 };
 },
 
 
 
-sort: function (items, keyFn, desc) {
-var n = items.length;
-var keys = new Array(n);
-for (var i = 0; i < n; i++) keys[i] = String(keyFn(items[i]));
+sort:function(q,ua,oa){
+var n=q.length;
+var s=new Array(n);
+for(var i=0;i<n;i++)s[i]=String(ua(q[i]));
 
 
 
-for (var a = 1; a < n; a++) {
-var it = items[a], k = keys[a];
-var b = a - 1;
-while (b >= 0 && (desc ? keys[b] < k : keys[b] > k)) {
-keys[b + 1] = keys[b];
-items[b + 1] = items[b];
+for(var a=1;a<n;a++){
+var it=q[a],k=s[a];
+var b=a-1;
+while(b>=0&&(oa?s[b]<k:s[b]>k)){
+s[b+1]=s[b];
+q[b+1]=q[b];
 b--;
 }
-keys[b + 1] = k;
-items[b + 1] = it;
+s[b+1]=k;
+q[b+1]=it;
 }
-return items;
+return q;
 },
 
 
-badge: function (kind) {
-var T = A.T || System.theme();
-return kind === 'ok' ? T.ok :
-kind === 'warn' ? T.warn :
-kind === 'err' ? T.err : T.textDim;
+badge:function(P){
+var T=A.T||System.theme();
+return P==='ok'?T.ok:
+P==='warn'?T.warn:
+P==='err'?T.err:T.textDim;
 },
 
 
-bars: function (rssi) {
-if (typeof rssi !== 'number' || rssi >= 0) return -1;
-if (rssi > -55) return 4;
-if (rssi > -67) return 3;
-if (rssi > -78) return 2;
-if (rssi > -88) return 1;
+bars:function(B){
+if(typeof B!=='number'||B>=0)return-1;
+if(B>-55)return 4;
+if(B>-67)return 3;
+if(B>-78)return 2;
+if(B>-88)return 1;
 return 0;
 },
 
@@ -97,127 +97,127 @@ return 0;
 
 
 
-view: function (id, x, y, w, h, items, o) {
-o = o || {};
-var S = System;
-var T = (A.style && A.style.T) || A.T || S.theme() || {};
-var rowH = o.row === undefined ? 36 : o.row;
-if (rowH < 1) rowH = 1;
-var lh = UI.lineHeight('body');
-var cap = UI.lineHeight('caption');
-var two = lh + 1 + cap;
+view:function(id,x,y,w,h,r,o){
+o=o||{};
+var S=System;
+var T=(A.style&&A.style.T)||A.T||S.theme()||{};
+var e=o.row===undefined?36:o.row;
+if(e<1)e=1;
+var Q=UI.lineHeight('body');
+var ma=UI.lineHeight('caption');
+var V=Q+1+ma;
 
 
 
 
-if (rowH < two + 2) {
-for (var z = 0; z < items.length; z++) {
-if (items[z] && typeof items[z] === 'object' && items[z].sub) {
-rowH = two + 2;
+if(e<V+2){
+for(var z=0;z<r.length;z++){
+if(r[z]&&typeof r[z]==='object'&&r[z].sub){
+e=V+2;
 break;
 }
 }
 }
-var pad = o.pad === undefined ? 6 : o.pad;
-var panel = o.panel !== false;
-var panelBg = o.panelBg === undefined ? T.card : o.panelBg;
-var rowBg = o.rowBg === undefined ? T.raised : o.rowBg;
-var contentH = items.length * rowH;
-var fired = -1;
-if (panel) {
-UI.card(x, y, w, h, {
-color: panelBg,
-radius: o.r === undefined ? (T.radius === undefined ? 10 : T.radius) : o.r,
-stroke: o.stroke !== false
+var $=o.pad===undefined?6:o.pad;
+var aa=o.panel!==false;
+var va=o.panelBg===undefined?T.card:o.panelBg;
+var xa=o.rowBg===undefined?T.raised:o.rowBg;
+var na=r.length*e;
+var M=-1;
+if(aa){
+UI.card(x,y,w,h,{
+color:va,
+radius:o.r===undefined?(T.radius===undefined?10:T.radius):o.r,
+stroke:o.stroke!==false
 });
 }
-var sx = x + pad, sy = y + 2;
-var sw = w - pad * 2, sh = h - 4;
-var off = UI.scrollBegin(id || 'kit:list', sx, sy, sw, sh, contentH);
-var k0 = Math.floor(off / rowH);
-var k1 = Math.min(items.length - 1, Math.ceil((off + sh) / rowH) - 1);
-for (var k = k0; k <= k1; k++) {
-var it = items[k];
-if (it === undefined) continue;
-var isStr = typeof it === 'string';
-var ry = sy + k * rowH - off;
-if (!isStr && (it.section || it.header || it.k === 'secao')) {
-UI.text(String(it.label === undefined ? it.section : it.label).toUpperCase(),
-sx + 8, ry + Math.round((rowH - UI.lineHeight('caption')) / 2),
-{ role: 'caption', color: T.textDim, w: sw - 16, lines: 1 });
+var f=x+$,sy=y+2;
+var l=w-$*2,sh=h-4;
+var U=UI.scrollBegin(id||'kit:list',f,sy,l,sh,na);
+var k0=Math.floor(U/e);
+var k1=Math.min(r.length-1,Math.ceil((U+sh)/e)-1);
+for(var k=k0;k<=k1;k++){
+var c=r[k];
+if(c===undefined)continue;
+var N=typeof c==='string';
+var g=sy+k*e-U;
+if(!N&&(c.section||c.header||c.k==='secao')){
+UI.text(String(c.label===undefined?c.section:c.label).toUpperCase(),
+f+8,g+Math.round((e-UI.lineHeight('caption'))/2),
+{role:'caption',color:T.textDim,w:l-16,lines:1});
 continue;
 }
-var dis = !isStr && !!it.disabled;
-var t0 = UI.touch();
-var pressed = !dis && t0.down && t0.x >= sx && t0.x <= sx + sw &&
-t0.y >= ry && t0.y <= ry + rowH;
-UI.card(sx, ry + 1, sw, rowH - 2, {
-color: dis ? T.card : rowBg,
-radius: o.rowR === undefined ? 8 : o.rowR,
-stroke: false
+var E=!N&&!!c.disabled;
+var H=UI.touch();
+var wa=!E&&H.down&&H.x>=f&&H.x<=f+l&&
+H.y>=g&&H.y<=g+e;
+UI.card(f,g+1,l,e-2,{
+color:E?T.card:xa,
+radius:o.rowR===undefined?8:o.rowR,
+stroke:false
 });
-if (isStr) it = { label: it };
-if (o.paintRow) {
-o.paintRow(it, sx + 8, ry, sw - 16, rowH,
-{ pressed: pressed, disabled: dis, selected: k === o.selected });
-} else {
-var color = dis ? T.textDim
-: (it.color === undefined ? T.text : it.color);
-var tx = sx + 8;
-if (it.icon && A.icons) {
-A.icons.draw(it.icon, tx, ry + Math.round((rowH - 16) / 2), 16,
-{ color: color });
-tx += 22;
+if(N)c={label:c};
+if(o.paintRow){
+o.paintRow(c,f+8,g,l-16,e,
+{pressed:wa,disabled:E,selected:k===o.selected});
+}else{
+var Y=E?T.textDim
+:(c.color===undefined?T.text:c.color);
+var I=f+8;
+if(c.icon&&A.icons){
+A.icons.draw(c.icon,I,g+Math.round((e-16)/2),16,
+{color:Y});
+I+=22;
 }
-var rw = 0;
-if (it.right !== undefined) rw = UI.measure(String(it.right), 'caption') + 10;
-else if (it.badge !== undefined)
-rw = UI.measure(String(it.badge), 'caption') + 22;
-else if (it.bars >= 0) rw = 26;
-var lw = sw - (tx - sx) - 8 - rw;
-var sub = it.sub !== undefined && it.sub !== '';
+var F=0;
+if(c.right!==undefined)F=UI.measure(String(c.right),'caption')+10;
+else if(c.badge!==undefined)
+F=UI.measure(String(c.badge),'caption')+22;
+else if(c.bars>=0)F=26;
+var _=l-(I-f)-8-F;
+var da=c.sub!==undefined&&c.sub!=='';
 
 
-var ty = ry + Math.round((rowH - (sub ? two : lh)) / 2);
-UI.text(String(it.label === undefined ? '' : it.label), tx, ty,
-{ role: 'body', color: color, w: lw, lines: 1 });
-if (sub) {
-UI.text(String(it.sub), tx, ty + lh + 1,
-{ role: 'caption', color: T.textDim, w: lw, lines: 1 });
+var ty=g+Math.round((e-(da?V:Q))/2);
+UI.text(String(c.label===undefined?'':c.label),I,ty,
+{role:'body',color:Y,w:_,lines:1});
+if(da){
+UI.text(String(c.sub),I,ty+Q+1,
+{role:'caption',color:T.textDim,w:_,lines:1});
 }
-if (it.right !== undefined) {
-UI.text(String(it.right), sx + sw - 8,
-ry + Math.round((rowH - UI.lineHeight('caption')) / 2),
-{ role: 'caption', align: 'right',
-color: it.rightColor === undefined ? T.textDim : it.rightColor,
-w: rw, lines: 1 });
-} else if (it.badge !== undefined) {
-UI.badge(String(it.badge),
-sx + sw - 8 - Math.round(UI.measure(String(it.badge), 'caption') + 14),
-ry + Math.round((rowH - (UI.lineHeight('caption') + 6)) / 2),
-{ color: it.badgeColor });
-} else if (it.bars >= 0) {
-var bx = sx + sw - 8 - 23, by = ry + Math.round((rowH - 14) / 2);
-for (var bi = 0; bi < 4; bi++) {
-var bh = 4 + bi * 3;
-S.fillRect(bx + bi * 5, by + 14 - bh, 3, bh,
-bi < it.bars ? (it.rightColor === undefined ? T.ok : it.rightColor)
-: T.stroke);
+if(c.right!==undefined){
+UI.text(String(c.right),f+l-8,
+g+Math.round((e-UI.lineHeight('caption'))/2),
+{role:'caption',align:'right',
+color:c.rightColor===undefined?T.textDim:c.rightColor,
+w:F,lines:1});
+}else if(c.badge!==undefined){
+UI.badge(String(c.badge),
+f+l-8-Math.round(UI.measure(String(c.badge),'caption')+14),
+g+Math.round((e-(UI.lineHeight('caption')+6))/2),
+{color:c.badgeColor});
+}else if(c.bars>=0){
+var bx=f+l-8-23,by=g+Math.round((e-14)/2);
+for(var D=0;D<4;D++){
+var X=4+D*3;
+S.fillRect(bx+D*5,by+14-X,3,X,
+D<c.bars?(c.rightColor===undefined?T.ok:c.rightColor)
+:T.stroke);
 }
 }
 }
-if (o.widget) o.widget(it, sx, ry, sw, rowH);
+if(o.widget)o.widget(c,f,g,l,e);
 UI.cardEnd();
-var t = UI.touch();
-if (t.tap && fired < 0 && t.x >= sx && t.x <= sx + sw &&
-t.y >= ry && t.y <= ry + rowH && !dis) fired = k;
+var t=UI.touch();
+if(t.tap&&M<0&&t.x>=f&&t.x<=f+l&&
+t.y>=g&&t.y<=g+e&&!E)M=k;
 }
 UI.scrollEnd();
-if (panel) UI.cardEnd();
-return fired;
+if(aa)UI.cardEnd();
+return M;
 }
 };
 
 A._mods.push('list');
 
-module.exports = A;
+module.exports=A;

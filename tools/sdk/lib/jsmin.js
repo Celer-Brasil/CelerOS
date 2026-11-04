@@ -313,25 +313,33 @@ function shortNumber(text) {
 function emit(src, tokens, rename, opts) {
     let out = '';
     let prev = null;
+    let prevLabel = '';
     let prevEnd = 0;
     for (const t of tokens) {
         let nl = 0;
         for (let i = prevEnd; i < t.start; i++) {
             if (src.charCodeAt(i) === 0x0a) nl++;
         }
+        const label = t.type && t.type.label;
         let text;
         if (rename.has(t.start)) text = rename.get(t.start);
-        else if (t.type && t.type.label === 'num') text = shortNumber(src.slice(t.start, t.end));
+        else if (label === 'num') text = shortNumber(src.slice(t.start, t.end));
         else text = src.slice(t.start, t.end);
+        // regex seguida de identificador PRECISA de espaco: as letras colariam
+        // como FLAGS (`/x/ instanceof` -> `/x/instanceof` e erro de sintaxe).
+        // A verificacao de tokens pegaria (min.verify), mas o app cairia no
+        // strip sem minificar — entao separa aqui.
+        const glueRegexIdent = prevLabel === 'regexp' && isIdentChar(text.charCodeAt(0));
 
         if (prev !== null) {
             if (opts.keepLines && nl > 0) out += nl === 1 ? '\n' : new Array(nl + 1).join('\n');
-            else if (needSpace(prev, text)) out += ' ';
+            else if (glueRegexIdent || needSpace(prev, text)) out += ' ';
         } else if (opts.keepLines && nl > 0) {
             out += new Array(nl + 1).join('\n');
         }
         out += text;
         prev = text;
+        prevLabel = label || '';
         prevEnd = t.end;
     }
     if (opts.keepLines) {

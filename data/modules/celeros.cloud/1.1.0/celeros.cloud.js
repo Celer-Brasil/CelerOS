@@ -28,266 +28,266 @@
 
 
 
-var cloud = { version: '1.1.0' };
+var f={version:'1.1.0'};
 
-var CONFIG_PATH = '/local/celercloud.json';
-var OUTBOX_PATH = '/local/cloud_outbox.json';
-var DESIRED_PATH = '/local/cloud_desired.json';
-var COMMANDS_PATH = '/local/cloud_commands.json';
-var MAX_OUTBOX = 50;
-var MAX_COMMANDS = 50;
+var H='/local/celercloud.json';
+var t='/local/cloud_outbox.json';
+var z='/local/cloud_desired.json';
+var G='/local/cloud_commands.json';
+var V=50;
+var I=50;
 
-var _cfg = null;
-var _lastBeat = 0;
-var _desired = null;
-var _commands = [];
-var _acks = [];
-var _seq = 0;
-var _lastError = '';
+var a=null;
+var u=0;
+var k=null;
+var c=[];
+var m=[];
+var A=0;
+var g='';
 
-function readJSON(path, fallback) {
-try {
-if (typeof FS === 'undefined' || !FS.exists(path)) return fallback;
-var text = FS.readTextFile(path);
-if (!text) return fallback;
-return JSON.parse(text);
-} catch (e) {
-return fallback;
+function o(Q,C){
+try{
+if(typeof FS==='undefined'||!FS.exists(Q))return C;
+var U=FS.readTextFile(Q);
+if(!U)return C;
+return JSON.parse(U);
+}catch(e){
+return C;
 }
 }
 
-function writeJSON(path, value) {
-try {
-FS.writeTextFile(path, JSON.stringify(value));
+function y(aa,ba){
+try{
+FS.writeTextFile(aa,JSON.stringify(ba));
 return true;
-} catch (e) {
+}catch(e){
 return false;
 }
 }
 
-function millis() {
-try { return System.millis(); } catch (e) { return Date.now ? Date.now() : 0; }
+function N(){
+try{return System.millis();}catch(e){return Date.now?Date.now():0;}
 }
 
-function isArray(value) {
-return Object.prototype.toString.call(value) === '[object Array]';
+function l(ca){
+return Object.prototype.toString.call(ca)==='[object Array]';
 }
 
-function netReady() {
-return typeof Net !== 'undefined' && typeof Net.request === 'function';
+function Z(){
+return typeof Net!=='undefined'&&typeof Net.request==='function';
 }
 
-function osVersion() {
-try {
-return (typeof System !== 'undefined' && typeof System.getOSVersion === 'function')
-? String(System.getOSVersion() || '') : '';
-} catch (e) { return ''; }
+function $(){
+try{
+return(typeof System!=='undefined'&&typeof System.getOSVersion==='function')
+?String(System.getOSVersion()||''):'';
+}catch(e){return'';}
 }
 
-function osApiLevel() {
-try {
-return (typeof System !== 'undefined' && typeof System.getAPILevel === 'function')
-? (Number(System.getAPILevel()) || 0) : 0;
-} catch (e) { return 0; }
+function _(){
+try{
+return(typeof System!=='undefined'&&typeof System.getAPILevel==='function')
+?(Number(System.getAPILevel())||0):0;
+}catch(e){return 0;}
 }
 
-function persistCommands() {
-if (_commands.length > MAX_COMMANDS) {
-_commands = _commands.slice(_commands.length - MAX_COMMANDS);
+function S(){
+if(c.length>I){
+c=c.slice(c.length-I);
 }
-return writeJSON(COMMANDS_PATH, _commands);
+return y(G,c);
 }
 
-cloud.init = function (path) {
-_cfg = null;
-_desired = null;
-_commands = readJSON(COMMANDS_PATH, []);
-if (!isArray(_commands)) _commands = [];
-_acks = [];
-_lastBeat = 0;
-_lastError = '';
-var cfg = readJSON(path || CONFIG_PATH, null);
-if (!cfg || !cfg.url || !cfg.key || !cfg.tenantId || !cfg.deviceId || !cfg.secret) {
-_lastError = 'config ausente/incompleta em ' + (path || CONFIG_PATH);
+f.init=function(R){
+a=null;
+k=null;
+c=o(G,[]);
+if(!l(c))c=[];
+m=[];
+u=0;
+g='';
+var d=o(R||H,null);
+if(!d||!d.url||!d.key||!d.tenantId||!d.deviceId||!d.secret){
+g='config ausente/incompleta em '+(R||H);
 return false;
 }
-var base = String(cfg.url).replace(/\/+$/, '');
-cfg.endpoint = cfg.endpoint || (base + '/functions/v1/device-heartbeat');
-cfg.heartbeatMs = typeof cfg.heartbeatMs === 'number' ? cfg.heartbeatMs : 60000;
-cfg.timeoutMs = typeof cfg.timeoutMs === 'number' ? cfg.timeoutMs : 8000;
-_cfg = cfg;
-_desired = readJSON(DESIRED_PATH, null);
+var W=String(d.url).replace(/\/+$/,'');
+d.endpoint=d.endpoint||(W+'/functions/v1/device-heartbeat');
+d.heartbeatMs=typeof d.heartbeatMs==='number'?d.heartbeatMs:6e4;
+d.timeoutMs=typeof d.timeoutMs==='number'?d.timeoutMs:8000;
+a=d;
+k=o(z,null);
 return true;
 };
 
-cloud.configured = function () {
-return !!_cfg;
+f.configured=function(){
+return!!a;
 };
 
-cloud.lastError = function () {
-return _lastError;
-};
-
-
-cloud.desired = function () {
-if (_desired === null) _desired = readJSON(DESIRED_PATH, null);
-return _desired;
+f.lastError=function(){
+return g;
 };
 
 
-
-cloud.commands = function () {
-return _commands.slice(0);
+f.desired=function(){
+if(k===null)k=o(z,null);
+return k;
 };
 
 
-cloud.ack = function (id) {
-var ids = isArray(id) ? id : [id];
-for (var i = 0; i < ids.length && _acks.length < 20; i++) {
-var cid = ids[i];
-if (!cid) continue;
-var s = String(cid);
-_acks.push(s);
-for (var j = 0; j < _commands.length; j++) {
-if (_commands[j] && _commands[j].id === s) {
-_commands.splice(j, 1);
+
+f.commands=function(){
+return c.slice(0);
+};
+
+
+f.ack=function(E){
+var L=l(E)?E:[E];
+for(var i=0;i<L.length&&m.length<20;i++){
+var K=L[i];
+if(!K)continue;
+var s=String(K);
+m.push(s);
+for(var j=0;j<c.length;j++){
+if(c[j]&&c[j].id===s){
+c.splice(j,1);
 j--;
 }
 }
 }
-persistCommands();
-return _acks.length;
+S();
+return m.length;
 };
 
 
-cloud.report = function (event) {
-if (!event || !event.type) return false;
-var outbox = readJSON(OUTBOX_PATH, []);
-if (!isArray(outbox)) outbox = [];
-if (outbox.length >= MAX_OUTBOX) outbox.shift();
-_seq++;
-outbox.push({
-id: event.id ? String(event.id) : ('ev-' + (_cfg ? _cfg.deviceId : 'dev') + '-' + millis() + '-' + _seq),
-type: String(event.type),
-severity: event.severity || 'info',
-payload: event.payload || {}
+f.report=function(n){
+if(!n||!n.type)return false;
+var r=o(t,[]);
+if(!l(r))r=[];
+if(r.length>=V)r.shift();
+A++;
+r.push({
+id:n.id?String(n.id):('ev-'+(a?a.deviceId:'dev')+'-'+N()+'-'+A),
+type:String(n.type),
+severity:n.severity||'info',
+payload:n.payload||{}
 });
-return writeJSON(OUTBOX_PATH, outbox);
+return y(t,r);
 };
 
-cloud.pending = function () {
-var outbox = readJSON(OUTBOX_PATH, []);
-return isArray(outbox) ? outbox.length : 0;
+f.pending=function(){
+var P=o(t,[]);
+return l(P)?P.length:0;
 };
 
 
 
 
 
-cloud.heartbeat = function (extra, force) {
-if (!_cfg) return null;
-if (!netReady()) {
-_lastError = 'Net.request indisponivel (API < 49)';
+f.heartbeat=function(b,Y){
+if(!a)return null;
+if(!Z()){
+g='Net.request indisponivel (API < 49)';
 return null;
 }
-var now = millis();
-if (!force && _lastBeat && (now - _lastBeat) < _cfg.heartbeatMs) {
-return cloud.desired();
+var O=N();
+if(!Y&&u&&(O-u)<a.heartbeatMs){
+return f.desired();
 }
-extra = extra || {};
-var outbox = readJSON(OUTBOX_PATH, []);
-if (!isArray(outbox)) outbox = [];
+b=b||{};
+var F=o(t,[]);
+if(!l(F))F=[];
 
-var body = {
-tenant_id: _cfg.tenantId,
-device_id: _cfg.deviceId,
-secret: _cfg.secret,
-kind: extra.kind || _cfg.kind || 'generic',
-label: extra.label || _cfg.label || '',
-board: extra.board || _cfg.board || '',
-firmware: extra.firmware || _cfg.firmware || osVersion(),
-api_level: typeof extra.apiLevel === 'number'
-? extra.apiLevel
-: (typeof _cfg.apiLevel === 'number' ? _cfg.apiLevel : osApiLevel()),
-uptime_s: typeof extra.uptimeS === 'number' ? extra.uptimeS : 0,
-events: outbox,
-ack: _acks
+var v={
+tenant_id:a.tenantId,
+device_id:a.deviceId,
+secret:a.secret,
+kind:b.kind||a.kind||'generic',
+label:b.label||a.label||'',
+board:b.board||a.board||'',
+firmware:b.firmware||a.firmware||$(),
+api_level:typeof b.apiLevel==='number'
+?b.apiLevel
+:(typeof a.apiLevel==='number'?a.apiLevel:_()),
+uptime_s:typeof b.uptimeS==='number'?b.uptimeS:0,
+events:F,
+ack:m
 };
-if (typeof extra.rssi === 'number') body.rssi = extra.rssi;
-if (isArray(extra.apps)) body.apps = extra.apps;
-if (extra.caps && typeof extra.caps === 'object') body.caps = extra.caps;
-if (isArray(extra.resources)) body.resources = extra.resources.slice(0, 32);
+if(typeof b.rssi==='number')v.rssi=b.rssi;
+if(l(b.apps))v.apps=b.apps;
+if(b.caps&&typeof b.caps==='object')v.caps=b.caps;
+if(l(b.resources))v.resources=b.resources.slice(0,32);
 
-var response = null;
-try {
-response = Net.request({
-url: _cfg.endpoint,
-method: 'POST',
-body: JSON.stringify(body),
-contentType: 'application/json',
-headers: {
-apikey: _cfg.key,
-Authorization: 'Bearer ' + _cfg.key
+var p=null;
+try{
+p=Net.request({
+url:a.endpoint,
+method:'POST',
+body:JSON.stringify(v),
+contentType:'application/json',
+headers:{
+apikey:a.key,
+Authorization:'Bearer '+a.key
 },
-timeoutMs: _cfg.timeoutMs
+timeoutMs:a.timeoutMs
 });
-} catch (e) {
-response = null;
-_lastError = 'Net.request: ' + e;
+}catch(e){
+p=null;
+g='Net.request: '+e;
 }
 
-if (!response) {
-if (!_lastError) _lastError = 'sem rede';
+if(!p){
+if(!g)g='sem rede';
 return null;
 }
-if (response.status < 200 || response.status >= 300) {
-_lastError = 'HTTP ' + response.status;
-return null;
-}
-
-var parsed = null;
-try { parsed = JSON.parse(response.body); } catch (e2) { parsed = null; }
-if (!parsed || parsed.ok !== true) {
-_lastError = 'resposta invalida';
+if(p.status<200||p.status>=300){
+g='HTTP '+p.status;
 return null;
 }
 
-_lastBeat = now;
-_lastError = '';
-if (parsed.desired) {
-_desired = parsed.desired;
-writeJSON(DESIRED_PATH, _desired);
-}
-if (isArray(parsed.commands) && parsed.commands.length) {
-var added = false;
-for (var ci = 0; ci < parsed.commands.length; ci++) {
-var cmd = parsed.commands[ci];
-if (!cmd || !cmd.id) continue;
-var known = false;
-for (var cj = 0; cj < _commands.length; cj++) {
-if (_commands[cj] && _commands[cj].id === cmd.id) { known = true; break; }
-}
-if (!known) {
-_commands.push(cmd);
-added = true;
-}
-}
-if (added) persistCommands();
+var h=null;
+try{h=JSON.parse(p.body);}catch(e2){h=null;}
+if(!h||h.ok!==true){
+g='resposta invalida';
+return null;
 }
 
-writeJSON(OUTBOX_PATH, []);
-_acks = [];
-return _desired;
+u=O;
+g='';
+if(h.desired){
+k=h.desired;
+y(z,k);
+}
+if(l(h.commands)&&h.commands.length){
+var J=false;
+for(var B=0;B<h.commands.length;B++){
+var x=h.commands[B];
+if(!x||!x.id)continue;
+var M=false;
+for(var w=0;w<c.length;w++){
+if(c[w]&&c[w].id===x.id){M=true;break;}
+}
+if(!M){
+c.push(x);
+J=true;
+}
+}
+if(J)S();
+}
+
+y(t,[]);
+m=[];
+return k;
 };
 
-cloud.reset = function () {
-_cfg = null;
-_desired = null;
-_commands = [];
-_acks = [];
-_lastBeat = 0;
-_seq = 0;
-_lastError = '';
+f.reset=function(){
+a=null;
+k=null;
+c=[];
+m=[];
+u=0;
+A=0;
+g='';
 };
 
-module.exports = cloud;
+module.exports=f;

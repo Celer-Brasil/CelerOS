@@ -15,109 +15,109 @@
 
 
 
-var usb = require("celeros.usb");
+var e=require("celeros.usb");
 
-var esc = { version: '1.1.0' };
+var c={version:'1.1.0'};
 
-var ESC = 0x1B;
-var GS = 0x1D;
-var FS = 0x1C;
+var j=27;
+var g=29;
+var FS=28;
 
-esc.ESC = ESC;
-esc.GS = GS;
-
-
-esc.initCmd = function () { return [ESC, 0x40]; };
-esc.feedCmd = function (n) { return [ESC, 0x64, (n || 1) & 0xFF]; };
-esc.alignCmd = function (a) { return [ESC, 0x61, a & 0x03]; };
-esc.boldCmd = function (on) { return [ESC, 0x45, on ? 1 : 0]; };
-esc.underlineCmd = function (n) { return [ESC, 0x2D, (n || 0) & 0x03]; };
-esc.reverseCmd = function (on) { return [GS, 0x42, on ? 1 : 0]; };
+c.ESC=j;
+c.GS=g;
 
 
-esc.sizeCmd = function (w, h) {
-w = w || 1; h = h || 1;
-if (w < 1) w = 1; if (w > 8) w = 8;
-if (h < 1) h = 1; if (h > 8) h = 8;
-return [GS, 0x21, (((w - 1) & 0x07) << 4) | ((h - 1) & 0x07)];
+c.initCmd=function(){return[j,64];};
+c.feedCmd=function(n){return[j,100,(n||1)&255];};
+c.alignCmd=function(a){return[j,97,a&3];};
+c.boldCmd=function(on){return[j,69,on?1:0];};
+c.underlineCmd=function(n){return[j,45,(n||0)&3];};
+c.reverseCmd=function(on){return[g,66,on?1:0];};
+
+
+c.sizeCmd=function(w,h){
+w=w||1;h=h||1;
+if(w<1)w=1;if(w>8)w=8;
+if(h<1)h=1;if(h>8)h=8;
+return[g,33,(((w-1)&7)<<4)|((h-1)&7)];
 };
-esc.cutCmd = function (partial) { return [GS, 0x56, partial ? 1 : 0]; };
-esc.codepageCmd = function (n) { return [ESC, 0x74, n & 0xFF]; };
-esc.drawerCmd = function (pin, onMs, offMs) {
-return [ESC, 0x70, (pin || 0) & 1, (onMs || 25) & 0xFF, ((offMs || 250) / 2) & 0xFF];
-};
-
-
-esc.barcodeCmd = function (data) {
-var b = usb.bytes(String(data).toUpperCase());
-var out = [GS, 0x6B, 4];
-for (var i = 0; i < b.length; i++) out.push(b[i]);
-out.push(0);
-return out;
+c.cutCmd=function(na){return[g,86,na?1:0];};
+c.codepageCmd=function(n){return[j,116,n&255];};
+c.drawerCmd=function(ra,ka,ea){
+return[j,112,(ra||0)&1,(ka||25)&255,((ea||250)/2)&255];
 };
 
 
-esc.qrCmd = function (data, size, ec) {
-var d = usb.bytes(data);
-var len = d.length + 3;
-var pL = len & 0xFF;
-var pH = (len >> 8) & 0xFF;
-var out = [];
-out = usb.concat(out, [GS, 0x28, 0x6B, 4, 0, 0x31, 0x41, 0x32, 0]);
-var s = size || 6;
-if (s < 1) s = 1; if (s > 16) s = 16;
-out = usb.concat(out, [GS, 0x28, 0x6B, 3, 0, 0x31, 0x43, s]);
-out = usb.concat(out, [GS, 0x28, 0x6B, 3, 0, 0x31, 0x45, ec === undefined ? 49 : (48 + (ec & 3))]);
-out = usb.concat(out, [GS, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30]);
-for (var i = 0; i < d.length; i++) out.push(d[i]);
-out = usb.concat(out, [GS, 0x28, 0x6B, 3, 0, 0x31, 0x51, 0x30]);
-return out;
+c.barcodeCmd=function(Q){
+var b=e.bytes(String(Q).toUpperCase());
+var C=[g,107,4];
+for(var i=0;i<b.length;i++)C.push(b[i]);
+C.push(0);
+return C;
+};
+
+
+c.qrCmd=function(R,va,G){
+var d=e.bytes(R);
+var H=d.length+3;
+var pL=H&255;
+var pH=(H>>8)&255;
+var f=[];
+f=e.concat(f,[g,40,107,4,0,49,65,50,0]);
+var s=va||6;
+if(s<1)s=1;if(s>16)s=16;
+f=e.concat(f,[g,40,107,3,0,49,67,s]);
+f=e.concat(f,[g,40,107,3,0,49,69,G===undefined?49:(48+(G&3))]);
+f=e.concat(f,[g,40,107,pL,pH,49,80,48]);
+for(var i=0;i<d.length;i++)f.push(d[i]);
+f=e.concat(f,[g,40,107,3,0,49,81,48]);
+return f;
 };
 
 
 
 
-esc.open = function (dev) {
-if (!dev) return null;
-var iface = usb.ifaceOf(dev, 7);
-var h = usb.open(dev, { iface: iface || undefined });
-if (!h || h.epOut < 0) {
-if (h) usb.close(h);
+c.open=function(y){
+if(!y)return null;
+var X=e.ifaceOf(y,7);
+var h=e.open(y,{iface:X||undefined});
+if(!h||h.epOut<0){
+if(h)e.close(h);
 return null;
 }
-return new esc.Printer(h);
+return new c.Printer(h);
 };
 
-esc.openByVid = function (vid, pid) {
-return esc.open(usb.find({ vid: vid, pid: pid }));
+c.openByVid=function(za,qa){
+return c.open(e.find({vid:za,pid:qa}));
 };
 
-esc.Printer = function (h) {
-this.h = h;
+c.Printer=function(h){
+this.h=h;
 };
 
 
-esc.Printer.prototype.raw = function (bytes) {
-return usb.write(this.h, bytes, 2000);
+c.Printer.prototype.raw=function(P){
+return e.write(this.h,P,2000);
 };
 
-esc.Printer.prototype.init = function () { this.raw(esc.initCmd()); return this; };
-esc.Printer.prototype.text = function (s) { this.raw(usb.bytes(s)); return this; };
-esc.Printer.prototype.line = function (s) {
-this.raw(usb.concat(usb.bytes(s === undefined ? "" : s), [0x0A]));
+c.Printer.prototype.init=function(){this.raw(c.initCmd());return this;};
+c.Printer.prototype.text=function(s){this.raw(e.bytes(s));return this;};
+c.Printer.prototype.line=function(s){
+this.raw(e.concat(e.bytes(s===undefined?"":s),[10]));
 return this;
 };
-esc.Printer.prototype.feed = function (n) { this.raw(esc.feedCmd(n)); return this; };
-esc.Printer.prototype.align = function (a) { this.raw(esc.alignCmd(a)); return this; };
-esc.Printer.prototype.bold = function (on) { this.raw(esc.boldCmd(on)); return this; };
-esc.Printer.prototype.underline = function (n) { this.raw(esc.underlineCmd(n)); return this; };
-esc.Printer.prototype.reverse = function (on) { this.raw(esc.reverseCmd(on)); return this; };
-esc.Printer.prototype.size = function (w, h) { this.raw(esc.sizeCmd(w, h)); return this; };
-esc.Printer.prototype.codepage = function (n) { this.raw(esc.codepageCmd(n)); return this; };
-esc.Printer.prototype.barcode = function (data) { this.raw(esc.barcodeCmd(data)); return this; };
-esc.Printer.prototype.qr = function (data, size, ec) { this.raw(esc.qrCmd(data, size, ec)); return this; };
-esc.Printer.prototype.cut = function (partial) { this.raw(esc.cutCmd(partial)); return this; };
-esc.Printer.prototype.drawer = function (pin) { this.raw(esc.drawerCmd(pin)); return this; };
+c.Printer.prototype.feed=function(n){this.raw(c.feedCmd(n));return this;};
+c.Printer.prototype.align=function(a){this.raw(c.alignCmd(a));return this;};
+c.Printer.prototype.bold=function(on){this.raw(c.boldCmd(on));return this;};
+c.Printer.prototype.underline=function(n){this.raw(c.underlineCmd(n));return this;};
+c.Printer.prototype.reverse=function(on){this.raw(c.reverseCmd(on));return this;};
+c.Printer.prototype.size=function(w,h){this.raw(c.sizeCmd(w,h));return this;};
+c.Printer.prototype.codepage=function(n){this.raw(c.codepageCmd(n));return this;};
+c.Printer.prototype.barcode=function(S){this.raw(c.barcodeCmd(S));return this;};
+c.Printer.prototype.qr=function(T,wa,U){this.raw(c.qrCmd(T,wa,U));return this;};
+c.Printer.prototype.cut=function(oa){this.raw(c.cutCmd(oa));return this;};
+c.Printer.prototype.drawer=function(sa){this.raw(c.drawerCmd(sa));return this;};
 
 
 
@@ -130,59 +130,59 @@ esc.Printer.prototype.drawer = function (pin) { this.raw(esc.drawerCmd(pin)); re
 
 
 
-esc.Printer.prototype.status = function (tries) {
-if (this.h.epIn < 0) return null;
-var n = tries || 3;
-var ask = function (self, q) {
-for (var t = 0; t < n; t++) {
-if (!usb.write(self.h, [0x10, 0x04, q], 1000).ok) return -1;
-var r = usb.read(self.h, 1, 1000);
-if (r.ok && r.len > 0) return r.data[0];
+c.Printer.prototype.status=function(ya){
+if(this.h.epIn<0)return null;
+var n=ya||3;
+var E=function(L,q){
+for(var t=0;t<n;t++){
+if(!e.write(L.h,[16,4,q],1000).ok)return-1;
+var r=e.read(L.h,1,1000);
+if(r.ok&&r.len>0)return r.data[0];
 }
-return -1;
+return-1;
 };
-var s1 = ask(this, 1);
-if (s1 < 0) return null;
-var st = {
-online: (s1 & 0x08) === 0,
-erro: (s1 & 0x40) !== 0,
-esperando: (s1 & 0x20) !== 0,
-papel: false,
-acabando: false,
-raw1: s1,
-raw2: -1
+var p=E(this,1);
+if(p<0)return null;
+var u={
+online:(p&8)===0,
+erro:(p&64)!==0,
+esperando:(p&32)!==0,
+papel:false,
+acabando:false,
+raw1:p,
+raw2:-1
 };
-var s2 = ask(this, 2);
-if (s2 >= 0) {
-st.raw2 = s2;
-st.papel = (s2 & 0x60) !== 0;
-st.acabando = !st.papel && (s2 & 0x0C) !== 0;
+var v=E(this,2);
+if(v>=0){
+u.raw2=v;
+u.papel=(v&96)!==0;
+u.acabando=!u.papel&&(v&12)!==0;
 }
-return st;
+return u;
 };
 
 
-esc.Printer.prototype.file = function (path, maxBytes) {
-return usb.printFile(this.h, path, maxBytes);
+c.Printer.prototype.file=function(pa,Y){
+return e.printFile(this.h,pa,Y);
 };
 
 
-esc.Printer.prototype.receipt = function (title, lines, qrText) {
+c.Printer.prototype.receipt=function(xa,I,J){
 this.init();
-this.align(1).size(2, 2).bold(true).line(title || "CELER OS");
-this.size(1, 1).bold(false).line("");
+this.align(1).size(2,2).bold(true).line(xa||"CELER OS");
+this.size(1,1).bold(false).line("");
 this.align(0);
-for (var i = 0; i < (lines || []).length; i++) this.line(lines[i]);
+for(var i=0;i<(I||[]).length;i++)this.line(I[i]);
 this.feed(1);
-if (qrText) this.align(1).qr(qrText, 5, 1);
+if(J)this.align(1).qr(J,5,1);
 this.align(0).feed(4).cut();
 return this;
 };
 
-esc.Printer.prototype.close = function () {
-var ok = usb.close(this.h);
-this.h = null;
+c.Printer.prototype.close=function(){
+var ok=e.close(this.h);
+this.h=null;
 return ok;
 };
 
-module.exports = esc;
+module.exports=c;

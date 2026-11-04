@@ -16,7 +16,7 @@
 
 
 
-var A = require('celeros.app');
+var A=require('celeros.app');
 require('celeros.app.path');
 
 
@@ -24,61 +24,59 @@ require('celeros.app.path');
 
 
 
-function nomeSeguro(n) {
-var s = String(n === undefined || n === null ? '' : n);
-return s.length > 0 && s !== '.' && s !== '..' && s.indexOf('/') < 0 &&
-s.indexOf('\\') < 0 && s.indexOf('..') < 0;
+function R(n){
+var s=String(n===undefined||n===null?'':n);
+return s.length>0&&s!=='.'&&s!=='..'&&s.indexOf('/')<0&&
+s.indexOf('\\')<0&&s.indexOf('..')<0;
 }
 
-A.fsx = {
-version: '1.0.3',
+A.fsx={
+version:'1.0.3',
 
 
 
 
-free: function (drive) {
-try { return FS.getFreeSpace(drive || '/local') || 0; } catch (e) { return 0; }
+free:function(K){
+try{return FS.getFreeSpace(K||'/local')||0;}catch(e){return 0;}
 },
-hasRoom: function (bytes, drive) { return A.fsx.free(drive) > bytes; },
+hasRoom:function(I,L){return A.fsx.free(L)>I;},
 
 
-ensureDir: function (p) {
-var parts = String(p).split('/');
-var cur = '';
-for (var i = 0; i < parts.length; i++) {
-if (!parts[i]) { cur = '/'; continue; }
-cur = (cur === '/' ? '' : cur) + '/' + parts[i];
-try {
-if (!FS.isDirectory(cur) && !FS.mkdir(cur)) return false;
-} catch (e) { return false; }
+ensureDir:function(p){
+var y=String(p).split('/');
+var f='';
+for(var i=0;i<y.length;i++){
+if(!y[i]){f='/';continue;}
+f=(f==='/'?'':f)+'/'+y[i];
+try{
+if(!FS.isDirectory(f)&&!FS.mkdir(f))return false;
+}catch(e){return false;}
 }
 return true;
 },
 
 
-treeSize: function (dir) {
-var total = 0;
-var list = [];
-try { list = FS.listDir(dir) || []; } catch (e) { return 0; }
-for (var i = 0; i < list.length; i++) {
-try {
-if (FS.isDirectory(list[i])) total += A.fsx.treeSize(list[i]);
-else total += FS.getFileSize(list[i]) || 0;
-} catch (e2) { }
+treeSize:function(J){
+var B=0;
+var l=[];
+try{l=FS.listDir(J)||[];}catch(e){return 0;}
+for(var i=0;i<l.length;i++){
+try{
+if(FS.isDirectory(l[i]))B+=A.fsx.treeSize(l[i]);
+else B+=FS.getFileSize(l[i])||0;
+}catch(e2){}
 }
-return total;
+return B;
 },
 
-copy: function (src, dst) {
-try { return !!FS.copyDirectory(src, dst); } catch (e) { return false; }
-},
-
-
-md5: function (file) {
-try { return FS.getFileMD5(file) || ''; } catch (e) { return ''; }
+copy:function(T,M){
+try{return!!FS.copyDirectory(T,M);}catch(e){return false;}
 },
 
 
+md5:function(N){
+try{return FS.getFileMD5(N)||'';}catch(e){return'';}
+},
 
 
 
@@ -86,48 +84,50 @@ try { return FS.getFileMD5(file) || ''; } catch (e) { return ''; }
 
 
 
-stage: function (dir, files, json, onStep) {
-if (!A.fsx.ensureDir(dir)) return false;
-var staged = [];
-var fail = '';
-for (var i = 0; i < files.length && !fail; i++) {
-var fe = files[i];
-if (!fe || !nomeSeguro(fe.name)) { fail = 'Nome de arquivo invalido no pacote'; break; }
-var ftmp = dir + '/' + fe.name + '.new';
-var ok = false;
-try {
-ok = !!Net.download(fe.url, ftmp, function (got, total) {
-if (onStep) onStep(fe.name, got, total);
+
+
+stage:function(h,C,D,G){
+if(!A.fsx.ensureDir(h))return false;
+var d=[];
+var c='';
+for(var i=0;i<C.length&&!c;i++){
+var b=C[i];
+if(!b||!R(b.name)){c='Nome de arquivo invalido no pacote';break;}
+var j=h+'/'+b.name+'.new';
+var w=false;
+try{
+w=!!Net.download(b.url,j,function(O,U){
+if(G)G(b.name,O,U);
 });
-} catch (e) { ok = false; }
-if (!ok) {
+}catch(e){w=false;}
+if(!w){
 
 
-try { FS.deleteFile(ftmp); } catch (e9) { }
-fail = 'Erro ao baixar ' + fe.name;
+try{FS.deleteFile(j);}catch(e9){}
+c='Erro ao baixar '+b.name;
 break;
 }
-if (fe.md5 && A.fsx.md5(ftmp) !== fe.md5) {
-try { FS.deleteFile(ftmp); } catch (e2) { }
-fail = 'Verificacao falhou (md5)';
+if(b.md5&&A.fsx.md5(j)!==b.md5){
+try{FS.deleteFile(j);}catch(e2){}
+c='Verificacao falhou (md5)';
 break;
 }
-staged.push({ tmp: ftmp, dst: dir + '/' + fe.name });
+d.push({tmp:j,dst:h+'/'+b.name});
 }
 
-if (!fail && json) {
-var jtmp = dir + '/app.json.new';
-if (!FS.writeTextFile(jtmp, json)) fail = 'Erro ao gravar app.json';
-else staged.push({ tmp: jtmp, dst: dir + '/app.json' });
+if(!c&&D){
+var E=h+'/app.json.new';
+if(!FS.writeTextFile(E,D))c='Erro ao gravar app.json';
+else d.push({tmp:E,dst:h+'/app.json'});
 }
-if (fail) {
-for (var s = 0; s < staged.length; s++) {
-try { FS.deleteFile(staged[s].tmp); } catch (e3) { }
+if(c){
+for(var s=0;s<d.length;s++){
+try{FS.deleteFile(d[s].tmp);}catch(e3){}
 }
 return false;
 }
-for (var r = 0; r < staged.length; r++) {
-if (!FS.renameFile(staged[r].tmp, staged[r].dst)) return false;
+for(var r=0;r<d.length;r++){
+if(!FS.renameFile(d[r].tmp,d[r].dst))return false;
 }
 return true;
 },
@@ -138,26 +138,26 @@ return true;
 
 
 
-zipBlob: function (url, appName, md5, onProg) {
-if (typeof System.installZip !== 'function') return null;
-var zpath = '/local/kit_install.zip';
-var ok = false;
-try {
-ok = !!Net.download(url, zpath, function (got, total) {
-if (onProg) onProg(got, total);
+zipBlob:function(W,H,Q,F){
+if(typeof System.installZip!=='function')return null;
+var m='/local/kit_install.zip';
+var x=false;
+try{
+x=!!Net.download(W,m,function(P,V){
+if(F)F(P,V);
 });
-} catch (e) { ok = false; }
-if (!ok || A.fsx.md5(zpath) !== md5) {
-try { FS.deleteFile(zpath); } catch (e2) { }
+}catch(e){x=false;}
+if(!x||A.fsx.md5(m)!==Q){
+try{FS.deleteFile(m);}catch(e2){}
 return false;
 }
-var res = null;
-try { res = System.installZip(zpath, A.path.safeName(appName)); } catch (e3) { res = null; }
-try { FS.deleteFile(zpath); } catch (e4) { }
-return !!(res && res.ok);
+var t=null;
+try{t=System.installZip(m,A.path.safeName(H));}catch(e3){t=null;}
+try{FS.deleteFile(m);}catch(e4){}
+return!!(t&&t.ok);
 }
 };
 
 A._mods.push('fsx');
 
-module.exports = A;
+module.exports=A;

@@ -136,11 +136,17 @@ function validPin(p) {
 }
 function flowNewPin() {
     var p1 = A.form.askText("Novo PIN (4-6 dígitos)", { hint: "num", mask: true });
+    // CANCELAR (X) devolve null com nullOnCancel: sem este corte o cancelar
+    // caia no alerta "PIN inválido" (validPin(null) e falso) e o cancelar do
+    // Confirmar em "Os PINs não conferem". O "" (OK com o campo vazio)
+    // continua sendo PIN invalido de verdade.
+    if (p1 === null || p1 === undefined) return false;
     if (!validPin(p1)) {
         UI.alert("Segurança", "PIN inválido: use 4 a 6 dígitos");
         return false;
     }
     var p2 = A.form.askText("Confirmar PIN", { hint: "num", mask: true });
+    if (p2 === null || p2 === undefined) return false;
     if (p1 !== p2) {
         UI.alert("Segurança", "Os PINs não conferem");
         return false;

@@ -83,6 +83,11 @@ function refreshInstalled() {
         app.inst = false;
         app.instVer = "";
         if (app.pkg.length === 0) continue;
+        // cede a janela do executor a cada 8 apps: readJson + tamanho de arvore
+        // de dezenas de pacotes no cartao passava do slice de 1 s e o app
+        // morria com "execution timeout" (mesmo sintoma que a varredura do
+        // Ajustes tinha)
+        if ((i & 7) === 7) System.delay(1);
         var m = readJson(A.path.join(base, app.pkg, "app.json"));
         if (m === null) continue;
         app.inst = true;
@@ -134,6 +139,10 @@ function scanApps() {
             if (nome.length === 0 || nome.charAt(0) === ".") continue;
             var dir = A.path.join(SD_APPS, nome);
             if (!FS.isDirectory(dir)) continue;
+            // a varredura inteira num quadro estourava o slice de 1 s com o
+            // cartao cheio de apps (execution timeout na abertura): cede de 4
+            // em 4 pastas (A.fsx.treeSize anda a arvore do pacote)
+            if ((i & 3) === 3) System.delay(1);
             var m = readJson(A.path.join(dir, "app.json"));
             if (m === null || typeof m.name !== "string" || m.name.length === 0) continue;
             apps.push({

@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 55
+### Nível de API: 56
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -262,6 +262,39 @@ para o SO do ESP32.
   Quando o usuário toca em "OK", a execução retoma e a string
   digitada é devolvida. Devolve string vazia `""` se o usuário tocar em "X"
   (cancelar).
+
+---
+
+### Objeto App (API 56)
+
+O app deixa de ler o próprio `app.json` (que exige `"fs"` e conhecer
+`/local/apps/<Nome>/`) e de comparar `System.getAPILevel()` à mão.
+
+#### `App.info()` (API 56)
+- **Parâmetros:** nenhum.
+- **Retorna:** `{id, name, version, dataDir, api, runtimeApi, system,
+  permissions}`:
+  - `id` — `packageName` (String vazia em `.js` avulso sem manifesto)
+  - `name` — título exibido (o mesmo da topbar)
+  - `version` — `version` do `app.json` (String vazia se ausente/inválida)
+  - `dataDir` — `/local/data/<id>/` (String vazia sem `id`); **não cria** a
+    pasta — para criar e usar, chame `FS.appData()`
+  - `api` — `api` declarada no `app.json` (0 = não declara)
+  - `runtimeApi` — nível de API deste firmware (`CELEROS_API_LEVEL`)
+  - `system` — `true` se a capability `"system"` foi concedida
+  - `permissions` — array com as permissões **concedidas** (`"fs"`, `"net"`,
+    `"gpio"`, `"system"`, `"mic"`, `"camera"`, `"usb"`, `"input"`)
+- **Descrição:** identidade e contrato do app corrente, sem tocar no disco.
+  O firmware recusa no lançamento o app cujo `api` seja ilegível ou maior
+  que `runtimeApi` (ver `main/Utils/AppManifest.h`), então um app aberto tem
+  `api <= runtimeApi` por construção. Use `permissions` para saber o que foi
+  realmente concedido em vez de testar `typeof FS`/`typeof Net`.
+- **Exemplo:**
+```javascript
+var me = App.info();
+System.print(me.id + " v" + me.version + " (api " + me.api + "/" + me.runtimeApi + ")");
+if (me.permissions.indexOf("net") < 0) System.print("sem rede para este app");
+```
 
 ---
 
@@ -554,10 +587,14 @@ O CelerOS habilita controle direto dos pinos do microcontrolador ESP32 via
 
 `System.i2c` entrega ao app um barramento I²C master cru para sensores e
 atuadores externos. Exige a permissão `gpio`. Nas placas que já têm um bus de
-placa (GT911 da SmartDisplay em 19/45, watch em 15/14, OLED do cão em 41/42)
-`System.i2c.begin()` **adota** o bus que o touch/PMU/OLED abriu no boot; as
-demais placas usam pinos explícitos com `beginAt`. O protocolo do device mora
-nas deps JS (ex.: `celeros.hw.pca9685`), não no firmware.
+placa sobre o driver `i2c_master` do IDF (GT911 da SmartDisplay em 19/45,
+watch em 15/14) `System.i2c.begin()` **adota** o bus que o touch abriu no
+boot; as demais placas usam pinos explícitos com `beginAt`. No cão o bus do
+OLED (41/42) é escrito pela própria biblioteca de vídeo — não é recurso de
+app: `begin()`/`pins()` devolvem `null` e `beginAt(41, 42)` é recusado (use
+outros pinos; o bus do app cai no segundo controlador I²C do chip). O
+protocolo do device mora nas deps JS (ex.: `celeros.hw.pca9685`), não no
+firmware.
 
 - Endereços de 7 bits (`0x08..0x77`); dados como array de números `0..255`
   (o Duktape é enxuto, sem `Uint8Array`); teto de 128 bytes por transferência.
@@ -568,7 +605,7 @@ nas deps JS (ex.: `celeros.hw.pca9685`), não no firmware.
 
 #### `System.i2c.begin()` (API 54)
 - **Parâmetros:** nenhum
-- **Retorna:** `{port, sda, scl, hz}` ou `null` quando a placa não tem bus de placa
+- **Retorna:** `{port, sda, scl, hz}` ou `null` quando a placa não tem bus de placa utilizável pelo app (não declarado, ou bus escrito pela própria biblioteca de vídeo — cão)
 - **Descrição:** abre/adota o bus I²C do perfil da placa. Na CYD/devkit use `beginAt`.
 
 #### `System.i2c.beginAt(sda, scl, hz)` (API 54)
@@ -584,7 +621,7 @@ nas deps JS (ex.: `celeros.hw.pca9685`), não no firmware.
 #### `System.i2c.pins()` (API 54)
 - **Parâmetros:** nenhum
 - **Retorna:** `{port, sda, scl, hz}` ou `null`
-- **Descrição:** descreve o bus da placa para o app pré-preencher um seletor de pinos; `null` em placa sem bus.
+- **Descrição:** descreve o bus da placa para o app pré-preencher um seletor de pinos; `null` em placa sem bus utilizável pelo app (ex.: cão).
 
 #### `System.i2c.scan()` (API 54)
 - **Parâmetros:** nenhum
@@ -866,6 +903,49 @@ var r = Net.request({
 });
 if (r === null) System.print("offline");
 else System.print("HTTP " + r.status + ": " + r.body);
+```
+
+#### `Net.fetch(opts)` (API 56)
+- **Parâmetros:** `opts` (Object):
+  - `url` (String, obrigatória)
+  - `method` (String, opcional — `"GET"` (padrão), `"POST"`, `"PUT"`,
+    `"PATCH"`, `"DELETE"`)
+  - `body` (String, opcional — até 64 KB)
+  - `contentType` (String, opcional)
+  - `headers` (Object, opcional — até 6 cabeçalhos, mesmo contrato do
+    `Net.request`)
+  - `timeoutMs` (Number, opcional — 1000..20000, padrão 10000)
+  - `waitOnline` (Number, opcional — ms para esperar a rede voltar antes de
+    desistir; 0..60000, padrão 0)
+  - `retry` (Number, opcional — tentativas extras, 0..5, padrão 0; **só em
+    GET**)
+- **Retorna:** `{ok, status, body, truncated, durationMs, error}`. Nunca
+  `null` e nunca lança por falha de transporte:
+  - `ok` (Boolean) — `true` só em 2xx **e** corpo não truncado
+  - `status` (Number) — status HTTP (0 quando o transporte falhou)
+  - `body` (String) — corpo (também em 4xx/5xx, onde o gateway costuma
+    explicar o erro)
+  - `truncated` (Boolean) — o corpo passou do teto de 32 KB
+  - `durationMs` (Number)
+  - `error` (Object|null) — `{code, message}` com `code` em `NO_NETWORK`,
+    `TIMEOUT`, `TRANSPORT`, `HTTP` ou `TRUNCATED`
+- **Descrição:** o pedido que o app **não precisa orquestrar**. O SO espera a
+  rede voltar em fatias de 50 ms (a tela continua desenhando), repete GETs
+  com backoff de 400/800/1600/3200 ms (inclui 5xx), distingue transporte de
+  status e transforma o truncamento de 32 KB em erro visível — em vez de um
+  JSON cortado que falha no `JSON.parse` sem explicação. Corpo maior que
+  32 KB é caso de `Net.download` (streaming para arquivo, fora do heap JS).
+  Repetir um POST pode duplicar efeito no servidor, por isso `retry` só vale
+  para GET.
+- **Exemplo:**
+```javascript
+var r = Net.fetch({
+    url: "https://api.exemplo.br/tempo",
+    waitOnline: 30000,
+    retry: 2
+});
+if (!r.ok) System.print("falhou: " + r.error.code + " " + r.error.message);
+else System.print(r.body);
 ```
 
 #### `Net.download(url, caminho, onProgress)` (API 6)

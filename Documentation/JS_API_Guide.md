@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 55
+### API Level: 56
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -199,6 +199,32 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
     - `hint: "num"` (API level 11) opens the numeric page instead of QWERTY (big 3x3 dial pad). It is a suggestion, not a lock — the mode key ("ABC"/"123") stays available. Unknown values fall back to QWERTY, so older firmware degrades gracefully.
 - **Returns:** `String`
 - **Description:** Completely suspends JavaScript execution and opens the native C++ full-screen QWERTY touch keyboard (with shift — double-tap toggles caps lock —, two symbol pages and a PT-BR accent page). Once the user taps "OK", execution resumes and the typed string is returned. Returns an empty string `""` if the user taps "X" (cancel).
+
+---
+
+### App Object (API 56)
+
+The app no longer reads its own `app.json` (which requires `"fs"` and knowing
+`/local/apps/<Name>/`) nor compares `System.getAPILevel()` by hand.
+
+#### `App.info()` (API 56)
+- **Parameters:** none.
+- **Returns:** `{id, name, version, dataDir, api, runtimeApi, system, permissions}`:
+  - `id` — `packageName` (empty String for a bare `.js` without a manifest)
+  - `name` — display title (the same one shown in the system topbar)
+  - `version` — `version` from `app.json` (empty String if absent/invalid)
+  - `dataDir` — `/local/data/<id>/` (empty String without `id`); it does **not** create the folder — call `FS.appData()` for that
+  - `api` — `api` declared in `app.json` (0 = not declared)
+  - `runtimeApi` — this firmware's API level (`CELEROS_API_LEVEL`)
+  - `system` — `true` if the `"system"` capability was granted
+  - `permissions` — array of **granted** permissions (`"fs"`, `"net"`, `"gpio"`, `"system"`, `"mic"`, `"camera"`, `"usb"`, `"input"`)
+- **Description:** identity and contract of the current app, without touching the disk. The firmware refuses at launch any app whose `api` is unreadable or greater than `runtimeApi` (see `main/Utils/AppManifest.h`), so a running app has `api <= runtimeApi` by construction. Use `permissions` to know what was actually granted instead of probing `typeof FS`/`typeof Net`.
+- **Example:**
+```javascript
+var me = App.info();
+System.print(me.id + " v" + me.version + " (api " + me.api + "/" + me.runtimeApi + ")");
+if (me.permissions.indexOf("net") < 0) System.print("no network for this app");
+```
 
 ---
 
@@ -401,10 +427,14 @@ CelerOS enables direct hardware control of the ESP32 microcontroller pins via `S
 
 `System.i2c` gives apps a raw I²C master bus for external sensors and
 actuators. It requires the `gpio` permission. On boards that already have a
-board bus (SmartDisplay GT911 on 19/45, watch 15/14, robot dog OLED on 41/42)
-`System.i2c.begin()` **adopts** the bus the touch/PMU/OLED opened at boot; the
-other boards take explicit pins with `beginAt`. The device protocol lives in
-the JS deps (e.g. `celeros.hw.pca9685`), not in the firmware.
+board bus over the IDF `i2c_master` driver (SmartDisplay GT911 on 19/45,
+watch 15/14) `System.i2c.begin()` **adopts** the bus the touch opened at
+boot; the other boards take explicit pins with `beginAt`. On the robot dog
+the OLED bus (41/42) is driven by the display library itself — it is not an
+app resource: `begin()`/`pins()` return `null` and `beginAt(41, 42)` is
+rejected (use other pins; the app bus lands on the chip's second I²C
+controller). The device protocol lives in the JS deps (e.g.
+`celeros.hw.pca9685`), not in the firmware.
 
 - Addresses are 7-bit (`0x08..0x77`); data is an array of numbers `0..255`
   (Duktape is lean, no `Uint8Array`); max 128 bytes per transfer.
@@ -415,7 +445,7 @@ the JS deps (e.g. `celeros.hw.pca9685`), not in the firmware.
 
 #### `System.i2c.begin()` (API 54)
 - **Parameters:** none
-- **Returns:** `{port, sda, scl, hz}` or `null` when the board has no board bus
+- **Returns:** `{port, sda, scl, hz}` or `null` when the board has no board bus apps can use (none declared, or the bus is driven by the display itself — dog)
 - **Description:** opens/adopts the board I²C bus from the board profile. On the CYD/devkit boards use `beginAt` instead.
 
 #### `System.i2c.beginAt(sda, scl, hz)` (API 54)
@@ -431,7 +461,7 @@ the JS deps (e.g. `celeros.hw.pca9685`), not in the firmware.
 #### `System.i2c.pins()` (API 54)
 - **Parameters:** none
 - **Returns:** `{port, sda, scl, hz}` or `null`
-- **Description:** describes the board bus so an app can pre-fill a pin picker; `null` on boards without one.
+- **Description:** describes the board bus so an app can pre-fill a pin picker; `null` on boards without one usable by apps (dog).
 
 #### `System.i2c.scan()` (API 54)
 - **Parameters:** none
@@ -680,6 +710,35 @@ var r = Net.request({
 });
 if (r === null) System.print("offline");
 else System.print("HTTP " + r.status + ": " + r.body);
+```
+
+#### `Net.fetch(opts)` (API 56)
+- **Parameters:** `opts` (Object):
+  - `url` (String, required)
+  - `method` (String, optional — `"GET"` (default), `"POST"`, `"PUT"`, `"PATCH"`, `"DELETE"`)
+  - `body` (String, optional — up to 64 KB)
+  - `contentType` (String, optional)
+  - `headers` (Object, optional — up to 6 headers, same contract as `Net.request`)
+  - `timeoutMs` (Number, optional — 1000..20000, default 10000)
+  - `waitOnline` (Number, optional — ms to wait for the network to come back; 0..60000, default 0)
+  - `retry` (Number, optional — extra attempts, 0..5, default 0; **GET only**)
+- **Returns:** `{ok, status, body, truncated, durationMs, error}`. Never `null` and never throws on transport failure:
+  - `ok` (Boolean) — `true` only on 2xx **and** an untruncated body
+  - `status` (Number) — HTTP status (0 when the transport failed)
+  - `body` (String) — body (also on 4xx/5xx, where gateways usually explain the error)
+  - `truncated` (Boolean) — the body exceeded the 32 KB cap
+  - `durationMs` (Number)
+  - `error` (Object|null) — `{code, message}` with `code` in `NO_NETWORK`, `TIMEOUT`, `TRANSPORT`, `HTTP` or `TRUNCATED`
+- **Description:** the request the app does **not** have to orchestrate. The OS waits for the network in 50 ms slices (the screen keeps drawing), retries GETs with 400/800/1600/3200 ms backoff (including 5xx), tells transport from HTTP status apart, and turns the 32 KB truncation into a visible error instead of a JSON body that fails `JSON.parse` with no explanation. Bodies above 32 KB are a job for `Net.download` (streaming to a file, outside the JS heap). Retrying a POST can duplicate a server-side effect, which is why `retry` only applies to GET.
+- **Example:**
+```javascript
+var r = Net.fetch({
+    url: "https://api.example.br/weather",
+    waitOnline: 30000,
+    retry: 2
+});
+if (!r.ok) System.print("failed: " + r.error.code + " " + r.error.message);
+else System.print(r.body);
 ```
 
 #### `Net.download(url, filePath, onProgress)` (API 6)

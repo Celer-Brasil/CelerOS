@@ -26,13 +26,20 @@ public:
     static void appExitCleanup();
     // Apaga o Storage (NVS) de um pacote — desinstalacao pelo launcher
     static bool storageClearPackage(const std::string& pkg);
+    // Acesso NATIVO a Storage de um pacote (API 56): o UpdateService escreve
+    // last_check/noted_ver nas chaves que o painel do Nucleo le, sem depender
+    // do service.js do app. Mesmo namespace/limites do Storage do JS.
+    static bool storageSetFor(const std::string& pkg, const char* key, const char* value);
+    static std::string storageGetFor(const std::string& pkg, const char* key);
 
     // appTitle: nome na topbar do sistema; topbarFixed: false = faixa
     // retratil (swipe da borda superior revela por alguns segundos) com o
-    // app em tela cheia — campo "topbar" do app.json
+    // app em tela cheia — campo "topbar" do app.json. appApi/appVersion vem
+    // do app.json e alimentam App.info() (API 56).
     static void init(duk_context *ctx, CelerDisplay *tft, const char* appTitle = "",
                     bool topbarFixed = true, const char* appPkg = "",
-                    uint32_t perms = PERM_ALL);
+                    uint32_t perms = PERM_ALL, int appApi = 0,
+                    const char* appVersion = "");
 
     // Alvo de desenho do app (sprite do app > quadro automatico > display)
     static lgfx::LGFXBase* gfx();
@@ -323,6 +330,8 @@ public:
     static duk_ret_t js_netGetJSON(duk_context *ctx);
     static duk_ret_t js_netPost(duk_context *ctx);
     static duk_ret_t js_netRequest(duk_context *ctx);  // headers proprios + status (API 49)
+    static duk_ret_t js_netFetch(duk_context *ctx);    // espera online + retry + erro tipado (API 56)
+    static duk_ret_t js_appInfo(duk_context *ctx);     // App.info() — identidade do app (API 56)
     static duk_ret_t js_netDownload(duk_context *ctx);  // streaming p/ arquivo (API 6)
     static duk_ret_t js_netIsConnected(duk_context *ctx);
 

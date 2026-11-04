@@ -70,7 +70,10 @@ function makeEnv() {
 
     // Cores globais do firmware (RGB565), como globais do script
     env.__prelude = 'var BLACK=0x0000,WHITE=0xFFFF,RED=0xF800,GREEN=0x07E0,BLUE=0x001F,' +
-                    'YELLOW=0xFFE0,CYAN=0x07FF,MAGENTA=0xF81F,ORANGE=0xFDA0,DARKGREY=0x7BEF;';
+                    'YELLOW=0xFFE0,CYAN=0x07FF,MAGENTA=0xF81F,ORANGE=0xFDA0,DARKGREY=0x7BEF;' +
+                    // API 56: App.info() espelha o objeto do firmware; o teste
+                    // ajusta env.__harness.appInfo antes de rodar.
+                    'var App={info:function(){return __harness.appInfo;}};';
 
     // ---- Timers (API 12): mesmo modelo do firmware (JsTimers.cpp) — pool
     // FIXO de 8 slots (setTimeout ocupa o MENOR slot livre; o tick varre na
@@ -1230,6 +1233,24 @@ function makeEnv() {
     getJSON: function() { return null; },
     post: function() { return null; },
     request: function() { return null; },  // API 49: {status, body} ou null
+    // API 56: Net.fetch devolve SEMPRE o objeto tipado. Scriptavel por
+    // __harness.netResponse ({status, body, truncated}) e __harness.netOffline.
+    fetch: function(opts) {
+        var o = opts || {};
+        env.__harness.netFetches.push(String(o.url || ''));
+        var r = env.__harness.netResponse;
+        if (!r) {
+            return { ok: false, status: 0, body: '', truncated: false, durationMs: 0,
+                     error: { code: env.__harness.netOffline ? 'NO_NETWORK' : 'TRANSPORT',
+                              message: env.__harness.netOffline ? 'sem rede' : 'sem resposta no harness' } };
+        }
+        var ok = r.status >= 200 && r.status < 300 && !r.truncated;
+        return { ok: ok, status: r.status, body: r.body || '', truncated: !!r.truncated,
+                 durationMs: r.durationMs || 0,
+                 error: ok ? null
+                      : { code: r.truncated ? 'TRUNCATED' : 'HTTP',
+                          message: r.truncated ? 'corpo maior que 32KB' : 'HTTP ' + r.status } };
+    },
     download: function() { return false; },  // streaming p/ arquivo (API 6)
     isConnected: function() { return false; },
     beginGet: function(url) {
@@ -1735,6 +1756,12 @@ function makeEnv() {
 
     env.__harness = {
     log: log,
+    // API 56: identidade do app (App.info) e script do Net.fetch
+    appInfo: { id: '', name: '', version: '', dataDir: '', api: 0, runtimeApi: 56,
+               system: false, permissions: [] },
+    netResponse: null,   // {status, body, truncated} ou null = falha de transporte
+    netOffline: false,   // true = NO_NETWORK (sem rede)
+    netFetches: [],      // URLs pedidas por Net.fetch (ordem)
     // API 54: devices do bus I2C em memoria
     i2cAdd: function(addr, regs) {
         var r = {};

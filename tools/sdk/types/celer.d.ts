@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 55 — 387 funcoes.
+// API level 56 — 389 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -373,7 +373,7 @@ declare const System: {
         /** remove os devices que este app adicionou e fecha o bus só se o app o criou. O bus da placa (touch/PMU/OLED) continua vivo. Idempotente. (API 54) */
         /** @permission "gpio" */
         end(): boolean;
-        /** descreve o bus da placa para o app pré-preencher um seletor de pinos; null em placa sem bus. (API 54) */
+        /** descreve o bus da placa para o app pré-preencher um seletor de pinos; null em placa sem bus utilizável pelo app (ex.: cão). (API 54) */
         /** @permission "gpio" */
         pins(): I2CBus | null;
         /** sonda 0x08..0x77 com i2c_master_probe. Um bus travado pode levar segundos; o binding renova a janela do executor a cada 16 endereços. (API 54) */
@@ -498,6 +498,8 @@ declare const Net: {
     post(url?: string, body?: string, contentType?: number): any;
     /** @permission "net" */
     request(opts?: Record<string, any>): any;
+    /** @permission "net" */
+    fetch(opts?: Record<string, any>): any;
     /** @permission "net+fs" */
     download(url: string, caminho: string, onProgress?: (...args: any[]) => any): any;
     /** @permission "net" */
@@ -762,6 +764,10 @@ declare const USB: {
     unlisten(addr: number, ep: number): boolean;
     /** @permission "usb" */
     flush(addr: number, ep: number): boolean;
+};
+
+declare const App: {
+    info(): any;
 };
 
 declare const BLACK: number;

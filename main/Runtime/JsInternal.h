@@ -345,9 +345,16 @@ template <size_t MAX>
 struct JsBodySink {
     char* p = nullptr;
     size_t n = 0, cap = 0;
+    bool overflow = false;  // o corpo passou de MAX (truncado, nao "exato")
     bool append(const char* d, size_t len) {
-        if (n >= MAX) return true;  // teto: descarta o excedente
-        if (len > MAX - n) len = MAX - n;
+        if (n >= MAX) {  // teto: descarta o excedente
+            if (len) overflow = true;
+            return true;
+        }
+        if (len > MAX - n) {
+            overflow = true;
+            len = MAX - n;
+        }
         if (n + len > cap) {
             size_t want = cap * 2 > n + len ? cap * 2 : n + len;
             if (want < 1024) want = 1024;

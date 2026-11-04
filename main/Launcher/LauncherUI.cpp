@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <new>
 #include "../Utils/AppPerms.h"  // parsePermissions/PERM_* (testavel no host)
+#include "../Utils/AppManifest.h"  // api/main/version do app.json (API 56)
+#include "../Utils/I18n.h"
 #include "../Utils/AppGrants.h"
 #include "../USBDevice/LogSink.h"
 #include "../Runtime/JSBindings.h"
@@ -252,6 +254,14 @@ void LauncherUI::scanLocalApps() {
 
                 std::string jsonContent = FileSystem::readTextFile(appJsonPath.c_str());
                 appEntryPerms = celer::parsePermissions(jsonContent);
+                // Contrato do runtime (API 56): o hub/lint ja validam, mas o
+                // device precisa ler o MESMO manifesto para nao aceitar um
+                // pacote sideloadado com api incompativel ou entry invalido.
+                celer::AppManifest mf = celer::parseAppManifest(jsonContent);
+                appApi = mf.api;
+                appApiInvalid = mf.apiInvalid;
+                appMain = mf.main;
+                appVersion = mf.version;
                 name = FileSystem::parseJsonValue(jsonContent, "name");
                 if (name.length() == 0) continue;
 
@@ -321,6 +331,10 @@ void LauncherUI::scanLocalApps() {
             e.isFolder = isFolder;
             e.isSystem = system;
             e.topbar = topbar;
+            e.mainFile = appMain;
+            e.api = appApi;
+            e.apiInvalid = appApiInvalid;
+            e.version = appVersion;
             apps.push_back(std::move(e));
             appCount++;
         }
@@ -518,8 +532,36 @@ bool LauncherUI::uninstallEntry(int i) {
 
 void LauncherUI::launchApp(int index) {
     if (index < 0 || index >= appCount) return;
-    runApp(tftInstance, apps[index].path, apps[index].isFolder, apps[index].topbar,
-           apps[index].pkg, effectivePerms(apps[index].pkg, apps[index].path, apps[index].perms));
+    const AppEntry& e = apps[index];
+    if (!gateEntry(e)) return;
+    runApp(tftInstance, e.path, e.isFolder, e.topbar, e.pkg,
+           effectivePerms(e.pkg, e.path, e.perms), e.mainFile, e.api, e.version);
+}
+
+// Contrato do runtime (API 56): "api" ilegivel ou maior que o firmware vira
+// tela de aviso com o motivo, ANTES de tocar no heap. Antes, um app
+// sideloadado com API maior rodava e recebia TypeError no primeiro simbolo
+// ausente — sem dizer que o problema era a versao do sistema.
+bool LauncherUI::gateEntry(const AppEntry& e) {
+    if (e.apiInvalid) {
+        char msg[180];
+        snprintf(msg, sizeof(msg),
+                 "O app \"%s\" declara um campo \"api\" invalido no app.json. "
+                 "Instale novamente pelo hub.",
+                 e.name.c_str());
+        CelerKernel::showNotice(i18n::TR("App invalido", "Invalid app"), msg);
+        return false;
+    }
+    if (e.api > CELEROS_API_LEVEL) {
+        char msg[220];
+        snprintf(msg, sizeof(msg),
+                 "O app \"%s\" pede a API %d e este aparelho roda a API %d. "
+                 "Atualize o CelerOS para abri-lo.",
+                 e.name.c_str(), e.api, CELEROS_API_LEVEL);
+        CelerKernel::showNotice(i18n::TR("Atualização necessária", "Update required"), msg);
+        return false;
+    }
+    return true;
 }
 
 bool LauncherUI::launchAppAsync(int index) {
@@ -528,11 +570,14 @@ bool LauncherUI::launchAppAsync(int index) {
     // nao foi criada — o chamador cai no caminho classico.
 #ifdef CELEROS_APP_TASK
     if (index < 0 || index >= appCount) return false;
+    const AppEntry& e = apps[index];
+    if (!gateEntry(e)) return false;
     std::string filePath;
     std::string title;
-    resolveApp(apps[index].path, apps[index].isFolder, filePath, title);
-    return AppRunner::start(filePath, title, apps[index].topbar,
-                            apps[index].pkg, effectivePerms(apps[index].pkg, apps[index].path, apps[index].perms));
+    resolveApp(e.path, e.isFolder, e.mainFile, filePath, title);
+    return AppRunner::start(filePath, title, e.topbar, e.pkg,
+                            effectivePerms(e.pkg, e.path, e.perms),
+                            e.api, e.version);
 #else
     (void)index;
     return false;
@@ -547,11 +592,15 @@ int LauncherUI::gridTotalPages() { return totalPages(); }
 // Execucao de app JS
 // ---------------------------------------------------------------------------
 void LauncherUI::resolveApp(const std::string& path, bool isFolder,
+                            const std::string& entryMain,
                             std::string& filePath, std::string& title) {
     if (isFolder) {
         filePath = path;
         if (!kstr::endsWith(filePath, "/")) filePath += "/";
-        filePath += "main.js";
+        // "main" do app.json (API 56; ja validado pelo AppManifest). Antes o
+        // campo era aceito na instalacao e o runtime SEMPRE abria main.js:
+        // um pacote com "main":"app.js" instalava e nao abria.
+        filePath += entryMain.empty() ? std::string("main.js") : entryMain;
     } else {
         filePath = path;
     }
@@ -565,12 +614,14 @@ void LauncherUI::resolveApp(const std::string& path, bool isFolder,
 }
 
 void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolder, bool topbarFixed,
-                        const std::string& appPkg, uint32_t perms) {
+                        const std::string& appPkg, uint32_t perms,
+                        const std::string& entryMain, int appApi,
+                        const std::string& appVersion) {
     tft->fillScreen(TFT_BLACK);
     tft->setTextDatum(TL_DATUM);
 
     std::string filePath, title;
-    resolveApp(path, isFolder, filePath, title);
+    resolveApp(path, isFolder, entryMain, filePath, title);
 
     // "topbar": true no app.json fixa a faixa (canvas abaixo dela); ausente
     // deixa a faixa retratil com o app em tela cheia
@@ -579,7 +630,7 @@ void LauncherUI::runApp(CelerDisplay* tft, const std::string& path, bool isFolde
     AppServices::suspendForApp();
     s_appRunning = true;
     CelerKernel::runFile(filePath.c_str(), title.c_str(), topbarFixed,
-                         appPkg.c_str(), perms);
+                         appPkg.c_str(), perms, appApi, appVersion.c_str());
     s_appRunning = false;
     AppServices::resumeAfterApp();
     // pedido de saida que o app nao chegou a consumir (saiu sozinho) morre

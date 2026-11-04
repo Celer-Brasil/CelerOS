@@ -6,6 +6,7 @@
 
 #include "../../main/Utils/SemVer.h"
 #include "../../main/Utils/AppPerms.h"
+#include "../../main/Utils/AppManifest.h"
 #include "../../main/Utils/JsStrip.h"
 #include "../../main/USBDevice/HostFrame.h"
 #include "../../main/Utils/AlarmCalc.h"
@@ -97,6 +98,95 @@ static void testPermissions() {
     // "camera" e perm valida desde a API 35 (Camera.* na esp32-cam)
     CHECK(parsePermissions("{\"permissions\":[\"camera\"]}") == PERM_CAMERA);
     CHECK(parsePermissions("{\"permissions\":[\"webcam\"]}") == 0);  // desconhecida segue nao concedendo
+}
+
+// Manifesto do app (API 56): o runtime passa a ler api/main/version/requires.
+// A regra e a MESMA do hub/lint, mas tolerante com o passado: ausente nao
+// invalida; presente e ilegivel e marcado para o gate do launcher.
+static void testAppManifest() {
+    using celer::parseAppManifest;
+    celer::AppManifest m;
+
+    m = parseAppManifest("{\"name\":\"x\"}");
+    CHECK(!m.hasApi && m.api == 0 && !m.apiInvalid);
+    CHECK(m.main == "main.js" && !m.mainInvalid);
+    CHECK(m.version.empty() && !m.requiresPsram);
+
+    m = parseAppManifest("{\"name\":\"x\",\"api\":56,\"version\":\"1.2.3\"}");
+    CHECK(m.hasApi && m.api == 56 && !m.apiInvalid);
+    CHECK(m.version == "1.2.3");
+
+    // "api" dentro de string (description) nao vale; a chave de verdade vale
+    m = parseAppManifest("{\"description\":\"use \\\"api\\\": 99\",\"api\":42}");
+    CHECK(m.hasApi && m.api == 42 && !m.apiInvalid);
+
+    // chave de objeto aninhado nao confunde a varredura
+    m = parseAppManifest("{\"extra\":{\"api\":77},\"api\":12}");
+    CHECK(m.api == 12);
+
+    // presente e ilegivel = marcado (o launcher recusa com mensagem)
+    m = parseAppManifest("{\"api\":\"56\"}");
+    CHECK(m.hasApi && m.apiInvalid && m.api == 0);
+    m = parseAppManifest("{\"api\":0}");
+    CHECK(m.apiInvalid);
+    m = parseAppManifest("{\"api\":1000}");
+    CHECK(m.apiInvalid);
+    m = parseAppManifest("{\"api\":1e3}");
+    CHECK(m.apiInvalid);
+
+    // main: flat, .js, sem caminho/..
+    m = parseAppManifest("{\"main\":\"app.js\"}");
+    CHECK(m.main == "app.js" && !m.mainInvalid);
+    m = parseAppManifest("{\"main\":\"MAIN-2.js\"}");
+    CHECK(m.main == "MAIN-2.js" && !m.mainInvalid);
+    m = parseAppManifest("{\"main\":\"../x.js\"}");
+    CHECK(m.mainInvalid && m.main == "main.js");
+    m = parseAppManifest("{\"main\":\"sub/x.js\"}");
+    CHECK(m.mainInvalid && m.main == "main.js");
+    m = parseAppManifest("{\"main\":\".hidden.js\"}");
+    CHECK(m.mainInvalid);
+    m = parseAppManifest("{\"main\":\"x.txt\"}");
+    CHECK(m.mainInvalid);
+    m = parseAppManifest("{\"main\":\".js\"}");
+    CHECK(m.mainInvalid);
+
+    // requires: so o array conta (mencao em description nao)
+    m = parseAppManifest("{\"requires\":[\"psram\"]}");
+    CHECK(m.requiresPsram);
+    m = parseAppManifest("{\"requires\":[\"wifi\",\"psram\"]}");
+    CHECK(m.requiresPsram);
+    m = parseAppManifest("{\"requires\":[]}");
+    CHECK(!m.requiresPsram);
+    m = parseAppManifest("{\"description\":\"requires psram\"}");
+    CHECK(!m.requiresPsram);
+
+    // version invalida vira "" (cosmetico: nao bloqueia)
+    m = parseAppManifest("{\"version\":\"1.0 beta\"}");
+    CHECK(m.version.empty());
+    m = parseAppManifest("{\"version\":\"2.0.0-rc1+build5\"}");
+    CHECK(m.version == "2.0.0-rc1+build5");
+
+    // system: so o booleano JSON vale (string "true" nao e o contrato)
+    m = parseAppManifest("{\"system\":true}");
+    CHECK(m.isSystem);
+    m = parseAppManifest("{\"system\":false}");
+    CHECK(!m.isSystem);
+    m = parseAppManifest("{\"system\":\"true\"}");
+    CHECK(!m.isSystem);
+    m = parseAppManifest("{\"extra\":{\"system\":true}}");
+    CHECK(!m.isSystem);
+
+    // packageName: mesma identidade que o launcher usa em /local/data/<pkg>
+    m = parseAppManifest("{\"packageName\":\"celeros.settings\"}");
+    CHECK(m.id == "celeros.settings");
+    m = parseAppManifest("{\"packageName\":\"../x\"}");
+    CHECK(m.id.empty());
+    m = parseAppManifest("{\"packageName\":\"a b\"}");
+    CHECK(m.id.empty());
+
+    // literal sem fechamento nao trava a leitura dos campos seguintes
+    m = parseAppManifest("{\"description\":\"sem fim,\"api\":7}");
+    CHECK(!m.hasApi);  // o literal engoliu o resto: nao inventa api
 }
 
 // Enxuga em chunks de 3 bytes (estado atravessa a fronteira dos pedacos)
@@ -2928,6 +3018,7 @@ int main() {
     testSemVer();
     testFsJail();
     testPermissions();
+    testAppManifest();
     testJsStrip();
     testJsStripInPlaceApps();
     testHostFrame();

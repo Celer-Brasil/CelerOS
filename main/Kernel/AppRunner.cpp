@@ -25,6 +25,11 @@ struct AppParams {
     bool topbarFixed;
     char appPkg[64];
     uint32_t perms;
+    int appApi;            // "api" do app.json (App.info; API 56)
+    // "version" (App.info): 40 cobre o teto do AppManifest (32) SEM truncar —
+    // truncado, o compare do commit do trial (mf.version == appVersion)
+    // falhava para versao longa e o .old ficava eternamente em LittleFS
+    char appVersion[40];
 };
 
 volatile bool s_running = false;
@@ -36,7 +41,8 @@ void appTask(void* raw) {
     // reinicia em ~15s — os pontos de espera ja alimentam o WDT)
     esp_task_wdt_add(nullptr);
 
-    CelerKernel::runFile(p->filePath, p->title, p->topbarFixed, p->appPkg, p->perms);
+    CelerKernel::runFile(p->filePath, p->title, p->topbarFixed, p->appPkg, p->perms,
+                         p->appApi, p->appVersion);
 
     // Sobra de stack da task do app (palavras de 4B), junto da linha de
     // sessao que o runFile emite. O caminho sincrono roda na task do
@@ -68,7 +74,8 @@ namespace AppRunner {
 bool supported() { return true; }
 
 bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
-                      const std::string& appPkg, uint32_t perms) {
+                      const std::string& appPkg, uint32_t perms, int appApi,
+                      const std::string& appVersion) {
     if (s_running) return false;  // um app por vez
 
     // Identidade sem truncar (jail de FS/Storage segue o pkg): path que nao
@@ -95,6 +102,8 @@ bool start(const std::string& filePath, const std::string& title, bool topbarFix
     p->topbarFixed = topbarFixed;
     snprintf(p->appPkg, sizeof(p->appPkg), "%s", appPkg.c_str());
     p->perms = perms;
+    p->appApi = appApi;
+    snprintf(p->appVersion, sizeof(p->appVersion), "%s", appVersion.c_str());
     if (xTaskCreatePinnedToCore(appTask, "celerapp", 32768, p, 1, nullptr, portNUM_PROCESSORS - 1) != pdPASS) {
         free(p);
         s_running = false;
@@ -119,7 +128,8 @@ bool running() { return s_running; }
 namespace AppRunner {
 
 bool supported() { return false; }
-bool start(const std::string&, const std::string&, bool, const std::string&, uint32_t) { return false; }
+bool start(const std::string&, const std::string&, bool, const std::string&, uint32_t,
+           int, const std::string&) { return false; }
 bool running() { return false; }
 
 }  // namespace AppRunner

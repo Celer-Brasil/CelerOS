@@ -163,6 +163,10 @@ static bool s_barOnGlass = false;
 static bool s_barHotOnGlass = false;
 static int s_armX = 0, s_armY = 0;   // onde o toque no X comecou
 static const char* s_appTitle = "";
+static int s_appApi = 0;             // "api" do app.json (App.info; API 56)
+// 40 = teto do AppManifest.validVersion (32) + folga: menos que isso cortava
+// em silencio uma version valida de 24..32 chars no App.info().version
+static char s_appVersion[40] = "";   // "version" do app.json (App.info)
 bool s_topbarFixed = true;    // setado por app pelo launcher (init)
 static bool s_barShown = false;      // retratil: faixa visivel agora
 static uint32_t s_barShownAt = 0;
@@ -995,6 +999,42 @@ void JSBindings::putFns(duk_context* ctx, const JsFn* fns, int n) {
 // app (decisivo na CYD sem PSRAM). Unica diferenca visivel: sem .name.
 // (a forma de tabela estatica e o template-membro no header)
 
+// App.info() (API 56): identidade e contrato do app corrente. O app deixa de
+// ler o proprio app.json (que exige "fs" e conhecer /local/apps/<Nome>) e de
+// comparar System.getAPILevel() a mao para saber se o aparelho o suporta.
+duk_ret_t JSBindings::js_appInfo(duk_context *ctx) {
+    char dataDir[160] = "";
+    if (!s_appPkg.empty()) {
+        snprintf(dataDir, sizeof(dataDir), "/local/data/%s/", s_appPkg.c_str());
+    }
+    static const struct {
+        uint32_t bit;
+        const char *name;
+    } kPermNames[] = {
+        {celer::PERM_FS, "fs"},         {celer::PERM_NET, "net"},
+        {celer::PERM_GPIO, "gpio"},     {celer::PERM_SYSTEM, "system"},
+        {celer::PERM_MIC, "mic"},       {celer::PERM_CAMERA, "camera"},
+        {celer::PERM_USB, "usb"},       {celer::PERM_INPUT, "input"},
+    };
+    duk_push_object(ctx);  // info
+    putStr(ctx, "id", s_appPkg.c_str());
+    putStr(ctx, "name", s_appTitle ? s_appTitle : "");
+    putStr(ctx, "version", s_appVersion);
+    putStr(ctx, "dataDir", dataDir);   // NAO cria a pasta (FS.appData cria)
+    putInt(ctx, "api", s_appApi);      // declarada no app.json (0 = ausente)
+    putInt(ctx, "runtimeApi", CELEROS_API_LEVEL);
+    putBool(ctx, "system", perm(celer::PERM_SYSTEM));
+    duk_push_array(ctx);
+    duk_uarridx_t n = 0;
+    for (const auto &p : kPermNames) {
+        if (!perm(p.bit)) continue;
+        duk_push_string(ctx, p.name);
+        duk_put_prop_index(ctx, -2, n++);
+    }
+    duk_put_prop_string(ctx, -2, "permissions");
+    return 1;
+}
+
 // ---- Identidade do svchost (API 42): pkg/perms/ctx/pasta do servico ----
 // Pilha de save: o dispatch aninha (mesmo cenario do save de deps em
 // JsModules.cpp) — 1 nivel era sobrescrito pelo Begin interno e o End
@@ -1038,11 +1078,14 @@ void JSBindings::svcIdentityRestore() {
 bool JSBindings::inService() { return s_svcActive; }
 
 void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
-                      bool topbarFixed, const char* appPkg, uint32_t perms) {
+                      bool topbarFixed, const char* appPkg, uint32_t perms,
+                      int appApi, const char* appVersion) {
     s_jsTft = tft;
     tftInstance = tft;
     s_jsCtx = ctx;
     s_appTitle = appTitle ? appTitle : "";
+    s_appApi = appApi;
+    snprintf(s_appVersion, sizeof(s_appVersion), "%s", appVersion ? appVersion : "");
     s_topbarFixed = topbarFixed;
     s_appPkg = appPkg ? appPkg : "";
     s_perms = perms;
@@ -1683,6 +1726,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"getJSON", js_netGetJSON, 1},
         {"post", js_netPost, 3},
         {"request", js_netRequest, 1},  // API 49: headers proprios + status
+        {"fetch", js_netFetch, 1},      // API 56: espera online + retry + erro tipado
         {"download", js_netDownload, 3},
         {"beginGet", js_netBeginGet, 1},
         {"pollGet", js_netPollGet, 1},
@@ -1948,6 +1992,16 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         duk_put_prop_string(ctx, -2, "USB");
     }
 #endif
+
+    // --- App (API 56): identidade/contrato do app corrente -------------
+    // Sempre presente (nao e capability): nome, id, versao, api declarada,
+    // api do runtime, pasta privada e permissoes CONCEDIDAS.
+    duk_push_object(ctx);  // App
+    static const JsFn kFnsApp[] = {
+        {"info", js_appInfo, 0},
+    };
+    putFns(ctx, kFnsApp);
+    duk_put_prop_string(ctx, -2, "App");
 
     // --- Color Constants on global scope ---
     // Common TFT colors so JS apps don't need hex

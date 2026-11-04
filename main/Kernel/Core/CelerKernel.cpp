@@ -7,6 +7,8 @@
 #include "../../Runtime/JSBindings.h"
 #include "../../FileSystem/FileSystem.h"
 #include "../../Utils/StrUtils.h"
+#include "../../Utils/AppPackage.h"
+#include "../../Utils/AppManifest.h"
 #include "../../Display/Theme.h"
 #include "../../UI/Kui.h"
 #include "../../Display/Icon.h"
@@ -188,8 +190,25 @@ static void showRuntimeError(const char* title, const std::string& detail) {
         return pin >= 0 && digitalRead(pin) == LOW;  // ativo-baixo (pull-up do Buttons::init)
     };
     while (dismissHeld()) { esp_task_wdt_reset(); delay(20); }
-    while (!dismissHeld()) { esp_task_wdt_reset(); delay(20); }
-    while (dismissHeld()) { esp_task_wdt_reset(); delay(20); }
+    // Prazo de leitura: o erro ja esta no log e em lastcrash.txt. Sem toque,
+    // volta ao launcher em 12 s — antes esperava para sempre e um app que
+    // quebrava no boot (casa/watchface) prendia o aparelho nessa tela.
+    // O primeiro laco (soltar o dedo) fica sem prazo: ali ha um toque ativo.
+    const uint32_t deadline = millis() + 12000;
+    bool tapped = false;
+    while (!tapped && (int32_t)(millis() - deadline) < 0) {
+        esp_task_wdt_reset();
+        delay(20);
+        tapped = dismissHeld();
+    }
+    // Toque de verdade: espera soltar, senao o release cairia na tela que
+    // volta (o launcher tem quarentena de 300 ms, mas o contrato e este).
+    if (tapped) {
+        while (dismissHeld()) {
+            esp_task_wdt_reset();
+            delay(20);
+        }
+    }
 }
 #else
 // Sem vidro (CELEROS_UI=n): o erro do runtime vai para o logcat (kern.log)
@@ -199,6 +218,13 @@ static void showRuntimeError(const char* title, const std::string& detail) {
     delay(1200);
 }
 #endif
+
+// Aviso do sistema (API 56): o launcher recusa um app incompativel antes de
+// criar o heap e mostra o motivo. Reusa a tela de erro (mesma espera por
+// toque/botao), mas nao grava lastcrash: nao e falha do app.
+void CelerKernel::showNotice(const char* title, const char* detail) {
+    showRuntimeError(title ? title : "", std::string(detail ? detail : ""));
+}
 
 // dica de OOM no idioma configurado (primeiro uso trava o idioma)
 static const char* oomHint() {
@@ -643,7 +669,8 @@ void CelerKernel::executeJS(const char* jsCode) {
 }
 
 void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topbarFixed,
-                         const char* appPkg, uint32_t perms) {
+                         const char* appPkg, uint32_t perms, int appApi,
+                         const char* appVersion) {
     // Abrir app acorda a tela (AOD/dim escondiam o app recem-launchado em
     // launches remotos/autostart: sem toque, o ScreenPower nunca sabia).
     Backlight::noteActivity();
@@ -735,7 +762,8 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         jsLoadAppDeps(s_appDir.c_str());
     }
 
-    JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms);
+    JSBindings::init(ctx, tftInstance, appTitle, topbarFixed, appPkg, perms, appApi,
+                     appVersion);
     celer_log_printf("[duk] heap base+API: %u B (livre %u, iram %u)\n",
                      (unsigned)(freeBefore - heap_caps_get_free_size(MALLOC_CAP_8BIT)),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
@@ -752,6 +780,12 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
             checkJSError(ctx, rc);
             s_exitReason = "compile";  // checkJSError marcou "erro": o app nem rodou
             logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
+            // Trial de app de sistema: compile quebrou = a versao nova nunca
+            // abre, e o return abaixo SALTA o bloco de trial do fim. Reverte
+            // aqui (so FS, heap ja destruido); sem isto o .old ficava preso
+            // no staging para sempre — boot estavel nao reverte (recover).
+            extern std::string s_appDir;  // Runtime/JsInternal.h (vazio em .js avulso)
+            if (!s_appDir.empty()) celer::apppkg::revertTrial(s_appDir.c_str());
             JsDebugger::detach(ctx);
             JSBindings::heapDetaching();
             duk_destroy_heap(ctx);
@@ -772,6 +806,39 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     celerAnalogWriteReset();  // canais LEDC 0..2 do analogWrite idem (vazavam entre apps)
     JSBindings::appExitCleanup();  // keepAwake + brilho/volume/tela de app comum
     checkJSError(ctx, rc);
+
+    // Update de app de sistema em trial: abrir/sair limpo confirma a versao
+    // nova; erro (inclusive OOM/timeout) devolve o .old na hora. Sem isto a
+    // confirmacao so viria no proximo boot e um app quebrado ficaria no ar
+    // ate la. Para app sem trial, os dois helpers sao um stat e voltam.
+    extern std::string s_appDir;  // Runtime/JsInternal.h (vazio em .js avulso)
+    if (!s_appDir.empty()) {
+        if (strcmp(s_exitReason, "ok") == 0 || strcmp(s_exitReason, "exitApp") == 0) {
+            // So confirma se o que rodou E a versao que esta no disco. A Loja
+            // se auto-atualiza com ela mesma aberta: o app.json novo aparece
+            // antes de a versao nova rodar, e confirmar aqui validaria um
+            // codigo que nunca abriu. Nesse caso o trial fica para o proximo
+            // lancamento (ou para o boot decidir).
+            if (celer::apppkg::trialPending(s_appDir.c_str())) {
+                const std::string json =
+                    FileSystem::readTextFile((s_appDir + "/app.json").c_str());
+                // Mesmo teto do installZip (16 KB): app.json gigante (SD
+                // mexido a mao) nao pode crescer sem teto dentro do parser
+                // no caminho sem PSRAM; acima disso o trial fica pendente e
+                // o boot decide (direcao segura).
+                if (!json.empty() && json.size() <= 16 * 1024) {
+                    const celer::AppManifest mf = celer::parseAppManifest(json);
+                    if (mf.version.empty() || appVersion == nullptr ||
+                        mf.version == appVersion) {
+                        celer::apppkg::commitTrial(s_appDir.c_str());
+                    }
+                }
+            }
+        } else {
+            celer::apppkg::revertTrial(s_appDir.c_str());
+        }
+    }
+
     JsDebugger::detach(ctx);
 
     // Destroy heap after app exits to free RAM

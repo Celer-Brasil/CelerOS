@@ -260,6 +260,239 @@ duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
     return 1;
 }
 
+// Resultado de Net.fetch: SEMPRE um objeto (nunca null/throw de transporte).
+// O corpo e opcional e o buffer malloc e sempre liberado pelo helper.
+static void netPushFetchResult(duk_context *ctx, bool ok, int status, char* body,
+                               size_t bodyLen, bool truncated, uint32_t durationMs,
+                               const char* code, const char* message) {
+    if (body != nullptr) jsPushOwnedString(ctx, body, bodyLen);  // libera o buffer
+    else duk_push_string(ctx, "");
+    duk_push_object(ctx);
+    duk_swap(ctx, -2, -1);  // corpo primeiro, objeto por cima
+    duk_put_prop_string(ctx, -2, "body");
+    putBool(ctx, "ok", ok);
+    putInt(ctx, "status", status);
+    putBool(ctx, "truncated", truncated);
+    putUint(ctx, "durationMs", durationMs);
+    if (code != nullptr) {
+        duk_push_object(ctx);
+        putStr(ctx, "code", code);
+        putStr(ctx, "message", message ? message : "");
+        duk_put_prop_string(ctx, -2, "error");
+    } else {
+        duk_push_null(ctx);
+        duk_put_prop_string(ctx, -2, "error");
+    }
+}
+
+// API 56: Net.fetch(opts) — o pedido que o app NAO precisa orquestrar.
+//
+//   var r = Net.fetch({ url, method, body, contentType, headers,
+//                       timeoutMs, waitOnline, retry });
+//   r -> { ok, status, body, truncated, durationMs, error: null|{code,message} }
+//
+// Por que existe, se ja ha Net.request: todo app reescrevia o mesmo laco de
+// "espera o WiFi voltar" + retry com backoff e ainda precisava distinguir
+// transporte de HTTP olhando null. Aqui a POLITICA e do SO:
+//   - waitOnline: espera a rede em fatias de 50 ms (present() mantem a tela e
+//     os timers; o app nao escreve while(!isConnected)); venceu = NO_NETWORK.
+//   - retry: SO em GET (repetir POST pode duplicar efeito no servidor), com
+//     backoff 400/800/1600/3200 ms e teto de 4 s; inclui 5xx.
+//   - erro tipado: NO_NETWORK | TIMEOUT | TRANSPORT | HTTP | TRUNCATED.
+//   - truncamento de 32KB deixa de ser silencioso: vira TRUNCATED (para corpo
+//     maior use Net.download, que escreve em arquivo sem passar pelo heap JS).
+// O corpo de 4xx/5xx volta junto (o gateway costuma explicar o erro no body).
+duk_ret_t JSBindings::js_netFetch(duk_context *ctx) {
+    if (!inService()) present();  // servico: sem vidro/reentrada do app
+    else esp_task_wdt_reset();
+    if (!duk_is_object(ctx, 0))
+        duk_error(ctx, DUK_ERR_TYPE_ERROR,
+                  "Net.fetch exige {url, method, body, headers, waitOnline, retry}");
+
+    duk_get_prop_string(ctx, 0, "url");
+    const char *url = netCheckUrl(ctx, duk_require_string(ctx, -1));
+    duk_pop(ctx);
+
+    duk_get_prop_string(ctx, 0, "method");
+    const char *method = duk_is_string(ctx, -1) ? duk_get_string(ctx, -1) : "GET";
+    HttpMethod verb = HttpMethod::GET;
+    if (strcasecmp(method, "POST") == 0) verb = HttpMethod::POST;
+    else if (strcasecmp(method, "PUT") == 0) verb = HttpMethod::PUT;
+    else if (strcasecmp(method, "PATCH") == 0) verb = HttpMethod::PATCH;
+    else if (strcasecmp(method, "DELETE") == 0) verb = HttpMethod::DELETE_;
+    else if (strcasecmp(method, "GET") != 0)
+        duk_error(ctx, DUK_ERR_RANGE_ERROR,
+                  "Net.fetch: method invalido (GET/POST/PUT/PATCH/DELETE)");
+    duk_pop(ctx);
+
+    std::string body;
+    std::string contentType = "text/plain";
+    duk_get_prop_string(ctx, 0, "body");
+    if (duk_is_string(ctx, -1)) {
+        size_t blen = 0;
+        const char *b = duk_get_lstring(ctx, -1, &blen);
+        if (blen > 64 * 1024)
+            duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.fetch: corpo acima de 64KB");
+        body.assign(b, blen);
+    }
+    duk_pop(ctx);
+    duk_get_prop_string(ctx, 0, "contentType");
+    if (duk_is_string(ctx, -1)) {
+        const char* ct = duk_get_string(ctx, -1);
+        contentType.assign(ct ? ct : "", strnlen(ct ? ct : "", 64));
+    }
+    duk_pop(ctx);
+
+    // Mesmo contrato de headers do Net.request: ate 6, sem CR/LF/controle.
+    char hNames[6][40] = {};
+    char hValues[6][260] = {};
+    int headerCount = 0;
+    duk_get_prop_string(ctx, 0, "headers");
+    if (!duk_is_null_or_undefined(ctx, -1)) {
+        if (!duk_is_object(ctx, -1))
+            duk_error(ctx, DUK_ERR_TYPE_ERROR,
+                      "Net.fetch: headers deve ser um objeto {nome: valor}");
+        duk_enum(ctx, -1, DUK_ENUM_OWN_PROPERTIES_ONLY);
+        while (duk_next(ctx, -1, 1 /*get_key_value*/) != 0) {
+            const char *name = duk_require_string(ctx, -2);
+            const char *value = duk_require_string(ctx, -1);
+            size_t nlen = strlen(name), vlen = strlen(value);
+            if (nlen == 0 || nlen >= sizeof(hNames[0]) || vlen >= sizeof(hValues[0]))
+                duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.fetch: header longo demais");
+            for (size_t i = 0; i < nlen; i++)
+                if ((unsigned char)name[i] < 0x20 || name[i] == ':')
+                    duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.fetch: nome de header invalido");
+            for (size_t i = 0; i < vlen; i++)
+                if ((unsigned char)value[i] < 0x20)
+                    duk_error(ctx, DUK_ERR_RANGE_ERROR, "Net.fetch: valor de header invalido");
+            if (headerCount < 6) {
+                memcpy(hNames[headerCount], name, nlen);
+                memcpy(hValues[headerCount], value, vlen);
+                headerCount++;
+            }
+            duk_pop_2(ctx);  // key value
+        }
+        duk_pop(ctx);  // enum
+    }
+    duk_pop(ctx);  // headers
+
+    duk_get_prop_string(ctx, 0, "timeoutMs");
+    uint32_t timeoutMs = duk_is_number(ctx, -1) ? (uint32_t)duk_get_number(ctx, -1) : 10000;
+    duk_pop(ctx);
+    if (timeoutMs < 1000) timeoutMs = 1000;
+    if (timeoutMs > 20000) timeoutMs = 20000;
+
+    duk_get_prop_string(ctx, 0, "waitOnline");
+    uint32_t waitMs = duk_is_number(ctx, -1) ? (uint32_t)duk_get_number(ctx, -1) : 0;
+    duk_pop(ctx);
+    if (waitMs > 60000) waitMs = 60000;
+
+    duk_get_prop_string(ctx, 0, "retry");
+    int retries = duk_is_number(ctx, -1) ? (int)duk_get_number(ctx, -1) : 0;
+    duk_pop(ctx);
+    if (retries < 0) retries = 0;
+    if (retries > 5) retries = 5;
+
+    // Espera online (bounded): o app nao escreve o loop; a tela continua
+    // desenhando porque cada fatia cede o quadro.
+    uint32_t waited = 0;
+    while (!WebManager::isWifiConnected() && waited < waitMs) {
+        uint32_t slice = 50;
+        if (slice > waitMs - waited) slice = waitMs - waited;
+        if (!inService()) present();
+        else esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(slice));
+        waited += slice;
+    }
+    if (!WebManager::isWifiConnected()) {
+        netPushFetchResult(ctx, false, 0, nullptr, 0, false, waited, "NO_NETWORK",
+                           waitMs ? "sem rede dentro da espera" : "sem rede");
+        return 1;
+    }
+
+    // GET e o unico metodo repetido automaticamente: repetir POST/PUT/PATCH
+    // pode duplicar efeito no servidor.
+    const bool retryable = (verb == HttpMethod::GET);
+    int attempt = 0;
+    for (;;) {
+        JsBodySink<NET_MAX_BODY> got;
+        bool gotResponse = false;
+        int status = 0;
+        uint32_t durationMs = 0;
+        char why[96] = "";
+        {
+            HttpClient http;
+            http.setTimeout(timeoutMs);
+            for (int i = 0; i < headerCount; i++) http.setHeader(hNames[i], hValues[i]);
+            http.setBodySink([&got](const char *d, size_t len) { return got.append(d, len); });
+            HttpResponse resp;
+            if (verb == HttpMethod::POST) resp = http.post(url, body, contentType);
+            else if (verb == HttpMethod::PUT) resp = http.put(url, body, contentType);
+            else if (verb == HttpMethod::PATCH) resp = http.patch(url, body, contentType);
+            else resp = http.request(verb, url, body);
+            // Resposta HTTP so quando houve status mesmo: success=false com
+            // 4xx/5xx parseado segue visivel ao app (bancada 2026-11-03: o
+            // 401 do web server local virava TRANSPORT/status 0). Ja success
+            // =false com 2xx parseado e conexao cortada NO MEIO do corpo —
+            // devolver ok=true com corpo parcial mentiria (o Net.request no
+            // mesmo caso devolve null): vira TRANSPORT com o corpo parcial
+            // preservado e, em GET, repetivel.
+            gotResponse = resp.success
+                              ? (resp.statusCode >= 100 && resp.statusCode <= 599)
+                              : (resp.statusCode >= 400 && resp.statusCode <= 599);
+            status = resp.statusCode;
+            durationMs = resp.durationMs;
+            snprintf(why, sizeof(why), "%s", resp.errorMessage.c_str());  // copia: resp morre
+        }
+        CelerKernel::noteAppYield();  // a chamada inteira nao tem bytecode
+
+        const bool truncated = got.overflow;
+        const bool serverErr = gotResponse && status >= 500;
+        if ((!gotResponse || serverErr) && retryable && attempt < retries) {
+            free(got.p);
+            uint32_t backoff = 400u << attempt;  // 400, 800, 1600, 3200...
+            if (backoff > 4000) backoff = 4000;
+            if (!inService()) present();
+            else esp_task_wdt_reset();
+            vTaskDelay(pdMS_TO_TICKS(backoff));
+            attempt++;
+            continue;
+        }
+
+        if (!gotResponse) {
+            // TIMEOUT pelo relogio: com CONFIG_ESP_ERR_TO_NAME_LOOKUP fora
+            // (sdkconfig.defaults) o esp_err_to_name so diz "UNKNOWN ERROR" e
+            // a pista textual nunca existe — o codigo TIMEOUT seria morto. Um
+            // pedido que queimou a janela inteira e timeout; DNS/conexao
+            // recusada falha bem antes (TRANSPORT).
+            const bool timedOut = durationMs >= timeoutMs ||
+                                  strstr(why, "TIMEOUT") != nullptr ||
+                                  strstr(why, "timeout") != nullptr;
+            netPushFetchResult(ctx, false, 0, got.p, got.n, got.overflow, durationMs,
+                               timedOut ? "TIMEOUT" : "TRANSPORT",
+                               why[0] ? why : "falha de transporte");
+            return 1;
+        }
+        if (status >= 200 && status < 300) {
+            if (truncated) {
+                netPushFetchResult(ctx, false, status, got.p, got.n, true, durationMs,
+                                   "TRUNCATED", "corpo maior que 32KB; use Net.download");
+                return 1;
+            }
+            netPushFetchResult(ctx, true, status, got.p, got.n, false, durationMs, nullptr,
+                               nullptr);
+            return 1;
+        }
+        char msg[24];
+        snprintf(msg, sizeof(msg), "HTTP %d", status);
+        // truncated no erro HTTP tambem: um 4xx/5xx com corpo acima do teto
+        // nao devolve o corte em silencio (mesma doutrina do 2xx)
+        netPushFetchResult(ctx, false, status, got.p, got.n, truncated, durationMs,
+                           "HTTP", msg);
+        return 1;
+    }
+}
+
 // API 6: download em streaming direto para arquivo — o corpo NAO passa pela
 // heap do Duktape (chunk a chunk vai pro FILE*), entao nao sofre o teto de
 // 32KB do Net.get. Uso: Net.download(url, path[, onProgress]) -> true|false;

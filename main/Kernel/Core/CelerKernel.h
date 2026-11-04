@@ -9,8 +9,16 @@
 class CelerKernel {
 public:
     static void init(CelerDisplay *tft);
+    // appApi/appVersion vem do app.json (celer::AppManifest): o runtime
+    // recusa o app ANTES de criar o heap se appApi > CELEROS_API_LEVEL e
+    // expoe os dois em App.info(). Defaults mantem os chamadores legados.
     static void runFile(const char* filePath, const char* appTitle = "", bool topbarFixed = true,
-                        const char* appPkg = "", uint32_t perms = 0xFFFFFFFFu);
+                        const char* appPkg = "", uint32_t perms = 0xFFFFFFFFu,
+                        int appApi = 0, const char* appVersion = "");
+    // Tela de aviso do SISTEMA (nao e erro de app): usada pelo launcher para
+    // recusar um app incompativel com mensagem legivel. Espera toque/botao,
+    // como a tela de erro do runtime; sem vidro vai para o kern.log.
+    static void showNotice(const char* title, const char* detail);
     static void loop();
     static void executeJS(const char* jsCode);
     static duk_context *ctx;

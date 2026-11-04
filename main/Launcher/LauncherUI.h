@@ -75,11 +75,18 @@ public:
     static int gridTotalPages();
 
 private:
+    struct AppEntry;  // definido abaixo; gateEntry usa a referencia
     static CelerDisplay *tftInstance;
     static void runApp(CelerDisplay *tft, const std::string& path, bool isFolder, bool topbarFixed,
-                       const std::string& appPkg, uint32_t perms);
+                       const std::string& appPkg, uint32_t perms,
+                       const std::string& entryMain, int appApi,
+                       const std::string& appVersion);
     static void resolveApp(const std::string& path, bool isFolder,
+                           const std::string& entryMain,
                            std::string& filePath, std::string& title);
+    // Contrato do runtime (API 56): recusa app com "api" ilegivel ou maior
+    // que o firmware, com tela de aviso nativa. false = nao lancar.
+    static bool gateEntry(const AppEntry& e);
 
     // Um registro por app do grid (eram 9 arrays paralelos de 50 posicoes:
     // ~5,4KB de RAM interna fixos, cheios ou nao — a lista tem o tamanho
@@ -94,6 +101,11 @@ private:
         bool isFolder;      // pasta com app.json (false = .js legado)
         bool isSystem;      // "system": true (e concedido)
         bool topbar;        // "topbar": true (faixa fixa; ausente = retratil)
+        // Contrato do runtime (API 56), lido do app.json no scan:
+        std::string mainFile;  // "main" (default main.js; validado)
+        std::string version;   // "version" (App.info().version)
+        int api;               // "api" declarada (0 = ausente)
+        bool apiInvalid;       // "api" presente e ilegivel/fora de 1..999
     };
     static std::vector<AppEntry> apps;
     static int appCount;

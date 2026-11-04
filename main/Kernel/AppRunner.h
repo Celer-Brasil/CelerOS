@@ -16,9 +16,11 @@ namespace AppRunner {
 bool supported();
 
 // Inicia o app em task propria. Retorna false se nao suportado/ocupado
-// (o chamador deve cair no caminho sincrono).
+// (o chamador deve cair no caminho sincrono). appApi/appVersion vem do
+// app.json e vao para App.info() (API 56).
 bool start(const std::string& filePath, const std::string& title, bool topbarFixed,
-            const std::string& appPkg = "", uint32_t perms = 0xFFFFFFFFu);
+            const std::string& appPkg = "", uint32_t perms = 0xFFFFFFFFu,
+            int appApi = 0, const std::string& appVersion = "");
 
 // false quando nao ha app rodando (ou ja terminou — o chamador faz o pop)
 bool running();

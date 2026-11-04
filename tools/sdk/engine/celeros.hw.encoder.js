@@ -15,11 +15,18 @@
 // contagem acumula alem de 32767 (o driver usa flags.accum_count).
 //
 // ES5 (Duktape).
+//
+// 1.0.1: pino NaN nao vira mais GPIO 0 (NaN | 0 === 0; create rejeita).
 
-var E = { version: '1.0.0' };
+var E = { version: '1.0.1' };
 
 function _num(v, d) {
     return (typeof v === 'number' && v === v) ? v : d;
+}
+
+// Pino de verdade: NaN e "numero" mas NaN | 0 === 0 (viraria GPIO 0).
+function _pin(v) {
+    return (typeof v === 'number' && v === v) ? (v | 0) : -1;
 }
 
 function _now() {
@@ -28,10 +35,8 @@ function _now() {
 
 function Encoder(o) {
     o = o || {};
-    this.pinA = (typeof o.pinA === 'number') ? (o.pinA | 0)
-             : (typeof o.a === 'number') ? (o.a | 0) : -1;
-    this.pinB = (typeof o.pinB === 'number') ? (o.pinB | 0)
-             : (typeof o.b === 'number') ? (o.b | 0) : -1;
+    this.pinA = _pin(o.pinA) >= 0 ? _pin(o.pinA) : _pin(o.a);
+    this.pinB = _pin(o.pinB) >= 0 ? _pin(o.pinB) : _pin(o.b);
     if (this.pinA < 0 || this.pinB < 0)
         throw new Error('celeros.hw.encoder: informe pinA e pinB');
     if (!E.available())

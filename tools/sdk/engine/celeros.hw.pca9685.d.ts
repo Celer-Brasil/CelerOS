@@ -9,7 +9,7 @@ declare namespace PCA {
     const version: string;
 
     interface Opts {
-        /** 0x40..0x7F (default 0x40). */
+        /** 0x40..0x77 (default 0x40; 0x78+ e faixa reservada que o firmware recusa). */
         addr?: number;
         /** 24..1526 Hz (default 50). */
         freq?: number;
@@ -32,8 +32,11 @@ declare namespace PCA {
         bus: { port: number; sda: number; scl: number; hz: number };
         init(): boolean;
         setFreq(hz: number): boolean;
+        /** on/off em contagens de 12 bits; off 4096 = saida cheia (LED_FULL). */
         setPwm(ch: number, on: number, off: number): boolean;
+        /** duty 0..1 (1.0 = saida cheia via LED_FULL). */
         setDuty(ch: number, duty: number): boolean;
+        /** false quando o pulso nao cabe em 12 bits na freq atual (us * freq > ~1e6). */
         setServoUs(ch: number, us: number): boolean;
         setServo(ch: number, angle: number, opts?: {
             minUs?: number; maxUs?: number;

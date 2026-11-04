@@ -58,7 +58,7 @@ module.exports = function (check) {
 
         var t = setup();
         var S = t.req('celeros.hw.servo');
-        check('servo: exporta version e available', S.version === '1.1.0' && S.available() === true);
+        check('servo: exporta version e available', S.version === '1.1.1' && S.available() === true);
         var s = S.create({ pin: 12 });
         s.write(90);
         var last = t.rec.servo[t.rec.servo.length - 1];
@@ -101,6 +101,11 @@ module.exports = function (check) {
         check('servo: group.pose aplica nos dois', t.rec.servo.length >= 2 &&
               t.rec.servo[t.rec.servo.length - 2][0] === 15 &&
               t.rec.servo[t.rec.servo.length - 1][0] === 16);
+
+        // NaN nao e pino: NaN | 0 === 0 viraria GPIO 0 sem erro
+        var nanThrew = false;
+        try { S.create({ pin: NaN }); } catch (e) { nanThrew = true; }
+        check('servo: pin NaN rejeitado (nao vira GPIO 0)', nanThrew);
     })();
 
     // ------------------------------------------------------------ motor --
@@ -109,7 +114,7 @@ module.exports = function (check) {
 
         var t = setup();
         var M = t.req('celeros.hw.motor');
-        check('motor: exporta version e available', M.version === '1.1.0' && M.available() === true);
+        check('motor: exporta version e available', M.version === '1.1.1' && M.available() === true);
         var m = M.create({ pwm: 18, in1: 19, in2: 20 });
         check('motor: create configura as 3 saidas e coast',
               t.rec.modes.length === 3 && t.rec.analog[0][1] === 0 &&
@@ -128,23 +133,48 @@ module.exports = function (check) {
         t.rec.writes = [];
         m.reverse(50);
         M.tick(75);
-        check('motor: reversao desce o PWM suavemente',
+        check('motor: reversao desce o PWM suavemente (janela reverseMs)',
               t.rec.analog[0][1] > 0 && t.rec.analog[0][1] < 128,
               JSON.stringify(t.rec.analog));
+        check('motor: durante a descida o sentido nao troca',
+              t.rec.writes.length === 0, JSON.stringify(t.rec.writes));
         M.tick(150);
-        check('motor: reversao zera o PWM antes de trocar o sentido',
+        // speed() e imediato: ao fim da janela zera, troca IN1/IN2 e aplica
+        check('motor: fim da janela zera o PWM e troca IN1/IN2 no mesmo tick',
+              t.rec.analog[t.rec.analog.length - 2][1] === 0 &&
+              t.rec.analog[t.rec.analog.length - 1][1] === 128 &&
+              t.rec.writes[t.rec.writes.length - 2][1] === 0 &&
+              t.rec.writes[t.rec.writes.length - 1][1] === 1,
+              JSON.stringify({ a: t.rec.analog, w: t.rec.writes }));
+        check('motor: reversao termina em -50% (PWM 128)',
+              m.speedNow() === -50 &&
+              t.rec.analog[t.rec.analog.length - 1][1] === 128,
+              JSON.stringify(t.rec.analog));
+
+        // rampTo preserva o ms do chamador na subida pos-reversao (1.1.1);
+        // mesmo relogio da lib: rec.clock alimenta o System.millis virtual
+        var m2 = M.create({ pwm: 24, in1: 25, in2: 26, reverseMs: 100 });
+        m2.forward(40);
+        t.rec.analog = [];
+        t.rec.clock = 0;
+        m2.rampTo(-40, 500);   // descida em reverseMs (100), t0 = 0
+        t.rec.clock = 100; M.tick();   // fim da janela: PWM 0, subida armada
+        check('motor: rampTo(-40,500) zera no fim da janela',
               t.rec.analog[t.rec.analog.length - 1][1] === 0,
               JSON.stringify(t.rec.analog));
-        t.rec.writes = [];
-        M.tick(225);
-        check('motor: depois de zerar troca IN1/IN2', t.rec.writes.length >= 2 &&
-              t.rec.writes[0][1] === 0 && t.rec.writes[1][1] === 1,
-              JSON.stringify(t.rec.writes));
-        M.tick(300);
-        var last = t.rec.analog[t.rec.analog.length - 1];
-        var inv = t.rec.writes[t.rec.writes.length - 1];
-        check('motor: reversao termina em -50% com IN1 0/IN2 1',
-              last[1] === 128 && inv[1] === 1, JSON.stringify({ last: last, inv: inv }));
+        t.rec.clock = 350; M.tick();   // 250 ms na subida de 500 ms -> -20
+        check('motor: subida pos-reversao usa o ms do rampTo (metade em -20)',
+              t.rec.analog[t.rec.analog.length - 1][1] === 51,
+              JSON.stringify(t.rec.analog));
+        t.rec.clock = 600; M.tick();   // fim (500 ms apos a janela): -40
+        check('motor: rampTo completa em -40 com os 500 ms respeitados',
+              t.rec.analog[t.rec.analog.length - 1][1] === 102 &&
+              m2.speedNow() === -40,
+              JSON.stringify(t.rec.analog));
+
+        var nanThrew = false;
+        try { M.create({ pwm: NaN, in1: 5, in2: 6 }); } catch (e) { nanThrew = true; }
+        check('motor: pino NaN rejeitado (nao vira GPIO 0)', nanThrew);
 
         t.rec.analog = [];
         t.rec.writes = [];
@@ -176,7 +206,7 @@ module.exports = function (check) {
 
         var t = setup();
         var L = t.req('celeros.hw.led');
-        check('led: exporta version e available', L.version === '1.0.0' && L.available() === true);
+        check('led: exporta version e available', L.version === '1.0.1' && L.available() === true);
         var led = L.create({ pin: 4 });
         led.on();
         check('led: on liga o pino', t.rec.writes[t.rec.writes.length - 1][1] === 1);
@@ -221,6 +251,10 @@ module.exports = function (check) {
         check('led: hsv(0,1,1) = vermelho e mix anda ate o destino',
               L.hsv(0, 1, 1) === 0xFF0000 && L.mix(0x000000, 0xFFFFFF, 0.5) === 0x808080,
               'hsv=' + L.hsv(0, 1, 1) + ' mix=' + L.mix(0, 0xFFFFFF, 0.5));
+
+        var nanThrew = false;
+        try { L.create({ pin: NaN }); } catch (e) { nanThrew = true; }
+        check('led: pin NaN rejeitado (nao vira GPIO 0)', nanThrew);
     })();
 
     // ----------------------------------------------------------- button --
@@ -229,7 +263,7 @@ module.exports = function (check) {
 
         var t = setup();
         var B = t.req('celeros.hw.button');
-        check('button: exporta version e available', B.version === '1.0.0' && B.available() === true);
+        check('button: exporta version e available', B.version === '1.0.1' && B.available() === true);
         var ev = [];
         var b = B.create({ pin: 0, activeLow: true, debounceMs: 20, longMs: 100, doubleMs: 50 });
         var names = ['press', 'release', 'click', 'double', 'long', 'repeat'];
@@ -281,6 +315,10 @@ module.exports = function (check) {
         tick(760);
         check('button: pulso curto (< debounce) nao gera evento',
               ev.length === 0, JSON.stringify(ev));
+
+        var nanThrew = false;
+        try { B.create({ pin: NaN }); } catch (e) { nanThrew = true; }
+        check('button: pin NaN rejeitado (nao vira GPIO 0)', nanThrew);
     })();
 
     // ----------------------------------------------------------- pca9685 --
@@ -290,9 +328,14 @@ module.exports = function (check) {
         var t = setup(function (env) { env.__harness.i2cAdd(0x40); });
         var PCA = t.req('celeros.hw.pca9685');
         check('pca9685: exporta version/available/prescale',
-              PCA.version === '1.0.0' && PCA.available() === true &&
+              PCA.version === '1.0.1' && PCA.available() === true &&
               PCA.prescale(50) === 121 && PCA.prescale(60) === 101,
               'p50=' + PCA.prescale(50) + ' p60=' + PCA.prescale(60));
+
+        var addrThrew = false;
+        try { PCA.create({ addr: 0x78 }); } catch (e) { addrThrew = true; }
+        check('pca9685: endereco 0x78+ recusado (faixa reservada do I2C)',
+              addrThrew);
 
         var p = PCA.create({ addr: 0x40, freq: 50 });
         check('pca9685: create adota o bus do perfil', p.bus && p.bus.sda === 22);
@@ -323,6 +366,15 @@ module.exports = function (check) {
               regs[0x44] === 0x00 && regs[0x45] === 0x08,
               JSON.stringify([regs[0x44], regs[0x45]]));
 
+        // duty 1.0 = saida cheia de verdade: bit LED_FULL (0x10) no OFF_H
+        check('pca9685: setDuty(14,1.0) liga o LED_FULL (OFF_H 0x10)',
+              p.setDuty(14, 1.0) === true &&
+              regs[0x40] === 0x00 && regs[0x41] === 0x10,
+              JSON.stringify([regs[0x40], regs[0x41]]));
+        var full = p.readPwm(14);
+        check('pca9685: readPwm devolve off 4096 do LED_FULL',
+              full && full.off === 4096, JSON.stringify(full));
+
         check('pca9685: sleep/wake mexem no MODE1', p.sleep() === true && regs[0x00] === 0x10 &&
               p.wake() === true && regs[0x00] === 0xA0,
               JSON.stringify([regs[0x00]]));
@@ -336,6 +388,15 @@ module.exports = function (check) {
         check('pca9685: servo() devolve um Servo que escreve no canal 2',
               regs[0x0E] === 0 && regs[0x10] === Math.round(500 * 4096 * 50 / 1000000) % 256,
               JSON.stringify([regs[0x0E], regs[0x0F], regs[0x10], regs[0x11]]));
+
+        // pulso que nao cabe em 12 bits na freq: false honesto, nao 4095
+        var p2 = PCA.create({ addr: 0x40, freq: 1526 });
+        check('pca9685: setServoUs false quando o pulso nao cabe em 12 bits',
+              p2.setServoUs(0, 1500) === false && p2.lastError.length > 0,
+              p2.lastError);
+        check('pca9685: de volta a 50 Hz o mesmo pulso cabe',
+              p2.setFreq(50) === true && p2.setServoUs(0, 1500) === true,
+              p2.lastError);
 
         check('pca9685: close marca fechado', p.close() === true && p.closed === true);
     })();
@@ -387,6 +448,18 @@ module.exports = function (check) {
         check('servo: speed em servo de posicao devolve false',
               S.create({ pin: 19 }).speed(50) === false);
 
+        // invert espelha em volta do stopUs (1.1.1): speed(0) TEM que parar
+        var ci = S.create({ pin: 21, continuous: true, stopUs: 1600, invert: true });
+        ci.speed(0);
+        check('servo: continuous invertido para no stopUs com speed(0)',
+              ci.us() === 1600, 'us=' + ci.us());
+        ci.speed(100);
+        check('servo: invert espelha speed(100) em volta do stopUs',
+              ci.us() === 700, 'us=' + ci.us());
+        ci.speed(-100);
+        check('servo: invert espelha speed(-100) (clamp na ponta)',
+              ci.us() === 2500, 'us=' + ci.us());
+
         var q = S.create({ pin: 20 });
         q.play([[0, 50], [180, 50]]);
         S.tick(0);
@@ -434,7 +507,7 @@ module.exports = function (check) {
         var t = setup();
         var E = t.req('celeros.hw.encoder');
         check('encoder: exporta version e available',
-              E.version === '1.0.0' && E.available() === true);
+              E.version === '1.0.1' && E.available() === true);
         var e = E.create({ pinA: 18, pinB: 19 });
         check('encoder: create devolve o id 0', e.id === 0);
         t.env.__harness.encoderSet(0, 100);
@@ -457,16 +530,27 @@ module.exports = function (check) {
               t.env.__harness.encoderGet(e2.id) === 0);
         e2.free();
         check('encoder: free libera o id', e2.id === -1);
+
+        var nanThrew = false;
+        try { E.create({ pinA: NaN, pinB: 8 }); } catch (e) { nanThrew = true; }
+        check('encoder: pino NaN rejeitado (nao vira GPIO 0)', nanThrew);
     })();
 
     // --------------------------------------------------------------- dht --
     (function () {
         console.log('SDK hw.dht:');
 
-        var t = setup();
+        var t = setup(function (env) {
+            // pino negado pela placa: o binding nativo da RangeError
+            var orig = env.System.dht.read;
+            env.System.dht.read = function (pin, type) {
+                if (pin === 13) throw new RangeError('GPIO 13 invalido para DHT');
+                return orig(pin, type);
+            };
+        });
         var D = t.req('celeros.hw.dht');
         check('dht: exporta version e available',
-              D.version === '1.0.0' && D.available() === true);
+              D.version === '1.0.1' && D.available() === true);
         t.env.__harness.dhtSet(4, 22, { ok: true, temp: 23.5, humidity: 45.2 });
         var r = D.read({ pin: 4, type: 22 });
         check('dht: read pontual devolve temp/umidade', r.ok === true &&
@@ -480,5 +564,16 @@ module.exports = function (check) {
               miss.ok === false && miss.error === 'sem resposta', JSON.stringify(miss));
         t.env.__harness.dhtSet(4, 11, { ok: true, temp: 20, humidity: 60 });
         check('dht: tipo 11 usa a entrada certa', D.read({ pin: 4, type: 11 }).temp === 20);
+
+        // pino negado: {ok:false, error} em vez de quebrar o app (1.0.1)
+        var denied = D.read({ pin: 13, type: 22 });
+        check('dht: pino negado devolve {ok:false} com o erro do binding',
+              denied.ok === false && denied.temp === 0 &&
+              denied.error.length > 0, JSON.stringify(denied));
+        var di = D.create({ pin: 13, type: 22 });
+        var r2 = di.read();
+        check('dht: instancia tambem captura o pino negado',
+              r2.ok === false && di.ok() === false && di.temp() === null,
+              JSON.stringify(r2));
     })();
 };

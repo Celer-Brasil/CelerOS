@@ -18,14 +18,21 @@
 // O firmware tem 20 ms de debounce e 1200 ms de longo no botao da placa
 // (Buttons.cpp); estes sao os defaults da lib para botao externo. System.button()
 // NAO e usado (so existe nas placas buttonToApp). ES5 (Duktape).
+//
+// 1.0.1: pino NaN nao vira mais GPIO 0 (NaN | 0 === 0; create rejeita).
 
-var B = { version: '1.0.0' };
+var B = { version: '1.0.1' };
 
 var _all = [];
 var _timer = 0;
 
 function _num(v, d) {
     return (typeof v === 'number' && v === v) ? v : d;
+}
+
+// Pino de verdade: NaN e "numero" mas NaN | 0 === 0 (viraria GPIO 0).
+function _pin(v) {
+    return (typeof v === 'number' && v === v) ? (v | 0) : -1;
 }
 
 function _now() {
@@ -40,7 +47,7 @@ function _gpio() {
 
 function Button(o) {
     o = o || {};
-    this.pin = (typeof o.pin === 'number') ? (o.pin | 0) : -1;
+    this.pin = _pin(o.pin);
     if (this.pin < 0) throw new Error('celeros.hw.button: informe pin');
     this.activeLow = o.activeLow !== false;   // padrao: botao para GND
     this.pullup = o.pullup !== false;

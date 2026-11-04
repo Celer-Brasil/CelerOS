@@ -25,8 +25,14 @@
 // jsGpioReleaseOutputs), mas chame m.stop() no fluxo normal.
 //
 // ES5 (Duktape; permissao "gpio").
+//
+// 1.1.1: a reversao suave perdia o ms do chamador — a subida depois da
+// janela reverseMs recebia reverseMs de novo: rampTo(-40, 500) subia em
+// 150 ms (e o ms 500 ia fora) e speed() "imediato" levava 300 ms. Agora a
+// janela reverseMs e so o zero entre os sentidos; a subida usa o ms pedido.
+// Pino NaN nao vira mais GPIO 0 (create rejeita).
 
-var M = { version: '1.1.0' };
+var M = { version: '1.1.1' };
 
 var _all = [];
 
@@ -38,6 +44,12 @@ function _clamp(v, a, b) {
     if (v < a) return a;
     if (v > b) return b;
     return v;
+}
+
+// Pino de verdade: NaN e "numero" mas NaN | 0 === 0 — um pin NaN viraria
+// GPIO 0 sem erro. Guarda propria para os campos de pino.
+function _pin(v) {
+    return (typeof v === 'number' && v === v) ? (v | 0) : -1;
 }
 
 function _now() {
@@ -52,11 +64,11 @@ function _gpio() {
 
 function Motor(o) {
     o = o || {};
-    this.pwm = (typeof o.pwm === 'number') ? (o.pwm | 0) : -1;
-    this.in1 = (typeof o.in1 === 'number') ? (o.in1 | 0) : -1;
-    this.in2 = (typeof o.in2 === 'number') ? (o.in2 | 0) : -1;
-    this.pwmA = (typeof o.pwmA === 'number') ? (o.pwmA | 0) : -1;
-    this.pwmB = (typeof o.pwmB === 'number') ? (o.pwmB | 0) : -1;
+    this.pwm = _pin(o.pwm);
+    this.in1 = _pin(o.in1);
+    this.in2 = _pin(o.in2);
+    this.pwmA = _pin(o.pwmA);
+    this.pwmB = _pin(o.pwmB);
     this._twoPwm = this.pwmA >= 0 || this.pwmB >= 0;
     if (this._twoPwm) {
         if (this.pwmA < 0 || this.pwmB < 0 || this.pwmA === this.pwmB)
@@ -90,6 +102,7 @@ function Motor(o) {
     this._t0 = 0;
     this._ms = 0;
     this._after = 0;      // alvo pendente depois de zerar (reversao)
+    this._afterMs = 0;    // ms do chamador para a subida pos-reversao
     this._brake = false;
     this._coast = true;
     this.coast();  // nasce em roda livre (PWM 0, IN1/IN2 0)
@@ -149,14 +162,17 @@ Motor.prototype._request = function (target, ms) {
             this._speed = 0;
             this._apply(0);
             this._after = 0;
+            this._afterMs = 0;
             this._rampTo(target, 0);
             return;
         }
         this._after = target;
+        this._afterMs = ms;          // a subida respeita o ms do chamador
         this._rampTo(0, this.reverseMs);
         return;
     }
     this._after = 0;
+    this._afterMs = 0;
     this._rampTo(target, ms);
 };
 
@@ -174,7 +190,7 @@ Motor.prototype._tick = function (now) {
         if (this._after !== 0) {
             var a = this._after;
             this._after = 0;
-            this._request(a, this.reverseMs);
+            this._request(a, this._afterMs);
         }
     }
 };

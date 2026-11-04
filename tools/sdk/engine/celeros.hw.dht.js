@@ -16,11 +16,21 @@
 // tolerante no ESP32. O pino precisa da permissao "gpio".
 //
 // ES5 (Duktape).
+//
+// 1.0.1: pino negado pela placa (mascara do perfil) fazia o binding
+// nativo dar RangeError e o app quebrar; read() captura e devolve
+// {ok:false, error} como o contrato do modulo promete. Pino NaN nao vira
+// mais GPIO 0 (NaN | 0 === 0).
 
-var D = { version: '1.0.0' };
+var D = { version: '1.0.1' };
 
 function _num(v, d) {
     return (typeof v === 'number' && v === v) ? v : d;
+}
+
+// Pino de verdade: NaN e "numero" mas NaN | 0 === 0 (viraria GPIO 0).
+function _pin(v) {
+    return (typeof v === 'number' && v === v) ? (v | 0) : -1;
 }
 
 function _bad(error) {
@@ -29,7 +39,7 @@ function _bad(error) {
 
 function Dht(o) {
     o = o || {};
-    this.pin = (typeof o.pin === 'number') ? (o.pin | 0) : -1;
+    this.pin = _pin(o.pin);
     if (this.pin < 0) throw new Error('celeros.hw.dht: informe pin');
     this.type = (o.type === 11) ? 11 : 22;
     if (!D.available())
@@ -39,7 +49,13 @@ function Dht(o) {
 
 Dht.prototype.read = function () {
     if (this.pin < 0) return _bad('sem pino');
-    var r = System.dht.read(this.pin, this.type);
+    var r;
+    try {
+        r = System.dht.read(this.pin, this.type);
+    } catch (e) {
+        // RangeError do binding: pino invalido/negado pela placa.
+        r = _bad(String(e && e.message ? e.message : e));
+    }
     if (!r || typeof r !== 'object') r = _bad('sem resposta');
     this.last = r;
     return r;
@@ -55,11 +71,16 @@ D.create = function (o) { return new Dht(o); };
 // Leitura pontual: D.read({pin, type}) -> {ok, temp, humidity, error}
 D.read = function (o) {
     o = o || {};
-    var pin = (typeof o.pin === 'number') ? (o.pin | 0) : -1;
+    var pin = _pin(o.pin);
     if (pin < 0) return _bad('sem pino');
     if (!D.available()) return _bad('System.dht indisponivel (API 55)');
     var type = (o.type === 11) ? 11 : 22;
-    var r = System.dht.read(pin, type);
+    var r;
+    try {
+        r = System.dht.read(pin, type);
+    } catch (e) {
+        return _bad(String(e && e.message ? e.message : e));
+    }
     return (r && typeof r === 'object') ? r : _bad('sem resposta');
 };
 

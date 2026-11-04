@@ -18,8 +18,10 @@
 // Cores de fita em 0x00RRGGBB (o formato REAL do System.neopixel; o comentario
 // antigo do dts.js dizia RGB565). O analogWrite tem 3 canais, 8 bits e 5 kHz
 // fixos. ES5 (Duktape; permissao "gpio").
+//
+// 1.0.1: pino NaN nao vira mais GPIO 0 (NaN | 0 === 0; create rejeita).
 
-var L = { version: '1.0.0' };
+var L = { version: '1.0.1' };
 
 var _leds = [];
 var _strips = [];
@@ -32,6 +34,11 @@ function _clamp(v, a, b) {
     if (v < a) return a;
     if (v > b) return b;
     return v;
+}
+
+// Pino de verdade: NaN e "numero" mas NaN | 0 === 0 (viraria GPIO 0).
+function _pin(v) {
+    return (typeof v === 'number' && v === v) ? (v | 0) : -1;
 }
 
 function _now() {
@@ -52,7 +59,7 @@ function _neopixel() {
 // ---- LED simples / PWM ----------------------------------------------------
 function Led(o) {
     o = o || {};
-    this.pin = (typeof o.pin === 'number') ? (o.pin | 0) : -1;
+    this.pin = _pin(o.pin);
     if (this.pin < 0) throw new Error('celeros.hw.led: informe pin');
     this.activeLow = !!o.activeLow;
     this.pwm = !!o.pwm;
@@ -172,7 +179,7 @@ L.statusOff = function () { return L.status(0, 0, 0); };
 // ---- fita WS2812 ----------------------------------------------------------
 function Strip(o) {
     o = o || {};
-    this.index = (typeof o.index === 'number') ? (o.index | 0) : 0;
+    this.index = Math.max(0, _pin(o.index));  // NaN/ausente -> fita 0
     this.count = _clamp(_num(o.count, 8) | 0, 1, 8);
     this.buf = [];
     for (var i = 0; i < this.count; i++) this.buf.push(0);

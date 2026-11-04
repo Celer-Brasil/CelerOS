@@ -25,8 +25,13 @@
 //
 // A placa precisa da permissao "gpio" (o objeto System.gpio nao existe sem
 // ela). ES5 (Duktape).
+//
+// 1.1.1: speed() com invert espelhava em volta do MEIO de minUs/maxUs; com
+// stopUs calibrado diferente do meio, speed(0) escrevia um pulso diferente
+// do stopUs e o servo continuava girando "parado". Agora o espelho e em
+// volta do proprio stopUs. Pino NaN nao vira mais GPIO 0 (create rejeita).
 
-var S = { version: '1.1.0' };
+var S = { version: '1.1.1' };
 
 var _all = [];
 
@@ -38,6 +43,11 @@ function _clamp(v, a, b) {
     if (v < a) return a;
     if (v > b) return b;
     return v;
+}
+
+// Pino de verdade: NaN e "numero" mas NaN | 0 === 0 (viraria GPIO 0).
+function _pin(v) {
+    return (typeof v === 'number' && v === v) ? (v | 0) : -1;
 }
 
 function _now() {
@@ -72,7 +82,7 @@ function _native(pin) {
 
 function Servo(o) {
     o = o || {};
-    this.pin = (typeof o.pin === 'number') ? (o.pin | 0) : -1;
+    this.pin = _pin(o.pin);
     this.minUs = _num(o.minUs, 500);
     this.maxUs = _num(o.maxUs, 2500);
     if (this.maxUs <= this.minUs) this.maxUs = this.minUs + 1;
@@ -174,7 +184,8 @@ Servo.prototype.speed = function (pct) {
     var p = _clamp(_num(pct, 0), -100, 100);
     var span = p >= 0 ? (this.maxUs - this.stopUs) : (this.stopUs - this.minUs);
     var us = this.stopUs + (p / 100) * span;
-    if (this.invert) us = this.minUs + this.maxUs - us;
+    if (this.invert) us = 2 * this.stopUs - us;  // espelha em volta do stopUs
+                                                 // (speed(0) TEM que parar)
     return this.writeUs(us);
 };
 

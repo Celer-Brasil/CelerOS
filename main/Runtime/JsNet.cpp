@@ -15,6 +15,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "../Utils/TaskCaps.h"
 #include "esp_rom_md5.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Display/Backlight.h"
@@ -640,7 +641,13 @@ static void netAsyncTask(void* raw) {
         snprintf(err, sizeof(err), "%s", resp.success ? "" : resp.errorMessage.c_str());
     }  // TLS/cliente liberados antes de publicar o resultado
     jsSlotPublish(*s, got.p, got.n, ok, status, err);
-    vTaskDelete(nullptr);
+    // Auto-delecao casada com a criacao (celerTaskCreate): com stack na
+    // PSRAM o vTaskDelete comum vazaria o bloco (o IDLE nao conhece
+    // alocacoes com caps) — o vTaskDeleteWithCaps cobre os dois casos e o
+    // IDF 6.1 suporta self-delete (spawna task temporaria de limpeza).
+    // Handle corrente lido AQUI: nenhum handle guardado no slot, entao o
+    // reuso do slot por outra task nao pode apontar a delecao errada.
+    celerTaskDelete(xTaskGetCurrentTaskHandle());
 }
 
 duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
@@ -674,7 +681,16 @@ duk_ret_t JSBindings::js_netBeginGet(duk_context *ctx) {
         // http) — 12KB estourava o handshake ("UNKNOWN ERROR") e 32KB nao
         // nascia (xTaskCreate falhava com a RAM interna da arvore API 17,
         // bancada 2026-10-02). Boards sem PSRAM nao abrem apps com "net".
-        if (xTaskCreate(netAsyncTask, "jsnet", 24576, &s, 3, nullptr) != pdPASS) {
+        //
+        // Stack na PSRAM onde o build permite (TaskCaps, mesmo padrao do
+        // res_rx/jsai): 24 KB de RAM interna por requisicao de rede era o
+        // maior mergulho do heap interno em runtime (bancada 2026-11-04: o
+        // 4848 chegou a 88 B livres com um Net async vivo). O TLS/httpd nao
+        // toca flash (regra do TaskCaps) e os buffers mbedtls ja sao PSRAM
+        // (MBEDTLS_EXTERNAL_MEM_ALLOC). Sem suporte a stack externa cai na
+        // interna com o mesmo 24 KB (igual ao xTaskCreate de antes).
+        TaskHandle_t h = nullptr;
+        if (celerTaskCreate(netAsyncTask, "jsnet", 24576, 24576, &s, 3, &h) != pdPASS) {
             celer_log_println("[net] beginGet -1: xTaskCreate falhou (RAM p/ stack de 24KB)");
             // task nao nasceu: nada escrevera o slot, devolve ao estado livre
             jsSlotMuxTake(s);

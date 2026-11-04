@@ -7,6 +7,7 @@
 #include "../Boards/Board.h"
 #include "../Utils/CelerSettings.h"
 #include "../Utils/Settings.h"
+#include "../Utils/Mem.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -1296,7 +1297,11 @@ char* micRecBuildOut(bool base64, size_t* lenOut, uint32_t* msOut) {
     }
     if (msOut != nullptr) *msOut = (uint32_t)(s_rec.n / 16);  // 16000 amostras/s
     const size_t dataLen = s_rec.n * sizeof(int16_t);
-    uint8_t* wav = (uint8_t*)malloc(44 + dataLen);
+    // PSRAM-first (padrao do AudioRes, que ja faz o mesmo para o Pack):
+    // o WAV (PCM + header) e o base64 de uma gravacao nasciam na heap
+    // INTERNA e somavam-se aos picos de rede/TLS do mesmo momento
+    // (bancada 2026-11-04: interna minima de 88 B no 4848).
+    uint8_t* wav = (uint8_t*)mem::alloc(44 + dataLen, mem::Want::Psram);
     if (wav == nullptr) return nullptr;
     wavHeader(wav, (uint32_t)dataLen);
     if (dataLen > 0) memcpy(wav + 44, s_rec.pcm, dataLen);
@@ -1306,7 +1311,7 @@ char* micRecBuildOut(bool base64, size_t* lenOut, uint32_t* msOut) {
     }
     size_t b64len = 0;
     mbedtls_base64_encode(nullptr, 0, &b64len, wav, 44 + dataLen);
-    char* b64 = (char*)malloc(b64len);
+    char* b64 = (char*)mem::alloc(b64len, mem::Want::Psram);
     if (b64 == nullptr) {
         free(wav);
         return nullptr;

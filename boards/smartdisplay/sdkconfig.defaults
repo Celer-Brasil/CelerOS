@@ -13,7 +13,11 @@ CONFIG_SPIRAM_SPEED_80M=y
 # devolve nada em producao; o Tactility desliga (device.py:232).
 CONFIG_SPIRAM_MEMTEST=n
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+# 1024 (receita medida no watch): com 4096, buffers de 1-4 KB (LittleFS,
+# TinyUSB, caches varios) nasciam na heap INTERNA e o minimo historico do
+# aparelho chegou a 88 B livres (2026-11-04). No watch a mesma mudanca
+# rendeu +10 KB livres e minimo de 648 B -> 3,9 KB.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # Experimento: instrucoes/rodata na PSRAM (device.py:262-268). Gate de bench:
 # lcddma limpo, fps, boot e soak; reverter se o painel RGB embaralhar.
@@ -48,12 +52,47 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
 # CONFIG_BT_NIMBLE_NVS_PERSIST is not set
+# SMP fora: o pareamento BLE so existe no PhoneLink do watch (bloco
+# ble_hs_cfg.sm_* ja e #if CONFIG_CELEROS_PHONE_LINK); o CelerLink P2P e a
+# malha usam criptografia propria acima do payload (selo AES-GCM / NetKeys
+# PBKDF2+CCM). O TinyCrypt do SMP guardava ~1-2 KB internos.
+# NAO replicar no watch (la o SMP e usado).
+# CONFIG_BT_NIMBLE_SECURITY_ENABLE is not set
+# Servicos GATT de exemplo do NimBLE (defaults do IDF, ninguem registra
+# nenhum: os servicos reais — CelerLink e NUS do watch — tem UUID proprio).
+# Cada um traz codigo/rodata para o binario a toa.
+# CONFIG_BT_NIMBLE_ANS_SERVICE is not set
+# CONFIG_BT_NIMBLE_BAS_SERVICE is not set
+# CONFIG_BT_NIMBLE_CTS_SERVICE is not set
+# CONFIG_BT_NIMBLE_DIS_SERVICE is not set
+# CONFIG_BT_NIMBLE_HR_SERVICE is not set
+# CONFIG_BT_NIMBLE_HTP_SERVICE is not set
+# CONFIG_BT_NIMBLE_IAS_SERVICE is not set
+# CONFIG_BT_NIMBLE_IPSS_SERVICE is not set
+# CONFIG_BT_NIMBLE_LLS_SERVICE is not set
+# CONFIG_BT_NIMBLE_PROX_SERVICE is not set
+# CONFIG_BT_NIMBLE_SPS_SERVICE is not set
+# CONFIG_BT_NIMBLE_TPS_SERVICE is not set
 # Pools/buffers do HOST NimBLE na PSRAM: a RAM interna fica para o
 # controller BLE + WiFi + DMA. Com tudo interno o boot sobrava ~60 KB, o init
 # pedia mais e o os_mempool_init do ble_hs_init caia num
 # SYSINIT_PANIC_ASSERT (o Celer Remote reiniciava o aparelho no 1o scan).
 # Medido: o init passa a consumir ~38 KB internos (sobram ~22 KB)
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+# Enxugo do CONTROLLER (lib pre-compilada, so aloca interna). O uso real
+# (malha + CelerLink): 1 adv set (os 3 donos revezam pelo s_advMutex),
+# 1 scan e 1 conexao = 3 atividades; cada instancia custa ~828 B.
+CONFIG_BT_CTRL_BLE_MAX_ACT=3
+# Filtro de duplicados do scan e flow control dos reports de adv: os
+# defaults (100/30) reservavam ~3,5 KB + ~0,5 KB internos. Reduzir o cache
+# de duplicados SUPRIME MENOS (chega mais report repetido), nunca perde.
+# O flow control 50 pode derrubar reports sob coex saturado — A/B na
+# bancada com a telemetria da malha (rxCruPerdido/noTok) antes de fechar.
+CONFIG_BT_CTRL_BLE_ADV_REPORT_FLOW_CTRL_NUM=50
+CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=30
+CONFIG_BT_CTRL_ADV_DUP_FILT_MAX=10
+# DTM e modo de homologacao de radio, sem uso em producao.
+# CONFIG_BT_CTRL_DTM_ENABLE is not set
 
 # Ring de logs maior (tem PSRAM): historico do boot inteiro no logcat --dump
 CONFIG_CELEROS_LOG_RING=8192

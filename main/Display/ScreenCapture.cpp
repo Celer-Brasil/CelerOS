@@ -4,6 +4,7 @@
 #include <string.h>
 #include <Arduino.h>
 #include "../Boards/Board.h"
+#include "../Utils/Mem.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -119,7 +120,11 @@ bool stream(bool rle, uint8_t* out, size_t cap, const std::function<bool(const u
     const uint16_t w = (uint16_t)tft.width();
     const uint16_t h = (uint16_t)tft.height();
     constexpr uint16_t kRows = 8;  // bloco por pedido: ~12ms de SPI na CYD
-    uint16_t* rows = (uint16_t*)malloc((size_t)w * kRows * 2);
+    // PSRAM-first (7,5 KB no vidro 480): cada screencap/stream/web /api/screen
+    // nascia na heap INTERNA (bancada 2026-11-04: interna minima de 88 B no
+    // 4848). O readRect e copia por CPU — destino em PSRAM e seguro (a fonte,
+    // o framebuffer RGB, ja mora la). Sem PSRAM o fallback cai na interna.
+    uint16_t* rows = (uint16_t*)mem::alloc((size_t)w * kRows * 2, mem::Want::Psram);
     if (rows == nullptr) return false;
 
     bool ok = true;

@@ -21,6 +21,7 @@
 #include "CaptivePortal.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
+#include "../Utils/Mem.h"
 #include "../Utils/CelerSettings.h"
 #include "../Utils/Settings.h"
 #include "../Kernel/TimeManager.h"
@@ -553,7 +554,11 @@ static int readBody(httpd_req_t* req, BodyBuf& out, size_t limit = 8192) {
         }
         return 1;
     }
-    out.data = (char*)malloc(remaining + 1);
+    // PSRAM-first (mem::alloc, mesmo padrao do staging OTA): ate 8 KB de
+    // corpo POST nasciam na heap INTERNA — pico transitorio do httpd junto
+    // com o screencap (bancada 2026-11-04: interna minima de 88 B no 4848).
+    // Em placa sem PSRAM o fallback do helper cai na interna como antes.
+    out.data = (char*)mem::alloc(remaining + 1, mem::Want::Psram);
     if (out.data == nullptr) return 2;
     size_t got = 0;
     while (got < remaining) {

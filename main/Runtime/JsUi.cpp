@@ -188,6 +188,20 @@ kui::Rect pr(int x, int y, int w, int h) { return {jsx(x), jsy(y), jsx(w), jsH(h
 int vW(int physW) { return (int)((long)physW * 240 / UI::W); }
 int vH(int physH) { return (int)(physH / appScaleY() + 0.5f); }
 
+// Avanco de linha do texto multi-linha (UI.text lines:N): fontHeight() e o
+// yAdvance da fonte e fica ABAIXO da altura de tinta do glifo nas fontes do
+// vidro grande; 12,5% de folga separa as linhas.
+int textLineAdvance(int fh) { return fh + (fh + 7) / 8; }
+
+// Altura do bloco de n linhas: (n-1) avancos + a tinta da ultima. Uma linha
+// so mede exatamente fontHeight (o que UI.text sempre devolveu). Tem que ser
+// o MESMO numero em UI.text(lines:N) e em UI.measureWrap: os apps dimensionam
+// balao/card/rolagem pelo measureWrap e desenham com UI.text.
+int textBlockHeight(int n, int fh) {
+    if (n < 1) n = 1;
+    return (n - 1) * textLineAdvance(fh) + fh;
+}
+
 // Estado de texto/fonte/recorte do app intacto em volta do desenho do toolkit.
 // Diferente do GfxStateGuard: o recorte do sistema (topbar no desenho direto)
 // FICA — o toolkit desenha dentro do que o app pode desenhar.
@@ -451,10 +465,11 @@ duk_ret_t JSBindings::js_uiText(duk_context* ctx) {
     // Entrelinha de texto multi-linha: fontHeight() e o yAdvance da fonte GFX
     // e fica ABAIXO da altura de tinta do glifo nas fontes do vidro grande —
     // as linhas de um mesmo UI.text(lines:N) encostavam (a legenda de 3
-    // linhas do Batata Quente lia com as linhas sobrepostas no 4848). 12,5%
-    // de folga separa sem mudar o desenho de uma linha so.
+    // linhas do Batata Quente lia com as linhas sobrepostas no 4848). A folga
+    // de textLineAdvance separa; a altura DEVOLVIDA e a do bloco desenhado
+    // (textBlockHeight), entao uma linha so nao muda de altura.
     const int fh = g->fontHeight(f);
-    const int lh = fh + (fh + 7) / 8;
+    const int lh = textLineAdvance(fh);
     Slot& s = slot(rectId("text", x, y, optInt(ctx, 3, "id", 0), 0));
     uint32_t sig = fnv(str);
     sig = fnvInt((int)color, sig);
@@ -498,11 +513,12 @@ duk_ret_t JSBindings::js_uiText(duk_context* ctx) {
     int bx = px;
     if (datum == TC_DATUM) bx = px - widest / 2;
     else if (datum == TR_DATUM) bx = px - widest;
+    const int blockH = textBlockHeight(n, fh);
     s.bx = (int16_t)(bx - 1);
     s.by = (int16_t)py;
     s.bw = (int16_t)(widest + 2);
-    s.bh = (int16_t)(n * lh);
-    duk_push_int(ctx, vH(n * lh));
+    s.bh = (int16_t)blockH;
+    duk_push_int(ctx, vH(blockH));
     return 1;
 }
 
@@ -533,7 +549,10 @@ duk_ret_t JSBindings::js_uiMeasureWrap(duk_context* ctx) {
     const lgfx::IFont* f = roleFont(role);
     int n = (int)c.wrapText(str, f, jsx(w), 64).size();
     if (n < 1) n = 1;
-    duk_push_int(ctx, vH(n * g->fontHeight(f)));
+    // mesma geometria do UI.text(lines:N): o block h usa o avanco com folga,
+    // nao n*fontHeight (o desenho ficava 12,5% por linha mais alto que a
+    // medida, e balao/rolagem dimensionados por aqui cortavam o texto)
+    duk_push_int(ctx, vH(textBlockHeight(n, g->fontHeight(f))));
     return 1;
 }
 

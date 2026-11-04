@@ -94,6 +94,15 @@ function makeUI(env, opts) {
     const str = (v) => (v === undefined || v === null) ? '' : String(v);
     const roleFont = (role) => role === 'caption' ? 1 : role === 'display' ? 4 : 2;
 
+    // Geometria do texto multi-linha — a MESMA conta do firmware
+    // (main/Runtime/JsUi.cpp: textLineAdvance/textBlockHeight): o avanco tem
+    // 12,5% de folga sobre o fontHeight (a tinta do glifo encosta no yAdvance
+    // das fontes do vidro grande) e a altura do bloco e (n-1) avancos + a
+    // tinta da ultima linha — uma linha so mede exatamente fontHeight. UI.text
+    // e UI.measureWrap devolvem esse numero; se o C++ mudar, mude aqui.
+    const textLineAdvance = (fh) => fh + Math.floor((fh + 7) / 8);
+    const textBlockHeight = (n, fh) => (Math.max(1, n | 0) - 1) * textLineAdvance(fh) + fh;
+
     // texto com datum LovyanGFX (TL=0 TC=1 TR=2 ML=4 MC=5 MR=6 BL=8 — o
     // renderer e o firmware decodificam coluna = d&3, linha = d&12)
     function text(s, x, y, font, color, datum) {
@@ -301,10 +310,11 @@ function makeUI(env, opts) {
             const lines = Math.max(1, Math.min(64, opt(o, 'lines', 1) | 0));
             const bgc = opt(o, 'bg', bg());
             const datum = align === 'center' ? 1 : align === 'right' ? 2 : 0;
-            const lh = S().fontHeight(font);
+            const fh = S().fontHeight(font);
+            const lh = textLineAdvance(fh);
             const sl = slot('text:' + x + ':' + y + ':' + opt(o, 'id', 0));
             const d = needDraw(sl, [s, color, font, maxW, lines, datum].join('|'));
-            if (!d) return sl.box ? sl.box.h : lh;
+            if (!d) return sl.box ? sl.box.h : fh;
             if (d.clear && sl.box) S().fillRect(sl.box.x, sl.box.y, sl.box.w, sl.box.h, bgc);
             let ls;
             if (maxW > 0 && lines > 1) ls = wrap(s, font, maxW, lines);
@@ -319,14 +329,15 @@ function makeUI(env, opts) {
             }
             bgStack.pop();
             const bx = datum === 1 ? x - (widest >> 1) : datum === 2 ? x - widest : x;
-            sl.box = { x: bx - 1, y: y, w: widest + 2, h: ls.length * lh };
+            const blockH = textBlockHeight(ls.length, fh);
+            sl.box = { x: bx - 1, y: y, w: widest + 2, h: blockH };
             return sl.box.h;
         },
         measure(s, role) { return S().textWidth(str(s), roleFont(role || 'body')); },
         lineHeight(role) { return S().fontHeight(roleFont(role || 'body')); },
         measureWrap(s, w, role) {
             const f = roleFont(role || 'body');
-            return Math.max(1, wrap(str(s), f, w, 64).length) * S().fontHeight(f);
+            return textBlockHeight(wrap(str(s), f, w, 64).length, S().fontHeight(f));
         },
 
         header(title, o) {

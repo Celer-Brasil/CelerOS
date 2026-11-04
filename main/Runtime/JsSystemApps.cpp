@@ -498,6 +498,13 @@ duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
     if (!inService()) present();  // servico: sem vidro/reentrada do app
     else esp_task_wdt_reset();    // flash longo: entrada + trampoline alimentam
     const char* url = duk_require_string(ctx, 0);
+    // Teto ANTES da copia: performUpdate recebe std::string (a conversao copia
+    // a string crua do duk; crescer sem excecao aborta no heap apertado) e nao
+    // tem teto proprio. 2 KB = o mesmo NET_MAX_URL do JsNet (cobre qualquer
+    // URL real com query longa).
+    if (strlen(url) > 2048) {
+        duk_error(ctx, DUK_ERR_RANGE_ERROR, "otaStart: URL longa demais (max 2048)");
+    }
     bool hasCb = duk_is_function(ctx, 1) ? true : false;
 
     if (hasCb) {
@@ -530,7 +537,16 @@ duk_ret_t JSBindings::js_otaStart(duk_context *ctx) {
 duk_ret_t JSBindings::js_setTimezone(duk_context *ctx) {
     // TZ POSIX ("<-03>3", "UTC-5"...): o config_time.txt separa campos por
     // '|' — um fuso com '|' ou quebra de linha corrompia a leitura no boot
-    duk_push_boolean(ctx, TimeManager::setTimezone(duk_require_string(ctx, 0)) ? 1 : 0);
+    const char* tz = duk_require_string(ctx, 0);
+    // Teto ANTES da copia: setTimezone recebe std::string (a conversao copia a
+    // string crua do duk; crescer sem excecao aborta no heap apertado) e so
+    // valida 48 LA DENTRO. Fuso fora do teto ja devolvia false: recusa aqui e
+    // o MESMO resultado, sem a copia inteira.
+    if (strlen(tz) > 48) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+    duk_push_boolean(ctx, TimeManager::setTimezone(tz) ? 1 : 0);
     return 1;
 }
 
@@ -679,7 +695,11 @@ duk_ret_t JSBindings::js_setAlarm(duk_context *ctx) {
     int h = duk_require_int(ctx, 0);
     int m = duk_require_int(ctx, 1);
     const char* msg = duk_is_string(ctx, 2) ? duk_require_string(ctx, 2) : "";
-    duk_push_boolean(ctx, TimeManager::setAlarm(h, m, msg) ? 1 : 0);
+    // Teto ANTES da copia: setAlarm recebe std::string (a conversao copia a
+    // string crua do duk; crescer sem excecao aborta o aparelho no heap
+    // apertado) e so corta em 64 LA DENTRO, no substr. Label 64 = o mesmo
+    // teto de la (a chamada segue aceita, so sem copiar o resto).
+    duk_push_boolean(ctx, TimeManager::setAlarm(h, m, std::string(msg, strnlen(msg, 64))) ? 1 : 0);
     return 1;
 }
 

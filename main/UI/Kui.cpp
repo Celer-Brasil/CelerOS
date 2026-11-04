@@ -1590,6 +1590,12 @@ void Navigator::tick() {
         raises.swap(s_pendRaise);
         xSemaphoreGive(s_pendMux);
         for (Toast& t : toasts) {
+            // Teto TAMBEM na saida: s_pendToasts limita o lote entre ticks,
+            // mas o tick esvazia a fila pendente no s_toasts e o drain e de
+            // UM toast por durationMs — rajada de outra task (celular, erro
+            // de servico em laco) crescia s_toasts sem fim, cada um com a
+            // std::string dele (RAM interna de placa sem PSRAM).
+            if (s_toasts.size() >= 8) break;
             t.shownAtMs = 0;  // conta a partir de quando aparece
             s_toasts.push_back(t);
             s_repaint = true;

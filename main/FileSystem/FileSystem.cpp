@@ -1005,11 +1005,19 @@ static bool lfsSpaceInfo(size_t* total, size_t* used) {
     uint32_t nowMs = (uint32_t)(esp_timer_get_time() / 1000);
     if (s_lfsInfoAtMs == 0 || (uint32_t)(nowMs - s_lfsInfoAtMs) > kLfsInfoTtlMs) {
         size_t t = 0, u = 0;
-        esp_task_wdt_reset();           // varredura longa: nao morrer por ela
-        if (esp_littlefs_info("littlefs", &t, &u) != ESP_OK) return s_lfsInfoAtMs != 0;
-        s_lfsTotal = t;
-        s_lfsUsed = u;
-        s_lfsInfoAtMs = nowMs ? nowMs : 1;
+        // So a task INSCRITA no TWDT e alimentada por este reset; nas outras
+        // (usb_link/svchost/shell) ele so imprime "task not found" no console.
+        if (esp_task_wdt_status(nullptr) == ESP_OK) esp_task_wdt_reset();
+        if (esp_littlefs_info("littlefs", &t, &u) == ESP_OK) {
+            s_lfsTotal = t;
+            s_lfsUsed = u;
+            s_lfsInfoAtMs = nowMs ? nowMs : 1;
+        } else if (s_lfsInfoAtMs == 0) {
+            return false;  // nunca medido: nao ha numero para dar
+        }
+        // falhou mas existe medida anterior: serve a ultima (abaixo). O
+        // return antecipado de antes devolvia true com *total/*used INTOCADOS
+        // e o chamador lia 0 livre (disco cheio) numa falha transitoria.
     }
     *total = s_lfsTotal;
     *used = s_lfsUsed;

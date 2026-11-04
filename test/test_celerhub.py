@@ -23,9 +23,13 @@ import celerhub as H  # noqa: E402
 
 
 def die_saida(fn):
-    """Roda fn esperando o SystemExit do die(); devolve a mensagem (stderr)."""
+    """Roda fn esperando o SystemExit do die(); devolve a mensagem (stderr).
+
+    O stdout tambem vai para um buffer: o resumo do LOTE ("erro: lote
+    terminou com N pasta(s) falhada(s)") e um print de stdout e vazava no
+    console do CI como se o teste tivesse falhado."""
     err = io.StringIO()
-    with contextlib.redirect_stderr(err):
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
         try:
             fn()
         except SystemExit:
@@ -39,8 +43,8 @@ class TestReadDepVersion(unittest.TestCase):
         self.assertEqual(H.read_dep_version('var E = { version: "1.2.3" };'), "1.2.3")
 
     def test_sem_versao_morre(self):
-        with self.assertRaises(SystemExit):
-            H.read_dep_version("var E = {};")
+        msg = die_saida(lambda: H.read_dep_version("var E = {};"))
+        self.assertIn("sem `version:", msg)
 
     def test_versoes_distintas_morre(self):
         # antes: a primeira `version: '...'` vencia calada
@@ -112,8 +116,8 @@ class TestPublishDepPreflight(unittest.TestCase):
             args = H.argparse.Namespace(
                 dry=True, force=False, file=str(p), name=None, version=None,
                 min_api=1, dep=None, no_strip=False, hub=None, token=None)
-            with self.assertRaises(SystemExit):
-                H.cmd_publish_dep(args)
+            msg = die_saida(lambda: H.cmd_publish_dep(args))
+            self.assertIn("versoes distintas", msg)
 
     def test_sintaxe_invalida_morre(self):
         with tempfile.TemporaryDirectory() as td:
@@ -746,8 +750,9 @@ class TestPublishHostil(unittest.TestCase):
         hub = {"celeros.a": {"1.0.0": {"deps": {"celeros.b": "^1.0.0"}},
                              "2.0.0": {"deps": {"celeros.b": "^2.0.0"}}},
                "celeros.b": {"1.0.0": {}, "2.0.0": {}}}
-        with self.assertRaises(SystemExit):
-            H.resolve_dep_ranges({"celeros.a": "^1.0.0", "celeros.b": "^2.0.0"}, hub)
+        msg = die_saida(lambda: H.resolve_dep_ranges(
+            {"celeros.a": "^1.0.0", "celeros.b": "^2.0.0"}, hub))
+        self.assertIn("sem versao que satisfaca", msg)
 
     def test_diamante_de_deps_pega_o_maior_comum(self):
         # app -> (A ^1, B ^1); A 1.0 -> C ^1.2; B 1.0 -> C ^1.4: C fica 1.9

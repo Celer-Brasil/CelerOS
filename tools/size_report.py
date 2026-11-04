@@ -200,13 +200,22 @@ def ledger_problems(current, ledger, selected, max_growth):
     quando ela e medida com o build fresco (o baseline da imagem ja cobre a
     presenca). Assim o CI de uma placa recem-adicionada nao quebra antes de
     alguem gravar o numero dela.
+
+    Medida SEM objeto nenhum (esp_idf_size ausente/mudou o JSON: `--files`
+    devolve {}) tambem e falha para placa no ledger: passar calado aqui
+    desligava a catraca inteira sem ninguem ver.
     """
     out = []
     for b in selected:
         cur = current.get(b)
-        if cur is None:
+        if not cur:
             if b in ledger:
-                out.append((b, "-", "esta no ledger e nao foi medido"))
+                if cur is None:
+                    out.append((b, "-", "esta no ledger e nao foi medido"))
+                else:
+                    out.append((b, "-", "medido sem dados por objeto "
+                                        "(esp_idf_size indisponivel?): o gate "
+                                        "nao pode pesar 0 objeto"))
             continue
         prev = ledger.get(b)
         if prev is None:

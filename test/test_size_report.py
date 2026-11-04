@@ -134,6 +134,18 @@ class LedgerProblemsTest(unittest.TestCase):
         self.assertEqual(len(p), 1)
         self.assertIn("nao foi medido", p[0][2])
 
+    def test_placa_do_ledger_sem_dados_por_objeto_falha(self):
+        # mediu a imagem mas o --files voltou vazio (esp_idf_size ausente no
+        # PATH ou JSON em outro formato): com `cur` vazio o laco de objetos
+        # nao roda e o gate passava calado, desligando a catraca do CI para
+        # quem esta no ledger sem ninguem ver
+        p = S.ledger_problems({"cyd": {}}, {"cyd": {"A.obj": 9_000}}, ["cyd"], 512)
+        self.assertEqual(len(p), 1)
+        self.assertIn("sem dados por objeto", p[0][2])
+
+    def test_placa_fora_do_ledger_com_medida_vazia_passa(self):
+        self.assertEqual(S.ledger_problems({"devkit": {}}, {}, ["devkit"], 512), [])
+
     def test_placa_selecionada_sem_build_e_sem_ledger_passa(self):
         self.assertEqual(S.ledger_problems({}, {}, ["devkit"], 512), [])
 

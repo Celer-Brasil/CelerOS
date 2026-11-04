@@ -61,6 +61,17 @@ var lastSig = {};            // assinaturas do desenho base (sem UI.custom)
 
 var guards = {};             // id -> {name, armed, at, missing}
 var seen = {};               // "origem:n" de alarmes ja tratados
+// teto do dedup (o MESMO do service.js): cada alarme novo cria uma chave e
+// um app aberto por horas guardava o mapa inteiro no heap
+var SEEN_MAX = 64;
+var seenQ = [];              // chaves na ordem de entrada (evicta a mais antiga)
+function mark(key) {
+    if (seen[key]) return false;
+    seen[key] = true;
+    seenQ.push(key);
+    if (seenQ.length > SEEN_MAX) delete seen[seenQ.shift()];
+    return true;
+}
 var meshWasActive = false;   // malha ligada no frame anterior
 var ringing = null;          // {zone, kind, at}
 var history = [];            // ["zona: tipo", ...]
@@ -96,7 +107,7 @@ function raise(kind, extra, now) {
     alarmN++;
     Storage.set("n", "" + alarmN);
     var payload = alarmN + "." + kind + (extra || "");
-    seen[me.id + ":" + alarmN] = true;
+    mark(me.id + ":" + alarmN);
     A.mesh.send(null, "!", payload, { ttl: 8 });
     resend.push({ op: "!", payload: payload, at: now + 1000 });
     ring(kind === "v" ? nameOf(extra) : "Aqui (" + me.name + ")", kind, now);
@@ -151,13 +162,11 @@ function onMesh(from, op, rest, m) {
     } else if (op === "!") {
         var dot = rest.indexOf(".");
         var key = from + ":" + rest.substring(0, dot);
-        if (seen[key]) return;
-        seen[key] = true;
+        if (!mark(key)) return;
         var kind = rest.charAt(dot + 1);
         if (kind === "v") {
             var who = rest.substring(dot + 2);
-            if (seen["v:" + who]) return;          // outra central ja avisou
-            seen["v:" + who] = true;
+            if (!mark("v:" + who)) return;         // outra central ja avisou
             if (guards[who]) guards[who].missing = true;
             ring(nameOf(who), "v", frameNow);
         } else {
@@ -190,7 +199,7 @@ function watchdog(now) {
         var g = guards[id];
         if (g.armed && !g.missing && now - g.at > 16000) {
             g.missing = true;
-            if (!seen["v:" + id]) { seen["v:" + id] = true; raise("v", id, now); }
+            if (mark("v:" + id)) raise("v", id, now);
         }
     }
 }
@@ -210,11 +219,19 @@ function disarmAll(now) {
 // ---- portao da malha (2.0) -------------------------------------------------
 function gate(full) {
     if (typeof CelerNet === "undefined" || typeof Pack === "undefined") {
-        A.style.card(10, 56, 220, 108, { full: full, draw: function (r) {
-            UI.text("Esta placa não tem Bluetooth no firmware.", r.x, r.y,
-                    { w: r.w, lines: 2, role: "body", color: T.text, bg: r.bg });
-            UI.text("A Sentinela fala pela malha CelerNet (app Matilha). O alarme local ainda pode tocar se você armar.",
-                    r.x, r.y + 30, { w: r.w, lines: 4, role: "caption", color: T.textDim, bg: r.bg });
+        // cartao com a altura DERIVADA do texto: no 4848 o corpo mede 20 px
+        // virtuais e a legenda em +30 fixo caia dentro do titulo (e as 4
+        // linhas dela passavam do cartao, por cima do espaco do botao)
+        var s1 = "Esta placa não tem Bluetooth no firmware.";
+        var s2 = "A Sentinela fala pela malha CelerNet (app Matilha). O alarme local ainda pode tocar se você armar.";
+        var gw = 220 - 20;                      // pad 10 explicito abaixo
+        var gh = UI.measureWrap(s1, gw, "body") + 6 +
+                 UI.measureWrap(s2, gw, "caption") + 20;
+        A.style.card(10, 56, 220, gh, { full: full, pad: 10, draw: function (r) {
+            var gy = r.y + UI.text(s1, r.x, r.y,
+                    { w: r.w, lines: 64, role: "body", color: T.text, bg: r.bg }) + 6;
+            UI.text(s2, r.x, gy,
+                    { w: r.w, lines: 64, role: "caption", color: T.textDim, bg: r.bg });
         }});
         return false;
     }

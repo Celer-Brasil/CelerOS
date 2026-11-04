@@ -191,20 +191,27 @@ function paintRow(r, x, y, w, h) {
 function tapRow(i, rows) {
     var r = rows[i];
     if (!r) return;
-    if (r.k === "action" && r.cb) {
-        r.cb();
-        UI.invalidate();
-    } else if (r.k === "choice") {
-        r.set(((r.get() | 0) + 1) % r.opts.length);
-        UI.invalidate();
-    } else if (r.k === "toggle") {
-        r.set(!r.get());
-        UI.invalidate();
-    } else if (r.k === "stepper") {
-        var v = A.form.askNum(r.label, { min: r.min, max: r.max, initial: r.get(),
-            hint: r.min + " a " + r.max, int: r.step >= 1 });
-        if (v !== null) { r.set(v); UI.invalidate(); }
+    // Acao com pino negado/reservado (ex.: 19/20 no devkit-s3 com USB no
+    // build, 0..21 no SmartDisplay) joga RangeError do requirePin nativo;
+    // sem este guarda a excecao sobe pelo A.run e mata o app com a tela
+    // "Erro no app" em vez de mostrar o motivo.
+    try {
+        if (r.k === "action" && r.cb) {
+            r.cb();
+        } else if (r.k === "choice") {
+            r.set(((r.get() | 0) + 1) % r.opts.length);
+        } else if (r.k === "toggle") {
+            r.set(!r.get());
+        } else if (r.k === "stepper") {
+            var v = A.form.askNum(r.label, { min: r.min, max: r.max, initial: r.get(),
+                hint: r.min + " a " + r.max, int: r.step >= 1 });
+            if (v === null) return;
+            r.set(v);
+        }
+    } catch (eT) {
+        A.error("Hardware", String(eT && eT.message ? eT.message : eT));
     }
+    UI.invalidate();
 }
 
 // ---- telas ----------------------------------------------------------------
@@ -218,7 +225,7 @@ function telaMain(c) {
     ]);
     var i = UI.list("hw:main", LX, 116, LW, BOTTOM - 116,
                     ["Servo", "Ponte H", "LED / fita", "Botao", "I2C / PCA9685"],
-                    { row: 40 });
+                    { rowH: 40 });
     if (i === 0) return "servo";
     if (i === 1) return "motor";
     if (i === 2) return "led";
@@ -326,7 +333,10 @@ var ledRows = [
         else { var s0 = ensureStrip(); s0.fill(HW.led.rgb(255, 0, 0)); s0.show(); }
     }),
     A.form.action("Apagar", function () { if (led) led.off(); }),
-    A.form.action("Status RGB (verde)", function () { HW.led.status(0, 40, 0); }),
+    A.form.action("Status RGB (verde)", function () {
+        if (!HW.led.status(0, 40, 0))
+            A.error("LED RGB", "Esta placa nao tem LED RGB de status");
+    }),
     A.form.action("Status off", function () { HW.led.statusOff(); }),
     A.form.secao("Fita WS2812"),
     A.form.stepper("Indice da fita", function () { return stripIdx; },

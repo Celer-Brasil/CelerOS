@@ -1,7 +1,7 @@
 {
   "name": "Hardware Lab",
   "packageName": "celeros.hwlab",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 54,
   "author": "CelerOS",
   "type": "App",
@@ -15,5 +15,5 @@
   "permissions": [
     "gpio"
   ],
-  "changelog": "1.0.0 - primeira versão: telas de servo (pino/ângulo/rampa/detach), ponte H EN+IN1/IN2 (velocidade/rampa/freio/roda livre), LED e fita WS2812 (pisca/breathe/rainbow), botão com debounce e gestos (click/duplo/longo/repeat) e I²C com scan + PCA9685 (16 canais, servo por canal, sleep/wake). Placa com bus de placa usa o bus do touch/PMU/OLED; CYD/devkit abrem os pinos na tela."
+  "changelog": "1.0.1 - toque numa ação com pino negado/reservado (ex.: IN1/IN2 em 19/20 no devkit-s3 com USB no build, GPIO 0..21 no SmartDisplay) mostra o motivo do requirePin em vez de derrubar o app com 'Erro no app'; 'Status RGB' avisa quando a placa não tem LED RGB; menu principal usa o rowH correto do UI.list\n1.0.0 - primeira versão: telas de servo (pino/ângulo/rampa/detach), ponte H EN+IN1/IN2 (velocidade/rampa/freio/roda livre), LED e fita WS2812 (pisca/breathe/rainbow), botão com debounce e gestos (click/duplo/longo/repeat) e I²C com scan + PCA9685 (16 canais, servo por canal, sleep/wake). Placa com bus de placa usa o bus do touch/PMU/OLED; CYD/devkit abrem os pinos na tela."
 }

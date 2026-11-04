@@ -37,6 +37,18 @@ A.style.preset("soft");
 A.mesh.family("b");
 
 var T = A.style.T;
+// tela "Como jogar": paragrafos numa tabela so para a altura sair do
+// UI.measureWrap (nada de offset fixo por vidro)
+var AJUDA = [
+    { s: "Abra a Batata Quente em 2 ou mais aparelhos com a malha ligada." },
+    { s: "Um toca Começar: a batata nasce na mão dele com um pavio secreto de 12 a 25 s." },
+    { s: "Quem está com ela toca Passar!: o pavio viaja junto e os bipes aceleram.",
+      role: "caption", color: T.textDim },
+    { s: "Sem confirmação em 3,5 s o passe é reenviado; após 3 tentativas a batata volta.",
+      role: "caption", color: T.textDim },
+    { s: "Quem estiver segurando quando estourar queima. O placar fica na roda.",
+      role: "caption", color: T.accent }
+];
 // placas sem Bluetooth nao tem CelerNet: a malha e o jogo, entao a partida
 // nao comeca — mas nenhuma chamada crua pode derrubar o app aberto na CYD
 var TEM_MALHA = A.mesh.available();
@@ -295,11 +307,19 @@ var roundList = A.list.make(function () { return scoreStamp(); }, scoreItems);
 // ---- portao da malha (2.0) -------------------------------------------------
 function gate(full) {
     if (!caps.bt || !TEM_MALHA) {
-        A.style.card(10, 56, 220, 108, { full: full, draw: function (r) {
-            UI.text("Esta placa não tem Bluetooth no firmware.", r.x, r.y,
-                    { w: r.w, lines: 2, role: "body", color: T.text, bg: r.bg });
-            UI.text("A batata voa pela malha CelerNet (app Matilha): abra em 2 ou mais aparelhos com rádio.",
-                    r.x, r.y + 30, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
+        // cartao com a altura DERIVADA do texto: no 4848 o corpo mede 20 px
+        // virtuais e a legenda em +30 fixo caia dentro do titulo (e o texto
+        // passava do cartao de 108 px)
+        var g1 = "Esta placa não tem Bluetooth no firmware.";
+        var g2 = "A batata voa pela malha CelerNet (app Matilha): abra em 2 ou mais aparelhos com rádio.";
+        var gw = 220 - 20;                      // pad 10 explicito abaixo
+        var gh = UI.measureWrap(g1, gw, "body") + 6 +
+                 UI.measureWrap(g2, gw, "caption") + 20;
+        A.style.card(10, 56, 220, gh, { full: full, pad: 10, draw: function (r) {
+            var gy = r.y + UI.text(g1, r.x, r.y,
+                    { w: r.w, lines: 64, role: "body", color: T.text, bg: r.bg }) + 6;
+            UI.text(g2, r.x, gy,
+                    { w: r.w, lines: 64, role: "caption", color: T.textDim, bg: r.bg });
         }});
         return false;
     }
@@ -415,15 +435,19 @@ A.run({
             var eu = loser === me.id;
             A.style.card(8, 44, 224, 96, { full: c.full, draw: function (r) {
                 drawPotato(r.x + 34, r.y + 34, 26, true);
-                UI.text(eu ? "BUM! Você queimou" : nameOf(loser) + " queimou!",
-                        120, r.y + 8, { role: "title", align: "center",
-                                       color: eu ? T.err : T.ok, w: r.w, bg: r.bg, id: "st" });
-                UI.text(eu ? "O pavio acabou na sua mão" : "A batata estourou na mão de " + nameOf(loser),
-                        120, r.y + 30, { role: "caption", align: "center", color: T.textDim,
-                                        bg: r.bg, w: r.w, lines: 1, id: "st2" });
+                // empilhado pela altura devolvida: no 4848 o titulo mede 30 px
+                // virtuais e a legenda em +30 fixo encostava nele
+                var fy = r.y + 8;
+                fy += UI.text(eu ? "BUM! Você queimou" : nameOf(loser) + " queimou!",
+                              120, fy, { role: "title", align: "center",
+                                         color: eu ? T.err : T.ok, w: r.w, bg: r.bg,
+                                         lines: 1, id: "st" }) + 3;
+                fy += UI.text(eu ? "O pavio acabou na sua mão" : "A batata estourou na mão de " + nameOf(loser),
+                              120, fy, { role: "caption", align: "center", color: T.textDim,
+                                         bg: r.bg, w: r.w, lines: 1, id: "st2" }) + 3;
                 UI.text("nova rodada em " + Math.max(0, 5 - Math.floor((now - overAt) / 1000)) + " s",
-                        120, r.y + 62, { role: "caption", align: "center", color: T.textDim,
-                                        bg: r.bg, w: r.w, lines: 1, id: "st3" });
+                        120, fy, { role: "caption", align: "center", color: T.textDim,
+                                   bg: r.bg, w: r.w, lines: 1, id: "st3" });
             }});
             A.list.view("roda", 8, 148, 224, 164, roundList.rows(),
                         { row: 38, panel: true, rowR: 7 });
@@ -432,17 +456,23 @@ A.run({
     ajuda: function (c) {
         var h = A.widgets.header("Como jogar", { full: c.full });
         if (h.back) return A.BACK;
-        A.style.card(8, 48, 224, 252, { full: c.full, draw: function (r) {
-            UI.text("Abra a Batata Quente em 2 ou mais aparelhos com a malha ligada.",
-                    r.x, r.y, { w: r.w, lines: 3, bg: r.bg });
-            UI.text("Um toca Começar: a batata nasce na mão dele com um pavio secreto de 12 a 25 s.",
-                    r.x, r.y + 48, { w: r.w, lines: 3, bg: r.bg });
-            UI.text("Quem está com ela toca Passar!: o pavio viaja junto e os bipes aceleram.",
-                    r.x, r.y + 96, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
-            UI.text("Sem confirmação em 3,5 s o passe é reenviado; após 3 tentativas a batata volta.",
-                    r.x, r.y + 144, { w: r.w, lines: 4, role: "caption", color: T.textDim, bg: r.bg });
-            UI.text("Quem estiver segurando quando estourar queima. O placar fica na roda.",
-                    r.x, r.y + 204, { w: r.w, lines: 3, role: "caption", color: T.accent, bg: r.bg });
+        // paragrafos EMPILHADOS pela altura devolvida e ROLAVEIS: os offsets
+        // fixos (48/96/144/204) eram do vidro pequeno — no 4848 o corpo mede
+        // 20 px virtuais e cada bloco de 3 linhas passa de 60, entao os cinco
+        // paragrafos se sobrepunham e o ultimo saia do cartao
+        A.style.card(8, 44, 224, 268, { full: c.full, draw: function (r) {
+            var i, it = AJUDA, tot = 0;
+            for (i = 0; i < it.length; i++)
+                tot += UI.measureWrap(it[i].s, r.w, it[i].role) + 6;
+            var off = UI.scrollBegin("ajuda", r.x, r.y, r.w, r.h, tot);
+            var y = r.y - off;
+            for (i = 0; i < it.length; i++) {
+                y += UI.text(it[i].s, r.x, y,
+                             { w: r.w, lines: 64, role: it[i].role || "body",
+                               color: it[i].color === undefined ? T.text : it[i].color,
+                               bg: r.bg }) + 6;
+            }
+            UI.scrollEnd();
         }});
     }
 }, "main");

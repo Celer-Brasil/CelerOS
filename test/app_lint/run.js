@@ -47,6 +47,16 @@ const CASES = [
     expect: { 'erro:es6': 10, 'erro:global': 1 },
   },
   {
+    // receptor provado sem ser literal (Array(n)/new Array(n), Object.keys,
+    // "x".split) conta; os ausentes fora da lista classica (Object.hasOwn,
+    // Math.asinh, trimLeft, flatMap, findLastIndex, matchAll) tambem; polyfill
+    // de Array.prototype isenta; variavel e chave dinamica ficam de fora
+    // (limites do AST, documentados no fixture). 4 + 6.
+    name: 'es6 rejeitado (prototype com receptor provado pelo AST)',
+    file: 'es6_proto_recv.js',
+    expect: { 'erro:es6': 10 },
+  },
+  {
     name: 'funcoes/constantes inexistentes', file: 'api_inexistente.js',
     expect: { 'erro:api': 4, 'aviso:var': 2 },  // T e MAGNETA nao declarados no fixture
   },

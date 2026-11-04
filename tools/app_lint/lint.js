@@ -135,18 +135,22 @@ const BANNED_GLOBALS = {
 // endsWith/repeat, Math.trunc/sign/clz32/log2/log10/hypot/cbrt/imul, Array.isArray.
 const BANNED_STATIC_METHODS = {
   Array: ['from', 'of'],
-  Object: ['values', 'entries', 'fromEntries', 'getOwnPropertyDescriptors'],
+  Object: ['values', 'entries', 'fromEntries', 'getOwnPropertyDescriptors', 'hasOwn'],
   String: ['raw'],
-  Math: ['fround', 'sinh', 'cosh', 'tanh', 'expm1', 'log1p'],
+  Math: ['fround', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh', 'expm1', 'log1p'],
   Number: ['toInteger'],
 };
-// Metodos de prototype ausentes: checados quando o RECEPTOR e literal
-// ("ab".padStart(4), [1,2].find(...)) — receptor em variavel e opaco para o
-// lint (mesma limite do acesso computado por chave dinamica).
+// Metodos de prototype ausentes: checados quando o RECEPTOR e PROVADO pelo
+// AST (literal, Array(n)/new Array(n), Object.keys, "x".split) — receptor em
+// variavel e opaco para o lint (mesmo limite do acesso computado por chave
+// dinamica). trimLeft/trimRight sao os aliases da Mozilla; matchAll/flatMap/
+// findLastIndex/toSorted/toReversed/group sao ES2019+ — todos ausentes na
+// probe do test/duk (-1 resultado, TypeError em runtime).
 const BANNED_PROTO_METHODS = {
-  String: ['padStart', 'padEnd', 'trimStart', 'trimEnd', 'replaceAll', 'normalize', 'at'],
-  Array: ['includes', 'find', 'findIndex', 'findLast', 'fill', 'copyWithin',
-          'keys', 'values', 'entries', 'flat', 'at'],
+  String: ['padStart', 'padEnd', 'trimStart', 'trimEnd', 'trimLeft', 'trimRight',
+           'replaceAll', 'matchAll', 'normalize', 'at'],
+  Array: ['includes', 'find', 'findIndex', 'findLast', 'findLastIndex', 'fill', 'copyWithin',
+          'keys', 'values', 'entries', 'flat', 'flatMap', 'toSorted', 'toReversed', 'group', 'at'],
 };
 
 // ============================================================
@@ -683,6 +687,34 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
     return found;
   }
 
+  // Tipo PROVADO do receptor de um metodo de prototype, para o check de
+  // builtins ES6: literal de string, literal de array e as fabricas que o AST
+  // prova devolver array (Array(n)/new Array(n), Object.keys/
+  // getOwnPropertyNames e "literal".split). Receptor em variavel segue opaco
+  // (mesmo limite do acesso por chave dinamica) — nao inventar tipo.
+  function recvProtoTable(recv) {
+    if (recv.type === 'Literal' && typeof recv.value === 'string') return BANNED_PROTO_METHODS.String;
+    if (recv.type === 'ArrayExpression') return BANNED_PROTO_METHODS.Array;
+    const isGlobal = (name) => !scopeHas(scopeAt, name) && !implicitGlobals.has(name);
+    if ((recv.type === 'CallExpression' || recv.type === 'NewExpression') &&
+        recv.callee.type === 'Identifier' && recv.callee.name === 'Array' && isGlobal('Array')) {
+      return BANNED_PROTO_METHODS.Array;   // Array(n) / new Array(n)
+    }
+    if (recv.type === 'CallExpression' && recv.callee.type === 'MemberExpression') {
+      const c = recv.callee;
+      const ch = memberChain(c);
+      if (ch && ch.root === 'Object' && isGlobal('Object') && ch.parts.length === 1 &&
+          (ch.parts[0] === 'keys' || ch.parts[0] === 'getOwnPropertyNames')) {
+        return BANNED_PROTO_METHODS.Array;  // Object.keys devolve array
+      }
+      const m = c.computed ? litProp(c) : (c.property.type === 'Identifier' ? c.property.name : null);
+      if (m === 'split' && c.object.type === 'Literal' && typeof c.object.value === 'string') {
+        return BANNED_PROTO_METHODS.Array;  // "a,b".split(...) devolve array
+      }
+    }
+    return null;
+  }
+
   let scopeAt = rootScope;
 
   function walk(node, parent, key) {
@@ -758,7 +790,12 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
         // isenta a chamada do check "es6": o app trata a ausencia no device
         if (t.type === 'MemberExpression') {
           const ch = memberChain(t);
-          if (ch && ch.parts.length >= 1) polyfilled.add(ch.root + '.' + ch.parts[0]);
+          if (ch && ch.parts.length >= 1) {
+            polyfilled.add(ch.root + '.' + ch.parts[0]);
+            // caminho INTEIRO tambem: o check de prototype consulta
+            // `Array.prototype.includes` (o de estatico usa `Array.from`)
+            polyfilled.add(ch.root + ch.parts.map((p) => '.' + p).join(''));
+          }
         }
         break;
       }
@@ -778,20 +815,24 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
               ' nao existe no Duktape do aparelho (ES6): TypeError em runtime' +
               ' (polifill com guard if (!' + chain.root + '.' + chain.parts[0] + ') isenta)');
           }
-          // metodo de prototype ausente com receptor literal ("ab".padStart(4),
-          // [1,2].find(...)): a string/array literal PROVA o tipo do receptor
+          // metodo de prototype ausente com receptor PROVADO ("ab".padStart(4),
+          // [1,2].find(...), new Array(n).fill(0), Object.keys(o).includes(k)):
+          // o tipo vem do AST (recvProtoTable). Polyfill do prototype no proprio
+          // arquivo (Array.prototype.includes = ...) isenta — o app trata a
+          // ausencia no device.
           if (!chain) {
             const prop = node.callee.property;
             const meth = node.callee.computed
               ? litProp(node.callee)
               : (prop.type === 'Identifier' ? prop.name : null);
-            const recv = node.callee.object;
-            const tabela = (recv.type === 'Literal' && typeof recv.value === 'string')
-              ? BANNED_PROTO_METHODS.String
-              : (recv.type === 'ArrayExpression' ? BANNED_PROTO_METHODS.Array : null);
-            if (meth !== null && tabela && tabela.indexOf(meth) >= 0) {
+            const tabela = recvProtoTable(node.callee.object);
+            const tipoNome = tabela === BANNED_PROTO_METHODS.String ? 'String'
+              : tabela === BANNED_PROTO_METHODS.Array ? 'Array' : null;
+            if (meth !== null && tipoNome && tabela.indexOf(meth) >= 0 &&
+                !polyfilled.has(tipoNome + '.prototype.' + meth)) {
               d(node, 'erro', 'es6', '.' + meth + '() nao existe no Duktape do aparelho' +
-                ' (ES6): TypeError em runtime');
+                ' (ES6): TypeError em runtime (polyfill de ' + tipoNome +
+                '.prototype.' + meth + ' isenta)');
             }
           }
           if (chain && NAMESPACE_ROOTS.indexOf(chain.root) >= 0 &&

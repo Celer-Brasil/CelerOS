@@ -152,6 +152,7 @@ exports.start = function (ctx) {
     s.joyOn = false;       // joystick flutuante: base assentada no toque
     s.joyX0 = 0;
     s.joyY0 = 0;
+    s.portalBlock = null;  // celula onde a heroina CHEGOU de portal: mudo ate sair
     s.enemies = [];
     s.rocks = [];
     s.bombs = [];
@@ -238,6 +239,11 @@ function startRoom(s, ctx) {
     }
     s.hx = cx(at[0]);
     s.hy = cy(at[1]);
+    // a chegada costuma cair EM CIMA da porta de destino (as portas das bordas
+    // apontam uma para a celula da porta irma): o portal dali fica mudo enquanto
+    // ela nao sair da celula — o cooldown sozinho vencia com ela parada e a
+    // devolvia ("indo e voltando" agarrada na troca de cena)
+    s.portalBlock = [at[0], at[1]];
     initButtons(s);
     s.hudKey = '';
     applyGameClip(s, E);
@@ -456,12 +462,13 @@ function updateGame(s, E, ctx, dt) {
     if (s.invuln > 0) s.invuln -= dt;
     if (s.attackT > 0) s.attackT -= dt;
 
-    // movimento: JOYSTICK FLUTUANTE. O toque so ASSENTA a base (nao anda) e o
-    // diferencial desde ela da a direcao. Antes a heroina andava NA DIRECAO DO
-    // DEDO (vetor heroina->toque): o toque inicial ja a colocava em movimento
-    // e a direcao mudava sozinha conforme ela se aproximava. A gesto que comeca
-    // num botao nao pega o stick; um que comecou fora continua valendo mesmo se
-    // passar por cima do botao.
+    // movimento: JOYSTICK FLUTUANTE POR TRACO (igual ao Detona). O toque so
+    // ASSENTA a base (nao anda) e o diferencial desde ela da a direcao; quando
+    // o botao bate no anel, a base GLIDEA atras do dedo. O modelo antigo (base
+    // cravada no pouso) pedia o arrasto de volta por cima da base para virar —
+    // perto da borda/quina nao sobrava curso e a heroina parecia nao obedecer.
+    // A gesto que comeca num botao nao pega o stick; um que comecou fora
+    // continua valendo mesmo se passar por cima do botao.
     s.walking = false;
     var r0 = s.buttons;
     var overUi = inRect(r0 && r0.a, E.input.x, E.input.y) ||
@@ -475,6 +482,17 @@ function updateGame(s, E, ctx, dt) {
         }
         var dx = E.input.x - s.joyX0, dy = E.input.y - s.joyY0;
         var d = Math.sqrt(dx * dx + dy * dy);
+        if (d > JOY_R) {
+            // botao bateu no anel: a base desliza na direcao do dedo (o curso
+            // nunca acaba — virar e so puxar para o outro lado). O pouso em
+            // si nao glidea: encostar o dedo continua sem mexer a heroina.
+            var over = d - JOY_R;
+            s.joyX0 = clamp(s.joyX0 + dx / d * over, JOY_R, s.W - JOY_R);
+            s.joyY0 = clamp(s.joyY0 + dy / d * over, OY + JOY_R, s.H - JOY_R);
+            dx = E.input.x - s.joyX0;
+            dy = E.input.y - s.joyY0;
+            d = Math.sqrt(dx * dx + dy * dy);
+        }
         if (d > JOY_DEAD) {
             var speed = CELL * 3.4 * dt;
             moveHero(s, dx / d * speed, dy / d * speed);
@@ -946,6 +964,10 @@ function hurtHero(s, E, dmg) {
 function checkPortals(s, E, ctx) {
     if (s.portalCd > 0) return;
     var c = cellX(s.hx), r = cellY(s.hy);
+    if (s.portalBlock) {
+        if (s.portalBlock[0] === c && s.portalBlock[1] === r) return;
+        s.portalBlock = null;   // saiu da celula de chegada: portais valendo
+    }
     for (var i = 0; i < s.portals.length; i++) {
         var p = s.portals[i];
         if (p.c !== c || p.r !== r) continue;

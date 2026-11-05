@@ -11,7 +11,7 @@ antigas cópias planas em `hub_apps/` foram removidas na consolidação de
 |---------|--------|-------|-----------|
 | `Detona` | 1.2.5 | 10 | 6 fases 15x13, 3 tilesets, soldado 4 direções, slime/fantasma/caçador + Rei Slime, itens e explosão text2d, menus UI 1.3 sobre parallax, joystick de arraste, SOBREVIVENCIA em ondas e DUELO 1x1 pela malha |
 | `Arrasa` | 2.1.4 | 13 | 10 fases com peças/entidades + `P.rigid`, estilingue, 7 pedras com arte própria, TNT, rei animado, explosão/fumaça vfx, fila de tiros no HUD, menus UI 1.3 |
-| `Lenda de Celer` | 2.2.5 | 23 | 20 salas ASCII + tilemap, heroína 4 direções (`animate-set`), golpe/fumaça/explosão/cura vfx, espada/bomba/bumerangue, baús, Sábio com retrato, loja, Guardião, 3 slots de save com estatísticas, menus UI 1.3 |
+| `Lenda de Celer` | 2.2.6 | 23 | 20 salas ASCII + tilemap, heroína 4 direções (`animate-set`), golpe/fumaça/explosão/cura vfx, espada/bomba/bumerangue, baús, Sábio com retrato, loja, Guardião, 3 slots de save com estatísticas, menus UI 1.3 |
 | `Supernova` | 3.1.3 | 5 | campanha de 10 ondas + infinito, chefe 3 fases, 4 inimigos com arte própria, explosão vfx, drops, nebulosa assada, HUD `E.ui.hud`, menus UI 1.3 |
 
 Build/run/deploy headless:

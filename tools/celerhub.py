@@ -607,15 +607,28 @@ def validate(folder: Path, strip=True, snapshot=None):
         # (o mesmo sanity que o loader faz no device — recusar no publish
         # poupa o autor de descobrir no aparelho)
         if n.endswith(".bin") and size_n >= 96:
-            head = raw_n[:96] if raw_n is not None else p.open("rb").read(96)
+            head = raw_n[:128] if raw_n is not None else p.open("rb").read(128)
             if head[:4] == b"CLRN":
                 hsize = int.from_bytes(head[4:8], "little")
                 bsize = int.from_bytes(head[8:12], "little")
                 chip = int.from_bytes(head[12:16], "little")
                 bapi = int.from_bytes(head[16:20], "little")
                 cnt = int.from_bytes(head[20:24], "little")
-                if (hsize != 96 or bsize != size_n - 96 or chip not in (0, 1)
-                        or bapi > MAX_API_LEVEL or not 1 <= cnt <= 8):
+                ok_h = hsize in (96, 128) and chip in (0, 1) and \
+                    bapi <= MAX_API_LEVEL and 1 <= cnt <= 8
+                if ok_h and hsize == 96:
+                    # v1: so a imagem; tabela/savestate inexistentes
+                    ok_h = bsize == size_n - 96
+                elif ok_h:
+                    # v2: imagem + tabela de relocs no fim do arquivo
+                    bss_off = int.from_bytes(head[56:60], "little")
+                    reloc_off = int.from_bytes(head[64:68], "little")
+                    reloc_n = int.from_bytes(head[68:72], "little")
+                    ok_h = (reloc_n <= 16384 and
+                            bsize == size_n - 128 - 4 * reloc_n and
+                            reloc_off == 128 + bsize and
+                            bss_off >= bsize)
+                if not ok_h:
                     die(f"{folder}: {n} e blob CLRN com cabecalho invalido "
                         f"(hsize={hsize} blob={bsize} chip={chip} api={bapi} "
                         f"entradas={cnt}; max api {MAX_API_LEVEL})")

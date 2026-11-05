@@ -1138,17 +1138,18 @@ function lintAppJson(dir, manifest) {
       if (enxuto > STREAM_SAFE_MAIN_JS && jsApiLow)
         d('aviso', 'appjson', name + ' enxuto tem ' + kbFmt(enxuto) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
     } else {
-      // Blob nativo (API 57): .bin com magic "CLRN" ganha teto proprio FORA
+      // Blob nativo (API 57+): .bin com magic "CLRN" ganha teto proprio FORA
       // do total de assets e exige requires ["native"] (mesmas regras do
       // celerhub.py e do servidor — recusar aqui poupa o publish falhar).
-      // .bin sem magic segue asset comum. So os 96 B do cabecalho sao lidos.
+      // .bin sem magic segue asset comum. Cabecalho v1=96 B (computacao
+      // pura) ou v2=128 B (relocavel: imagem + tabela de relocs no fim).
       let isNative = false;
       if (ext === '.bin' && st.size >= 96) {
         let head = null;
         try {
           const fd = fs.openSync(path.join(dir, name), 'r');
-          head = Buffer.alloc(96);
-          const got = fs.readSync(fd, head, 0, 96, 0);
+          head = Buffer.alloc(128);
+          const got = fs.readSync(fd, head, 0, 128, 0);
           fs.closeSync(fd);
           head = head.slice(0, got);
         } catch (e) { /* cabeçalho ilegivel: tratado como asset comum */ }
@@ -1157,10 +1158,18 @@ function lintAppJson(dir, manifest) {
           const hsize = head.readUInt32LE(4), bsize = head.readUInt32LE(8);
           const chip = head.readUInt32LE(12), bapi = head.readUInt32LE(16);
           const cnt = head.readUInt32LE(20);
-          // v2 (build_core.py atual) = cabecalho de 128 B; v1 de 96 B segue
-          // aceito pelo loader (ver tools/native/build_core.py)
-          const hdrOk = (hsize === 96 || hsize === 128) && bsize === st.size - hsize;
-          if (!hdrOk || chip > 1 || cnt < 1 || cnt > 8) {
+          let hdrOk = (hsize === 96 || hsize === 128) &&
+              chip <= 1 && cnt >= 1 && cnt <= 8;
+          if (hdrOk && hsize === 96) {
+            hdrOk = bsize === st.size - 96;
+          } else if (hdrOk) {
+            const bssOff = head.readUInt32LE(56);
+            const relocOff = head.readUInt32LE(64);
+            const relocN = head.readUInt32LE(68);
+            hdrOk = relocN <= 16384 && bsize === st.size - 128 - 4 * relocN &&
+                relocOff === 128 + bsize && bssOff >= bsize;
+          }
+          if (!hdrOk) {
             d('erro', 'appjson', name + ' e blob CLRN com cabecalho invalido (hsize=' + hsize + ' blob=' + bsize + ' chip=' + chip + ' entradas=' + cnt + ')');
           } else if (bapi > manifest.apiLevel) {
             d('erro', 'appjson', name + ' e blob CLRN de api ' + bapi + ' (o firmware declara ' + manifest.apiLevel + ')');

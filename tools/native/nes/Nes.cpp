@@ -1,6 +1,6 @@
 #include "Nes.h"
 
-#ifndef CELER_HOST_TEST
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
@@ -13,6 +13,15 @@
 
 namespace nes {
 namespace {
+// CRC do save state em hex maiusculo de 8 digitos (equivalente ao
+// "%08lX" do Anemoia; o blob CLRN nao tem snprintf).
+void crcHex(char out[9], uint32_t v)
+{
+    static const char kHex[] = "0123456789ABCDEF";
+    for (int i = 0; i < 8; i++) out[i] = kHex[(v >> ((7 - i) * 4)) & 0xF];
+    out[8] = '\0';
+}
+
 // Sink interno do openScreen: copia os blocos de 8 linhas para o fb proprio
 // (host/fallback; stride = SCREEN_W).
 void fbSink(void* ctx, const uint16_t* rows, int y, int nrows)
@@ -26,7 +35,7 @@ void fbSink(void* ctx, const uint16_t* rows, int y, int nrows)
 }
 }  // namespace
 
-#ifndef CELER_HOST_TEST
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
 namespace {
 // APU a CPU/2 = 894,886 kHz: quantos ticks por microssegundo o task deve
 // clockar para casar o tempo de parede (o Anemoia era paced pelo i2s_write
@@ -132,7 +141,7 @@ void Nes::unload()
 // precisa clockar (jogos NES nao leem o estado dele para logica).
 void Nes::apuTaskStart()
 {
-#ifndef CELER_HOST_TEST
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
     if (apu_task != nullptr) return;
     xTaskCreatePinnedToCore(apuTaskFn, "nesapu", 4096, &cpu.apu, 2, (TaskHandle_t*)&apu_task,
                             portNUM_PROCESSORS - 1);
@@ -141,18 +150,34 @@ void Nes::apuTaskStart()
 
 void Nes::apuTaskStop()
 {
-#ifndef CELER_HOST_TEST
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
     if (apu_task == nullptr) return;
     vTaskDelete((TaskHandle_t)apu_task);
     apu_task = nullptr;
 #endif
 }
 
+// Blob CLRN: o framebuffer vem do .bss do blob (core_ctl aponta antes do
+// load); nao ha heap_caps nem free. Definido em NESBlob.cpp.
+#ifdef NES_BLOB
+extern uint16_t* g_blob_fb;
+#endif
+
 bool Nes::openScreen()
 {
     if (fb != nullptr) return true;
     if (cart == nullptr) return false;
 
+#ifdef NES_BLOB
+    fb = g_blob_fb;
+    if (fb == nullptr) return false;
+    memset(fb, 0, SCREEN_W * SCREEN_H * sizeof(uint16_t));
+    // A PPU escreve no fb interno pelo sink (o app puxa o quadro por
+    // nativeDraw); paleta _swap = o byte order do pushImage (swap565).
+    cpu.bus.ppu.setPaletteByteSwap(true);
+    cpu.bus.ppu.setChunkSink(&fbSink, this);
+    return true;
+#else
     // PSRAM no device (122 KB nao cabem no heap interno do app); malloc no host
 #ifndef CELER_HOST_TEST
     fb = (uint16_t*)heap_caps_malloc(SCREEN_W * SCREEN_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
@@ -166,17 +191,22 @@ bool Nes::openScreen()
     cpu.bus.ppu.setPaletteByteSwap(false);
     cpu.bus.ppu.setChunkSink(&fbSink, this);
     return true;
+#endif
 }
 
 void Nes::closeScreen()
 {
     if (fb == nullptr) return;
+#ifdef NES_BLOB
+    fb = nullptr;  // buffer do .bss do blob: nao e nosso para liberar
+#else
 #ifndef CELER_HOST_TEST
     heap_caps_free(fb);
 #else
     free(fb);
 #endif
     fb = nullptr;
+#endif
     cpu.bus.ppu.setChunkSink(nullptr, nullptr);
 }
 
@@ -200,7 +230,7 @@ bool Nes::saveState(File& out)
     // Mesma sequencia do saveState do Anemoia (nes.cpp): header + RAM + CPU +
     // PPU + mapper. Quem consome os bytes e o binding (FileSystem do app).
     char crcStr[9];
-    snprintf(crcStr, sizeof(crcStr), "%08lX", (unsigned long)cpu.bus.cart->CRC32);
+    crcHex(crcStr, cpu.bus.cart->CRC32);
     out.write((const uint8_t*)"ANEMOIA", 7);
     out.write((const uint8_t*)crcStr, 8);
 
@@ -218,7 +248,7 @@ bool Nes::loadState(File& in)
     char header[8] = {};
     char crc[9] = {};
     char crcStr[9];
-    snprintf(crcStr, sizeof(crcStr), "%08lX", (unsigned long)cpu.bus.cart->CRC32);
+    crcHex(crcStr, cpu.bus.cart->CRC32);
 
     if (in.read((uint8_t*)header, 7) != 7) return false;
     if (in.read((uint8_t*)crc, 8) != 8) return false;

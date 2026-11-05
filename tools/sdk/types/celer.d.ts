@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 57 — 414 funcoes.
+// API level 58 — 410 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -36,19 +36,6 @@ declare function setInterval(callback: () => void, ms: number): number;
 declare function clearTimeout(id: number): void;
 declare function clearInterval(id: number): void;
 declare function require(nome: string): any;
-
-declare const Nes: {
-    load(path: string): any;
-    bind(spriteId: number): any;
-    bindFrame(): any;
-    frame(buttons: number, render?: number): any;
-    reset(): void;
-    saveState(path: string): any;
-    loadState(path: string): any;
-    audioStart(): any;
-    audioStop(): void;
-    unload(): void;
-};
 
 declare const System: {
     /** aloca um buffer de Sprite persistente off-screen na RAM. Força GC automaticamente e cai para 8 bits para garantir memória contígua. */
@@ -95,6 +82,12 @@ declare const System: {
     nativeCall(handle: number, fnIdx: number, a0?: number, a1?: number): any;
     nativeRead(handle: number, offset?: number, maxLen?: number): any;
     nativeFree(handle: number): any;
+    nativeWrite(arg0: number, arg1?: number, arg2?: number): any;
+    nativeLoadFile(arg0: number, arg1?: number, arg2?: number): any;
+    nativeSaveFile(arg0: number, arg1?: number, arg2?: number, arg3?: number): any;
+    nativeDraw(arg0: number, arg1?: number, arg2?: number, arg3?: number, arg4?: number, arg5?: number): any;
+    nativeAudio(arg0: number, arg1?: number, arg2?: number): any;
+    nativeAudioStop(arg0: number): void;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
     fillScreen(color: number): void;
     /** desenha retângulos vazados ou preenchidos. */

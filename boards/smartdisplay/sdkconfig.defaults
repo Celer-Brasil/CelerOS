@@ -135,4 +135,3 @@ CONFIG_CELEROS_APP_SERVICES=y
 CONFIG_CELEROS_JS_NATIVE=y
 # Emulador de NES (objeto Nes, API 57): nucleo Anemoia (main/Nes) + JsNes.
 # ROM inteira + frame 256x240x2 morrem na PSRAM: so placas S3 com vidro.
-CONFIG_CELEROS_JS_NES=y

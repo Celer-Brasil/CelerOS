@@ -78,7 +78,7 @@ function check(name, ok, detail) {
         check('celer.js native gera core.bin com magic CLRN',
               bin.length >= 96 + 4 && bin.slice(0, 4).toString('latin1') === 'CLRN');
         check('cabecalho do blob declara chip=esp32s3 e api 57',
-              bin.readUInt32LE(12) === 1 && bin.readUInt32LE(16) === 57);
+              bin.readUInt32LE(12) === 1 && bin.readUInt32LE(16) === 58);
         var lint = runLint([appDir], {});
         check('app nativo com core.bin passa no lint (requires native valida o CLRN)',
               lint.totals.errors === 0,

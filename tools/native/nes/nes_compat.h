@@ -19,12 +19,13 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef NES_BLOB
 #include <vector>
+#endif
 
-#if defined(CELER_HOST_TEST)
-// No host os atributos de secao nao existem. No device o esp_attr.h do IDF
-// define os reais: incluir aqui (antes de qualquer uso do nucleo) para nao
-// redefinir — o build do firmware e -Werror.
+#if defined(CELER_HOST_TEST) || defined(NES_BLOB)
+// Host e blob CLRN: sem atributos de secao (o blob e um bloco plano na
+// PSRAM; no device o esp_attr.h do IDF define os reais).
 #define IRAM_ATTR
 #define DMA_ATTR
 #define DRAM_ATTR
@@ -32,7 +33,7 @@
 #include "esp_attr.h"
 #endif
 
-#if !defined(CELER_HOST_TEST)
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
 #include "esp_heap_caps.h"
 #endif
 #include <stdlib.h>
@@ -42,9 +43,10 @@
 // malloc acima de 1 KB vai para a PSRAM, que no 4848 divide o barramento com
 // o DMA do painel RGB e custa cache miss a cada linha renderizada. Fallback
 // na PSRAM para nao recusar o jogo. Libera com free() (vale para os dois).
+// No blob (NES_BLOB) o malloc e a arena freestanding do runtime.
 inline void* nes_fast_alloc(size_t size)
 {
-#if !defined(CELER_HOST_TEST)
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
     void* p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (p != nullptr) return p;
 #endif
@@ -73,6 +75,49 @@ namespace nes {
 // "File" do SD no Anemoia: so write(buf,n)/read(buf,n) eram usados para
 // serializar save state. Buffer de memoria com a mesma cara; write acumula
 // (save), read consome (load). Bytes saem/entram pelo binding (FileSystem).
+#ifdef NES_BLOB
+// Blob CLRN: sem std::vector (sem libstdc++). O chamador (core_ctl) da o
+// buffer de escrita apontando para o savestate no .bss do blob.
+class File
+{
+public:
+    File() {}
+    explicit File(const uint8_t* data, size_t size) : _r(data), _size(size) {}
+    void setWriteBuf(uint8_t* buf, size_t cap)
+    {
+        _w = buf;
+        _cap = cap;
+        _wn = 0;
+    }
+
+    size_t write(const uint8_t* p, size_t n)
+    {
+        if (_w == nullptr) return 0;
+        if (_wn + n > _cap) n = _cap - _wn;
+        memcpy(_w + _wn, p, n);
+        _wn += n;
+        return n;
+    }
+    size_t read(uint8_t* p, size_t n)
+    {
+        if (_rpos + n > _size) n = (_rpos < _size) ? _size - _rpos : 0;
+        memcpy(p, _r + _rpos, n);
+        _rpos += n;
+        return n;
+    }
+
+    const uint8_t* bytes() const { return _w; }
+    size_t size() const { return _wn; }
+
+private:
+    uint8_t* _w = nullptr;          // modo escrita (save)
+    size_t _cap = 0;
+    size_t _wn = 0;
+    const uint8_t* _r = nullptr;    // modo leitura (load)
+    size_t _size = 0;
+    size_t _rpos = 0;
+};
+#else
 class File
 {
 public:
@@ -100,6 +145,7 @@ private:
     size_t _size = 0;
     size_t _rpos = 0;
 };
+#endif  // NES_BLOB
 
 // Antes em flash_mmap.h: o Anemoia mmapava a particao "nesrom"; aqui os
 // ponteiros caem dentro do buffer da ROM carregada (PSRAM). mmap_handle sai.

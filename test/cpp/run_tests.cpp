@@ -28,7 +28,16 @@
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
 #include "../../main/USBHost/UsbDesc.h"
-#include "../../main/Nes/Nes.h"
+
+// Componentes base (header-only no host: Event/Timeout tem shim proprio;
+// ErrorCode e constexpr puro)
+#include "../../components/Utility/Event.h"
+#include "../../components/Utility/Timeout.h"
+#include "../../components/ErrorCodes/CommonErrorCodes.h"
+// O .cpp do ErrorCode entra como TU unico deste harness (a linha de
+// compilacao do gate/CI e fixa) e de quebra leva o static_assert da tabela
+// de descricoes para o host.
+#include "../../components/ErrorCodes/ErrorCode.cpp"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -3244,110 +3253,319 @@ static void testInstallMarker() {
     CHECK(!due("", ""));
 }
 
-// ============================================================
-// Emulador NES (nucleo Anemoia portado, main/Nes): ROM NROM
-// sintetica escreve $3F00=0x01 e habilita o bg; todo pixel do
-// frame tem que sair palette_NTSC565[0][1] (o backdrop le
-// palette_table[0] — renderBackground). Save/load roundtrip
-// deterministico e sink de audio contando bytes por quadro.
-static void testNesEmu() {
-    // ROM: header 16B + PRG 16KB + CHR 8KB (tudo zero exceto o programa)
-    static std::vector<uint8_t> rom(16 + 16384 + 8192, 0);
-    memcpy(&rom[0], "NES\x1a", 4);
-    rom[4] = 1;  // 1 banco PRG de 16KB (NROM)
-    rom[5] = 1;  // 1 banco CHR de 8KB
-    uint8_t* prg = &rom[16];
-    int o = 0;
-    auto emit = [&](std::initializer_list<uint8_t> bytes) {
-        for (uint8_t b : bytes) prg[o++] = b;
+// ==== ErrorCodes: id e contrato de campo (devices comparam NUMEROS) — a
+// tabela abaixo trava cada constante na descricao certa; reordenar,
+// renumerar ou trocar descricao quebra o par id<->linha em producao.
+static void testErrorCode() {
+    struct DescCase { ErrorCode code; const char* desc; };
+    const DescCase kCases[] = {
+        {CommonErrorCodes::Invalid, "Invalid error code"},
+        {CommonErrorCodes::None, "No error occurred"},
+        {CommonErrorCodes::UnknownError, "An unexpected error occurred"},
+        {CommonErrorCodes::OperationFailed, "The requested operation failed"},
+        {CommonErrorCodes::NotImplemented, "Functionality not implemented yet"},
+        {CommonErrorCodes::NotInitialized, "Component not initialized"},
+        {CommonErrorCodes::ArgumentError, "Invalid argument provided"},
+        {CommonErrorCodes::Timeout, "Operation timed out"},
+        {CommonErrorCodes::CommandAlreadyRegistered, "Command already registered"},
+        {CommonErrorCodes::InvalidCommand, "Invalid command received"},
+        {CommonErrorCodes::ConnectionClosed, "Connection is closed"},
+        {CommonErrorCodes::ListIsEmpty, "The list is empty"},
+        {CommonErrorCodes::NetworkDown, "Network connection is down"},
+        {CommonErrorCodes::HostUnreachable, "Host is unreachable"},
+        {CommonErrorCodes::ConnectionRefused, "Connection refused"},
+        {CommonErrorCodes::AddressInUse, "Network address is in use"},
+        {CommonErrorCodes::SocketClosed, "Socket is closed"},
+        {CommonErrorCodes::SocketSendFailed, "Failed to send data through socket"},
+        {CommonErrorCodes::SocketReceiveFailed, "Failed to receive data from socket"},
+        {CommonErrorCodes::SocketCreationFailed, "Failed to create socket"},
+        {CommonErrorCodes::SocketConnectFailed, "Failed to connect socket"},
+        {CommonErrorCodes::SocketBindFailed, "Failed to bind socket"},
+        {CommonErrorCodes::SocketListenFailed, "Failed to listen on socket"},
+        {CommonErrorCodes::SocketAcceptFailed, "Failed to accept connection on socket"},
+        {CommonErrorCodes::WifiInitFailed, "WiFi initialization failed"},
+        {CommonErrorCodes::WifiConnectionFailed, "Failed to connect to WiFi network"},
+        {CommonErrorCodes::WifiAPStartFailed, "Failed to start WiFi Access Point"},
+        {CommonErrorCodes::WifiScanFailed, "WiFi scan for networks failed"},
+        {CommonErrorCodes::WifiNetworkNotFound, "The specified WiFi network was not found"},
+        {CommonErrorCodes::WifiAuthFailed, "WiFi authentication failed"},
+        {CommonErrorCodes::WifiStopFailed, "Failed to stop WiFi"},
+        {CommonErrorCodes::BluetoothInitFailed, "Bluetooth initialization failed"},
+        {CommonErrorCodes::BluetoothConnectionFailed, "Failed to establish Bluetooth connection"},
+        {CommonErrorCodes::BluetoothServiceCreationFailed, "Failed to create Bluetooth service"},
+        {CommonErrorCodes::BluetoothCharacteristicCreationFailed, "Failed to create Bluetooth characteristic"},
+        {CommonErrorCodes::FileNotFound, "File not found"},
+        {CommonErrorCodes::FileOpenError, "Error opening file"},
+        {CommonErrorCodes::FileReadError, "Error reading from file"},
+        {CommonErrorCodes::FileWriteError, "Error writing to file"},
+        {CommonErrorCodes::FileExists, "File already exists"},
+        {CommonErrorCodes::FileIsEmpty, "File is empty"},
+        {CommonErrorCodes::StorageInitFailed, "Storage device initialization failed"},
+        {CommonErrorCodes::StorageReadError, "Error reading from storage device"},
+        {CommonErrorCodes::StorageWriteError, "Error writing to storage device"},
+        {CommonErrorCodes::StorageNotMounted, "Storage device not mounted"},
+        {CommonErrorCodes::StorageFull, "Storage device is full"},
+        {CommonErrorCodes::AuthenticationFailed, "User authentication failed"},
+        {CommonErrorCodes::UserNotFound, "User not found"},
+        {CommonErrorCodes::UserAlreadyExists, "User already exists"},
+        {CommonErrorCodes::SensorError, "Sensor reading failed or is invalid"},
+        {CommonErrorCodes::DeviceNotResponding, "Hardware device not responding"},
+        {CommonErrorCodes::CommunicationError, "A communication error occurred"},
+        {CommonErrorCodes::CommunicationTimeout, "Communication timeout"},
+        {CommonErrorCodes::ChecksumError, "Checksum or CRC verification failed"},
     };
-    // Programa no offset 0: no NROM de 1 banco o banco espelha $8000-$BFFF em
-    // $C000-$FFFF, entao offset 0 roda tanto em $8000 quanto em $C000 (uma
-    // primeira versao deste teste escreveu em 0x4000 — alem do fim do banco —
-    // e o codigo foi parar no CHR: framebuffer uniforme na paleta zerada).
-    emit({0x78});                            // SEI
-    emit({0xD8});                            // CLD
-    emit({0xA9, 0x00});                      // LDA #$00
-    emit({0x8D, 0x00, 0x20});                // STA $2000 (NMI off, inc 1)
-    emit({0x8D, 0x01, 0x20});                // STA $2001 (render off)
-    emit({0xA9, 0x3F});                      // LDA #$3F
-    emit({0x8D, 0x06, 0x20});                // STA $2006
-    emit({0xA9, 0x00});                      // LDA #$00
-    emit({0x8D, 0x06, 0x20});                // STA $2006 (v=$3F00)
-    emit({0xA9, 0x01});                      // LDA #$01
-    emit({0x8D, 0x07, 0x20});                // STA $2007 (backdrop cor 1)
-    emit({0xA9, 0x0A});                      // LDA #$0A
-    emit({0x8D, 0x01, 0x20});                // STA $2001 (bg on + coluna 0)
-    emit({0x4C, 0x1D, 0xC0});                // JMP $C01D (o proprio JMP: laco)
+    CHECK(sizeof(kCases) / sizeof(kCases[0]) == 54);  // teto documentado
 
-    // Vetores em $FFFA-$FFFF (fim do PRG): NMI/RESET/IRQ -> $C000
-    int v = 0x3FFA;
-    prg[v + 0] = 0x00; prg[v + 1] = 0xC0;  // NMI
-    prg[v + 2] = 0x00; prg[v + 3] = 0xC0;  // RESET
-    prg[v + 4] = 0x00; prg[v + 5] = 0xC0;  // IRQ
+    for (const DescCase& c : kCases) {
+        CHECK(c.code.isValid());
+        CHECK(strcmp(c.code.description(), c.desc) == 0);
+    }
 
-    nes::Nes n;
-    uint32_t crc = 0;
-    uint8_t mapperId = 0xFF;
-    CHECK(n.load(&rom[0], (uint32_t)rom.size(), &crc, &mapperId));
-    CHECK(n.loaded());
-    CHECK(mapperId == 0);
-    CHECK(crc != 0);
-    CHECK(n.openScreen());
+    // Id 0 (default) e ids fora da tabela: invalidos, descricao nunca nula.
+    ErrorCode invalid;
+    CHECK(!invalid.isValid());
+    CHECK(strcmp(invalid.description(), "Invalid Error Code") == 0);
+    const uint16_t kBadIds[] = {0, 55, 200, 65535};
+    for (uint16_t bad : kBadIds) {
+        ErrorCode e(bad);
+        CHECK(!e.isValid());
+        CHECK(strcmp(e.description(), "Invalid Error Code") == 0);
+    }
 
-    // Audio: o sink conta bytes PCM16 mono; ~1468 B por quadro (734 amostras)
-    static uint32_t audioBytes = 0;
-    n.setAudioSink([](const uint8_t* p, uint32_t bytes) { (void)p; audioBytes += bytes; });
-
-    n.reset();
-    for (int i = 0; i < 30; i++) n.frame(0);
-
-    const uint16_t* fb = n.framebuffer();
-    CHECK(fb != nullptr);
-    bool uniform = true;
-    for (int i = 1; i < nes::SCREEN_W * nes::SCREEN_H; i++)
-        if (fb[i] != fb[0]) { uniform = false; break; }
-    CHECK(uniform);
-    CHECK(fb[0] == 0x00F2);  // palette_NTSC565[0][1]: backdrop $3F00=0x01
-    CHECK(audioBytes > 30 * 1200);       // audio inline esta produzindo
-    CHECK(audioBytes < 30 * 1700);       // e na taxa certa (~1458 B/quadro: 729 amostras)
-
-    // Frameskip de runtime (render=false) roda sem desenhar
-    n.frame(0, false);
-    n.frame(0, false);
-    CHECK(n.framebuffer()[0] == 0x00F2);
-
-    // Save state: determinismo — S1 (t=30) difere de S2 (t=50), e voltar para
-    // S1 e refazer os mesmos 20 quadros reproduz S2 byte a byte
-    nes::File s1;
-    CHECK(n.saveState(s1));
-    for (int i = 0; i < 20; i++) n.frame(0);
-    nes::File s2;
-    CHECK(n.saveState(s2));
-    CHECK(s1.bytes() != s2.bytes());
-
-    // File de escrita nao le: o binding (e este teste) abre uma view em modo
-    // leitura sobre os bytes gravados, como fara com o readFile do device
-    nes::File s1r(s1.bytes().data(), s1.bytes().size());
-    CHECK(n.loadState(s1r));
-    for (int i = 0; i < 20; i++) n.frame(0);
-    nes::File s3;
-    CHECK(n.saveState(s3));
-    CHECK(s3.bytes() == s2.bytes());
-
-    // ROM fora do formato e recusada com diagnostico
-    nes::Nes bad;
-    const char* err = nullptr;
-    uint8_t junk[32] = {};
-    memcpy(junk, "XXXX", 4);
-    CHECK(!bad.load(junk, sizeof(junk), nullptr, nullptr, &err));
-    CHECK(err != nullptr && err[0] != 0);
-    CHECK(!bad.loaded());
-
-    n.unload();
-    CHECK(!n.loaded());
+    // Construtor explicito e comparacao por id.
+    CHECK(ErrorCode(2) == CommonErrorCodes::None);
+    CHECK(CommonErrorCodes::None != CommonErrorCodes::UnknownError);
+    CHECK(ErrorCode(54) == CommonErrorCodes::ChecksumError);
 }
 
+// ==== Event: snapshot em disparo, remocao idempotente, teto, reentrancia
+// e a fila de pendentes cheia (slot aposentado; antes era destroy imediato
+// sobre um box que o snapshot em voo ainda referenciava).
+static void testEvent() {
+    using HandlerId = EventBase::HandlerId;
+
+    // Sem handler: trigger vazio nao explode.
+    { Event<> ev; ev.trigger(); }
+
+    // Dois handlers: ambos rodam, na ordem de registro; remove por id.
+    {
+        Event<int> ev;
+        std::vector<int> seen;
+        HandlerId h1 = ev.addHandler([&](int v) { seen.push_back(v * 2); });
+        HandlerId h2 = ev.addHandler([&](int v) { seen.push_back(v * 10); });
+        CHECK(h1 != 0 && h2 != 0 && h1 != h2);
+        ev.trigger(3);
+        CHECK(seen.size() == 2 && seen[0] == 6 && seen[1] == 30);
+        ev.removeHandler(h1);
+        ev.trigger(5);
+        CHECK(seen.size() == 3 && seen[2] == 50);
+        ev.removeHandler(h2);
+        ev.trigger(7);
+        CHECK(seen.size() == 3);
+    }
+
+    // removeHandler com id invalido/zero/desconhecido: no-op.
+    {
+        Event<> ev;
+        int calls = 0;
+        HandlerId id = ev.addHandler([&] { ++calls; });
+        ev.removeHandler(0);
+        ev.removeHandler(id + 999);
+        ev.trigger();
+        CHECK(calls == 1);
+    }
+
+    // Handler vazio = id 0.
+    { Event<> ev; CHECK(ev.addHandler(nullptr) == 0); }
+
+    // Referencia: handler enxerga o MESMO objeto do chamador.
+    {
+        Event<std::string&> ev;
+        ev.addHandler([](std::string& s) { s += "!"; });
+        std::string s = "oi";
+        ev.trigger(s);
+        CHECK(s == "oi!");
+    }
+
+    // Teto de 16: o 17o devolve 0; slot liberado volta a aceitar.
+    {
+        Event<> ev;
+        HandlerId ids[16];
+        int calls = 0;
+        bool allOk = true;
+        for (int i = 0; i < 16; ++i) {
+            ids[i] = ev.addHandler([&] { ++calls; });
+            allOk = allOk && ids[i] != 0;
+        }
+        CHECK(allOk);
+        CHECK(ev.addHandler([&] { ++calls; }) == 0);  // teto cheio
+        ev.removeHandler(ids[5]);
+        HandlerId re = ev.addHandler([&] { ++calls; });
+        CHECK(re != 0);
+        ev.trigger();
+        CHECK(calls == 16);  // 15 vivos + o re-atribuido
+    }
+
+    // Removido DURANTE o disparo: roda naquele disparo, nao no seguinte.
+    {
+        Event<> ev;
+        int a = 0, b = 0;
+        ev.addHandler([&] { ++a; });
+        HandlerId idB = ev.addHandler([&] { ++b; ev.removeHandler(idB); });
+        (void)idB;
+        ev.trigger();
+        CHECK(a == 1 && b == 1);
+        ev.trigger();
+        CHECK(a == 2 && b == 1);
+    }
+
+    // Re-entrancia: handler dispara o MESMO evento de volta (sem deadlock;
+    // no host o lock e no-op, o que se prova e o aninhamento de snapshots).
+    {
+        Event<int> ev;
+        std::vector<int> order;
+        bool reentered = false;
+        ev.addHandler([&](int depth) {
+            order.push_back(depth);
+            if (depth == 1 && !reentered) {
+                reentered = true;
+                ev.trigger(2);
+            }
+        });
+        ev.trigger(1);
+        CHECK(order.size() == 2 && order[0] == 1 && order[1] == 2);
+    }
+
+    // addHandler durante o disparo: o novo NAO roda naquele disparo.
+    {
+        Event<> ev;
+        int first = 0, late = 0;
+        ev.addHandler([&] {
+            ++first;
+            ev.addHandler([&] { ++late; });
+        });
+        ev.trigger();
+        CHECK(first == 1 && late == 0);
+        ev.trigger();
+        CHECK(first == 2 && late == 1);
+    }
+
+    // Fila de pendentes cheia (16 pares add+remove dentro do handler e a
+    // remocao de um handler vivo do snapshot): slot aposentado em vez de
+    // destroy imediato. E2 roda NAQUELE disparo e nunca mais; o evento
+    // morre no fim do escopo com o box aposentado pendurado.
+    {
+        Event<> ev;
+        int fired = 0, e2 = 0;
+        HandlerId idE2 = ev.addHandler([&] { ++e2; });
+        HandlerId idE1 = ev.addHandler([&] {
+            for (int k = 0; k < 16; ++k) {
+                HandlerId t = ev.addHandler([&fired] { ++fired; });
+                ev.removeHandler(t);
+            }
+            ev.removeHandler(idE2);  // fila cheia: aposenta o slot
+        });
+        (void)idE1;
+        for (int i = 0; i < 14; ++i) ev.addHandler([&fired] { ++fired; });
+
+        ev.trigger();
+        CHECK(fired == 14 && e2 == 1);   // E2 ainda roda no disparo da remocao
+        ev.trigger();
+        CHECK(fired == 28 && e2 == 1);   // aposentado nao roda mais
+    }
+
+    // Dois argumentos (valor + const ref).
+    {
+        Event<int, const std::string&> ev;
+        int sum = 0;
+        std::string msg;
+        ev.addHandler([&](int v, const std::string& s) { sum += v; msg = s; });
+        ev.trigger(5, "ok");
+        CHECK(sum == 5 && msg == "ok");
+    }
+}
+
+// ==== Timeout: default parado, borda >= (mesmo instante = expirado nos
+// dois metodos), wrap de uint32 e ciclo Stop/Start/SetTimeout. O relogio
+// e congelado via timeoutHostClock() (shim host do Timeout.h).
+static void testTimeout() {
+    // Nao iniciado: TrueUntil=true, Occurred=false.
+    {
+        Timeout t;
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+    }
+
+    TimeoutHostClock& clk = timeoutHostClock();
+    clk.fixed = true;
+    clk.value = 1000;
+
+    // Borda exata: em now-start == timeout TrueUntil ja e false e
+    // TimeoutOccurred ja e true (o >= dos dois lados).
+    {
+        Timeout t(100, true);            // ancora em 1000
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+        clk.value = 1099;
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+        clk.value = 1100;
+        CHECK(!t.TrueUntilTimeout());
+        CHECK(t.TimeoutOccurred());
+        clk.value = 1050;
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());     // 50 < 100: ainda dentro
+    }
+
+    // Wrap de uint32: diff sem sinal atravessa o rollover do tick.
+    {
+        clk.value = 0xFFFFFFF0u;
+        Timeout t(0x20u, true);          // expira em (start+0x20) mod 2^32
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+        clk.value = 0x00000008u;         // rolou: diff = 0x18 < 0x20
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+        clk.value = 0x00000010u;         // diff = 0x20: limite exato
+        CHECK(!t.TrueUntilTimeout());
+        CHECK(t.TimeoutOccurred());
+    }
+
+    // Stop congela; Start re-ancora; SetTimeout muda a duracao da ancora.
+    {
+        clk.value = 500;
+        Timeout t(100, true);
+        t.Stop();
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+        clk.value = 5000;
+        CHECK(t.TrueUntilTimeout());     // parado ignora o relogio
+        t.Start();                       // re-ancora em 5000
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+        clk.value = 5099;
+        CHECK(t.TrueUntilTimeout());
+        clk.value = 5100;
+        CHECK(t.TimeoutOccurred());
+        t.SetTimeout(200);               // ancora continua em 5000
+        CHECK(!t.TimeoutOccurred());     // 100 < 200
+        clk.value = 5200;
+        CHECK(t.TimeoutOccurred());      // 200 >= 200
+    }
+
+    // Ctor com start=false: mesmo contrato do default.
+    {
+        clk.value = 42;
+        Timeout t(100, false);
+        CHECK(t.TrueUntilTimeout());
+        CHECK(!t.TimeoutOccurred());
+    }
+
+    clk.fixed = false;  // devolve o relogio real (higiene para os outros testes)
+}
+
+
+// ============================================================
 int main() {
     testSemVer();
     testFsJail();
@@ -3394,8 +3612,10 @@ int main() {
     testAppPackageTrial();
     testUpdatePolicy();
     testInstallMarker();
+    testErrorCode();
+    testEvent();
+    testTimeout();
     testUsbDesc();
-    testNesEmu();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

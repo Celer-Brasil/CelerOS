@@ -105,9 +105,6 @@ void JSBindings::appExitCleanup() {
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();
 #endif
-#if CONFIG_CELEROS_JS_NES
-    jsNesReset();  // audio solta a guarda do I2S na saida do app
-#endif
 #if CONFIG_CELEROS_BLUETOOTH
     // canais do app saem JA (REVOKE "gone" aos clientes) e os handles fecham:
     // antes so no init do proximo app, e no launcher os KEEPs dos clientes
@@ -1119,9 +1116,6 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #if CONFIG_CELEROS_JS_NATIVE
     jsNativeReset();   // blobs nativos do app anterior (malloc PSRAM incluso)
 #endif
-#if CONFIG_CELEROS_JS_NES
-    jsNesReset();      // ROM/framebuffer/audio do emulador do app anterior
-#endif
 #if CONFIG_CELEROS_JS_I2C
     jsI2cReset();      // bus de um app anterior (idempotente)
 #endif
@@ -1373,31 +1367,6 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"copySprite", js_copySprite, 8},  // API 45: regiao de sprite -> alvo corrente
     };
     putFns(ctx, kFnsAccel);
-#endif
-
-#if CONFIG_CELEROS_JS_NES
-    // Objeto Nes (API 57): emulador completo sobre o nucleo Anemoia
-    // (main/Nes). O app e o dono do loop: load/bind/frame por tick; o
-    // frame sai direto no quadro do Kui (bindFrame, zero copia) ou no
-    // sprite bound (bind, para escalar) e o audio sai pelo PcmFeed com a
-    // APU em task propria. Botoes no bitmask NES: bit0 A ... bit7 Right.
-    duk_push_object(ctx);
-    {
-        static const JsFn kFnsNes[] = {
-            {"load", js_nesLoad, 1},             // path da ROM (jail fs) -> bool
-            {"bind", js_nesBind, 1},             // id do sprite (256x240 fisico)
-            {"bindFrame", js_nesBindFrame, 0},   // frame direto no quadro do Kui
-            {"frame", js_nesFrame, 2},           // buttons bitmask, render? -> bool
-            {"reset", js_nesReset, 0},
-            {"saveState", js_nesSaveState, 1},  // path -> bool
-            {"loadState", js_nesLoadState, 1},  // path -> bool
-            {"audioStart", js_nesAudioStart, 0},  // APU -> I2S (PcmFeed) -> bool
-            {"audioStop", js_nesAudioStop, 0},
-            {"unload", js_nesUnload, 0},
-        };
-        putFns(ctx, kFnsNes);
-    }
-    duk_put_global_string(ctx, "Nes");
 #endif
 
 #if CONFIG_CELEROS_JS_NATIVE

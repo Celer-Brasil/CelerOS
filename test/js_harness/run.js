@@ -750,6 +750,42 @@ function makeEnv() {
                 slots[h - 1] = null;
                 return true;
             },
+            // API 58: ponte de dados/video/audio (o host modela o contrato;
+            // apps com core proprio (ex.: Anemoia) sobrescrevem via test.js)
+            nativeWrite: function (h, off, str) {
+                var m = at(h);
+                if (!m) return -1;
+                if (off === undefined) off = 0;
+                if (off < 0 || off >= m.scratch.length) return -1;
+                var s = String(str), n = Math.min(s.length, m.scratch.length - off);
+                for (var i = 0; i < n; i++) m.scratch[off + i] = s.charCodeAt(i) & 0xFF;
+                return n;
+            },
+            nativeLoadFile: function (h, off, p) {
+                // FS em memoria do harness: arquivo -> scratch (binario)
+                var m = at(h);
+                if (!m || !files) return -1;
+                var f = files[p];
+                if (!f || typeof f.data !== 'string') return -1;
+                if (off === undefined) off = 0;
+                var n = Math.min(f.data.length, m.scratch.length - off);
+                for (var i = 0; i < n; i++) m.scratch[off + i] = f.data.charCodeAt(i) & 0xFF;
+                return n;
+            },
+            nativeSaveFile: function (h, off, len, p) {
+                var m = at(h);
+                if (!m || !files) return false;
+                if (off === undefined) off = 0;
+                if (len === undefined) len = 0;
+                var s = '';
+                for (var i = 0; i < len && off + i < m.scratch.length; i++)
+                    s += String.fromCharCode(m.scratch[off + i]);
+                files[p] = { data: s, size: s.length };
+                return true;
+            },
+            nativeDraw: function () { return true; },     // alvo e so visual
+            nativeAudio: function () { return true; },    // sem I2S no host
+            nativeAudioStop: function () {},
         };
         return api;
     })();
@@ -1148,11 +1184,17 @@ function makeEnv() {
     rigidStep: rigidStub.rigidStep,
     rigidState: rigidStub.rigidState,
     rigidCount: rigidStub.rigidCount,
-    // Codigo nativo carregavel (SPIKE API 57): espelho JS (nativeStub acima)
+    // Codigo nativo carregavel (API 57/58): espelho JS (nativeStub acima)
     nativeLoad: nativeStub.nativeLoad,
     nativeCall: nativeStub.nativeCall,
     nativeRead: nativeStub.nativeRead,
     nativeFree: nativeStub.nativeFree,
+    nativeWrite: nativeStub.nativeWrite,        // API 58: ponte do blob v2
+    nativeLoadFile: nativeStub.nativeLoadFile,
+    nativeSaveFile: nativeStub.nativeSaveFile,
+    nativeDraw: nativeStub.nativeDraw,
+    nativeAudio: nativeStub.nativeAudio,
+    nativeAudioStop: nativeStub.nativeAudioStop,
     drawSprite: function() {},
     blitSprite: function() {},   // API 34: restaura o fundo (preview no emulador)
     copySprite: function() {},   // API 45: regiao de sprite -> alvo corrente (preview no emulador)
@@ -1294,26 +1336,6 @@ function makeEnv() {
     notificationsClear: function() { env.__notifs = []; }
     };
 
-    // Nes (API 57): stub headless do nucleo Anemoia (main/Nes) — global como
-    // no firmware (duk_put_global_string); frame confere o alvo (sprite ou
-    // bindFrame direto no quadro).
-    env.Nes = {
-        _spr: 0,
-        _direct: false,
-        bind: function(id) { this._spr = id | 0; this._direct = false; return id > 0; },
-        bindFrame: function() { this._direct = true; this._spr = 0; return true; },
-        load: function() { return true; },
-        frame: function(btns, render) {
-            if (this._direct) return true;
-            return this._spr > 0 && !!env.__spriteSlots[this._spr - 1];
-        },
-        reset: function() { return true; },
-        saveState: function() { return true; },
-        loadState: function() { return true; },
-        audioStart: function() { return true; },
-        audioStop: function() {},
-        unload: function() { this._spr = 0; this._direct = false; },
-    };
 
     env.FS = FS;
     // ---- Net assincrono (API 12): pool de 2 slots no modelo do JsNet ----
@@ -2173,7 +2195,7 @@ function resolveSharedDep(appDir, name, env) {
 
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                 'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input', 'BT', 'Service', 'Nes'];
+                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input', 'BT', 'Service'];
 // Valores na MESMA ordem de GLOBAL_NAMES; o slot 'require' e o req do app
 // (runApp) ou o proprio req do modulo (makeRequire) — nunca duplicado no
 // wrapper, senao o ultimo sombreia o primeiro.
@@ -2182,7 +2204,7 @@ function globalValues(env, req) {
     return [env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
         env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
         env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined,
-        env.USB, env.Input, env.BT, env.Service, env.Nes];
+        env.USB, env.Input, env.BT, env.Service];
 }
 function makeRequire(appDir, env) {
     var cache = {};

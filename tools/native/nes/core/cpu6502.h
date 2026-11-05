@@ -43,10 +43,10 @@ public:
     //
     // No DEVICE quem clocka a APU e a task propria (Nes::apuTaskStart, core
     // 0, como no Anemoia): aqui vira no-op para tirar ~15 mil chamadas do
-    // caminho do quadro. No HOST o tick fica inline (o teste roda sem RTOS).
+    // caminho do quadro. No HOST e no BLOB (sem RTOS) o tick fica inline.
     void apuCycles(int n)
     {
-#ifndef CELER_HOST_TEST
+#if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
         (void)n;
 #else
         apu_pending += n;

@@ -81,10 +81,6 @@ bool jsGpioOwnPin(int pin);
 // Corpo rigido nativo (API 33, JsRigid.cpp): mesmo ciclo do verlet.
 void jsRigidReset();
 #endif
-#if CONFIG_CELEROS_JS_NES
-// Emulador de NES por app (JsNes.cpp): ROM/framebuffer/audio do app anterior.
-void jsNesReset();
-#endif
 inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 
 // Saida limpa de app (F2): erro MARCADO com a propriedade celerExit — o

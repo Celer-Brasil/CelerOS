@@ -45,7 +45,7 @@ int spriteCap() { return Board::profile().hasPsram ? kSpritePool : 1; }
 // conversores de JsInternal.h e pelo touch (JsSystem.cpp). Zerado no init().
 bool s_nativeCanvas = false;
 
-// Acesso de outros bindings ao pool (JsNes blita o frame NES no backing do
+// Acesso de outros bindings ao pool (drawNative blita o frame do blob no backing do
 // sprite bound). id 1..cap; 0 ou fora = nullptr (o corrente e id... nao: o
 // pool nao tem id implicito, createSprite devolveu 1..n na ordem).
 CelerSprite* JSBindings::spriteById(int id) {

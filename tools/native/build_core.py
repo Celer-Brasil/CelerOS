@@ -1,22 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Constroi o blob nativo de teste do spike de codigo carregavel (API 57).
+"""Constroi um blob nativo CLRN (v2, relocavel) para o carregador de apps.
 
-Fluxo: compila tools/native/core_hello.c com a toolchain Xtensa do IDF,
-liga num endereco-base 0 com linker script proprio, aplica os gates do
-formato (autocontido) e prepende o cabecalho "CLRN" que o loader do
-firmware (main/Runtime/JsNative.cpp) valida.
+Fluxo: compila UM fonte (C ou C++ freestanding) com a toolchain Xtensa do
+IDF, liga em base 0 com linker script proprio, EXTRAI as relocacoes
+absolutas (R_XTENSA_32) e monta o arquivo: cabecalho + imagem plana
+[code][data] + tabela de relocacoes. O loader do firmware
+(main/Runtime/JsNative.cpp) copia a imagem para a PSRAM, zera o .bss,
+aplica +base em cada site da tabela e executa.
 
-Gates do formato (qualquer desvio barra o build):
-  1. ZERO relocations no .o (blob autocontido: nenhum endereco absoluto);
-  2. ZERO l32r no desassembly final (constantes grandes virariam literais
-     de endereco — so movi/imediato pequeno);
-  3. .data/.bss vazios (sem globais: estado do core morre em buffers que o
-     loader aloca, nunca dentro do blob).
+Formato v2 (cabecalho de 128 B, little-endian):
+   0 magic "CLRN"      4 headerSize=128   8 imageSize      12 chip
+  16 api              20 entryCount      24 entries[8] (offsets no blob)
+  56 bssOff           60 bssSize         64 relocOff       68 relocCount
+  72,76 reservado     80 sha256[32]      112 reservado[16]
+imagem = code+data planos (VMA 0..); tabela = relocCount u32 de offsets
+RELATIVOS ao inicio da imagem onde aplicar +base (4 B alinhados).
 
-Saida padrao: test/native/app/core_native_test.bin (o app de teste).
+V1 (cabecalho 96 B, sem data/bss/reloc) continua aceito pelo loader; este
+builder so emite v2.
 
-Uso: python3 tools/native/build_core.py [--out CAMINHO.bin]
+Gates (qualquer desvio barra o build):
+  1. sem -mlongcalls (call8 direto; o link falha se o blob passar de
+     ~256 KB de texto — reduza o core ou habilite longcalls com reloc);
+  2. -G0: sem .sdata/.sbss (acesso GP-relativo exigiria registrar o gp,
+     que o loader nao faz);
+  3. apenas R_XTENSA_32 na tabela de relocacoes (branches SLOT0_OP ja
+     sao PC-relative e sao ignorados; qualquer outro tipo barra);
+  4. entradas = funcoes core_* em ORDEM DE ENDERECO (nm -n), maximo 8.
+
+Uso: python3 tools/native/build_core.py --src ARQ [--out ARQ]
 """
 
 import argparse
@@ -34,19 +47,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "core_hello.c")
 
 MAGIC = 0x4E524C43  # "CLRN" (little-endian)
-CHIP_ID = 1         # 0 = esp32, 1 = esp32s3 (alvo unico do spike)
-API_LEVEL = 57      # CELEROS_API_LEVEL que o loader exige no maximo
-HEADER_SIZE = 96
+CHIP_ID = 1         # 0 = esp32, 1 = esp32s3
+API_LEVEL = 58      # CELEROS_API_LEVEL que o loader exige no maximo
+HEADER_SIZE = 128
 ENTRY_COUNT_MAX = 8
-# Entradas do blob: toda funcao core_* em ORDEM DE ENDERECO (nm -n) — o
-# loader so recebe indices + offsets; o app conhece a ordem porque compila
-# o proprio core.c. Nome nunca chega ao firmware.
-HEADER_FMT = "<6I8I2I32s"  # 96 bytes exatos
+MAX_RELOCS = 16384  # teto de sanidade da tabela (64 KB de u32)
+# magic, hsize, imageSize, chip, api, entryCount, entries[8], bssOff,
+# bssSize, relocOff, relocCount, r4, r5, sha256[32], pad[16]
+HEADER_FMT = "<6I8I6I32s16s"  # 128 bytes exatos
+RE_V2 = True
+VERBOSE_RELOCS = os.environ.get("CLRN_VERBOSE_RELOCS") == "1"
+
+# Flags C++ freestanding: sem excecoes/RTTI, sem guardas de static, sem
+# tabuas de switch (indirecao por tabela e o que queremos evitar de graca),
+# sem unwind. .sdata/.sbss sao barrados no link: sao acessados por GP, que
+# o loader nao registra.
+CXX_FLAGS = ["-std=c++17", "-fno-exceptions", "-fno-rtti",
+             "-fno-threadsafe-statics", "-fno-use-cxa-atexit",
+             "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
+             "-fno-jump-tables", "-fno-tree-switch-conversion"]
+COMMON_FLAGS = ["-Os", "-ffreestanding", "-fno-builtin", "-fno-pic",
+                "-fno-pie", "-fno-stack-protector", "-fomit-frame-pointer",
+                "-fno-tree-loop-distribute-patterns",
+                "-mtext-section-literals", "-mno-longcalls"]
 
 
 def find_toolchain():
-    """xtensa-esp32s3-elf-{gcc,objdump,objcopy,nm}: PATH ou ~/.espressif."""
-    names = ("gcc", "objdump", "objcopy", "nm")
+    """xtensa-esp32s3-elf-{gcc,g++,readelf,objdump,nm}."""
+    names = ("gcc", "g++", "readelf", "objdump", "objcopy", "nm")
     prefix = shutil.which("xtensa-esp32s3-elf-gcc")
     if prefix:
         base = os.path.dirname(prefix)
@@ -67,131 +95,209 @@ def run(cmd, **kw):
 
 
 def die(msg, detail=""):
-    sys.exit("ERRO: %s\n%s" % (msg, detail[-2000:] if detail else ""))
+    sys.exit("ERRO: %s\n%s" % (msg, detail[-3000:] if detail else ""))
+
+
+def sections(rd, elf):
+    """{nome: (addr, size)} das secoes SHF_ALLOC do ELF linkado."""
+    r = run([rd, "-S", "-W", elf])
+    if r.returncode != 0:
+        die("readelf -S falhou", r.stderr)
+    out = {}
+    for line in r.stdout.splitlines():
+        p = line.split()
+        # [Nr] Name Type Address Off Size ES Flg Lk Inf Al
+        if len(p) < 9 or not p[0].startswith("["):
+            continue
+        try:
+            name = p[2]
+            addr = int(p[4], 16)
+            size = int(p[6], 16)
+            flg = p[8]
+        except (IndexError, ValueError):
+            continue
+        if "A" in flg:  # SHF_ALLOC
+            out[name] = (addr, size)
+    return out
+
+
+def absolute_relocs(rd, elf, secs):
+    """Sites de R_XTENSA_32 (endereco absoluto) nas secoes ALOCADAS do ELF
+    linkado, como offset na IMAGEM (VMA da secao + offset da relocacao —
+    .rela.data offsets sao relativos a .data, nao a imagem!). SLOT0_OP
+    (branches PC-relative) ja resolvidos sao ignorados; QUALQUER outro tipo
+    nas secoes alocadas e erro. .rela.xt.prop/.rela.xt.lit sao metadado do
+    linker (relaxador), NAO relocacoes de runtime — fora."""
+    r = run([rd, "-r", "-W", elf])
+    if r.returncode != 0:
+        die("readelf -r falhou", r.stderr)
+    sites = set()
+    bad = []
+    cur = None  # secao-alvo (nome sem o prefixo .rela)
+    for line in r.stdout.splitlines():
+        msec = re.search(r"Relocation section '\.rela(\S*)'", line)
+        if msec:
+            cur = msec.group(1)
+            continue
+        if cur is None or cur not in secs:
+            continue  # xt.prop/xt.lit e afins: metadado, nao alocado
+        m = re.match(r"([0-9a-f]{8})\s+[0-9a-f]+\s+(R_XTENSA_\w+)",
+                     line.strip())
+        if not m:
+            continue
+        off, typ = int(m.group(1), 16), m.group(2)
+        if typ == "R_XTENSA_32":
+            # O readelf dessa toolchain imprime o Offset de .rela.data ja
+            # como ENDERECO (VMA), nao offset-dentro-da-secao (visto na
+            # bancada: .data@7d1c com .data em 0x7d1c). Discriminante: um
+            # offset valido dentro da secao e sempre < size.
+            vma, ssz = secs[cur]
+            site = off if off >= ssz else vma + off
+            sites.add(site)
+            if VERBOSE_RELOCS:
+                sys.stderr.write("[reloc] %s@%x -> site 0x%x\n"
+                                 % (cur, off, site))
+        elif typ in ("R_XTENSA_SLOT0_OP", "R_XTENSA_NONE"):
+            continue  # branch PC-relative resolvido / relocacao no-op
+        else:
+            bad.append((off, typ))
+    if bad:
+        die("relocacoes inesperadas (%d): %s — o formato v2 so aplica "
+            "R_XTENSA_32" % (len(bad),
+                             ", ".join("%s@%x" % (t, o) for o, t in bad[:8])))
+    return sorted(sites)
 
 
 def build():
     tc = find_toolchain()
+    src = args.src
+    is_cxx = src.lower().endswith((".cpp", ".cc", ".cxx"))
+    cc = tc["g++"] if is_cxx else tc["gcc"]
     with tempfile.TemporaryDirectory(prefix="celeros-native-") as tmp:
         obj = os.path.join(tmp, "core.o")
         elf = os.path.join(tmp, "core.elf")
         binf = os.path.join(tmp, "core.bin")
         lds = os.path.join(tmp, "blob.ld")
 
-        # 1. compilar: freestanding, sem builtin (o blob nao chama libc),
-        #    literais dentro do .text (uma secao so, blob plano). O fonte e
-        #    o do app (--src); o default e o core_hello.c de teste.
-        r = run([tc["gcc"], "-std=c11", "-Os", "-c", args.src, "-o", obj,
-                 "-ffreestanding", "-fno-builtin", "-fno-pic", "-fno-pie",
-                 "-fno-stack-protector", "-fomit-frame-pointer",
-                 "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
-                 "-fno-tree-loop-distribute-patterns", "-mtext-section-literals",
-                 # toolchain do IDF defaulta -mlongcalls: chamada via literal
-                 # de endereco absoluto (l32r+callx) — inexecutavel em base
-                 # arbitraria. Blob pequeno usa call8 direto PC-relative.
-                 "-mno-longcalls"])
+        # 1. compilar o TU unico (freestanding; o blob nao chama libc —
+        #    quem precisa de mem* usa tools/native/runtime.c incluido no TU).
+        cmd = [cc] + COMMON_FLAGS + (CXX_FLAGS if is_cxx else ["-std=c11"])
+        for inc in args.include or []:
+            cmd += ["-I", os.path.abspath(inc)]
+        cmd += ["-c", src, "-o", obj]
+        r = run(cmd)
         if r.returncode != 0:
             die("compilacao falhou", r.stderr)
 
-        # 2. ligar em base 0 (linker script proprio; sem libc; se faltar
-        #    simbolo externo o proprio link barra — prova de autocontido).
-        #    Os gates do formato rodam sobre o ELF LINKADO: no .o os
-        #    branches sempre carregam R_XTENSA_SLOT0_OP (operandos
-        #    PC-relative, inofensivos — o linker resolve como deslocamento)
-        #    e pode sobrar literal morto sem l32r nenhum que o leia.
+        # 2. ligar em base 0 mantendo as relocacoes (--emit-relocs): a
+        #    tabela vira dado do blob e o loader soma a base no destino.
+        #    .bss fica fora da imagem (loader zera); .data entra na imagem.
         with open(lds, "w") as f:
             f.write("SECTIONS\n{\n  . = 0;\n"
                     "  .text : { *(.literal*) *(.text*) *(.rodata*) }\n"
-                    "  .data : { *(.data*) }\n"
-                    "  .bss  : { *(.bss*) *(COMMON) }\n}\n")
-        r = run([tc["gcc"], "-nostdlib", "-Wl,--build-id=none",
-                 "-Wl,-T," + lds, "-o", elf, obj])
+                    "  .data : ALIGN(4) { *(.data*) *(.ctors) *(.dtors) }\n"
+                    "  .bss  : ALIGN(4) { *(.bss*) *(COMMON) }\n}\n")
+        r = run([tc["gcc"], "-nostdlib", "-Wl,--emit-relocs",
+                 "-Wl,--build-id=none", "-Wl,-T," + lds, "-o", elf, obj])
         if r.returncode != 0:
-            die("link falhou (simbolo externo = blob nao autocontido)", r.stderr)
+            die("link falhou (simbolo externo = blob nao autocontido; "
+                "mem*/malloc vem do runtime freestanding)", r.stderr)
 
-        # Gates no ELF final:
-        #   - l32r: carrega literal de 32b do pool — com base arbitraria o
-        #     literal linkado teria endereco absoluto; proibido no formato;
-        #   - callx: chamada indireta = endereco de funcao tomado ou
-        #     dependencia externa — o spike nao tem nenhuma das duas.
-        r = run([tc["objdump"], "-d", elf])
+        secs = sections(tc["readelf"], elf)
+        # GP-relativo: .sdata/.sbss sao acessados via gp e o loader nao o
+        # registra — qualquer conteudo ali e inexecutavel no formato.
+        for gp_sec in (".sdata", ".sbss", ".sdata2", ".sbss2"):
+            s = secs.get(gp_sec)
+            if s and s[1] > 0:
+                die("blob tem %s (%d B): acesso GP-relativo nao suportado "
+                    "(evite variaveis pequenas/const locais)" % (gp_sec, s[1]))
+        text = secs.get(".text")
+        data = secs.get(".data")
+        bss = secs.get(".bss")
+        if text is None:
+            die("ELF sem .text")
+        image_end = 0
+        if data is not None:
+            image_end = data[0] + data[1]
+        bss_off, bss_size = (bss[0], bss[1]) if bss else (image_end, 0)
+        if bss_size and bss_off < image_end:
+            die("layout inesperado: .bss dentro da imagem")
+
+        # 3. imagem plana code+data (VMA 0..image_end) e tabela de relocs.
+        r = run([tc["objcopy"], "-O", "binary", elf, binf])
         if r.returncode != 0:
-            die("objdump -d falhou", r.stderr)
-        bad = [l.strip() for l in r.stdout.splitlines()
-               if "l32r" in l or "callx" in l]
-        if bad:
-            die("blob nao e autocontido (%d instrucao(oes) com l32r/callx):\n%s"
-                % (len(bad), "\n".join(bad[:5])))
+            die("objcopy falhou", r.stderr)
+        with open(binf, "rb") as f:
+            image = f.read()
+        if len(image) > image_end:
+            die("imagem %d B > fim do .data %d B (secoes nao mapeadas?)"
+                % (len(image), image_end))
+        # ALIGN entre secoes deixa buraco no meio da imagem: o loader copia
+        # a imagem como memoria plana, entao o vao vira zeros.
+        image += b"\x00" * (image_end - len(image))
+        sites = absolute_relocs(tc["readelf"], elf, secs)
+        if len(sites) > MAX_RELOCS:
+            die("tabela de relocacoes com %d sites (max %d)"
+                % (len(sites), MAX_RELOCS))
+        for o in sites:
+            if o % 4 or o + 4 > image_end:
+                die("site de relocacao invalido: 0x%x (imagem 0x%x)"
+                    % (o, image_end))
 
-        # Gate 3: sem globais — .data/.bss vazios (o loader nao zera nada).
-        r = run([tc["objdump"], "-h", elf])
-        if r.returncode != 0:
-            die("objdump -h falhou", r.stderr)
-        for line in r.stdout.splitlines():
-            m = re.match(r"\s*\d+\s+(\.\w+)\s+\S+\s+([0-9a-f]+)", line)
-            if m and m.group(1) in (".data", ".bss") and int(m.group(2), 16) != 0:
-                die("blob tem global em %s (%s bytes) — proibido no formato"
-                    % (m.group(1), m.group(2)))
-
-        # Entradas por simbolo, na ordem fixa; base 0 => offset = endereco.
-        r = run([tc["nm"], "-n", elf])  # -n: ordenado por endereco
+        # 4. entradas: todo core_* em ordem de endereco (o loader recebe
+        #    so indices + offsets; o nome nunca chega ao firmware).
+        r = run([tc["nm"], "-n", elf])
         if r.returncode != 0:
             die("nm falhou", r.stderr)
-        # Entradas do blob: TODO simbolo core_* em ORDEN DE ENDERECO (o
-        # loader so recebe indices + offsets — o app sabe a ordem porque
-        # compila o proprio core.c; o nome nunca chega ao firmware). O app
-        # de teste e o scaffold seguem a mesma convensao.
-        entry_names = []
-        entries = []
+        entry_names, entries = [], []
         for line in r.stdout.splitlines():
             m = re.match(r"([0-9a-f]+)\s+\w+\s+(core_\w+)$", line.strip())
             if m:
                 entry_names.append(m.group(2))
                 entries.append(int(m.group(1), 16))
         if not entry_names:
-            die("blob sem nenhuma entrada: nenhuma funcao core_* definida "
-                "(cada entrada e uma funcao core_<nome>)")
+            die("blob sem entrada: defina funcoes core_* (extern \"C\")")
         if len(entry_names) > ENTRY_COUNT_MAX:
-            die("blob tem %d entradas (core_*), teto do formato e %d"
+            die("%d entradas core_* (max %d)"
                 % (len(entry_names), ENTRY_COUNT_MAX))
-        for name, off in zip(entry_names, entries):
-            if off & 0x3:
-                die("entrada %s desalinhada (offset %d)" % (name, off))
 
-        # 3. binario plano + cabecalho "CLRN".
-        r = run([tc["objcopy"], "-O", "binary", elf, binf])
-        if r.returncode != 0:
-            die("objcopy falhou", r.stderr)
-        with open(binf, "rb") as f:
-            blob = f.read()
-        digest = hashlib.sha256(blob).digest()
-        header = struct.pack(HEADER_FMT, MAGIC, HEADER_SIZE, len(blob),
-                             CHIP_ID, API_LEVEL, len(entries),
-                             *(entries + [0] * (ENTRY_COUNT_MAX - len(entries))),
-                             0, 0, digest)
-        assert len(header) == HEADER_SIZE, "cabecalho != 96 bytes"
-
+        # 5. cabecalho v2 + imagem + tabela.
+        digest = hashlib.sha256(image + b"".join(
+            struct.pack("<I", o) for o in sites)).digest()
+        header = struct.pack(
+            HEADER_FMT, MAGIC, HEADER_SIZE, len(image), CHIP_ID, API_LEVEL,
+            len(entries), *(entries + [0] * (ENTRY_COUNT_MAX - len(entries))),
+            # relocOff e offset no ARQUIVO (header + imagem): a tabela vem
+            # logo depois da imagem
+            bss_off, bss_size, HEADER_SIZE + len(image), len(sites), 0, 0,
+            digest, b"\x00" * 16)
+        assert len(header) == HEADER_SIZE, "cabecalho != 128 bytes"
         out = os.path.abspath(args.out)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "wb") as f:
-            f.write(header + blob)
+            f.write(header)
+            f.write(image)
+            for o in sites:
+                f.write(struct.pack("<I", o))
 
         print("blob nativo OK: %s" % out)
-        print("  blob %d B + cabecalho %d B = %d B total"
-              % (len(blob), HEADER_SIZE, HEADER_SIZE + len(blob)))
-        print("  chip=esp32s3(%d) api=%d sha256=%s" % (CHIP_ID, API_LEVEL,
-                                                       digest.hex()[:16]))
+        print("  imagem %d B (%s) + %d relocs + cabecalho %d B = %d B"
+              % (len(image), "C++" if is_cxx else "C", len(sites),
+                 HEADER_SIZE, HEADER_SIZE + len(image) + 4 * len(sites)))
+        print("  bss %d B @ 0x%x | chip=esp32s3(%d) api=%d sha256=%s"
+              % (bss_size, bss_off, CHIP_ID, API_LEVEL, digest.hex()[:16]))
         for i, (name, off) in enumerate(zip(entry_names, entries)):
-            print("  [%d] %-10s offset %4d" % (i,
-                                               name, off))
+            print("  [%d] %-10s offset %5d" % (i, name, off))
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--src", default=SRC,
-                   help="fonte C do blob (default: core_hello.c de teste)")
+                   help="fonte unico do blob (C ou C++; default hello de teste)")
     p.add_argument("--out", default=os.path.join(
         HERE, "..", "..", "hub_apps", "Bench Nativo", "core_native_test.bin"))
+    p.add_argument("--include", action="append",
+                   help="diretorio de include extra (repetivel)")
     args = p.parse_args()
     args.src = os.path.abspath(args.src)
     build()

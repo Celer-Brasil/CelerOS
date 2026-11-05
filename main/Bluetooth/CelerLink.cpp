@@ -166,6 +166,10 @@ volatile bool s_ready = false;        // pronto para send()/connected()
 volatile bool s_isCentral = false;    // nos conectamos no peer
 volatile bool s_connecting = false;   // connect() em andamento (central)
 volatile bool s_appScanning = false;  // scan() do app em andamento (scanner dele)
+// Procedimento de radio de OUTRO modulo (BleHid, gamepad BLE HID): val true
+// enquanto o scan/connect do pad esta no ar — entra no appBusy() e a malha
+// pausa o scanner dela (mesmo contrato do scan do app).
+volatile bool s_extBusy = false;
 volatile bool s_peerSubscribed = false;  // central inscrito no nosso notify
 volatile uint16_t s_mtu = 0;
 volatile uint32_t s_rxDropped = 0;
@@ -1281,7 +1285,13 @@ int CelerLink::scan(uint32_t ms, Peer* out, int max) {
 }
 
 bool CelerLink::appBusy() {
-    return s_connecting || s_appScanning;
+    // s_extBusy: procedimento do gamepad BLE HID (BleHid::busy) — a malha
+    // pausa o scanner dela do mesmo jeito que para o scan/connect do app.
+    return s_connecting || s_appScanning || s_extBusy;
+}
+
+void CelerLink::setExternalBusy(bool busy) {
+    s_extBusy = busy;
 }
 
 bool CelerLink::linkActive() {

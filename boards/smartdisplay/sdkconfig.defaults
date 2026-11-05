@@ -41,23 +41,24 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # CONFIG_COMPILER_OPTIMIZATION_SIZE is not set
 
 # Celer Link (BLE entre CelerOS): NimBLE enxuto via C API do IDF —
-# 1 conexao, os 4 papéis (central+peripheral p/ P2P), sem pareamento.
-# O S3 nao tem BT classico; coexistencia WiFi/BLE e automatica.
+# 2 conexoes (Celer Link/malha + gamepad BLE HID), os 4 papéis
+# (central+peripheral p/ P2P). O S3 nao tem BT classico; coexistencia
+# WiFi/BLE e automatica.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
-# CONFIG_BT_NIMBLE_NVS_PERSIST is not set
-# SMP fora: o pareamento BLE so existe no PhoneLink do watch (bloco
-# ble_hs_cfg.sm_* ja e #if CONFIG_CELEROS_PHONE_LINK); o CelerLink P2P e a
-# malha usam criptografia propria acima do payload (selo AES-GCM / NetKeys
-# PBKDF2+CCM). O TinyCrypt do SMP guardava ~1-2 KB internos.
-# NAO replicar no watch (la o SMP e usado).
-# CONFIG_BT_NIMBLE_SECURITY_ENABLE is not set
+# Gamepad BLE HID (API 57): pareamento SMP Just Works com bond no NVS. O
+# SMP volta ao build so para isto (TinyCrypt ~1-2 KB internos): o pad nao
+# tem teclado/display, e o gate de codigo do CelerLink usa criptografia
+# propria (selo AES-GCM) acima do payload, nao o SMP.
+CONFIG_CELEROS_BLE_HID=y
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
 # Servicos GATT de exemplo do NimBLE (defaults do IDF, ninguem registra
 # nenhum: os servicos reais — CelerLink e NUS do watch — tem UUID proprio).
 # Cada um traz codigo/rodata para o binario a toa.

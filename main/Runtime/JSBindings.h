@@ -489,6 +489,22 @@ public:
     static duk_ret_t js_usbFlush(duk_context *ctx);
     static void usbAppReset();                            // solta claims/listeners do app
 #endif
+#if CONFIG_CELEROS_BLE_HID
+    // BT (API 57): gamepad Bluetooth LE HID cru — capability "input"
+    // (JsBt.cpp). O firmware so transporta: scan/pareamento/descoberta/
+    // reports crus; o protocolo HID e a dep JS celeros.gamepad.
+    static duk_ret_t js_btScan(duk_context *ctx);         // BT.scan([ms])
+    static duk_ret_t js_btScanResults(duk_context *ctx);  // BT.scanResults()
+    static duk_ret_t js_btConnect(duk_context *ctx);      // BT.connect(addr)
+    static duk_ret_t js_btDisconnect(duk_context *ctx);   // BT.disconnect()
+    static duk_ret_t js_btState(duk_context *ctx);        // BT.state()
+    static duk_ret_t js_btReportMap(duk_context *ctx);    // BT.reportMap()
+    static duk_ret_t js_btRead(duk_context *ctx);         // BT.read()
+    static duk_ret_t js_btWrite(duk_context *ctx);        // BT.write(data)
+    static duk_ret_t js_btPaired(duk_context *ctx);       // BT.paired()
+    static duk_ret_t js_btForget(duk_context *ctx);       // BT.forget([addr])
+    static void btAppReset();                             // fila/cache do app saem
+#endif
 #if CONFIG_CELEROS_JS_CAMERA
     // Camera (API 35): OV2640 da esp32-cam — capability "camera" (JsCamera.cpp)
     static duk_ret_t js_cameraSetup(duk_context *ctx);    // Camera.setup({framesize,pixformat,fbcount,xclkMhz})

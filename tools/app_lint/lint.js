@@ -274,6 +274,16 @@ function parseBindingsCpp(text) {
       parent.props[m[1]] = obj;
       continue;
     }
+    if ((m = /duk_put_global_string\s*\(\s*ctx\s*,\s*"([^"]+)"\s*\)/.exec(line))) {
+      // duk_put_global_string (Nes, API 57): atribui ao GLOBAL e TIRA o valor
+      // do topo da pilha (duktape.c:23789 - [... global val ] -> [...]). O
+      // objeto vira um global nomeado, solto na raiz.
+      const obj = stack.pop();
+      if (!obj) { warnings.push('duk_put_global_string sem objeto na pilha: ' + m[1]); continue; }
+      obj.perm = mergePerm(obj.perm, linePerm);
+      globalObj.props[m[1]] = obj;
+      continue;
+    }
     // `if (perm(...))` puro ou `{`/`}` de bloco: guarda o perm para a proxima op duk
     if (linePerm && !/duk_|putFns/.test(line)) pendingPerm = linePerm;
   }

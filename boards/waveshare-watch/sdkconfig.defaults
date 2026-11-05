@@ -53,12 +53,16 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
 # Phone Link (API 15): Gadgetbridge fala com o relogio como Bangle.js; o
 # bond do celular (pareamento com codigo) persiste no NVS do NimBLE.
 CONFIG_CELEROS_PHONE_LINK=y
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
+# Gamepad BLE HID (API 57): o enlace do pad coexiste com o celular (2
+# conexoes). O SMP ja vem do Phone Link; o BleHid sobrescreve io_cap/mitm
+# para Just Works (bond do celular ja gravado segue valendo).
+CONFIG_CELEROS_BLE_HID=y
 
 # Energia (API 15, Hardware/PowerPolicy): DFS + light sleep automatico com a
 # tela apagada. O BLE dorme junto (modem sleep com o XTAL principal ligado:

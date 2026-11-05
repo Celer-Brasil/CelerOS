@@ -121,6 +121,9 @@ void JSBindings::appExitCleanup() {
 #if CONFIG_CELEROS_USB_HOST
     usbAppReset();  // solta interfaces/listeners DELE (o registry do SO fica)
 #endif
+#if CONFIG_CELEROS_BLE_HID
+    btAppReset();  // fila de reports/cache do scan saem (o enlace do pad fica)
+#endif
 #if CONFIG_CELEROS_JS_CAMERA
     cameraAppReset();  // sensor, framebuffers retidos e quirc voltam ao heap
 #endif
@@ -1990,6 +1993,30 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         };
         putFns(ctx, kFnsUsb);
         duk_put_prop_string(ctx, -2, "USB");
+    }
+#endif
+
+#if CONFIG_CELEROS_BLE_HID
+    // --- BT Object (API 57): gamepad Bluetooth LE HID cru (S3) ---
+    // Transporte apenas: scan/pareamento/Report Map cru/reports crus. O
+    // protocolo HID (parser do descriptor, decodificacao, rumble) vive na
+    // dep JS celeros.gamepad — mesmo molde do USB/celeros.usb.hid.
+    if (perm(celer::PERM_INPUT)) {
+        duk_push_object(ctx);  // BT
+        static const JsFn kFnsBt[] = {
+            {"scan", js_btScan, 1},
+            {"scanResults", js_btScanResults, 0},
+            {"connect", js_btConnect, 1},
+            {"disconnect", js_btDisconnect, 0},
+            {"state", js_btState, 0},
+            {"reportMap", js_btReportMap, 0},
+            {"read", js_btRead, 0},
+            {"write", js_btWrite, 1},
+            {"paired", js_btPaired, 0},
+            {"forget", js_btForget, 1},
+        };
+        putFns(ctx, kFnsBt);
+        duk_put_prop_string(ctx, -2, "BT");
     }
 #endif
 

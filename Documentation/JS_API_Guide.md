@@ -3677,3 +3677,135 @@ Two behaviour notes for app authors:
 The point of the move: the setup screen is a normal app, so it upgrades from
 the hub without a firmware OTA, and the firmware keeps only the radio, the
 portal and the credentials.
+
+## 53. API Level 57 — Bluetooth LE gamepad: `BT.*` and the `celeros.gamepad` dep
+
+**Where it exists.** Only on firmware built with `CELEROS_BLE_HID` (today
+the `smartdisplay` and `waveshare-watch` boards) and in an app with the
+`"input"` permission in `app.json`. Feature-detect with
+`System.getInfo().hasBtHid` and `typeof BT !== "undefined"` — other boards
+do not have the object (the CYD has no Bluetooth radio in its build at all).
+
+**What the firmware does.** Only the Bluetooth LE transport: scan filtered
+to HID devices (HID appearance family, 0x03C4 = gamepad, or service 0x1812
+in the advertisement), SMP Just Works pairing with a persistent bond in
+NVS, HID service discovery (the **raw Report Map** and each characteristic's
+Report Reference) and routing: input reports land in the `BT.read()` queue;
+output bytes (rumble) go out through `BT.write()`. **No gamepad parsing
+lives in C++**: the HID descriptor, report decoding and rumble formatting
+are the `celeros.gamepad` hub dep (JS), same mold as `celeros.usb.hid` for
+USB.
+
+**Bytes are arrays of numbers (0..255).** The cap is **64 bytes per report**
+(HOGP never goes past that in practice). `BT.read()` returns `{id, data}`
+where `data` is the raw Report characteristic payload — INCLUDING the
+report id byte when the pad uses ids (the dep decides by reading the map).
+
+**Pads.** Works with Bluetooth LE HID (HOGP) pads: Xbox One S/Series,
+8bitdo in BLE mode. **DualShock 4, DualSense and Switch Pro are Bluetooth
+CLASSIC** — the S3 radio has no BR/EDR and they will NOT pair here.
+
+**Coexistence.** The pad link is a second BLE connection: it coexists with
+Celer Link and, on the watch, with the Phone Link phone. While the pad
+scans/connects, the CelerNet mesh pauses its scanner (same contract as a
+Celer Link scan). Just Works pairing asks for no code — put the pad in
+pairing mode (hold its pair button) and run `scan` + `connect` from the app.
+
+**Across apps.** Exiting an app clears the report queue and the scan cache;
+the pad LINK stays alive (switching games does not drop the controller).
+The bond survives reboot.
+
+**Careful:** `BT.forget()` with no argument erases ALL NimBLE bonds — on
+the watch that includes the Phone Link phone. To forget only the pad, pass
+its address.
+
+Example with the dep (the normal way to use it):
+
+```javascript
+// app.json: {"api": 57, "permissions": ["input"],
+//            "deps": {"celeros.gamepad": "^0.1.0"}}
+var pad = require("celeros.gamepad");
+var pads = pad.scan(3000);                 // [{addr, name, rssi, gamepad}]
+if (!pads.length || !pad.connect(pads[0].addr).ok) return;
+var gp = pad.setup();                      // parses the Report Map
+if (!gp) return;
+
+setInterval(function () {
+    var st = gp.poll();                    // drains BT.read()
+    if (!st) return;
+    if (st.pressed.indexOf("a") >= 0) gp.rumble(0.3, 0.8, 250);
+    System.print("lx=" + st.lx.toFixed(2) + " dpad=" + st.dpad);
+}, 16);
+```
+
+### `BT.scan([ms])` (API 57)
+**Blocking** scan for HID devices during `ms` ms (default 2500, cap 15000).
+Filters by HID appearance family (0x03C0..0x03CF; 0x03C4 = gamepad) or by
+service 0x1812 in the advertisement. Returns `true` when the scan ran (even
+with no hits); `false` without host/RAM or with a pad already connected.
+While scanning, the CelerNet mesh pauses its own scanner.
+
+### `BT.scanResults()` (API 57)
+Entries from the last scan, strongest RSSI first:
+
+```javascript
+[ { addr: "5C:BA:37:12:34:56", addrType: 0, name: "Xbox Wireless Controller",
+    rssi: -42, appearance: 0x03C4 } ]
+```
+
+`addrType` is the BLE address type (0 public, 1 random static, 2 RPA) and
+`appearance` is the advertised GATT appearance (0 when absent).
+
+### `BT.connect(addr)` (API 57)
+Connects to the address and completes **everything**: link + SMP Just Works
+pairing (bond in NVS) + HID service discovery + Report Map read + input
+report subscription. Blocking (total budget 10 s; the call yields the
+frame). Returns `{ok: true}` or `{ok: false, err: "..."}`. The address type
+comes from the last scan, an existing bond or the "last pad" slot — already
+bonded pads reconnect without re-pairing (and the pad reconnects by itself
+if you turn it on later).
+
+### `BT.disconnect()` (API 57)
+Drops the pad link. `true` when there was a link.
+
+### `BT.state()` (API 57)
+Host/pad state for rendering in the app:
+
+```javascript
+{ phase: "ready", addr: "5C:BA:37:12:34:56", name: "Xbox Wireless Controller",
+  rssi: -42, battery: 80, mtu: 256, queued: 1, dropped: 0, err: "",
+  reports: [ { id: 1, type: 1, size: 0 }, { id: 3, type: 2, size: 0 } ] }
+```
+
+`phase`: `"off"` (no host), `"idle"`, `"scanning"`, `"connecting"`,
+`"ready"` or `"error"` (reason in `err`). `reports` lists the discovered
+Report characteristics with the Report Reference `id`/`type` (1 = input,
+2 = output, 3 = feature) — this is where the dep learns where to write the
+rumble. `battery` comes from the pad's Battery Service (-1 without it).
+
+### `BT.reportMap()` (API 57)
+The connected pad's **raw Report Map** as a byte array (the HID descriptor
+that the `celeros.gamepad` dep parses), or `null` without pad/map.
+
+### `BT.read()` (API 57)
+Next input report from the queue or `null`: `{id, data}`. `data` is the raw
+payload (including the id byte when the pad uses report ids). The queue is
+a small ring (8 slots): when full, the OLDEST report is dropped (the newest
+command wins) and `BT.state().dropped` counts it. Drain it every frame;
+with no report id in the map, `id` comes back `0`.
+
+### `BT.write(data)` (API 57)
+Writes `data` (array 0..255, cap 64) to the OUTPUT Report characteristic
+(type 2 in `state().reports`). This is the rumble path: the dep builds the
+report with the right id. Blocks up to ~1 s; returns `{ok, sent}` or
+`{ok: false, err}`.
+
+### `BT.paired()` (API 57)
+Bonds stored in the NimBLE NVS: `[{addr, addrType}]`. Useful to offer
+"reconnect" without a scan. On the watch the list includes the Phone Link
+phone (the store is shared) — filter by the pad's address.
+
+### `BT.forget([addr])` (API 57)
+Erases bonds: with `addr`, only that peer; without it, **all of them** (on
+the watch that includes the phone — prefer passing the pad's address). Also
+clears the "last pad" slot. Returns `true` when something was erased.

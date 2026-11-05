@@ -349,4 +349,22 @@ config CELEROS_BLUETOOTH
       Desligado, o objeto global CelerLink nao existe (apps testam
       typeof CelerLink).
 
+config CELEROS_BLE_HID
+    bool "Gamepad Bluetooth LE HID (host HOGP cru)"
+    depends on CELEROS_BLUETOOTH
+    default n
+    help
+      API BT.* dos apps JS (API 57, permission "input"): o firmware faz
+      APENAS o transporte — scan de HID devices (appearance 0x03C4 ou
+      servico 0x1812), conexao + pareamento SMP Just Works com bond no
+      NVS, descoberta do servico HID (Report Map cru, Report Reference
+      de cada char) e roteamento dos reports de entrada para BT.read()
+      e de saida para BT.write(). TODO o parsing do protocolo (mapa do
+      descriptor, decodificacao, rumble) vive na dep JS celeros.gamepad.
+      Pads testaveis em modo BLE: Xbox One S/Series, 8bitdo BLE. O
+      DualShock 4 e Bluetooth CLASSIC e NAO funciona (o S3 nem tem o
+      radio). Exige BT_NIMBLE_SECURITY_ENABLE (SMP) e
+      BT_NIMBLE_NVS_PERSIST no board, e MAX_CONNECTIONS >= 2 (o enlace
+      do pad coexiste com o Celer Link/Phone Link).
+
 endmenu

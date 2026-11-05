@@ -292,6 +292,9 @@
       "celeros.usb": "^1.0.0"
     }
   },
+  "celeros.gamepad": {
+    "deps": {}
+  },
   "celeros.usb.msc": {
     "deps": {
       "celeros.usb": "^1.0.0"

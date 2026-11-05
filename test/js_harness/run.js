@@ -1754,6 +1754,54 @@ function makeEnv() {
     clear: function() { inputKeys = []; inputPtr = { x: 0, y: 0, buttons: 0 }; }
     };
 
+    // BT (API 57): host Bluetooth LE HID fake (placas com CELEROS_BLE_HID;
+    // SmartDisplay/watch). O pad simulado conecta na hora com reports do
+    // descriptor do map injetado. __harness.btScan([...]) define o resultado
+    // do scan; __harness.btSetMap(bytes) define o reportMap; __harness
+    // .btPushReport(id, bytes) alimenta BT.read(); __harness.btWrites
+    // acumula o que o app enviou; __harness.btReset() limpa tudo.
+    var btWrites = [];
+    var btReports = [];
+    var btScanList = [];
+    var btBonded = [];
+    var btMap = [];
+    var btState = { phase: 'idle', addr: '', name: '', rssi: 0, battery: -1,
+                    mtu: 0, reports: [], queued: 0, dropped: 0 };
+    env.BT = {
+    scan: function(ms) { btState.phase = 'idle'; return true; },
+    scanResults: function() { return btScanList.slice(); },
+    connect: function(addr) {
+        var nm = '';
+        for (var i = 0; i < btScanList.length; i++) {
+            if (btScanList[i].addr === addr) nm = btScanList[i].name || '';
+        }
+        btState.phase = 'ready';
+        btState.addr = addr || '';
+        btState.name = nm;
+        btState.reports = btMap.length ? [{ id: 1, type: 1, size: 18 },
+                                         { id: 3, type: 2, size: 10 }] : [];
+        return { ok: true };
+    },
+    disconnect: function() {
+        btState.phase = 'idle';
+        btState.addr = '';
+        btState.name = '';
+        btState.reports = [];
+        return true;
+    },
+    state: function() { btState.queued = btReports.length; return btState; },
+    reportMap: function() { return btMap.length ? btMap.slice() : null; },
+    read: function() { return btReports.length ? btReports.shift() : null; },
+    write: function(data) { btWrites.push(data.slice()); return { ok: true, sent: data.length }; },
+    paired: function() { return btBonded.slice(); },
+    forget: function(addr) {
+        for (var i = 0; i < btBonded.length; i++) {
+            if (!addr || btBonded[i].addr === addr) btBonded.splice(i--, 1);
+        }
+        return true;
+    }
+    };
+
     env.__harness = {
     log: log,
     // API 56: identidade do app (App.info) e script do Net.fetch
@@ -1810,6 +1858,23 @@ function makeEnv() {
     setUsbControl: function(addr, req, data) { usbCtrl[addr + ':' + req] = data.slice(); },
     usbTx: usbTx,
     usbListens: usbListens,
+    // API 57: gamepad Bluetooth LE HID fake
+    btScan: function(list) { btScanList = (list || []).slice(); return true; },
+    btSetMap: function(bytes) { btMap = (bytes || []).slice(); return true; },
+    btPushReport: function(id, bytes) {
+        btReports.push({ id: id, data: (bytes || []).slice() });
+    },
+    btSetState: function(st) {
+        for (var k in st) if (st.hasOwnProperty(k)) btState[k] = st[k];
+    },
+    btSetBonded: function(list) { btBonded = (list || []).slice(); return true; },
+    btWrites: btWrites,
+    btReset: function() {
+        btWrites.length = 0; btReports.length = 0; btScanList = [];
+        btBonded = []; btMap = [];
+        btState = { phase: 'idle', addr: '', name: '', rssi: 0, battery: -1,
+                    mtu: 0, reports: [], queued: 0, dropped: 0 };
+    },
     inputKeys: function() { return inputKeys.slice(); },
     setAiResponse: function(r) { aiResponse = r; },
     aiChats: aiChats,
@@ -2005,7 +2070,7 @@ function resolveSharedDep(appDir, name, env) {
 
 var GLOBAL_NAMES = ['System', 'FS', 'Net', 'CelerLink', 'Phone', 'AI', 'Mic', 'WakeWord', '__harness',
                 'Storage', 'Sensors', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval',
-                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input', 'Service'];
+                'UI', 'require', 'CelerNet', 'Pack', 'USB', 'Input', 'BT', 'Service', 'Nes'];
 // Valores na MESMA ordem de GLOBAL_NAMES; o slot 'require' e o req do app
 // (runApp) ou o proprio req do modulo (makeRequire) — nunca duplicado no
 // wrapper, senao o ultimo sombreia o primeiro.
@@ -2014,7 +2079,7 @@ function globalValues(env, req) {
     return [env.System, env.FS, env.Net, env.CelerLink, env.Phone, env.AI, env.Mic, env.WakeWord, env.__harness,
         env.Storage, env.Sensors, env.setTimeout, env.setInterval, env.clearTimeout, env.clearInterval,
         env.UI, req || null, mesh ? env.CelerNet : undefined, mesh ? env.Pack : undefined,
-        env.USB, env.Input, env.Service];
+        env.USB, env.Input, env.BT, env.Service, env.Nes];
 }
 function makeRequire(appDir, env) {
     var cache = {};

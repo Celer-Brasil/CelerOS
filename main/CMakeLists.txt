@@ -189,6 +189,10 @@ if(CONFIG_CELEROS_BLUETOOTH)
     if(CONFIG_CELEROS_PHONE_LINK)
         list(APPEND CELEROS_SRCS "Bluetooth/PhoneLink.cpp" "Runtime/JsPhone.cpp" "Launcher/PhoneScreens.cpp")
     endif()
+    if(CONFIG_CELEROS_BLE_HID)
+        # Gamepad BLE HID (API 57): transporte cru HOGP + bindings BT.*.
+        list(APPEND CELEROS_SRCS "Bluetooth/BleHid.cpp" "Runtime/JsBt.cpp")
+    endif()
 endif()
 
 # ---- HAL de placas: exatamente um Boards/<placa>/Board.cpp entra no build,

@@ -347,6 +347,18 @@ duk_ret_t JSBindings::js_getInfo(duk_context *ctx) {
 #else
     putBool(ctx, "hasUsbHost", false);
 #endif
+    // API 57: gamepad Bluetooth LE HID (objeto BT existe com a perm "input")
+#if CONFIG_CELEROS_BLE_HID
+    putBool(ctx, "hasBtHid", true);
+#else
+    putBool(ctx, "hasBtHid", false);
+#endif
+    // API 57: codigo nativo carregavel (System.native*, flag de build)
+#if CONFIG_CELEROS_JS_NATIVE
+    putBool(ctx, "hasNative", true);
+#else
+    putBool(ctx, "hasNative", false);
+#endif
     putBool(ctx, "hasImu", Board::profile().imuAccel != nullptr);  // API 13
     // API 15: bateria, placa e geometria do vidro (relogio: cantos mortos)
     putBool(ctx, "hasBattery", BoardIO::batteryMv() >= 0);

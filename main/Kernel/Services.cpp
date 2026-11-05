@@ -32,6 +32,13 @@
 #include "../../Bluetooth/CelerNet.h"
 #include "../../Pack/Pack.h"
 #endif
+#if CONFIG_CELEROS_BLE_HID
+#include "../../Bluetooth/BleHid.h"
+// Gamepad BLE HID: so o watchdog de connect preso (20 s sem evento solta o
+// estado local — senao o busy da malha nunca cai). ALWAYS: com app aberto o
+// connect pode estar em curso.
+void svcBleHid(bool) { BleHid::tick(); }
+#endif
 #if CONFIG_CELEROS_PHONE_LINK
 #include "../../Bluetooth/PhoneLink.h"
 #include "../../Launcher/PhoneScreens.h"
@@ -171,6 +178,9 @@ const CelerServices::Service kServices[] = {
 #if CONFIG_CELEROS_BLUETOOTH
     {"celernet", svcCelerNet, CelerServices::ALWAYS},
     {"pack", svcPack, CelerServices::ALWAYS},
+#endif
+#if CONFIG_CELEROS_BLE_HID
+    {"blehid", svcBleHid, CelerServices::ALWAYS},
 #endif
 #if CONFIG_CELEROS_APP_SERVICES
     // Servicos em segundo plano de APPS instalados (API 42): depois do pack

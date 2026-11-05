@@ -3027,6 +3027,8 @@ require('./ui_parity.js')(check);
 require('./ui_extras.js')(check);
 // deps de hardware (API 54): servo, motor, LED, botao e PCA9685
 require('./hw_libs.js')(check);
+// gamepad Bluetooth LE HID (API 57): parser do descriptor + decodificador
+require('./gamepad_lib.js')(check);
 // jsmin: minificador do publish/deploy (mangle de locais + espaco minimo)
 require('./jsmin.js')(check);
 

@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 56 — 389 funcoes.
+// API level 57 — 412 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -36,6 +36,18 @@ declare function setInterval(callback: () => void, ms: number): number;
 declare function clearTimeout(id: number): void;
 declare function clearInterval(id: number): void;
 declare function require(nome: string): any;
+
+declare const Nes: {
+    load(arg0: number): any;
+    bind(arg0: number): any;
+    frame(arg0: number, arg1?: number): any;
+    reset(): void;
+    saveState(arg0: number): any;
+    loadState(arg0: number): any;
+    audioStart(): any;
+    audioStop(): void;
+    unload(): void;
+};
 
 declare const System: {
     /** aloca um buffer de Sprite persistente off-screen na RAM. Força GC automaticamente e cai para 8 bits para garantir memória contígua. */
@@ -78,6 +90,10 @@ declare const System: {
     drawSprite(id: number, x: number, y: number, angle?: number, zoomX?: number, zoomY?: number, key?: number, smooth?: number): void;
     blitSprite(id: number, x: number, y: number, w: number, h: number): void;
     copySprite(id: number, sx: number, sy: number, w: number, h: number, dx: number, dy: number, key?: number): void;
+    nativeLoad(path: string, scratchKB?: number): any;
+    nativeCall(handle: number, fnIdx: number, a0?: number, a1?: number): any;
+    nativeRead(handle: number, offset?: number, maxLen?: number): any;
+    nativeFree(handle: number): any;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
     fillScreen(color: number): void;
     /** desenha retângulos vazados ou preenchidos. */
@@ -108,9 +124,9 @@ declare const System: {
     drawWideLine(x0: number, y0: number, x1: number, y1: number, width: number, color: number): void;
     mixColor(a: number, b: number, pct: number): number;
     /** lê uma imagem .bmp de 16, 24 ou 32 bits do sistema de arquivos (`/sd/` ou `/local/`) e a transmite em `x, y` sem usar RAM do */
-    drawBMP(path: string, x: number, y: number): any;
+    drawBMP(path: string, x: number, y: number): boolean;
     /** desenha uma imagem .png do sistema de arquivos (/sd/ ou `/local/`) em `x, y`, decodificada em streaming linha a linha (sem pico de */
-    drawPNG(path: string, x: number, y: number): any;
+    drawPNG(path: string, x: number, y: number): boolean;
     /** desenha um .jpg baseline (a saída do Pack.snap ou do `Camera.save`) decodificado em blocos 8x8 (sem a imagem inteira na RAM), (API 36) */
     drawJPG(path: string, x: number, y: number): boolean;
     /** renderiza strings em alta velocidade no display. O texto é UTF-8 e todas as fontes cobrem Latin-1 (U+0020..U+00FF), então acentos */
@@ -121,13 +137,13 @@ declare const System: {
     setTextSize(size: number): void;
     setTextDatum(datum: number): void;
     textWidth(str: string, font?: number): number;
-    fontHeight(font?: number): any;
+    fontHeight(font?: number): number;
     /** empacota valores RGB 8/8/8 de 24 bits no formato RGB 5/6/5 de 16 bits esperado pelo hardware. */
-    color(r: number, g: number, b: number): any;
+    color(r: number, g: number, b: number): number;
     /** largura do canvas de design em que os apps desenham. Em painéis maiores o runtime escala tudo para a tela física (veja a nota do */
-    screenWidth(): any;
+    screenWidth(): number;
     /** altura do canvas de design em que os apps desenham. */
-    screenHeight(): any;
+    screenHeight(): number;
     /** consulta o controlador de toque. */
     getTouch(): TouchPoint;
     /** consulta TODOS os dedos no controlador de toque (multitoque). Mesma cedida de quadro do `System.getTouch()` — chame UM dos dois por loop, (API 43) */
@@ -190,7 +206,7 @@ declare const System: {
     keypadDraw(): void;
     keypadClose(): void;
     topbarText(texto: string): void;
-    topbarButtons(labels?: number): any;
+    topbarButtons(labels?: string[]): number;
     topbarPop(): any;
     setBrightness(level: number): void;
     getBrightness(): any;
@@ -764,6 +780,29 @@ declare const USB: {
     unlisten(addr: number, ep: number): boolean;
     /** @permission "usb" */
     flush(addr: number, ep: number): boolean;
+};
+
+declare const BT: {
+    /** @permission "input" */
+    scan(ms?: number): any;
+    /** @permission "input" */
+    scanResults(): any;
+    /** @permission "input" */
+    connect(addr: number): any;
+    /** @permission "input" */
+    disconnect(): any;
+    /** @permission "input" */
+    state(): any;
+    /** @permission "input" */
+    reportMap(): any;
+    /** @permission "input" */
+    read(): any;
+    /** @permission "input" */
+    write(data?: number): any;
+    /** @permission "input" */
+    paired(): any;
+    /** @permission "input" */
+    forget(addr?: number): any;
 };
 
 declare const App: {

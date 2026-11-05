@@ -75,6 +75,7 @@ CelerDisplay* s_jsTft = nullptr;  // setado no JSBindings::init
 // definicao que vivia no JsGfx.cpp (fora do build sem vidro): a init real
 // (ressuscitada pelo servico launcher headless) reseta o modo nativo
 bool s_nativeCanvas = false;
+uint8_t s_alpha = 255;
 #endif
 uint32_t s_perms = celer::PERM_ALL;   // capabilities do app corrente (F4)
 std::string s_appPkg;                 // packageName do app corrente (F4)
@@ -1095,6 +1096,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_appExitPending = false;
     s_hwTouched = false;
     s_nativeCanvas = false;  // app anterior pode ter saido no modo nativo
+    s_alpha = 255;           // alpha global nao vaza entre apps (API 59)
     s_launchBright = Backlight::get();
     s_launchAuto = Backlight::isAuto();
     s_launchIdle = Backlight::idleTimeout();
@@ -1434,6 +1436,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     // --- Utility ---
     static const JsFn kFns6[] = {
         {"color", js_color, 3},
+        {"setAlpha", js_setAlpha, 1},  // API 59: alpha global dos primitivos
         {"screenWidth", js_screenWidth, 0},
         {"screenHeight", js_screenHeight, 0},
     };

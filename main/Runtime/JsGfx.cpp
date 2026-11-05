@@ -19,6 +19,7 @@
 #include "../Launcher/Screens.h"
 #include "../Boards/Board.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
+#include <math.h>
 #include <new>
 #include "JsInternal.h"
 #include "JsFsJail.h"
@@ -44,6 +45,13 @@ int spriteCap() { return Board::profile().hasPsram ? kSpritePool : 1; }
 // Canvas nativo (API 28): definido aqui (dominio grafico), lido pelos
 // conversores de JsInternal.h e pelo touch (JsSystem.cpp). Zerado no init().
 bool s_nativeCanvas = false;
+
+// Alpha global dos primitivos (API 59, System.setAlpha): 0..255, 255 =
+// opaco. Nasceu com o overlay do Anemoia — jogo em tela cheia e controles
+// TRANSLUCIDOS por cima. No quadro o blend e direto no buffer de PSRAM
+// (FrameSprite::blendSpan); em sprite do app/display direto cai no
+// fillRectAlpha do LGFX. Texto segue opaco. Zerado no init() de cada app.
+uint8_t s_alpha = 255;
 
 // Acesso de outros bindings ao pool (drawNative blita o frame do blob no backing do
 // sprite bound). id 1..cap; 0 ou fora = nullptr (o corrente e id... nao: o
@@ -384,6 +392,39 @@ duk_ret_t JSBindings::js_fillScreen(duk_context *ctx) {
     return 0;
 }
 
+// ---- alpha global dos primitivos (API 59) ---------------------------------
+namespace {
+// Alvo corrente e o quadro automatico? So nele o blend e direto no buffer
+// (PSRAM, RGB565 nativo); sprite do app e display direto usam o LGFX.
+bool frameTarget() {
+    return s_frame != nullptr && JSBindings::gfx() == (lgfx::LGFXBase*)s_frame &&
+           !JSBindings::clipActive();
+}
+// Retangulo com o alpha global (s_alpha < 255; o opaco nao passa aqui).
+void fillRectA(int x, int y, int w, int h, uint32_t c565) {
+    if (w <= 0 || h <= 0) return;
+    if (frameTarget()) {
+        for (int i = 0; i < h; i++) s_frame->blendSpan(x, y + i, w, (uint16_t)c565, s_alpha);
+        return;
+    }
+    JSBindings::gfx()->fillRectAlpha(x, y, w, h, s_alpha, jsc(c565));
+}
+void pixelA(int x, int y, uint32_t c565) {
+    if (frameTarget()) {
+        s_frame->blendPixel(x, y, (uint16_t)c565, s_alpha);
+        return;
+    }
+    JSBindings::gfx()->fillRectAlpha(x, y, 1, 1, s_alpha, jsc(c565));
+}
+// Meia-largura inteira do arco: sqrt(r^2 - k^2).
+int arcHalf(int r2, int k) {
+    if (k <= 0) return (int)(sqrtf((float)r2) + 0.5f);
+    int d = r2 - k * k;
+    if (d <= 0) return 0;
+    return (int)(sqrtf((float)d) + 0.5f);
+}
+}  // namespace
+
 duk_ret_t JSBindings::js_fillRect(duk_context *ctx) {
     if (!tftInstance) return 0;
     int x = duk_require_int(ctx, 0);
@@ -391,6 +432,7 @@ duk_ret_t JSBindings::js_fillRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
+    if (s_alpha < 255) { fillRectA(jsx(x), jsy(y), jsx(w), jsH(h), color); return 0; }
     gfx()->fillRect(jsx(x), jsy(y), jsx(w), jsH(h), jsc(color));
     return 0;
 }
@@ -402,6 +444,14 @@ duk_ret_t JSBindings::js_drawRect(duk_context *ctx) {
     int w = duk_require_int(ctx, 2);
     int h = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
+    if (s_alpha < 255) {
+        const int px = jsx(x), py = jsy(y), pw = jsx(w), ph = jsH(h);
+        fillRectA(px, py, pw, 1, color);
+        fillRectA(px, py + ph - 1, pw, 1, color);
+        fillRectA(px, py, 1, ph, color);
+        fillRectA(px + pw - 1, py, 1, ph, color);
+        return 0;
+    }
     gfx()->drawRect(jsx(x), jsy(y), jsx(w), jsH(h), jsc(color));
     return 0;
 }
@@ -413,6 +463,23 @@ duk_ret_t JSBindings::js_drawLine(duk_context *ctx) {
     int x1 = duk_require_int(ctx, 2);
     int y1 = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
+    if (s_alpha < 255) {
+        // Bresenham com blend (contornos: poucos pixels)
+        int px0 = jsx(x0), py0 = jsy(y0), px1 = jsx(x1), py1 = jsy(y1);
+        const int dx = px1 > px0 ? px1 - px0 : px0 - px1;
+        const int sx = px0 < px1 ? 1 : -1;
+        const int dy = py1 > py0 ? py0 - py1 : py1 - py0;
+        const int sy = py0 < py1 ? 1 : -1;
+        int err = dx + dy;
+        for (;;) {
+            pixelA(px0, py0, color);
+            if (px0 == px1 && py0 == py1) break;
+            const int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; px0 += sx; }
+            if (e2 <= dx) { err += dx; py0 += sy; }
+        }
+        return 0;
+    }
     gfx()->drawLine(jsx(x0), jsy(y0), jsx(x1), jsy(y1), jsc(color));
     return 0;
 }
@@ -423,6 +490,7 @@ duk_ret_t JSBindings::js_drawPixel(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     uint32_t color = duk_require_uint(ctx, 2);
     const int px = jsx(x), py = jsy(y);
+    if (s_alpha < 255) { pixelA(px, py, color); return 0; }
     // Fast path: pixel direto no buffer do quadro. Ponto ESPALHADO pelo
     // caminho completo do LGFX custava ~0,2 ms (60 estrelas = 12 ms de
     // quadro); aqui e escrita + caixa suja, microssegundos. A cor segue
@@ -447,6 +515,21 @@ duk_ret_t JSBindings::js_drawCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
+    if (s_alpha < 255) {
+        // circulo de Bresenham com blend (anel de controle)
+        const int cx = jsx(x), cy = jsy(y), rr = jsu(r);
+        int px = rr, py = 0, err = 1 - rr;
+        while (px >= py) {
+            pixelA(cx + px, cy + py, color); pixelA(cx - px, cy + py, color);
+            pixelA(cx + px, cy - py, color); pixelA(cx - px, cy - py, color);
+            pixelA(cx + py, cy + px, color); pixelA(cx - py, cy + px, color);
+            pixelA(cx + py, cy - px, color); pixelA(cx - py, cy - px, color);
+            py++;
+            if (err < 0) err += 2 * py + 1;
+            else { px--; err += 2 * (py - px) + 1; }
+        }
+        return 0;
+    }
     gfx()->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color));
     return 0;
 }
@@ -457,6 +540,15 @@ duk_ret_t JSBindings::js_fillCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
+    if (s_alpha < 255) {
+        // disco por linhas: cada linha e um fillRect com blend
+        const int cx = jsx(x), cy = jsy(y), rr = jsu(r);
+        for (int dy = -rr; dy <= rr; dy++) {
+            const int half = arcHalf(rr * rr, dy);
+            fillRectA(cx - half, cy + dy, half * 2 + 1, 1, color);
+        }
+        return 0;
+    }
     gfx()->fillCircle(jsx(x), jsy(y), jsu(r), jsc(color));
     return 0;
 }
@@ -495,6 +587,34 @@ duk_ret_t JSBindings::js_drawRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
+    if (s_alpha < 255) {
+        // contorno arredondado: retas + 4 arcos de quarto com blend
+        const int px = jsx(x), py = jsy(y), pw = jsx(w), ph = jsH(h);
+        int cr = jsu(r);
+        if (cr > pw / 2) cr = pw / 2;
+        if (cr > ph / 2) cr = ph / 2;
+        fillRectA(px + cr, py, pw - 2 * cr, 1, color);
+        fillRectA(px + cr, py + ph - 1, pw - 2 * cr, 1, color);
+        fillRectA(px, py + cr, 1, ph - 2 * cr, color);
+        fillRectA(px + pw - 1, py + cr, 1, ph - 2 * cr, color);
+        if (cr > 0) {
+            // 4 quartos de circulo por Bresenham (sem os buracos de um
+            // ponto por linha perto do topo do arco)
+            int ax = cr, ay = 0, err = 1 - cr;
+            const int xl = px + cr, xr = px + pw - 1 - cr;
+            const int yt = py + cr, yb = py + ph - 1 - cr;
+            while (ax >= ay) {
+                pixelA(xl - ax, yt - ay, color); pixelA(xl - ay, yt - ax, color);
+                pixelA(xr + ax, yt - ay, color); pixelA(xr + ay, yt - ax, color);
+                pixelA(xl - ax, yb + ay, color); pixelA(xl - ay, yb + ax, color);
+                pixelA(xr + ax, yb + ay, color); pixelA(xr + ay, yb + ax, color);
+                ay++;
+                if (err < 0) err += 2 * ay + 1;
+                else { ax--; err += 2 * (ay - ax) + 1; }
+            }
+        }
+        return 0;
+    }
     gfx()->drawRoundRect(jsx(x), jsy(y), jsx(w), jsH(h), jsu(r), jsc(color));
     return 0;
 }
@@ -507,6 +627,20 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
+    if (s_alpha < 255) {
+        // cantos arredondados por linha (mesma geometria do LGFX)
+        const int px = jsx(x), py = jsy(y), pw = jsx(w), ph = jsH(h);
+        int cr = jsu(r);
+        if (cr > pw / 2) cr = pw / 2;
+        if (cr > ph / 2) cr = ph / 2;
+        for (int dy = 0; dy < ph; dy++) {
+            int inset = 0;
+            if (dy < cr) inset = cr - arcHalf(cr * cr, cr - dy);
+            else if (dy >= ph - cr) inset = cr - arcHalf(cr * cr, dy - (ph - cr - 1));
+            fillRectA(px + inset, py + dy, pw - inset * 2, 1, color);
+        }
+        return 0;
+    }
     gfx()->fillRoundRect(jsx(x), jsy(y), jsx(w), jsH(h), jsu(r), jsc(color));
     return 0;
 }
@@ -594,6 +728,19 @@ duk_ret_t JSBindings::js_setTextDatum(duk_context *ctx) {
 // =====================================================
 // Display Bindings - Utility
 // =====================================================
+
+// API 59: alpha global dos primitivos de desenho (0..255; 255 = opaco).
+// Vale para fillRect/fillRoundRect/fillCircle/drawRect/drawCircle/drawLine/
+// drawPixel; o resto (texto, gradientes, AA) segue opaco. O alpha nao vaza
+// entre apps (init() zera) e o app decide quando voltar a 255 — o overlay do
+// Anemoia e o caso de uso: jogo em tela cheia e controles por cima.
+duk_ret_t JSBindings::js_setAlpha(duk_context *ctx) {
+    int a = duk_require_int(ctx, 0);
+    if (a < 0) a = 0;
+    if (a > 255) a = 255;
+    s_alpha = (uint8_t)a;
+    return 0;
+}
 
 // Convert RGB888 (0-255 per channel) to the target's native color format
 duk_ret_t JSBindings::js_color(duk_context *ctx) {

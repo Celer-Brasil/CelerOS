@@ -43,6 +43,7 @@ class Renderer {
         this.bound = false;     // useSprite(id)/bindSprite(true): draws vao ao sprite (contrato do firmware)
         this.unsupported = new Set();
         this.clip = null;       // {x,y,w,h} de setClip (null = alvo inteiro)
+        this.alpha = 255;       // System.setAlpha (API 59): alpha global dos primitivos
     }
 
     // ------------------------------------------------------------ pixgrade
@@ -64,7 +65,21 @@ class Renderer {
         if (x < 0 || y < 0 || x >= this.targetW() || y >= this.targetH()) return;
         const k = this.clip;
         if (k && (x < k.x || y < k.y || x >= k.x + k.w || y >= k.y + k.h)) return;
-        this.target()[y * this.targetW() + x] = c & 0xFFFF;
+        const tgt = this.target();
+        const idx = y * this.targetW() + x;
+        // API 59: alpha global mistura com o que ja esta no alvo (firmware:
+        // FrameSprite::blendSpan; aqui o mesmo blend565 no fb do host)
+        tgt[idx] = this.alpha < 255 ? Renderer.blend565(tgt[idx], c & 0xFFFF, this.alpha)
+                                    : (c & 0xFFFF);
+    }
+
+    static blend565(d, s, a) {
+        const ia = 255 - a;
+        const mix = (sh, sa) => {
+            const x = (((d >> sh) & sa) * ia + ((s >> sh) & sa) * a);
+            return (x + 128 + (x >> 8)) >> 8;
+        };
+        return (mix(11, 0x1F) << 11) | (mix(5, 0x3F) << 5) | mix(0, 0x1F);
     }
 
     hLine(x, y, w, c) { for (let i = 0; i < w; i++) this.px(x + i, y, c); }
@@ -354,6 +369,8 @@ class Renderer {
         const r = this;
         const S = env.System;
         S.fillScreen = (c) => { r.target().fill((c == null ? 0 : c) & 0xFFFF); };
+        // API 59: alpha global dos primitivos (0..255; 255 = opaco)
+        S.setAlpha = (a) => { r.alpha = Math.max(0, Math.min(255, a | 0)); };
         // canvas nativo: o harness passa a informar o vidro (screenWidth/
         // Height) e o fb acompanha
         const origNative = S.setNativeCanvas;
@@ -433,6 +450,8 @@ class Renderer {
                 throw new TypeError('pushSprite: cor-chave (number) invalida');  // duk_require_uint
             const kk = key & 0xFFFF;
             const wasBound = r.bound;
+            const wasAlpha = r.alpha;
+            r.alpha = 255;    // pushSprite NAO sofre o setAlpha (contrato do firmware)
             r.bound = false;  // destino e sempre a tela (quadro/display no firmware)
             for (let j = 0; j < sp.h; j++) {
                 for (let i = 0; i < sp.w; i++) {
@@ -442,6 +461,7 @@ class Renderer {
                 }
             }
             r.bound = wasBound;
+            r.alpha = wasAlpha;
         };
         S.deleteSprite = (id) => {
             // JsGfx.cpp: so argumento NUMERICO seleciona por id; qualquer outra

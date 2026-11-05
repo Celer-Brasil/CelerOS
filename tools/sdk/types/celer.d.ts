@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 58 — 410 funcoes.
+// API level 59 — 411 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -82,11 +82,11 @@ declare const System: {
     nativeCall(handle: number, fnIdx: number, a0?: number, a1?: number): any;
     nativeRead(handle: number, offset?: number, maxLen?: number): any;
     nativeFree(handle: number): any;
-    nativeWrite(arg0: number, arg1?: number, arg2?: number): any;
-    nativeLoadFile(arg0: number, arg1?: number, arg2?: number): any;
-    nativeSaveFile(arg0: number, arg1?: number, arg2?: number, arg3?: number): any;
-    nativeDraw(arg0: number, arg1?: number, arg2?: number, arg3?: number, arg4?: number, arg5?: number): any;
-    nativeAudio(arg0: number, arg1?: number, arg2?: number): any;
+    nativeWrite(h: number, off?: number, str?: string): any;
+    nativeLoadFile(h: number, off?: number, path?: string): any;
+    nativeSaveFile(h: number, off?: number, len?: number, path?: string): any;
+    nativeDraw(h: number, off?: number, x?: number, y?: number, w?: number, h?: number): any;
+    nativeAudio(h: number, off?: number, len?: number): any;
     nativeAudioStop(arg0: number): void;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
     fillScreen(color: number): void;
@@ -134,6 +134,7 @@ declare const System: {
     fontHeight(font?: number): number;
     /** empacota valores RGB 8/8/8 de 24 bits no formato RGB 5/6/5 de 16 bits esperado pelo hardware. */
     color(r: number, g: number, b: number): number;
+    setAlpha(alpha: number): void;
     /** largura do canvas de design em que os apps desenham. Em painéis maiores o runtime escala tudo para a tela física (veja a nota do */
     screenWidth(): number;
     /** altura do canvas de design em que os apps desenham. */

@@ -23,6 +23,10 @@ extern bool s_topbarFixed;
 // viram identidade; o touch e screenWidth/Height passam a fisicos. Exigido
 // app sem topbar fixa (System.setNativeCanvas recusa e devolve false).
 extern bool s_nativeCanvas;
+// Alpha global dos primitivos (API 59, System.setAlpha): 0..255, 255 =
+// opaco. Definido no JsGfx.cpp (dominio grafico) e zerado no init() de cada
+// app; sem vidro o JSBindings.cpp define o mesmo simbolo.
+extern uint8_t s_alpha;
 extern FrameSprite* s_frame;
 // Pedido de push do quadro INTEIRO: o vidro foi sujado por fora do quadro
 // (teclado do prompt). Desenho normal no quadro dispensa: a caixa suja do

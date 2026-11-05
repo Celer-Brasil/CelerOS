@@ -3914,3 +3914,30 @@ Erases bonds: with `addr`, only that peer; without it, **all of them** (on
 the watch that includes the phone — prefer passing the pad's address). Also
 clears the "last pad" slot. Returns `true` when something was erased.
 
+
+## 54. API Level 59 — Translucent drawing: `System.setAlpha`
+
+#### `System.setAlpha(alpha)` (API 59)
+Sets the **global** alpha of the drawing primitives, from `0` (invisible) to
+`255` (opaque, the default): `fillRect`, `fillRoundRect`, `fillCircle`,
+`drawRect`, `drawCircle`, `drawLine` and `drawPixel` now **blend** the color
+with whatever is already on the target instead of overwriting it. That is
+what makes a harmonious overlay on top of a fullscreen game — controls that
+let the scenery show through. Text, gradients, arcs and the AA variants
+(`fillSmoothCircle`/`fillSmoothRoundRect`) stay opaque; draw the label on
+top of a translucent chip.
+
+On the app frame the blend is direct in the PSRAM buffer (cheap: a 60x60
+rect costs ~0.2 ms); on an app sprite (`useSprite`) or the direct display
+the path falls back to LovyanGFX `fillRectAlpha`. The value is **reset when
+the app changes** — each app turns it on when it wants and goes back to
+`255` before drawing HUD/menus.
+
+```javascript
+// control overlay over the game scaled to the whole glass
+System.setAlpha(90);                       // ~35%: nearly transparent
+System.fillCircle(W - 70, H - 70, 34, 0xFFFF);
+System.setAlpha(255);                      // text and "solid" items
+System.drawString("A", W - 78, H - 78, 2);
+```
+

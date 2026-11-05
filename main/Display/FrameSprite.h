@@ -22,6 +22,18 @@
  * (setColorDepth/createSprite/deleteSprite no quadro desligariam o buffer
  * compartilhado) — o quadro e criado uma vez e reaproveitado entre apps.
  */
+/// Mistura RGB565 de um pixel: out = d + (s - d) * a / 255, por canal.
+inline uint16_t blend565(uint16_t d, uint16_t s, uint8_t a) {
+    const uint32_t ia = 255 - a;
+    const uint32_t dr = (d >> 11) & 0x1F, dg = (d >> 5) & 0x3F, db = d & 0x1F;
+    const uint32_t sr = (s >> 11) & 0x1F, sg = (s >> 5) & 0x3F, sb = s & 0x1F;
+    uint32_t r = dr * ia + sr * a, g = dg * ia + sg * a, b = db * ia + sb * a;
+    r = (r + 128 + (r >> 8)) >> 8;  // div255 exato para x <= 65025
+    g = (g + 128 + (g >> 8)) >> 8;
+    b = (b + 128 + (b >> 8)) >> 8;
+    return (uint16_t)((r << 11) | (g << 5) | b);
+}
+
 class FrameSprite : public CelerSprite {
 public:
     explicit FrameSprite(lgfx::LovyanGFX* parent) : CelerSprite(parent) {}
@@ -48,9 +60,12 @@ public:
     /// estrelas/balas dos jogos somavam 12-46 ms por quadro). false =
     /// fora do quadro (o chamador cai no caminho do LGFX). Nao trata
     /// clipe: so chame sem clipe ativo (invariante do quadro: rotacao 0).
+    /// A cor chega em RGB565 nativo; o buffer guarda os BYTES TROCADOS
+    /// (mesma convencao do Canvas::dim: e o que o pushSprite entrega ao
+    /// painel), entao a escrita passa pelo bswap.
     bool pokePixel(int32_t x, int32_t y, uint16_t c565) {
         if (x < 0 || y < 0 || x >= width() || y >= height()) return false;
-        _img16[(size_t)_dirty.bitWidth() * y + x] = c565;
+        _img16[(size_t)_dirty.bitWidth() * y + x] = (uint16_t)__builtin_bswap16(c565);
         _dirty.add(x, y, x, y);
         return true;
     }
@@ -58,6 +73,46 @@ public:
     /// Caixas sujas desde a ultima chamada (e zera): ate kMaxDirty em out,
     /// ja recortadas ao quadro. 0 = nada mudou.
     int takeDirty(celer::DirtyRect* out) { return _dirty.take(out); }
+
+    /// Mistura um trecho de linha no buffer (API 59, System.setAlpha): o
+    /// pixel que JA esta no quadro recebe `c565` com peso a/255 — e o que
+    /// deixa os controles em overlay TRANSLUCIDOS por cima do jogo. A cor
+    /// chega em RGB565 NATIVO; o buffer guarda os bytes trocados (a mesma
+    /// convencao do Canvas::dim e do pokePixel), entao le e escreve com
+    /// bswap — sem isso o blend reinterpreta os canais e o overlay sai com
+    /// as cores trocadas. Respeita o recorte do quadro e marca a caixa suja.
+    void blendSpan(int32_t x, int32_t y, int32_t w, uint16_t c565, uint8_t a) {
+        if (w <= 0 || a == 0 || y < 0 || y >= height()) return;
+        int32_t x0 = x, x1 = x + w;
+        int32_t cx, cy, cw, ch;
+        getClipRect(&cx, &cy, &cw, &ch);
+        if (y < cy || y >= cy + ch) return;
+        if (x0 < cx) x0 = cx;
+        if (x1 > cx + cw) x1 = cx + cw;
+        if (x0 < 0) x0 = 0;
+        if (x1 > width()) x1 = width();
+        if (x1 <= x0) return;
+        uint16_t* row = _img16 + (size_t)_dirty.bitWidth() * (size_t)y;
+        for (int32_t i = x0; i < x1; i++) {
+            const uint16_t d = (uint16_t)__builtin_bswap16(row[i]);
+            row[i] = (uint16_t)__builtin_bswap16(blend565(d, c565, a));
+        }
+        _dirty.add(x0, y, x1 - 1, y);
+    }
+
+    /// Um pixel misturado (drawLine/drawCircle com alpha).
+    bool blendPixel(int32_t x, int32_t y, uint16_t c565, uint8_t a) {
+        if (a == 0) return true;
+        if (x < 0 || y < 0 || x >= width() || y >= height()) return false;
+        int32_t cx, cy, cw, ch;
+        getClipRect(&cx, &cy, &cw, &ch);
+        if (x < cx || y < cy || x >= cx + cw || y >= cy + ch) return false;
+        uint16_t* p = _img16 + (size_t)_dirty.bitWidth() * (size_t)y + x;
+        const uint16_t d = (uint16_t)__builtin_bswap16(*p);
+        *p = (uint16_t)__builtin_bswap16(blend565(d, c565, a));
+        _dirty.add(x, y, x, y);
+        return true;
+    }
 
     /// Alguma caixa suja comeca acima de y (faixa da topbar).
     bool dirtyAbove(int32_t y) const { return _dirty.rects.touchesAbove(y); }

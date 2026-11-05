@@ -262,6 +262,7 @@ public:
 
     // Display Bindings - Utility
     static duk_ret_t js_color(duk_context *ctx);
+    static duk_ret_t js_setAlpha(duk_context *ctx);         // API 59
     static duk_ret_t js_screenWidth(duk_context *ctx);
     static duk_ret_t js_screenHeight(duk_context *ctx);
     static duk_ret_t js_setNativeCanvas(duk_context *ctx);  // API 28

@@ -4093,6 +4093,35 @@ else {
 }
 ```
 
+#### Ponte v2/v3 (API 58): dados, video e audio entre o JS e o blob
+
+`System.nativeLoad` aceita **blobs v2/v3 (relocáveis)**: o loader copia a
+imagem, mapeia `[imagem][.bss]` na janela de INSTRUÇÃO da PSRAM (`mmap`
+EXEC|32BIT — instrução não é buscada pela janela de dados, o que derrubava
+até um blob de 199 B), aplica as relocações (bit 31 = alvo de DADOS; sem
+ele, função) e roda C/C++ de verdade (tabelas, ponteiros de função,
+globais). Os bindings abaixo movem dados para o scratch do blob sem passar
+bytes pelo heap do Duktape; os offsets são bytes desde o início do scratch
+(um comando `core_ctl` do blob reporta o próprio layout):
+
+#### `System.nativeWrite(h, off, str)` → Integer (bytes copiados): string JS
+  → scratch (binário-segura, corta no fim do scratch).
+#### `System.nativeLoadFile(h, off, path)` → Integer (bytes lidos, `-1` em
+  erro): arquivo → scratch (ROMs, save states). Mesma jail do `FS.readFile`.
+#### `System.nativeSaveFile(h, off, len, path)` → Boolean: scratch → arquivo,
+  atômico (`.tmp` + rename em `/local`).
+#### `System.nativeDraw(h, off[, x, y, w, h])` → Boolean: RGB565 do scratch
+  para o alvo corrente — **um push por quadro**.
+#### `System.nativeAudio(h, off, len)` → Boolean: PCM16 mono LE do scratch
+  na fila compartilhada do `PcmFeed` 44,1 kHz (criada no primeiro uso;
+  bloqueia só com a fila de 32KB cheia). `System.nativeAudioStop(h)`
+  encerra o feed — não chame `playWav` de outra fonte ao mesmo tempo.
+
+Um core real (o app `Anemoia`) guarda todo o estado no `.bss` do blob,
+pergunta os offsets com um `nativeCall`, alimenta a ROM com
+`nativeLoadFile`, o input com `nativeCall` e puxa imagem/áudio com
+`nativeDraw`/`nativeAudio` a cada quadro.
+
 ## 53. Nível de API 57 — Gamepad Bluetooth LE: `BT.*` e a dep `celeros.gamepad`
 
 **Onde existe.** Somente em firmware com `CELEROS_BLE_HID` (hoje SmartDisplay
@@ -4223,4 +4252,31 @@ store é compartilhado) — filtre pelo endereço do pad.
 Apaga bonds: com `addr`, só aquele peer; sem argumento, **todos** (no watch
 isso inclui o celular — prefira passar o endereço do pad). Também limpa o
 slot "último pad". Devolve `true` quando apagou algo.
+
+
+## 54. Nível de API 59 — Desenho translúcido: `System.setAlpha`
+
+#### `System.setAlpha(alpha)` (API 59)
+Define o alpha **global** dos primitivos de desenho, de `0` (invisível) a
+`255` (opaco, o padrão): `fillRect`, `fillRoundRect`, `fillCircle`,
+`drawRect`, `drawCircle`, `drawLine` e `drawPixel` passam a **misturar** a
+cor com o que já está no alvo em vez de sobrescrever. É o que permite um
+overlay harmonioso por cima de um jogo em tela cheia — controles que
+deixam o cenário aparecer. Texto, gradientes, arcos e as variantes AA
+(`fillSmoothCircle`/`fillSmoothRoundRect`) seguem opacos; desenhe o rótulo
+por cima de um chip translúcido.
+
+No quadro do app o blend é direto no buffer de PSRAM (barato: um retângulo
+de 60x60 custa ~0,2 ms); em sprite do app (`useSprite`) ou display direto
+o caminho cai no `fillRectAlpha` do LovyanGFX. O valor é **zerado na troca
+de app** — cada app liga o seu quando quer e volta a `255` antes de
+desenhar HUD/menus.
+
+```javascript
+// overlay de controle sobre o jogo escalado para o vidro inteiro
+System.setAlpha(90);                       // ~35%: quase transparente
+System.fillCircle(W - 70, H - 70, 34, 0xFFFF);
+System.setAlpha(255);                      // texto e itens "sólidos"
+System.drawString("A", W - 78, H - 78, 2);
+```
 

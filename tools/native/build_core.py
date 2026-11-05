@@ -191,8 +191,7 @@ if __name__ == "__main__":
     p.add_argument("--src", default=SRC,
                    help="fonte C do blob (default: core_hello.c de teste)")
     p.add_argument("--out", default=os.path.join(
-        HERE, "..", "..", "test", "native", "bench-nativo",
-        "core_native_test.bin"))
+        HERE, "..", "..", "hub_apps", "Bench Nativo", "core_native_test.bin"))
     args = p.parse_args()
     args.src = os.path.abspath(args.src)
     build()

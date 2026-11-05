@@ -1,15 +1,16 @@
-// Anemoia — emulador de NES do CelerOS (nucleo nativo main/Nes, API 57).
+// Anemoia — emulador de NES do CelerOS (nucleo nativo em blob CLRN).
 //
-// O app e a casca: lista as ROMs (.nes em /sd/roms e /local/roms), desenha
-// o frame do nucleo (N.frame blita no sprite; System.drawSprite escala),
-// mapeia toque -> bitmask do controller (d-pad por traco na esquerda, A/B
-// na direita, Start/Select no centro; multitouch API 43) e guarda save
-// states por ROM em slots no appData. Pausa = Start+Select juntos (mesmo
-// gesto do Anemoia original) ou toque no canto superior direito.
+// O app e a casca: lista as ROMs (.nes em /sd/roms e /local/roms), alimenta
+// o core com o bitmask do controle, desenha o quadro ESCALADO PARA O VIDRO
+// INTEIRO (256x240 -> 480x450, nearest) e poe os controles POR CIMA em
+// overlay translucido (System.setAlpha, API 59): d-pad analogico flutuante a
+// esquerda (a base assenta onde o dedo pousa e o knob acompanha o traco),
+// A/B a direita e SEL/STA no meio de baixo. Multitouch (API 43): cada dedo
+// classifica o proprio papel na chegada.
 //
-// Canvas nativo (API 28): pixels fisicos do vidro, o sprite nasce exato
-// 256x240 e o toque chega nas coordenadas do vidro. Pede firmware com o
-// objeto Nes (1.15.0+, placas com PSRAM) — feature-detect com mensagem.
+// Pausa = botao no canto superior direito, Start+Select juntos ou o icone de
+// pausa; o menu tem Reset, 3 slots de save state por ROM no appData e
+// frameskip. Canvas nativo (API 28): pixels fisicos do vidro.
 //
 // Baseado no Anemoia-ESP32 de Shim06 (GPLv3). O app nao vem com jogos.
 
@@ -28,8 +29,8 @@ if (!HAS_NAT) {
     S.setTextColor(0xFFFF, 0);
     S.drawString("Anemoia", 60, 90, 4);
     S.setTextColor(0xC618, 0);
-    S.drawString("Precisa do CelerOS 1.16+", 20, 150, 1);
-    S.drawString("(API 58, nucleo nativo no build).", 20, 164, 1);
+    S.drawString("Precisa do CelerOS 1.17+", 20, 150, 1);
+    S.drawString("(API 59, nucleo nativo no build).", 20, 164, 1);
     S.delay(3500);
     S.exitApp();
 }
@@ -38,35 +39,28 @@ S.setNativeCanvas(true);
 var W = S.screenWidth();
 var H = S.screenHeight();
 
-// Sprite do frame (256x240, canvas nativo = pixel fisico): a PPU escreve nele
-// e o laco empurra 1:1 com pushSprite — o caminho comprovado no 4848.
-var spr = S.createSprite(256, 240);
-
-// ---- layout -------------------------------------------------------------
-// Jogo em cima (256x240 1:1, centrado), controles embaixo.
-var CH = Math.round(H * 0.2);            // altura da faixa de controles
-if (CH < 78) CH = 78; if (CH > 130) CH = 130;
-var FH = 240;                            // altura do frame no vidro (1:1)
-var GY = 0;
-var GX = Math.round((W - 256) / 2);      // x do frame 1:1
+// O nucleo entrega o quadro JA ESCALADO (core_ctl SET_SCALE): nada de
+// sprite intermediario nem pushRotateZoom por pixel no JS.
 
 // ---- nucleo nativo (API 58): MESMO contrato do antigo objeto Nes de
 // firmware, agora sobre o blob CLRN que viaja com o app (appDir/nes_core.bin).
 // O core devolve os offsets do proprio layout (core_ctl 1..5): ROM/PCM/FB/
 // STATE — o app nunca hardcoda numeros de .bss.
 var N = (function () {
-    var h = 0, romOff = 0, pcmOff = 0, fbOff = 0, stateOff = 0;
-    var audioOn = false, sprId = 0;
+    var h = 0, romOff = 0, pcmOff = 0, fbOff = 0, stateOff = 0, scaleOff = 0;
+    var audioOn = false;
     function ctl(cmd, arg) { return S.nativeCall(h, 0, cmd, arg || 0); }
     return {
-        bind: function (id) { sprId = id; },
         load: function (path) {
             if (h > 0) S.nativeFree(h);
-            // scratch cobre o .bss do core (ROM 1MB + fb 120KB + estado)
-            h = S.nativeLoad(System.appDir() + "/nes_core.bin", 1400);
+            // scratch: ROM 1MB + PCM 8K + FB 120K + ESCALADO 512K + estado
+            h = S.nativeLoad(System.appDir() + "/nes_core.bin", 1750);
             if (h <= 0) return false;
             ctl(0);                              // INIT
             romOff = ctl(1); pcmOff = ctl(2); fbOff = ctl(3); stateOff = ctl(4);
+            // 12 = SET_SCALE: o core escala 256x240 -> (W, GH) no FRAME
+            scaleOff = ctl(12, (W << 16) | GH);
+            ctl(13, audioOff ? 0 : 1);           // APU fora do laco sem audio
             var n = S.nativeLoadFile(h, romOff, path);
             return n > 0 && ctl(6, n) === 1;     // LOAD
         },
@@ -78,14 +72,20 @@ var N = (function () {
                 var n = ctl(11);                 // PCM do quadro
                 if (n > 0) S.nativeAudio(h, pcmOff, n);
             }
-            if (render && sprId > 0) {
-                S.useSprite(sprId);
-                S.nativeDraw(h, fbOff, 0, 0, 256, 240);
-                S.useSprite(0);
+            if (render && scaleOff > 0) {
+                // uma copia 1:1 do buffer escalado para o quadro
+                S.nativeDraw(h, scaleOff, 0, GY, W, GH);
             }
         },
-        audioStart: function () { audioOn = h > 0; return audioOn; },
-        audioStop: function () { audioOn = false; if (h > 0) S.nativeAudioStop(h); },
+        audioStart: function () {
+            audioOn = h > 0;
+            if (h > 0) ctl(13, 1);
+            return audioOn;
+        },
+        audioStop: function () {
+            audioOn = false;
+            if (h > 0) { ctl(13, 0); S.nativeAudioStop(h); }
+        },
         saveState: function (p) {
             if (h <= 0) return false;
             var n = ctl(9);
@@ -103,20 +103,48 @@ var N = (function () {
     };
 })();
 
-var R = Math.max(20, Math.min(32, Math.round(W * 0.062)));  // raio de A/B
-var A_X = W - Math.round(R * 2.6), A_Y = H - Math.round(R * 2.6);
-var B_X = W - Math.round(R * 6.4), B_Y = H - Math.round(R * 1.4);
-var SS_W = Math.round(R * 2.0), SS_H = Math.round(R * 0.9);
-var SS_Y = H - SS_H - 6;
-var SEL_X = Math.round(W * 0.30);
-var STA_X = Math.round(W * 0.425);
-var PAUSE_X = W - 56, PAUSE_W = 56, PAUSE_H = 44;
-var DPAD_MAX_X = Math.round(W * 0.42);
-var DEAD = Math.max(12, Math.round(W * 0.033));  // zona morta do d-pad
+// ---- layout: jogo em TELA CHEIA + overlay --------------------------------
+// O frame 256x240 escala para a largura do vidro e fica centrado na
+// vertical; as barras que sobram (480x450 -> 15 px em cima/baixo) ficam
+// pretas (fillScreen na entrada).
+var SCALE = W / 256;
+var GH = Math.round(240 * SCALE);
+var GY = Math.round((H - GH) / 2);
+
+// d-pad analogico flutuante: vive no canto inferior esquerdo, a base assenta
+// no ponto do POUSO (limitada a zona) e o knob segue o traco clampado
+var DP_RING = Math.round(Math.min(W, H) * 0.13);      // 62 no 4848
+var KNOB_R = Math.round(DP_RING * 0.42);
+var KNOB_TRAVEL = Math.round(DP_RING * 0.61);
+var DP_HOME_X = Math.round(W * 0.175);
+var DP_HOME_Y = H - Math.round(H * 0.183);
+var DP_ZONE_W = Math.round(W * 0.40);                 // x < 192
+var DP_ZONE_Y = Math.round(H * 0.45);                 // y > 216
+var DEAD = Math.max(10, Math.round(DP_RING * 0.18));
+
+// A/B: cluster da direita (A em cima/direita, B embaixo/esquerda)
+var AB_R = Math.round(Math.min(W, H) * 0.088);
+var A_X = W - Math.round(AB_R * 1.81);
+var A_Y = H - Math.round(AB_R * 2.0);
+var B_X = A_X - Math.round(AB_R * 2.33);
+var B_Y = A_Y + Math.round(AB_R * 0.67);
+
+// SEL/STA: pilulas no meio de baixo, COM folga do cluster A/B e do d-pad
+var SS_W = Math.round(W * 0.117);
+var SS_H = Math.round(H * 0.046);
+var SS_Y = H - Math.round(SS_H * 1.73);
+var SEL_X = Math.round(W * 0.29);
+var STA_X = Math.round(W * 0.42);
+
+// pausa: canto superior direito, sobre o jogo (translucido)
+var PAUSE_R = Math.max(11, Math.round(Math.min(W, H) * 0.030));
+var PAUSE_X = W - PAUSE_R - Math.round(PAUSE_R * 0.9);
+var PAUSE_Y = PAUSE_R + Math.round(PAUSE_R * 0.9);
 
 // ---- cores --------------------------------------------------------------
 var C_PANEL = 0x1082;
 var C_TEXT = 0xFFFF, C_DIM = 0x8410, C_ACC = 0x4BF3, C_OK = 0x07E0, C_ERR = 0xF800;
+var C_SOFT = 0xE71C;   // texto do overlay (cinza claro)
 
 // ---- estado -------------------------------------------------------------
 var screen = "sel";          // sel | game | pause | err
@@ -203,8 +231,9 @@ function openRom(idx) {
     }
     screen = "game";
     slotMsg = "";
-    if (spr > 0) N.bind(spr);  // o load solta o alvo (reset por ROM): re-aponta
     needClear = true;  // tira a tela da lista do vidro no primeiro quadro
+    dpReset();
+    toastStart = S.millis();
     N.reset();
     radioPause();      // modo jogo: sem scan da malha (o controller BLE + msync do painel estalam sob carga)
     if (!audioOff) N.audioStart();
@@ -230,7 +259,7 @@ function radioResume() {
     try { CelerNet.start({ relay: false }); } catch (e) {}
 }
 
-// ---- desenho ------------------------------------------------------------
+// ---- texto ------------------------------------------------------------
 function txt(s, x, y, color, font) {
     S.setTextColor(color, 0);
     S.drawString(s, x, y, font || 1);
@@ -240,16 +269,35 @@ function txtCenter(s, cx, y, color, font) {
     var w = S.textWidth(s, font || 1);
     S.drawString(s, Math.round(cx - w / 2), y, font || 1);
 }
+// Texto centrado nos DOIS eixos (rotulos dos botoes do overlay): o
+// drawString ancora no topo-esquerda, entao o centro sai de textWidth e
+// fontHeight — era isso que deixava "A"/"B"/"SEL"/"STA" fora do lugar.
+function txtMid(s, cx, cy, color, font) {
+    font = font || 1;
+    var tw = S.textWidth(s, font), fh = S.fontHeight(font);
+    S.setTextColor(color, 0);
+    S.drawString(s, Math.round(cx - tw / 2), Math.round(cy - fh / 2), font);
+}
 function dist(x, y, cx, cy) {
     var dx = x - cx, dy = y - cy;
     return Math.sqrt(dx * dx + dy * dy);
 }
 
-// ---- d-pad por traco ------------------------------------------------------
-// Direcao do dedo ANCORSADO na chegada; zona morta; 8 setores de 45 graus.
+// ---- d-pad analogico ------------------------------------------------------
+// Direcao em 8 setores a partir do ponto onde o dedo POUSOU (a "base" do
+// stick virtual); zona morta radial. O knob desenhado usa o deslocamento
+// clampado ao curso do stick, entao o controle "anima" como um analogico.
+var dpBaseX = 0, dpBaseY = 0, dpKnobX = 0, dpKnobY = 0, dpActive = false;
+
+function dpReset() {
+    dpBaseX = DP_HOME_X; dpBaseY = DP_HOME_Y;
+    dpKnobX = dpBaseX; dpKnobY = dpBaseY;
+    dpActive = false;
+}
+
 function dpadBits(x, y) {
-    var dx = x - ax_, dy = y - ay_;
-    if (Math.abs(dx) < DEAD && Math.abs(dy) < DEAD) return 0;
+    var dx = x - dpBaseX, dy = y - dpBaseY;
+    if (Math.sqrt(dx * dx + dy * dy) < DEAD) return 0;
     var deg = Math.atan2(dy, dx) * 180 / Math.PI;
     if (deg >= -22.5 && deg < 22.5) return BTN_RIGHT;
     if (deg >= 22.5 && deg < 67.5) return BTN_RIGHT | BTN_DOWN;
@@ -260,7 +308,6 @@ function dpadBits(x, y) {
     if (deg >= -112.5 && deg < -67.5) return BTN_UP;
     return BTN_RIGHT | BTN_UP;
 }
-var ax_ = 0, ay_ = 0;
 
 // Mascara do controller a partir dos dedos vivos (so na tela de jogo;
 // cada dedo classificou o SEU papel na chegada).
@@ -268,9 +315,10 @@ var btnsMask = 0;
 var pauseHit = false;
 
 function pollGame() {
-    var ts = pollTouch();
+    pollTouch();
     btnsMask = 0;
     pauseHit = false;
+    dpActive = false;
     for (var i = 0; i < freshIds.length; i++) {
         var f = fingers[freshIds[i]];
         var kind = classifyArrival(f.ax, f.ay);
@@ -278,56 +326,121 @@ function pollGame() {
         else f.kind = kind;   // "" = dedo no jogo (sem papel)
     }
     for (var id in fingers) {
-        var f = fingers[id];
-        if (f.kind === "dpad") { ax_ = f.ax; ay_ = f.ay; btnsMask |= dpadBits(f.x, f.y); }
-        else if (f.kind === "a") btnsMask |= BTN_A;
-        else if (f.kind === "b") btnsMask |= BTN_B;
-        else if (f.kind === "start") btnsMask |= BTN_START;
-        else if (f.kind === "select") btnsMask |= BTN_SELECT;
+        var g = fingers[id];
+        if (g.kind === "dpad") {
+            // base assenta no pouso (limitada a zona) e o knob segue o traco
+            dpActive = true;
+            dpBaseX = g.ax; dpBaseY = g.ay;
+            if (dpBaseX > DP_ZONE_W - KNOB_R) dpBaseX = DP_ZONE_W - KNOB_R;
+            if (dpBaseX < KNOB_R + 2) dpBaseX = KNOB_R + 2;
+            if (dpBaseY > H - KNOB_R - 2) dpBaseY = H - KNOB_R - 2;
+            if (dpBaseY < DP_ZONE_Y + KNOB_R) dpBaseY = DP_ZONE_Y + KNOB_R;
+            var dx = g.x - g.ax, dy = g.y - g.ay;
+            var m = Math.sqrt(dx * dx + dy * dy);
+            if (m > KNOB_TRAVEL) { dx = dx * KNOB_TRAVEL / m; dy = dy * KNOB_TRAVEL / m; }
+            dpKnobX = dpBaseX + dx; dpKnobY = dpBaseY + dy;
+            btnsMask |= dpadBits(g.x, g.y);
+        }
+        else if (g.kind === "a") btnsMask |= BTN_A;
+        else if (g.kind === "b") btnsMask |= BTN_B;
+        else if (g.kind === "start") btnsMask |= BTN_START;
+        else if (g.kind === "select") btnsMask |= BTN_SELECT;
     }
+    if (!dpActive) { dpBaseX = DP_HOME_X; dpBaseY = DP_HOME_Y; dpKnobX = DP_HOME_X; dpKnobY = DP_HOME_Y; }
 }
+
 function classifyArrival(x, y) {
-    if (x >= PAUSE_X && y <= PAUSE_H) return "pause";
-    if (dist(x, y, A_X, A_Y) <= R * 1.7) return "a";
-    if (dist(x, y, B_X, B_Y) <= R * 1.7) return "b";
-    if (y >= SS_Y - SS_H && y <= SS_Y + SS_H * 2) {
-        if (x >= STA_X && x <= STA_X + SS_W) return "start";
-        if (x >= SEL_X - SS_W && x <= SEL_X + SS_W) return "select";
+    if (dist(x, y, PAUSE_X, PAUSE_Y) <= PAUSE_R + 10) return "pause";
+    if (dist(x, y, A_X, A_Y) <= AB_R + 10) return "a";
+    if (dist(x, y, B_X, B_Y) <= AB_R + 10) return "b";
+    if (y >= SS_Y - 8 && y <= SS_Y + SS_H + 8) {
+        if (x >= STA_X - 6 && x <= STA_X + SS_W + 6) return "start";
+        if (x >= SEL_X - 6 && x <= SEL_X + SS_W + 6) return "select";
     }
-    if (x < DPAD_MAX_X && y >= GY + FH) return "dpad";
+    if (x < DP_ZONE_W && y > DP_ZONE_Y) return "dpad";
     return "";
 }
 
-// ---- primitivas de controle desenhadas -----------------------------------
-function drawBtn(cx, cy, r, on, label) {
-    S.fillSmoothCircle(cx, cy, r, on ? C_ACC : 0x18E3);
-    S.drawCircle(cx, cy, r, 0x4229);
-    txtCenter(label, cx, cy - 6, on ? 0 : C_TEXT, 2);
-}
-function drawPill(x, y, on, label) {
-    S.fillRoundRect(x, y, SS_W, SS_H, 4, on ? C_ACC : 0x2104);
-    S.drawRoundRect(x, y, SS_W, SS_H, 4, on ? C_ACC : 0x4229);
-    txtCenter(label, x + Math.round(SS_W / 2), y + 2, on ? 0 : C_TEXT);
+// ---- desenho do overlay (translucido: System.setAlpha, API 59) ------------
+// Nada cobre o jogo por completo: base escura em alpha baixo + anel e
+// rotulos claros. O texto fica opaco por cima do chip escuro (texto nao tem
+// alpha) — a leitura melhora e o cenario continua aparecendo em volta.
+function drawDpad() {
+    var on = (btnsMask & (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)) !== 0;
+    var bx = dpBaseX, by = dpBaseY;
+    S.setAlpha(dpActive ? 150 : 90);
+    S.drawCircle(bx, by, DP_RING + 6, 0x9CF3);
+    S.drawCircle(bx, by, DP_RING - 4, 0x4A69);
+    // chevrons das 4 direcoes (linhas, que tem alpha)
+    var o = DP_RING - 16, c = 6;
+    S.setAlpha(on ? 210 : 90);
+    S.drawLine(bx - c, by - o + c, bx, by - o - c, 0xFFFF);
+    S.drawLine(bx + c, by - o + c, bx, by - o - c, 0xFFFF);
+    S.drawLine(bx - c, by + o - c, bx, by + o + c, 0xFFFF);
+    S.drawLine(bx + c, by + o - c, bx, by + o + c, 0xFFFF);
+    S.drawLine(bx - o + c, by - c, bx - o - c, by, 0xFFFF);
+    S.drawLine(bx - o + c, by + c, bx - o - c, by, 0xFFFF);
+    S.drawLine(bx + o - c, by - c, bx + o + c, by, 0xFFFF);
+    S.drawLine(bx + o - c, by + c, bx + o + c, by, 0xFFFF);
+    // knob: acompanha o traco (o "analogico" que faltava)
+    S.setAlpha(dpActive ? 210 : 130);
+    S.fillCircle(dpKnobX, dpKnobY, KNOB_R - 4, 0xD69A);
+    S.setAlpha(dpActive ? 240 : 170);
+    S.drawCircle(dpKnobX, dpKnobY, KNOB_R, 0xFFFF);
+    S.drawCircle(dpKnobX, dpKnobY, KNOB_R - 4, 0x8C71);
 }
 
-function drawControls(clearBand) {
-    // A banda de fundo so na entrada (o resto do redesenho sao os botoes em
-    // cima): mudanca de estado marca caixas pequenas, nao a banda inteira.
-    if (clearBand) S.fillRect(0, GY + FH, W, H - GY - FH, C_PANEL);
-    var dpadOn = (btnsMask & (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)) !== 0;
-    var dcx = Math.round(DPAD_MAX_X / 2), dcy = GY + FH + Math.round((H - GY - FH) / 2);
-    S.drawCircle(dcx, dcy, Math.round(R * 1.3), dpadOn ? C_ACC : 0x3186);
-    txtCenter("D-PAD", dcx, dcy - 4, dpadOn ? C_ACC : C_DIM);
-    drawBtn(A_X, A_Y, R, (btnsMask & BTN_A) !== 0, "A");
-    drawBtn(B_X, B_Y, R, (btnsMask & BTN_B) !== 0, "B");
-    drawPill(SEL_X, SS_Y, (btnsMask & BTN_SELECT) !== 0, "SEL");
-    drawPill(STA_X, SS_Y, (btnsMask & BTN_START) !== 0, "STA");
-    // pausa: FORA da regiao do jogo (o bindFrame escreve 256x240 centrado =
-    // x 112..368; o botao vive em x 424..480), entao nao e sobrescrito pelo
-    // quadro do NES e pode ficar na camada suja do Kui
-    S.fillRect(PAUSE_X, 0, PAUSE_W, PAUSE_H, 0);
-    S.drawRect(PAUSE_X, 0, PAUSE_W, PAUSE_H, 0x3186);
-    txt("II", PAUSE_X + 22, 14, C_DIM, 2);
+function drawAB(cx, cy, label, on) {
+    S.setAlpha(on ? 175 : 70);
+    S.fillCircle(cx, cy, AB_R - 10, 0x0000);
+    S.setAlpha(on ? 255 : 120);
+    S.drawCircle(cx, cy, AB_R, on ? C_ACC : 0x9CF3);
+    S.drawCircle(cx, cy, AB_R - 3, on ? C_ACC : 0x52AA);
+    S.setAlpha(255);
+    txtMid(label, cx, cy, on ? 0xFFFF : C_SOFT, 3);
+}
+
+function drawPill(x, label, on) {
+    S.setAlpha(on ? 185 : 75);
+    S.fillRoundRect(x, SS_Y, SS_W, SS_H, Math.round(SS_H / 2), 0x0000);
+    S.setAlpha(on ? 255 : 120);
+    S.drawRoundRect(x, SS_Y, SS_W, SS_H, Math.round(SS_H / 2), on ? C_ACC : 0x8C71);
+    S.setAlpha(255);
+    txtMid(label, x + Math.round(SS_W / 2), SS_Y + Math.round(SS_H / 2), on ? 0xFFFF : C_SOFT, 1);
+}
+
+function drawPauseBtn() {
+    S.setAlpha(80);
+    S.fillCircle(PAUSE_X, PAUSE_Y, PAUSE_R, 0x0000);
+    S.setAlpha(150);
+    S.drawCircle(PAUSE_X, PAUSE_Y, PAUSE_R, 0x9CF3);
+    S.setAlpha(230);
+    var bh = PAUSE_R, bw = Math.max(2, Math.round(PAUSE_R * 0.22));
+    S.fillRect(PAUSE_X - Math.round(bw * 1.4), PAUSE_Y - (bh >> 1), bw, bh, 0xFFFF);
+    S.fillRect(PAUSE_X + Math.round(bw * 0.4), PAUSE_Y - (bh >> 1), bw, bh, 0xFFFF);
+}
+
+var toastStart = 0;
+
+function drawToast() {
+    var dt = S.millis() - toastStart;
+    if (dt < 0 || dt > 2200) return;
+    var tw = S.textWidth(romBase(), 1) + 20;
+    S.setAlpha(120);
+    S.fillRoundRect(8, GY + 8, tw, 22, 11, 0x0000);
+    S.setAlpha(255);
+    txt(romBase(), 18, GY + 14, C_SOFT, 1);
+}
+
+function drawOverlay() {
+    drawDpad();
+    drawAB(A_X, A_Y, "A", (btnsMask & BTN_A) !== 0);
+    drawAB(B_X, B_Y, "B", (btnsMask & BTN_B) !== 0);
+    drawPill(SEL_X, "SEL", (btnsMask & BTN_SELECT) !== 0);
+    drawPill(STA_X, "STA", (btnsMask & BTN_START) !== 0);
+    drawPauseBtn();
+    drawToast();
+    S.setAlpha(255);   // o resto do app (menus) desenha opaco
 }
 
 // ---- tela: lista de ROMs ---------------------------------------------------
@@ -511,36 +624,21 @@ function loopErr() {
 }
 
 // ---- ciclo do jogo ----------------------------------------------------------
-// Caminho comprovado na bancada: sprite do pool (createSprite 256x240) +
-// pushSprite 1:1 — o bindFrame (pushImage direto no display) nao apareceu no
-// painel do 4848 (o present do Kui/estado do display anulava; investigar
-// depois). Limpa o quadro UMA vez ao entrar e redesenha os controles so
-// quando o estado deles muda.
 var needClear = true;
-var bandSig = -1;
 
 function loopGame() {
     pollGame();
     if (pauseHit) { pauseGame(); return; }
     if ((btnsMask & BTN_START) !== 0 && (btnsMask & BTN_SELECT) !== 0) { pauseGame(); return; }
     if (needClear) {
+        S.setAlpha(255);
         S.fillScreen(0);   // unica limpeza: tira a tela anterior do vidro
-        drawControls(true);
-        bandSig = btnsMask;
         needClear = false;
-    } else if (btnsMask !== bandSig) {
-        drawControls(false);
-        bandSig = btnsMask;
     }
     var render = true;
     if (skipMode) render = (frameNo % 2) === 0;
     N.frame(btnsMask, render);
-    if (render && spr > 0) {
-        // 1:1 no vidro, centrado na horizontal (o sprite tem o quadro do NES)
-        S.useSprite(spr);
-        S.pushSprite(GX, 0);
-        S.useSprite(0);
-    }
+    if (render) drawOverlay();
     UI.end(60);
 }
 
@@ -549,6 +647,7 @@ function pauseGame() {
     menuSub = 0; menuArm = -1; menuHover = -1; hadMenuTouch = false;
     slotMsg = "";
     fingers = {}; freshIds = [];
+    S.setAlpha(255);
     N.audioStop();
     radioResume();  // fora do jogo a malha volta
 }
@@ -556,6 +655,7 @@ function resumeGame() {
     screen = "game";
     fingers = {}; freshIds = [];
     needClear = true;  // o menu de pausa pintou o vidro inteiro: limpa 1x
+    dpReset();
     radioPause();
     if (!audioOff) N.audioStart();
 }
@@ -563,6 +663,7 @@ function resumeGame() {
 // ---- laco principal ----------------------------------------------------------
 S.keepAwake(true);
 scanRoms();
+dpReset();
 
 while (true) {
     frameNo++;

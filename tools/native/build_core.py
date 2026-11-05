@@ -66,7 +66,7 @@ CXX_FLAGS = ["-std=c++17", "-fno-exceptions", "-fno-rtti",
              "-fno-threadsafe-statics", "-fno-use-cxa-atexit",
              "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
              "-fno-jump-tables", "-fno-tree-switch-conversion"]
-COMMON_FLAGS = ["-Os", "-ffreestanding", "-fno-builtin", "-fno-pic",
+COMMON_FLAGS = ["-O2", "-ffreestanding", "-fno-builtin", "-fno-pic",
                 "-fno-pie", "-fno-stack-protector", "-fomit-frame-pointer",
                 "-fno-tree-loop-distribute-patterns",
                 "-mtext-section-literals", "-mno-longcalls"]
@@ -317,6 +317,9 @@ def build():
               % (bss_size, bss_off, CHIP_ID, API_LEVEL, digest.hex()[:16]))
         for i, (name, off) in enumerate(zip(entry_names, entries)):
             print("  [%d] %-10s offset %5d" % (i, name, off))
+        if args.keep_elf:
+            shutil.copyfile(elf, args.keep_elf)
+            print("  elf: %s" % args.keep_elf)
 
 
 if __name__ == "__main__":
@@ -327,6 +330,9 @@ if __name__ == "__main__":
         HERE, "..", "..", "hub_apps", "Bench Nativo", "core_native_test.bin"))
     p.add_argument("--include", action="append",
                    help="diretorio de include extra (repetivel)")
+    p.add_argument("--keep-elf", metavar="ARQ",
+                   help="copia o ELF intermediario para ARQ (addr2line dos "
+                        "offsets do crash.txt: pc - nexec)")
     args = p.parse_args()
     args.src = os.path.abspath(args.src)
     build()

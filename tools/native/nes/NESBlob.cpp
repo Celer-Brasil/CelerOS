@@ -24,6 +24,13 @@
 //   9 SAVE_STATE   serializa em STATE_OFF; devolve bytes escritos
 //  10 LOAD_STATE   arg = bytes validos em STATE_OFF; 1/0
 //  11 PCM_LEN      devolve bytes de PCM gerados no ultimo FRAME
+//  13 SET_AUDIO    arg != 0 liga a APU (default); 0 tira o tick dela do laco
+//  12 SET_SCALE    arg = (dstW << 16) | dstH (0 desliga): o FRAME tambem
+//                  ESCALA o framebuffer 256x240 por nearest para
+//                  SCALED_OFF, na resolucao pedida (teto 512x512) e
+//                  devolve o offset. O app desenha por nativeDraw 1:1 na
+//                  tela cheia — escalar em C++ custa ~1/8 do drawSprite
+//                  com zoom (pushRotateZoom por pixel).
 //
 // A APU ticka INLINE no frame (o blob nao tem task): o sink grava no buffer
 // de PCM do .bss e o app drena por nativeAudio a cada quadro.
@@ -35,6 +42,10 @@
 
 #include "NesCore.cpp"
 #include "Nes.cpp"
+
+// Gate da APU (cpu6502.h): fora do namespace anonimo — o header declara
+// `extern bool` e o linker precisa do mesmo (linkage externo).
+bool g_blob_apu_on = true;
 
 namespace {
 
@@ -56,7 +67,9 @@ constexpr uint32_t kPcmOff = kRomOff + kRomCap;
 constexpr uint32_t kPcmCap = 8 * 1024;               // ~5 quadros de PCM
 constexpr uint32_t kFbOff = kPcmOff + kPcmCap;
 constexpr uint32_t kFbCap = nes::SCREEN_W * nes::SCREEN_H * 2;
-constexpr uint32_t kStateOff = kFbOff + kFbCap;
+constexpr uint32_t kScaledOff = kFbOff + kFbCap;
+constexpr uint32_t kScaledCap = 512 * 512 * 2;       // maior vidro: 4848 480x480
+constexpr uint32_t kStateOff = kScaledOff + kScaledCap;
 constexpr uint32_t kStateCap = 40 * 1024;            // savestate ~6-20KB
 constexpr uint32_t kArenaOff = kStateOff + kStateCap;
 constexpr uint32_t kArenaCap = 64 * 1024;            // cart+mappers (carga)
@@ -66,6 +79,33 @@ uint8_t* s_rom;
 uint8_t* s_state;
 uint8_t* s_pcm;
 uint32_t s_pcm_len;
+uint16_t* s_scaled;          // framebuffer ESCALADO (saida para o vidro)
+int s_scaleW = 0, s_scaleH = 0;
+// limite de coluna por pixel de origem: a divisao inteira do nearest fica
+// FORA do laco quente (no Xtensa a divisao e software, ~dezenas de ciclos —
+// 256 por linha custavam ~20 ms por quadro)
+uint16_t s_colStart[nes::SCREEN_W + 1];
+
+// Nearest-neighbor por RUNS: le cada pixel da origem uma vez e escreve a
+// faixa de destino correspondente (escrita sequencial). 480x450 saiu de
+// ~25 ms (pushRotateZoom no JS) para ~3 ms aqui.
+void scaleFrame()
+{
+    if (s_scaled == nullptr || s_scaleW <= 0 || s_scaleH <= 0) return;
+    const int sw = nes::SCREEN_W, sh = nes::SCREEN_H;
+    for (int y = 0; y < s_scaleH; y++) {
+        const int sy = (y * sh) / s_scaleH;
+        const uint16_t* src = s_fb + (size_t)sy * sw;
+        uint16_t* dst = s_scaled + (size_t)y * s_scaleW;
+        int x = 0;
+        for (int sx = 0; sx < sw; sx++) {
+            const int next = s_colStart[sx + 1];
+            const uint16_t px = src[sx];
+            while (x < next) dst[x++] = px;
+        }
+        while (x < s_scaleW) dst[x++] = src[sw - 1];
+    }
+}
 
 void pcmSink(const uint8_t* data, uint32_t bytes)
 {
@@ -96,6 +136,8 @@ enum {
     CORE_SAVE_STATE,
     CORE_LOAD_STATE,
     CORE_PCM_LEN,
+    CORE_SET_SCALE,
+    CORE_SET_AUDIO,
 };
 }  // namespace
 
@@ -109,6 +151,8 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         s_pcm = sc + kPcmOff;
         s_fb = (uint16_t*)(sc + kFbOff);
         s_state = sc + kStateOff;
+        s_scaled = (uint16_t*)(sc + kScaledOff);
+        s_scaleW = s_scaleH = 0;
         nes_arena_use(sc + kArenaOff, kArenaCap);  // cart/mappers na PSRAM (carga)
         if (s_nes == nullptr) s_nes = ::new (static_cast<void*>(s_nes_mem)) nes::Nes();
         nes::g_blob_fb = s_fb;  // Nes::openScreen usa este ponteiro
@@ -146,6 +190,7 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         bool render = ((uint32_t)arg >> 8) != 0;
         s_pcm_len = 0;  // o app drena o que este quadro gerar
         s_nes->frame(buttons, render);
+        if (render) scaleFrame();  // o app desenha o buffer escalado
         return 1;
     }
     case CORE_SAVE_STATE: {
@@ -164,6 +209,21 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
     }
     case CORE_PCM_LEN:
         return s_pcm_len;
+    case CORE_SET_AUDIO:
+        g_blob_apu_on = arg != 0;
+        return 1;
+    case CORE_SET_SCALE: {
+        uint32_t w = ((uint32_t)arg >> 16) & 0xFFFFu;
+        uint32_t h = (uint32_t)arg & 0xFFFFu;
+        if (w == 0 || h == 0) { s_scaleW = s_scaleH = 0; return 0; }
+        if (w > 512 || h > 512) return 0;
+        if ((size_t)w * h * 2 > kScaledCap) return 0;
+        s_scaleW = (int)w;
+        s_scaleH = (int)h;
+        for (int sx = 0; sx <= nes::SCREEN_W; sx++)
+            s_colStart[sx] = (uint16_t)(((uint32_t)sx * w) / nes::SCREEN_W);
+        return kScaledOff;
+    }
     default:
         return 0;
     }

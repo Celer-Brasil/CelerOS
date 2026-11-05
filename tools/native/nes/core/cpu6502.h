@@ -8,6 +8,13 @@
 #include "bus.h"
 #include "cartridge.h"
 
+#if defined(NES_BLOB)
+// Gate da APU no blob: sem task de audio e com o audio DESLIGADO no app,
+// clockar a APU a cada 2 ciclos de CPU e trabalho jogado fora (~15 mil
+// clocks de APU por quadro). NESBlob.cpp liga/desliga pelo core_ctl.
+extern bool g_blob_apu_on;
+#endif
+
 #define GET_FLAG(f)    ((status & (f)) != 0)
 #define SET_FLAG(f, v) (status = (v) ? (status | (f)) : (status & ~(f)))
 #define SET_ZN(v)      (status = ((status & ~(Z | N)) | zn_table[(v)]))
@@ -49,6 +56,9 @@ public:
 #if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
         (void)n;
 #else
+#if defined(NES_BLOB)
+        if (!g_blob_apu_on) return;   // app com audio off: APU fora do laco
+#endif
         apu_pending += n;
         while (apu_pending >= 2)
         {

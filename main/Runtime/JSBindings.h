@@ -126,6 +126,14 @@ private:
     static duk_ret_t js_blitSprite(duk_context *ctx);
     static duk_ret_t js_copySprite(duk_context *ctx);
 
+    // Codigo nativo carregavel (SPIKE API 57, CONFIG_CELEROS_JS_NATIVE,
+    // JsNative.cpp): blob Xtensa de arquivo -> PSRAM -> cache-sync ->
+    // ponteiro. Ring-0 por natureza: no spike, gate = flag de build.
+    static duk_ret_t js_nativeLoad(duk_context *ctx);
+    static duk_ret_t js_nativeCall(duk_context *ctx);
+    static duk_ret_t js_nativeRead(duk_context *ctx);
+    static duk_ret_t js_nativeFree(duk_context *ctx);
+
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);
     static duk_ret_t js_setInterval(duk_context *ctx);
@@ -331,6 +339,7 @@ public:
     
     static duk_ret_t js_getOSVersion(duk_context *ctx);
     static duk_ret_t js_getAPILevel(duk_context *ctx);
+    static duk_ret_t js_appDir(duk_context *ctx);  // API 57: pasta do app
 
     // Network Bindings
     static duk_ret_t js_getIPAddress(duk_context *ctx);

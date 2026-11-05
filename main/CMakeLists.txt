@@ -147,6 +147,12 @@ endif()
 if(CONFIG_CELEROS_JS_GAME_ACCEL)
     list(APPEND CELEROS_SRCS "Runtime/JsRigid.cpp")
 endif()
+# Spike de codigo nativo carregavel (API 57): blob Xtensa de arquivo -> PSRAM
+# -> esp_cache_msync -> ponteiro. So e compilar em placa que ligar a flag
+# (default n; o smartdisplay liga) — sem PSRAM nao ha rota de execucao.
+if(CONFIG_CELEROS_JS_NATIVE)
+    list(APPEND CELEROS_SRCS "Runtime/JsNative.cpp")
+endif()
 # Emulador de NES (objeto Nes, API 57): nucleo Anemoia em main/Nes (TU unico
 # NesCore.cpp) + bindings JsNes.cpp. Gate duplo: CELEROS_UI (sprite do pool)
 # e SPIRAM (ROM + frame 122 KB na PSRAM) — CYD/devkit/cam nem compilam.

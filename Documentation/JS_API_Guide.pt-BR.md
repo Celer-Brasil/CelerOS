@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 56
+### Nível de API: 57
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -75,6 +75,17 @@ para o SO do ESP32.
 #### `System.getAPILevel()`
 - **Retorna:** `Integer` (ex.: `5`)
 - **Descrição:** devolve o inteiro do Nível de API do SO.
+
+#### `System.appDir()` (API 57)
+- **Retorna:** `String` — a pasta onde o app está instalado (ex.
+  `"/local/apps/Demo Nativo"`), **sem** barra final; `""` em script solto
+  rodado pelo shell.
+- **Descrição:** a base para carregar assets do próprio pacote por caminho —
+  em especial o blob nativo: `System.nativeLoad(System.appDir() + "/core.bin")`.
+  O app não consegue deduzir esse caminho sozinho: a Loja instala em
+  `/local/apps/<packageName>` enquanto o `celerctl apps install` usa o
+  basename da pasta local, então o mesmo pacote cai em pastas diferentes
+  conforme o canal de instalação.
 
 #### `System.millis()`
 - **Retorna:** `Number`
@@ -179,6 +190,9 @@ para o SO do ESP32.
   - `hasPhysics` (API 46, Boolean): mundos verlet nativos (`System.verlet*`)
     compilados; `false` e a dep `celeros.physics` cai no `P.verlet`
     interpretado (mais lento).
+  - `hasNative` (API 57, Boolean, SPIKE): código nativo carregável
+    (`System.native*`, seção 52) compilado — só placas S3 com PSRAM; a
+    superfície nasce por placa (smartdisplay).
 
 #### `System.button()` (API 17)
 - **Retorna:** `Integer` — `0` nada, `1` toque curto, `2` segurar ~1,2 s
@@ -1127,7 +1141,8 @@ alto-falante I2S da SKU padrão, então a placa tem um ou outro.
 
 `System.getInfo()` também informa `hasLed`, `hasLightSensor` e `hasSpeaker`
 para detecção de recursos — e, desde a API 46, as capacidades do build
-`hasAudio` (pipeline digital) e `hasPhysics` (verlet nativo).
+`hasAudio` (pipeline digital), `hasPhysics` (verlet nativo) e, desde a API
+57, `hasNative` (código nativo carregável, SPIKE).
 
 #### `System.setting(key)` / `System.setting(key, value)`
 Configurações do sistema em NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Leitura (aberta) devolve a string ou `null`; **escrita exige `"system"`** e devolve `true` (chave 1–15 caracteres, valor até 63). Para dados do próprio app use `Storage`. Apps de sistema usam isto em vez de arquivos `/local/*.txt` soltos (arquivos legados são importados e removidos no primeiro boot).
@@ -4011,6 +4026,72 @@ Duas notas de comportamento para quem escreve apps:
 O motivo da mudança: a tela de setup é um app normal, então atualiza pelo hub
 sem OTA de firmware, e o firmware fica só com o rádio, o portal e as
 credenciais.
+
+## 52. Nível de API 57 — Código nativo carregável, SPIKE: `System.native*`
+
+**Status: spike / viabilidade.** O pacote do app pode carregar um blob de
+código Xtensa nativo como asset; `System.nativeLoad` copia o arquivo para
+a PSRAM, sincroniza os caches e `System.nativeCall` chama as entradas por
+índice via ponteiro de função. O motivo: cores de emulador e outros hot
+paths numéricos que ES5 puro no Duktape não entrega.
+
+Disponibilidade: só placas S3 com PSRAM, e só onde o build da placa ligar
+`CELEROS_JS_NATIVE` (hoje o smartdisplay). Faça feature-detect com
+`System.getInfo().hasNative` — nas demais placas as funções não existem. O
+desenho completo de produção (assinatura ECDSA do blob reusando a chave de
+OTA, permissão `native` com o diálogo de consentimento, gates de catálogo)
+está em `Documentation/Estudo_Native_Loader.pt-BR.md`; esta API é o gate de
+bancada do estudo e pode mudar de forma.
+
+Formato do blob (`tools/native/build_core.py` constrói e valida):
+
+- Cabeçalho de 96 bytes: magic `"CLRN"`, tamanho do cabeçalho, tamanho do
+  código, **chip** (1 = esp32s3), **api** (o loader recusa blob mais novo
+  que o firmware), até 8 offsets de entrada, SHA-256 do código.
+- Código autocontido: sem libc, sem globais, sem endereço absoluto
+  (`-mno-longcalls`; o builder barra `l32r`/`callx` e `.data`/`.bss`
+  não vazios), chamadas internas PC-relative, blob até 256 KB.
+- Toda entrada tem a assinatura única
+  `uint32_t fn(void* scratch, int32_t a0, int32_t a1)` — o `scratch` é a
+  região logo após o código no mesmo bloco, dona do loader.
+
+#### `System.nativeLoad(path[, scratchKB])` → Integer (API 57, SPIKE)
+Lê o arquivo do blob (mesma jail do `FS.readFile`), valida o cabeçalho
+(chip, api, tamanhos, offsets) e copia para um bloco PSRAM alinhado a 64
+bytes `[código][scratch]`. `scratchKB` default 128, faixa 4 a 1024. Devolve
+o handle (1..2, dois blobs por app) ou `-1` em qualquer falha (arquivo
+ausente, magic ruim, chip errado, api mais nova, sem PSRAM, sem slot).
+Depois da cópia o loader roda `esp_cache_msync` (writeback + invalidação de
+instrução) — o código é chamável imediatamente.
+
+#### `System.nativeCall(handle, fnIdx[, a0, a1])` → Number (API 57, SPIKE)
+Chama a entrada `fnIdx` (0..) com a assinatura única, `a0`/`a1` default 0,
+e devolve o uint32 de retorno como number. **Contrato: só tick curto.** O
+hook de exec-timeout só dispara entre opcodes do Duktape, então uma chamada
+nativa longa é invisível para ele e o watchdog acaba rebootando — fatie o
+trabalho (um quadro de emulador por chamada, como o step do verlet).
+
+#### `System.nativeRead(handle[, offset, maxLen])` → String (API 57, SPIKE)
+Lê até `maxLen` bytes (default 64, teto 256) do scratch de volta para uma
+string JS (byte por char, segura com NUL) — a prova de que o código nativo
+escreveu memória que o app enxerga. Devolve `null` em handle/faixa ruim.
+
+#### `System.nativeFree(handle)` → Boolean (API 57, SPIKE)
+Solta o blob (malloc PSRAM incluso). Blobs também saem quando o app
+termina — nada atravessa apps, como todo handle nativo.
+
+```javascript
+if (!System.getInfo().hasNative) { System.print("sem nativo aqui"); }
+else {
+  var h = System.nativeLoad("/local/apps/Nativo/core_native_test.bin");
+  if (h > 0) {
+    System.print("fib(20) = " + System.nativeCall(h, 1, 20));   // 6765
+    var soma = System.nativeCall(h, 2, 160, 120);               // fill 160x120
+    var cabecalho = System.nativeRead(h, 0, 8);
+    System.nativeFree(h);
+  }
+}
+```
 
 ## 53. Nível de API 57 — Gamepad Bluetooth LE: `BT.*` e a dep `celeros.gamepad`
 

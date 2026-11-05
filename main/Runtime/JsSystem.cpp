@@ -501,6 +501,16 @@ duk_ret_t JSBindings::js_getAPILevel(duk_context *ctx) {
     return 1;
 }
 
+// API 57: pasta onde o app esta instalado ("/local/apps/<pasta>", sem barra
+// final) — a base para achar assets do proprio pacote (ex.: blob nativo
+// core.bin). A Loja instala em /local/apps/<packageName> e o celerctl usa o
+// basename da pasta local: o app NAO consegue deduzir o caminho sozinho.
+// Vazia em script solto rodado pelo shell (sem app).
+duk_ret_t JSBindings::js_appDir(duk_context *ctx) {
+    duk_push_string(ctx, s_appDir.c_str());
+    return 1;
+}
+
 // UI Bindings=====================================================
 // Network Bindings
 // =====================================================

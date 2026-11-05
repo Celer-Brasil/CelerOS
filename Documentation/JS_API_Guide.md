@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 56
+### API Level: 57
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -58,6 +58,10 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
 #### `System.getAPILevel()`
 - **Returns:** `Integer` (e.g., `1`)
 - **Description:** Returns the OS API Level integer.
+
+#### `System.appDir()` (API 57)
+- **Returns:** `String` — the folder the app is installed in (e.g., `"/local/apps/Demo Nativo"`), **without** a trailing slash; `""` for a bare script run from the shell.
+- **Description:** The base for loading the app's own packaged assets by path — most notably the native blob: `System.nativeLoad(System.appDir() + "/core.bin")`. You cannot derive this path yourself: the store installs to `/local/apps/<packageName>` while `celerctl apps install` uses the local folder's basename, so the same package lands in different folders depending on the install path.
 
 #### `System.millis()`
 - **Returns:** `Number`
@@ -133,6 +137,9 @@ The `System` object provides low-level hardware-accelerated bindings to the ESP3
   - `hasPhysics` (API 46, Boolean): native verlet worlds (`System.verlet*`)
     are compiled in; `false` means the `celeros.physics` dep falls back to
     the interpreted `P.verlet` (slower).
+  - `hasNative` (API 57, Boolean, SPIKE): loadable native code
+    (`System.native*`, section 52) is compiled in — S3 boards with PSRAM
+    only; the surface ships gated per board (smartdisplay).
 
 #### `System.button()` (API 17)
 - **Returns:** `Integer` — `0` none, `1` short press, `2` held ~1.2 s
@@ -846,7 +853,7 @@ Ambient light from the board's light sensor: `0` (dark) to `100` (lit room); `-1
 #### `System.relay(n, on)` / `System.relayState(n)` / `System.relayCount()` (API 8)
 Relay lines of the board. `n` is 1-based (`1` = hardware line L1); `relay(n, true/false)` switches it and returns `false` without relays or with an out-of-range index, `relayState(n)` returns `1`/`0` (or `-1`), and `relayCount()` returns how many lines exist (`0`..`3`). Relays start **off** at boot. Available on the SmartDisplay 4848S040 "Y" wall-switch SKUs (L1=GPIO40, L2=GPIO2, L3=GPIO1) when the firmware is built with `CONFIG_CELEROS_SMARTDISPLAY_RELAYS` — the same pins drive the I2S speaker on the standard SKU, so a board has one or the other.
 
-`System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection — and, since API 46, the build capabilities `hasAudio` (digital pipeline) and `hasPhysics` (native verlet).
+`System.getInfo()` also reports `hasLed`, `hasLightSensor` and `hasSpeaker` for feature detection — and, since API 46, the build capabilities `hasAudio` (digital pipeline), `hasPhysics` (native verlet) and, since API 57, `hasNative` (loadable native code, SPIKE).
 
 #### `System.setting(key)` / `System.setting(key, value)`
 System settings kept in NVS (`web_on`, `nowifi`, `install_sd`, `brightness`, ...). Read (open to all) returns the string or `null`; **write requires `"system"`** and returns `true` (key 1–15 chars, value up to 63). Use `Storage` for the app's own data. System apps use this instead of loose `/local/*.txt` files (legacy files are imported and removed on first boot).
@@ -3677,6 +3684,73 @@ Two behaviour notes for app authors:
 The point of the move: the setup screen is a normal app, so it upgrades from
 the hub without a firmware OTA, and the firmware keeps only the radio, the
 portal and the credentials.
+
+## 52. API Level 57 — Loadable native code, SPIKE: `System.native*`
+
+**Status: spike / feasibility.** An app package can carry a native Xtensa
+code blob as an asset; `System.nativeLoad` copies it from the file into
+PSRAM, syncs the caches and `System.nativeCall` invokes the entries by
+index through a function pointer. The point: emulator cores and other
+number-crunching hot paths that pure ES5 in Duktape cannot deliver.
+
+Availability: S3 boards with PSRAM only, and only where the board build
+turns `CELEROS_JS_NATIVE` on (currently the smartdisplay). Feature-detect
+with `System.getInfo().hasNative` — everywhere else the functions do not
+exist. The full production design (ECDSA blob signature reusing the OTA
+key, a `native` permission with the consent dialog, catalog gates) is
+drawn in `Documentation/Estudo_Native_Loader.pt-BR.md`; this API is the
+bench gate for that study and may change shape.
+
+Blob format (`tools/native/build_core.py` builds and validates it):
+
+- 96-byte header: magic `"CLRN"`, header size, blob size, **chip** (1 =
+  esp32s3), **api** (loader refuses blobs newer than the firmware),
+  up to 8 entry offsets, SHA-256 of the code.
+- Self-contained code: no libc, no globals, no absolute addresses
+  (`-mno-longcalls`; the builder rejects `l32r`/`callx` and non-empty
+  `.data`/`.bss`), internal calls PC-relative, blob up to 256 KB.
+- Every entry has the uniform signature
+  `uint32_t fn(void* scratch, int32_t a0, int32_t a1)` — `scratch` is the
+  region right after the code in the same block, owned by the loader.
+
+#### `System.nativeLoad(path[, scratchKB])` → Integer (API 57, SPIKE)
+Reads the blob file (same FS jail as `FS.readFile`), validates the header
+(chip, api, sizes, entry offsets) and copies it into a 64-byte-aligned
+PSRAM block `[code][scratch]`. `scratchKB` defaults to 128, from 4 to
+1024. Returns the handle (1..2, two blobs per app) or `-1` on any failure
+(missing file, bad magic, wrong chip, newer api, no PSRAM, no slot). After
+the copy the loader runs `esp_cache_msync` (writeback + instruction
+invalidate) — the code is immediately callable.
+
+#### `System.nativeCall(handle, fnIdx[, a0, a1])` → Number (API 57, SPIKE)
+Calls entry `fnIdx` (0..) with the uniform signature, `a0`/`a1` defaulting
+to 0, and returns its uint32 result as a number. **Contract: short ticks
+only.** The execution timeout hook only fires between Duktape opcodes, so
+a long native call is invisible to it and the watchdog eventually reboots
+the device — slice your work (one emulator frame per call, like the verlet
+step).
+
+#### `System.nativeRead(handle[, offset, maxLen])` → String (API 57, SPIKE)
+Reads up to `maxLen` bytes (default 64, cap 256) from the scratch region
+back into a JS string (byte per char, NUL-safe) — the proof that native
+code wrote memory the app can see. Returns `null` on bad handle/range.
+
+#### `System.nativeFree(handle)` → Boolean (API 57, SPIKE)
+Releases the blob (PSRAM malloc included). Blobs are also torn down when
+the app exits — nothing crosses app boundaries, like every native handle.
+
+```javascript
+if (!System.getInfo().hasNative) { System.print("sem nativo aqui"); }
+else {
+  var h = System.nativeLoad("/local/apps/Nativo/core_native_test.bin");
+  if (h > 0) {
+    System.print("fib(20) = " + System.nativeCall(h, 1, 20));   // 6765
+    var sum = System.nativeCall(h, 2, 160, 120);                // fill 160x120
+    var head = System.nativeRead(h, 0, 8);
+    System.nativeFree(h);
+  }
+}
+```
 
 ## 53. API Level 57 — Bluetooth LE gamepad: `BT.*` and the `celeros.gamepad` dep
 

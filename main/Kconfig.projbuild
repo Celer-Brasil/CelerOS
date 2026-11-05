@@ -215,6 +215,21 @@ config CELEROS_JS_PHYSICS
       e a dep celeros.physics feature-detecta: P.verletFast sai do ar e o
       P.verlet interpretado da propria dep segue valendo.
 
+config CELEROS_JS_NATIVE
+    bool "Codigo nativo carregavel para apps (System.native*, SPIKE API 57)"
+    default n
+    help
+      SPIKE de viabilidade (Estudo_Native_Loader.pt-BR.md): System.nativeLoad
+      copia um blob de codigo Xtensa (asset do pacote, cabecalho "CLRN"
+      gerado pelo tools/native/build_core.py) do LittleFS para a PSRAM,
+      sincroniza os caches (writeback C2M e depois invalidacao de I-cache
+      M2C+TYPE_INST — duas chamadas: o IDF recusa as duas flags juntas) e
+      System.nativeCall chama as entradas por ponteiro. So tem sentido em
+      placa S3 com PSRAM e com a rota SPIRAM_XIP_FROM_PSRAM exercitada
+      (smartdisplay). Codigo nativo e ring-0: sem assinatura/permissao
+      ainda — a flag de build e o gate do spike. Desligado, System.native*
+      nao existe (typeof teste).
+
 config CELEROS_JS_NES
     bool "Emulador de NES para apps (objeto Nes, API 57)"
     depends on CELEROS_UI  # o frame sai num sprite do pool (JsGfx): sem vidro nao existe

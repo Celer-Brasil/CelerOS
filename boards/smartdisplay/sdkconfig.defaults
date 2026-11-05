@@ -129,6 +129,10 @@ CONFIG_CELEROS_APP_SERVICES=y
 # nao nasce (typeof Mic === "undefined", como nas placas sem o periferico).
 # CONFIG_CELEROS_MIC is not set
 
+# SPIKE de codigo nativo carregavel (API 57): o smartdisplay e a unica placa
+# com a rota instrucao->cache->PSRAM exercitada (SPIRAM_XIP_FROM_PSRAM
+# acima) — aqui System.native* existe; demais placas ficam com default n.
+CONFIG_CELEROS_JS_NATIVE=y
 # Emulador de NES (objeto Nes, API 57): nucleo Anemoia (main/Nes) + JsNes.
 # ROM inteira + frame 256x240x2 morrem na PSRAM: so placas S3 com vidro.
 CONFIG_CELEROS_JS_NES=y

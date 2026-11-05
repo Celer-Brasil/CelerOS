@@ -686,6 +686,74 @@ function makeEnv() {
         return api;
     })();
 
+    // Codigo nativo carregavel (SPIKE API 57): espelho JS do binding
+    // (JsNative.cpp). O host nao executa Xtensa — replica as SEMANTICAS:
+    // 2 slots por app, entradas por indice com a assinatura unica
+    // fn(scratch, a0, a1) e o blob de teste core_hello (add/fib/fill na
+    // ordem fixa do builder). fill usa a MESMA aritmetica do C (padrao
+    // (i*31 + (i>>6))&0xFF, checksum rotate-xor) para o app de teste
+    // conferir valores identicos na bancada.
+    var nativeStub = (function () {
+        var slots = [null, null];
+        function at(id) { return id >= 1 && id <= 2 ? slots[id - 1] : null; }
+        var api = {
+            nativeLoad: function (path, scratchKB) {
+                for (var i = 0; i < 2; i++) {
+                    if (!slots[i]) {
+                        var kb = scratchKB === undefined ? 128 : scratchKB;
+                        if (kb < 4) kb = 4;
+                        if (kb > 1024) kb = 1024;
+                        slots[i] = { scratch: new Uint8Array(kb * 1024) };
+                        return i + 1;
+                    }
+                }
+                return -1;
+            },
+            nativeCall: function (h, fnIdx, a0, a1) {
+                var m = at(h);
+                if (!m || fnIdx < 0 || fnIdx > 2) return 4294967295;
+                if (fnIdx === 0) return (a0 + a1) >>> 0;
+                if (fnIdx === 1) {
+                    var n = a0;
+                    if (n < 0) n = 0;
+                    if (n > 50) n = 50;
+                    var a = 0, b = 1;
+                    while (n-- > 0) { var t = a + b; a = b; b = t; }
+                    return a >>> 0;
+                }
+                // fill: padrao + checksum identicos ao core_hello.c
+                var w = a0, hh = a1, area = (w * hh) >>> 0;
+                if (area > 1048576) area = 1048576;
+                var c = 0, v, i;
+                for (i = 0; i < area; i++) {
+                    v = ((i * 31 + (i >>> 6)) & 0xFF) >>> 0;
+                    m.scratch[i] = v;
+                    c = ((((c << 1) | (c >>> 31)) ^ v) >>> 0);
+                }
+                return c >>> 0;
+            },
+            nativeRead: function (h, off, maxLen) {
+                var m = at(h);
+                if (!m) return null;
+                if (off === undefined) off = 0;
+                if (maxLen === undefined) maxLen = 64;
+                if (off < 0 || maxLen <= 0 || off >= m.scratch.length) return null;
+                var n = maxLen > 256 ? 256 : maxLen;
+                if (n > m.scratch.length - off) n = m.scratch.length - off;
+                var s = '';
+                for (var i = 0; i < n; i++) s += String.fromCharCode(m.scratch[off + i]);
+                return s;
+            },
+            nativeFree: function (h) {
+                var m = at(h);
+                if (!m) return false;
+                slots[h - 1] = null;
+                return true;
+            },
+        };
+        return api;
+    })();
+
     var rigidStub = require(path.join(ROOT, 'tools', 'sdk', 'lib', 'rigid2d.js')).makeStub();
 
     // pool de sprites com IDENTIDADE como o firmware (JsGfx.cpp): 16 slots
@@ -844,12 +912,18 @@ function makeEnv() {
     restart: function() { throw 'OS_EXIT'; },
     getOSVersion: function() { return fwMeta().version; },
     getAPILevel: function() { return fwMeta().api; },
+    // API 57: pasta do app no device — o runApp alimenta env.__appDir com o
+    // dirname do main.js (o install real varia: Loja usa packageName,
+    // celerctl usa o basename da pasta local). Script solto: '', como no firmware.
+    appDir: function() { return env.__appDir || ''; },
     getInfo: function() {
         return {
             totalRAM: 320000, freeRAM: 150000, minFreeRAM: 120000, maxAllocRAM: 110000, appRAM: 225000, hasLed: true, hasLightSensor: true, hasSpeaker: true, hasBattery: true, board: 'host', inset: 0, shape: 'rect', hasDisplay: true, screenW: 240, screenH: 320,
             // API 46: o host modela uma placa completa (audio, mic e
-            // fisica no build) — os perfis lite (CYD) zera os tres
-            hasAudio: true, hasMic: true, hasPhysics: true,
+            // fisica no build) — os perfis lite (CYD) zeram os tres.
+            // hasNative (API 57, SPIKE) segue a mesma ideia: o host
+            // modela o smartdisplay (flag ligada, stub acima)
+            hasAudio: true, hasMic: true, hasPhysics: true, hasNative: true,
             totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
             chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
             macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
@@ -1074,6 +1148,11 @@ function makeEnv() {
     rigidStep: rigidStub.rigidStep,
     rigidState: rigidStub.rigidState,
     rigidCount: rigidStub.rigidCount,
+    // Codigo nativo carregavel (SPIKE API 57): espelho JS (nativeStub acima)
+    nativeLoad: nativeStub.nativeLoad,
+    nativeCall: nativeStub.nativeCall,
+    nativeRead: nativeStub.nativeRead,
+    nativeFree: nativeStub.nativeFree,
     drawSprite: function() {},
     blitSprite: function() {},   // API 34: restaura o fundo (preview no emulador)
     copySprite: function() {},   // API 45: regiao de sprite -> alvo corrente (preview no emulador)
@@ -2149,6 +2228,10 @@ function runApp(relPath, wire) {
     var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
     if (mf && mf.packageName) env.__pkg = mf.packageName;
     } catch (e) { /* .js avulso: sem pkg */ }
+    // System.appDir (API 57): o host modela o install do celerctl (pasta
+    // virtual /local/apps/<basename>) — o caminho real no device depende do
+    // canal (a Loja usa packageName), e e por isso a API existe
+    env.__appDir = '/local/apps/' + path.basename(appDir);
     // capabilities do app.json (AppPerms.h parsePermissions): campo ausente ou
     // mal formado = PERM_LEGACY; valido = so o que foi declarado — o jail do
     // FS e o System.* de nivel 3 olham essa mascara, como no firmware

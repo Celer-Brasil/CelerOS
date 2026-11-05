@@ -1116,6 +1116,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #if CONFIG_CELEROS_JS_GAME_ACCEL
     jsRigidReset();    // mundos rigidos nativos (API 33)
 #endif
+#if CONFIG_CELEROS_JS_NATIVE
+    jsNativeReset();   // blobs nativos do app anterior (malloc PSRAM incluso)
+#endif
 #if CONFIG_CELEROS_JS_NES
     jsNesReset();      // ROM/framebuffer/audio do emulador do app anterior
 #endif
@@ -1395,6 +1398,20 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     duk_put_global_string(ctx, "Nes");
 #endif
 
+#if CONFIG_CELEROS_JS_NATIVE
+    // Codigo nativo carregavel (SPIKE API 57): blob Xtensa de arquivo ->
+    // PSRAM -> esp_cache_msync -> ponteiro (JsNative.cpp). Ring-0 por
+    // natureza: o gate do spike e a flag de build (smartdisplay);
+    // assinatura/consentimento sao a infra pos-spike.
+    static const JsFn kFnsNative[] = {
+        {"nativeLoad", js_nativeLoad, 2},
+        {"nativeCall", js_nativeCall, 4},
+        {"nativeRead", js_nativeRead, 3},
+        {"nativeFree", js_nativeFree, 1},
+    };
+    putFns(ctx, kFnsNative);
+#endif  // CONFIG_CELEROS_JS_NATIVE
+
 #if CONFIG_CELEROS_UI
     static const JsFn kFns3[] = {
         {"fillScreen", js_fillScreen, 1},
@@ -1484,6 +1501,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 
     static const JsFn kFns10[] = {
         {"getAPILevel", js_getAPILevel, 0},
+        {"appDir", js_appDir, 0},  // API 57: pasta do app (blob nativo etc.)
     };
     putFns(ctx, kFns10);
 

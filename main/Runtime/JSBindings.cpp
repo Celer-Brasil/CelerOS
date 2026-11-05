@@ -1378,14 +1378,16 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
 #if CONFIG_CELEROS_JS_NES
     // Objeto Nes (API 57): emulador completo sobre o nucleo Anemoia
     // (main/Nes). O app e o dono do loop: load/bind/frame por tick; o
-    // frame blita no sprite bound (canvas nativo) e o audio sai pelo
-    // PcmFeed. Botões no bitmask NES: bit0 A ... bit7 Right.
+    // frame sai direto no quadro do Kui (bindFrame, zero copia) ou no
+    // sprite bound (bind, para escalar) e o audio sai pelo PcmFeed com a
+    // APU em task propria. Botoes no bitmask NES: bit0 A ... bit7 Right.
     duk_push_object(ctx);
     {
         static const JsFn kFnsNes[] = {
-            {"load", js_nesLoad, 1},           // path da ROM (jail fs) -> bool
-            {"bind", js_nesBind, 1},           // id do sprite (256x240 fisico)
-            {"frame", js_nesFrame, 2},         // buttons bitmask, render? -> bool
+            {"load", js_nesLoad, 1},             // path da ROM (jail fs) -> bool
+            {"bind", js_nesBind, 1},             // id do sprite (256x240 fisico)
+            {"bindFrame", js_nesBindFrame, 0},   // frame direto no quadro do Kui
+            {"frame", js_nesFrame, 2},           // buttons bitmask, render? -> bool
             {"reset", js_nesReset, 0},
             {"saveState", js_nesSaveState, 1},  // path -> bool
             {"loadState", js_nesLoadState, 1},  // path -> bool

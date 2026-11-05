@@ -3,11 +3,13 @@
 
 #include <stdint.h>
 
-// SCREEN_SWAP_BYTES do Anemoia nunca e definido aqui: o CelerOS entrega RGB565
-// nativo pro LovyanGFX (o swap era exigencia do TFT_eSPI byte-swapped).
+// Duas familias: as tabelas normais (RGB565 host-order) e as _swap, com os
+// bytes trocados (a convencao do CelerOS: Display/Board e o FrameSprite do
+// Kui usam setSwapBytes(true), entao quem escreve RAW no framebuffer do
+// painel — o PPU — precisa dos valores trocados; o Anemoia selecionava isso
+// em compile-time com SCREEN_SWAP_BYTES, aqui a escolha e por placa/runtime).
 
 // clang-format off
-#ifndef SCREEN_SWAP_BYTES
     static constexpr uint16_t palette_NTSC565[8][64] =
     {
         {
@@ -343,9 +345,9 @@
             0xAD4A, 0xAD4A, 0xAD4A, 0xAD55, 0xAD55, 0xAD55, 0x0000, 0x0000,
         },
     };
-#else
+    // Variantes byte-swapped (ver comentario no topo do arquivo)
     #define SWAP16(c) (uint16_t)(((uint16_t)(c) << 8) | ((uint16_t)(c) >> 8))
-    static constexpr uint16_t palette_NTSC565[8][64] =
+    static constexpr uint16_t palette_NTSC565_swap[8][64] =
     {
         {
             SWAP16(0x630C), SWAP16(0x00F2), SWAP16(0x1835), SWAP16(0x4013), SWAP16(0x600D), SWAP16(0x6804), SWAP16(0x6020), SWAP16(0x48E0),
@@ -429,7 +431,7 @@
         },
     };
 
-    static constexpr uint16_t palette_NTSC222[8][64] =
+    static constexpr uint16_t palette_NTSC222_swap[8][64] =
     {
         {
             SWAP16(0x52AA), SWAP16(0x0015), SWAP16(0x0015), SWAP16(0x5015), SWAP16(0x500A), SWAP16(0x5000), SWAP16(0x5000), SWAP16(0x5000),
@@ -513,7 +515,7 @@
         },
     };
 
-    static constexpr uint16_t palette_PAL565[8][64] =
+    static constexpr uint16_t palette_PAL565_swap[8][64] =
     {
         {
             SWAP16(0x630C), SWAP16(0x010C), SWAP16(0x088F), SWAP16(0x280F), SWAP16(0x400C), SWAP16(0x5006), SWAP16(0x5020), SWAP16(0x40A0),
@@ -597,7 +599,7 @@
         },
     };
 
-    static constexpr uint16_t palette_PAL222[8][64] =
+    static constexpr uint16_t palette_PAL222_swap[8][64] =
     {
         {
             SWAP16(0x52AA), SWAP16(0x000A), SWAP16(0x000A), SWAP16(0x000A), SWAP16(0x500A), SWAP16(0x5000), SWAP16(0x5000), SWAP16(0x5000),
@@ -681,7 +683,6 @@
         },
     };
     #undef SWAP16
-#endif
 // clang-format on
 
 #endif

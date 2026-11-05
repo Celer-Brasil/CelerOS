@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 57 — 421 funcoes.
+// API level 57 — 414 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -40,6 +40,7 @@ declare function require(nome: string): any;
 declare const Nes: {
     load(path: string): any;
     bind(spriteId: number): any;
+    bindFrame(): any;
     frame(buttons: number, render?: number): any;
     reset(): void;
     saveState(path: string): any;
@@ -193,6 +194,8 @@ declare const System: {
     getOSVersion(): any;
     /** devolve o inteiro do Nível de API do SO. */
     getAPILevel(): any;
+    /** a base para carregar assets do próprio pacote por caminho — em especial o blob nativo: `System.nativeLoad(System.appDir() + "/core.bin")`. (API 57) */
+    appDir(): any;
     /** devolve o endereço IP local atual do ESP32 (ex. "192.168.1.11") se o WiFi estiver conectado. */
     getIPAddress(): any;
     /** devolve true se o ESP32 estiver conectado a uma rede WiFi. */

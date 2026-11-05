@@ -45,7 +45,9 @@ public:
         bus = n;
     }
     void connectCartridge(Cartridge* cartridge);
-    void connectFramebuffer(uint8_t* framebuffer);
+    // Alvo do frame: stride/offset em PIXELS (o CelerOS pode render direto
+    // numa regiao do framebuffer do painel, sem copia intermediaria).
+    void connectFramebuffer(uint8_t* framebuffer, int stride = SCANLINE_SIZE, int x0 = 0, int y0 = 0);
     void setMirror(MIRROR mirror);
     MIRROR getMirror();
 
@@ -60,7 +62,26 @@ public:
         PAL222,
         PaletteCount
     };
+    // Sink dos blocos de 8 scanlines (RGB565, 256 px por linha): o desenho
+    // no vidro e responsabilidade do dono — no Anemoia era o pushPixelsDMA no
+    // TFT; aqui o binding usa o pushImage do LovyanGFX (o caminho suportado
+    // do painel RGB: copia crua no framebuffer viola a regra da cache line de
+    // 64 B do 4848 e faulta na bancada).
+    typedef void (*ChunkSink)(void* ctx, const uint16_t* rows, int y, int nrows);
+    void setChunkSink(ChunkSink cb, void* ctx)
+    {
+        chunk_sink = cb;
+        chunk_ctx = ctx;
+    }
     void setPalette(uint8_t palette);
+    // Byte order do alvo: o painel/FrameSprite do CelerOS usa a convencao
+    // setSwapBytes(true) — quem escreve RAW (o PPU) precisa das tabelas
+    // _swap. O Anemoia escolhia em compile-time (SCREEN_SWAP_BYTES).
+    void setPaletteByteSwap(bool on)
+    {
+        byte_swap = on;
+        applyPalette();
+    }
 
     static constexpr int PPU_PAGE_SIZE = 256;
     static constexpr int NUM_PPU_PAGES = 0x4000 / PPU_PAGE_SIZE;
@@ -87,12 +108,25 @@ private:
     uint8_t scanline_counter = 0;
     uint8_t scanline_buffer[BUFFER_SIZE];
     uint8_t scanline_metadata[BUFFER_SIZE];
-    // Frame inteiro 256x240 RGB565, alocado pelo dono (facade: PSRAM no
-    // device, malloc no host) e entregue via connectFramebuffer. No Anemoia
-    // era um buffer rolante de 8 linhas empurrado por DMA no TFT.
-    uint16_t* display_buffer = nullptr;
+    // Bloco rolante de 8 scanlines (4 KB, RAM interna) + sink do bloco: o
+    // modelo do Anemoia original. O render NUNCA escreve no framebuffer do
+    // vidro (na PSRAM do painel cada escrita e um cache miss e a copia crua
+    // viola a regra da cache line); a cada 8 linhas o bloco sai pelo sink
+    // (pushImage do LovyanGFX no binding, incremental como o pushPixelsDMA).
+    static constexpr int kChunkRows = SCANLINES_PER_BUFFER;
+    uint16_t chunk_buffer[kChunkRows * SCANLINE_SIZE];
+    int chunk_rows = 0;  // linhas prontas no bloco atual
+    void flushChunk();
+    ChunkSink chunk_sink = nullptr;
+    void* chunk_ctx = nullptr;
 
     const uint16_t (*nes_palette)[64] = palette_NTSC565;
+    uint8_t palette_idx = 0;
+    bool byte_swap = false;
+    // (alvo do frame: o sink de blocos; ver setChunkSink)
+    int fb_x0 = 0;
+    int fb_y0 = 0;
+    void applyPalette();
     static constexpr uint8_t palette_mirror[32] = {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
         0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x00, 0x11, 0x12, 0x13, 0x04, 0x15,

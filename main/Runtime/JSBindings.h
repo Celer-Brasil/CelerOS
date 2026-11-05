@@ -83,6 +83,7 @@ private:
     // emulador de NES (JsNes.cpp, nucleo main/Nes; reset por app: jsNesReset)
     static duk_ret_t js_nesLoad(duk_context *ctx);
     static duk_ret_t js_nesBind(duk_context *ctx);
+    static duk_ret_t js_nesBindFrame(duk_context *ctx);
     static duk_ret_t js_nesFrame(duk_context *ctx);
     static duk_ret_t js_nesReset(duk_context *ctx);
     static duk_ret_t js_nesSaveState(duk_context *ctx);

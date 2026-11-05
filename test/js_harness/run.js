@@ -1295,12 +1295,16 @@ function makeEnv() {
     };
 
     // Nes (API 57): stub headless do nucleo Anemoia (main/Nes) — global como
-    // no firmware (duk_put_global_string); frame confere o sprite bound.
+    // no firmware (duk_put_global_string); frame confere o alvo (sprite ou
+    // bindFrame direto no quadro).
     env.Nes = {
         _spr: 0,
-        bind: function(id) { this._spr = id | 0; return id > 0; },
+        _direct: false,
+        bind: function(id) { this._spr = id | 0; this._direct = false; return id > 0; },
+        bindFrame: function() { this._direct = true; this._spr = 0; return true; },
         load: function() { return true; },
         frame: function(btns, render) {
+            if (this._direct) return true;
             return this._spr > 0 && !!env.__spriteSlots[this._spr - 1];
         },
         reset: function() { return true; },
@@ -1308,7 +1312,7 @@ function makeEnv() {
         loadState: function() { return true; },
         audioStart: function() { return true; },
         audioStop: function() {},
-        unload: function() { this._spr = 0; },
+        unload: function() { this._spr = 0; this._direct = false; },
     };
 
     env.FS = FS;

@@ -491,9 +491,23 @@ class Renderer {
         // stub segue o contrato e expoe env.Nes, nao System.Nes
         env.Nes = {
             _spr: 0,
-            bind(id) { this._spr = id | 0; return id > 0; },
+            _direct: false,
+            bind(id) { this._spr = id | 0; this._direct = false; return id > 0; },
+            bindFrame() { this._direct = true; this._spr = 0; return true; },
             load(path) { this._rom = String(path); return true; },
             frame(btns, render) {
+                if (this._direct) {
+                    // bindFrame: a PPU escreve a regiao 256x240 no quadro do
+                    // Kui (centrado na horizontal, topo) — o stub pinta as
+                    // barras no fb principal, como o firmware faria.
+                    if (render === false) return true;
+                    const bars = [0x0000, 0x001F, 0x07E0, 0x07FF, 0xF800, 0xF81F, 0xFFE0, 0xFFFF];
+                    const x0 = (r.w - 256) >> 1;
+                    for (let y = 24; y < 216; y++) {
+                        for (let x = 0; x < 256; x++) r.px(x0 + x, y, bars[(x * bars.length / 256) | 0]);
+                    }
+                    return true;
+                }
                 const sp = r.sprites[this._spr - 1];
                 if (!sp) return false;
                 if (render === false) return true;
@@ -513,7 +527,7 @@ class Renderer {
             loadState() { return true; },
             audioStart() { return true; },
             audioStop() {},
-            unload() { this._spr = 0; this._rom = null; },
+            unload() { this._spr = 0; this._direct = false; this._rom = null; },
         };
         // API 34: o retangulo (x, y, w, h) do sprite id volta a MESMA posicao
         // do alvo corrente (sprite cobrindo o canvas a partir de 0,0); o

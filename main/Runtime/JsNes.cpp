@@ -7,12 +7,14 @@
 // com uma ROM sintetica); o JS fica so com a casca: menus, controles de
 // toque, save states.
 //
-// Contrato do app:
-//   var spr = System.createSprite(256, 240);  // canvas nativo: pixel fisico
-//   Nes.bind(spr);                            // o frame blita nesse sprite
+// Contrato do app (arquitetura do Anemoia original: APU em task propria e
+// frame direto no destino, sem copia intermediaria):
+//   Nes.bindFrame();                         // frame direto no quadro do Kui
 //   Nes.load("/sd/roms/Jogo.nes");            // fs: ROM inteira na PSRAM
-//   Nes.audioStart();                         // APU -> PcmFeed -> I2S
-//   laco: Nes.frame(btns); System.drawSprite(spr, x, y, 0, zx, zy); UI.end(60)
+//   Nes.audioStart();                         // APU (task core 0) -> PcmFeed
+//   laco: S.fillScreen(0); desenha controles; Nes.frame(btns); UI.end(60)
+// Alternativa com sprite do pool (apps que querem escalar/posicionar):
+//   var spr = S.createSprite(256, 240); Nes.bind(spr); ... S.pushSprite(GX, GY)
 //
 // Estado por app: ROM/framebuffer/audio saem no jsNesReset (init do proximo
 // app e appExitCleanup). Compilado so com CONFIG_CELEROS_JS_NES (S3+PSRAM);
@@ -43,6 +45,19 @@ nes::Nes* s_nes = nullptr;
 uint8_t* s_rom = nullptr;        // ROM inteira (o cartucho nao copia: ponteiros)
 uint32_t s_romSize = 0;
 CelerSprite* s_spr = nullptr;    // sprite bound (nao e dono: pool do JsGfx)
+lgfx::LovyanGFX* s_sink_dst = nullptr;  // alvo do pushImage (display ou sprite)
+int s_sink_x0 = 0;               // x da regiao 256 no alvo
+
+// Sink dos blocos de 8 scanlines (o pushPixelsDMA do Anemoia): entrega ao
+// pushImage do LovyanGFX, que e o caminho suportado do painel RGB — copia
+// crua no framebuffer viola a regra da cache line de 64 B do 4848 (bancada:
+// fault dentro do memcpy) e o pushImage incremental nao afoga a PSRAM.
+void nesChunkSink(void* ctx, const uint16_t* rows, int y, int nrows)
+{
+    (void)ctx;
+    if (s_sink_dst == nullptr) return;
+    s_sink_dst->pushImage(s_sink_x0, y, kNesW, nrows, rows);
+}
 
 #if CONFIG_CELEROS_AUDIO
 AudioPlayer::PcmFeed* s_feed = nullptr;  // guarda de saida enquanto toca
@@ -62,6 +77,7 @@ void nesAudioSink(const uint8_t* mono16le, uint32_t bytes)
 
 void nesStopAudio()
 {
+    if (s_nes != nullptr) s_nes->apuTaskStop();  // APU volta a ficar so no quadro
 #if CONFIG_CELEROS_AUDIO
     if (s_feed != nullptr) {
         s_feed->end();  // para o player e solta a guarda (idempotente)
@@ -80,6 +96,7 @@ void nesStopAudio()
 void jsNesReset()
 {
     nesStopAudio();
+    s_sink_dst = nullptr;
     if (s_nes != nullptr) {
         delete s_nes;
         s_nes = nullptr;
@@ -155,6 +172,38 @@ duk_ret_t JSBindings::js_nesBind(duk_context* ctx)
     int ph = spr->height();
     if (pw < kNesW || ph < kNesH) { duk_push_false(ctx); return 1; }
     s_spr = spr;
+    // Blocos de 8 linhas via pushImage: a conversao de cor do LovyanGFX leva
+    // em conta a convencao swapped do destino (sprite/painel) — a paleta sai
+    // NORMAL aqui; paleta _swap + pushImage fazia swap duplo (laranja na
+    // bancada: backdrop azul 0x00F2 saindo 0xF200).
+    s_nes->setByteSwap(false);
+    s_sink_dst = spr;
+    s_sink_x0 = 0;
+    s_nes->setChunkSink(&nesChunkSink, nullptr);
+    duk_push_true(ctx);
+    return 1;
+}
+
+duk_ret_t JSBindings::js_nesBindFrame(duk_context* ctx)
+{
+    (void)ctx;
+    if (s_nes == nullptr || !s_nes->loaded()) { duk_push_false(ctx); return 1; }
+    // Frame em blocos de 8 linhas direto no vidro: pushImage no display (o
+    // caminho suportado; incremental como o pushPixelsDMA do Anemoia, sem
+    // copia crua no framebuffer do painel). O app desenha so a faixa de
+    // controles pelo caminho normal (caixas sujas). Fallback: quadro do Kui.
+    lgfx::LovyanGFX* dst = tftInstance;
+    int width = tftInstance ? (int)tftInstance->width() : 0;
+    if (dst == nullptr || width < kNesW) {
+        if (s_frame == nullptr) { duk_push_false(ctx); return 1; }
+        dst = s_frame;
+        width = (int)s_frame->width();
+    }
+    s_nes->setByteSwap(false);  // pushImage aplica a conversao do destino
+    s_sink_dst = dst;
+    s_sink_x0 = (width - kNesW) / 2;  // centrado na horizontal, topo
+    s_nes->setChunkSink(&nesChunkSink, nullptr);
+    s_spr = nullptr;  // alvo nao e sprite do pool
     duk_push_true(ctx);
     return 1;
 }
@@ -164,17 +213,8 @@ duk_ret_t JSBindings::js_nesFrame(duk_context* ctx)
     if (s_nes == nullptr || !s_nes->loaded()) { duk_push_false(ctx); return 1; }
     uint8_t buttons = (uint8_t)(duk_require_int(ctx, 0) & 0xFF);
     bool render = !duk_is_boolean(ctx, 1) || duk_get_boolean(ctx, 1);
-
+    // O quadro ja sai no alvo (sprite ou frame do Kui): sem copia aqui.
     s_nes->frame(buttons, render);
-
-    if (s_spr != nullptr) {
-        // Frame 256x240 RGB565 -> sprite via pushImage: o LovyanGFX aplica o
-        // byte order do painel (o 4848 RGB espera os bytes trocados — o
-        // memcpy cru mostrou o backdrop 0x00F2 como 0xF200 laranja na
-        // bancada) e o stride fisico do sprite.
-        const uint16_t* src = s_nes->framebuffer();
-        if (src != nullptr) s_spr->pushImage(0, 0, kNesW, kNesH, src);
-    }
     duk_push_true(ctx);
     return 1;
 }
@@ -252,6 +292,7 @@ duk_ret_t JSBindings::js_nesAudioStart(duk_context* ctx)
     }
     s_feed->start();
     s_nes->setAudioSink(&nesAudioSink);
+    s_nes->apuTaskStart();  // APU no core 0, como no Anemoia
     duk_push_true(ctx);
 #else
     (void)ctx;

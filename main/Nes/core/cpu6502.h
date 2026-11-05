@@ -40,14 +40,22 @@ public:
     // passada (early-return carregando `cycles`), entao o tick conta CICLOS
     // nos mesmos pontos do cpuCycle do mapper — tick por passada errava ~6x
     // a taxa de amostras.
+    //
+    // No DEVICE quem clocka a APU e a task propria (Nes::apuTaskStart, core
+    // 0, como no Anemoia): aqui vira no-op para tirar ~15 mil chamadas do
+    // caminho do quadro. No HOST o tick fica inline (o teste roda sem RTOS).
     void apuCycles(int n)
     {
+#ifndef CELER_HOST_TEST
+        (void)n;
+#else
         apu_pending += n;
         while (apu_pending >= 2)
         {
             apu_pending -= 2;
             apu.clock();
         }
+#endif
     }
     void apuWrite(uint16_t addr, uint8_t data);
     void OAM_DMA(uint8_t page);

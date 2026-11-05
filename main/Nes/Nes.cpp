@@ -2,15 +2,60 @@
 
 #ifndef CELER_HOST_TEST
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #endif
 
 #include <cstdio>
 #include <new>
 
 namespace nes {
+namespace {
+// Sink interno do openScreen: copia os blocos de 8 linhas para o fb proprio
+// (host/fallback; stride = SCREEN_W).
+void fbSink(void* ctx, const uint16_t* rows, int y, int nrows)
+{
+    Nes* self = (Nes*)ctx;
+    uint16_t* fb = (uint16_t*)self->framebuffer();
+    if (fb == nullptr || nrows <= 0) return;
+    if (y < 0) return;
+    if (y + nrows > SCREEN_H) nrows = SCREEN_H - y;
+    memcpy(fb + (size_t)y * SCREEN_W, rows, (size_t)nrows * SCREEN_W * sizeof(uint16_t));
+}
+}  // namespace
+
+#ifndef CELER_HOST_TEST
+namespace {
+// APU a CPU/2 = 894,886 kHz: quantos ticks por microssegundo o task deve
+// clockar para casar o tempo de parede (o Anemoia era paced pelo i2s_write
+// bloqueante, ~2,9 ms por buffer; aqui o relogio e o esp_timer e o sink
+// segue dando backpressure quando ha audio).
+constexpr int kApuTicksPerMs = 895;
+constexpr int64_t kApuMaxCatchUpUs = 20000;  // teto do atraso recuperado (20 ms)
+
+void apuTaskFn(void* arg)
+{
+    Apu2A03* apu = (Apu2A03*)arg;
+    int64_t last = esp_timer_get_time();
+    while (true)
+    {
+        const int64_t now = esp_timer_get_time();
+        int64_t elapsed = now - last;
+        last = now;
+        if (elapsed > kApuMaxCatchUpUs) elapsed = kApuMaxCatchUpUs;
+        const int ticks = (int)(elapsed * kApuTicksPerMs / 1000);
+        for (int i = 0; i < ticks; i++) apu->clock();
+        vTaskDelay(1);  // 1 tick: o burst do proximo laco compensa o relogio
+    }
+}
+}  // namespace
+#endif
 
 Nes::~Nes()
 {
+    apuTaskStop();
     closeScreen();
     unload();
 }
@@ -60,12 +105,33 @@ bool Nes::load(const uint8_t* data, uint32_t size, uint32_t* crc32, uint8_t* map
 
 void Nes::unload()
 {
+    apuTaskStop();  // a task referencia cpu.apu: para antes de soltar o cartucho
     if (cart != nullptr)
     {
         delete cart;
         cart = nullptr;
         cpu.bus.cart = nullptr;
     }
+}
+
+// Task da APU no core 0 (fora do caminho do quadro, como no Anemoia).
+// Criada no audioStart e parada no audioStop/unload: sem audio o APU nao
+// precisa clockar (jogos NES nao leem o estado dele para logica).
+void Nes::apuTaskStart()
+{
+#ifndef CELER_HOST_TEST
+    if (apu_task != nullptr) return;
+    xTaskCreatePinnedToCore(apuTaskFn, "nesapu", 4096, &cpu.apu, 2, (TaskHandle_t*)&apu_task, 0);
+#endif
+}
+
+void Nes::apuTaskStop()
+{
+#ifndef CELER_HOST_TEST
+    if (apu_task == nullptr) return;
+    vTaskDelete((TaskHandle_t)apu_task);
+    apu_task = nullptr;
+#endif
 }
 
 bool Nes::openScreen()
@@ -82,7 +148,9 @@ bool Nes::openScreen()
 #endif
     if (fb == nullptr) return false;
     memset(fb, 0, SCREEN_W * SCREEN_H * sizeof(uint16_t));
-    cpu.bus.ppu.connectFramebuffer((uint8_t*)fb);
+    // host/fallback: os blocos caem neste buffer (sem swap: RGB565 host)
+    cpu.bus.ppu.setPaletteByteSwap(false);
+    cpu.bus.ppu.setChunkSink(&fbSink, this);
     return true;
 }
 
@@ -95,7 +163,7 @@ void Nes::closeScreen()
     free(fb);
 #endif
     fb = nullptr;
-    cpu.bus.ppu.connectFramebuffer(nullptr);
+    cpu.bus.ppu.setChunkSink(nullptr, nullptr);
 }
 
 void Nes::reset()

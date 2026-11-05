@@ -4,11 +4,18 @@
 // FreeRTOS (task da APU, i2s_write, pushPixelsDMA); aqui o app JS e o dono:
 //
 //   load(bytes)  -> parse iNES + mapper; ROM inteira em memoria (PSRAM)
-//   frame(btns)  -> 1 quadro (CPU+PPU+APU inline); frame 256x240 RGB565 no
-//                   buffer entregue em open(); o app blit no sprite do pool
-//                   audio sai pelo sink setado em setAudioSink (PcmFeed)
+//   frame(btns)  -> 1 quadro (CPU+PPU); frame 256x240 RGB565 no alvo de
+//                   renderTo() (o binding aponta para a regiao do frame do
+//                   painel, sem copia intermediaria) ou no buffer proprio de
+//                   openScreen(). audio sai pelo sink de setAudioSink
+//                   (PcmFeed), alimentado pela task da APU no device.
 //   saveState    -> formato do Anemoia ("ANEMOIA"+CRC) serializado em buffer;
 //                   o binding persiste no FileSystem do app
+//
+// Arquitetura igual ao Anemoia original: a APU roda numa task propria (core
+// 0 no device; no host o tick fica inline no clock() para o teste rodar
+// sem FreeRTOS) e o frame sai direto no destino — o original empurrava
+// blocos de 8 scanlines por DMA, aqui a PPU escreve linha a linha no alvo.
 //
 // Host-testavel: sem esp/arduino (o teste do test/cpp compila o mesmo TU).
 
@@ -47,11 +54,21 @@ public:
     void unload();
     bool loaded() const { return cart != nullptr && cart->isValid() && cpu.bus.cart != nullptr; }
 
-    // Framebuffer 256x240 RGB565, alocado aqui (PSRAM no device). Tem que ser
-    // aberto antes do primeiro frame. *fb nunca e null depois de open() ok.
+    // Framebuffer 256x240 RGB565 proprio, alocado aqui (PSRAM no device).
+    // Caminho do host/fallback: instala um sink interno que copia os blocos
+    // de 8 linhas do PPU para este buffer (o teste e o emulador local leem
+    // framebuffer()).
     bool openScreen();
     void closeScreen();
     const uint16_t* framebuffer() const { return fb; }
+
+    // Sink dos blocos de 8 scanlines (o Anemoia empurrava por DMA no TFT; o
+    // binding entrega ao pushImage do LovyanGFX). Substitui o alvo de
+    // openScreen quando o app desenha no vidro.
+    void setChunkSink(Ppu2C02::ChunkSink cb, void* ctx) { cpu.bus.ppu.setChunkSink(cb, ctx); }
+    // Byte order da paleta: true = tabelas _swap (o caminho pushImage do OS
+    // copia os valores como vierem para o framebuffer swapped do painel).
+    void setByteSwap(bool on) { cpu.bus.ppu.setPaletteByteSwap(on); }
 
     void reset();
     void frame(uint8_t buttons, bool render = true);
@@ -64,11 +81,20 @@ public:
     void setAudioSink(Apu2A03::AudioSink sink) { cpu.apu.setAudioSink(sink); }
     void setVolume(uint8_t vol) { cpu.apu.setVolume(vol); }
 
+    // Task da APU no device (core 0, como o Anemoia): clocka a APU a CPU/2
+    // (~895 kHz) em fatias de 1 ms; o sink (PcmFeed) da o backpressure
+    // quando a fila enche. No host e no-op (tick inline no clock()).
+    void apuTaskStart();
+    void apuTaskStop();
+
     Cpu6502 cpu;
 
 private:
     Cartridge* cart = nullptr;
     uint16_t* fb = nullptr;
+#ifndef CELER_HOST_TEST
+    void* apu_task = nullptr;  // TaskHandle_t
+#endif
 };
 
 }  // namespace nes

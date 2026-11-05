@@ -494,13 +494,31 @@ inline void Ppu2C02::finishScanline()
 
     // Uma linha do frame inteiro do dono (o Anemoia empurrava blocos de 8
     // linhas por DMA no TFT; aqui o facade blit o frame inteiro no sprite)
-    uint16_t* display = display_buffer + ((uint32_t)scanline * SCANLINE_SIZE);
-    uint8_t* buffer = ptr_buffer;
-    for (int i = 0; i < SCANLINE_SIZE; i++) display[i] = nes_palette[mask.emphasize][buffer[i]];
+    // Converte a scanline para o bloco rolante de 8 linhas (RAM interna) e,
+    // a cada bloco fechado, copia em blocos para o alvo (o streaming do
+    // Anemoia original: 8 linhas por pushPixelsDMA; aqui um memcpy de 512 B
+    // por linha, sem escrever pixel a pixel no framebuffer em PSRAM).
+    uint16_t* row = chunk_buffer + (size_t)chunk_rows * SCANLINE_SIZE;
+    const uint8_t* buffer = ptr_buffer;
+    for (int i = 0; i < SCANLINE_SIZE; i++) row[i] = nes_palette[mask.emphasize][buffer[i]];
+    if (++chunk_rows >= kChunkRows) flushChunk();
 
     // contador mantido so para o formato do save state do Anemoia
     scanline_counter++;
     if (scanline_counter >= SCANLINES_PER_BUFFER) scanline_counter = 0;
+}
+
+// Entrega as linhas prontas do bloco ao sink (pushImage do binding): a
+// primeira linha do bloco e a scanline corrente menos chunk_rows-1.
+void Ppu2C02::flushChunk()
+{
+    if (chunk_sink == nullptr || chunk_rows <= 0) {
+        chunk_rows = 0;
+        return;
+    }
+    const int first = (int)scanline - (chunk_rows - 1);
+    chunk_sink(chunk_ctx, chunk_buffer, fb_y0 + first, chunk_rows);
+    chunk_rows = 0;
 }
 
 void Ppu2C02::reset()
@@ -631,12 +649,19 @@ MIRROR Ppu2C02::getMirror()
 
 void Ppu2C02::setPalette(uint8_t palette)
 {
-    switch (palette)
+    palette_idx = palette;
+    applyPalette();
+}
+
+// indice x byte order -> tabela certa (8 combinacoes)
+void Ppu2C02::applyPalette()
+{
+    switch (palette_idx)
     {
-    case NTSC565: nes_palette = palette_NTSC565; break;
-    case PAL565: nes_palette = palette_PAL565; break;
-    case NTSC222: nes_palette = palette_NTSC222; break;
-    case PAL222: nes_palette = palette_PAL222; break;
+    case NTSC565: nes_palette = byte_swap ? palette_NTSC565_swap : palette_NTSC565; break;
+    case PAL565: nes_palette = byte_swap ? palette_PAL565_swap : palette_PAL565; break;
+    case NTSC222: nes_palette = byte_swap ? palette_NTSC222_swap : palette_NTSC222; break;
+    case PAL222: nes_palette = byte_swap ? palette_PAL222_swap : palette_PAL222; break;
     default: break;
     }
 }
@@ -698,7 +723,12 @@ void Ppu2C02::loadState(File& state)
     state.read((uint8_t*)&PPUDATA_buffer, sizeof(PPUDATA_buffer));
 }
 
-void Ppu2C02::connectFramebuffer(uint8_t* framebuffer)
+void Ppu2C02::connectFramebuffer(uint8_t* framebuffer, int stride, int x0, int y0)
 {
-    display_buffer = (uint16_t*)framebuffer;
+    // Compat: posicao do bloco no vidro (x0 nao usado pelo sink; quem desenha
+    // decide — ver setChunkSink). framebuffer ignorado: o frame sai pelo sink.
+    (void)framebuffer;
+    (void)stride;
+    fb_x0 = x0;
+    fb_y0 = y0;
 }

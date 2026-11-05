@@ -37,27 +37,23 @@ S.setNativeCanvas(true);
 var W = S.screenWidth();
 var H = S.screenHeight();
 
-// sprite do frame: canvas nativo = pixel fisico exato (256x240); o nucleo
-// blita direto no backing (JsNes) e o drawSprite escala no draw
-var spr = S.createSprite(256, 240);
-if (spr > 0) Nes.bind(spr);
+// Frame direto no quadro do Kui (bindFrame): a PPU escreve a regiao do jogo
+// sem copia; o laco so limpa a tela, desenha os controles e roda o quadro.
 
 // ---- layout -------------------------------------------------------------
-// Jogo em cima (256x240 escalado para caber), controles na faixa de baixo.
+// Jogo em cima (256x240 1:1, centrado pelo bindFrame), controles embaixo.
 var CH = Math.round(H * 0.2);            // altura da faixa de controles
 if (CH < 78) CH = 78; if (CH > 130) CH = 130;
-var zoom = Math.min(W / 256, (H - CH) / 240);
-if (zoom > 2.5) zoom = 2.5; if (zoom < 0.5) zoom = 0.5;
-var FW = Math.round(256 * zoom), FH = Math.round(240 * zoom);
-var GX = Math.round((W - FW) / 2), GY = 0;
+var FH = 240;                            // altura do frame no vidro (1:1)
+var GY = 0;
 
 var R = Math.max(20, Math.min(32, Math.round(W * 0.062)));  // raio de A/B
 var A_X = W - Math.round(R * 2.6), A_Y = H - Math.round(R * 2.6);
 var B_X = W - Math.round(R * 6.4), B_Y = H - Math.round(R * 1.4);
+var SS_W = Math.round(R * 2.0), SS_H = Math.round(R * 0.9);
 var SS_Y = H - SS_H - 6;
 var SEL_X = Math.round(W * 0.30);
 var STA_X = Math.round(W * 0.425);
-var SS_W = Math.round(R * 2.0), SS_H = Math.round(R * 0.9);
 var PAUSE_X = W - 56, PAUSE_W = 56, PAUSE_H = 44;
 var DPAD_MAX_X = Math.round(W * 0.42);
 var DEAD = Math.max(12, Math.round(W * 0.033));  // zona morta do d-pad
@@ -74,6 +70,7 @@ var listOff = 0;
 var romName = "";
 var slotMsg = "";
 var skipMode = (typeof Storage !== "undefined" && Storage.get("skip") === "1");
+var audioOff = false;  // true desliga o audio (bancada)
 var frameNo = 0;
 
 // Dedos vivos: id -> {ax, ay, x, y} (a = onde POUSOU). `fresh` marca quem
@@ -150,9 +147,10 @@ function openRom(idx) {
     }
     screen = "game";
     slotMsg = "";
-    if (spr > 0) Nes.bind(spr);   // o load solta o bind (reset por ROM)
+    Nes.bindFrame();   // o load solta o alvo (reset por ROM): re-aponta
+    needClear = true;  // tira a tela da lista do vidro no primeiro quadro
     Nes.reset();
-    Nes.audioStart();
+    if (!audioOff) Nes.audioStart();
 }
 
 // ---- desenho ------------------------------------------------------------
@@ -235,8 +233,10 @@ function drawPill(x, y, on, label) {
     txtCenter(label, x + Math.round(SS_W / 2), y + 2, on ? 0 : C_TEXT);
 }
 
-function drawControls() {
-    S.fillRect(0, GY + FH, W, H - GY - FH, C_PANEL);
+function drawControls(clearBand) {
+    // A banda de fundo so na entrada (o resto do redesenho sao os botoes em
+    // cima): mudanca de estado marca caixas pequenas, nao a banda inteira.
+    if (clearBand) S.fillRect(0, GY + FH, W, H - GY - FH, C_PANEL);
     var dpadOn = (btnsMask & (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT)) !== 0;
     var dcx = Math.round(DPAD_MAX_X / 2), dcy = GY + FH + Math.round((H - GY - FH) / 2);
     S.drawCircle(dcx, dcy, Math.round(R * 1.3), dpadOn ? C_ACC : 0x3186);
@@ -245,7 +245,9 @@ function drawControls() {
     drawBtn(B_X, B_Y, R, (btnsMask & BTN_B) !== 0, "B");
     drawPill(SEL_X, SS_Y, (btnsMask & BTN_SELECT) !== 0, "SEL");
     drawPill(STA_X, SS_Y, (btnsMask & BTN_START) !== 0, "STA");
-    // pausa (canto superior direito, sobre o jogo)
+    // pausa: FORA da regiao do jogo (o bindFrame escreve 256x240 centrado =
+    // x 112..368; o botao vive em x 424..480), entao nao e sobrescrito pelo
+    // quadro do NES e pode ficar na camada suja do Kui
     S.fillRect(PAUSE_X, 0, PAUSE_W, PAUSE_H, 0);
     S.drawRect(PAUSE_X, 0, PAUSE_W, PAUSE_H, 0x3186);
     txt("II", PAUSE_X + 22, 14, C_DIM, 2);
@@ -432,16 +434,29 @@ function loopErr() {
 }
 
 // ---- ciclo do jogo ----------------------------------------------------------
+// bindFrame escreve o quadro do NES DIRETO no vidro (scanline a scanline, sem
+// copia); o Kui so leva a banda de controles pelas caixas sujas. Por isso:
+// limpa o quadro UMA vez ao entrar (o resto do vidro fica preto) e redesenha
+// os controles so quando o estado deles muda — nada de fillScreen por quadro.
+var needClear = true;
+var bandSig = -1;
+
 function loopGame() {
     pollGame();
     if (pauseHit) { pauseGame(); return; }
     if ((btnsMask & BTN_START) !== 0 && (btnsMask & BTN_SELECT) !== 0) { pauseGame(); return; }
+    if (needClear) {
+        S.fillScreen(0);   // unica limpeza: tira a tela anterior do vidro
+        drawControls(true);
+        bandSig = btnsMask;
+        needClear = false;
+    } else if (btnsMask !== bandSig) {
+        drawControls(false);
+        bandSig = btnsMask;
+    }
     var render = true;
     if (skipMode) render = (frameNo % 2) === 0;
     Nes.frame(btnsMask, render);
-    S.fillScreen(0);
-    if (render) S.drawSprite(spr, GX + FW / 2, GY + FH / 2, 0, zoom, zoom);
-    drawControls();
     UI.end(60);
 }
 
@@ -455,7 +470,8 @@ function pauseGame() {
 function resumeGame() {
     screen = "game";
     fingers = {}; freshIds = [];
-    Nes.audioStart();
+    needClear = true;  // o menu de pausa pintou o vidro inteiro: limpa 1x
+    if (!audioOff) Nes.audioStart();
 }
 
 // ---- laco principal ----------------------------------------------------------

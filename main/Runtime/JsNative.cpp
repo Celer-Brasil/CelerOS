@@ -37,6 +37,7 @@
 #include "esp_heap_caps.h"
 #include "esp_cache.h"
 #include "esp_memory_utils.h"
+#include "esp_mmu_map.h"
 #include "esp_timer.h"
 
 #if CONFIG_CELEROS_AUDIO
@@ -69,8 +70,10 @@ constexpr uint32_t kChip = 0;  // esp32 (nao deve existir: sem PSRAM nao ha rota
 typedef uint32_t (*NativeEntry)(void*, int32_t, int32_t);
 
 struct NativeModule {
-    uint8_t* code;       // imagem em RAM INTERNA (executavel; fetch de PSRAM falha)
+    uint8_t* code;       // alias EXECUTAVEL da imagem (mmap I-window ou RAM interna)
     uint8_t* scratch;    // dados do core em PSRAM (bloco separado)
+    uint8_t* data;       // alias de DADOS da imagem (bloco PSRAM do mmap)
+    void* mmap_vaddr;    // base mapeada (para esp_mmu_unmap)
     size_t blobSize;
     size_t scratchSize;
     uint32_t entries[kMaxEntries];
@@ -108,8 +111,12 @@ void jsNativeReset() {
         }
 #endif
         if (s_modules[i].code != nullptr) {
-            heap_caps_free(s_modules[i].code);
+            if (s_modules[i].mmap_vaddr != nullptr)
+                esp_mmu_unmap(s_modules[i].mmap_vaddr);
+            heap_caps_free(s_modules[i].data);  // dono do bloco (mmap ou interno)
             s_modules[i].code = nullptr;
+            s_modules[i].data = nullptr;
+            s_modules[i].mmap_vaddr = nullptr;
         }
         if (s_modules[i].scratch != nullptr) {
             heap_caps_free(s_modules[i].scratch);
@@ -206,13 +213,15 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     }
     if (slot < 0) { fclose(f); duk_push_int(ctx, -1); return 1; }
 
-    // SPLIT obrigatorio: a CPU busca instrucao da RAM INTERNA — a janela de
-    // DADOS da PSRAM (0x3C...) nao e mapeada para fetch no S3 (bancada
-    // 2026-11-05: InstructionFetchError com PC dentro do blob, ate um blob de
-    // 199 B sem dados). Imagem + .bss (contiguos: a mesma base vale para as
-    // relocacoes) vao para a RAM interna; o scratch do app e um bloco
-    // SEPARADO em PSRAM. Sem fallback de imagem para PSRAM: executaria e
-    // cairia no InstructionFetchError.
+    // EXECUCAO (bancada 2026-11-05): o S3 nao busca instrucao pela janela
+    // de DADOS da PSRAM (InstructionFetchError). Dois caminhos, nesta ordem:
+    //  1) bloco PSRAM mapeado na JANELA DE INSTRUCAO (esp_mmu_map EXEC) —
+    //     mesmo caminho do XIP, sem gastar RAM interna; `base` = alias exec
+    //     (fetch) e `baseData` = alias de dados (R/W). Relocacao de FUNCAO
+    //     leva o alias exec (callx cai na janela); de dados/rodata, o alias
+    //     de dados (store no alias exec faultaria).
+    //  2) imagem+bss inteiros em RAM INTERNA (blob pequeno) se o mmap falhar.
+    // O scratch do app e sempre um bloco PSRAM SEPARADO.
     size_t scratchSize = (size_t)scratchKB * 1024u;
     size_t imgSpan = blobSize;
     if (bssSize) {
@@ -225,27 +234,71 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         }
         imgSpan = (size_t)bssOff + bssSize;
     }
-    uint8_t* base = (uint8_t*)heap_caps_aligned_alloc(
-        64, blobSize + scratchSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t* baseData = (uint8_t*)heap_caps_aligned_alloc(
+        64, imgSpan, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint8_t* base = baseData;
+    void* mmapRoot = nullptr;
+    bool mapped = false;
+    if (baseData != nullptr) {
+        const size_t page = 0x10000;  // CONFIG_MMU_PAGE_SIZE (S3)
+        uintptr_t pa = (uintptr_t)baseData & ~(uintptr_t)(page - 1);
+        size_t span = (((uintptr_t)baseData - pa) + imgSpan + page - 1) &
+                      ~(page - 1);
+        void* vaddr = nullptr;
+        esp_err_t merr = esp_mmu_map((esp_paddr_t)pa, span, MMU_TARGET_PSRAM0,
+                                     MMU_MEM_CAP_EXEC, 0, &vaddr);
+        if (merr == ESP_OK) {
+            base = (uint8_t*)vaddr + ((uintptr_t)baseData - pa);
+            mapped = true;
+            mmapRoot = vaddr;
+        } else {
+            celer_log_printf("[Native] load: mmap exec falhou (%d) — "
+                             "caindo na RAM interna", (int)merr);
+            heap_caps_free(baseData);
+            baseData = nullptr;
+            base = nullptr;
+        }
+    }
     if (base == nullptr) {
+        base = (uint8_t*)heap_caps_aligned_alloc(
+            64, imgSpan, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        baseData = base;
+        if (base == nullptr) {
+            fclose(f);
+            celer_log_printf("[Native] load: sem mmap exec e sem RAM interna "
+                             "para imagem+bss (%u B; maior bloco %u B)",
+                             (unsigned)imgSpan,
+                             (unsigned)heap_caps_get_largest_free_block(
+                                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+            duk_push_int(ctx, -1);
+            return 1;
+        }
+    }
+    uint8_t* scratch = (uint8_t*)heap_caps_aligned_alloc(
+        64, scratchSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (scratch == nullptr) {
         fclose(f);
+        if (mapped) esp_mmu_unmap(mmapRoot);
+        heap_caps_free(baseData);
         celer_log_printf("[Native] load: PSRAM cheia (%u KB)", (unsigned)scratchKB);
         duk_push_int(ctx, -1);
         return 1;
     }
-    if (fread(base, 1, blobSize, f) != blobSize) {
+    if (fread(baseData, 1, blobSize, f) != blobSize) {
         fclose(f);
-        heap_caps_free(base);
+        if (mapped) esp_mmu_unmap(mmapRoot);
+        heap_caps_free(baseData);
+        heap_caps_free(scratch);
         celer_log_printf("[Native] load: blob curto");
         duk_push_int(ctx, -1);
         return 1;
     }
 
-    // v2: zera o .bss e aplica as relocacoes absolutas (cada site guarda o
-    // endereco LINKADO em base 0; a imagem roda em `base`, entao soma-se a
-    // base). A tabela fica no arquivo logo apos a imagem; le em blocos de
-    // pilha para nao alocar. Sites fora da imagem = blob corrompido.
-    if (bssSize) memset(base + bssOff, 0, bssSize);
+    // v2/v3: zera o .bss e aplica as relocacoes absolutas. v3 (header r4=1):
+    // bit31 do offset = KIND — 1 aponta para dados/rodata (alias de dados),
+    // 0 para funcao (alias executavel). v2 antigo: tudo com a mesma base.
+    if (bssSize) memset(baseData + bssOff, 0, bssSize);
+    uint32_t relocKindFlag = rd32(hdr + 72);  // 1 = tabela com kind
     bool relocOk = true;
     if (relocCount) {
         if (fseek(f, (long)relocOff, SEEK_SET) != 0) relocOk = false;
@@ -255,11 +308,13 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
             uint32_t n = left < kRelocChunk ? left : kRelocChunk;
             if (fread(chunk, sizeof(uint32_t), n, f) != n) { relocOk = false; break; }
             for (uint32_t i = 0; i < n; i++) {
-                uint32_t o = chunk[i];
+                uint32_t raw = chunk[i];
+                bool isData = relocKindFlag != 0 && (raw & 0x80000000u) != 0;
+                uint32_t o = relocKindFlag ? (raw & 0x7FFFFFFFu) : raw;
                 if ((o & 3u) || (size_t)o + 4 > blobSize) { relocOk = false; break; }
-                uint32_t v = rd32(base + o);
-                v += (uint32_t)(uintptr_t)base;
-                memcpy(base + o, &v, 4);
+                uint32_t v = rd32(baseData + o);
+                v += (uint32_t)(uintptr_t)(isData ? baseData : base);
+                memcpy(baseData + o, &v, 4);
             }
             left -= n;
         }
@@ -267,46 +322,35 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     fclose(f);
     CelerKernel::noteAppYield();  // tempo NATIVO da leitura (mold js_readFile)
     if (!relocOk) {
-        heap_caps_free(base);
+        if (mapped) esp_mmu_unmap(mmapRoot);
+        heap_caps_free(baseData);
         heap_caps_free(scratch);
         celer_log_printf("[Native] load: relocacao invalida");
         duk_push_int(ctx, -1);
         return 1;
     }
 
-    // Execucao: a escrita passou pela D-cache (writeback C2M leva as linhas
-    // sujas ao PSRAM) e o I-cache pode ter copias velhas da regiao (M2C +
-    // TYPE_INST invalida). O IDF 6.1 RECUSA C2M+TYPE_INST numa chamada so
-    // ("C2M direction doesn't support instruction type", esp_cache_msync.c):
-    // sao DOIS passos. Memoria interna nao tem esse cache — so sincroniza
-    // quando o bloco caiu na PSRAM. Tamanho arredondado para linha de cache
-    // (exigencia da API sem UNALIGNED).
-    if (false) {  // imagem sempre em RAM interna: nada a sincronizar no load
+    // Cache: writeback da imagem pelo ALIAS DE DADOS e invalidacao de
+    // I-cache pelo ALIAS EXECUTIVO (as duas linhas de cache sao fisicas: o
+    // mesmo endereco fisico muda pelos dois mapeamentos).
+    if (mapped) {
         size_t syncLen = (blobSize + 31u) & ~((size_t)31u);
-        if (esp_cache_msync(base, syncLen,
+        if (esp_cache_msync(baseData, syncLen,
                             ESP_CACHE_MSYNC_FLAG_DIR_C2M) != ESP_OK) {
-            heap_caps_free(base);
-            heap_caps_free(scratch);
-            celer_log_printf("[Native] load: writeback falhou (len=%u)",
-                             (unsigned)syncLen);
-            duk_push_int(ctx, -1);
-            return 1;
+            celer_log_printf("[Native] load: writeback da imagem falhou");
         }
-        // A invalidacao de I-cache em endereco da janela de dados pode nao
-        // ser suportada (NOT_SUPPORTED): na primeira carga o I-cache esta
-        // frio para esse endereco e o writeback ja garantiu o conteudo — o
-        // risco so existe reusando um bloco que ja executou codigo velho.
-        // Nao e fatal: segue com aviso no log.
         if (esp_cache_msync(base, syncLen,
                             ESP_CACHE_MSYNC_FLAG_DIR_M2C |
                             ESP_CACHE_MSYNC_FLAG_TYPE_INST) != ESP_OK) {
-            celer_log_printf("[Native] load: icache invalidate nao suportada "
+            celer_log_printf("[Native] load: icache invalidate no alias falhou "
                              "(primeira carga segue ok)");
         }
     }
 
     NativeModule& m = s_modules[slot];
-    m.code = base;
+    m.code = base;        // alias executavel (entradas e callx)
+    m.data = baseData;    // alias de dados (liberar/unmap)
+    m.mmap_vaddr = mmapRoot;
     m.scratch = scratch;
     m.blobSize = blobSize;
     m.scratchSize = scratchSize;
@@ -314,12 +358,13 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     for (uint32_t i = 0; i < entryCount; i++) {
         m.entries[i] = rd32(hdr + 24 + 4 * i);
     }
-    // Diagnostico do blob: base da imagem (offset = pc - base para
-    // simbolizar um crash), tamanhos e o scratch. Um PC fora de
-    // [base, base+img) num crash = salto errado, nao o core.
-    celer_log_printf("[Native] load ok: img=%p/%u B bss=%u scratch=%p/%u\n",
-                     (void*)base, (unsigned)blobSize, (unsigned)bssSize,
-                     (void*)scratch, (unsigned)scratchSize);
+    // Diagnostico: exec/data (pc - exec = offset para addr2line), tamanhos
+    // e o scratch. mmap=1 => imagem PSRAM na janela de instrucao.
+    celer_log_printf("[Native] load ok: exec=%p data=%p img=%u bss=%u "
+                     "scratch=%p/%u mmap=%d\n",
+                     (void*)base, (void*)baseData, (unsigned)blobSize,
+                     (unsigned)bssSize, (void*)scratch, (unsigned)scratchSize,
+                     (int)mapped);
     duk_push_int(ctx, slot + 1);
     return 1;
 }
@@ -399,8 +444,11 @@ duk_ret_t JSBindings::js_nativeFree(duk_context* ctx) {
         m->feed = nullptr;
     }
 #endif
-    heap_caps_free(m->code);
+    if (m->mmap_vaddr != nullptr) esp_mmu_unmap(m->mmap_vaddr);
+    heap_caps_free(m->data);
     m->code = nullptr;
+    m->data = nullptr;
+    m->mmap_vaddr = nullptr;
     if (m->scratch != nullptr) heap_caps_free(m->scratch);
     m->scratch = nullptr;
     m->blobSize = 0;

@@ -121,17 +121,25 @@ def sections(rd, elf):
     return out
 
 
-def absolute_relocs(rd, elf, secs):
+def absolute_relocs(rd, elf, secs, nmbin):
     """Sites de R_XTENSA_32 (endereco absoluto) nas secoes ALOCADAS do ELF
     linkado, como offset na IMAGEM (VMA da secao + offset da relocacao —
     .rela.data offsets sao relativos a .data, nao a imagem!). SLOT0_OP
     (branches PC-relative) ja resolvidos sao ignorados; QUALQUER outro tipo
     nas secoes alocadas e erro. .rela.xt.prop/.rela.xt.lit sao metadado do
     linker (relaxador), NAO relocacoes de runtime — fora."""
+    # Tipos de simbolo no nm: T/t = funcao; D/d/B/b = dados; R/r = rodata.
+    sym_type = {}
+    rn = run([nmbin, elf])
+    if rn.returncode == 0:
+        for line in rn.stdout.splitlines():
+            mm = re.match(r"[0-9a-f]+\s+(\w)\s+(\S+)$", line.strip())
+            if mm:
+                sym_type[mm.group(2)] = mm.group(1)
     r = run([rd, "-r", "-W", elf])
     if r.returncode != 0:
         die("readelf -r falhou", r.stderr)
-    sites = set()
+    sites = {}  # site -> kind (0 = codigo/exec, 1 = dados)
     bad = []
     cur = None  # secao-alvo (nome sem o prefixo .rela)
     for line in r.stdout.splitlines():
@@ -141,11 +149,16 @@ def absolute_relocs(rd, elf, secs):
             continue
         if cur is None or cur not in secs:
             continue  # xt.prop/xt.lit e afins: metadado, nao alocado
-        m = re.match(r"([0-9a-f]{8})\s+[0-9a-f]+\s+(R_XTENSA_\w+)",
-                     line.strip())
+        m = re.match(r"([0-9a-f]{8})\s+[0-9a-f]+\s+(R_XTENSA_\w+)"
+                     r"\s+[0-9a-f]+\s+(\S+)", line.strip())
         if not m:
-            continue
-        off, typ = int(m.group(1), 16), m.group(2)
+            m = re.match(r"([0-9a-f]{8})\s+[0-9a-f]+\s+(R_XTENSA_\w+)",
+                         line.strip())
+            if not m:
+                continue
+            off, typ, sym = int(m.group(1), 16), m.group(2), ""
+        else:
+            off, typ, sym = int(m.group(1), 16), m.group(2), m.group(3)
         if typ == "R_XTENSA_32":
             # O readelf dessa toolchain imprime o Offset de .rela.data ja
             # como ENDERECO (VMA), nao offset-dentro-da-secao (visto na
@@ -153,10 +166,17 @@ def absolute_relocs(rd, elf, secs):
             # offset valido dentro da secao e sempre < size.
             vma, ssz = secs[cur]
             site = off if off >= ssz else vma + off
-            sites.add(site)
+            # Funcao alvo vai para o ALIAS EXECUTAVEL; data/rodata para o
+            # endereco de dados. Simbolo de secao ".text" e funcao (ponteiro
+            # de codigo). Desconhecido => dados (acesso errado por alias exec
+            # faulta; por dados num ponteiro de codigo o callx falha — a
+            # escolha segura e o caso dominante: literais apontam p/ dados).
+            st = sym_type.get(sym, "")
+            is_code = (st in ("T", "t")) or sym == ".text"
+            sites[site] = 0 if is_code else 1
             if VERBOSE_RELOCS:
-                sys.stderr.write("[reloc] %s@%x -> site 0x%x\n"
-                                 % (cur, off, site))
+                sys.stderr.write("[reloc] %s@%x -> site 0x%x kind=%d (%s)\n"
+                                 % (cur, off, site, 0 if is_code else 1, sym))
         elif typ in ("R_XTENSA_SLOT0_OP", "R_XTENSA_NONE"):
             continue  # branch PC-relative resolvido / relocacao no-op
         else:
@@ -165,7 +185,7 @@ def absolute_relocs(rd, elf, secs):
         die("relocacoes inesperadas (%d): %s — o formato v2 so aplica "
             "R_XTENSA_32" % (len(bad),
                              ", ".join("%s@%x" % (t, o) for o, t in bad[:8])))
-    return sorted(sites)
+    return sorted(sites.items())
 
 
 def build():
@@ -235,12 +255,12 @@ def build():
         # ALIGN entre secoes deixa buraco no meio da imagem: o loader copia
         # a imagem como memoria plana, entao o vao vira zeros.
         image += b"\x00" * (image_end - len(image))
-        sites = absolute_relocs(tc["readelf"], elf, secs)
+        sites = absolute_relocs(tc["readelf"], elf, secs, tc["nm"])
         if len(sites) > MAX_RELOCS:
             die("tabela de relocacoes com %d sites (max %d)"
                 % (len(sites), MAX_RELOCS))
-        for o in sites:
-            if o % 4 or o + 4 > image_end:
+        for o, _kind in sites:
+            if o % 4 or o + 4 > image_end or o >= (1 << 31):
                 die("site de relocacao invalido: 0x%x (imagem 0x%x)"
                     % (o, image_end))
 
@@ -263,13 +283,14 @@ def build():
 
         # 5. cabecalho v2 + imagem + tabela.
         digest = hashlib.sha256(image + b"".join(
-            struct.pack("<I", o) for o in sites)).digest()
+            struct.pack("<I", o | (k << 31)) for o, k in sites)).digest()
         header = struct.pack(
             HEADER_FMT, MAGIC, HEADER_SIZE, len(image), CHIP_ID, API_LEVEL,
             len(entries), *(entries + [0] * (ENTRY_COUNT_MAX - len(entries))),
             # relocOff e offset no ARQUIVO (header + imagem): a tabela vem
             # logo depois da imagem
-            bss_off, bss_size, HEADER_SIZE + len(image), len(sites), 0, 0,
+            bss_off, bss_size, HEADER_SIZE + len(image), len(sites),
+            1, 0,  # r4=1: tabela de relocs com KIND (bit31 = dados)
             digest, b"\x00" * 16)
         assert len(header) == HEADER_SIZE, "cabecalho != 128 bytes"
         out = os.path.abspath(args.out)
@@ -277,8 +298,8 @@ def build():
         with open(out, "wb") as f:
             f.write(header)
             f.write(image)
-            for o in sites:
-                f.write(struct.pack("<I", o))
+            for o, k in sites:
+                f.write(struct.pack("<I", o | (k << 31)))
 
         print("blob nativo OK: %s" % out)
         print("  imagem %d B (%s) + %d relocs + cabecalho %d B = %d B"

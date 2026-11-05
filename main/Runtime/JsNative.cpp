@@ -69,7 +69,8 @@ constexpr uint32_t kChip = 0;  // esp32 (nao deve existir: sem PSRAM nao ha rota
 typedef uint32_t (*NativeEntry)(void*, int32_t, int32_t);
 
 struct NativeModule {
-    uint8_t* code;       // base de execucao: [imagem][scratch] no MESMO bloco
+    uint8_t* code;       // imagem em RAM INTERNA (executavel; fetch de PSRAM falha)
+    uint8_t* scratch;    // dados do core em PSRAM (bloco separado)
     size_t blobSize;
     size_t scratchSize;
     uint32_t entries[kMaxEntries];
@@ -109,6 +110,10 @@ void jsNativeReset() {
         if (s_modules[i].code != nullptr) {
             heap_caps_free(s_modules[i].code);
             s_modules[i].code = nullptr;
+        }
+        if (s_modules[i].scratch != nullptr) {
+            heap_caps_free(s_modules[i].scratch);
+            s_modules[i].scratch = nullptr;
         }
     }
 }
@@ -201,18 +206,24 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     }
     if (slot < 0) { fclose(f); duk_push_int(ctx, -1); return 1; }
 
-    // [imagem][scratch] num bloco so; alinhamento 64 (linha de cache 32 com
-    // folga — o esp_cache_msync exige alinhamento sem a flag UNALIGNED).
-    // O .bss do blob mora logo apos a imagem (dentro da regiao de scratch):
-    // o app aloca o scratch JA contando com ele (layout documentado no core).
+    // SPLIT obrigatorio: a CPU busca instrucao da RAM INTERNA — a janela de
+    // DADOS da PSRAM (0x3C...) nao e mapeada para fetch no S3 (bancada
+    // 2026-11-05: InstructionFetchError com PC dentro do blob, ate um blob de
+    // 199 B sem dados). Imagem + .bss (contiguos: a mesma base vale para as
+    // relocacoes) vao para a RAM interna; o scratch do app e um bloco
+    // SEPARADO em PSRAM. Sem fallback de imagem para PSRAM: executaria e
+    // cairia no InstructionFetchError.
     size_t scratchSize = (size_t)scratchKB * 1024u;
-    if (bssSize && ((size_t)bssOff < blobSize ||
-                    (size_t)bssOff + bssSize > blobSize + scratchSize)) {
-        fclose(f);
-        celer_log_printf("[Native] load: bss fora do bloco (%u+%u)",
-                         (unsigned)bssOff, (unsigned)bssSize);
-        duk_push_int(ctx, -1);
-        return 1;
+    size_t imgSpan = blobSize;
+    if (bssSize) {
+        if ((size_t)bssOff < blobSize) {
+            fclose(f);
+            celer_log_printf("[Native] load: bss sobrepoe a imagem (%u+%u)",
+                             (unsigned)bssOff, (unsigned)bssSize);
+            duk_push_int(ctx, -1);
+            return 1;
+        }
+        imgSpan = (size_t)bssOff + bssSize;
     }
     uint8_t* base = (uint8_t*)heap_caps_aligned_alloc(
         64, blobSize + scratchSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -257,6 +268,7 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     CelerKernel::noteAppYield();  // tempo NATIVO da leitura (mold js_readFile)
     if (!relocOk) {
         heap_caps_free(base);
+        heap_caps_free(scratch);
         celer_log_printf("[Native] load: relocacao invalida");
         duk_push_int(ctx, -1);
         return 1;
@@ -269,11 +281,12 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     // sao DOIS passos. Memoria interna nao tem esse cache — so sincroniza
     // quando o bloco caiu na PSRAM. Tamanho arredondado para linha de cache
     // (exigencia da API sem UNALIGNED).
-    if (esp_ptr_external_ram(base)) {
+    if (false) {  // imagem sempre em RAM interna: nada a sincronizar no load
         size_t syncLen = (blobSize + 31u) & ~((size_t)31u);
         if (esp_cache_msync(base, syncLen,
                             ESP_CACHE_MSYNC_FLAG_DIR_C2M) != ESP_OK) {
             heap_caps_free(base);
+            heap_caps_free(scratch);
             celer_log_printf("[Native] load: writeback falhou (len=%u)",
                              (unsigned)syncLen);
             duk_push_int(ctx, -1);
@@ -294,12 +307,19 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
 
     NativeModule& m = s_modules[slot];
     m.code = base;
+    m.scratch = scratch;
     m.blobSize = blobSize;
     m.scratchSize = scratchSize;
     m.entryCount = (int)entryCount;
     for (uint32_t i = 0; i < entryCount; i++) {
         m.entries[i] = rd32(hdr + 24 + 4 * i);
     }
+    // Diagnostico do blob: base da imagem (offset = pc - base para
+    // simbolizar um crash), tamanhos e o scratch. Um PC fora de
+    // [base, base+img) num crash = salto errado, nao o core.
+    celer_log_printf("[Native] load ok: img=%p/%u B bss=%u scratch=%p/%u\n",
+                     (void*)base, (unsigned)blobSize, (unsigned)bssSize,
+                     (void*)scratch, (unsigned)scratchSize);
     duk_push_int(ctx, slot + 1);
     return 1;
 }
@@ -339,7 +359,7 @@ duk_ret_t JSBindings::js_nativeCall(duk_context* ctx) {
     NativeEntry fn = (NativeEntry)((uintptr_t)(m->code + m->entries[fnIdx]) |
                                    kFnFormatCall8);
     int64_t pb0 = esp_timer_get_time();
-    uint32_t r = fn(m->code + m->blobSize, a0, a1);  // scratch: apos o blob
+    uint32_t r = fn(m->scratch, a0, a1);  // scratch: bloco PSRAM separado
     int64_t pb1 = esp_timer_get_time();
     s_pbCall += pb1 - pb0;
     if (a0 == 8) { s_pbN++; probeTick(pb1); }
@@ -364,7 +384,7 @@ duk_ret_t JSBindings::js_nativeRead(duk_context* ctx) {
     if (n > m->scratchSize - (size_t)off) n = m->scratchSize - (size_t)off;
     char* buf = (char*)malloc(n > 0 ? n : 1);
     if (buf == nullptr) { duk_push_null(ctx); return 1; }
-    memcpy(buf, m->code + m->blobSize + off, n);
+    memcpy(buf, m->scratch + off, n);
     CelerKernel::noteAppYield();
     return jsPushOwnedString(ctx, buf, n);
 }
@@ -381,6 +401,8 @@ duk_ret_t JSBindings::js_nativeFree(duk_context* ctx) {
 #endif
     heap_caps_free(m->code);
     m->code = nullptr;
+    if (m->scratch != nullptr) heap_caps_free(m->scratch);
+    m->scratch = nullptr;
     m->blobSize = 0;
     m->scratchSize = 0;
     m->entryCount = 0;
@@ -403,7 +425,7 @@ duk_ret_t JSBindings::js_nativeWrite(duk_context* ctx) {
     const char* data = duk_require_lstring(ctx, 2, &len);
     if (off < 0 || (size_t)off >= m->scratchSize) { duk_push_int(ctx, -1); return 1; }
     if (len > m->scratchSize - (size_t)off) len = m->scratchSize - (size_t)off;
-    memcpy(m->code + m->blobSize + off, data, len);
+    memcpy(m->scratch + off, data, len);
     CelerKernel::noteAppYield();
     duk_push_int(ctx, (duk_int_t)len);
     return 1;
@@ -432,7 +454,7 @@ duk_ret_t JSBindings::js_nativeLoadFile(duk_context* ctx) {
     if (sz < 0) { fclose(f); duk_push_int(ctx, -1); return 1; }
     size_t cap = m->scratchSize - (size_t)off;
     size_t want = (size_t)sz > cap ? cap : (size_t)sz;
-    size_t got = fread(m->code + m->blobSize + off, 1, want, f);
+    size_t got = fread(m->scratch + off, 1, want, f);
     fclose(f);
     CelerKernel::noteAppYield();
     duk_push_int(ctx, (duk_int_t)got);
@@ -463,7 +485,7 @@ duk_ret_t JSBindings::js_nativeSaveFile(duk_context* ctx) {
     else esp_task_wdt_reset();
     FILE* f = fopen(tmp, "wb");
     if (f == nullptr) { duk_push_boolean(ctx, 0); return 1; }
-    bool ok = fwrite(m->code + m->blobSize + off, 1, (size_t)len, f) == (size_t)len;
+    bool ok = fwrite(m->scratch + off, 1, (size_t)len, f) == (size_t)len;
     ok = fclose(f) == 0 && ok;
     if (ok) {
         remove(path);  // rename nao sobrescreve no littlefs: remove primeiro
@@ -499,14 +521,13 @@ duk_ret_t JSBindings::js_nativeDraw(duk_context* ctx) {
     // O buffer pode ter sido escrito pela CPU agora: writeback antes do DMA
     // (mesmo rito do load, so a direcao de dados).
     int64_t pb0 = esp_timer_get_time();
-    if (esp_ptr_external_ram(m->code)) {
+    if (esp_ptr_external_ram(m->scratch)) {
         size_t syncLen = ((size_t)w * (size_t)h * 2u + 31u) & ~((size_t)31u);
-        esp_cache_msync(m->code + m->blobSize + off, syncLen,
-                        ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        esp_cache_msync(m->scratch + off, syncLen, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
     }
     tgt->clearClipRect();
     tgt->pushImage(jsx(x), jsy(y), w, h,
-                   reinterpret_cast<const lgfx::swap565_t*>(m->code + m->blobSize + off));
+                   reinterpret_cast<const lgfx::swap565_t*>(m->scratch + off));
     s_pbDraw += esp_timer_get_time() - pb0;
     CelerKernel::noteAppYield();
     duk_push_boolean(ctx, 1);
@@ -543,7 +564,7 @@ duk_ret_t JSBindings::js_nativeAudio(duk_context* ctx) {
     }
     CelerKernel::noteAppYield();
     int64_t pb0 = esp_timer_get_time();
-    bool okw = m->feed->write(m->code + m->blobSize + off, (size_t)len);
+    bool okw = m->feed->write(m->scratch + off, (size_t)len);
     s_pbAud += esp_timer_get_time() - pb0;
     duk_push_boolean(ctx, okw);
     return 1;

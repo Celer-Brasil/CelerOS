@@ -1,7 +1,7 @@
 // Anemoia — emulador de NES do CelerOS (nucleo nativo main/Nes, API 57).
 //
 // O app e a casca: lista as ROMs (.nes em /sd/roms e /local/roms), desenha
-// o frame do nucleo (Nes.frame blita no sprite; System.drawSprite escala),
+// o frame do nucleo (N.frame blita no sprite; System.drawSprite escala),
 // mapeia toque -> bitmask do controller (d-pad por traco na esquerda, A/B
 // na direita, Start/Select no centro; multitouch API 43) e guarda save
 // states por ROM em slots no appData. Pausa = Start+Select juntos (mesmo
@@ -19,16 +19,17 @@ var BTN_UP = 16, BTN_DOWN = 32, BTN_LEFT = 64, BTN_RIGHT = 128;
 
 var S = System;
 
-if (typeof Nes === "undefined") {
-    // firmware sem o nucleo: mensagem e sai (a Loja ja bloqueia placas sem
-    // PSRAM; este caso e firmware velho no aparelho novo)
+var HAS_NAT = S.getInfo().hasNative === true &&
+              typeof S.nativeLoad === "function" && typeof S.nativeCall === "function";
+if (!HAS_NAT) {
+    // placa/build sem o acelerador nativo: a Loja ja bloqueia pelo requires
+    // (badge S3); este caso e firmware antigo ou build sem a flag
     S.fillScreen(0);
     S.setTextColor(0xFFFF, 0);
     S.drawString("Anemoia", 60, 90, 4);
     S.setTextColor(0xC618, 0);
-    S.drawString("Precisa do firmware 1.15.0+", 20, 150, 1);
-    S.drawString("(objeto Nes, API 57). Atualize", 20, 164, 1);
-    S.drawString("pela Loja ou OTA.", 20, 178, 1);
+    S.drawString("Precisa do CelerOS 1.16+", 20, 150, 1);
+    S.drawString("(API 58, nucleo nativo no build).", 20, 164, 1);
     S.delay(3500);
     S.exitApp();
 }
@@ -48,6 +49,59 @@ if (CH < 78) CH = 78; if (CH > 130) CH = 130;
 var FH = 240;                            // altura do frame no vidro (1:1)
 var GY = 0;
 var GX = Math.round((W - 256) / 2);      // x do frame 1:1
+
+// ---- nucleo nativo (API 58): MESMO contrato do antigo objeto Nes de
+// firmware, agora sobre o blob CLRN que viaja com o app (appDir/nes_core.bin).
+// O core devolve os offsets do proprio layout (core_ctl 1..5): ROM/PCM/FB/
+// STATE — o app nunca hardcoda numeros de .bss.
+var N = (function () {
+    var h = 0, romOff = 0, pcmOff = 0, fbOff = 0, stateOff = 0;
+    var audioOn = false, sprId = 0;
+    function ctl(cmd, arg) { return S.nativeCall(h, 0, cmd, arg || 0); }
+    return {
+        bind: function (id) { sprId = id; },
+        load: function (path) {
+            if (h > 0) S.nativeFree(h);
+            // scratch cobre o .bss do core (ROM 1MB + fb 120KB + estado)
+            h = S.nativeLoad(System.appDir() + "/nes_core.bin", 1400);
+            if (h <= 0) return false;
+            ctl(0);                              // INIT
+            romOff = ctl(1); pcmOff = ctl(2); fbOff = ctl(3); stateOff = ctl(4);
+            var n = S.nativeLoadFile(h, romOff, path);
+            return n > 0 && ctl(6, n) === 1;     // LOAD
+        },
+        reset: function () { if (h > 0) ctl(7); },
+        frame: function (btns, render) {
+            if (h <= 0) return;
+            ctl(8, ((btns | 0) & 0xFF) | (render ? 0x100 : 0));
+            if (audioOn) {
+                var n = ctl(11);                 // PCM do quadro
+                if (n > 0) S.nativeAudio(h, pcmOff, n);
+            }
+            if (render && sprId > 0) {
+                S.useSprite(sprId);
+                S.nativeDraw(h, fbOff, 0, 0, 256, 240);
+                S.useSprite(0);
+            }
+        },
+        audioStart: function () { audioOn = h > 0; return audioOn; },
+        audioStop: function () { audioOn = false; if (h > 0) S.nativeAudioStop(h); },
+        saveState: function (p) {
+            if (h <= 0) return false;
+            var n = ctl(9);
+            return n > 0 && S.nativeSaveFile(h, stateOff, n, p);
+        },
+        loadState: function (p) {
+            if (h <= 0) return false;
+            var n = S.nativeLoadFile(h, stateOff, p);
+            return n > 0 && ctl(10, n) === 1;
+        },
+        unload: function () {
+            if (h > 0) { S.nativeAudioStop(h); S.nativeFree(h); h = 0; }
+            audioOn = false;
+        },
+    };
+})();
 
 var R = Math.max(20, Math.min(32, Math.round(W * 0.062)));  // raio de A/B
 var A_X = W - Math.round(R * 2.6), A_Y = H - Math.round(R * 2.6);
@@ -112,7 +166,7 @@ function romBase() {
     if (i > 0) n = n.substring(0, i);
     return n;
 }
-function slotPath(n) { return dataDir + "/" + romBase() + ".s" + n; }
+function slotPath(n) { return dataDir + romBase() + ".s" + n; }   // dataDir ja tem a barra
 
 function scanRoms() {
     roms = [];
@@ -141,19 +195,19 @@ function scanRoms() {
 function openRom(idx) {
     romName = roms[idx].name;
     listOff = 0;
-    Nes.unload();
-    if (!Nes.load(roms[idx].path)) {
+    N.unload();
+    if (!N.load(roms[idx].path)) {
         errMsg = romName + " nao abriu (nao e iNES, grande demais ou mapper fora da lista: 0/1/2/3/4/69).";
         screen = "err";
         return;
     }
     screen = "game";
     slotMsg = "";
-    if (spr > 0) Nes.bind(spr);  // o load solta o alvo (reset por ROM): re-aponta
+    if (spr > 0) N.bind(spr);  // o load solta o alvo (reset por ROM): re-aponta
     needClear = true;  // tira a tela da lista do vidro no primeiro quadro
-    Nes.reset();
+    N.reset();
     radioPause();      // modo jogo: sem scan da malha (o controller BLE + msync do painel estalam sob carga)
-    if (!audioOff) Nes.audioStart();
+    if (!audioOff) N.audioStart();
 }
 
 // ---- radio ----------------------------------------------------------------
@@ -384,18 +438,18 @@ function drawPause() {
 
 function doMenu(i) {
     if (menuSub === 1) {
-        slotMsg = Nes.saveState(slotPath(i)) ? "salvo no slot " + (i + 1) : "falhou ao salvar";
+        slotMsg = N.saveState(slotPath(i)) ? "salvo no slot " + (i + 1) : "falhou ao salvar";
         menuSub = 0; menuArm = -1; return;
     }
     if (menuSub === 2) {
         if (!FS.exists(slotPath(i))) slotMsg = "slot vazio";
-        else if (Nes.loadState(slotPath(i))) { slotMsg = "carregado do slot " + (i + 1); }
+        else if (N.loadState(slotPath(i))) { slotMsg = "carregado do slot " + (i + 1); }
         else slotMsg = "state invalido";
         menuSub = 0; menuArm = -1; return;
     }
     var item = MENU[i];
     if (item === "Continuar") resumeGame();
-    else if (item === "Reset") { Nes.reset(); slotMsg = ""; resumeGame(); }
+    else if (item === "Reset") { N.reset(); slotMsg = ""; resumeGame(); }
     else if (item === "Salvar estado") { menuSub = 1; menuArm = -1; }
     else if (item === "Carregar estado") { menuSub = 2; menuArm = -1; }
     else if (item === "Frameskip") {
@@ -480,7 +534,7 @@ function loopGame() {
     }
     var render = true;
     if (skipMode) render = (frameNo % 2) === 0;
-    Nes.frame(btnsMask, render);
+    N.frame(btnsMask, render);
     if (render && spr > 0) {
         // 1:1 no vidro, centrado na horizontal (o sprite tem o quadro do NES)
         S.useSprite(spr);
@@ -495,7 +549,7 @@ function pauseGame() {
     menuSub = 0; menuArm = -1; menuHover = -1; hadMenuTouch = false;
     slotMsg = "";
     fingers = {}; freshIds = [];
-    Nes.audioStop();
+    N.audioStop();
     radioResume();  // fora do jogo a malha volta
 }
 function resumeGame() {
@@ -503,7 +557,7 @@ function resumeGame() {
     fingers = {}; freshIds = [];
     needClear = true;  // o menu de pausa pintou o vidro inteiro: limpa 1x
     radioPause();
-    if (!audioOff) Nes.audioStart();
+    if (!audioOff) N.audioStart();
 }
 
 // ---- laco principal ----------------------------------------------------------

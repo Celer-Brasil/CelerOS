@@ -481,6 +481,40 @@ class Renderer {
                 }
             }
         };
+
+        // Nes (API 57): stub do emulador/harness — o nucleo nativo (main/Nes)
+        // nao existe fora do firmware. bind guarda o sprite; frame pinta barras
+        // de cor no backing (padrao de teste: o app blita com drawSprite
+        // normal); save/load voltam true e o audio e no-op. Da para QA de
+        // menus/layout/fluxo sem ROM e sem firmware.
+        // no firmware o objeto e global (duk_put_global_string "Nes"): o
+        // stub segue o contrato e expoe env.Nes, nao System.Nes
+        env.Nes = {
+            _spr: 0,
+            bind(id) { this._spr = id | 0; return id > 0; },
+            load(path) { this._rom = String(path); return true; },
+            frame(btns, render) {
+                const sp = r.sprites[this._spr - 1];
+                if (!sp) return false;
+                if (render === false) return true;
+                const bars = [0x0000, 0x001F, 0x07E0, 0x07FF, 0xF800, 0xF81F, 0xFFE0, 0xFFFF];
+                for (let y = 24; y < sp.h - 24; y++) {
+                    const row = y * sp.w;
+                    for (let x = 0; x < sp.w; x++) sp.fb[row + x] = bars[Math.floor((x * bars.length) / sp.w)];
+                }
+                for (let y = sp.h - 24; y < sp.h; y++) {
+                    const row = y * sp.w;
+                    for (let x = 0; x < sp.w; x++) sp.fb[row + x] = ((x >> 3) + (y >> 3)) & 1 ? 0x0000 : 0x8410;
+                }
+                return true;
+            },
+            reset() { return true; },
+            saveState() { return true; },
+            loadState() { return true; },
+            audioStart() { return true; },
+            audioStop() {},
+            unload() { this._spr = 0; this._rom = null; },
+        };
         // API 34: o retangulo (x, y, w, h) do sprite id volta a MESMA posicao
         // do alvo corrente (sprite cobrindo o canvas a partir de 0,0); o
         // recorte do alvo nao muda

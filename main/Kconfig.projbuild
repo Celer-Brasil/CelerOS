@@ -215,6 +215,22 @@ config CELEROS_JS_PHYSICS
       e a dep celeros.physics feature-detecta: P.verletFast sai do ar e o
       P.verlet interpretado da propria dep segue valendo.
 
+config CELEROS_JS_NES
+    bool "Emulador de NES para apps (objeto Nes, API 57)"
+    depends on CELEROS_UI  # o frame sai num sprite do pool (JsGfx): sem vidro nao existe
+    depends on SPIRAM      # ROM inteira + frame 256x240x2 (122 KB) morrem na PSRAM
+    default y if IDF_TARGET_ESP32S3 && SPIRAM
+    default n
+    help
+      Nucleo Anemoia (GPLv3, Shim06/Anemoia-ESP32) portado para main/Nes:
+      CPU 6502 + PPU 2C02 + APU 2A03 + mappers 0/1/2/3/4/69, ROM inteira em
+      PSRAM (teto 1 MB), APU tickada inline a cada 2 ciclos de CPU (amostras
+      PCM16 mono 44,1 kHz via sink), frame 256x240 RGB565 num framebuffer
+      proprio. O objeto Nes (JsNes.cpp) da load/frame/saveState e blita o
+      frame num sprite do pool; o audio sai pelo PcmFeed do AudioPlayer.
+      ~40 KB de flash: so placas com PSRAM e vidro (smartdisplay, watch,
+      cao). CYD/cyd-vspi/devkit/esp32-cam nem compilam o nucleo.
+
 config CELEROS_JS_GPIO
     bool "API System.gpio para apps"
     default y

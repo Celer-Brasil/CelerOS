@@ -163,7 +163,10 @@ function makeEnv() {
         '/local': { dir: true },
         '/sd': { dir: true },
         '/local/apps': { dir: true },
-        '/local/config_snake_hi.txt': { data: '17' }
+        '/local/config_snake_hi.txt': { data: '17' },
+        '/local/roms': { dir: true },
+        '/sd/roms': { dir: true },
+        '/sd/roms/Demo.nes': { data: 'NES\u001a' + new Array(33).join('\u0000') }
     };
 
     // ---- Jail do FS (paridade de JsFsJail.h + JsFs.cpp) --------------------
@@ -1210,6 +1213,23 @@ function makeEnv() {
     notify: function(t, m) { log.push('[notify] ' + t + '|' + (m || '')); },
     notifications: function() { return env.__notifs || []; },
     notificationsClear: function() { env.__notifs = []; }
+    };
+
+    // Nes (API 57): stub headless do nucleo Anemoia (main/Nes) — global como
+    // no firmware (duk_put_global_string); frame confere o sprite bound.
+    env.Nes = {
+        _spr: 0,
+        bind: function(id) { this._spr = id | 0; return id > 0; },
+        load: function() { return true; },
+        frame: function(btns, render) {
+            return this._spr > 0 && !!env.__spriteSlots[this._spr - 1];
+        },
+        reset: function() { return true; },
+        saveState: function() { return true; },
+        loadState: function() { return true; },
+        audioStart: function() { return true; },
+        audioStop: function() {},
+        unload: function() { this._spr = 0; },
     };
 
     env.FS = FS;

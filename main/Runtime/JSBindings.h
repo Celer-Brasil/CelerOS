@@ -79,6 +79,17 @@ private:
     static duk_ret_t js_useSprite(duk_context *ctx);   // troca de alvo (API 12)
     static duk_ret_t js_spriteSlots(duk_context *ctx); // limite do pool (API 29)
     static void deleteAllSprites();                    // reset por app
+    static CelerSprite* spriteById(int id);            // pool para bindings (JsNes)
+    // emulador de NES (JsNes.cpp, nucleo main/Nes; reset por app: jsNesReset)
+    static duk_ret_t js_nesLoad(duk_context *ctx);
+    static duk_ret_t js_nesBind(duk_context *ctx);
+    static duk_ret_t js_nesFrame(duk_context *ctx);
+    static duk_ret_t js_nesReset(duk_context *ctx);
+    static duk_ret_t js_nesSaveState(duk_context *ctx);
+    static duk_ret_t js_nesLoadState(duk_context *ctx);
+    static duk_ret_t js_nesAudioStart(duk_context *ctx);
+    static duk_ret_t js_nesAudioStop(duk_context *ctx);
+    static duk_ret_t js_nesUnload(duk_context *ctx);
     static bool useSprite;
 
     // Verlet nativo (API 31, JsPhysics.cpp): mundos em buffer C++ (malloc,

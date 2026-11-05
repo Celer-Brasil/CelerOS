@@ -147,6 +147,12 @@ endif()
 if(CONFIG_CELEROS_JS_GAME_ACCEL)
     list(APPEND CELEROS_SRCS "Runtime/JsRigid.cpp")
 endif()
+# Emulador de NES (objeto Nes, API 57): nucleo Anemoia em main/Nes (TU unico
+# NesCore.cpp) + bindings JsNes.cpp. Gate duplo: CELEROS_UI (sprite do pool)
+# e SPIRAM (ROM + frame 122 KB na PSRAM) — CYD/devkit/cam nem compilam.
+if(CONFIG_CELEROS_JS_NES)
+    list(APPEND CELEROS_SRCS "Runtime/JsNes.cpp" "Nes/Nes.cpp" "Nes/NesCore.cpp")
+endif()
 # Objeto AI (API 18/24): ~10 KB de transporte LLM/TTS. Desligado na CYD, onde
 # os apps de IA ja estao fora da imagem de dados (boards/cyd/data-exclude.txt).
 if(CONFIG_CELEROS_JS_AI)
@@ -362,8 +368,8 @@ foreach(page ${CELEROS_WEB_PAGES})
 endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    CELEROS_VERSION="1.14.0"
-    CELEROS_API_LEVEL=56
+    CELEROS_VERSION="1.15.0"
+    CELEROS_API_LEVEL=57
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

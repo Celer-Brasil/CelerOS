@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 57 — 412 funcoes.
+// API level 57 — 421 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -38,12 +38,12 @@ declare function clearInterval(id: number): void;
 declare function require(nome: string): any;
 
 declare const Nes: {
-    load(arg0: number): any;
-    bind(arg0: number): any;
-    frame(arg0: number, arg1?: number): any;
+    load(path: string): any;
+    bind(spriteId: number): any;
+    frame(buttons: number, render?: number): any;
     reset(): void;
-    saveState(arg0: number): any;
-    loadState(arg0: number): any;
+    saveState(path: string): any;
+    loadState(path: string): any;
     audioStart(): any;
     audioStop(): void;
     unload(): void;

@@ -45,6 +45,14 @@ int spriteCap() { return Board::profile().hasPsram ? kSpritePool : 1; }
 // conversores de JsInternal.h e pelo touch (JsSystem.cpp). Zerado no init().
 bool s_nativeCanvas = false;
 
+// Acesso de outros bindings ao pool (JsNes blita o frame NES no backing do
+// sprite bound). id 1..cap; 0 ou fora = nullptr (o corrente e id... nao: o
+// pool nao tem id implicito, createSprite devolveu 1..n na ordem).
+CelerSprite* JSBindings::spriteById(int id) {
+    if (id < 1 || id > kSpritePool) return nullptr;
+    return s_spritePool[id - 1];
+}
+
 // Reset por app (JSBindings::init): app que saiu sem deleteSprite nao vaza
 void JSBindings::deleteAllSprites() {
     for (CelerSprite*& s : s_spritePool) {

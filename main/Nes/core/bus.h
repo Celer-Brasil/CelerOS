@@ -1,0 +1,55 @@
+#ifndef BUS_H
+#define BUS_H
+
+#include <stdint.h>
+
+#include "../nes_compat.h"
+#include "cartridge.h"
+#include "ppu2C02.h"
+
+class Cpu6502;
+class Bus
+{
+public:
+    Bus();
+    ~Bus();
+
+public:
+    Ppu2C02 ppu;
+    Cpu6502* cpu;
+    Cartridge* cart;
+    uint8_t RAM[2048];
+    uint8_t controller = 0x00;
+
+    void setController(uint8_t state);
+    uint8_t getControllerState();
+
+    void cpuWrite(uint16_t addr, uint8_t data);
+    uint8_t cpuRead(uint16_t addr);
+    void setPPUMirrorMode(MIRROR mirror);
+    MIRROR getPPUMirrorMode();
+
+    void insertCartridge(Cartridge* cartridge);
+    void connectCPU(Cpu6502* n);
+    void reset();
+    void IRQ();
+    void NMI();
+
+    static constexpr int PAGE_SIZE = 256;
+    static constexpr int NUM_PAGES = 0x10000 / PAGE_SIZE;
+    uint8_t* read_pages[NUM_PAGES] = {};
+    uint8_t* write_pages[NUM_PAGES] = {};
+
+    using ReadHandler = uint8_t (*)(Bus*, uint16_t);
+    using WriteHandler = void (*)(Bus*, uint16_t, uint8_t);
+    ReadHandler read_handlers[NUM_PAGES] = {};
+    WriteHandler write_handlers[NUM_PAGES] = {};
+
+    void buildPageTables();
+
+private:
+    uint8_t controller_state;
+    uint8_t controller_strobe = 0x00;
+};
+
+#endif

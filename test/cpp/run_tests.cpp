@@ -28,6 +28,7 @@
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
 #include "../../main/USBHost/UsbDesc.h"
+#include "../../main/Nes/Nes.h"
 
 // Jail do FS dos apps JS: o teste faz o papel do runtime (perm/s_appPkg)
 #include <cstdint>
@@ -3243,6 +3244,110 @@ static void testInstallMarker() {
     CHECK(!due("", ""));
 }
 
+// ============================================================
+// Emulador NES (nucleo Anemoia portado, main/Nes): ROM NROM
+// sintetica escreve $3F00=0x01 e habilita o bg; todo pixel do
+// frame tem que sair palette_NTSC565[0][1] (o backdrop le
+// palette_table[0] — renderBackground). Save/load roundtrip
+// deterministico e sink de audio contando bytes por quadro.
+static void testNesEmu() {
+    // ROM: header 16B + PRG 16KB + CHR 8KB (tudo zero exceto o programa)
+    static std::vector<uint8_t> rom(16 + 16384 + 8192, 0);
+    memcpy(&rom[0], "NES\x1a", 4);
+    rom[4] = 1;  // 1 banco PRG de 16KB (NROM)
+    rom[5] = 1;  // 1 banco CHR de 8KB
+    uint8_t* prg = &rom[16];
+    int o = 0;
+    auto emit = [&](std::initializer_list<uint8_t> bytes) {
+        for (uint8_t b : bytes) prg[o++] = b;
+    };
+    // Programa no offset 0: no NROM de 1 banco o banco espelha $8000-$BFFF em
+    // $C000-$FFFF, entao offset 0 roda tanto em $8000 quanto em $C000 (uma
+    // primeira versao deste teste escreveu em 0x4000 — alem do fim do banco —
+    // e o codigo foi parar no CHR: framebuffer uniforme na paleta zerada).
+    emit({0x78});                            // SEI
+    emit({0xD8});                            // CLD
+    emit({0xA9, 0x00});                      // LDA #$00
+    emit({0x8D, 0x00, 0x20});                // STA $2000 (NMI off, inc 1)
+    emit({0x8D, 0x01, 0x20});                // STA $2001 (render off)
+    emit({0xA9, 0x3F});                      // LDA #$3F
+    emit({0x8D, 0x06, 0x20});                // STA $2006
+    emit({0xA9, 0x00});                      // LDA #$00
+    emit({0x8D, 0x06, 0x20});                // STA $2006 (v=$3F00)
+    emit({0xA9, 0x01});                      // LDA #$01
+    emit({0x8D, 0x07, 0x20});                // STA $2007 (backdrop cor 1)
+    emit({0xA9, 0x0A});                      // LDA #$0A
+    emit({0x8D, 0x01, 0x20});                // STA $2001 (bg on + coluna 0)
+    emit({0x4C, 0x1D, 0xC0});                // JMP $C01D (o proprio JMP: laco)
+
+    // Vetores em $FFFA-$FFFF (fim do PRG): NMI/RESET/IRQ -> $C000
+    int v = 0x3FFA;
+    prg[v + 0] = 0x00; prg[v + 1] = 0xC0;  // NMI
+    prg[v + 2] = 0x00; prg[v + 3] = 0xC0;  // RESET
+    prg[v + 4] = 0x00; prg[v + 5] = 0xC0;  // IRQ
+
+    nes::Nes n;
+    uint32_t crc = 0;
+    uint8_t mapperId = 0xFF;
+    CHECK(n.load(&rom[0], (uint32_t)rom.size(), &crc, &mapperId));
+    CHECK(n.loaded());
+    CHECK(mapperId == 0);
+    CHECK(crc != 0);
+    CHECK(n.openScreen());
+
+    // Audio: o sink conta bytes PCM16 mono; ~1468 B por quadro (734 amostras)
+    static uint32_t audioBytes = 0;
+    n.setAudioSink([](const uint8_t* p, uint32_t bytes) { (void)p; audioBytes += bytes; });
+
+    n.reset();
+    for (int i = 0; i < 30; i++) n.frame(0);
+
+    const uint16_t* fb = n.framebuffer();
+    CHECK(fb != nullptr);
+    bool uniform = true;
+    for (int i = 1; i < nes::SCREEN_W * nes::SCREEN_H; i++)
+        if (fb[i] != fb[0]) { uniform = false; break; }
+    CHECK(uniform);
+    CHECK(fb[0] == 0x00F2);  // palette_NTSC565[0][1]: backdrop $3F00=0x01
+    CHECK(audioBytes > 30 * 1200);       // audio inline esta produzindo
+    CHECK(audioBytes < 30 * 1700);       // e na taxa certa (~1458 B/quadro: 729 amostras)
+
+    // Frameskip de runtime (render=false) roda sem desenhar
+    n.frame(0, false);
+    n.frame(0, false);
+    CHECK(n.framebuffer()[0] == 0x00F2);
+
+    // Save state: determinismo — S1 (t=30) difere de S2 (t=50), e voltar para
+    // S1 e refazer os mesmos 20 quadros reproduz S2 byte a byte
+    nes::File s1;
+    CHECK(n.saveState(s1));
+    for (int i = 0; i < 20; i++) n.frame(0);
+    nes::File s2;
+    CHECK(n.saveState(s2));
+    CHECK(s1.bytes() != s2.bytes());
+
+    // File de escrita nao le: o binding (e este teste) abre uma view em modo
+    // leitura sobre os bytes gravados, como fara com o readFile do device
+    nes::File s1r(s1.bytes().data(), s1.bytes().size());
+    CHECK(n.loadState(s1r));
+    for (int i = 0; i < 20; i++) n.frame(0);
+    nes::File s3;
+    CHECK(n.saveState(s3));
+    CHECK(s3.bytes() == s2.bytes());
+
+    // ROM fora do formato e recusada com diagnostico
+    nes::Nes bad;
+    const char* err = nullptr;
+    uint8_t junk[32] = {};
+    memcpy(junk, "XXXX", 4);
+    CHECK(!bad.load(junk, sizeof(junk), nullptr, nullptr, &err));
+    CHECK(err != nullptr && err[0] != 0);
+    CHECK(!bad.loaded());
+
+    n.unload();
+    CHECK(!n.loaded());
+}
+
 int main() {
     testSemVer();
     testFsJail();
@@ -3290,6 +3395,7 @@ int main() {
     testUpdatePolicy();
     testInstallMarker();
     testUsbDesc();
+    testNesEmu();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

@@ -3809,3 +3809,72 @@ phone (the store is shared) — filter by the pad's address.
 Erases bonds: with `addr`, only that peer; without it, **all of them** (on
 the watch that includes the phone — prefer passing the pad's address). Also
 clears the "last pad" slot. Returns `true` when something was erased.
+## 54. API Level 57 — NES emulator: the `Nes` object
+
+The Anemoia core (GPLv3, Shim06/Anemoia-ESP32) ported into the firmware
+(`main/Nes`): 6502 CPU + 2C02 PPU + 2A03 APU + mappers 0/1/2/3/4/69, at
+60 fps with audio. Emulation is real time — hence the native core
+(host-tested in `test/cpp` with a synthetic ROM); the JS app is the shell
+(menus, touch controls, save states). The reference app is
+`hub_apps/Anemoia`.
+
+Availability: boards with `CELEROS_JS_NES` enabled only (S3 with PSRAM
+and a display: smartdisplay, watch, dog). Feature-detect with
+`typeof Nes !== "undefined"`; on other boards the object does not exist.
+
+App contract:
+
+- The frame (256x240 RGB565) lands in a pool SPRITE: create
+  `System.createSprite(256, 240)` under native canvas
+  (`System.setNativeCanvas(true)`; `topbar:false` in app.json) and
+  `Nes.bind(id)`. Every `Nes.frame` blits the frame into the sprite
+  backing (physical stride aware); the app draws it with
+  `System.drawSprite` scaled (drawSprite x,y is the CENTER of the
+  scaled sprite).
+- `load` drops the bind (per-ROM reset): bind again after every load.
+- ROMs: `.nes` files on the FS (same jail as `FS.readFile`), read whole
+  into PSRAM (1 MB cap). The app declares the `fs` permission.
+- Audio: `Nes.audioStart` wires the APU into `PcmFeed` (PSRAM queue ->
+  I2S, 44.1 kHz PCM16 mono); returns false on speakerless boards. Volume
+  is the device volume (`System.setVolume`).
+- Buttons: NES bitmask — bit0 A, 1 B, 2 Select, 3 Start, 4 Up, 5 Down,
+  6 Left, 7 Right.
+- Save states in the Anemoia format (~6-20 KB per file; apps keep them
+  in appData per ROM/slot).
+
+#### `Nes.load(path)` → Boolean (API 57)
+iNES parse + mapper + PSRAM framebuffer. false = not iNES, too big
+(1 MB cap), unsupported mapper, or no free PSRAM.
+
+#### `Nes.bind(spriteId)` → Boolean (API 57)
+Frame destination sprite (at least 256x240 PHYSICAL pixels — under
+virtual canvas the glass scaling changes the real size and the contract
+breaks). false = bad id or sprite too small.
+
+#### `Nes.frame(buttons[, render])` → Boolean (API 57)
+Emulates one frame (~30008 CPU cycles; APU ticked every 2 cycles) with
+the `buttons` bitmask and blits it into the bound sprite.
+`render=false` runs the frame without drawing (runtime frameskip: only
+the sprite-0 hit is simulated, so games waiting on it do not hang).
+
+#### `Nes.reset()` (API 57)
+Warm reset (reset vector; mapper pages rebuilt).
+
+#### `Nes.saveState(path)` → Boolean (API 57)
+Serializes the state ("ANEMOIA" + CRC + RAM/CPU/PPU/mapper, ~6-20 KB)
+and writes it to `path` (fs write jail).
+
+#### `Nes.loadState(path)` → Boolean (API 57)
+Loads a state from `path`. false = missing, corrupt, or from a DIFFERENT
+ROM (the header stores the CRC and it is verified).
+
+#### `Nes.audioStart()` → Boolean (API 57)
+Wires the APU to I2S via PcmFeed. false = no speaker on the board or the
+output is busy (playWav/AI speech in progress — same audio guard).
+
+#### `Nes.audioStop()` (API 57)
+Stops the audio and releases the I2S guard.
+
+#### `Nes.unload()` (API 57)
+Releases cartridge, ROM (PSRAM), framebuffer and audio. Launching
+another app does the same (per-app reset).

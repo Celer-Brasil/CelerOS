@@ -1,7 +1,17 @@
-// Neon Surfer (2D Runner) 3.0 — corrida infinita neon em 3 faixas, agora na
+// Neon Surfer (2D Runner) 3.1 — corrida infinita neon em 3 faixas, na
 // CelerGame 1.7 + UI 1.3 (ES5 puro, Duktape).
 //
-// Novidades da 3.0:
+// Novidades da 3.1:
+// - controle por DESLIZE em qualquer lugar da pista: o stick nasce onde o
+//   dedo pousa e segue o traco (re-ancora a cada passo = faixas seguidas
+//   num arrasto continuo); o toque seco virou ATAQUE — tap num drone
+//   derruba ele, e o drone voltou mais frequente pra virar alvo, nao
+//   sentenca.
+// - power-ups na pista: escudo (invencivel e atropela trem), ima (moedas
+//   de qualquer faixa voam pro jogador) e x2 (pontos em dobro), com chip
+//   de tempo restante no topo da pista.
+//
+// Vem da 3.0:
 // - arte IA em spritesheet de VERDADE: arte.js descreve a folha 4x4 pelo
 //   E.spr.meta e o jogo pede clipes com E.spr.animOf (heroi/trem/moeda);
 //   o prescale continua gravando os quadros na escala da tela num slot so.
@@ -17,8 +27,7 @@
 //   E.ui.dialog, E.ui.pause/gameOver e os 12 icones compartilhados.
 // - E.prof sob flag nos ajustes (input/mods/update/draw em us no HUD).
 //
-// A jogabilidade da 2.4 segue igual: 3 faixas, toque na faixa, deslize ou
-// stick multitoque, trens/moedas, drone perseguidor, velocidade crescente e
+// O resto segue igual: 3 faixas, trens/moedas, velocidade crescente e
 // recorde no NVS. A arte de IA e a pista justa do pista.js continuam.
 
 var E = require("celeros.game");       // core 1.7 (loop, input, dirty, slots)
@@ -34,8 +43,15 @@ var T = E.theme, W = E.W, H = E.H, S = System;
 var TK = E.ui.preset("neon");
 var ROAD_X = 20, ROAD_W = 200, LANE_W = ROAD_W / 3;
 var LANES = [ROAD_X + LANE_W / 2, ROAD_X + 3 * LANE_W / 2, ROAD_X + 5 * LANE_W / 2];
-var HUD_H = 34, PAD_Y = H - 66, AI_KEY = 0xF81F;
+var HUD_H = 34, AI_KEY = 0xF81F;
 var ROAD_BG = E.color.mix(T.bg, T.raised, 0.45);
+
+// power-ups (timers em segundos; DUR = duracao da ativacao)
+var PW_KINDS = ["escudo", "ima", "x2"];
+var PW_DUR = { escudo: 6, ima: 8, x2: 8 };
+var PW_COR = { escudo: T.accent, ima: 0x07FF, x2: 0x07E0 };
+var PW_GLYPH = { escudo: "E", ima: "M", x2: "x2" };
+var PW_NOME = { escudo: "ESCUDO!", ima: "IMA!", x2: "PONTOS x2!" };
 
 // recorde no NVS do core (sem permissao "fs": o appData da 1.x morreu)
 var hi = E.save.num("hi", 0);
@@ -52,31 +68,38 @@ E.audio.sfxTable.coin = [[988, 45], [1319, 70]];
 E.audio.sfxTable.crash = [[150, 220], [90, 160]];
 E.audio.sfxTable.record = [[784, 70], [1047, 110]];
 E.audio.sfxTable.alerta = [[880, 55], [660, 55], [880, 90]];
+E.audio.sfxTable.kill = [[1047, 35], [1568, 60]];
+E.audio.sfxTable.pw = [[659, 40], [880, 40], [1175, 70]];
 function sfx(what) { E.audio.sfx(what); }
 
 // ---------------------------------------------------------------- estado ---
 var playerLane, playerX, playerY, playerBob;
 var score, coins, speed, distance, spawnT, newRecord, morto;
 var rnd = null, moveStep = 0;
-var pausado = false, pressPause = false, pressPad = false, pressT = 0, marco = 0;
+var pausado = false, pressPause = false, pressT = 0, marco = 0;
+var pw = { escudo: 0, ima: 0, x2: 0 };
+var drones = 0;
 var dlg = null;
 
-var PLAN_H = 10, planoObs = null, planoCoin = null, planoRow = 0;
+var PLAN_H = 10, planoObs = null, planoCoin = null, planoPw = null, planoRow = 0;
 
 // drone (perseguicao por forcas, sem dep: seek + evade + corredor)
-var drone = null, droneVoo = 0, droneEspera = 10;
+var drone = null, droneVoo = 0, droneEspera = 6;
 var AREA_DRONE = { x: ROAD_X + 4, y: HUD_H + 4, w: ROAD_W - 8, h: H - HUD_H - 8 };
 
-// stick local multitoque (dono do dedo; o mesmo codigo no toque unico)
+// stick local multitoque: nasce ONDE o dedo pousa e segue o traco; cada
+// STK_PASSO px de arrasto horizontal = uma faixa (re-ancora no passo).
+// Toque seco (sem arrastar) = ataque — derruba o drone sob o dedo.
 var stk = { finger: null, active: false, cx: W / 2, cy: H - 12,
-            x: 0, y: 0, r: 18, dead: 0.22 };
-var stickLock = 0;
+            x: 0, y: 0, r: 18 };
+var STK_PASSO = 30;
 var PAUSE_B = { x: W - 36, y: 4, w: 26, h: 26 };
 
-var COMO_JOGAR = "Toque na faixa para onde quer ir, deslize para os lados ou arraste o " +
-                 "stick da faixa de baixo. Desvie dos trens e do drone, colete as moedas " +
-                 "e bata o recorde. A velocidade aumenta com o tempo. O botao de pausa " +
-                 "fica no topo.";
+var COMO_JOGAR = "Deslize o dedo na pista para trocar de faixa (o stick segue o " +
+                 "traco). Toque num drone para derruba-lo antes que ele te alcance. " +
+                 "Desvie dos trens, colete moedas e pegue os power-ups: escudo " +
+                 "(invencivel e atropela trem), ima (atrai moedas) e x2 (pontos em " +
+                 "dobro). A velocidade aumenta com o tempo. Pausa no topo.";
 
 // ------------------------------------------------------------- sprites -----
 // painter procedural = fallback quando o PNG/slot nao carrega
@@ -265,35 +288,46 @@ function drawTrem() {
 }
 function updTrem() {
     this.y += moveStep;
-    if (this.y > H + 12) { this.dead = true; score += 5; return; }
+    if (this.y > H + 12) { this.dead = true; score += soma(5); return; }
     if (morto) return;
     var py = playerY - 20 + playerBob;
     if (Math.abs(LANES[this.lane] - playerX) < LANE_W / 2 &&
-        py < this.y + this.h && py + 40 > this.y) bater();
+        py < this.y + this.h && py + 40 > this.y) {
+        if (pw.escudo > 0) {
+            // escudo ativo: atropela o trem
+            this.dead = true;
+            score += soma(25);
+            sfx("kill");
+            pBurst(LANES[this.lane], this.y + 40, { n: 14, colors: [T.err, T.warn],
+                                                    speed: 90, speed2: 160, life: 0.5 });
+            pText(LANES[this.lane], this.y + 20, "+25");
+        } else bater();
+    }
 }
 function drawMoeda() {
     var y = this.y + Math.round(Math.sin((distance + this.y) / 18) * 2);
-    if (temAtlas) AN_MOEDA.draw(Math.round(LANES[this.lane]), y, _CENTRO_O);
+    var x = Math.round(this.px);
+    if (temAtlas) AN_MOEDA.draw(x, y, _CENTRO_O);
     else {
-        S.fillCircle(Math.round(LANES[this.lane]), y, 9, T.warn);
-        S.fillCircle(Math.round(LANES[this.lane]) - 2, y - 2, 4,
-                     S.mixColor(T.warn, T.text, 40));
+        S.fillCircle(x, y, 9, T.warn);
+        S.fillCircle(x - 2, y - 2, 4, S.mixColor(T.warn, T.text, 40));
     }
 }
-function updMoeda() {
+function updMoeda(dt) {
     this.y += moveStep;
     if (this.y > H + 12) { this.dead = true; return; }
     if (morto) return;
+    if (pw.ima > 0) this.px += (playerX - this.px) * Math.min(1, dt * 8);
     var py = playerY - 20 + playerBob;
-    if (Math.abs(LANES[this.lane] - playerX) < LANE_W / 2 &&
+    if (Math.abs(this.px - playerX) < LANE_W / 2 &&
         py < this.y + 10 && py + 40 > this.y - 10) {
-        score += 50;
+        score += soma(50);
         coins++;
         sfx("coin");
-        pBurst(LANES[this.lane], this.y, { n: 8, color: T.warn, speed: 50, speed2: 90,
-                                          life: 0.4, size: 2 });
-        pRing(LANES[this.lane], this.y, { color: T.warn, r0: 4, speed: 90, life: 0.35 });
-        pText(LANES[this.lane], Math.max(HUD_H + 6, this.y - 6), "+50");
+        pBurst(this.px, this.y, { n: 8, color: T.warn, speed: 50, speed2: 90,
+                                  life: 0.4, size: 2 });
+        pRing(this.px, this.y, { color: T.warn, r0: 4, speed: 90, life: 0.35 });
+        pText(this.px, Math.max(HUD_H + 6, this.y - 6), "+" + soma(50));
         this.dead = true;
     }
 }
@@ -303,10 +337,48 @@ function addTrem(lane, y) {
                    draw: drawTrem, update: updTrem });
 }
 function addMoeda(lane, y) {
-    entities.add({ type: "coin", lane: lane, y: y,
+    entities.add({ type: "coin", lane: lane, y: y, px: LANES[lane],
                    x: LANES[lane] - 10, w: 20, h: 20,
                    draw: drawMoeda, update: updMoeda });
 }
+
+// power-up: token circular com glifo (E/M/x2), anel pulsante
+var _PW_RING = { fill: false };
+function drawPw() {
+    var x = Math.round(LANES[this.lane]);
+    var y = this.y + Math.round(Math.sin((distance + this.y) / 16) * 2);
+    var c = PW_COR[this.kind];
+    S.fillCircle(x, y, 10, TK.surface3);
+    E.gfx.circle(x, y, 11, c, _PW_RING);
+    E.gfx.circle(x, y, 13 + Math.round(Math.sin(S.millis() / 130) * 2), c, _PW_RING);
+    E.gfx.text(PW_GLYPH[this.kind], x, y,
+               { ts: "tiny", align: "center", valign: "middle", color: T.text });
+}
+function updPw() {
+    this.y += moveStep;
+    if (this.y > H + 12) { this.dead = true; return; }
+    if (morto) return;
+    var py = playerY - 20 + playerBob;
+    if (Math.abs(LANES[this.lane] - playerX) < LANE_W / 2 &&
+        py < this.y + 12 && py + 40 > this.y - 12) {
+        ativaPw(this.kind);
+        this.dead = true;
+    }
+}
+function addPw(lane, y, kind) {
+    entities.add({ type: "pw", lane: lane, y: y, kind: kind,
+                   x: LANES[lane] - 12, w: 24, h: 24,
+                   draw: drawPw, update: updPw });
+}
+function ativaPw(kind) {
+    pw[kind] = PW_DUR[kind];
+    sfx("pw");
+    pRing(playerX, playerY + playerBob, { color: PW_COR[kind], r0: 6, speed: 150,
+                                          life: 0.4 });
+    pText(playerX, Math.max(HUD_H + 6, playerY - 30), PW_NOME[kind], PW_COR[kind]);
+}
+// pontos com x2 ligado dobram
+function soma(n) { return pw.x2 > 0 ? n * 2 : n; }
 
 // ---------------------------------------------------------- pista (gen) ----
 // Plano de 10 linhas x 3 faixas: 14 trens espalhados (minDist 2, como o
@@ -347,6 +419,24 @@ function novoPlano() {
         planoCoin[cr][cc] = "c";
         nc++;
     }
+    // power-up: 1 por plano com sorte (55%), em celula livre de trem E moeda
+    planoPw = [];
+    for (r = 0; r < PLAN_H; r++) {
+        var lp = [];
+        for (c = 0; c < 3; c++) lp.push(".");
+        planoPw.push(lp);
+    }
+    if (rnd() < 0.55) {
+        var liv3 = [];
+        for (r = 0; r < PLAN_H; r++) for (c = 0; c < 3; c++) {
+            if (g[r][c] === "." && planoCoin[r][c] === ".") liv3.push(r * 3 + c);
+        }
+        E.m.shuffle(liv3, rnd);
+        if (liv3.length) {
+            var pr = (liv3[0] / 3) | 0, pc = liv3[0] % 3;
+            planoPw[pr][pc] = PW_KINDS[(rnd() * PW_KINDS.length) | 0];
+        }
+    }
     planoRow = 0;
 }
 
@@ -375,6 +465,15 @@ function nascerDoPlano() {
         }
         break;                          // uma fileira/moeda por linha
     }
+    // power-up da linha: so nasce em faixa segura (mesma regra da moeda)
+    for (i = 0; i < 3; i++) {
+        var kp = planoPw[r][i];
+        if (kp === ".") continue;
+        if (PISTA.seguraPraMoeda(entities.items, i, yF - 14, yF + 14, cfg)) {
+            addPw(i, yF, kp);
+        }
+        break;                          // um power-up por linha
+    }
 }
 
 // -------------------------------------------------------------- drone ------
@@ -387,16 +486,16 @@ function nasceDrone() {
 function atualizaDrone(dt) {
     if (!drone) {
         droneVoo += dt;
-        if (droneVoo > droneEspera && distance > 900) {
+        if (droneVoo > droneEspera && distance > 500) {
             droneVoo = 0;
-            droneEspera = 12 + rnd() * 6;
+            droneEspera = 5 + rnd() * 4;   // vem mais vezes: virou alvo, nao sentenca
             nasceDrone();
         }
         return false;
     }
     var d = drone, i, e;
     d.t += dt;
-    if (d.t > 14) {
+    if (d.t > 12) {
         if (!d.fuga) d.fuga = true;
         d.x += d.vx * dt;
         d.y -= 170 * dt;
@@ -430,10 +529,32 @@ function atualizaDrone(dt) {
     }
     if (!d.fuga && Math.abs(d.x - playerX) < 16 &&
         Math.abs(d.y - (playerY + playerBob)) < 22) {
-        bater();
+        if (pw.escudo > 0) destruirDrone();
+        else bater();
         return true;
     }
     return false;
+}
+
+// ataque (toque seco): derruba o drone sob o dedo
+function atacar(x, y) {
+    if (drone && Math.abs(x - drone.x) < 22 && Math.abs(y - drone.y) < 24) {
+        destruirDrone();
+        return true;
+    }
+    return false;
+}
+function destruirDrone() {
+    if (!drone) return;
+    drones++;
+    score += soma(120);
+    sfx("kill");
+    pBurst(drone.x, drone.y, { n: 16, colors: [T.err, T.warn, T.text],
+                               speed: 90, speed2: 170, life: 0.6, grav: 60 });
+    pRing(drone.x, drone.y, { color: T.err, r0: 6, speed: 200, life: 0.45 });
+    pText(drone.x, Math.max(HUD_H + 6, drone.y - 8), "+" + soma(120));
+    drone = null;
+    droneVoo = 0;
 }
 
 // ------------------------------------------------------------ simulacao ---
@@ -452,12 +573,15 @@ function resetGame() {
     pressT = 0;
     marco = 0;
     pressPause = false;
-    pressPad = false;
+    pw.escudo = 0;
+    pw.ima = 0;
+    pw.x2 = 0;
+    drones = 0;
     rnd = E.rng((Math.random() * 2147483647) | 0);
     novoPlano();
     drone = null;
     droneVoo = 0;
-    droneEspera = 10;
+    droneEspera = 6;
     entities.clear();
     fxClear();
 }
@@ -468,31 +592,25 @@ function move(dir) {
     playerLane = nl;
     sfx("lane");
 }
-function laneAt(x) {
-    return x < ROAD_X + LANE_W ? 0 : (x < ROAD_X + 2 * LANE_W ? 1 : 2);
-}
 
-// stick: um passo por empurrao (volta ao centro rearma); tap seco na zona
-// vira o toque na faixa (fallback do toque unico)
+// deslize: QUALQUER dedo que pousar na pista (abaixo do HUD) vira o stick;
+// o stick segue o traco — a cada STK_PASSO px de arrasto horizontal move uma
+// faixa e re-ancora (um arrasto continuo percorre as 3 faixas). Toque seco
+// (levantou sem arrastar) = ATAQUE: derruba o drone sob o dedo. O dedo
+// primario nao ataca aqui (o ramo justUp do update cuida — evita ataque duplo)
 function leStick() {
     var ts = E.input.touches || EMPTY_L, f, i;
     f = stk.finger !== null ? E.input.finger(stk.finger) : null;
     if (f && !f.down) {
-        if (!f.moved && f.heldMs < 300) {
-            var alvo = laneAt(f.x);
-            if (alvo > playerLane) move(1);
-            else if (alvo < playerLane) move(-1);
-        }
+        if (!f.moved && !f.primary) atacar(f.x, f.y);
         stk.finger = null;
         stk.active = false;
-        stk.cx = W / 2;
-        stk.cy = H - 12;
         f = null;
     }
     if (!f) {
         for (i = 0; i < ts.length; i++) {
             var g = ts[i];
-            if (g.justDown && g.y >= PAD_Y) {
+            if (g.justDown && g.y >= HUD_H) {
                 f = g;
                 stk.finger = g.id;
                 stk.active = true;
@@ -502,26 +620,24 @@ function leStick() {
             }
         }
     }
-    if (!f) { stk.x = 0; stk.y = 0; stickLock = 0; return; }
-    var dx = (f.x - stk.cx) / stk.r, dy = (f.y - stk.cy) / stk.r;
-    var m = Math.sqrt(dx * dx + dy * dy);
-    if (m < stk.dead) { stk.x = 0; stk.y = 0; return; }
-    var k = (m - stk.dead) / (1 - stk.dead) / m;
-    stk.x = dx * k;
-    stk.y = dy * k;
-    if (stk.x > 0.55) {
-        if (stickLock !== 1) { move(1); stickLock = 1; }
-    } else if (stk.x < -0.55) {
-        if (stickLock !== -1) { move(-1); stickLock = -1; }
-    } else if (Math.abs(stk.x) < 0.3) stickLock = 0;
+    if (!f) { stk.x = 0; stk.y = 0; return; }
+    var dx = f.x - stk.cx, dy = f.y - stk.cy;
+    if (Math.abs(dx) >= STK_PASSO) {
+        move(dx > 0 ? 1 : -1);
+        stk.cx = f.x;                    // re-ancora: traco continuo = faixas seguidas
+        dx = 0;
+    }
+    stk.x = Math.max(-1, Math.min(1, dx / stk.r));
+    stk.y = Math.max(-1, Math.min(1, dy / stk.r));
 }
 var EMPTY_L = [];
 var _ringO = { fill: false };
 var _knobO = { fill: true, smooth: true };
 function desenhaStick() {
-    E.gfx.circle(stk.cx, stk.cy, stk.r, stk.active ? T.accent : T.stroke, _ringO);
+    if (!stk.active) return;             // o stick so existe enquanto o dedo desliza
+    E.gfx.circle(stk.cx, stk.cy, stk.r, T.accent, _ringO);
     E.gfx.circle(stk.cx + stk.x * stk.r * 0.7, stk.cy + stk.y * stk.r * 0.7,
-                 Math.round(stk.r * 0.38), stk.active ? T.accent : T.stroke, _knobO);
+                 Math.round(stk.r * 0.38), T.accent, _knobO);
 }
 
 // dedo extra no botao de pausa (o primario pode estar no stick)
@@ -538,7 +654,7 @@ function toquePausaExtra() {
 }
 
 function bater() {
-    if (morto) return;
+    if (morto || pw.escudo > 0) return;
     morto = true;
     sfx("crash");
     if (score > hi) { hi = score; newRecord = true; E.save.set("hi", hi); }
@@ -573,6 +689,8 @@ function simula(dt) {
     atualizaDrone(dt);
     if (morto) return;
     speed += dt * 5.0;
+    var pk;
+    for (pk in pw) if (pw[pk] > 0) { pw[pk] -= dt; if (pw[pk] < 0) pw[pk] = 0; }
 
     // rastro da prancha + escapamento (emissores alimentados pelo pool)
     trailAcc += dt * 26;
@@ -590,8 +708,17 @@ function simula(dt) {
 }
 
 function desenhaHeroi() {
-    if (temAtlas) AN_HEROI.draw(Math.round(playerX), Math.round(playerY + playerBob), _CENTRO_O);
-    else paintAi("ai0", Math.round(playerX) - 18, Math.round(playerY - 24 + playerBob), 0.75);
+    var hx = Math.round(playerX), hy = Math.round(playerY + playerBob);
+    if (pw.escudo > 0) {
+        // aura pulsante do escudo (2 aneis; some com fade nos ultimos 1,5 s)
+        var rs = 27 + Math.round(Math.sin(S.millis() / 90) * 2);
+        var cs = pw.escudo < 1.5 ? (Math.floor(S.millis() / 120) % 2 === 0 ?
+                                    T.accent : TK.glow) : T.accent;
+        E.gfx.circle(hx, hy + 20, rs, cs, _ringO);
+        E.gfx.circle(hx, hy + 20, rs - 5, TK.glow, _ringO);
+    }
+    if (temAtlas) AN_HEROI.draw(hx, hy, _CENTRO_O);
+    else paintAi("ai0", hx - 18, hy - 24, 0.75);
 }
 function desenhaDrone() {
     if (!drone) return;
@@ -625,6 +752,24 @@ function paintRoad(x, y, w, h) {
 }
 
 var DASH_O = { r: 2, screen: true };
+var _CHIP_TX = { ts: "tiny", color: 0, fit: 21, screen: true };
+// chips dos power-ups ativos: barra colorida + glifo + segundos restantes,
+// empilhados da direita pra esquerda no topo da pista (a pista repinta o
+// quadro inteiro todo frame, entao o chip pode ser dinamico)
+function desenhaPwChips() {
+    var x = W - 6;
+    for (var k = PW_KINDS.length - 1; k >= 0; k--) {
+        var nome = PW_KINDS[k];
+        var t = pw[nome];
+        if (t <= 0) continue;
+        var c = PW_COR[nome];
+        x -= 32;
+        S.fillRect(x + 2, HUD_H + 3, 30, 13, TK.surface2);
+        S.fillRect(x + 2, HUD_H + 3, 3, 13, c);
+        _CHIP_TX.color = T.text;
+        E.gfx.text(PW_GLYPH[nome] + " " + Math.ceil(t), x + 8, HUD_H + 4, _CHIP_TX);
+    }
+}
 function drawJogo() {
     var off = Math.floor(distance) % 44;
     for (var y = -44; y < H; y += 44) {
@@ -638,6 +783,7 @@ function drawJogo() {
     desenhaDrone();
     fxDraw();
     desenhaStick();
+    desenhaPwChips();
 }
 
 // ------------------------------------------------------------------ HUD ----
@@ -689,7 +835,6 @@ function retomar() {
     pausado = false;
     stk.finger = null;
     stk.active = false;
-    stickLock = 0;
     armaJogo();
     drawHud();
 }
@@ -700,11 +845,31 @@ if (typeof __harness !== "undefined") {
         estado: function () {
             return { score: score, distance: distance, lane: playerLane, pausado: pausado,
                      fps: E.fps, prof: E.prof.on, linha: planoRow, entidades: entities.count,
+                     vivo: !morto, drones: drones,
+                     pw: { escudo: pw.escudo, ima: pw.ima, x2: pw.x2 },
                      drone: drone ? { x: drone.x, y: drone.y, t: drone.t, fuga: drone.fuga } : null,
                      stick: { active: stk.active, x: stk.x, finger: stk.finger },
                      atlas: temAtlas, fundo: bgSpr, slots: E.slots.n() };
         },
-        forcarDrone: function () { distance = 1000; droneVoo = 99; droneEspera = 0; },
+        comecar: function () { E.goto("jogo", { transition: "fade", ms: 0 }); },
+        forcarDrone: function (x, y) {
+            distance = 1000;
+            if (typeof x === "number") {
+                drone = { x: x, y: y, vx: 0, vy: 0, t: 0, fuga: false };
+            } else {
+                droneVoo = 99;
+                droneEspera = 0;
+            }
+        },
+        darPw: function (k) { addPw(playerLane, playerY - 10, k); },
+        forcarMoeda: function (lane, y) {
+            addMoeda(lane === undefined ? playerLane : lane,
+                     y === undefined ? playerY - 10 : y);
+        },
+        forcarTrem: function (lane, y) {
+            addTrem(lane === undefined ? playerLane : lane,
+                    y === undefined ? playerY - 30 : y);
+        },
         limpar: function () { entities.clear(); }
     };
 }
@@ -737,7 +902,7 @@ E.run({
                     E.gfx.rect(i * 30, H - alt[i], 26, alt[i], T.accentD, { screen: true });
                 }
             }
-            E.ui.badge("v3.0", 6, 6, { color: TK.accent2 });
+            E.ui.badge("v3.1", 6, 6, { color: TK.accent2 });
             if (dlg) {
                 if (!dlg.draw(18, 72, 204)) {
                     dlg = null;
@@ -832,18 +997,14 @@ E.run({
             if (i.justDown) {
                 pressT = S.millis();
                 pressPause = i.y < HUD_H;
-                pressPad = i.y >= PAD_Y;
             } else if (i.justUp && !i.moved) {
+                // toque seco do primario: pausa no botao, ATAQUE no resto da
+                // pista (o traco/deslize e o controle; o tap virou acao)
                 if (pressPause) {
                     if (E.hit(PAUSE_B)) { pausar(); return; }
-                } else if (!pressPad && S.millis() - pressT >= 40) {
-                    var alvo = laneAt(i.x);
-                    if (alvo > playerLane) move(1);
-                    else if (alvo < playerLane) move(-1);
+                } else {
+                    atacar(i.x, i.y);
                 }
-            } else if (i.swipe && !pressPause && !pressPad) {
-                if (i.swipe.dir === "left") move(-1);
-                else if (i.swipe.dir === "right") move(1);
             }
             if (toquePausaExtra()) { pausar(); return; }
             simula(dt);

@@ -42,7 +42,7 @@ namespace {
 // magic descarta lixo de energizacao). Mesmo padrao do s_fatalMsg do kernel.
 // ---------------------------------------------------------------------------
 constexpr uint32_t kMagic = 0xCE1AC05Eu;
-constexpr uint8_t kLayout = 2;
+constexpr uint8_t kLayout = 3;
 constexpr uint8_t kMaxPcs = 12;
 
 struct Record {
@@ -59,6 +59,7 @@ struct Record {
     // proibido de load proibido (bancada do blob nativo 2026-11-05).
     char reason[40];
     char desc[48];
+    uint32_t nativeExec;  // base exec do blob nativo carregado (0 = nenhum)
 };
 
 // Copia de string com teto, sem libc (contexto de panic).
@@ -160,6 +161,12 @@ extern "C" void __wrap_esp_panic_handler(panic_info_t* info) {
 
 namespace CrashRecord {
 
+void setNativeExec(uint32_t base) {
+    // Chamado pelo loader do blob a cada carga: o panic usa para relatar a
+    // base EXEC (offset = pc - base p/ addr2line). Nao mexe no magic.
+    s_rec.nativeExec = base;
+}
+
 void installPanicHook() {
     // O wrap e ligado pelo linker; aqui so garantimos que o espaco RTC existe
     // no binario (referencia viva) e normalizamos um estado inicial.
@@ -199,10 +206,11 @@ void consumeAndLog() {
 
     char line[448];
     int n = snprintf(line, sizeof(line),
-                     "CelerOS %s | %s | uptime %lus | causa %s (%u) addr 0x%08x | motivo \"%s\" | app: %s (%s) | pcs",
+                     "CelerOS %s | %s | uptime %lus | causa %s (%u) addr 0x%08x | motivo \"%s\" | nexec 0x%08x | app: %s (%s) | pcs",
                      CELEROS_VERSION, when, (unsigned long)(s_rec.uptimeMs / 1000UL),
                      causeLabel(s_rec.cause), (unsigned)s_rec.cause, (unsigned)s_rec.addr,
                      s_rec.reason[0] ? s_rec.reason : "-",
+                     (unsigned)s_rec.nativeExec,
                      app[0] ? app : "-", pkg[0] ? pkg : "-");
     if (n < 0) return;
     for (uint8_t i = 0; i < s_rec.nPcs && n < (int)sizeof(line) - 16; i++) {

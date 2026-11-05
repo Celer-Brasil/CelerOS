@@ -27,6 +27,7 @@
 // (jsNativeReset, malloc incluso) — molde jsPhysicsReset.
 
 #include "JsInternal.h"
+#include "../Kernel/CrashRecord.h"
 #include "JsFsJail.h"
 #include "../USBDevice/LogSink.h"
 #include <cstdint>
@@ -245,8 +246,12 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         size_t span = (((uintptr_t)baseData - pa) + imgSpan + page - 1) &
                       ~(page - 1);
         void* vaddr = nullptr;
+        // EXEC|32BIT como o flash_mmap do IDF faz para CODIGO: o l32r do
+        // literal pool e uma carga de 32 bits atraves da janela; sem 32BIT o
+        // acesso falha (bancada: fault com addr = pc+3 = literal).
         esp_err_t merr = esp_mmu_map((esp_paddr_t)pa, span, MMU_TARGET_PSRAM0,
-                                     MMU_MEM_CAP_EXEC, 0, &vaddr);
+                                     (mmu_mem_caps_t)(MMU_MEM_CAP_EXEC | MMU_MEM_CAP_32BIT), 0,
+                                     &vaddr);
         if (merr == ESP_OK) {
             base = (uint8_t*)vaddr + ((uintptr_t)baseData - pa);
             mapped = true;
@@ -347,6 +352,9 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         }
     }
 
+    // Crash record: guarda a base exec do blob para o panic relatar
+    // (offset = pc - base -> addr2line no ELF do blob).
+    CrashRecord::setNativeExec((uint32_t)(uintptr_t)base);
     NativeModule& m = s_modules[slot];
     m.code = base;        // alias executavel (entradas e callx)
     m.data = baseData;    // alias de dados (liberar/unmap)
@@ -401,8 +409,10 @@ duk_ret_t JSBindings::js_nativeCall(duk_context* ctx) {
     // renova a janela ANTES de cada call. Contrato da API: tick curto —
     // nunca "Native.call(runEverything)" (TWDT reboota em ~5 s).
     CelerKernel::noteAppYield();
-    NativeEntry fn = (NativeEntry)((uintptr_t)(m->code + m->entries[fnIdx]) |
-                                   kFnFormatCall8);
+    // SEM o marcador |1: a bancada mostrou o salto caindo 1 byte dentro da
+    // primeira instrucao (pc = entry+1 -> StoreProhibited). O callx8 que o
+    // compilador emite ja define a janela; o endereco vai cru.
+    NativeEntry fn = (NativeEntry)(m->code + m->entries[fnIdx]);
     int64_t pb0 = esp_timer_get_time();
     uint32_t r = fn(m->scratch, a0, a1);  // scratch: bloco PSRAM separado
     int64_t pb1 = esp_timer_get_time();

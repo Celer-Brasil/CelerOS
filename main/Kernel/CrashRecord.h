@@ -1,6 +1,8 @@
 #ifndef CELER_CRASH_RECORD_H
 #define CELER_CRASH_RECORD_H
 
+#include <stdint.h>
+
 /**
  * @file CrashRecord.h
  * @brief Forense de crash: registro em RAM RTC + tela/QR + crash.txt no boot.
@@ -20,6 +22,9 @@
  */
 
 namespace CrashRecord {
+// Base EXEC do blob nativo carregado (loader chama a cada carga): o crash
+// reporta e o offset pc-base casa o simbolo por addr2line.
+void setNativeExec(uint32_t base);
 
 /**
  * @brief Registra o wrap do linker (--wrap=esp_panic_handler).

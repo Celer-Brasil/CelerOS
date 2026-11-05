@@ -213,8 +213,16 @@ def build():
         #    tabela vira dado do blob e o loader soma a base no destino.
         #    .bss fica fora da imagem (loader zera); .data entra na imagem.
         with open(lds, "w") as f:
+            # .rodata em SECAO PROPRIA logo apos o codigo: as relocacoes
+            # contra o simbolo de secao dizem se o alvo e codigo (".text",
+            # alias EXEC) ou rodata/dados (alias de dados). Mergida no .text
+            # (script antigo), todo ponteiro de rodata virava "funcao" e o
+            # load pelo alias executavel faultava (StoreProhibited/
+            # LoadStoreProhibited na bancada). A imagem segue plana: text ->
+            # rodata -> data -> bss.
             f.write("SECTIONS\n{\n  . = 0;\n"
-                    "  .text : { *(.literal*) *(.text*) *(.rodata*) }\n"
+                    "  .text : { *(.literal*) *(.text*) }\n"
+                    "  .rodata : ALIGN(4) { *(.rodata*) }\n"
                     "  .data : ALIGN(4) { *(.data*) *(.ctors) *(.dtors) }\n"
                     "  .bss  : ALIGN(4) { *(.bss*) *(COMMON) }\n}\n")
         r = run([tc["gcc"], "-nostdlib", "-Wl,--emit-relocs",

@@ -1410,6 +1410,13 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"nativeCall", js_nativeCall, 4},
         {"nativeRead", js_nativeRead, 3},
         {"nativeFree", js_nativeFree, 1},
+        // API 58: ponte de dados/video/audio do blob (v2 relocavel)
+        {"nativeWrite", js_nativeWrite, 3},
+        {"nativeLoadFile", js_nativeLoadFile, 3},
+        {"nativeSaveFile", js_nativeSaveFile, 4},
+        {"nativeDraw", js_nativeDraw, 6},
+        {"nativeAudio", js_nativeAudio, 3},
+        {"nativeAudioStop", js_nativeAudioStop, 1},
     };
     putFns(ctx, kFnsNative);
 #endif  // CONFIG_CELEROS_JS_NATIVE

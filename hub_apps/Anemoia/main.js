@@ -37,15 +37,17 @@ S.setNativeCanvas(true);
 var W = S.screenWidth();
 var H = S.screenHeight();
 
-// Frame direto no quadro do Kui (bindFrame): a PPU escreve a regiao do jogo
-// sem copia; o laco so limpa a tela, desenha os controles e roda o quadro.
+// Sprite do frame (256x240, canvas nativo = pixel fisico): a PPU escreve nele
+// e o laco empurra 1:1 com pushSprite — o caminho comprovado no 4848.
+var spr = S.createSprite(256, 240);
 
 // ---- layout -------------------------------------------------------------
-// Jogo em cima (256x240 1:1, centrado pelo bindFrame), controles embaixo.
+// Jogo em cima (256x240 1:1, centrado), controles embaixo.
 var CH = Math.round(H * 0.2);            // altura da faixa de controles
 if (CH < 78) CH = 78; if (CH > 130) CH = 130;
 var FH = 240;                            // altura do frame no vidro (1:1)
 var GY = 0;
+var GX = Math.round((W - 256) / 2);      // x do frame 1:1
 
 var R = Math.max(20, Math.min(32, Math.round(W * 0.062)));  // raio de A/B
 var A_X = W - Math.round(R * 2.6), A_Y = H - Math.round(R * 2.6);
@@ -69,8 +71,8 @@ var roms = [];               // [{name, path, size}]
 var listOff = 0;
 var romName = "";
 var slotMsg = "";
-var skipMode = (typeof Storage !== "undefined" && Storage.get("skip") === "1");
-var audioOff = false;  // true desliga o audio (bancada)
+var skipMode = (typeof Storage === "undefined") || Storage.get("skip") !== "0";
+var audioOff = true;  // TESTE: jogo congelado x APU task
 var frameNo = 0;
 
 // Dedos vivos: id -> {ax, ay, x, y} (a = onde POUSOU). `fresh` marca quem
@@ -147,10 +149,31 @@ function openRom(idx) {
     }
     screen = "game";
     slotMsg = "";
-    Nes.bindFrame();   // o load solta o alvo (reset por ROM): re-aponta
+    if (spr > 0) Nes.bind(spr);  // o load solta o alvo (reset por ROM): re-aponta
     needClear = true;  // tira a tela da lista do vidro no primeiro quadro
     Nes.reset();
+    radioPause();      // modo jogo: sem scan da malha (o controller BLE + msync do painel estalam sob carga)
     if (!audioOff) Nes.audioStart();
+}
+
+// ---- radio ----------------------------------------------------------------
+// O controller BLE do chip asserta (r_lld_scan/r_rwble_isr, "causa debug")
+// com o scanner da malha ativo durante o emulador: a main a ~50 fps divide o
+// core 0 com o BT e o msync do framebuffer do painel suspende o cache por
+// janelas. Pausar a malha enquanto o jogo roda tira o scan do caminho; volta
+// na saida do jogo. Feature-detect: firmware sem malha so ignora.
+var radioOn = false;
+
+function radioPause() {
+    if (radioOn) return;
+    if (typeof CelerNet === "undefined") return;
+    try { CelerNet.stop(); radioOn = true; } catch (e) {}
+}
+function radioResume() {
+    if (!radioOn) return;
+    radioOn = false;
+    if (typeof CelerNet === "undefined") return;
+    try { CelerNet.start({ relay: false }); } catch (e) {}
 }
 
 // ---- desenho ------------------------------------------------------------
@@ -379,7 +402,7 @@ function doMenu(i) {
         skipMode = !skipMode;
         if (typeof Storage !== "undefined") Storage.set("skip", skipMode ? "1" : "0");
     }
-    else if (item === "Sair") S.exitApp();
+    else if (item === "Sair") { radioResume(); S.exitApp(); }
 }
 
 function loopPause() {
@@ -434,10 +457,11 @@ function loopErr() {
 }
 
 // ---- ciclo do jogo ----------------------------------------------------------
-// bindFrame escreve o quadro do NES DIRETO no vidro (scanline a scanline, sem
-// copia); o Kui so leva a banda de controles pelas caixas sujas. Por isso:
-// limpa o quadro UMA vez ao entrar (o resto do vidro fica preto) e redesenha
-// os controles so quando o estado deles muda — nada de fillScreen por quadro.
+// Caminho comprovado na bancada: sprite do pool (createSprite 256x240) +
+// pushSprite 1:1 — o bindFrame (pushImage direto no display) nao apareceu no
+// painel do 4848 (o present do Kui/estado do display anulava; investigar
+// depois). Limpa o quadro UMA vez ao entrar e redesenha os controles so
+// quando o estado deles muda.
 var needClear = true;
 var bandSig = -1;
 
@@ -457,6 +481,12 @@ function loopGame() {
     var render = true;
     if (skipMode) render = (frameNo % 2) === 0;
     Nes.frame(btnsMask, render);
+    if (render && spr > 0) {
+        // 1:1 no vidro, centrado na horizontal (o sprite tem o quadro do NES)
+        S.useSprite(spr);
+        S.pushSprite(GX, 0);
+        S.useSprite(0);
+    }
     UI.end(60);
 }
 
@@ -466,11 +496,13 @@ function pauseGame() {
     slotMsg = "";
     fingers = {}; freshIds = [];
     Nes.audioStop();
+    radioResume();  // fora do jogo a malha volta
 }
 function resumeGame() {
     screen = "game";
     fingers = {}; freshIds = [];
     needClear = true;  // o menu de pausa pintou o vidro inteiro: limpa 1x
+    radioPause();
     if (!audioOff) Nes.audioStart();
 }
 

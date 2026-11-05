@@ -62,7 +62,7 @@ private:
 
     // clang-format off
     // Duty sequences
-    static constexpr uint8_t duty_sequences[4][8] =
+    static constexpr DRAM_ATTR uint8_t duty_sequences[4][8] =
     {
         { 0, 1, 0, 0, 0, 0, 0, 0},
         { 0, 1 ,1 ,0 ,0, 0, 0, 0},
@@ -71,21 +71,21 @@ private:
     };
 
     // Length counter lookup table
-    static constexpr uint8_t length_counter_lookup[32] =
+    static constexpr DRAM_ATTR uint8_t length_counter_lookup[32] =
     { 10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
     12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30 };
 
     // Triangle 32-step sequence
-    static constexpr uint8_t triangle_sequence[32] =
+    static constexpr DRAM_ATTR uint8_t triangle_sequence[32] =
     { 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
 
     // Noise channel period lookup table
-    static constexpr uint16_t noise_period_lookup[16] =
+    static constexpr DRAM_ATTR uint16_t noise_period_lookup[16] =
     { 4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068 };
 
     // DMC rate lookup table
-    static constexpr uint16_t DMC_rate_lookup[16] =
+    static constexpr DRAM_ATTR uint16_t DMC_rate_lookup[16] =
     { 428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54 };
     // clang-format on
 

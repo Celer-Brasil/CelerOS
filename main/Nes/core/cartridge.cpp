@@ -57,17 +57,47 @@ Cartridge::Cartridge(const uint8_t* data, uint32_t size)
         LOGF("CRC32: %08lX\n", (unsigned int)CRC32);
     }
 
-    // Mesmo efeito do mmap do Anemoia: bancos viram ponteiros diretos no buffer
+    // Mesmo efeito do mmap do Anemoia: bancos viram ponteiros diretos.
+    // Preferencia: copia do PRG+CHR para RAM interna quando couber (o SMB tem
+    // 40 KB e cabe) — leitura quente para CPU e PPU, sem disputar a PSRAM com
+    // o DMA do painel. Sem memoria, os dois ficam apontando para a ROM em
+    // PSRAM (fallback do nes_fast_alloc).
     mROM.prg_base = rom_data + prg_base;
     mROM.chr_base = rom_data + chr_base;
     mROM.prg_size = (uint32_t)number_PRG_banks * 16384;
     mROM.chr_size = (uint32_t)number_CHR_banks * 8192;
+    if (mROM.prg_size > 0 && mROM.prg_size + mROM.chr_size <= kRomInternalMax)
+    {
+        uint8_t* blk = (uint8_t*)nes_fast_alloc(mROM.prg_size + mROM.chr_size);
+        if (blk != nullptr)
+        {
+            memcpy(blk, rom_data + prg_base, mROM.prg_size);
+            if (mROM.chr_size > 0) memcpy(blk + mROM.prg_size, rom_data + chr_base, mROM.chr_size);
+            rom_internal = blk;
+            mROM.prg_base = blk;
+            mROM.chr_base = blk + mROM.prg_size;
+        }
+    }
     createMapper(number_PRG_banks, number_CHR_banks);
     LOGF("Cartridge (Mapper %i) Initialized\n", mapper_ID);
 }
 
+// O Anemoia nunca soltava o mapper (um cartucho por boot); aqui o app troca
+// de ROM sem reiniciar, entao estado + CHR-RAM/PRG-RAM (RAM interna) voltam
+// ao heap a cada unload.
 Cartridge::~Cartridge()
 {
+    switch (mapper_ID)
+    {
+    case 0: mapper000_destroy(&mapper); break;
+    case 1: mapper001_destroy(&mapper); break;
+    case 2: mapper002_destroy(&mapper); break;
+    case 3: mapper003_destroy(&mapper); break;
+    case 4: mapper004_destroy(&mapper); break;
+    case 69: mapper069_destroy(&mapper); break;
+    default: break;
+    }
+    if (rom_internal != nullptr) free(rom_internal);
 }
 
 void Cartridge::ppuScanline()

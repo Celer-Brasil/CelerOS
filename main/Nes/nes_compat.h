@@ -32,6 +32,25 @@
 #include "esp_attr.h"
 #endif
 
+#if !defined(CELER_HOST_TEST)
+#include "esp_heap_caps.h"
+#endif
+#include <stdlib.h>
+
+// Alocacao do estado quente (objeto Nes, CHR-RAM, PRG-RAM dos mappers): RAM
+// interna primeiro. No Anemoia (ESP32 sem PSRAM) tudo isso era DRAM; aqui um
+// malloc acima de 1 KB vai para a PSRAM, que no 4848 divide o barramento com
+// o DMA do painel RGB e custa cache miss a cada linha renderizada. Fallback
+// na PSRAM para nao recusar o jogo. Libera com free() (vale para os dois).
+inline void* nes_fast_alloc(size_t size)
+{
+#if !defined(CELER_HOST_TEST)
+    void* p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (p != nullptr) return p;
+#endif
+    return malloc(size);
+}
+
 #if defined(CELER_HOST_TEST)
 #define NES_LOGF(...) fprintf(stderr, __VA_ARGS__)
 #else

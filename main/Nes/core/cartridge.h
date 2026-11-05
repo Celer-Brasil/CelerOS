@@ -47,6 +47,14 @@ public:
     MappedROM mROM;
     Mapper mapper;
 
+    // PRG+CHR em RAM interna quando couber (teto kRomInternalMax): a CPU
+    // busca instrucoes no PRG e a PPU le o CHR varias vezes por scanline; na
+    // PSRAM do 4848 isso divide o barramento com o DMA do painel e custa
+    // cache miss a cada leitura. O original rodava com tudo na DRAM. Copia
+    // antes do createMapper (os mappers guardam ponteiros para
+    // mROM->prg_base/chr_base); sem memoria, os dois ficam na PSRAM.
+    static constexpr uint32_t kRomInternalMax = 0;  // TESTE: desliga a copia interna
+
 private:
     Bus* bus = nullptr;
     bool is_valid = true;
@@ -54,6 +62,7 @@ private:
     uint32_t rom_size = 0;
     uint32_t prg_base;  // offset do PRG dentro do arquivo
     uint32_t chr_base;  // offset do CHR dentro do arquivo
+    uint8_t* rom_internal = nullptr;  // copia PRG+CHR em RAM interna (ou null)
 
     uint8_t mapper_ID = 0;
     void createMapper(uint8_t number_PRG_banks, uint8_t number_CHR_banks);

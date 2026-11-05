@@ -127,13 +127,20 @@ private:
     static duk_ret_t js_blitSprite(duk_context *ctx);
     static duk_ret_t js_copySprite(duk_context *ctx);
 
-    // Codigo nativo carregavel (SPIKE API 57, CONFIG_CELEROS_JS_NATIVE,
+    // Codigo nativo carregavel (API 57/58, CONFIG_CELEROS_JS_NATIVE,
     // JsNative.cpp): blob Xtensa de arquivo -> PSRAM -> cache-sync ->
-    // ponteiro. Ring-0 por natureza: no spike, gate = flag de build.
+    // ponteiro. v2 (API 58) acrescenta a ponte de dados (JS<->scratch,
+    // arquivo<->scratch), o desenho RGB565 do scratch e o dreno de PCM.
     static duk_ret_t js_nativeLoad(duk_context *ctx);
     static duk_ret_t js_nativeCall(duk_context *ctx);
     static duk_ret_t js_nativeRead(duk_context *ctx);
     static duk_ret_t js_nativeFree(duk_context *ctx);
+    static duk_ret_t js_nativeWrite(duk_context *ctx);
+    static duk_ret_t js_nativeLoadFile(duk_context *ctx);
+    static duk_ret_t js_nativeSaveFile(duk_context *ctx);
+    static duk_ret_t js_nativeDraw(duk_context *ctx);
+    static duk_ret_t js_nativeAudio(duk_context *ctx);
+    static duk_ret_t js_nativeAudioStop(duk_context *ctx);
 
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);

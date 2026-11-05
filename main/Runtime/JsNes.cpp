@@ -26,10 +26,13 @@
 #include "../Utils/Mem.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Display/Display.h"
+#include "../USBDevice/LogSink.h"
 
 #if CONFIG_CELEROS_AUDIO
 #include "../Hardware/AudioPlayer.h"
 #endif
+
+#include <esp_timer.h>
 
 #include <cstdio>
 #include <cstring>
@@ -48,20 +51,49 @@ CelerSprite* s_spr = nullptr;    // sprite bound (nao e dono: pool do JsGfx)
 lgfx::LovyanGFX* s_sink_dst = nullptr;  // alvo do pushImage (display ou sprite)
 int s_sink_x0 = 0;               // x da regiao 256 no alvo
 
-// Sink dos blocos de 8 scanlines (o pushPixelsDMA do Anemoia): entrega ao
-// pushImage do LovyanGFX, que e o caminho suportado do painel RGB — copia
-// crua no framebuffer viola a regra da cache line de 64 B do 4848 (bancada:
-// fault dentro do memcpy) e o pushImage incremental nao afoga a PSRAM.
-void nesChunkSink(void* ctx, const uint16_t* rows, int y, int nrows)
-{
-    (void)ctx;
-    if (s_sink_dst == nullptr) return;
-    s_sink_dst->pushImage(s_sink_x0, y, kNesW, nrows, rows);
-}
-
 #if CONFIG_CELEROS_AUDIO
 AudioPlayer::PcmFeed* s_feed = nullptr;  // guarda de saida enquanto toca
 #endif
+
+// Entrega do quadro: a PPU ja escreve com a paleta _swap (o byte order do
+// framebuffer do painel/sprite de 16 bits, rgb565_2Byte), e o ponteiro vai
+// tipado como swap565_t — o pixelcopy do LovyanGFX ve origem == destino e
+// copia cada linha com memcpy. Com uint16_t* cru ele convertia pixel a pixel
+// (61 mil swaps por quadro, lendo e escrevendo PSRAM).
+void nesPush(const uint16_t* fb)
+{
+    // O frame do emulador e full-screen e NAO respeita clip de app: o clip do
+    // display pode estar vazio (o Kui restaura o "anterior" caixa a caixa no
+    // present) e o pushImage virava no-op — o jogo rodava com a tela
+    // congelada (bancada: push 2 us no Diag sem draws; ~7 ms no Anemoia).
+    s_sink_dst->clearClipRect();
+    // Um push por quadro (swap565: o pixelcopy vira memcpy por linha; o
+    // custo e o proprio trafego de 122 KB no barramento PSRAM, que divide
+    // com o scanout do LCD_CAM).
+    s_sink_dst->pushImage(s_sink_x0, 0, kNesW, kNesH, reinterpret_cast<const lgfx::swap565_t*>(fb));
+}
+
+// Medidor do quadro (bancada): a cada 2 s loga fps e a media por quadro de
+// emulacao (CPU+PPU), entrega ao vidro e o resto (JS + present + espera).
+int64_t s_stWin = 0, s_stEnd = 0, s_stEmu = 0, s_stPush = 0, s_stRest = 0;
+int s_stN = 0;
+void nesStatsNote(int64_t t0, int64_t t1, int64_t t2)
+{
+    if (s_stEnd != 0) s_stRest += t0 - s_stEnd;
+    s_stEnd = t2;
+    s_stEmu += t1 - t0;
+    s_stPush += t2 - t1;
+    s_stN++;
+    if (s_stWin == 0) s_stWin = t0;
+    if (t2 - s_stWin < 2000000) return;
+    const int n = s_stN;
+    celer_log_printf("[nes] %d.%d fps emu %d us push %d us resto %d us\n", (int)(n * 10000000LL / (t2 - s_stWin)) / 10,
+                     (int)(n * 10000000LL / (t2 - s_stWin)) % 10, (int)(s_stEmu / n), (int)(s_stPush / n),
+                     (int)(s_stRest / n));
+    s_stWin = t2;
+    s_stEmu = s_stPush = s_stRest = 0;
+    s_stN = 0;
+}
 
 // Sink da APU: 128 amostras PCM16 mono LE por chamada (~2,9 KB/quadro).
 // PcmFeed::write so bloqueia com a fila cheia (22 quadros de colchao: nunca
@@ -77,13 +109,14 @@ void nesAudioSink(const uint8_t* mono16le, uint32_t bytes)
 
 void nesStopAudio()
 {
-    if (s_nes != nullptr) s_nes->apuTaskStop();  // APU volta a ficar so no quadro
+    if (s_nes != nullptr) s_nes->apuTaskStop();  // APU para junto com o audio
 #if CONFIG_CELEROS_AUDIO
     if (s_feed != nullptr) {
-        s_feed->end();  // para o player e solta a guarda (idempotente)
+        // end() para o player E solta a guarda que o begin tomou (_held);
+        // releaseOutput aqui soltaria a guarda de outro dono
+        s_feed->end();
         delete s_feed;
         s_feed = nullptr;
-        AudioPlayer::releaseOutput();
     }
 #endif
 }
@@ -172,14 +205,14 @@ duk_ret_t JSBindings::js_nesBind(duk_context* ctx)
     int ph = spr->height();
     if (pw < kNesW || ph < kNesH) { duk_push_false(ctx); return 1; }
     s_spr = spr;
-    // Blocos de 8 linhas via pushImage: a conversao de cor do LovyanGFX leva
-    // em conta a convencao swapped do destino (sprite/painel) — a paleta sai
-    // NORMAL aqui; paleta _swap + pushImage fazia swap duplo (laranja na
-    // bancada: backdrop azul 0x00F2 saindo 0xF200).
-    s_nes->setByteSwap(false);
+    // A PPU acumula o quadro no fb proprio (sink interno do openScreen) e o
+    // frame() entrega o quadro INTEIRO num pushImage so: um msync por quadro,
+    // como qualquer app full-redraw do OS. O pushImage por bloco de 8 linhas
+    // (30 msyncs/frame) faultava no esp_cache_msync com o LCD_CAM sob carga
+    // (bancada 2026-11-05).
+    s_nes->setByteSwap(true);  // fb ja no byte order do painel (ver nesPush)
     s_sink_dst = spr;
     s_sink_x0 = 0;
-    s_nes->setChunkSink(&nesChunkSink, nullptr);
     duk_push_true(ctx);
     return 1;
 }
@@ -188,10 +221,11 @@ duk_ret_t JSBindings::js_nesBindFrame(duk_context* ctx)
 {
     (void)ctx;
     if (s_nes == nullptr || !s_nes->loaded()) { duk_push_false(ctx); return 1; }
-    // Frame em blocos de 8 linhas direto no vidro: pushImage no display (o
-    // caminho suportado; incremental como o pushPixelsDMA do Anemoia, sem
-    // copia crua no framebuffer do painel). O app desenha so a faixa de
-    // controles pelo caminho normal (caixas sujas). Fallback: quadro do Kui.
+    // Frame INTEIRO por pushImage no display a cada frame (1 msync/frame; o
+    // bloco de 8 linhas fazia 30 msyncs e faultava sob carga). O app desenha
+    // so a faixa de controles pelo caminho normal (caixas sujas) e NAO
+    // desenha o frame: a regiao 256x240 fica centrada na horizontal, no topo.
+    // Fallback sem vidro: quadro do Kui (s_frame).
     lgfx::LovyanGFX* dst = tftInstance;
     int width = tftInstance ? (int)tftInstance->width() : 0;
     if (dst == nullptr || width < kNesW) {
@@ -199,10 +233,10 @@ duk_ret_t JSBindings::js_nesBindFrame(duk_context* ctx)
         dst = s_frame;
         width = (int)s_frame->width();
     }
-    s_nes->setByteSwap(false);  // pushImage aplica a conversao do destino
+    s_nes->setByteSwap(true);  // fb ja no byte order do painel (ver nesPush)
     s_sink_dst = dst;
     s_sink_x0 = (width - kNesW) / 2;  // centrado na horizontal, topo
-    s_nes->setChunkSink(&nesChunkSink, nullptr);
+    s_nes->setChunkSink(nullptr, nullptr);  // sink interno do fb (openScreen)
     s_spr = nullptr;  // alvo nao e sprite do pool
     duk_push_true(ctx);
     return 1;
@@ -213,8 +247,17 @@ duk_ret_t JSBindings::js_nesFrame(duk_context* ctx)
     if (s_nes == nullptr || !s_nes->loaded()) { duk_push_false(ctx); return 1; }
     uint8_t buttons = (uint8_t)(duk_require_int(ctx, 0) & 0xFF);
     bool render = !duk_is_boolean(ctx, 1) || duk_get_boolean(ctx, 1);
-    // O quadro ja sai no alvo (sprite ou frame do Kui): sem copia aqui.
+    // A PPU acumula o quadro no fb proprio (sink interno); aqui vai UM
+    // pushImage por quadro ao alvo — o msync unico do caminho do OS.
+    const int64_t t0 = esp_timer_get_time();
     s_nes->frame(buttons, render);
+    const int64_t t1 = esp_timer_get_time();
+    if (render && s_sink_dst != nullptr) {
+        const uint16_t* fb = s_nes->framebuffer();
+        if (fb != nullptr) nesPush(fb);
+    }
+    const int64_t t2 = esp_timer_get_time();
+    nesStatsNote(t0, t1, t2);
     duk_push_true(ctx);
     return 1;
 }
@@ -283,16 +326,20 @@ duk_ret_t JSBindings::js_nesAudioStart(duk_context* ctx)
 #if CONFIG_CELEROS_AUDIO
     if (s_nes == nullptr || !s_nes->loaded()) { duk_push_false(ctx); return 1; }
     if (s_feed != nullptr) { duk_push_true(ctx); return 1; }  // ja tocando
-    if (!AudioPlayer::acquireOutput()) { duk_push_false(ctx); return 1; }
+    // O PcmFeed::begin toma a guarda de reproducao por conta propria (_held):
+    // NAO chamar acquireOutput antes — a mesma guarda era disputada duas
+    // vezes e o begin recusava sempre (bancada: "begin falhou" sem audio).
     s_feed = new (std::nothrow) AudioPlayer::PcmFeed();
     if (s_feed == nullptr || !s_feed->begin(44100, kAudioQueueBytes)) {
+        celer_log_printf("[nes] audio: begin falhou (i2s/codec/ram)\n");
         nesStopAudio();
         duk_push_false(ctx);
         return 1;
     }
     s_feed->start();
     s_nes->setAudioSink(&nesAudioSink);
-    s_nes->apuTaskStart();  // APU no core 0, como no Anemoia
+    s_nes->apuTaskStart();  // APU no core 1, como no Anemoia
+    celer_log_printf("[nes] audio: 44100 Hz (apu task no core %d)\n", portNUM_PROCESSORS - 1);
     duk_push_true(ctx);
 #else
     (void)ctx;

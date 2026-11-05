@@ -328,11 +328,11 @@ Mapper createMapper001(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
     if (CHR_banks == 0)
     {
         // Allocate one shared 8 KB RAM
-        state->CHR_RAM = (uint8_t*)malloc(8U * 1024U);
+        state->CHR_RAM = (uint8_t*)nes_fast_alloc(8U * 1024U);
         if (state->CHR_RAM) memset(state->CHR_RAM, 0, 8U * 1024U);
     }
 
-    state->RAM = (uint8_t*)malloc(8U * 1024U);
+    state->RAM = (uint8_t*)nes_fast_alloc(8U * 1024U);
     if (!state->RAM) return mapper;
     state->number_PRG_banks = PRG_banks;
     state->number_CHR_banks = CHR_banks;
@@ -363,4 +363,14 @@ static inline void loadCHRRAM(Mapper001_state* state, uint8_t* bank, uint16_t si
     // o memcpy lia lixo alem do fim do mmap; aqui, sem dado, CHR-RAM fica.
     if (offset + size > state->mROM->chr_size) return;
     memcpy(bank, (uint8_t*)(state->mROM->chr_base + offset), size);
+}
+
+void mapper001_destroy(Mapper* mapper)
+{
+    if (mapper->state == nullptr) return;
+    auto* s = (Mapper001_state*)mapper->state;
+    free(s->CHR_RAM);
+    free(s->RAM);
+    delete s;
+    mapper->state = nullptr;
 }

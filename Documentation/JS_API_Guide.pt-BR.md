@@ -4369,3 +4369,82 @@ Para o áudio e solta a guarda do I2S.
 #### `Nes.unload()` (API 57)
 Solta cartucho, ROM (PSRAM), framebuffer e áudio. O lançamento de outro
 app faz o mesmo (reset por app).
+## 54. Nível de API 57 — Emulador de NES: objeto `Nes`
+
+O núcleo Anemoia (GPLv3, Shim06/Anemoia-ESP32) portado para o firmware
+(`main/Nes`): CPU 6502 + PPU 2C02 + APU 2A03 + mappers 0/1/2/3/4/69, a
+60 fps com áudio. Emulação é tempo real — por isso o núcleo é nativo
+(host-testável em `test/cpp` com ROM sintética); o app JS é a casca
+(menus, controles de toque, save states). O app de referência é o
+`hub_apps/Anemoia`.
+
+Disponibilidade: só placas com `CELEROS_JS_NES` ligado (S3 com PSRAM e
+vidro: smartdisplay, watch, cão). Faça feature-detect com
+`typeof Nes !== "undefined"`; nas demais placas o objeto não existe.
+
+Contrato do app:
+
+- O frame (256x240 RGB565) sai num SPRITE do pool: crie
+  `System.createSprite(256, 240)` em canvas nativo
+  (`System.setNativeCanvas(true)`; `topbar:false` no app.json) e faça
+  `Nes.bind(id)`. Cada `Nes.frame` blita o quadro no backing do sprite
+  (respeitando o stride físico); o app desenha com `System.drawSprite`
+  escalado (o x,y do drawSprite é o CENTRO do sprite escalado).
+- O `load` solta o bind (reset por ROM): re-binde depois de cada load.
+- ROMs: arquivos `.nes` no FS (mesma jail do `FS.readFile`), lidos
+  inteiros para a PSRAM (teto 1 MB). O app declara permissão `fs`.
+- Áudio: `Nes.audioStart` liga a APU ao `PcmFeed` (fila na PSRAM -> I2S,
+  44,1 kHz PCM16 mono); devolve false em placa sem alto-falante. O
+  volume é o do aparelho (`System.setVolume`).
+- Botões: bitmask NES — bit0 A, 1 B, 2 Select, 3 Start, 4 Up, 5 Down,
+  6 Left, 7 Right.
+- Save states no formato do Anemoia (~6-20 KB por arquivo; o app guarda
+  no appData por ROM/slot).
+
+#### `Nes.load(path)` → Boolean (API 57)
+Parse iNES + cria o mapper e o framebuffer PSRAM. false = não é iNES,
+grande demais (teto 1 MB), mapper fora da lista ou sem PSRAM livre.
+
+#### `Nes.bind(spriteId)` → Boolean (API 57)
+Sprite de destino do frame (mínimo 256x240 FÍSICOS — em canvas virtual o
+escalonamento do vidro muda o tamanho real e o contrato quebra). false =
+id inválido ou sprite pequeno demais. O frame chega por blocos de 8
+scanlines via pushImage (a conversão de cor é a do destino).
+
+#### `Nes.bindFrame()` → Boolean (API 57)
+Frame direto no vidro: um pushImage por quadro no display. A região
+256x240 fica centrada na horizontal, no topo; o app desenha os controles
+pela camada normal (caixas sujas). **Na bancada do 4848 (2026-11-05) este
+caminho não chegou ao painel** (o pushImage no display não aparecia, com o
+present do Kui por perto); o app Anemoia usa o caminho comprovado:
+`bind(sprite)` + `System.pushSprite` 1:1. O objeto existe e o contrato é
+esse, mas trate-o como não verificado em hardware até nova bancada.
+
+#### `Nes.frame(buttons[, render])` → Boolean (API 57)
+Emula 1 quadro (~30008 ciclos de CPU; a APU roda em task própria quando o
+áudio está ligado) com o bitmask `buttons` e entrega o quadro ao alvo do
+`bind`/`bindFrame`. `render=false` roda o quadro sem desenhar (frameskip
+de runtime: só o sprite-0 hit é simulado, para jogos que esperam por ele
+não travarem).
+
+#### `Nes.reset()` (API 57)
+Reset quente (vetor de reset; paginas do mapper remontadas).
+
+#### `Nes.saveState(path)` → Boolean (API 57)
+Serializa o estado ("ANEMOIA" + CRC + RAM/CPU/PPU/mapper, ~6-20 KB) e
+escreve no `path` (jail de escrita do fs).
+
+#### `Nes.loadState(path)` → Boolean (API 57)
+Carrega um state do `path`. false = arquivo ausente, corrompido ou de
+OUTRA ROM (o header guarda o CRC e é conferido).
+
+#### `Nes.audioStart()` → Boolean (API 57)
+Liga a APU ao I2S via PcmFeed. false = placa sem alto-falante ou saída
+ocupada (playWav/fala do AI em curso — a mesma guarda do audio).
+
+#### `Nes.audioStop()` (API 57)
+Para o áudio e solta a guarda do I2S.
+
+#### `Nes.unload()` (API 57)
+Solta cartucho, ROM (PSRAM), framebuffer e áudio. O lançamento de outro
+app faz o mesmo (reset por app).

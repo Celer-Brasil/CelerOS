@@ -14,6 +14,7 @@ struct Mapper002_state
 };
 
 Mapper createMapper002(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart);
+void mapper002_destroy(Mapper* mapper);  // solta estado + RAMs do mapper
 
 void mapper002_mapPages(Mapper* mapper, Bus* bus);
 void mapper002_mapPPUPages(Mapper* mapper, Ppu2C02* ppu);

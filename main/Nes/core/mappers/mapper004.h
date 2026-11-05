@@ -7,6 +7,7 @@
 #define MAPPER004_NUM_CHR_BANKS_1K 16
 
 Mapper createMapper004(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart);
+void mapper004_destroy(Mapper* mapper);  // solta estado + RAMs do mapper
 
 void mapper004_mapPages(Mapper* mapper, Bus* bus);
 void mapper004_mapPPUPages(Mapper* mapper, Ppu2C02* ppu);

@@ -21,6 +21,8 @@
 
 #include "nes_compat.h"
 
+#include <new>
+
 #include "core/cartridge.h"
 #include "core/cpu6502.h"
 
@@ -44,6 +46,15 @@ class Nes
 {
 public:
     ~Nes();
+
+    // O objeto inteiro (~21 KB: RAM do 6502, VRAM/OAM/scanline da PPU, bloco
+    // de 8 linhas, APU) e o estado QUENTE do emulador: o Anemoia o tinha como
+    // `static Nes nes` na DRAM. Um `new` comum cai na PSRAM (limiar de 1 KB
+    // do malloc), onde cada acesso disputa o barramento com o DMA do painel
+    // RGB — a emulacao ficava 2x mais lenta. Vai para a RAM interna; PSRAM
+    // so se a interna nao tiver o bloco.
+    static void* operator new(size_t size, const std::nothrow_t&) noexcept;
+    static void operator delete(void* p) noexcept;
 
     // Parse iNES + cria o mapper. Nao copia a ROM: data tem que viver enquanto
     // o cartucho estiver inserido (o binding cuida do ciclo: readFile -> load

@@ -1157,7 +1157,10 @@ function lintAppJson(dir, manifest) {
           const hsize = head.readUInt32LE(4), bsize = head.readUInt32LE(8);
           const chip = head.readUInt32LE(12), bapi = head.readUInt32LE(16);
           const cnt = head.readUInt32LE(20);
-          if (hsize !== 96 || bsize !== st.size - 96 || chip > 1 || cnt < 1 || cnt > 8) {
+          // v2 (build_core.py atual) = cabecalho de 128 B; v1 de 96 B segue
+          // aceito pelo loader (ver tools/native/build_core.py)
+          const hdrOk = (hsize === 96 || hsize === 128) && bsize === st.size - hsize;
+          if (!hdrOk || chip > 1 || cnt < 1 || cnt > 8) {
             d('erro', 'appjson', name + ' e blob CLRN com cabecalho invalido (hsize=' + hsize + ' blob=' + bsize + ' chip=' + chip + ' entradas=' + cnt + ')');
           } else if (bapi > manifest.apiLevel) {
             d('erro', 'appjson', name + ' e blob CLRN de api ' + bapi + ' (o firmware declara ' + manifest.apiLevel + ')');

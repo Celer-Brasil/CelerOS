@@ -8,7 +8,7 @@
   "type": "Game",
   "category": "Arcade",
   "description": "Emulador de NES no aparelho: nucleo Anemoia nativo (CPU 6502, PPU 2C02, APU 2A03 e mappers 0/1/2/3/4/69) a 60 fps com audio pelo alto-falante. Ponha arquivos .nes em /sd/roms ou /local/roms (celerctl push), escolha na lista e jogue com d-pad por traco, A/B, Start e Select multitouch; pausa com Reset, 3 slots de save state por jogo e volume. Controles por traco: toque na metade esquerda e arraste para as 8 direcoes; A/B na direita; toque no canto superior direito pausa. Baseado no Anemoia-ESP32 de Shim06 (GPLv3); o app nao vem com jogos.",
-  "changelog": "1.0.0 - primeira versao: nucleo Anemoia nativo (main/Nes) a 60 fps com audio PCM 44,1 kHz, d-pad por traco multitouch, A/B/Start/Select na tela, pausa com Reset, 3 slots de save state por ROM, frameskip de runtime nos ajustes e suporte a mappers NROM/MMC1/UxROM/CNROM/MMC3/FME-7",
+  "changelog": "1.0.0 - primeira versao: nucleo Anemoia nativo (main/Nes) com CPU 6502, PPU 2C02, APU 2A03 (task propria no core 1, PCM 44,1 kHz pelo PcmFeed) e mappers NROM/MMC1/UxROM/CNROM/MMC3/FME-7; lista ROMs de /sd/roms e /local/roms, d-pad por traco multitouch, A/B/Start/Select na tela, pausa por Start+Select ou canto superior direito (volta a malha CelerNet no menu e pausa durante o jogo), Reset, 3 slots de save state por ROM no appData e frameskip para apresentar 1 de 2 quadros (a emulacao segue a 60 Hz). Rodou no 4848 a ~50 fps com som. O app nao vem com jogos.",
   "requires": ["psram"],
   "topbar": false
 }

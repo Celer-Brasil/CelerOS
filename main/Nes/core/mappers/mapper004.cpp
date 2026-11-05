@@ -275,7 +275,7 @@ Mapper createMapper004(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
 
     state->mROM = &cart->mROM;
 
-    state->RAM = (uint8_t*)malloc(8U * 1024U);
+    state->RAM = (uint8_t*)nes_fast_alloc(8U * 1024U);
     if (!state->RAM) return mapper;
     state->number_PRG_banks = PRG_banks;
     state->number_CHR_banks = CHR_banks;
@@ -293,4 +293,13 @@ static inline uint8_t* getPRGBank(Mapper004_state* state, uint8_t index)
 static inline uint8_t* getCHRBank(Mapper004_state* state, uint8_t index)
 {
     return (uint8_t*)(state->mROM->chr_base + (uint32_t)index * 1U * 1024U);
+}
+
+void mapper004_destroy(Mapper* mapper)
+{
+    if (mapper->state == nullptr) return;
+    auto* s = (Mapper004_state*)mapper->state;
+    free(s->RAM);
+    delete s;
+    mapper->state = nullptr;
 }

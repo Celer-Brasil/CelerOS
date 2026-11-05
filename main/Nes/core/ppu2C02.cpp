@@ -21,6 +21,7 @@ Ppu2C02::Ppu2C02()
     memset(scanline_buffer, 0, sizeof(scanline_buffer));
     memset(scanline_metadata, 0, sizeof(scanline_metadata));
     memset(sprite, 0, sizeof(sprite));
+    applyPalette();
 }
 
 Ppu2C02::~Ppu2C02()
@@ -42,7 +43,6 @@ inline void Ppu2C02::ppuWrite(uint16_t addr, uint8_t data)
 inline uint8_t Ppu2C02::ppuRead(uint16_t addr)
 {
     PROFILE_SCOPE(PROF_PPU_PPU_READ);
-    uint8_t data = 0x00;
     addr &= 0x3FFF;
     if (uint8_t* p = ppu_read_pages[addr >> 8]) return p[addr & 0xFF];
     return ppu_read_handlers[addr >> 8](this, addr);
@@ -656,14 +656,16 @@ void Ppu2C02::setPalette(uint8_t palette)
 // indice x byte order -> tabela certa (8 combinacoes)
 void Ppu2C02::applyPalette()
 {
+    const uint16_t (*src)[64] = nullptr;
     switch (palette_idx)
     {
-    case NTSC565: nes_palette = byte_swap ? palette_NTSC565_swap : palette_NTSC565; break;
-    case PAL565: nes_palette = byte_swap ? palette_PAL565_swap : palette_PAL565; break;
-    case NTSC222: nes_palette = byte_swap ? palette_NTSC222_swap : palette_NTSC222; break;
-    case PAL222: nes_palette = byte_swap ? palette_PAL222_swap : palette_PAL222; break;
-    default: break;
+    case NTSC565: src = byte_swap ? palette_NTSC565_swap : palette_NTSC565; break;
+    case PAL565: src = byte_swap ? palette_PAL565_swap : palette_PAL565; break;
+    case NTSC222: src = byte_swap ? palette_NTSC222_swap : palette_NTSC222; break;
+    case PAL222: src = byte_swap ? palette_PAL222_swap : palette_PAL222; break;
+    default: return;
     }
+    memcpy(palette_lut, src, sizeof(palette_lut));
 }
 
 void Ppu2C02::dumpState(File& state)

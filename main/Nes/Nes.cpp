@@ -53,6 +53,16 @@ void apuTaskFn(void* arg)
 }  // namespace
 #endif
 
+void* Nes::operator new(size_t size, const std::nothrow_t&) noexcept
+{
+    return nes_fast_alloc(size);
+}
+
+void Nes::operator delete(void* p) noexcept
+{
+    free(p);  // heap_caps_malloc e malloc devolvem pelo mesmo free()
+}
+
 Nes::~Nes()
 {
     apuTaskStop();
@@ -114,14 +124,18 @@ void Nes::unload()
     }
 }
 
-// Task da APU no core 0 (fora do caminho do quadro, como no Anemoia).
+// Task da APU fora do caminho do quadro, como no Anemoia. O Anemoia pinava
+// no core 0 porque o loop dele rodava no core 1; no CelerOS a main (loop do
+// app) E o core 0 — junto do WiFi/BT. Pinar aqui em `portNUM_PROCESSORS-1`
+// (core 1 no S3, a regra do repo) tira a APU da frente do radio.
 // Criada no audioStart e parada no audioStop/unload: sem audio o APU nao
 // precisa clockar (jogos NES nao leem o estado dele para logica).
 void Nes::apuTaskStart()
 {
 #ifndef CELER_HOST_TEST
     if (apu_task != nullptr) return;
-    xTaskCreatePinnedToCore(apuTaskFn, "nesapu", 4096, &cpu.apu, 2, (TaskHandle_t*)&apu_task, 0);
+    xTaskCreatePinnedToCore(apuTaskFn, "nesapu", 4096, &cpu.apu, 2, (TaskHandle_t*)&apu_task,
+                            portNUM_PROCESSORS - 1);
 #endif
 }
 

@@ -70,3 +70,10 @@ Mapper createMapper003(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
     mapper.state = state;
     return mapper;
 }
+
+void mapper003_destroy(Mapper* mapper)
+{
+    if (mapper->state == nullptr) return;
+    delete (Mapper003_state*)mapper->state;
+    mapper->state = nullptr;
+}

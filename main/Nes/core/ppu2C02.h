@@ -120,7 +120,11 @@ private:
     ChunkSink chunk_sink = nullptr;
     void* chunk_ctx = nullptr;
 
-    const uint16_t (*nes_palette)[64] = palette_NTSC565;
+    // Paleta ativa copiada para dentro do objeto (RAM interna, 1 KB): a
+    // conversao le uma entrada por pixel (61 mil por quadro) e as tabelas
+    // constexpr moram na rodata, que no S3 fica na PSRAM (SPIRAM_RODATA).
+    uint16_t palette_lut[8][64];
+    const uint16_t (*nes_palette)[64] = palette_lut;
     uint8_t palette_idx = 0;
     bool byte_swap = false;
     // (alvo do frame: o sink de blocos; ver setChunkSink)

@@ -4,6 +4,7 @@
 #include "../mapper.h"
 
 Mapper createMapper001(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart);
+void mapper001_destroy(Mapper* mapper);  // solta estado + RAMs do mapper
 
 void mapper001_mapPages(Mapper* mapper, Bus* bus);
 void mapper001_mapPPUPages(Mapper* mapper, Ppu2C02* ppu);

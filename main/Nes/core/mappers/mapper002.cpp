@@ -80,7 +80,7 @@ Mapper createMapper002(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
     Mapper002_state* state = new (std::nothrow) Mapper002_state;
     if (!state) return mapper;
 
-    if (CHR_banks == 0) state->CHR_bank = (uint8_t*)malloc(8U * 1024U);
+    if (CHR_banks == 0) state->CHR_bank = (uint8_t*)nes_fast_alloc(8U * 1024U);
     state->mROM = &cart->mROM;
 
     state->number_PRG_banks = PRG_banks;
@@ -88,4 +88,13 @@ Mapper createMapper002(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
     state->cart = cart;
     mapper.state = state;
     return mapper;
+}
+
+void mapper002_destroy(Mapper* mapper)
+{
+    if (mapper->state == nullptr) return;
+    auto* s = (Mapper002_state*)mapper->state;
+    if (s->number_CHR_banks == 0) free(s->CHR_bank);  // senao aponta para a ROM
+    delete s;
+    mapper->state = nullptr;
 }

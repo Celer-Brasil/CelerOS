@@ -22,11 +22,35 @@ extern "C" {
 #endif
 
 #ifndef CORE_ARENA_BYTES
-#define CORE_ARENA_BYTES (96u * 1024u)
+// Fallback pequeno: cores de verdade chamam nes_arena_use() com um buffer da
+// SCRATCH (PSRAM) — a arena nao precisa ocupar .bss, que agora vive na RAM
+// interna do loader junto da imagem (orcamento apertado).
+#define CORE_ARENA_BYTES (8u * 1024u)
 #endif
 
-/* .bss do blob: o loader zera tudo antes de executar a primeira entrada. */
-static uint8_t g_arena[CORE_ARENA_BYTES] __attribute__((aligned(8)));
+static uint8_t g_arena_static[CORE_ARENA_BYTES] __attribute__((aligned(8)));
+static uint8_t* g_arena;
+static size_t g_arena_cap;
+
+/* Free-list da arena (typedef aqui: nes_arena_use/arena_ensure usam antes). */
+typedef struct Block {
+    struct Block* next;
+    uint32_t size;   /* bytes uteis */
+    uint32_t free;   /* 1 = livre */
+} Block;
+
+static Block* g_blocks;
+static uint8_t* g_top;
+
+/* Aponta a arena para um buffer do chamador (ex.: scratch+offset do blob).
+ * Zera o estado da arena; o conteudo do buffer nao e limpo (blocos sao
+ * escritos antes de ler). */
+void nes_arena_use(void* buf, uint32_t cap) {
+    g_arena = (uint8_t*)buf;
+    g_arena_cap = (size_t)cap;
+    g_blocks = 0;
+    g_top = 0;
+}
 
 void* memcpy(void* dst, const void* src, size_t n) {
     uint8_t* d = (uint8_t*)dst;
@@ -68,23 +92,23 @@ int memcmp(const void* a, const void* b, size_t n) {
  * encadeada; free marca livre e o malloc seguinte reaproveita. O padrao do
  * core (aloca na carga, cria/destroi cartucho+mapper no load) cabe nisto.
  * A arena nunca cresce nem devolve ao loader; reset = nova partida do app. */
-typedef struct Block {
-    struct Block* next;
-    uint32_t size;   /* bytes uteis */
-    uint32_t free;   /* 1 = livre */
-} Block;
-
-static Block* g_blocks;
-static uint8_t* g_top;
-
 void nes_arena_reset(void) {
     g_blocks = 0;
     g_top = g_arena;
 }
 
+static void arena_ensure(void) {
+    if (g_arena == 0) {
+        g_arena = g_arena_static;
+        g_arena_cap = sizeof(g_arena_static);
+        g_top = g_arena;
+    }
+}
+
 void* malloc(size_t n) {
     if (n == 0) n = 1;
     n = (n + 7u) & ~(size_t)7u;  /* payload alinhado a 8 */
+    arena_ensure();
     if (g_top == 0) nes_arena_reset();
     for (Block* b = g_blocks; b != 0; b = b->next) {
         if (b->free && b->size >= n) {
@@ -93,7 +117,7 @@ void* malloc(size_t n) {
         }
     }
     size_t need = n + sizeof(Block);
-    if ((size_t)(g_top - g_arena) + need > sizeof(g_arena)) return 0;
+    if ((size_t)(g_top - g_arena) + need > g_arena_cap) return 0;
     Block* b = (Block*)g_top;
     g_top += need;
     b->next = g_blocks;
@@ -116,8 +140,8 @@ void* calloc(size_t n, size_t sz) {
     return p;
 }
 
-/* Espaco total da arena (core_ctl usa para reportar o layout). */
-uint32_t nes_arena_bytes(void) { return CORE_ARENA_BYTES; }
+/* Espaco total da arena configurada (core_ctl reporta o layout). */
+uint32_t nes_arena_bytes(void) { return (uint32_t)g_arena_cap; }
 
 #ifdef __cplusplus
 }  /* extern "C" */

@@ -44,18 +44,32 @@ namespace {
 // buffer e construido UMA vez pelo core_ctl(INIT) com placement-new.
 alignas(nes::Nes) static uint8_t s_nes_mem[sizeof(nes::Nes)];
 static nes::Nes* s_nes;
-uint16_t s_fb[nes::SCREEN_W * nes::SCREEN_H];
-// ROM inteira: o cartucho NAO copia (guarda ponteiros), entao o buffer tem
-// que viver enquanto o jogo roda. 1 MB = teto do nes::MAX_ROM_SIZE.
-uint8_t s_rom[nes::MAX_ROM_SIZE] __attribute__((aligned(8)));
-uint8_t s_state[40 * 1024] __attribute__((aligned(8)));  // savestate (~6-20KB)
-// PCM16 mono 44,1 kHz: ~735 amostras/quadro = 1470 B; 8 KB cobre ~5 quadros
-uint8_t s_pcm[8 * 1024] __attribute__((aligned(8)));
+// Layout FIXO da SCRATCH (PSRAM, bloco do app): a imagem+bss do blob vivem
+// na RAM INTERNA (executavel; o S3 nao busca instrucao de PSRAM) e a RAM
+// interna nao comporta 1,3MB de buffers. Os comandos core_ctl devolvem
+// exatamente estes offsets; o app usa os valores devolvidos, nunca numeros.
+//   ROM (1MB) | PCM (8KB) | FB (120KB) | STATE (40KB) | ARENA (64KB)
+// Total ~1,23MB — o app pede scratch >= 1280KB no nativeLoad.
+constexpr uint32_t kRomOff = 0;
+constexpr uint32_t kRomCap = nes::MAX_ROM_SIZE;      // 1 MB
+constexpr uint32_t kPcmOff = kRomOff + kRomCap;
+constexpr uint32_t kPcmCap = 8 * 1024;               // ~5 quadros de PCM
+constexpr uint32_t kFbOff = kPcmOff + kPcmCap;
+constexpr uint32_t kFbCap = nes::SCREEN_W * nes::SCREEN_H * 2;
+constexpr uint32_t kStateOff = kFbOff + kFbCap;
+constexpr uint32_t kStateCap = 40 * 1024;            // savestate ~6-20KB
+constexpr uint32_t kArenaOff = kStateOff + kStateCap;
+constexpr uint32_t kArenaCap = 64 * 1024;            // cart+mappers (carga)
+
+uint16_t* s_fb;
+uint8_t* s_rom;
+uint8_t* s_state;
+uint8_t* s_pcm;
 uint32_t s_pcm_len;
 
 void pcmSink(const uint8_t* data, uint32_t bytes)
 {
-    if (s_pcm_len + bytes > sizeof(s_pcm)) return;  // app nao drenou: corta
+    if (s_pcm == nullptr || s_pcm_len + bytes > kPcmCap) return;  // nao drenou: corta
     memcpy(s_pcm + s_pcm_len, data, bytes);
     s_pcm_len += bytes;
 }
@@ -65,18 +79,10 @@ void pcmSink(const uint8_t* data, uint32_t bytes)
 // O loader aponta o framebuffer antes do LOAD (Nes::openScreen usa o
 // nes::g_blob_fb declarado em Nes.cpp).
 namespace nes {
-uint16_t* g_blob_fb = s_fb;
+uint16_t* g_blob_fb = nullptr;  // apontado no core_ctl(INIT) para a scratch
 }  // namespace nes
 
 namespace {
-// offset de um simbolo do .bss relativo ao inicio da regiao de scratch
-// (o loader passa scratch = base + tamanho da imagem, e o .bss do blob vive
-// exatamente ali — a conta funciona para qualquer base).
-uint32_t offOf(const void* scratch, const void* p)
-{
-    return (uint32_t)((const uint8_t*)p - (const uint8_t*)scratch);
-}
-
 enum {
     CORE_INIT = 0,
     CORE_ROM_OFF,
@@ -96,25 +102,34 @@ enum {
 extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
 {
     switch (cmd) {
-    case CORE_INIT:
-        nes_arena_reset();
+    case CORE_INIT: {
+        uint8_t* sc = (uint8_t*)scratch;
+        if (sc == nullptr) return 0;
+        s_rom = sc + kRomOff;
+        s_pcm = sc + kPcmOff;
+        s_fb = (uint16_t*)(sc + kFbOff);
+        s_state = sc + kStateOff;
+        nes_arena_use(sc + kArenaOff, kArenaCap);  // cart/mappers na PSRAM (carga)
         if (s_nes == nullptr) s_nes = ::new (static_cast<void*>(s_nes_mem)) nes::Nes();
+        nes::g_blob_fb = s_fb;  // Nes::openScreen usa este ponteiro
         s_nes->setAudioSink(&pcmSink);  // PCM -> s_pcm (drenado pelo app)
         s_pcm_len = 0;
         return 1;
+    }
     case CORE_ROM_OFF:
-        return offOf(scratch, s_rom);
+        return kRomOff;
     case CORE_PCM_OFF:
-        return offOf(scratch, s_pcm);
+        return kPcmOff;
     case CORE_FB_OFF:
-        return offOf(scratch, s_fb);
+        return kFbOff;
     case CORE_STATE_OFF:
-        return offOf(scratch, s_state);
+        return kStateOff;
     case CORE_STATE_SIZE:
-        return (uint32_t)sizeof(s_state);
+        return kStateCap;
     case CORE_LOAD: {
         uint32_t sz = (uint32_t)(arg > 0 ? arg : 0);
-        if (sz > sizeof(s_rom)) return 0;
+        if (sz == 0 || sz > kRomCap) return 0;
+        if (s_rom == nullptr) return 0;
         s_pcm_len = 0;
         const char* err = nullptr;
         if (!s_nes->load(s_rom, sz, nullptr, nullptr, &err)) return 0;
@@ -135,13 +150,15 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
     }
     case CORE_SAVE_STATE: {
         nes::File out;
-        out.setWriteBuf(s_state, sizeof(s_state));
+        if (s_state == nullptr) return 0;
+        out.setWriteBuf(s_state, kStateCap);
         if (!s_nes->saveState(out)) return 0;
         return (uint32_t)out.size();
     }
     case CORE_LOAD_STATE: {
         uint32_t len = (uint32_t)(arg > 0 ? arg : 0);
-        if (len == 0 || len > sizeof(s_state)) return 0;
+        if (len == 0 || len > kStateCap) return 0;
+        if (s_state == nullptr) return 0;
         nes::File in(s_state, len);
         return s_nes->loadState(in) ? 1u : 0u;
     }

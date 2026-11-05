@@ -42,7 +42,7 @@ namespace {
 // magic descarta lixo de energizacao). Mesmo padrao do s_fatalMsg do kernel.
 // ---------------------------------------------------------------------------
 constexpr uint32_t kMagic = 0xCE1AC05Eu;
-constexpr uint8_t kLayout = 1;
+constexpr uint8_t kLayout = 2;
 constexpr uint8_t kMaxPcs = 12;
 
 struct Record {
@@ -53,7 +53,22 @@ struct Record {
     uint32_t uptimeMs;
     uint32_t addr;       // endereco que disparou (panic_info_t::addr)
     uint32_t pcs[kMaxPcs];
+    // Motivo arquitetural do panic (panic_info_t::reason/description): no
+    // Xtensa traz o NOME da excecao (InstrFetchErrorCause, LoadStoreError,
+    // IllegalInstruction...) — sem isto "causa fault" nao distingue fetch
+    // proibido de load proibido (bancada do blob nativo 2026-11-05).
+    char reason[40];
+    char desc[48];
 };
+
+// Copia de string com teto, sem libc (contexto de panic).
+void copyStr(char* dst, size_t cap, const char* src) {
+    size_t i = 0;
+    if (src != nullptr) {
+        for (; i + 1 < cap && src[i] != '\0'; i++) dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
 
 RTC_NOINIT_ATTR Record s_rec;
 
@@ -65,13 +80,16 @@ static bool s_bootValid = false;
 
 // Prepara o struct ANTES do backtrace (que pode andar frame podre): o
 // essencial (magic+causa+uptime) ja esta gravado se a walk engasgar.
-void recordBasics(uint16_t cause, uint32_t addr) {
+void recordBasics(uint16_t cause, uint32_t addr, const char* reason,
+                  const char* desc) {
     s_rec.magic = kMagic;
     s_rec.layout = kLayout;
     s_rec.cause = cause;
     s_rec.addr = addr;
     s_rec.uptimeMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
     s_rec.nPcs = 0;
+    copyStr(s_rec.reason, sizeof(s_rec.reason), reason);
+    copyStr(s_rec.desc, sizeof(s_rec.desc), desc);
 }
 
 // Backtrace a mao por frame-pointer (tecnica do IDF/Tactility): o primeiro
@@ -134,7 +152,8 @@ const char* causeLabel(uint16_t cause) {
 // ---------------------------------------------------------------------------
 extern "C" void __real_esp_panic_handler(panic_info_t* info);
 extern "C" void __wrap_esp_panic_handler(panic_info_t* info) {
-    recordBasics((uint16_t)info->exception, (uint32_t)(uintptr_t)info->addr);
+    recordBasics((uint16_t)info->exception, (uint32_t)(uintptr_t)info->addr,
+                 info->reason, info->description);
     recordBacktrace(info->frame);
     __real_esp_panic_handler(info);
 }
@@ -180,9 +199,10 @@ void consumeAndLog() {
 
     char line[448];
     int n = snprintf(line, sizeof(line),
-                     "CelerOS %s | %s | uptime %lus | causa %s (%u) addr 0x%08x | app: %s (%s) | pcs",
+                     "CelerOS %s | %s | uptime %lus | causa %s (%u) addr 0x%08x | motivo \"%s\" | app: %s (%s) | pcs",
                      CELEROS_VERSION, when, (unsigned long)(s_rec.uptimeMs / 1000UL),
                      causeLabel(s_rec.cause), (unsigned)s_rec.cause, (unsigned)s_rec.addr,
+                     s_rec.reason[0] ? s_rec.reason : "-",
                      app[0] ? app : "-", pkg[0] ? pkg : "-");
     if (n < 0) return;
     for (uint8_t i = 0; i < s_rec.nPcs && n < (int)sizeof(line) - 16; i++) {

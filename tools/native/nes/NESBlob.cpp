@@ -39,7 +39,11 @@
 namespace {
 
 // --- memoria do emulador no .bss do blob (o loader zera o .bss no load) ---
-nes::Nes s_nes;
+// O construtor de Nes (e os de Cpu6502/Bus/Ppu por dentro) NAO roda sozinho
+// no blob: sem crt/.init_array ninguem chama os construtores estaticos. O
+// buffer e construido UMA vez pelo core_ctl(INIT) com placement-new.
+alignas(nes::Nes) static uint8_t s_nes_mem[sizeof(nes::Nes)];
+static nes::Nes* s_nes;
 uint16_t s_fb[nes::SCREEN_W * nes::SCREEN_H];
 // ROM inteira: o cartucho NAO copia (guarda ponteiros), entao o buffer tem
 // que viver enquanto o jogo roda. 1 MB = teto do nes::MAX_ROM_SIZE.
@@ -94,7 +98,8 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
     switch (cmd) {
     case CORE_INIT:
         nes_arena_reset();
-        s_nes.setAudioSink(&pcmSink);  // PCM -> s_pcm (drenado pelo app)
+        if (s_nes == nullptr) s_nes = ::new (static_cast<void*>(s_nes_mem)) nes::Nes();
+        s_nes->setAudioSink(&pcmSink);  // PCM -> s_pcm (drenado pelo app)
         s_pcm_len = 0;
         return 1;
     case CORE_ROM_OFF:
@@ -112,33 +117,33 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         if (sz > sizeof(s_rom)) return 0;
         s_pcm_len = 0;
         const char* err = nullptr;
-        if (!s_nes.load(s_rom, sz, nullptr, nullptr, &err)) return 0;
-        if (!s_nes.openScreen()) return 0;
-        s_nes.reset();
+        if (!s_nes->load(s_rom, sz, nullptr, nullptr, &err)) return 0;
+        if (!s_nes->openScreen()) return 0;
+        s_nes->reset();
         return 1;
     }
     case CORE_RESET:
         s_pcm_len = 0;
-        s_nes.reset();
+        s_nes->reset();
         return 1;
     case CORE_FRAME: {
         uint8_t buttons = (uint8_t)((uint32_t)arg & 0xFFu);
         bool render = ((uint32_t)arg >> 8) != 0;
         s_pcm_len = 0;  // o app drena o que este quadro gerar
-        s_nes.frame(buttons, render);
+        s_nes->frame(buttons, render);
         return 1;
     }
     case CORE_SAVE_STATE: {
         nes::File out;
         out.setWriteBuf(s_state, sizeof(s_state));
-        if (!s_nes.saveState(out)) return 0;
+        if (!s_nes->saveState(out)) return 0;
         return (uint32_t)out.size();
     }
     case CORE_LOAD_STATE: {
         uint32_t len = (uint32_t)(arg > 0 ? arg : 0);
         if (len == 0 || len > sizeof(s_state)) return 0;
         nes::File in(s_state, len);
-        return s_nes.loadState(in) ? 1u : 0u;
+        return s_nes->loadState(in) ? 1u : 0u;
     }
     case CORE_PCM_LEN:
         return s_pcm_len;

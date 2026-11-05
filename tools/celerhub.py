@@ -68,7 +68,7 @@ MAX_MAIN_JS = 64 * 1024
 # o aparelho compila de fato.
 MAX_MAIN_JS_PSRAM = 1024 * 1024
 STREAM_SAFE_MAIN_JS = 30 * 1024
-VALID_REQUIRES = ("psram",)
+VALID_REQUIRES = ("psram", "native")
 # Pacote multi-arquivo (modulos .js + assets): flat, sem subpastas; mesmas
 # regras do servidor (CelerOS-Server app.py). O hub computa o campo gerenciado
 # "files" {nome: {size, md5}} no publish — nunca setar a mao. Modulos contam
@@ -82,6 +82,14 @@ FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}\Z")
 MAX_ASSET_FILE = 128 * 1024
 MAX_ASSETS_TOTAL = 256 * 1024
 MAX_EXTRA_FILES = 16
+# Parte nativa (API 57, era CLRN): .bin com magic "CLRN" e BLOB de codigo
+# Xtensa — teto proprio, FORA do total de assets, e o app.json tem que
+# declarar requires ["native"] (Loja/Installer bloqueiam em placa sem o
+# acelerador). Alinhado com o loader (kMaxBlob 512KB, JsNative.cpp) e com o
+# installZip por PSRAM (kMaxFileUncompPsram, AppPackage.h). Mesmos tetos no
+# servidor. .bin SEM magic continua asset comum (teto de 128KB).
+MAX_NATIVE_FILE = 512 * 1024
+MAX_NATIVE_TOTAL = 512 * 1024
 REQUIRED = ("name", "packageName", "version", "author", "description")
 PKG_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9]+)+\Z")
 VER_RE = re.compile(r"^\d+\.\d+\.\d+\Z")
@@ -561,33 +569,77 @@ def validate(folder: Path, strip=True, snapshot=None):
     extras = package_files(folder)
     if len(extras) > MAX_EXTRA_FILES:
         die(f"{folder}: {len(extras)} arquivos extras (max {MAX_EXTRA_FILES})")
-    js_sizes = {}
-    main_fonte = snap["main.js"] if "main.js" in snap else code_path
+
+    def fonte_de(n, p):
+        """Bytes do SNAPSHOT quando o publish os trouxe; o Path do disco caso
+        contrario (validate direto, --dry sem snapshot). O publish passa os
+        EXTRAS junto com app.json/main.js: validar tetos/lint sobre bytes do
+        disco e subir bytes de outro instante reabria o TOCTOU pela metade."""
+        return snap[n] if n in snap else p
+
+    js_fontes = [("main.js", fonte_de("main.js", code_path), code_path)]
+    js_fontes += [(n, fonte_de(n, p), p) for n, p in extras.items()
+                  if n.endswith(".js")]
     # globais que os modulos do pacote leem: o main.js nao pode renomea-los
-    reserved = free_names([p for n, p in extras.items() if n.endswith(".js")]) if strip else set()
-    for f in [main_fonte] + [p for n, p in extras.items() if n.endswith(".js")]:
-        if isinstance(f, bytes):  # snapshot do publish: enxuta esses bytes
-            js_sizes[f] = len(strip_js(code_path, f, reserved=reserved)) if strip else len(f)
+    # (free_names sai do mesmo conteudo: bytes do snapshot quando houver)
+    reserved = free_names([f for _, f, _ in js_fontes[1:]]) if strip else set()
+    js_por_nome = {}
+    for nome, fonte, caminho in js_fontes:
+        if isinstance(fonte, bytes):  # snapshot do publish: enxuta esses bytes
+            js_por_nome[nome] = len(strip_js(caminho, fonte, reserved=reserved)) \
+                if strip else len(fonte)
         else:
-            js_sizes[f] = len(strip_js(f, reserved=reserved)) if strip else f.stat().st_size
-    main_enxuto = js_sizes[main_fonte]
-    js_sum = sum(js_sizes.values())
+            js_por_nome[nome] = len(strip_js(fonte, reserved=reserved)) if strip \
+                else fonte.stat().st_size
+    main_enxuto = js_por_nome["main.js"]
+    js_sum = sum(js_por_nome.values())
     assets_total = 0
+    native_total = 0
+    requires_ok = "native" in (meta.get("requires") or [])
     for n, p in extras.items():
         if not FILE_NAME_RE.match(n) or p.suffix.lower() not in ASSET_EXTS:
             die(f"{folder}: arquivo extra invalido: {n} "
                 f"(nome [A-Za-z0-9._-], extensoes: {', '.join(ASSET_EXTS)})")
-        size_n = p.stat().st_size
+        raw_n = snap.get(n)
+        size_n = len(raw_n) if raw_n is not None else p.stat().st_size
+        # Blob nativo (API 57): .bin com magic "CLRN" ganha teto proprio e
+        # sai do total de assets; exige requires "native" e cabecalho sao
+        # (o mesmo sanity que o loader faz no device — recusar no publish
+        # poupa o autor de descobrir no aparelho)
+        if n.endswith(".bin") and size_n >= 96:
+            head = raw_n[:96] if raw_n is not None else p.open("rb").read(96)
+            if head[:4] == b"CLRN":
+                hsize = int.from_bytes(head[4:8], "little")
+                bsize = int.from_bytes(head[8:12], "little")
+                chip = int.from_bytes(head[12:16], "little")
+                bapi = int.from_bytes(head[16:20], "little")
+                cnt = int.from_bytes(head[20:24], "little")
+                if (hsize != 96 or bsize != size_n - 96 or chip not in (0, 1)
+                        or bapi > MAX_API_LEVEL or not 1 <= cnt <= 8):
+                    die(f"{folder}: {n} e blob CLRN com cabecalho invalido "
+                        f"(hsize={hsize} blob={bsize} chip={chip} api={bapi} "
+                        f"entradas={cnt}; max api {MAX_API_LEVEL})")
+                if not requires_ok:
+                    die(f"{folder}: {n} e blob nativo (CLRN) mas o app.json "
+                        f"nao declara requires: [\"native\"]")
+                if size_n > MAX_NATIVE_FILE:
+                    die(f"{folder}: {n} tem {size_n}B (blob nativo max "
+                        f"{MAX_NATIVE_FILE}B)")
+                native_total += size_n
+                continue
         if size_n > MAX_ASSET_FILE:
             die(f"{folder}: {n} tem {size_n}B (max {MAX_ASSET_FILE}B)")
         if n.endswith(".js"):
-            if js_sizes[p] > STREAM_SAFE_MAIN_JS and api < 6:
+            if js_por_nome[n] > STREAM_SAFE_MAIN_JS and api < 6:
                 die(f"{folder}: {n} enxuto > {STREAM_SAFE_MAIN_JS}B exige api >= 6 "
                     f"(firmware antigo trunca o download em 32KB)")
         else:
             assets_total += size_n
     if assets_total > MAX_ASSETS_TOTAL:
         die(f"{folder}: assets somam {assets_total}B (max {MAX_ASSETS_TOTAL}B)")
+    if native_total > MAX_NATIVE_TOTAL:
+        die(f"{folder}: blobs nativos somam {native_total}B "
+            f"(max {MAX_NATIVE_TOTAL}B)")
 
     # Dependencias compartilhadas (API 30): formato local; existencia no hub
     # e a soma das deps no teto sao checadas no cmd_publish com o indice

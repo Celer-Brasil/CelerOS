@@ -46,6 +46,20 @@ bool existsPath(const char* p) {
     return stat(p, &st) == 0;
 }
 
+// Tetos efetivos desta placa (runtime): PSRAM abre a era nativa (pacote com
+// blob CLRN de ate 512KB); sem PSRAM ficam os tetos classicos. Host test usa
+// a base (heap_caps nao existe la).
+struct Caps { uint32_t file; uint32_t total; };
+Caps effectiveCaps() {
+#if defined(CELER_HOST_TEST)
+    return {kMaxFileUncomp, kMaxTotalUncomp};
+#else
+    if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0)
+        return {kMaxFileUncompPsram, kMaxTotalUncompPsram};
+    return {kMaxFileUncomp, kMaxTotalUncomp};
+#endif
+}
+
 bool isDirPath(const char* p) {
     struct stat st;
     return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
@@ -352,15 +366,16 @@ bool installZip(const char* zipPath, const char* destDir, Result* out) {
     bool ok = z.open(zipPath);
     int n = z.count();
     ok = ok && n > 0;  // zip vazio nao e pacote
+    const Caps caps = effectiveCaps();
     bool hasAppJson = false;
     uint64_t total = 0;
     for (int i = 0; ok && i < n; i++) {
         appzip::Entry e;
         if (!z.stat(i, &e)) { ok = false; break; }
         if (e.isDir) continue;
-        if (e.uncompSize > kMaxFileUncomp) { ok = false; break; }
+        if (e.uncompSize > caps.file) { ok = false; break; }
         total += e.uncompSize;
-        if (total > kMaxTotalUncomp) { ok = false; break; }
+        if (total > caps.total) { ok = false; break; }
         if (strcmp(e.name, "app.json") == 0) hasAppJson = true;
     }
     if (ok && !hasAppJson) ok = false;  // sem app.json nao e pacote

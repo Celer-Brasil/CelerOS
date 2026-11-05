@@ -45,6 +45,51 @@ function check(name, ok, detail) {
     fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ---------------------------------------------------------------- native --
+// Era nativa (API 57): scaffold --native cria native/core.c + requires
+// ["native"]; celer.js native compila o blob CLRN (toolchain xtensa: PATH
+// ou ~/.espressif). Sem toolchain a suite NAO falha — o build do blob e
+// pule (o gate do CI que tem o toolchain e quem cobre).
+(function () {
+    console.log('SDK native:');
+    var { execSync } = require('child_process');
+    var { runLint } = require('../../tools/app_lint/lint.js');
+    var hasToolchain = fs.readdirSync(path.join(process.env.HOME || '', '.espressif', 'tools'))
+        .some(function (d) { return d.indexOf('xtensa-esp') === 0; })
+        && !!process.env.PATH;
+    var tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'celer-sdk-nat-'));
+    var appDir = path.join(tmp, 'Nativo');
+    execSync('node tools/sdk/celer.js new Nativo --native --dir ' + JSON.stringify(tmp), { cwd: ROOT });
+
+    check('scaffold --native cria native/core.c',
+          fs.existsSync(path.join(appDir, 'native', 'core.c')));
+    var mf = JSON.parse(fs.readFileSync(path.join(appDir, 'app.json'), 'utf8'));
+    check('scaffold --native declara requires ["native"]',
+          Array.isArray(mf.requires) && mf.requires.indexOf('native') >= 0);
+    check('main.js do scaffold feature-detecta hasNative e usa System.appDir',
+          fs.readFileSync(path.join(appDir, 'main.js'), 'utf8').indexOf('hasNative') >= 0 &&
+          fs.readFileSync(path.join(appDir, 'main.js'), 'utf8').indexOf('System.appDir') >= 0);
+
+    // blob: a pasta raiz carrega o core.bin (o pacote do hub e flat); os
+    // fontes em native/ nao embarcam (subpasta fora do publish)
+    try {
+        execSync('node tools/sdk/celer.js native ' + JSON.stringify(appDir), { cwd: ROOT, stdio: 'pipe' });
+        var bin = fs.readFileSync(path.join(appDir, 'core.bin'));
+        check('celer.js native gera core.bin com magic CLRN',
+              bin.length >= 96 + 4 && bin.slice(0, 4).toString('latin1') === 'CLRN');
+        check('cabecalho do blob declara chip=esp32s3 e api 57',
+              bin.readUInt32LE(12) === 1 && bin.readUInt32LE(16) === 57);
+        var lint = runLint([appDir], {});
+        check('app nativo com core.bin passa no lint (requires native valida o CLRN)',
+              lint.totals.errors === 0,
+              lint.apps[0].diagnostics.map(function (d) { return d.message; }).join('; '));
+    } catch (e) {
+        check('celer.js native (toolchain xtensa ausente: build pulado)',
+              /toolchain/.test(String(e)), String(e && e.message || e).slice(0, 200));
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ------------------------------------------------------------------ types --
 (function () {
     console.log('SDK types:');

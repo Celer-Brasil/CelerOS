@@ -63,7 +63,7 @@ The `app.json` file is the heart of your app's identity. The CelerOS Installer r
 - **`category`**: The specific category (e.g., `Utilities`, `Games`, `Tools`). You can type any value here without restriction.
 - **Boards without PSRAM** (e.g. the classic CYD): the whole app (main + modules + deps) — plus the JS heap and the compile temporaries — must fit in internal RAM. The enforced ceiling is **64 KB minified** (bench: 61 KB raw / 52 KB stripped compiles, 82 KB raw shows "Sem memoria"; comments, indentation and long local names are removed before compiling, so they cost nothing). Apps above 64 KB must declare `"requires": ["psram"]`; the store badges them "Requer PSRAM" and blocks the install on boards without PSRAM.
 - **`permissions`** (optional, F4): array of capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`, `"mic"`, `"camera"`, `"usb"`, `"input"`. Without the field the app keeps the six legacy ones (compat with the existing store); `"usb"` and `"input"` (API 48) only apply when declared explicitly, because they grant access to any USB device and to the system keyboard/mouse. With the field, only what is declared is registered: `FS` / `Net` / `System.gpio` **plus the external-hardware calls** (`System.led`, `System.relay*`, `System.neopixel`) and the device-affecting calls such as `restart`/`otaStart`. System files under `/local` (WiFi credentials, PIN, OTA/boot config) additionally require `"system"` even for apps with `"fs"`. System apps (`"system": true`) always get everything.
-- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `36`). This is verified by the system at install time.
+- **`api`**: The CelerOS API level your app targets (see the [JS API Guide](JS_API_Guide.md) — currently `57`). Since API 56 the device enforces it twice: the store/installer refuses a package at install time, and the launcher refuses at launch — an app whose `api` is unreadable or higher than the firmware gets a native "update required" screen instead of a `TypeError` crash.
 - **`deps`** *(optional, API 30)* — shared libraries from the hub instead of vendored copies: `"deps": { "celeros.game": "^1.0.0", "celeros.physics": "^2.1.0" }`. The version is a `^X.Y.Z` range (same major, ≥ base) or an exact `X.Y.Z`; the store resolves it **at install time** into `/local/modules/<name>/<version>/` (one copy per version on the device, shared across apps) and writes the choice to `<app folder>/deps.json`, which is what `require()` reads. A local `<name>.js` in the app folder still wins over the cache (vendoring keeps working). Deps count toward the 64 KB / 1 MB compile ceiling. Resolution order and details: [JS API Guide, section 35](JS_API_Guide.md).
 
 **How ranges behave** (the Dart `pub` model): `^1.1.0` runs on any 1.x ≥ 1.1.0 — resolution always picks the newest satisfying version, so minor/patch releases of a dep reach your app without touching it. The **major is the breaking line**: `^1.x` never jumps to 2.0, and different majors coexist on the device (`/local/modules/<name>/1.9.0/` and `/2.0.0/` side by side; each app's `deps.json` pins its own). If an app really needs a new major, bump the range in `app.json` and publish. `deps.json` is the per-app lockfile: it freezes what was resolved so the app boots reproducibly; refresh it with `celerctl apps deps --upgrade` (or the store's "Atualizar engine"). **Every install path syncs deps for you** — `celerctl apps install`, the store, `celerctl dev` (on start and whenever `app.json` changes, `--deps-local` to test repo versions before publishing) and `celerctl push PASTA /local/apps` all resolve against the hub, fill `/local/modules` and write `deps.json` before the app runs. `node tools/sdk/celer.js deps <Pasta> --verify` fails when a range has no satisfying version on the hub (the `celer.js check` gate enforces it for `hub_apps`).
@@ -243,6 +243,52 @@ python3 tools/celerctl.py dev MyApp [--shots]
 node tools/sdk/celer.js publish MyApp --dry  # offline validation
 node tools/sdk/celer.js publish MyApp
 ```
+
+### Native part: the C++ SDK (API 57)
+
+An app can ship a **native code blob** — Xtensa C compiled outside the
+firmware, loaded at runtime from the app folder and called through a
+function pointer. The point: emulator cores and other number-crunching hot
+paths that ES5 in Duktape cannot deliver. Available on S3 boards with PSRAM
+where the build turns `CELEROS_JS_NATIVE` on (smartdisplay); feature-detect
+with `System.getInfo().hasNative`.
+
+```bash
+# 1) scaffold with the native part (native/core.c + requires ["native"])
+node tools/sdk/celer.js new MyApp --native
+
+# 2) edit native/core.c — every entry has the uniform signature
+#    uint32_t fn(void* scratch, int32_t a0, int32_t a1);
+#    entries are the core_* functions in address order (the app calls by
+#    index); the blob must be self-contained: no libc, no globals, no
+#    absolute addresses (the builder enforces all of this)
+
+# 3) build the blob -> MyApp/core.bin (flat package root: what ships;
+#    the .c/.h sources in native/ never enter the zip)
+node tools/sdk/celer.js native MyApp
+```
+
+Loading and calling (short ticks only — the execution timeout cannot see a
+long native call, so slice per frame like the verlet step):
+
+```javascript
+if (System.getInfo().hasNative) {
+    var h = System.nativeLoad(System.appDir() + "/core.bin"); // handle or -1
+    if (h > 0) {
+        var r = System.nativeCall(h, 0, 160, 120);  // entry 0, args
+        var bytes = System.nativeRead(h, 0, 64);    // scratch back as string
+        System.nativeFree(h);
+    }
+}
+```
+
+The store and the installer gate `requires: ["native"]` with an
+"Requires S3" badge/block on boards without the accelerator; the hub accepts
+CLRN blobs up to 512 KB (out of the regular asset budget) and validates the
+header the same way the loader does. Design and limits:
+`Documentation/Estudo_Native_Loader.pt-BR.md` (signature/consent for
+third-party blobs is still future work — publishing native code relies on
+hub-side publisher trust).
 
 ### CelerKit: shared modules for general apps
 

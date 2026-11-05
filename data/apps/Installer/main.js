@@ -151,6 +151,7 @@ function scanApps() {
                 pkg: (typeof m.packageName === "string") ? m.packageName : "",
                 version: (typeof m.version === "string" && m.version.length > 0) ? m.version : "1.0.0",
                 api: (typeof m.api === "number") ? m.api : (parseInt(m.api, 10) || 0),
+                req: Array.isArray(m.requires) ? m.requires : [],
                 desc: (typeof m.description === "string") ? m.description : "",
                 author: (typeof m.author === "string") ? m.author : "",
                 deps: !!(m.deps && typeof m.deps === "object"),
@@ -199,6 +200,27 @@ function abrirApp(i) {
     if (!validPkg(app.pkg)) {
         A.error("Pacote inválido", BAD_PKG);
         return null;
+    }
+    // requires que esta placa nao atende: o app quebraria na primeira chamada
+    // (psram) ou nem carregaria o blob nativo (native, API 57). O mesmo
+    // vocabulario que a App Store usa; sem o gate o SD vendia dardo.
+    var req = app.req || [];
+    if (req.indexOf("native") >= 0) {
+        var gi = null; try { gi = System.getInfo(); } catch (e0) { gi = null; }
+        if (!gi || gi.hasNative !== true) {
+            A.error("Requer S3", "Este app carrega código nativo e só roda em " +
+                    "ESP32-S3 com PSRAM. Instale pela App Store em uma placa " +
+                    "compatível.");
+            return null;
+        }
+    }
+    if (req.indexOf("psram") >= 0) {
+        var gi2 = null; try { gi2 = System.getInfo(); } catch (e1) { gi2 = null; }
+        if (!gi2 || !(gi2.totalPSRAM > 0)) {
+            A.error("Requer PSRAM", "Este app precisa de PSRAM; esta placa não " +
+                    "tem. Instale pela App Store em uma placa compatível.");
+            return null;
+        }
     }
     var inst = installedMeta(app);
     if (inst !== null && inst.author && app.author && inst.author !== app.author) {
@@ -368,11 +390,14 @@ function desenhaDetalhe(c, app) {
         full: c.full, elev: 2, grad: true,
         draw: function (r) {
             A.icons.draw("star", r.x, r.y + 1, 20, { color: T.accent });
-            UI.text("v" + app.version, r.x + 28, r.y,
-                    { role: "title", color: T.text, bg: r.bg, lines: 1 });
-            UI.text("API " + app.api + (app.author.length ? "  ·  " + app.author : ""),
-                    r.x, r.y + 26, { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
-            UI.text(app.desc || "Sem descrição.", r.x, r.y + 48,
+            // EMPILHADO pela altura devolvida: no vidro grande o titulo mede
+            // 28 px e a legenda em +26 fixo caia dentro dele
+            var ty = r.y;
+            ty += UI.text("v" + app.version, r.x + 28, r.y,
+                          { role: "title", color: T.text, bg: r.bg, lines: 1 }) + 3;
+            ty += UI.text("API " + app.api + (app.author.length ? "  ·  " + app.author : ""),
+                          r.x, ty, { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 }) + 4;
+            UI.text(app.desc || "Sem descrição.", r.x, ty,
                     { role: "caption", color: T.text, bg: r.bg, w: r.w, lines: 3 });
         }
     });
@@ -434,18 +459,26 @@ A.run({
         });
 
         if (apps.length === 0) {
-            A.style.card(L.x, L.top + 56, L.w, 136, {
+            // altura DERIVADA do texto medido: no vidro grande as legendas de
+            // 2 linhas passavam dos offsets fixos 68/96 e a segunda saida do
+            // cartao de 136 px
+            var e1 = sdOk ? "Nenhum pacote em /sd/apps."
+                          : "Cartão SD não encontrado ou sem a pasta apps.";
+            var e2 = "Copie apps para o cartão ou use o celerctl / App Store.";
+            var ew = L.w - 20;
+            var eh = 36 + UI.lineHeight("title") + 3 +
+                     UI.measureWrap(e1, ew, "caption") + 4 +
+                     UI.measureWrap(e2, ew, "caption") + 10;
+            A.style.card(L.x, L.top + 56, L.w, eh, {
                 full: c.full, elev: 1, grad: true,
                 draw: function (r) {
                     A.icons.draw("info", L.cx - 11, r.y + 4, 22, { color: T.warn });
-                    UI.text("SD sem apps", L.cx, r.y + 36,
-                            { role: "title", align: "center", color: T.warn, bg: r.bg, w: r.w, lines: 1 });
-                    UI.text(sdOk ? "Nenhum pacote em /sd/apps."
-                                 : "Cartão SD não encontrado ou sem a pasta apps.",
-                            L.cx, r.y + 68,
-                            { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 });
-                    UI.text("Copie apps para o cartão ou use o celerctl / App Store.",
-                            L.cx, r.y + 96,
+                    var ty = r.y + 36;
+                    ty += UI.text("SD sem apps", L.cx, ty,
+                                  { role: "title", align: "center", color: T.warn, bg: r.bg, w: r.w, lines: 1 }) + 3;
+                    ty += UI.text(e1, L.cx, ty,
+                                  { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 }) + 4;
+                    UI.text(e2, L.cx, ty,
                             { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 });
                 }
             });

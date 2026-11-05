@@ -93,8 +93,11 @@ segurança.
 - **Placas sem PSRAM** (ex.: a CYD clássica): o app inteiro (main + módulos + deps) — mais o heap JS e os temporários do compile — tem que caber na RAM interna. O teto aplicado é **64 KB minificados** (bancada: 61 KB cru / 52 KB enxuto compila, 82 KB cru mostra "Sem memória"; comentários, indentação e nomes locais longos são removidos antes do compile, então não custam nada). Apps acima de 64 KB precisam declarar `"requires": ["psram"]`; a loja marca como "Requer PSRAM" e bloqueia o install em placa sem PSRAM.
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`, `"mic"`, `"camera"`, `"usb"`, `"input"`. Sem o campo o app mantém as seis antigas (compatibilidade com a loja existente); `"usb"` e `"input"` (API 48) só entram com declaração explícita, porque dão acesso a qualquer dispositivo USB e ao teclado/mouse do sistema. Com o campo, só o que foi declarado é registrado: `FS` / `Net` / `System.gpio` **e as chamadas de hardware externo** (`System.led`, `System.relay*`, `System.neopixel`), além das que afetam o aparelho, como `restart`/`otaStart`. Arquivos do sistema em `/local` (credenciais Wi-Fi, PIN, config de OTA/boot) exigem `"system"` adicionalmente, mesmo para apps com `"fs"`. Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
-  JS](JS_API_Guide.pt-BR.md) — atualmente `36`). Verificado pelo sistema na
-  instalação.
+  JS](JS_API_Guide.pt-BR.md) — atualmente `57`). Desde a API 56 o aparelho
+  aplica isso duas vezes: a loja/o instalador recusam o pacote na instalação e
+  o launcher recusa no lançamento — um app cujo `api` seja ilegível ou maior
+  que o firmware recebe uma tela nativa de "requer atualização" em vez de
+  morrer em `TypeError`.
 - **`deps`** *(opcional, API 30)* — bibliotecas compartilhadas do hub em vez de
   cópias vendorizadas: `"deps": { "celeros.game": "^1.0.0", "celeros.physics": "^2.1.0" }`.
   A versão é um range `^X.Y.Z` (mesma major, ≥ base) ou um `X.Y.Z` exato; a
@@ -362,6 +365,52 @@ python3 tools/celerctl.py dev MeuApp [--shots]
 node tools/sdk/celer.js publish MeuApp --dry  # valida offline
 node tools/sdk/celer.js publish MeuApp
 ```
+
+### Parte nativa: o SDK C++ (API 57)
+
+O app pode embarcar um **blob de código nativo** — C Xtensa compilado fora
+do firmware, carregado em runtime da pasta do app e chamado por ponteiro de
+função. O motivo: cores de emulador e outros hot paths numéricos que ES5 no
+Duktape não entrega. Disponível em placas S3 com PSRAM onde o build ligar
+`CELEROS_JS_NATIVE` (smartdisplay); feature-detect com
+`System.getInfo().hasNative`.
+
+```bash
+# 1) scaffold com a parte nativa (native/core.c + requires ["native"])
+node tools/sdk/celer.js new MeuApp --native
+
+# 2) edite native/core.c — toda entrada tem a assinatura unica
+#    uint32_t fn(void* scratch, int32_t a0, int32_t a1);
+#    as entradas sao as funcoes core_* em ordem de endereco (o app chama
+#    por indice); o blob tem que ser autocontido: sem libc, sem globais,
+#    sem endereco absoluto (o builder barra qualquer desvio)
+
+# 3) build do blob -> MeuApp/core.bin (na RAIZ, que e o que embarca no
+#    pacote flat; os fontes .c/.h em native/ nunca entram no zip)
+node tools/sdk/celer.js native MeuApp
+```
+
+Carregar e chamar (so tick curto — o exec-timeout nao ve chamada nativa
+longa; fatie por quadro, como o step do verlet):
+
+```javascript
+if (System.getInfo().hasNative) {
+    var h = System.nativeLoad(System.appDir() + "/core.bin"); // handle ou -1
+    if (h > 0) {
+        var r = System.nativeCall(h, 0, 160, 120);  // entrada 0, args
+        var bytes = System.nativeRead(h, 0, 64);    // scratch de volta como string
+        System.nativeFree(h);
+    }
+}
+```
+
+A loja e o instalador bloqueiam `requires: ["native"]` com o badge
+"Requer S3" em placa sem o acelerador; o hub aceita blobs CLRN de até
+512 KB (fora do orçamento de assets comum) e valida o cabeçalho igual ao
+loader. Desenho e limites:
+`Documentation/Estudo_Native_Loader.pt-BR.md` (assinatura/consentimento
+para blobs de terceiros segue trabalho futuro — publicar código nativo
+hoje se apoia na confiança do publicador no hub).
 
 ### CelerKit: módulos compartilhados para apps gerais
 

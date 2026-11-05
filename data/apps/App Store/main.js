@@ -52,6 +52,10 @@ var API = System.getAPILevel(); var IS = SM ? 44 : 56;
 var HI = System.getInfo ? System.getInfo() : null; var PM = !NP ? Infinity
     : HI && HI.appRAM ? Math.max(4096, Math.floor((HI.appRAM - 60000) * 0.4)) : Math.max(4096, Math.floor(((HI && HI.freeRAM || 0) - 52000) / 1.7));
 function NPS(j) { return (j.req && j.req.indexOf("psram") >= 0) || (j.size || 0) > PM; }
+// API 57, requires "native": o app carrega blob de codigo nativo (CLRN) —
+// so placa com o acelerador no build (S3 com PSRAM; hasNative no getInfo)
+var HN = !!(HI && HI.hasNative === true);
+function NNAT(j) { return j.req && j.req.indexOf("native") >= 0 && !HN; }
 
 // ---- utilitarios / rede / semver / deps ------------------------------------
 // Tudo isso mora no store.js (apelidado no topo): o servico da madrugada tem
@@ -86,6 +90,7 @@ function SETAUTO(on) { var c = CFG(); c.auto = !!on; U.cfgSave(c); UI.invalidate
 function SI(j) { var lo = lm2[j.pkg];
     if ((j.api || 1) > API) return { code: "api", bd: "API " + j.api, col: T.warn };
     if (NP && NPS(j)) return { code: "hw", bd: "PSRAM", col: T.warn };
+    if (NNAT(j)) return { code: "nat", bd: "S3", col: T.warn };
     if (!lo) return { code: "new", bd: "Novo", col: T.ok };
     // versao travada: nao entra no lote (nem no manual "Atualizar tudo") nem
     // na rotina da madrugada; o botao do detalhe continua atualizando na mao.
@@ -270,9 +275,12 @@ function DT(c) { var j = si; if (!j) return RT("home");
         if (c.full) System.fillGradient(q.x, yy, IS, IS, T.accent, T.accentD, 12);
         UI.text(String(j.name || "?").charAt(0).toUpperCase(), q.x + (IS >> 1), yy + ((IS - UI.lineHeight("title")) >> 1), { align: "center", role: "title", color: T.onAccent, bg: T.accentD });
         var tw = q.w - IS - 8, bw = UI.measure(st.bd, "caption") + 14;
-        UI.text(j.name, q.x + IS + 8, yy + 1, { role: "title", color: T.text, w: tw - bw - 4, lines: 1, bg: T.card });
-        UI.text((j.author || "Desconhecido") + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""), q.x + IS + 8, yy + 21, { role: "caption", color: T.textDim, w: tw, lines: 1, bg: T.card });
-        UI.text("v" + j.ver + (lo && lo.ver !== j.ver ? " · instalado v" + lo.ver : ""), q.x + IS + 8, yy + 36, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
+        // EMPILHADO pela altura devolvida: o titulo mede 28-29 px e a legenda
+        // em +21 fixo caia dentro dele
+        var hy = yy + 1;
+        hy += UI.text(j.name, q.x + IS + 8, yy + 1, { role: "title", color: T.text, w: tw - bw - 4, lines: 1, bg: T.card }) + 2;
+        hy += UI.text((j.author || "Desconhecido") + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""), q.x + IS + 8, hy, { role: "caption", color: T.textDim, w: tw, lines: 1, bg: T.card }) + 3;
+        UI.text("v" + j.ver + (lo && lo.ver !== j.ver ? " · instalado v" + lo.ver : ""), q.x + IS + 8, hy, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
         UI.badge(st.bd, q.x + q.w - bw, yy + 2, { color: st.col, textColor: T.bg });
         var sy = yy + IS + 8, sh = top + bh - 16 - sy;
         var off = UI.scrollBegin("det:" + j.pkg, q.x, sy, q.w, sh, 420), x = q.x, w = q.w, y = sy - off + 2;
@@ -293,9 +301,10 @@ function DT(c) { var j = si; if (!j) return RT("home");
         if (conf) { y += 8; tx("Instalado v" + lo.ver + " é mais novo que o hub (v" + j.ver + ").", x, y, T.warn, "caption", w, 2, T.card); }
         else if ((j.api || 1) > API) { y += 8; tx("Requer API " + j.api + " (aqui: " + API + ").", x, y, T.warn, "caption", w, 2, T.card); }
         else if (st.code === "hw") { y += 8; tx("Exige PSRAM: a RAM interna não basta.", x, y, T.warn, "caption", w, 2, T.card); }
+        else if (st.code === "nat") { y += 8; tx("Requer ESP32-S3 com PSRAM: o app carrega código nativo.", x, y, T.warn, "caption", w, 2, T.card); }
         UI.scrollEnd(); } });
 
-    var can = !!j.appUrl && st.code !== "api" && st.code !== "hw";
+    var can = !!j.appUrl && st.code !== "api" && st.code !== "hw" && st.code !== "nat";
     if (can) { var lbl = (st.code === "upd" || st.code === "pin") ? "Atualizar" : st.code === "dep" ? "Atualizar engine" : st.code === "inst" ? "Reinstalar" : "Instalar";
         if (A.style.button(lbl, L.x, fy, lo ? 108 : L.w, 30, { variant: "primary" })) {
             if (conf && st.code === "inst" && !UI.confirm("Versão", "Local v" + lo.ver + " > hub v" + j.ver + ". Reinstalar a do hub?", { yes: "Reinstalar" })) return;

@@ -19,8 +19,14 @@ namespace celer::apppkg {
 
 // Tetos de seguranca na extracao (o lint fino por categoria continua no
 // publish; aqui so impede zip bomb e disco cheio por meta-gordura).
-constexpr uint32_t kMaxFileUncomp = 272 * 1024;   // maior asset (256K) + folga
-constexpr uint32_t kMaxTotalUncomp = 448 * 1024;  // 128 codigo + 256 assets + 10 icone + folga
+// Base: o pacote classico (128 codigo + 256 assets + 10 icone + folga). Os
+// tetos EFETIVOS sao escolhidos em runtime (installZip): com PSRAM a placa
+// abre a era nativa (blob CLRN de ate 512KB) — o mesmo binario atende as
+// duas familias de placa; o host test (CELER_HOST_TEST) usa a base.
+constexpr uint32_t kMaxFileUncomp = 272 * 1024;        // maior asset (256K) + folga
+constexpr uint32_t kMaxTotalUncomp = 448 * 1024;       // pacote classico + folga
+constexpr uint32_t kMaxFileUncompPsram = 560 * 1024;   // blob CLRN (512K) + folga
+constexpr uint32_t kMaxTotalUncompPsram = 1024 * 1024; // pacote nativo + folga
 
 struct Result {
     bool ok = false;

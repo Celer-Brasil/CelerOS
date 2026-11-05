@@ -38,7 +38,10 @@ function usage() {
     console.log('uso: node tools/sdk/celer.js <comando> [args]');
     console.log('');
     console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
-    console.log('                                               (--game: jogo c/ deps celeros.game)');
+    console.log('           [--native]                                      (--game: jogo c/ deps celeros.game)');
+    console.log('                                                           (--native: parte nativa, blob CLRN)');
+    console.log('  native PASTA [--src ARQ] [--out ARQ]         build do blob nativo do app (xtensa;');
+    console.log('                                               gates do formato; default: PASTA/core.bin)');
     console.log('  deps [PASTA] [--verify]                      deps do app.json + resolucao no hub (--verify: exit 1 se nao resolve)');
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
@@ -71,6 +74,8 @@ function cmdNew(args) {
     if (fs.existsSync(dir)) die('new: ' + dir + ' ja existe');
     const game = !!flags.game;
     const appkit = !!flags.appkit;
+    const native = !!flags.native;
+    if (native && game) die('new: --native nao combina com --game');
 
     // packageName: default br.celer.<slug> (autor troca pelo proprio)
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -83,6 +88,7 @@ function cmdNew(args) {
         version: '0.1.0',
         author: 'Seu Nome',
         description: game ? 'Jogo feito com a engine CelerOS' :
+                      native ? 'App CelerOS com parte nativa (blob Xtensa)' :
                             'App CelerOS criado com o SDK',
         type: game ? 'Game' : 'App',
         category: game ? 'Jogos' : 'Utilidades',
@@ -107,6 +113,13 @@ function cmdNew(args) {
             'celeros.game.fx': '^' + engineVersion('celeros.game.fx.js'),
         };
     }
+    if (native) {
+        // parte nativa (API 57): o core roda fora do heap Duktape em placa
+        // S3 com PSRAM — requires "native" e o vocabulario que Loja/Installer
+        // usam para o badge/bloqueio "Requer S3" (o blob em si declara chip
+        // e api no cabecalho CLRN; o loader recusa o contrario)
+        appJson.requires = ['native'];
+    }
     if (appkit) {
         // app geral sobre o CelerKit: o pacote kit (core + fmt + path + data
         // + net + text + form + list + caps) numa unica dep — o fecho cabe
@@ -123,9 +136,19 @@ function cmdNew(args) {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(appJson, null, 2) + '\n');
     const mainSrc = fs.readFileSync(
-        path.join(__dirname, game ? 'template-game' : 'template', 'main.js'), 'utf8');
+        path.join(__dirname,
+                  native ? 'template-native' : game ? 'template-game' : 'template',
+                  'main.js'), 'utf8');
     fs.writeFileSync(path.join(dir, 'main.js'),
                      mainSrc.replace(/\{\{APP_NAME\}\}/g, name));
+    if (native) {
+        // fontes em native/ (SUBPASTA: o pacote do hub e flat e ignora
+        // subpastas — os .c/.h nunca embarcam; o blob compilado core.bin
+        // fica na RAIZ, que e o que viaja como asset)
+        fs.mkdirSync(path.join(dir, 'native'), { recursive: true });
+        fs.copyFileSync(path.join(__dirname, 'template-native', 'core.c'),
+                        path.join(dir, 'native', 'core.c'));
+    }
     fs.writeFileSync(path.join(dir, 'README.md'),
                      fs.readFileSync(path.join(__dirname, 'template', 'README.md'), 'utf8')
                          .replace(/\{\{APP_NAME\}\}/g, name)
@@ -155,8 +178,10 @@ function cmdNew(args) {
 
     console.log('criado: ' + dir + ' (api ' + api +
                 (game ? ', jogo com deps celeros.game + fx' : '') +
+                (native ? ', parte nativa (native/core.c)' : '') +
                 (appkit ? ', app com dep celeros.app.kit' : '') + ')');
     console.log('proximos passos:');
+    if (native) console.log('  node tools/sdk/celer.js native ' + dir + '   (build do core.bin)');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);
     console.log("  python3 tools/celerctl.py dev " + dir);
@@ -732,6 +757,34 @@ function cmdDev(args) {
     process.exit(r.status == null ? 1 : r.status);
 }
 
+// ---------------------------------------------------------------- native --
+
+// native PASTA [--src ARQ] [--out ARQ]: build do blob nativo do app (API 57,
+// formato "CLRN"). Delega ao tools/native/build_core.py (spawn, molde
+// publish/dev): resolve o toolchain xtensa (PATH ou ~/.espressif), aplica os
+// gates do formato (zero reloc/l32r/callx, sem .data/.bss) e grava o
+// cabecalho + codigo. Saida default: PASTA/core.bin na RAIZ — o pacote do
+// hub e flat (subpastas nao embarcam), entao o blob viaja como asset e os
+// fontes .c/.h em native/ ficam fora do zip. O app carrega com
+// System.nativeLoad(System.appDir() + "/core.bin").
+function cmdNative(args) {
+    const flags = parseFlags(args);
+    const folder = flags._[0];
+    if (!folder) die('native: informe a PASTA do app');
+    const dir = path.resolve(folder);
+    if (!fs.existsSync(path.join(dir, 'app.json')))
+        die('native: ' + dir + ' nao tem app.json (scaffold: celer.js new NOME --native)');
+    const src = path.resolve(flags.src || path.join(dir, 'native', 'core.c'));
+    if (!fs.existsSync(src))
+        die('native: ' + src + ' nao existe (scaffold cria native/core.c; ou passe --src)');
+    const out = path.resolve(flags.out || path.join(dir, 'core.bin'));
+    const r = spawnSync('python3',
+                        [path.join(ROOT, 'tools', 'native', 'build_core.py'),
+                         '--src', src, '--out', out],
+                        { stdio: 'inherit' });
+    process.exit(r.status == null ? 1 : r.status);
+}
+
 // ---------------------------------------------------------------- cli
 
 function parseFlags(args) {
@@ -768,6 +821,7 @@ function main() {
     const [cmd, ...rest] = process.argv.slice(2);
     switch (cmd) {
         case 'new': return cmdNew(rest);
+        case 'native': return cmdNative(rest);
         case 'deps': return cmdDeps(rest);
         case 'lint': return cmdLint(rest);
         case 'types': return cmdTypes(rest);

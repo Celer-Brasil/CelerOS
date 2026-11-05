@@ -165,6 +165,11 @@ function pktSize(j) { var n = (j && j.size) || 0, fn; for (fn in ((j && j.files)
     return n; }
 function nps(j) { return !!((j && j.req) && j.req.indexOf && j.req.indexOf("psram") >= 0) ||
                         !!((j && j.requires) && j.requires.indexOf && j.requires.indexOf("psram") >= 0); }
+// API 57, requires "native": blob de codigo nativo so roda em placa com o
+// acelerador no build (hasNative no getInfo) — a madrugada nao troca o app
+// por uma versao que a placa nao roda
+function natReq(j) { var r = (j && (j.req || j.requires)); return !!(r && r.indexOf && r.indexOf("native") >= 0); }
+function hasNat() { var i = null; try { i = System.getInfo(); } catch (e) { i = null; } return !!(i && i.hasNative === true); }
 
 // ---- config: auto/hora/pins ------------------------------------------------
 function cfgLoad() { var c = { auto: true, hour: 2, pins: {} };
@@ -221,6 +226,7 @@ function planUpdates(inst, c, maxApps) { inst = inst || {}; var lim = maxApps ||
         if (!e.ver || cmpV(e.ver, lo.ver) <= 0) continue;
         if ((e.api || 1) > api) continue;                 // nao roda nesta placa
         if (!ps && nps(e)) continue;                      // exige PSRAM e a placa nao tem
+        if (natReq(e) && !hasNat()) continue;             // exige nativo (S3) e a placa nao tem
         out.push({ pkg: pkg, name: lo.name, from: lo.ver, to: e.ver, dir: lo.dir, api: e.api || 1,
                    deps: e.deps || null, size: e.size || 0, zip: e.zip || null, req: e.req || [],
                    meta: e.meta || null }); }
@@ -242,6 +248,7 @@ function updateOne(cand, ui) {
     if (!ver || cmpV(ver, cand.from) <= 0) return { ok: true, skipped: true, version: ver };
     if ((meta.api || 1) > apiLevel()) return { ok: false, err: "exige API " + (meta.api || 1) };
     if (!hasPs() && nps(meta)) return { ok: false, err: "exige PSRAM" };
+    if (natReq(meta) && !hasNat()) return { ok: false, err: "exige ESP32-S3 (nativo)" };
     var zip = meta.zip || null;
     if ((!zip || !zip.md5) && cand.zip && cand.zip.md5)
         zip = { url: HUB + "/store/apps/" + pkg + "/app.zip", md5: cand.zip.md5, size: cand.zip.size || 0 };

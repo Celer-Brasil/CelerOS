@@ -3814,6 +3814,10 @@ def _lint_app_folder(folder, fatal=True):
 # install nunca mandou)
 _JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 _JUNK_SUFFIX = (".swp", ".swo", ".bak", ".tmp", "~")
+# fontes da parte nativa (API 57): compilam no PC (celer.js native) e viram
+# core.bin na raiz — o .c/.h nunca roda no device e o hub nem embarca
+# subpasta (pacote flat); filtrar aqui evita subir lixo no dev/push
+_NATIVE_SRC = (".c", ".h")
 # test.js e dev-only (wire do harness): o publish do hub exclui e o
 # data/AGENTS.md promete que nunca embarca — o install/dev filtram igual
 _DEV_ONLY = {"test.js"}
@@ -3830,6 +3834,8 @@ def _is_junk(p):
     if any(d in p.parts for d in _DEV_DIRS):
         return True
     if name in _JUNK_NAMES or name in _DEV_ONLY or name.startswith(".#") or ".git" in p.parts:
+        return True
+    if name.endswith(_NATIVE_SRC):
         return True
     return name.endswith(_JUNK_SUFFIX)
 

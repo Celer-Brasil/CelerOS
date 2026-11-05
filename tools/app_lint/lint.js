@@ -55,6 +55,11 @@ const STREAM_SAFE_MAIN_JS = _hubLimit('STREAM_SAFE_MAIN_JS', 30 * 1024);
 const MAX_ASSET_FILE = _hubLimit('MAX_ASSET_FILE', 128 * 1024);
 const MAX_ASSETS_TOTAL = _hubLimit('MAX_ASSETS_TOTAL', 256 * 1024);
 const MAX_EXTRA_FILES = _hubLimit('MAX_EXTRA_FILES', 16);
+// Parte nativa (API 57, era CLRN): mesmos tetos do celerhub.py (fonte unica
+// via _hubLimit) — .bin com magic "CLRN" e blob de codigo Xtensa, com teto
+// proprio FORA do total de assets e requires ["native"] obrigatorio
+const MAX_NATIVE_FILE = _hubLimit('MAX_NATIVE_FILE', 512 * 1024);
+const MAX_NATIVE_TOTAL = _hubLimit('MAX_NATIVE_TOTAL', 512 * 1024);
 // install.sh (API 42): script de instalacao — roda 1x por versao no sh
 // restrito do device (ver data/AGENTS.md); publica no pacote como asset.
 const ASSET_EXTS = ['.js', '.png', '.wav', '.qoa', '.json', '.bin', '.sh'];
@@ -963,7 +968,7 @@ function lintSource(manifest, src, appInfo, moduleGlobals) {
 const REQUIRED_FIELDS = ['name', 'packageName', 'version', 'author', 'description'];
 const RESERVED_FIELDS = ['size', 'md5', 'published_at', 'publisher'];
 const VALID_PERMS = ['fs', 'net', 'gpio', 'system', 'mic', 'camera', 'usb', 'input'];
-const VALID_REQUIRES = ['psram'];
+const VALID_REQUIRES = ['psram', 'native'];
 
 function lintAppJson(dir, manifest) {
   const diags = [];
@@ -1093,7 +1098,7 @@ function lintAppJson(dir, manifest) {
   // modulos .js SOMAM no teto de compile (e a soma que ocupa a RAM); assets
   // (nao-.js) tem tetos proprios. test.js e dev-only/junk de editor ficam
   // fora do pacote (o publish do celerhub tbm exclui).
-  let jsSum = 0, jsCount = 0, assetsTotal = 0, extras = 0;
+  let jsSum = 0, jsCount = 0, assetsTotal = 0, nativeTotal = 0, extras = 0;
   const jsApiLow = typeof app.api !== 'number' || app.api < 6;
   const entryPath = path.join(dir, entry);
   let entrySt = null;
@@ -1133,12 +1138,45 @@ function lintAppJson(dir, manifest) {
       if (enxuto > STREAM_SAFE_MAIN_JS && jsApiLow)
         d('aviso', 'appjson', name + ' enxuto tem ' + kbFmt(enxuto) + ': acima de ' + (STREAM_SAFE_MAIN_JS / 1024) + 'KB o hub exige api >= 6');
     } else {
-      assetsTotal += st.size;
-      if (st.size > MAX_ASSET_FILE) dsize(name + ' tem ' + kbFmt(st.size) + ' (max ' + (MAX_ASSET_FILE / 1024) + 'KB por arquivo)');
+      // Blob nativo (API 57): .bin com magic "CLRN" ganha teto proprio FORA
+      // do total de assets e exige requires ["native"] (mesmas regras do
+      // celerhub.py e do servidor — recusar aqui poupa o publish falhar).
+      // .bin sem magic segue asset comum. So os 96 B do cabecalho sao lidos.
+      let isNative = false;
+      if (ext === '.bin' && st.size >= 96) {
+        let head = null;
+        try {
+          const fd = fs.openSync(path.join(dir, name), 'r');
+          head = Buffer.alloc(96);
+          const got = fs.readSync(fd, head, 0, 96, 0);
+          fs.closeSync(fd);
+          head = head.slice(0, got);
+        } catch (e) { /* cabeçalho ilegivel: tratado como asset comum */ }
+        if (head && head.length >= 4 && head.toString('latin1', 0, 4) === 'CLRN') {
+          isNative = true;
+          const hsize = head.readUInt32LE(4), bsize = head.readUInt32LE(8);
+          const chip = head.readUInt32LE(12), bapi = head.readUInt32LE(16);
+          const cnt = head.readUInt32LE(20);
+          if (hsize !== 96 || bsize !== st.size - 96 || chip > 1 || cnt < 1 || cnt > 8) {
+            d('erro', 'appjson', name + ' e blob CLRN com cabecalho invalido (hsize=' + hsize + ' blob=' + bsize + ' chip=' + chip + ' entradas=' + cnt + ')');
+          } else if (bapi > manifest.apiLevel) {
+            d('erro', 'appjson', name + ' e blob CLRN de api ' + bapi + ' (o firmware declara ' + manifest.apiLevel + ')');
+          }
+          if (!(Array.isArray(app.requires) && app.requires.indexOf('native') >= 0))
+            d('erro', 'appjson', name + ' e blob nativo (CLRN): declare requires: ["native"] no app.json');
+          if (st.size > MAX_NATIVE_FILE) dsize(name + ' tem ' + kbFmt(st.size) + ' (blob nativo max ' + (MAX_NATIVE_FILE / 1024) + 'KB)');
+          nativeTotal += st.size;
+        }
+      }
+      if (!isNative) {
+        assetsTotal += st.size;
+        if (st.size > MAX_ASSET_FILE) dsize(name + ' tem ' + kbFmt(st.size) + ' (max ' + (MAX_ASSET_FILE / 1024) + 'KB por arquivo)');
+      }
     }
   }
   if (extras > MAX_EXTRA_FILES) dsize(extras + ' arquivos extras (max ' + MAX_EXTRA_FILES + ')');
   if (assetsTotal > MAX_ASSETS_TOTAL) dsize('assets somam ' + kbFmt(assetsTotal) + ' (max ' + (MAX_ASSETS_TOTAL / 1024) + 'KB)');
+  if (nativeTotal > MAX_NATIVE_TOTAL) dsize('blobs nativos somam ' + kbFmt(nativeTotal) + ' (max ' + (MAX_NATIVE_TOTAL / 1024) + 'KB)');
   // Teto em 2 niveis (o celerhub.py e o servidor reforcam no publish) pela
   // SOMA dos .js ENXUTOS: 64KB em qualquer placa; "psram" em requires sobe
   const ceiling = psramDecl ? MAX_MAIN_JS_PSRAM : MAX_MAIN_JS;

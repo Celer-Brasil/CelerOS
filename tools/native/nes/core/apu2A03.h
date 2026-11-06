@@ -29,6 +29,9 @@ public:
     uint8_t cpuRead(uint16_t addr);
     void setVolume(uint8_t vol);
     void clock();
+    // n ticks de uma vez (lote do Cpu6502::apuSync): mesmo resultado de n
+    // clock(), com os timers dos canais saltando ate o proximo evento
+    void clockN(int n);
 
     // Sink das amostras (chamado a cada buffer de 128): PCM16 mono LE.
     // No Anemoia era i2s_write bloqueante numa task livre; no CelerOS o
@@ -210,6 +213,8 @@ private:
     void writeBuffer();
 
     void pulseChannelClock(sequencerUnit& seq, bool enable);
+    void advance(uint32_t m);
+    void advancePulse(sequencerUnit& seq, uint32_t m);
     void triangleChannelClock(triangleChannel& triangle, bool enable);
     void noiseChannelClock(noiseChannel& noise, bool enable);
     void DMCChannelClock(DMCChannel& DMC, bool enable);

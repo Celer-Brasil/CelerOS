@@ -106,15 +106,16 @@ private:
     uint8_t* ptr_nametable[4];
     uint8_t palette_table[32];
     uint8_t scanline_counter = 0;
-    uint8_t scanline_buffer[BUFFER_SIZE];
-    uint8_t scanline_metadata[BUFFER_SIZE];
+    // alinhadas a 4: o fundo grava 4 pixels por store (renderBackground)
+    alignas(4) uint8_t scanline_buffer[BUFFER_SIZE];
+    alignas(4) uint8_t scanline_metadata[BUFFER_SIZE];
     // Bloco rolante de 8 scanlines (4 KB, RAM interna) + sink do bloco: o
     // modelo do Anemoia original. O render NUNCA escreve no framebuffer do
     // vidro (na PSRAM do painel cada escrita e um cache miss e a copia crua
     // viola a regra da cache line); a cada 8 linhas o bloco sai pelo sink
     // (pushImage do LovyanGFX no binding, incremental como o pushPixelsDMA).
     static constexpr int kChunkRows = SCANLINES_PER_BUFFER;
-    uint16_t chunk_buffer[kChunkRows * SCANLINE_SIZE];
+    alignas(4) uint16_t chunk_buffer[kChunkRows * SCANLINE_SIZE];
     int chunk_rows = 0;  // linhas prontas no bloco atual
     void flushChunk();
     ChunkSink chunk_sink = nullptr;

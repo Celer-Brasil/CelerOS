@@ -13,7 +13,12 @@ Formato v2 (cabecalho de 128 B, little-endian):
    0 magic "CLRN"      4 headerSize=128   8 imageSize      12 chip
   16 api              20 entryCount      24 entries[8] (offsets no blob)
   56 bssOff           60 bssSize         64 relocOff       68 relocCount
-  72,76 reservado     80 sha256[32]      112 reservado[16]
+  72 relocKind (1 = bit31 do site marca dados)
+  76 fastSize: os ULTIMOS fastSize bytes do .bss (secao .clrn_fast) podem
+     ir para a RAM INTERNA — o loader que entende aloca ali e redireciona
+     as relocacoes de dados que caem na faixa; o antigo ignora o campo e a
+     regiao segue no .bss (PSRAM): o mesmo binario roda nos dois
+  80 sha256[32]      112 reservado[16]
 imagem = code+data planos (VMA 0..); tabela = relocCount u32 de offsets
 RELATIVOS ao inicio da imagem onde aplicar +base (4 B alinhados).
 
@@ -59,13 +64,13 @@ RE_V2 = True
 VERBOSE_RELOCS = os.environ.get("CLRN_VERBOSE_RELOCS") == "1"
 
 # Flags C++ freestanding: sem excecoes/RTTI, sem guardas de static, sem
-# tabuas de switch (indirecao por tabela e o que queremos evitar de graca),
-# sem unwind. .sdata/.sbss sao barrados no link: sao acessados por GP, que
-# o loader nao registra.
+# unwind. Tabelas de salto LIGADAS: o switch de 256 opcodes do 6502 sem elas
+# vira arvore de ~8 comparacoes por instrucao; cada entrada e R_XTENSA_32
+# contra .text (kind = exec no v3), que o loader ja reloca. .sdata/.sbss
+# sao barrados no link: sao acessados por GP, que o loader nao registra.
 CXX_FLAGS = ["-std=c++17", "-fno-exceptions", "-fno-rtti",
              "-fno-threadsafe-statics", "-fno-use-cxa-atexit",
-             "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
-             "-fno-jump-tables", "-fno-tree-switch-conversion"]
+             "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
 COMMON_FLAGS = ["-O2", "-ffreestanding", "-fno-builtin", "-fno-pic",
                 "-fno-pie", "-fno-stack-protector", "-fomit-frame-pointer",
                 "-fno-tree-loop-distribute-patterns",
@@ -224,7 +229,10 @@ def build():
                     "  .text : { *(.literal*) *(.text*) }\n"
                     "  .rodata : ALIGN(4) { *(.rodata*) }\n"
                     "  .data : ALIGN(4) { *(.data*) *(.ctors) *(.dtors) }\n"
-                    "  .bss  : ALIGN(4) { *(.bss*) *(COMMON) }\n}\n")
+                    "  .bss  : ALIGN(4) { *(.bss*) *(COMMON) }\n"
+                    # estado QUENTE do core (CLRN_FAST): fim do .bss, para o
+                    # loader mover inteiro para a RAM interna
+                    "  .clrn_fast : ALIGN(16) { *(.clrn_fast*) }\n}\n")
         r = run([tc["gcc"], "-nostdlib", "-Wl,--emit-relocs",
                  "-Wl,--build-id=none", "-Wl,-T," + lds, "-o", elf, obj])
         if r.returncode != 0:
@@ -250,6 +258,16 @@ def build():
         bss_off, bss_size = (bss[0], bss[1]) if bss else (image_end, 0)
         if bss_size and bss_off < image_end:
             die("layout inesperado: .bss dentro da imagem")
+        fast = secs.get(".clrn_fast")
+        fast_size = fast[1] if fast else 0
+        if fast_size:
+            # a regiao fast e o FIM do .bss: estende o .bss ate cobri-la (o
+            # loader antigo zera e usa tudo junto, na PSRAM)
+            if not bss_size:
+                bss_off = (image_end + 3) & ~3
+            if fast[0] < bss_off:
+                die("layout inesperado: .clrn_fast antes do .bss")
+            bss_size = fast[0] + fast_size - bss_off
 
         # 3. imagem plana code+data (VMA 0..image_end) e tabela de relocs.
         r = run([tc["objcopy"], "-O", "binary", elf, binf])
@@ -298,7 +316,7 @@ def build():
             # relocOff e offset no ARQUIVO (header + imagem): a tabela vem
             # logo depois da imagem
             bss_off, bss_size, HEADER_SIZE + len(image), len(sites),
-            1, 0,  # r4=1: tabela de relocs com KIND (bit31 = dados)
+            1, fast_size,  # r4=1: relocs com KIND; r5 = regiao fast
             digest, b"\x00" * 16)
         assert len(header) == HEADER_SIZE, "cabecalho != 128 bytes"
         out = os.path.abspath(args.out)
@@ -313,8 +331,9 @@ def build():
         print("  imagem %d B (%s) + %d relocs + cabecalho %d B = %d B"
               % (len(image), "C++" if is_cxx else "C", len(sites),
                  HEADER_SIZE, HEADER_SIZE + len(image) + 4 * len(sites)))
-        print("  bss %d B @ 0x%x | chip=esp32s3(%d) api=%d sha256=%s"
-              % (bss_size, bss_off, CHIP_ID, API_LEVEL, digest.hex()[:16]))
+        print("  bss %d B @ 0x%x (fast %d B no fim) | chip=esp32s3(%d) api=%d "
+              "sha256=%s" % (bss_size, bss_off, fast_size, CHIP_ID, API_LEVEL,
+                             digest.hex()[:16]))
         for i, (name, off) in enumerate(zip(entry_names, entries)):
             print("  [%d] %-10s offset %5d" % (i, name, off))
         if args.keep_elf:

@@ -348,6 +348,104 @@ IRAM_ATTR void Apu2A03::clock()
     clock_counter++;
 }
 
+// Lote: entre dois eventos (amostra a cada ~20 ticks, passos do frame
+// counter) os canais so contam timers — avancar m ticks e saltar cada timer
+// direto ate o proximo estouro. O tick que tem evento roda pelo clock()
+// normal, entao a ordem (canais -> frame counter -> amostra) e a mesma.
+// Bancada 4848: 15 mil clock() por quadro custavam ~5 ms; casos raros (DMC
+// ligado, triangulo mudo ou com periodo < 2) seguem tick a tick.
+void Apu2A03::clockN(int n)
+{
+    while (n > 0)
+    {
+        // ticks "lisos" antes do proximo tick com evento
+        uint32_t m = (uint32_t)n;
+        const uint32_t d = pulse_hz <= 894886 ? 894886 - pulse_hz : 0;
+        const uint32_t toSample = d / SAMPLE_RATE;  // o tick toSample gera amostra
+        if (toSample < m) m = toSample;
+        static constexpr uint32_t kEvents[5] = {3728, 7456, 11185, 14914, 18640};
+        for (int e = 0; e < 5; e++)
+        {
+            if (kEvents[e] < clock_counter) continue;
+            if (e == 3 && !four_step_sequence_mode) continue;
+            if (kEvents[e] - clock_counter < m) m = kEvents[e] - clock_counter;
+            break;
+        }
+        if (m > 0)
+        {
+            advance(m);
+            pulse_hz += m * SAMPLE_RATE;
+            clock_counter += m;
+            n -= (int)m;
+        }
+        if (n > 0)
+        {
+            clock();  // o tick do evento, exato
+            n--;
+        }
+    }
+}
+
+inline void Apu2A03::advancePulse(sequencerUnit& seq, uint32_t m)
+{
+    uint32_t t = seq.timer;
+    while (m > t)
+    {
+        m -= t + 1;
+        t = seq.reload;
+        seq.output = duty_sequences[seq.duty_cycle][seq.cycle_position];
+        seq.cycle_position = (seq.cycle_position + 1) & 7;
+    }
+    seq.timer = (uint16_t)(t - m);
+}
+
+void Apu2A03::advance(uint32_t m)
+{
+    if (pulse1_enable) advancePulse(pulse1.seq, m);
+    if (pulse2_enable) advancePulse(pulse2.seq, m);
+    if (noise_enable)
+    {
+        uint32_t t = noise.timer;
+        uint32_t k = m;
+        while (k > t)
+        {
+            k -= t + 1;
+            t = noise.reload;
+            uint8_t temp = noise.mode ? (noise.shift_register >> 6) & 0x01 : (noise.shift_register >> 1) & 0x01;
+            noise.output = (noise.shift_register & 0x01) ^ (temp);
+            noise.shift_register >>= 1;
+            noise.shift_register |= noise.output << 14;
+        }
+        noise.timer = (uint16_t)(t - k);
+    }
+    if (DMC_enable)
+    {
+        for (uint32_t i = 0; i < m; i++) DMCChannelClock(DMC, true);
+    }
+    if (triangle_enable)
+    {
+        const bool running = triangle.len_counter.timer > 0 && triangle.lin_counter.counter > 0;
+        if (running && triangle.seq.reload >= 2 && triangle.seq.timer > 0)
+        {
+            // 2 decrementos por tick; estoura em 0 e recarrega (periodo = reload)
+            uint32_t t = triangle.seq.timer;
+            uint32_t k = 2 * m;
+            while (k >= t)
+            {
+                k -= t;
+                t = triangle.seq.reload;
+                triangle.seq.output = triangle_sequence[triangle.seq.duty_cycle];
+                triangle.seq.duty_cycle = (triangle.seq.duty_cycle + 1) & 31;
+            }
+            triangle.seq.timer = (uint16_t)(t - k);
+        }
+        else
+        {
+            for (uint32_t i = 0; i < m; i++) triangleChannelClock(triangle, true);
+        }
+    }
+}
+
 inline void Apu2A03::generateSample()
 {
     uint16_t index = (buffer_index << 1);

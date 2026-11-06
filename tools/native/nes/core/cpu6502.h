@@ -56,14 +56,24 @@ public:
 #if !defined(CELER_HOST_TEST) && !defined(NES_BLOB)
         (void)n;
 #else
-#if defined(NES_BLOB)
-        if (!g_blob_apu_on) return;   // app com audio off: APU fora do laco
-#endif
         apu_pending += n;
-        while (apu_pending >= 2)
+#endif
+    }
+    // Lote da APU (host/blob): o laco de clock() so ACUMULA ciclos e a APU
+    // roda de uma vez a cada fatia de scanline e antes de toda escrita em
+    // $4000-$4017. Ela nao devolve nada a CPU neste core ($4015 le 0 e o
+    // IRQ da APU nao chega ao 6502), entao o resultado e o mesmo — sem a
+    // chamada por instrucao no caminho quente. Com audio off nem roda.
+    void apuSync()
+    {
+#if defined(CELER_HOST_TEST) || defined(NES_BLOB)
+#if defined(NES_BLOB)
+        if (!g_blob_apu_on) { apu_pending = 0; return; }
+#endif
+        if (apu_pending >= 2)
         {
-            apu_pending -= 2;
-            apu.clock();
+            apu.clockN(apu_pending >> 1);
+            apu_pending &= 1;
         }
 #endif
     }

@@ -196,52 +196,67 @@ inline void Ppu2C02::renderBackground()
         return;
     }
 
-    uint8_t x_tile, y_tile, tile_index, nametable_index, bg_color;
-    uint8_t attribute_byte, attribute_shift, attribute;
-    uint16_t offset, nametable_byte_base, attribute_byte_base;
-    uint8_t* ptr_pattern_tile;
-    uint8_t* ptr_attribute;
-    uint8_t* ptr_tile;
+    // Fundo por MASCARAS, 4 pixels por operacao: cada nibble do padrao vira
+    // uma mascara de 4 bytes (0xFF onde o bit do pixel esta ligado, tabela
+    // de 16) e a cor sai por selecao bit a bit entre as 4 cores do atributo
+    // replicadas no u32 — sem shift variavel nem lookup por pixel. Tudo em
+    // LOCAIS: com *ptr_buffer++ (membro) o compilador relia o objeto a cada
+    // byte escrito. Bancada 4848: o fundo era 7,4 ms por quadro (224 ciclos
+    // por tile), 3/4 da PPU.
+    typedef uint32_t __attribute__((may_alias)) u32a;
+    static constexpr uint32_t kNibMask[16] = {
+        0x00000000, 0xFF000000, 0x00FF0000, 0xFFFF0000, 0x0000FF00, 0xFF00FF00, 0x00FFFF00, 0xFFFFFF00,
+        0x000000FF, 0xFF0000FF, 0x00FF00FF, 0xFFFF00FF, 0x0000FFFF, 0xFF00FFFF, 0x00FFFFFF, 0xFFFFFFFF,
+    };
+    // por atributo: cor 0 e as trocas 0^1 / 2 / 2^3, replicadas em 4 bytes
+    uint32_t c0[4], x01[4], c2[4], x23[4];
+    {
+        const uint32_t bg = palette_table[0] * 0x01010101u;
+        for (int a = 0; a < 4; a++)
+        {
+            const uint32_t k1 = READ_PALETTE(a * 4 + 1) * 0x01010101u;
+            const uint32_t k2 = READ_PALETTE(a * 4 + 2) * 0x01010101u;
+            const uint32_t k3 = READ_PALETTE(a * 4 + 3) * 0x01010101u;
+            c0[a] = bg;
+            x01[a] = bg ^ k1;
+            c2[a] = k2;
+            x23[a] = k2 ^ k3;
+        }
+    }
+    uint8_t* buf = scanline_buffer;
+    uint8_t* meta = scanline_metadata;
+    uint8_t x_tile = v.coarse_x;
+    const uint8_t y_tile = v.coarse_y;
+    const uint16_t offset = (control.background_table_addr ? 0x1000 : 0x0000) + v.fine_y;
+    uint8_t nametable_index = (v.reg >> 10) & 3;
 
-    bg_color = palette_table[0];
-    ptr_buffer = scanline_buffer;
-    ptr_scanline_meta = scanline_metadata;
-    x_tile = v.coarse_x;
-    y_tile = v.coarse_y;
-    offset = (control.background_table_addr ? 0x1000 : 0x0000) + v.fine_y;
-    nametable_index = (v.reg >> 10) & 3;
+    const uint16_t nametable_byte_base = v.reg & 0x03E0;
+    const uint8_t* ptr_tile = &ptr_nametable[nametable_index][nametable_byte_base + x_tile];
 
-    nametable_byte_base = v.reg & 0x03E0;
-    ptr_tile = &ptr_nametable[nametable_index][nametable_byte_base + x_tile];
+    const uint16_t attribute_byte_base = 0x03C0 + ((y_tile & 0x1C) << 1);
+    const uint8_t* ptr_attribute = &ptr_nametable[nametable_index][attribute_byte_base + (x_tile >> 2)];
+    uint8_t attribute_byte = *ptr_attribute++;
+    uint8_t attribute_shift = ((y_tile & 2) << 1) + (x_tile & 2);
+    int attr = (attribute_byte >> attribute_shift) & 3;
 
-    attribute_byte_base = 0x03C0 + ((y_tile & 0x1C) << 1);
-    ptr_attribute = &ptr_nametable[nametable_index][attribute_byte_base + (x_tile >> 2)];
-    attribute_byte = *ptr_attribute++;
-    attribute_shift = ((y_tile & 2) << 1) + (x_tile & 2);
-    attribute = ((attribute_byte >> attribute_shift) & 3) << 2;
-
-    // Shifts to get the bits of a pixel
-    static constexpr DRAM_ATTR uint8_t pixel_shift[8] = { 14, 6, 12, 4, 10, 2, 8, 0 };
-    static constexpr DRAM_ATTR uint8_t pixel_metadata[4] = { 0x80, 0x00, 0x00, 0x00 };
     for (int tile = 0; tile < 33; tile++)
     {
-        tile_index = *ptr_tile++;
-        ptr_pattern_tile = ppuReadPtr(offset + (tile_index << 4));
-
-        // draw to framebuffer
-        uint16_t pattern = ((ptr_pattern_tile[8] & 0xAA) << 8) |
-                           ((ptr_pattern_tile[8] & 0x55) << 1) |
-                           ((ptr_pattern_tile[0] & 0xAA) << 7) | (ptr_pattern_tile[0] & 0x55);
-        uint8_t tile_palette[4];
-        tile_palette[0] = bg_color;
-        for (int t = 1; t < 4; t++) tile_palette[t] = READ_PALETTE(attribute + t);
-        for (int i = 0; i < 8; i++)
-        {
-            uint8_t pixel = (pattern >> pixel_shift[i]) & 3;
-            *ptr_buffer++ = tile_palette[pixel];
-            *ptr_scanline_meta++ = pixel_metadata[pixel];
-            // Store if pixel is transparent for sprite rendering
-        }
+        const uint8_t* pt = ppuReadPtr(offset + (*ptr_tile++ << 4));
+        const uint32_t lo = pt[0], hi = pt[8];
+        const uint32_t a0 = c0[attr], a1 = x01[attr], a2 = c2[attr], a3 = x23[attr];
+        // pixels 0..3 = nibble alto (bit 7 = pixel 0), 4..7 = nibble baixo
+        const uint32_t l0 = kNibMask[lo >> 4], h0 = kNibMask[hi >> 4];
+        const uint32_t l1 = kNibMask[lo & 15], h1 = kNibMask[hi & 15];
+        uint32_t p = a0 ^ (a1 & l0), q = a2 ^ (a3 & l0);
+        ((u32a*)buf)[0] = p ^ ((p ^ q) & h0);
+        p = a0 ^ (a1 & l1);
+        q = a2 ^ (a3 & l1);
+        ((u32a*)buf)[1] = p ^ ((p ^ q) & h1);
+        // transparente (indice 0) = 0x80 no metadado (sprite atras)
+        ((u32a*)meta)[0] = 0x80808080u & ~(l0 | h0);
+        ((u32a*)meta)[1] = 0x80808080u & ~(l1 | h1);
+        buf += 8;
+        meta += 8;
 
         x_tile++;
         if ((x_tile & 1) == 0)
@@ -263,9 +278,10 @@ inline void Ppu2C02::renderBackground()
             }
 
             attribute_shift ^= 2;
-            attribute = ((attribute_byte >> attribute_shift) & 0x03) << 2;
+            attr = (attribute_byte >> attribute_shift) & 3;
         }
     }
+    ptr_scanline_meta = meta;
     ptr_buffer = scanline_buffer + x;
 }
 
@@ -500,7 +516,13 @@ inline void Ppu2C02::finishScanline()
     // por linha, sem escrever pixel a pixel no framebuffer em PSRAM).
     uint16_t* row = chunk_buffer + (size_t)chunk_rows * SCANLINE_SIZE;
     const uint8_t* buffer = ptr_buffer;
-    for (int i = 0; i < SCANLINE_SIZE; i++) row[i] = nes_palette[mask.emphasize][buffer[i]];
+    // paleta em local: sem isso o mask/nes_palette eram relidos por pixel
+    const uint16_t* pal = nes_palette[mask.emphasize];
+    for (int i = 0; i < SCANLINE_SIZE; i += 2)
+    {
+        const uint32_t a = pal[buffer[i] & 63], b = pal[buffer[i + 1] & 63];
+        *(uint32_t __attribute__((may_alias))*)(row + i) = a | (b << 16);
+    }
     if (++chunk_rows >= kChunkRows) flushChunk();
 
     // contador mantido so para o formato do save state do Anemoia

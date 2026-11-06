@@ -363,14 +363,17 @@ IRAM_ATTR void Cpu6502::clockFrame(bool render)
     for (int ppu_scanline = 0; ppu_scanline < 240; ppu_scanline += 3)
     {
         clock(113);
+        apuSync();
         if (render) bus.ppu.renderScanline(ppu_scanline);
         else bus.ppu.fakeSpriteHit(ppu_scanline);
 
         clock(114);
+        apuSync();
         if (render) bus.ppu.renderScanline(ppu_scanline + 1);
         else bus.ppu.fakeSpriteHit(ppu_scanline + 1);
 
         clock(114);
+        apuSync();
         if (render) bus.ppu.renderScanline(ppu_scanline + 2);
         else bus.ppu.fakeSpriteHit(ppu_scanline + 2);
     }
@@ -379,13 +382,16 @@ IRAM_ATTR void Cpu6502::clockFrame(bool render)
     // Same reason as scanlines 0-239, 2/3 of scanlines will have an extra CPU clock.
     // Scanline 240
     clock(113);
+    apuSync();
 
     // Scanline 241-261
     bus.ppu.setVBlank();
     clock(2501);
+    apuSync();
 
     bus.ppu.clearVBlank();
     clock(114);
+    apuSync();
 }
 
 void Cpu6502::reset()
@@ -413,6 +419,7 @@ void Cpu6502::reset()
 
 IRAM_ATTR void Cpu6502::apuWrite(uint16_t addr, uint8_t data)
 {
+    apuSync();  // a escrita encontra a APU no ciclo certo
     apu.cpuWrite(addr, data);
 }
 

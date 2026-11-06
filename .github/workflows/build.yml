@@ -48,8 +48,12 @@ jobs:
         run: node tools/sdk/celer.js check
       - name: C++ host tests (lógica pura de main/Utils + framer HostLink)
         run: |
-          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp main/Nes/Nes.cpp main/Nes/NesCore.cpp
+          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp
           ./celeros_tests
+      - name: APU do core NES em lote == tick a tick (blob do Anemoia)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/nes -Itools/native/nes/core -o nes_apu_test test/cpp/nes_apu_test.cpp tools/native/nes/core/apu2A03.cpp
+          ./nes_apu_test
       - name: celerctl tests (protocolo HostLink contra device simulado)
         run: |
           pip install pyserial

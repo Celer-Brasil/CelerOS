@@ -571,16 +571,13 @@ bool resolveTarget(const char* id, ble_addr_t* out) {
 
 bool BleHid::ensure() {
     if (s_started) return true;
-    if (s_hadFail) return false;
-    if (!CelerLink::ensureStarted(false)) {
-        s_hadFail = true;  // RAM insuficiente: o tick da malha re-tenta depois
-        return false;
-    }
+    // SEM latch: false aqui e "ainda nao" (RAM apertada, ou o init do host
+    // em curso em OUTRO task — CelerLink::ensureStarted virou one-shot
+    // protegido e devolve false para quem chega no meio). O backoff do
+    // driver segura o ritmo das re-tentativas.
+    if (!CelerLink::ensureStarted(false)) return false;
     if (s_evt == nullptr) s_evt = xEventGroupCreate();
-    if (s_evt == nullptr) {
-        s_hadFail = true;
-        return false;
-    }
+    if (s_evt == nullptr) return false;
     // SMP Just Works + bond no NVS do NimBLE. No watch isto sobrescreve o
     // bloco do Phone Link (ver cabecalho): bonds ja gravados seguem valendo.
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;

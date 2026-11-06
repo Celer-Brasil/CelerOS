@@ -141,6 +141,29 @@ constexpr EventBits_t EV_PAIRR = 1 << 9;  // leitura do estado confirmada
 
 bool s_started = false;
 bool s_initFail = false;
+// One-shot do ensureStarted (ver InitOnce): so UM task roda o init do
+// NimBLE — a malha (main task) e o gamepad (task do svchost) disputam.
+bool s_initBusy = false;
+portMUX_TYPE s_initMux = portMUX_INITIALIZER_UNLOCKED;
+
+// Guarda RAII: limpa s_initBusy em QUALQUER return do ensureStarted.
+struct InitOnce {
+    bool mine;
+    InitOnce() : mine(false) {
+        portENTER_CRITICAL(&s_initMux);
+        if (!s_initBusy) {
+            s_initBusy = true;
+            mine = true;
+        }
+        portEXIT_CRITICAL(&s_initMux);
+    }
+    ~InitOnce() {
+        if (!mine) return;
+        portENTER_CRITICAL(&s_initMux);
+        s_initBusy = false;
+        portEXIT_CRITICAL(&s_initMux);
+    }
+};
 SemaphoreHandle_t s_syncSem = nullptr;
 EventGroupHandle_t s_evt = nullptr;
 QueueHandle_t s_rxQueue = nullptr;
@@ -1080,6 +1103,16 @@ bool retryable(int rc) {
 bool CelerLink::ensureStarted(bool latchFailure) {
     if (s_started) return true;
     if (s_initFail) return false;
+
+    // UM init por vez: desde o gamepad (BleHid::ensure roda na task do
+    // svchost) a malha (main task) e o servico disputam este init. Duas
+    // passadas em paralelo = DOIS nimble_port_init = host/radio travados e
+    // ~40 KB de RAM interna extras (4848 congelou na bancada 2026-11-06,
+    // kern.log com dois "Celer Link pronto"). Sem lock blocking: quem chega
+    // no meio recebe false e re-tenta no giro seguinte (a malha re-tenta a
+    // cada tick; o pad tem backoff proprio).
+    InitOnce once;
+    if (!once.mine) return false;
 
     // O NimBLE nao devolve erro quando falta RAM interna no init do host: o
     // os_mempool_init do ble_hs_init cai num SYSINIT_PANIC_ASSERT e o

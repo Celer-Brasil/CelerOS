@@ -133,6 +133,8 @@ function run(cfg)
     var curIdx = -1;
     var needClear = true;
     var paddleValue = 0;
+    // frameskip auto adaptativo (por ROM aberta): quadros na janela de medida
+    var skipHeavy = false, skipT0 = 0, skipN = 0, skipSlow = 0;
 
     var fingers = {};
     var freshIds = [];
@@ -329,6 +331,9 @@ function run(cfg)
         screen = "game";
         slotMsg = "";
         buildStamps();      // desenha no quadro do app; o needClear limpa
+        skipHeavy = false;
+        skipT0 = 0;
+        skipSlow = 0;
         needClear = true;
         dpReset();
         toastStart = S.millis();
@@ -695,6 +700,15 @@ function run(cfg)
         return false;
     }
 
+    // Toque seco numa linha ARMA a abertura (dispara na saida do dedo);
+    // traco que passa do toque seco desarma e vira rolagem 1:1 (delta ENTRE
+    // quadros). Antes qualquer chegada abria na hora — arrasto comecado numa
+    // linha nunca rolava — e o deslocamento TOTAL desde o pouso era somado de
+    // novo a cada quadro: com o dedo parado a lista corria ate o fim.
+    var TAP_SLOP = 14;   // px de traco que ainda conta como toque seco
+    var armIdx = -1;     // linha armada na chegada
+    var scrollY = -1;    // y do dedo de rolagem no quadro anterior
+
     function loopSel()
     {
         var ts = pollTouch();
@@ -703,14 +717,31 @@ function run(cfg)
             var f = fingers[freshIds[i]];
             if (f.ay < LIST_TOP || f.ay > H - 24) continue;
             var idx = Math.floor((f.ay + listOff - LIST_TOP) / ROW_H);
-            if (idx >= 0 && idx < roms.length) { fingers = {}; freshIds = []; openRom(idx); return; }
+            if (idx >= 0 && idx < roms.length) armIdx = idx;
+        }
+        for (var id in fingers) {
+            if (!fingers.hasOwnProperty(id)) continue;
+            var g = fingers[id];
+            if (Math.abs(g.x - g.ax) > TAP_SLOP || Math.abs(g.y - g.ay) > TAP_SLOP) {
+                armIdx = -1;
+                break;
+            }
         }
         if (ts.length > 0) {
             var p = fingers[ts[0].id];
             if (p && p.ay >= LIST_TOP) {
-                var dy = p.ay - p.y;
-                if (dy > 2) listOff += dy; if (dy < -2) listOff += dy;
+                if (scrollY < 0) scrollY = p.y;
+                else { listOff += scrollY - p.y; scrollY = p.y; }
                 if (listOff < 0) listOff = 0;
+            }
+        } else {
+            scrollY = -1;
+            if (armIdx >= 0) {
+                var pick = armIdx;
+                armIdx = -1;
+                fingers = {}; freshIds = [];
+                openRom(pick);
+                return;
             }
         }
         drawSel();
@@ -881,12 +912,32 @@ function run(cfg)
             try { cfg.beforeFrame(api); } catch (e) {}
         }
         if (analog && analogOn) N.ctl(analog.ctl, paddleValue);
-        // Caminho direto: renderizar custa ~1 ms, entao TODO quadro sai (o
-        // frameskip escondia de vez os sprites que o jogo pisca em quadros
-        // alternados). O frameskip so vale no caminho antigo.
+        // Frameskip "auto": no caminho direto comeca desenhando TODO quadro
+        // (o skip esconde de vez os sprites que o jogo pisca em quadros
+        // alternados) e so passa a alternar se o jogo ficar claramente lento
+        // assim (2 janelas de 2 s seguidas abaixo de 52 fps: um soluco de
+        // toque/WiFi nao derruba). Bancada 4848: Atari ~59 fps desenhando
+        // tudo, cabe; NES com a tela rolando ~6,5 ms de composicao, 44 fps,
+        // nao cabe -> alterna e volta a ~59.
         var direct = N.direct() && stampsOk;
+        var alt = !direct || skipHeavy;
+        if (direct && !skipHeavy && skipMode) {
+            var now = S.millis();
+            if (skipT0 === 0) {
+                skipT0 = now + 500;  // aquecimento: limpeza do vidro, 1o quadro
+                skipN = 0;
+            } else if (now >= skipT0) {
+                skipN++;
+                if (now - skipT0 >= 2000) {
+                    skipSlow = skipN * 1000 / (now - skipT0) < 52 ? skipSlow + 1 : 0;
+                    if (skipSlow >= 2) skipHeavy = true;
+                    skipT0 = now;
+                    skipN = 0;
+                }
+            }
+        }
         var render = true;
-        if (skipMode && !direct) render = (frameNo % 2) === 0;
+        if (skipMode && alt) render = (frameNo % 2) === 0;
         if (render && stampsOk) placeStamps();
         N.frame(btnsMask, render, stampsOk);
         if (render) {
@@ -894,7 +945,7 @@ function run(cfg)
                 clearBands();
                 drawOverlay();
             }
-            UI.end(skipMode && !direct ? 30 : 60);
+            UI.end(skipMode && alt ? 30 : 60);
         }
     }
 
@@ -913,6 +964,7 @@ function run(cfg)
         screen = "game";
         fingers = {}; freshIds = [];
         needClear = true;
+        skipT0 = 0;  // a pausa nao entra na medida
         dpReset();
         radioPause();
         if (audioOn) N.audioStart();

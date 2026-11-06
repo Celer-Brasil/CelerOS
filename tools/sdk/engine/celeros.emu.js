@@ -379,13 +379,11 @@ function run(cfg)
             if (!fingers.hasOwnProperty(id)) continue;
             var g = fingers[id];
             if (g.kind === "dpad") {
+                // Base FIXA no lugar de descanso: o d-pad nao salta para o
+                // dedo ao tocar (o usuario via isso como bug). O knob segue o
+                // dedo dentro do curso e a direcao sai do delta contra a base.
                 dpActive = true;
-                dpBaseX = g.ax; dpBaseY = g.ay;
-                if (dpBaseX > DP_ZONE_W - KNOB_R) dpBaseX = DP_ZONE_W - KNOB_R;
-                if (dpBaseX < KNOB_R + 2) dpBaseX = KNOB_R + 2;
-                if (dpBaseY > H - KNOB_R - 2) dpBaseY = H - KNOB_R - 2;
-                if (dpBaseY < DP_ZONE_Y + KNOB_R) dpBaseY = DP_ZONE_Y + KNOB_R;
-                var dx = g.x - g.ax, dy = g.y - g.ay;
+                var dx = g.x - dpBaseX, dy = g.y - dpBaseY;
                 var m = Math.sqrt(dx * dx + dy * dy);
                 if (m > KNOB_TRAVEL) { dx = dx * KNOB_TRAVEL / m; dy = dy * KNOB_TRAVEL / m; }
                 dpKnobX = dpBaseX + dx; dpKnobY = dpBaseY + dy;
@@ -817,6 +815,6 @@ function run(cfg)
 }
 
 module.exports = {
-    version: "0.1.2",
+    version: "0.1.3",
     run: run,
 };

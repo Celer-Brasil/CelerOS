@@ -116,6 +116,14 @@ void JSBindings::appExitCleanup() {
     deleteAllSprites();
 #endif
     netAsyncReset();
+#if CONFIG_CELEROS_JS_NATIVE
+    // Blobs nativos do app anterior (malloc PSRAM incluso) e o PcmFeed do
+    // modulo saem na SAIDA, nao so no init do proximo app: um emulador deixa
+    // ~1,7 MB de scratch + ROM parados (e o feed alocado) durante o launcher
+    // e um OTA push/web comecado logo depois. jsNativeReset e idempotente e
+    // nao toca o heap Duktape (ainda vivo aqui).
+    jsNativeReset();
+#endif
 #if CONFIG_CELEROS_JS_AI
     aiReset();
 #endif

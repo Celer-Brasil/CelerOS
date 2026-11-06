@@ -219,7 +219,9 @@ void JSBindings::appWait(duk_context *ctx, int ms) {
     static uint32_t lastProbeMs = 0;
     static bool heapTight = false;
     static const uint32_t kGcEveryMs = Board::profile().hasPsram ? 10000 : 5000;
-    if (t0 - lastProbeMs >= 100) {
+    // Com PSRAM a sonda varre megabytes (~5 ms por vez, bancada 4848 com o
+    // Anemoia: ~0,45 ms por quadro so aqui): 500 ms bastam.
+    if (t0 - lastProbeMs >= (Board::profile().hasPsram ? 500u : 100u)) {
         lastProbeMs = t0;
         heapTight = ESP.getMaxAllocHeap() < 24 * 1024;
     }

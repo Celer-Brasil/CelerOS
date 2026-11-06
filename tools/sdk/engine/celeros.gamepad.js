@@ -29,8 +29,11 @@
 //
 // changelog:
 //   0.1.0: primeira versao (parser HID + decodificador + rumble Xbox BLE).
+//   0.1.1: items constant (padding) agora avancam o offset em bits — pads
+//          reais que fecham byte com Input (Const) entre hat e botoes tinham
+//          todos os campos seguintes deslocados (botoes trocados/fantasmas).
 
-var gamepad = { version: '0.1.0' };
+var gamepad = { version: '0.1.1' };
 
 // ---------------------------------------------------------------------------
 // itens do descriptor HID: byte 0 = size(0..1) | type(2..3) | tag(4..7)
@@ -125,36 +128,45 @@ gamepad.parseMap = function (map) {
         else if (tag === IT_FEATURE) kind = 'feat';
         else continue;   // desconhecido: size esta no byte 0, pula inteiro
         var isConst = (val & 0x01) !== 0;   // flag constant vai no DADO do item
-        if (!isConst && g.size > 0 && g.count > 0) {
-            var key = String(curId) + '|' + kind;
-            if (reports[key] === undefined) reports[key] = [];
+        // items constant ocupam bits no report mesmo sem dado (HID 6.2.2.4:
+        // padding para fechar byte) — o offset tem que avancar POR ELES
+        // tambem, senao todo campo depois do padding sai deslocado (pads
+        // reais enchem byte com Input (Const) entre hat e botoes)
+        if (g.size > 0 && g.count > 0) {
             if (offs[kind][curId] === undefined) {
                 // o byte do report id ocupa os 8 primeiros bits do report
                 offs[kind][curId] = curId ? 8 : 0;
             }
-            var expanded = usages.slice();
-            if (expanded.length === 0 && uMin >= 0 && uMax >= 0 && uMax >= uMin) {
-                for (var u = uMin; u <= uMax; u++) expanded.push(u);
-            }
-            var per = expanded.length > 0 ? expanded : null;
-            for (var c = 0; c < g.count; c++) {
-                var page = g.page, usage = 0;
-                if (per !== null && per.length === g.count) {
-                    page = (per[c] >> 16) & 0xFFFF;
-                    usage = per[c] & 0xFFFF;
-                } else if (per !== null && per.length > 0) {
-                    // menos usos que count: o 1o uso cobre o grupo (hat,
-                    // tri-axis, bloco anonimo de vendor)
-                    page = (per[0] >> 16) & 0xFFFF;
-                    usage = per[0] & 0xFFFF;
+            if (!isConst) {
+                var key = String(curId) + '|' + kind;
+                if (reports[key] === undefined) reports[key] = [];
+                var expanded = usages.slice();
+                if (expanded.length === 0 && uMin >= 0 && uMax >= 0 && uMax >= uMin) {
+                    for (var u = uMin; u <= uMax; u++) expanded.push(u);
                 }
-                if (page === 0) page = g.page;
-                reports[key].push({
-                    t: kind, id: curId, page: page, usage: usage,
-                    off: offs[kind][curId] || 0, bits: g.size,
-                    min: g.min, max: g.max
-                });
-                offs[kind][curId] = (offs[kind][curId] || 0) + g.size;
+                var per = expanded.length > 0 ? expanded : null;
+                for (var c = 0; c < g.count; c++) {
+                    var page = g.page, usage = 0;
+                    if (per !== null && per.length === g.count) {
+                        page = (per[c] >> 16) & 0xFFFF;
+                        usage = per[c] & 0xFFFF;
+                    } else if (per !== null && per.length > 0) {
+                        // menos usos que count: o 1o uso cobre o grupo (hat,
+                        // tri-axis, bloco anonimo de vendor)
+                        page = (per[0] >> 16) & 0xFFFF;
+                        usage = per[0] & 0xFFFF;
+                    }
+                    if (page === 0) page = g.page;
+                    reports[key].push({
+                        t: kind, id: curId, page: page, usage: usage,
+                        off: offs[kind][curId] || 0, bits: g.size,
+                        min: g.min, max: g.max
+                    });
+                    offs[kind][curId] = (offs[kind][curId] || 0) + g.size;
+                }
+            } else {
+                // padding: nada para emitir, mas os bits existem no report
+                offs[kind][curId] += g.size * g.count;
             }
         }
         usages = []; uMin = uMax = -1;   // locals morrem depois do main item

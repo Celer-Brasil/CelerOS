@@ -4,7 +4,8 @@
 // Xtensa, entao este wire substitui os bindings por um modelo do contrato
 // core_ctl (offsets do layout + comandos). O blob real compila no PC com
 // `celer.js native hub_apps/Anemoia` (toolchain xtensa) — aqui so queremos a
-// UI viva: lista de ROMs, abrir, controles, pausa, frameskip e save/load.
+// UI viva (casca celeros.emu): lista de ROMs, abrir, controles, pausa,
+// frameskip e save/load. Sem nativeScreen no stub: caminho FRAME + nativeDraw.
 // Nunca embarca ao device (o publish exclui test.js).
 
 module.exports.wire = function (env) {
@@ -18,7 +19,7 @@ module.exports.wire = function (env) {
     S.nativeCall = function (handle, fn, cmd, arg) {
         if (handle !== h) return 0;
         switch (cmd) {
-        case 0: return 1;          // INIT
+        case 0: return 1048576;    // INIT -> capacidade de ROM (a casca confere)
         case 1: return 4096;       // ROM_OFF
         case 2: return 524288;     // PCM_OFF
         case 3: return 131072;     // FB_OFF
@@ -30,6 +31,8 @@ module.exports.wire = function (env) {
         case 9: return loaded ? 128 : 0;                 // SAVE_STATE
         case 10: return loaded && arg > 0 ? 1 : 0;       // LOAD_STATE
         case 11: return 1470;                            // PCM_LEN
+        case 12: return 172032;                          // SET_SCALE -> offset
+        case 13: return 1;                               // SET_AUDIO
         }
         return 0;
     };

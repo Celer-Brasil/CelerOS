@@ -14,34 +14,34 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 
 | dep | stripped | o que dá ao app |
 |-----|---------:|-----------------|
-| `celeros.app` (core) | 4.1 KB | tema/layout cacheados, loop de telas com pilha (`A.run`), overlays (ocupado/progresso/resultado/espera Wi-Fi), ticker de polling |
+| `celeros.app` (core) | 3.3 KB | tema/layout cacheados, loop de telas com pilha (`A.run`), overlays (ocupado/progresso/resultado/espera Wi-Fi), ticker de polling |
 | `celeros.app.fmt` | 1.4 KB | bytes/uptime/duração/data nos formatos exatos do sistema |
 | `celeros.app.path` | 0.9 KB | base/dir/ext/stem/join/safeName |
-| `celeros.app.semver` | 2.2 KB | comparação de versão, ranges `^`, resolução transitiva de deps (mesmo algoritmo da loja) |
-| `celeros.app.data` | 0.9 KB | JSON em arquivo e blobs no NVS com try/catch, caches com carimbo de validade |
-| `celeros.app.history` | 0.8 KB | anel persistente com dedup consecutivo (histórico de comandos/conversa) |
-| `celeros.app.net` | 1.4 KB | getJSON/getText que nunca estouram, retry bloqueante com backoff, download + MD5 |
-| `celeros.app.caps` | 1.0 KB | uma sonda cacheada: placa, tela, PSRAM, presença de mic/câmera/BT/phone |
-| `celeros.app.events` | 1.9 KB | barramento de eventos (on/once/off/emit, coringa, prioridades) |
-| `celeros.app.text` | 0.8 KB | saneamento Latin-1 e leitor rolante pronto |
-| `celeros.app.input` | 2.0 KB | sessão de teclado dockado + linha de digitação (caret, cauda, placeholder, chips) |
-| `celeros.app.form` | 4.8 KB | tela de ajustes a partir de construtores de linha (info/toggle/choice/picker/action/gauge/stepper/card), seletor, askNum validado; linhas ricas quando `A.rows` é adotado |
-| `celeros.app.list` | 4.7 KB | listas com cache por carimbo, sort estável com chave pré-computada, cores de badge, barras RSSI, **`view()` com linhas ricas** (ícones/seções/badges/painter/widget) |
-| `celeros.app.style` | 6.1 KB | **tokens + 4 presets**, safe area, stack, card (gradiente/sombra), divider, botão |
+| `celeros.app.semver` | 2.5 KB | comparação de versão, ranges `^`, resolução transitiva de deps (mesmo algoritmo da loja) |
+| `celeros.app.data` | 0.7 KB | JSON em arquivo e blobs no NVS com try/catch, caches com carimbo de validade |
+| `celeros.app.history` | 0.6 KB | anel persistente com dedup consecutivo (histórico de comandos/conversa) |
+| `celeros.app.net` | 1.0 KB | getJSON/getText que nunca estouram, retry bloqueante com backoff, download + MD5 |
+| `celeros.app.caps` | 0.8 KB | uma sonda cacheada: placa, tela, PSRAM, presença de mic/câmera/BT/phone |
+| `celeros.app.events` | 1.4 KB | barramento de eventos (on/once/off/emit, coringa, prioridades) |
+| `celeros.app.text` | 0.7 KB | saneamento Latin-1 e leitor rolante pronto |
+| `celeros.app.input` | 1.7 KB | sessão de teclado dockado + linha de digitação (caret, cauda, placeholder, chips) |
+| `celeros.app.form` | 3.8 KB | tela de ajustes a partir de construtores de linha (info/toggle/choice/picker/action/gauge/stepper/card), seletor, askNum validado; linhas ricas quando `A.rows` é adotado |
+| `celeros.app.list` | 3.6 KB | listas com cache por carimbo, sort estável com chave pré-computada, cores de badge, barras RSSI, **`view()` com linhas ricas** (ícones/seções/badges/painter/widget) |
+| `celeros.app.style` | 4.7 KB | **tokens + 4 presets**, safe area, stack, card (gradiente/sombra), divider, botão |
 | `celeros.app.icons` | 0.2 KB | shim fino sobre a tabela compartilhada abaixo (`A.icons`, os mesmos 12 + `dot`) |
-| `celeros.ui.icons` | 3.5 KB | **tabela de ícones vetoriais compartilhada** (dot + 12 comuns), usada pelos apps **e** pelo `celeros.game.ui`; depende só de `System.*` |
-| `celeros.app.widgets` | 5.8 KB | **header com ações**, botão com ícone, iconButton, anel/medidor, sheet inferior, segmented |
-| `celeros.app.rows` | 2.4 KB | pintor de linha rico do form no `A.list.view` (toggle/gauge/stepper/choice/picker/info) |
-| `celeros.app.launch` | 2.1 KB | scan dos apps instalados (1ª vista vence), linhas de estado contra o catálogo do hub, abrir app |
-| `celeros.app.ai` | 2.8 KB | cliente do AI.chat: retry dos transientes (502/504/429), busy flag, histórico persistido, saída Latin-1 |
-| `celeros.app.chat` | 2.2 KB | transcript: bolhas medidas, rolagem por inércia que segue o fim, bolha "pensando" |
-| `celeros.app.updater` | 2.8 KB | checagem contra o catálogo do hub, promoção de deps no `/local/modules`, fluxo de instalação |
-| `celeros.app.fsx` | 2.8 KB | instalação staged (.new + MD5 + rename em lote), blob zip único (API 42), ensureDir/treeSize |
-| `celeros.app.svc` | 1.4 KB | kit de serviço em segundo plano (API 42): gates de política, drain com cap, estado persistido, notify-once |
-| `celeros.app.mesh` | 2.2 KB | protocolo de app sobre a CelerNet: prefixo de família, req/resp com nonce, dedup de replay, cache TTL |
+| `celeros.ui.icons` | 2.6 KB | **tabela de ícones vetoriais compartilhada** (dot + 12 comuns), usada pelos apps **e** pelo `celeros.game.ui`; depende só de `System.*` |
+| `celeros.app.widgets` | 4.7 KB | **header com ações**, botão com ícone, iconButton, anel/medidor, sheet inferior, segmented |
+| `celeros.app.rows` | 2.0 KB | pintor de linha rico do form no `A.list.view` (toggle/gauge/stepper/choice/picker/info) |
+| `celeros.app.launch` | 1.6 KB | scan dos apps instalados (1ª vista vence), linhas de estado contra o catálogo do hub, abrir app |
+| `celeros.app.ai` | 2.2 KB | cliente do AI.chat: retry dos transientes (502/504/429), busy flag, histórico persistido, saída Latin-1 |
+| `celeros.app.chat` | 1.8 KB | transcript: bolhas medidas, rolagem por inércia que segue o fim, bolha "pensando" |
+| `celeros.app.updater` | 2.2 KB | checagem contra o catálogo do hub, promoção de deps no `/local/modules`, fluxo de instalação |
+| `celeros.app.fsx` | 2.3 KB | instalação staged (.new + MD5 + rename em lote), blob zip único (API 42), ensureDir/treeSize |
+| `celeros.app.svc` | 1.2 KB | kit de serviço em segundo plano (API 42): gates de política, drain com cap, estado persistido, notify-once |
+| `celeros.app.mesh` | 1.8 KB | protocolo de app sobre a CelerNet: prefixo de família, req/resp com nonce, dedup de replay, cache TTL |
 | `celeros.app.kit` | 0.3 KB | pacote dos 8 módulos comuns (contorna o teto de 8 deps do hub) |
 
-A família inteira tem ~63 KB stripped; o fecho do `kit`, ~19 KB. Todo
+A família inteira tem ~50 KB stripped; o fecho do `kit`, ~15,4 KB. Todo
 módulo declara o próprio `version` e registra um nome único em `A._mods`.
 
 ## Kit de UI 2.0 (`celeros.app.style`, `.icons`, `.widgets`, `.rows`)
@@ -72,7 +72,7 @@ var cr = A.style.card(8, 48, 224, 120, { full: c.full, draw: function (r) {
 
 A lista rica (`A.list.view`) aceita `{label, sub, icon, right, badge, bars, disabled, section}`, `paintRow` e um `widget` por linha (embute `UI.toggle`/`UI.button`); o `UI.list` nativo continua para linhas simples.
 
-Orçamento: cada módulo ≤6 KB; o fecho do kit fica em ~19,6 KB. `style/icons/widgets/rows` ficam **fora** do `celeros.app.kit` (o kit já tem 8 deps): cada app adiciona o que precisa. A Loja na CYD tem ~6,4 KB livres, então adota no máximo o `style`; os outros apps têm folga. Os extras nativos `UI.custom`/`UI.clip`/`UI.style` para as placas S3 são uma rodada separada, habilitada em compilação (`CELEROS_UI_EXTRAS`), mantendo a CYD na UI base. Os 4 presets e os ícones compartilhados são mantidos iguais aos do lado dos jogos pelo `test/sdk/ui_parity.js` (as duas famílias já divergiram uma vez: sombra, raio do paper e cores do neon).
+Orçamento: cada módulo ≤5 KB; o fecho do kit fica em ~15,4 KB. `style/icons/widgets/rows` ficam **fora** do `celeros.app.kit` (o kit já tem 8 deps): cada app adiciona o que precisa. A Loja na CYD tem ~6,4 KB livres, então adota no máximo o `style`; os outros apps têm folga. Os extras nativos `UI.custom`/`UI.clip`/`UI.style` para as placas S3 são uma rodada separada, habilitada em compilação (`CELEROS_UI_EXTRAS`), mantendo a CYD na UI base. Os 4 presets e os ícones compartilhados são mantidos iguais aos do lado dos jogos pelo `test/sdk/ui_parity.js` (as duas famílias já divergiram uma vez: sombra, raio do paper e cores do neon).
 
 **Extras nativos (API 52, S3):** `CONFIG_CELEROS_UI_EXTRAS` (padrão `y` nas S3) liga `UI.extras`, `UI.custom` e `UI.clip`/`UI.unclip`. O kit expõe isso como `A.style.full` (capacidade) e `A.style.custom(id, x, y, w, h, sig, draw, { bg, clear })`: nas S3 a área é limpa e recortada pelo firmware e só redesenha no frame total ou quando a assinatura muda; na CYD o mesmo helper usa o `A.full` do `A.run` e a assinatura. Use `A.style.custom` em áreas que o app pinta **inteiras** com `System.*` (gráficos, ícones, medidores) — não em áreas com `UI.text`/`UI.card` dentro. A API é a mesma nas duas placas; só o caminho interno muda. A Loja na CYD continua na UI base.
 
@@ -130,3 +130,32 @@ do projeto — eles aumentam o `declare namespace A`.
 - O `test/sdk/celerosapp_r1.js` trava a família: d.ts + entrada no
   index.json por módulo, o guia cita todo módulo em EN e pt-BR, orçamento
   de tamanho, paridade de linhas stripped e cobertura de membros do d.ts.
+
+
+## Aplicação industrial: o miolo no binário (API 58+)
+
+O pacote pode levar as **regras** do app compiladas (blob CLRN, `core.bin`) e
+deixar no `main.js` só input, desenho e UI. O contrato é
+`tools/native/celeros_core.h`: entrada única `core_ctl(scratch, cmd, arg)`,
+`STEP` com input+dt num int32 e um bloco de saída no scratch com estado
+(Q16.16), eventos e **células sujas**, lido por `nativeRead` em fatias de
+256 B.
+
+Workflow: `celer.js new MeuApp --native-logic` (core.cpp de exemplo + casca),
+`celer.js native MeuApp` compila — `native/` fica FORA do pacote e o
+`core.bin` vai na raiz. O `app.json` precisa de `requires: ["psram","native"]`
+e `api >= 58`; o Studio força isso quando o projeto tem `native/` (e compila
+o blob no build).
+
+Duas regras de fronteira que já custaram bancada:
+
+- **payload**: `nativeWrite` copia a string do Duktape CRUA e char > 0x7F
+  viaja como 2 bytes (CESU-8) — mande bytes em nibbles (2 chars por byte) ou
+  use `nativeLoadFile` para dados grandes. Sem isso o payload desalinha e o
+  core lê lixo (tempo/jogador/inimigos).
+- **leitura**: parseie o bloco por `charCodeAt` em bytes numéricos; não
+  concatene os chunks numa string (o Duktape estoura em coerção de symbol).
+
+Sem o blob (CYD, firmware antigo) mantenha o caminho JS: feature-detect
+`System.getInfo().hasNative` e teste o fallback no harness — o core C++ pode
+(e deve) ser testado no HOST (`g++` com `test/cpp/test_detona_core.cpp`).

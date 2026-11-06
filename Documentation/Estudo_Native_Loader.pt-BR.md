@@ -190,3 +190,31 @@ app resolve o blob por esse caminho.
   PSRAM. É o caminho para cores de terceiros / experimentos rápidos.
 
 Os dois convivem: firmware para os cores estratégicos, loader para a cauda.
+
+## Atualização 2026-11-06 — de "core no blob" para "lógica no blob"
+
+O spike virou caminho de produto. Estado real:
+
+- **Loader v3** (mmap EXEC|32BIT na janela de instrução da PSRAM, relocs com
+  kind, `.rodata` em seção própria, `.clrn_fast` para RAM interna) e o
+  **Anemoia** rodando o core NES inteiro no 4848.
+- **ABI do core de lógica** (`tools/native/celeros_core.h`): entrada única
+  `core_ctl`, `STEP` com input+dt num int32, bloco de saída com estado
+  (Q16.16), eventos e células sujas. Template `celer.js new --native-logic`;
+  o Studio compila `native/` no build e empacota `core.bin`.
+- **Primeiro consumidor**: o Detona — `native/detona_core.cpp` porta a
+  simulação da fase (grade, jogador, bombas, chamas, caixas, inimigos,
+  drops, saída, relógio, vidas) e `Assets/Scripts/detona_core.js` espelha o
+  wire no estado da cena. Validado no 4848 (firmware 1.18.0): core carrega,
+  inimigos andam, dano/morte/FIM DE JOGO funcionam. As regras têm teste no
+  HOST (`test/cpp/test_detona_core.cpp`).
+- **Duas armadilhas de fronteira** (custaram bancada): `nativeWrite` copia a
+  string do Duktape crua e char > 0x7F vira 2 bytes (CESU-8) — payload
+  binário tem de ir em nibbles; e a leitura não pode concatenar os chunks
+  numa string (Duktape estoura "cannot string coerce Symbol") — parseie por
+  `charCodeAt`.
+
+Pendências: usar as células sujas no desenho do Detona (hoje ele repinta o
+tabuleiro inteiro), medir `E.prof` antes/depois, migrar o hook para o commit
+(está local por causa do WIP 1.2.6) e a camada de assinatura/permissão do
+blob (fora de escopo desta rodada, por decisão).

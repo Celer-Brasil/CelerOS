@@ -1297,6 +1297,11 @@ class HostLink:
                     and 0 <= s[3] <= 0xFFFF):
                 raise CelerError("amostra fora da faixa u16 (x, y, delay ms): "
                                  "%r" % (s,))
+            # o dedo vai como u8: --finger fora do byte era ValueError cru
+            # do bytes([s[4]]) no meio do payload
+            dedo = s[4] if len(s) > 4 else 0
+            if not 0 <= dedo <= 255:
+                raise CelerError("dedo fora da faixa 0..255: %r" % (s,))
         multi = any(len(s) > 4 and s[4] for s in samples)
         payload = bytes([len(samples)])
         for s in samples:
@@ -3815,18 +3820,20 @@ def _lint_app_folder(folder, fatal=True):
 _JUNK_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 _JUNK_SUFFIX = (".swp", ".swo", ".bak", ".tmp", "~")
 # fontes da parte nativa (API 57): compilam no PC (celer.js native) e viram
-# core.bin na raiz — o .c/.h nunca roda no device e o hub nem embarca
-# subpasta (pacote flat); filtrar aqui evita subir lixo no dev/push
-_NATIVE_SRC = (".c", ".h")
+# core.bin na raiz — fonte nativa nunca roda no device e o hub nem embarca
+# subpasta (pacote flat); filtrar aqui evita subir lixo no dev/push. Cobre
+# tambem .cpp/.hpp: o template --native-logic usa C++.
+_NATIVE_SRC = (".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx")
 # test.js e dev-only (wire do harness): o publish do hub exclui e o
 # data/AGENTS.md promete que nunca embarca — o install/dev filtram igual
 _DEV_ONLY = {"test.js"}
 
 
-# pastas que nunca sobem: .dev (telas do `celerctl dev`, fora do git) e
+# pastas que nunca sobem: .dev (telas do `celerctl dev`, fora do git),
 # _dev (fonte dev-only VERSIONADA ao lado do app: pipeline de arte, renders
-# brutos — ex. studio_games/<jogo>/_dev). O hub ja e flat (so a raiz)
-_DEV_DIRS = (".dev", "_dev")
+# brutos — ex. studio_games/<jogo>/_dev) e native/ (as fontes do core de
+# logica: o pacote leva so o core.bin compilado). O hub ja e flat (so a raiz)
+_DEV_DIRS = (".dev", "_dev", "native")
 
 
 def _is_junk(p):
@@ -4504,7 +4511,10 @@ def _apps_deps_upgrade(link, args):
     import celerhub
     hub = (os.environ.get("CELER_HUB") or "https://os.celer.tec.br").rstrip("/")
     try:
-        status, idx = celerhub.http("GET", f"{hub}/store/deps.json")
+        # token de leitura igual ao install/store: dep PRIVADA no upgrade
+        # saia do indice anonimo e o app morria em "sem resolucao no hub"
+        status, idx = celerhub.http("GET", _hub_url(hub, "/store/deps.json",
+                                                    _hub_token(args, link)))
     except Exception as e:  # noqa: BLE001
         die(f"deps: indice do hub indisponivel ({e})")
     index = (idx or {}).get("deps", {})

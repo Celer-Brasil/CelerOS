@@ -50,6 +50,10 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -o celeros_tests test/cpp/run_tests.cpp main/Utils/AppZip.cpp main/Utils/AppPackage.cpp main/USBHost/UsbDesc.cpp
           ./celeros_tests
+      - name: Core de lógica do Detona (regras no host, sem aparelho)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Itools/native -o detona_core_test test/cpp/test_detona_core.cpp studio_games/Detona/native/detona_core.cpp
+          ./detona_core_test
       - name: APU do core NES em lote == tick a tick (blob do Anemoia)
         run: |
           g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/nes -Itools/native/nes/core -o nes_apu_test test/cpp/nes_apu_test.cpp tools/native/nes/core/apu2A03.cpp

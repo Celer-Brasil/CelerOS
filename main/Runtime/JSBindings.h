@@ -498,6 +498,8 @@ public:
     static duk_ret_t js_inputMove(duk_context *ctx);      // Input.move(x, y, buttons)
     static duk_ret_t js_inputPointer(duk_context *ctx);   // Input.pointer() -> {x,y,buttons}
     static duk_ret_t js_inputClear(duk_context *ctx);     // Input.clear()
+    static duk_ret_t js_inputPad(duk_context *ctx);       // Input.pad({buttons,dpad,lx..}) (API 61)
+    static duk_ret_t js_inputPadState(duk_context *ctx);  // Input.padState() -> {seq,buttons,...}
 #include "sdkconfig.h"
 #if CONFIG_CELEROS_USB_HOST
     // USB Host (API 48) — capability "usb" (JsUsb.cpp). Drivers de

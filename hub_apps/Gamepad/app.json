@@ -1,7 +1,7 @@
 {
   "name": "Gamepad",
   "packageName": "celeros.gamepadtester",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
   "description": "Testa um gamepad Bluetooth LE HID (Xbox/8bitdo em modo BLE): pareia, mostra sticks, dpad, botoes, gatilhos e bateria ao vivo e dispara rumble. Usa a API BT crua (API 57) com a dep celeros.gamepad fazendo o parser do HID.",
   "type": "App",
@@ -13,5 +13,5 @@
     "celeros.app.style": "^1.0.0",
     "celeros.gamepad": "^0.1.0"
   },
-  "changelog": "1.0.0 - primeira versao: scan de pads HID (appearance 0x03C4 ou servico 0x1812), pareamento Just Works pela API BT crua (API 57, permission input), tela ao vivo com sticks (deadzone da dep), dpad, botoes nomeados, gatilhos analogicos, bateria do pad e rumble; sem BT no firmware/placa o app explica em vez de estourar. DualShock 4 nao funciona (Bluetooth Classic; o S3 nao tem o radio)"
+  "changelog": "1.1.0 - a tela ao vivo mostra a VISAO DO OS (Input.padState, API 61): com o driver Controle BT rodando ele drena o BT.read cru, e o tester passa a nao brigar pela fila — sem driver/sem canal continua drenando o pad direto; sobe o 1.0.1 (fps por tela de verdade). 1.0.1 - fps por tela de verdade (o opts.fps do A.run ganhava das duas e o tester ao vivo rodava a 15 em vez de 30). 1.0.0 - primeira versao: scan de pads HID (appearance 0x03C4 ou servico 0x1812), pareamento Just Works pela API BT crua (API 57, permission input), tela ao vivo com sticks (deadzone da dep), dpad, botoes nomeados, gatilhos analogicos, bateria do pad e rumble; sem BT no firmware/placa o app explica em vez de estourar. DualShock 4 nao funciona (Bluetooth Classic; o S3 nao tem o radio)"
 }

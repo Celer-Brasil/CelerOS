@@ -3991,3 +3991,63 @@ System.setAlpha(255);                      // text and "solid" items
 System.drawString("A", W - 78, H - 78, 2);
 ```
 
+
+## 55. API Level 61 — Gamepad as OS input: `Input.pad` and the Controle BT driver
+
+**Where it exists.** The gamepad channel lives in the same `Input.*` bus
+(API 48, `"input"` permission). `Input.pad`/`Input.padState` exist on any
+API 61+ firmware; whoever **feeds** the channel is a resident JS driver —
+from the factory, the **Controle BT** app (SmartDisplay and watch), built on
+`BT.*` (API 57) + the `celeros.gamepad` dep. Same mold as the USB HID
+driver: sources translate into the bus, consumers read from the bus.
+
+**Broadcast, not a queue.** `Input.pad` stores the pad's CURRENT state
+(bitmask + axes + a `seq` that rises per injection); there is no queue to
+drain and two consumers never fight — each keeps its own copy and diffs
+edges locally. It is the opposite contract of `Input.poll()` (destructive,
+keyboard).
+
+**What the firmware consumes natively** (while a pad injects):
+- **Launcher**: dpad/left stick moves the grid focus (orange outline),
+  **A** opens the app (same path as touch, consent included), **B** goes
+  back a page, **guide** exits the app / returns home and wakes the screen.
+  Holding a direction repeats (like a keyboard).
+- **Pointer**: the right stick becomes the cursor (the pointer already
+  enters the touch pipeline as a synthetic finger) and **R2 clicks** — the
+  driver injects `Input.move`; toggle it off in the Controle BT screen.
+
+**Bitmask bits** (`buttons`): bit0 A, 1 B, 2 X, 3 Y, 4 L1, 5 R1, 6 L2,
+7 R2, 8 select, 9 start, 10 guide, 11 LS, 12 RS. `dpad`: bit0 N, 1 E, 2 S,
+3 W. Axes `-127..127` (up = negative). Names live in the dep
+(`celeros.gamepad`) and the driver — the firmware only carries bits.
+
+```javascript
+// app with the "input" permission: read the pad every frame
+var prev = 0;
+setInterval(function () {
+    var p = Input.padState();
+    if (p.seq === 0) return;            // no driver injected yet
+    var pressed = p.buttons & ~prev;    // falling edge, local diff
+    prev = p.buttons;
+    if (pressed & 1) startJump();       // bit0 = A
+    move(p.lx / 127, p.ly / 127);       // axis -1..1
+}, 16);
+```
+
+### `Input.pad(state)` (API 61)
+Injects the pad's current state: `{buttons, dpad, lx, ly, rx, ry}` (raw
+bitmasks; axes `-127..127`; missing fields default to 0). This is what the
+driver calls per report. Returns nothing; RangeError outside the windows.
+
+### `Input.padState()` (API 61)
+Current channel state: `{seq, buttons, dpad, lx, ly, rx, ry}`. `seq` rises
+per `Input.pad` — `0` means no driver injected yet (pad absent/off) and
+consumers can skip. Requires the `"input"` permission.
+
+### The Controle BT driver (factory)
+svchost service in the `boards/smartdisplay|waveshare-watch/data/apps/`
+overlays: reconnects the last bonded pad by itself (NVS bond, 15–60 s
+backoff), injects the channel and the pointer; the `"on"`/`"ptr"` Storage
+keys toggle it without a restart. Pair a new pad from its own screen
+(scan → connect) or from the hub **Gamepad** app. DualShock 4/DualSense/
+Switch Pro do not work (Bluetooth CLASSIC — the S3 radio has no BR/EDR).

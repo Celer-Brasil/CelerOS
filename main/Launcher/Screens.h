@@ -39,6 +39,18 @@ private:
     int m_scroll = 0;              // modo lista (BoardProfile::launcherList): rolagem vertical em px
     void clampScroll();
 
+    // Navegacao por gamepad (API 61, canal InputBus::pad): dpad/esquerdo
+    // move o foco pela grade, A abre, B volta pagina. Bordas e repeticao
+    // (segurar repete, como teclado) sao estado LOCAL desta tela — o canal
+    // e broadcast e cada consumidor diff de copy propria.
+    void padNav();
+    int m_focus = -1;              // entrada em foco (indice global; -1 = nenhuma)
+    uint32_t m_padSeq = 0;         // ultimo seq visto (0 = nenhum pad injetou)
+    uint32_t m_prevPadButtons = 0; // diff de borda de A/B
+    int8_t m_navDirX = 0;          // direcao corrente segurada (repeticao)
+    int8_t m_navDirY = 0;
+    uint32_t m_lastNavMs = 0;
+
     // Pressionar e segurar num app (sem arrastar) abre "Remover app?"
     int entryAt(int x, int y) const;
     void openAppActions(int entry);

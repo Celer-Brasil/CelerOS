@@ -37,6 +37,35 @@ bool popKey(KeyEvent& out);
 void setPointer(int16_t x, int16_t y, uint8_t buttons);
 Pointer pointer();
 
+// Canal do gamepad (API 61): estado CORRENTE broadcast, sem fila — cada
+// consumidor guarda sua copia e faz o diff de bordas local, entao dois
+// leitores (launcher nativo e apps JS) nao brigam pelo evento. O driver JS
+// (servico Controle BT) injeta a cada report do pad; seq sobe a cada push
+// (0 = nenhum pad injetou ainda).
+//
+// Botoes no bitmask (mesmos nomes da dep celeros.gamepad):
+//   bit0 A, 1 B, 2 X, 3 Y, 4 L1, 5 R1, 6 L2, 7 R2, 8 select, 9 start,
+//   10 guide, 11 LS, 12 RS
+// dpad: bit0 N, 1 E, 2 S, 3 W. Eixos: -127..127 (para cima = negativo).
+struct PadState {
+    uint32_t buttons = 0;
+    uint8_t dpad = 0;
+    int8_t lx = 0;
+    int8_t ly = 0;
+    int8_t rx = 0;
+    int8_t ry = 0;
+    uint32_t seq = 0;
+};
+void pushPad(const PadState& st);
+PadState pad();
+
+// Consumo de sistema (servico "inputsys", ALWAYS): borda do botao GUIDE
+// sai do app (LauncherUI::requestAppExit — mesmo caminho do botao 1 curto)
+// e, no launcher, volta para a casa; qualquer borda de BOTAO acorda a tela
+// pelo mesmo hub do toque (Backlight::noteActivity). Dpad/sticks NAO
+// acordam nem navegam aqui — o launcher tem consumidor proprio.
+void sysTick(bool inApp);
+
 // Zera fila e ponteiro (bench / driver que desconectou).
 void clear();
 

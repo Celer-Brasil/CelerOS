@@ -86,3 +86,59 @@ duk_ret_t JSBindings::js_inputClear(duk_context *ctx) {
     InputBus::clear();
     return 0;
 }
+
+// Campo inteiro opcional de um objeto {..}: default quando ausente/nao
+// numero; RangeError fora da janela (antes de tocar o bus).
+int optField(duk_context* ctx, duk_idx_t objIdx, const char* name, int def, int lo, int hi,
+             const char* what) {
+    duk_get_prop_string(ctx, objIdx, name);
+    const bool has = duk_is_number(ctx, -1);
+    const int v = has ? duk_get_int(ctx, -1) : def;
+    duk_pop(ctx);
+    if (v < lo || v > hi) jsThrowMsg(ctx, DUK_ERR_RANGE_ERROR, what);
+    return v;
+}
+
+// Input.pad({buttons, dpad, lx, ly, rx, ry}) (API 61): injeta o estado
+// corrente do gamepad no canal de broadcast. E Chamado pelo driver
+// residente a cada report (25 ms); consumidores fazem o diff de bordas.
+duk_ret_t JSBindings::js_inputPad(duk_context *ctx) {
+    requireInput(ctx);
+    if (!duk_is_object(ctx, 0)) {
+        jsThrowMsg(ctx, DUK_ERR_TYPE_ERROR, "Input.pad: objeto {buttons, dpad, lx..}");
+    }
+    InputBus::PadState st;
+    // eixos sao int8: -127..127 (0 = centro); bitmask sem sinal
+    st.buttons = (uint32_t)optField(ctx, 0, "buttons", 0, 0, 0x7FFFFF, "Input.pad: buttons fora de 0..0x7FFFFF");
+    st.dpad = (uint8_t)optField(ctx, 0, "dpad", 0, 0, 15, "Input.pad: dpad fora de 0..15");
+    st.lx = (int8_t)optField(ctx, 0, "lx", 0, -127, 127, "Input.pad: lx fora de -127..127");
+    st.ly = (int8_t)optField(ctx, 0, "ly", 0, -127, 127, "Input.pad: ly fora de -127..127");
+    st.rx = (int8_t)optField(ctx, 0, "rx", 0, -127, 127, "Input.pad: rx fora de -127..127");
+    st.ry = (int8_t)optField(ctx, 0, "ry", 0, -127, 127, "Input.pad: ry fora de -127..127");
+    InputBus::pushPad(st);
+    return 0;
+}
+
+// Input.padState() (API 61): estado corrente do canal (seq sobe a cada
+// Input.pad; 0 = nenhum driver injetou). Bitmask cru — os nomes ficam na
+// dep celeros.gamepad / driver.
+duk_ret_t JSBindings::js_inputPadState(duk_context *ctx) {
+    requireInput(ctx);
+    const InputBus::PadState p = InputBus::pad();
+    duk_push_object(ctx);
+    duk_push_uint(ctx, p.seq);
+    duk_put_prop_string(ctx, -2, "seq");
+    duk_push_uint(ctx, p.buttons);
+    duk_put_prop_string(ctx, -2, "buttons");
+    duk_push_int(ctx, p.dpad);
+    duk_put_prop_string(ctx, -2, "dpad");
+    duk_push_int(ctx, p.lx);
+    duk_put_prop_string(ctx, -2, "lx");
+    duk_push_int(ctx, p.ly);
+    duk_put_prop_string(ctx, -2, "ly");
+    duk_push_int(ctx, p.rx);
+    duk_put_prop_string(ctx, -2, "rx");
+    duk_push_int(ctx, p.ry);
+    duk_put_prop_string(ctx, -2, "ry");
+    return 1;
+}

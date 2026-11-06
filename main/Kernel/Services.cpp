@@ -18,6 +18,7 @@
 #endif
 #include "../../Display/ScreenPower.h"
 #include "../../Hardware/Buttons.h"
+#include "../../Hardware/InputBus.h"
 #include "../../Hardware/PowerPolicy.h"
 #include "../../Launcher/LauncherUI.h"
 #if CONFIG_CELEROS_UI
@@ -62,6 +63,10 @@ void svcBacklight(bool) { Backlight::tick(); }
 void svcScreenCapture(bool) { ScreenCapture::service(); }
 #endif
 void svcButtons(bool inApp) { Buttons::tick(inApp); }
+// Gamepad como input do OS (API 61): borda do guide = sair do app (inApp)
+// ou casa no launcher; borda de botao acorda a tela. Dpad/A/B ficam com o
+// launcher (Screens.cpp tem consumidor proprio).
+void svcInputSys(bool inApp) { InputBus::sysTick(inApp); }
 void svcScreenPower(bool inApp) { ScreenPower::tick(inApp); }
 void svcIdleHome(bool) { LauncherUI::idleHomeTick(); }
 #if CONFIG_CELEROS_UI
@@ -161,6 +166,7 @@ const CelerServices::Service kServices[] = {
     {"screencapture", svcScreenCapture, CelerServices::LOOP},
 #endif
     {"buttons", svcButtons, CelerServices::ALWAYS},
+    {"inputsys", svcInputSys, CelerServices::ALWAYS},
     {"screenpower", svcScreenPower, CelerServices::ALWAYS},
     // ALWAYS: o contador de boots estabiliza mesmo com app/casa aberto; se
     // ficasse no celerLoop, um home-app que derruba o boot nunca zeraria.

@@ -9,6 +9,7 @@
 #include "../WebManager/WebManager.h"
 #include "../Boards/Board.h"
 #include "../Hardware/BoardIO.h"
+#include "../Hardware/InputBus.h"
 #include "../Utils/StrUtils.h"
 
 #include <Arduino.h>
@@ -244,6 +245,7 @@ void LauncherScreen::draw(kui::Canvas& c) {
             if (r.y + r.h <= gridHeaderH() || r.y >= listBottom()) continue;
             kui::Rect card{r.x, r.y + UI::sy(3), r.w, r.h - UI::sy(6)};
             c.fillRoundRect(card, card.h / 2, kui::isPressed(card) ? THEME_RAISED : THEME_CARD);
+            if (entry == m_focus) c.drawRoundRect(card, card.h / 2, THEME_ACCENT);  // foco do gamepad
             const int iconX = card.x + UI::sx(8);
             const int iconY = card.y + (card.h - Icon::SIZE) / 2;
             const std::string& label = LauncherUI::appEntryName(entry);
@@ -289,6 +291,12 @@ void LauncherScreen::draw(kui::Canvas& c) {
                 int pad = UI::sx(6);
                 c.fillRoundRect({cell.x + pad, iconY - pad, cell.w - 2 * pad, Icon::SIZE + labelGap + labelH + 2 * pad},
                                 UI::sx(12), THEME_RAISED);
+            }
+            // foco do gamepad (API 61): contorno na celula em foco
+            if (xOff == 0 && entry == m_focus) {
+                int pad = UI::sx(6);
+                c.drawRoundRect({cell.x + pad, iconY - pad, cell.w - 2 * pad, Icon::SIZE + labelGap + labelH + 2 * pad},
+                                UI::sx(12), THEME_ACCENT);
             }
 
             const std::string& label = LauncherUI::appEntryName(entry);
@@ -386,6 +394,119 @@ int LauncherScreen::entryAt(int x, int y) const {
         if (cellRect(entry).contains(x, y)) return entry;
     }
     return -1;
+}
+
+// --------------------------------------------------- gamepad (API 61) ----
+namespace {
+constexpr uint32_t kPadA = 1u << 0;      // bits do canal InputBus::pad
+constexpr uint32_t kPadB = 1u << 1;
+constexpr int kNavRepeatMs = 200;        // segurar a direcao = repetir (teclado)
+constexpr int kStickDead = 96;           // ~75% de -127..127 para navegar
+}  // namespace
+
+// Dpad/esquerdo movem o foco, A abre (mesmo caminho do toque: consentimento
+// incluso), B volta pagina. So roda com pad vivo (seq mudando) e sem dedo/
+// dialogo. Nada aqui acorda a tela — isso e do sysTick (guide).
+void LauncherScreen::padNav() {
+    const InputBus::PadState p = InputBus::pad();
+    if (p.seq == 0) return;  // nenhum driver injetou nesta sessao
+    if (Navigator::dialogOpen() || touchState().down || m_dragDx != 0) {
+        // dialogo/dedo mandam; so sincroniza as bordas para nao "vazar" um
+        // A pressionado durante o toque na hora que soltar
+        m_prevPadButtons = p.buttons;
+        m_navDirX = m_navDirY = 0;
+        return;
+    }
+    const uint32_t now = millis();
+    const int total = LauncherUI::gridTotalEntries();
+    if (total <= 0) return;
+    if (m_focus >= total) m_focus = total - 1;  // rescan encolheu a grade
+
+    const uint32_t novo = p.buttons & ~m_prevPadButtons;  // borda de descida
+    m_prevPadButtons = p.buttons;
+    if (novo & kPadA) {
+        if (m_focus < 0) {
+            m_focus = page * gridCellsPerPage();
+            if (m_focus >= total) m_focus = total - 1;
+            m_needClear = true;
+            markDirty();
+            return;
+        }
+        launchEntry(m_focus);
+        return;
+    }
+    if ((novo & kPadB) && !listMode() && page > 0) {
+        page--;
+        m_focus = page * gridCellsPerPage();
+        if (m_focus >= total) m_focus = total - 1;
+        m_needClear = true;
+        markDirty();
+        return;
+    }
+
+    // direcao pedida: dpad primeiro; sem dpad, esquerdo com deadzone
+    int dx = 0, dy = 0;
+    if (p.dpad & 0x1) dy = -1; else if (p.dpad & 0x4) dy = 1;
+    if (p.dpad & 0x8) dx = -1; else if (p.dpad & 0x2) dx = 1;
+    if (dx == 0 && dy == 0) {
+        if (p.lx > kStickDead) dx = 1;
+        else if (p.lx < -kStickDead) dx = -1;
+        if (dy == 0) {
+            if (p.ly > kStickDead) dy = 1;
+            else if (p.ly < -kStickDead) dy = -1;
+        }
+    }
+    if (dx == 0 && dy == 0) {
+        m_navDirX = m_navDirY = 0;
+        return;
+    }
+    const bool virou = dx != m_navDirX || dy != m_navDirY;
+    if (!virou && (int32_t)(now - m_lastNavMs) < kNavRepeatMs) return;
+    m_navDirX = (int8_t)dx;
+    m_navDirY = (int8_t)dy;
+    m_lastNavMs = now;
+
+    if (m_focus < 0) {
+        m_focus = page * gridCellsPerPage();
+        if (m_focus >= total) m_focus = total - 1;
+        m_needClear = true;
+        markDirty();
+        return;
+    }
+
+    if (listMode()) {
+        const int nf = m_focus + dy;  // dx nao navega na lista (uma coluna)
+        if (nf < 0 || nf >= total) return;
+        m_focus = nf;
+        const kui::Rect r = cellRect(m_focus);
+        if (r.y < gridTop()) m_scroll -= gridTop() - r.y;
+        else if (r.y + r.h > listBottom()) m_scroll += r.y + r.h - listBottom();
+        clampScroll();
+        m_needClear = true;
+        markDirty();
+        return;
+    }
+
+    const int per = gridCellsPerPage();
+    const int cols = LauncherUI::gridCols();
+    const int cellIdx = m_focus - page * per;
+    int col = cellIdx % cols + dx;
+    int row = cellIdx / cols + dy;
+    int npage = page;
+    if (col < 0) { col = cols - 1; npage--; }
+    else if (col >= cols) { col = 0; npage++; }
+    if (row < 0) { row = LauncherUI::gridRows() - 1; npage--; }
+    else if (row >= LauncherUI::gridRows()) { row = 0; npage++; }
+    if (npage < 0 || npage >= LauncherUI::gridTotalPages()) return;  // borda: fica
+    page = npage;
+    int nf = npage * per + row * cols + col;
+    if (nf >= total) {
+        if (dx != 0) return;  // linha incompleta da direita: nao serpenteia
+        nf = total - 1;
+    }
+    m_focus = nf;
+    m_needClear = true;  // o contorno de onde o foco estava precisa sair
+    markDirty();
 }
 
 void LauncherScreen::openAppActions(int entry) {
@@ -625,6 +746,10 @@ void LauncherScreen::onTick(uint32_t dtMs) {
         }
         Navigator::toast("App não encontrado: " + req, THEME_ERR);
     }
+
+    // gamepad (API 61): foco/nav antes da maquina de toque — o dedo na tela
+    // ou dialogo aberto suspendem (padNav cuida das bordas para nao vazar)
+    padNav();
 
     // pressionar e segurar (600 ms, sem arrastar) num app: acoes do app
     const kui::TouchState& ts = kui::touchState();

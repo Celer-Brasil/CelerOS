@@ -195,10 +195,35 @@ void install(duk_context* thr, const char* appPkg, uint32_t perms, const char* a
             {"move", JSBindings::js_inputMove, 3},
             {"pointer", JSBindings::js_inputPointer, 0},
             {"clear", JSBindings::js_inputClear, 0},
+            {"pad", JSBindings::js_inputPad, 1},
+            {"padState", JSBindings::js_inputPadState, 0},
         };
-        JSBindings::putFns(thr, kSvcInput, 5);
+        JSBindings::putFns(thr, kSvcInput, 7);
         duk_put_prop_string(thr, -2, "Input");
     }
+#if CONFIG_CELEROS_BLE_HID
+    // ---- BT (API 57): o driver do gamepad BLE roda de fundo ----
+    // Espelho do bloco do app (JSBindings.cpp): scan/pareamento/reports
+    // crus; o protocolo HID e a dep celeros.gamepad. Os bindings ja sao
+    // service-aware (btEnter/btCall nao reentram o pump).
+    if (perms & celer::PERM_INPUT) {
+        duk_push_object(thr);
+        static const JSBindings::JsFn kSvcBt[] = {
+            {"scan", JSBindings::js_btScan, 1},
+            {"scanResults", JSBindings::js_btScanResults, 0},
+            {"connect", JSBindings::js_btConnect, 1},
+            {"disconnect", JSBindings::js_btDisconnect, 0},
+            {"state", JSBindings::js_btState, 0},
+            {"reportMap", JSBindings::js_btReportMap, 0},
+            {"read", JSBindings::js_btRead, 0},
+            {"write", JSBindings::js_btWrite, 1},
+            {"paired", JSBindings::js_btPaired, 0},
+            {"forget", JSBindings::js_btForget, 1},
+        };
+        JSBindings::putFns(thr, kSvcBt, 10);
+        duk_put_prop_string(thr, -2, "BT");
+    }
+#endif
 #if CONFIG_CELEROS_USB_HOST
     if (perms & celer::PERM_USB) {
         duk_push_object(thr);

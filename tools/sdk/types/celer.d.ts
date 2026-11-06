@@ -1,7 +1,7 @@
 // celer.d.ts — tipos da API JS do CelerOS para o editor (IntelliSense).
 // ARTEFATO GERADO por `node tools/sdk/celer.js types` (manifest do firmware
 // + guia pt-BR). Nao editar a mao; o `celer.js check` acusa drift.
-// API level 60 — 413 funcoes.
+// API level 61 — 415 funcoes.
 
 interface CelerTheme {
     bg: number; card: number; raised: number; stroke: number;
@@ -87,7 +87,7 @@ declare const System: {
     nativeSaveFile(h: number, off?: number, len?: number, path?: string): any;
     nativeDraw(h: number, off?: number, x?: number, y?: number, w?: number, h?: number): any;
     nativeAudio(h: number, off?: number, len?: number): any;
-    nativeAudioStop(arg0: number): void;
+    nativeAudioStop(h: number): void;
     nativeScreen(h: number, fnIdx: number, a0?: number, a1?: number, x?: number, y?: number, w?: number, h?: number): any;
     nativeGrab(h: number, off?: number, x?: number, y?: number, w?: number, h?: number): any;
     /** inunda a tela inteira com uma única cor. Extremamente rápido: bypass do loop de pixels usando DMA de SPI direto do hardware. */
@@ -750,6 +750,10 @@ declare const Input: {
     pointer(): { x: number; y: number; buttons: number };
     /** @permission "input" */
     clear(): void;
+    /** @permission "input" */
+    pad(state?: number): void;
+    /** @permission "input" */
+    padState(): any;
 };
 
 declare const USB: {
@@ -783,25 +787,25 @@ declare const USB: {
 
 declare const BT: {
     /** @permission "input" */
-    scan(ms?: number): any;
+    scan(ms?: number): boolean;
     /** @permission "input" */
-    scanResults(): any;
+    scanResults(): Array<{ addr: string; addrType: number; name: string; rssi: number; appearance: number }>;
     /** @permission "input" */
-    connect(addr: number): any;
+    connect(addr: string): { ok: boolean; err?: string };
     /** @permission "input" */
-    disconnect(): any;
+    disconnect(): boolean;
     /** @permission "input" */
-    state(): any;
+    state(): { phase: "off" | "idle" | "scanning" | "connecting" | "ready" | "error"; addr: string; name: string; rssi: number; battery: number; mtu: number; queued: number; dropped: number; err: string; reports: Array<{ id: number; type: number; size: number }> };
     /** @permission "input" */
-    reportMap(): any;
+    reportMap(): number[] | null;
     /** @permission "input" */
-    read(): any;
+    read(): { id: number; data: number[] } | null;
     /** @permission "input" */
-    write(data?: number): any;
+    write(data: number[]): { ok: boolean; sent?: number; err?: string };
     /** @permission "input" */
-    paired(): any;
+    paired(): Array<{ addr: string; addrType: number }>;
     /** @permission "input" */
-    forget(addr?: number): any;
+    forget(addr?: string): boolean;
 };
 
 declare const App: {

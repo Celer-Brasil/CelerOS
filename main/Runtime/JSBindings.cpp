@@ -2027,6 +2027,8 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
             {"move", js_inputMove, 3},
             {"pointer", js_inputPointer, 0},
             {"clear", js_inputClear, 0},
+            {"pad", js_inputPad, 1},
+            {"padState", js_inputPadState, 0},
         };
         putFns(ctx, kFnsInput);
         duk_put_prop_string(ctx, -2, "Input");

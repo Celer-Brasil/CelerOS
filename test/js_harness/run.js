@@ -1874,6 +1874,7 @@ function makeEnv() {
     // Input (API 48): fila de teclas e estado do ponteiro.
     var inputKeys = [];
     var inputPtr = { x: 0, y: 0, buttons: 0 };
+    var inputPad = { seq: 0, buttons: 0, dpad: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
     env.Input = {
     key: function(usage, mods, down) {
         inputKeys.push({ key: usage, mods: mods, down: !!down });
@@ -1882,7 +1883,22 @@ function makeEnv() {
     poll: function() { return inputKeys.length ? inputKeys.shift() : null; },
     move: function(x, y, buttons) { inputPtr = { x: x, y: y, buttons: buttons || 0 }; },
     pointer: function() { return { x: inputPtr.x, y: inputPtr.y, buttons: inputPtr.buttons }; },
-    clear: function() { inputKeys = []; inputPtr = { x: 0, y: 0, buttons: 0 }; }
+    // API 61: canal do gamepad (broadcast de estado; seq sobe a cada pad)
+    pad: function(st) {
+        inputPad.seq++;
+        inputPad.buttons = st.buttons | 0;
+        inputPad.dpad = st.dpad | 0;
+        inputPad.lx = st.lx | 0;
+        inputPad.ly = st.ly | 0;
+        inputPad.rx = st.rx | 0;
+        inputPad.ry = st.ry | 0;
+    },
+    padState: function() { return { seq: inputPad.seq, buttons: inputPad.buttons,
+                                    dpad: inputPad.dpad, lx: inputPad.lx, ly: inputPad.ly,
+                                    rx: inputPad.rx, ry: inputPad.ry }; },
+    clear: function() { inputKeys = []; inputPtr = { x: 0, y: 0, buttons: 0 };
+                        inputPad.seq = 0; inputPad.buttons = 0; inputPad.dpad = 0;
+                        inputPad.lx = inputPad.ly = inputPad.rx = inputPad.ry = 0; }
     };
 
     // BT (API 57): host Bluetooth LE HID fake (placas com CELEROS_BLE_HID;
@@ -6139,6 +6155,46 @@ function holdFrames(x, y, n) {
           JSON.stringify(t1));
     check('input: getTouch legado satura y em 0', t2.x === 40 && t2.y === 0 && t2.touched === 1,
           JSON.stringify(t2));
+})();
+
+// Gamepad no canal do OS (API 61): o driver "Controle BT" mapeia o estado
+// da dep celeros.gamepad para Input.pad (bitmask broadcast) e Input.move
+// (ponteiro no stick direito, R2 = clique). O stub do canal aqui tem a
+// mesma semantica do firmware (seq sobe a cada pad, estado corrente).
+(function() {
+    console.log('Paridade gamepad no bus:');
+    var env = makeEnv();
+    var req = makeRequire(path.join(ROOT, 'boards', 'smartdisplay', 'data', 'apps', 'Controle BT'), env);
+    var drv = req('driver');
+    check('gamepad: driver exporta version', typeof drv.version === 'string' && !!drv.version);
+
+    // estado estilo dep (nomes + eixos -1..1) -> bitmask do canal
+    var st = { lx: 1, ly: -1, rx: 0, ry: 0, dpad: 'ne',
+               buttons: { a: true, guide: true, r2: true } };
+    var bus = drv.toBus(st);
+    check('gamepad: toBus mapeia os bits do canal',
+          bus.buttons === (drv.BITS.a | drv.BITS.guide | drv.BITS.r2) &&
+          bus.dpad === (drv.DPAD.n | drv.DPAD.e) &&
+          bus.lx === 127 && bus.ly === -127,
+          JSON.stringify(bus));
+
+    // injeta e le de volta (mesmo contrato de Input.pad/padState nativos)
+    env.Input.pad(bus);
+    var ps = env.Input.padState();
+    check('gamepad: pad/padState preserva o canal com seq',
+          ps.seq === 1 && ps.buttons === bus.buttons && ps.dpad === bus.dpad &&
+          ps.rx === 0, JSON.stringify(ps));
+
+    // ponteiro: acumula o stick direito com clamp 240x320 e R2 = clique
+    var p1 = drv.toPointer({ rx: 1, ry: 0, buttons: { r2: true } }, { x: 230, y: 160 }, 1000);
+    check('gamepad: ponteiro clampa em 240 e R2 clica',
+          p1.x === 239 && p1.y === 160 && p1.click === 1, JSON.stringify(p1));
+    var p2 = drv.toPointer({ rx: -1, ry: 0, buttons: {} }, { x: 5, y: 10 }, 1000);
+    check('gamepad: ponteiro clampa em 0 sem clique',
+          p2.x === 0 && p2.y === 10 && p2.click === 0, JSON.stringify(p2));
+    var p3 = drv.toPointer({ rx: 0, ry: -1, buttons: {} }, { x: 100, y: 160 }, 500);
+    check('gamepad: stick para cima sobe o ponteiro (clamp em 0)',
+          p3.y === 0 && p3.x === 100, JSON.stringify(p3));
 })();
 
 // Scroll clip (superficie JS do canvas do Kui): o viewport do scrollBegin

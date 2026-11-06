@@ -17,10 +17,33 @@ var T = A.style.T;
 var LX = A.L.x, LW = A.L.w, CX = A.L.cx, BOT = A.L.bottom;
 
 var HAS_BT = typeof BT !== "undefined";
+var HAS_PADBUS = typeof Input !== "undefined" && typeof Input.padState === "function";
 var gp = null;            // Gamepad da dep (null = desconectado)
 var pads = [];            // resultado do ultimo scan
 var st = null;            // ultimo estado normalizado do pad
 var busyMsg = "";
+
+// nomes dos bits do canal Input.pad (doc: InputBus.h) — a mesma tabela do
+// driver Controle BT; com o driver rodando ele drena o BT.read cru, entao o
+// tester mostra a VISAO DO OS (Input.padState) em vez de brigar pela fila
+var BITS = { a: 1, b: 2, x: 4, y: 8, l1: 16, r1: 32, l2: 64, r2: 128,
+             select: 256, start: 512, guide: 1024, ls: 2048, rs: 4096 };
+var DPAD_BITS = ["n", "e", "s", "w"];
+function doCanal(ps) {
+    var b = {}, nomes = [];
+    for (var k in BITS) {
+        if ((ps.buttons & BITS[k]) !== 0) { b[k] = true; nomes.push(k); }
+    }
+    var d = "";
+    for (var i = 0; i < 4; i++) {
+        if ((ps.dpad & (1 << i)) !== 0) d += DPAD_BITS[i];
+    }
+    return {
+        lx: ps.lx / 127, ly: ps.ly / 127, rx: ps.rx / 127, ry: ps.ry / 127,
+        l2: (ps.buttons & BITS.l2) ? 1 : 0, r2: (ps.buttons & BITS.r2) ? 1 : 0,
+        dpad: d, buttons: b, b: nomes, pressed: [], released: [], battery: -1
+    };
+}
 
 function phaseInfo() {
     if (!HAS_BT) return "sem BT neste firmware/placa";
@@ -64,7 +87,15 @@ function telaLive() {
         return "pads";
     }
 
-    st = gp.poll() || st;
+    // visao do OS primeiro (funciona com o driver Controle BT rodando — ele
+    // drena o BT.read cru); sem driver/sem canal, drena o pad direto
+    if (HAS_PADBUS) {
+        var ps = Input.padState();
+        if (ps.seq > 0) st = doCanal(ps);
+        else st = gp.poll() || st;
+    } else {
+        st = gp.poll() || st;
+    }
 
     // sticks
     stickBox(LX, 46, st ? st.lx : 0, st ? -st.ly : 0, "L");
@@ -204,4 +235,6 @@ function telaPads() {
 }
 telaPads.fps = 10;
 
-A.run({ pads: telaPads, live: telaLive }, "pads", { fps: 15 });
+// fps POR TELA (telaPads.fps / telaLive.fps): o opts.fps do A.run ganharia
+// das duas e o tester ao vivo rodaria a 15 em vez de 30
+A.run({ pads: telaPads, live: telaLive }, "pads");

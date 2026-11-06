@@ -752,175 +752,110 @@ bool pollEvent(Event& out) {
     return ok;
 }
 
-Result controlIn(uint8_t addr, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
-                 uint16_t wIndex, uint8_t* buf, size_t len, uint32_t timeoutMs) {
-    Result bad;
-    if (!s_inited || buf == nullptr) return bad;
-    if (len > kMaxControl || len + kCtrlSetup > CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE) return bad;
+// Preambulo comum dos transfers: device vivo, slot livre e buffer de
+// bufLen bytes ja ligado ao slot (callback/contexto/handle). nullptr = falhou,
+// com bad.status preenchido ("gone"/"busy"; alloc fica no "error" padrao).
+static XferSlot* beginXfer(uint8_t addr, uint8_t ep, size_t bufLen, Result& bad) {
     usb_device_handle_t hdl = handleFor(addr);
     if (hdl == nullptr) {
         bad.status = "gone";
-        return bad;
+        return nullptr;
     }
     XferSlot* s = acquireSlot();
     if (s == nullptr) {
         bad.status = "busy";
-        return bad;
+        return nullptr;
     }
     s->addr = addr;
     usb_transfer_t* x = nullptr;
-    if (usb_host_transfer_alloc(kCtrlSetup + len, 0, &x) != ESP_OK || x == nullptr) {
+    if (usb_host_transfer_alloc(bufLen, 0, &x) != ESP_OK || x == nullptr) {
+        ESP_LOGW(kTag, "ep=%02x: alloc %u falhou", ep, (unsigned)bufLen);
         releaseSlot(s, nullptr);
-        return bad;
+        return nullptr;
     }
+    x->device_handle = hdl;
+    x->bEndpointAddress = ep;
+    x->callback = xferCb;
+    x->context = s;
+    s->x = x;
+    return s;
+}
+
+// Control transfer no EP0: setup de 8 B + dados (OUT copia data; IN devolve
+// em inBuf). Um dos dois ponteiros e nullptr.
+static Result control(uint8_t addr, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
+                      uint16_t wIndex, const uint8_t* outData, uint8_t* inBuf, size_t len,
+                      uint32_t timeoutMs) {
+    Result bad;
+    if (!s_inited) return bad;
+    if (len > kMaxControl || len + kCtrlSetup > CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE) return bad;
+    XferSlot* s = beginXfer(addr, 0, kCtrlSetup + len, bad);
+    if (s == nullptr) return bad;
+    usb_transfer_t* x = s->x;
     usb_setup_packet_t* setup = (usb_setup_packet_t*)x->data_buffer;
     setup->bmRequestType = bmRequestType;
     setup->bRequest = bRequest;
     setup->wValue = wValue;
     setup->wIndex = wIndex;
     setup->wLength = (uint16_t)len;
-    x->device_handle = hdl;
-    x->bEndpointAddress = 0;
+    if (outData != nullptr && len > 0) memcpy(x->data_buffer + kCtrlSetup, outData, len);
     x->num_bytes = (int)(kCtrlSetup + len);
-    x->callback = xferCb;
-    x->context = s;
-    s->x = x;
 
     if (usb_host_transfer_submit_control(s_client, x) != ESP_OK) {
         releaseSlot(s, x);
         return bad;
     }
-    return waitSlot(s, timeoutMs, buf, len, kCtrlSetup);
+    return inBuf != nullptr ? waitSlot(s, timeoutMs, inBuf, len, kCtrlSetup)
+                            : waitSlot(s, timeoutMs, nullptr, 0, 0);
+}
+
+// Bulk/interrupt: submit + espera. Falha no submit vira status "submit".
+static Result submitWait(XferSlot* s, uint8_t* inBuf, size_t inCap, uint32_t timeoutMs) {
+    usb_transfer_t* x = s->x;
+    esp_err_t e = usb_host_transfer_submit(x);
+    if (e != ESP_OK) {
+        ESP_LOGW(kTag, "ep=%02x len=%d: submit falhou (%s)", x->bEndpointAddress, x->num_bytes,
+                 esp_err_to_name(e));
+        releaseSlot(s, x);
+        Result r;
+        r.status = "submit";
+        return r;
+    }
+    return waitSlot(s, timeoutMs, inBuf, inCap, 0);
+}
+
+Result controlIn(uint8_t addr, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
+                 uint16_t wIndex, uint8_t* buf, size_t len, uint32_t timeoutMs) {
+    if (buf == nullptr) return Result();
+    return control(addr, bmRequestType, bRequest, wValue, wIndex, nullptr, buf, len, timeoutMs);
 }
 
 Result controlOut(uint8_t addr, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue,
                   uint16_t wIndex, const uint8_t* data, size_t len, uint32_t timeoutMs) {
-    Result bad;
-    if (!s_inited) return bad;
-    if (len > kMaxControl || len + kCtrlSetup > CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE) return bad;
-    usb_device_handle_t hdl = handleFor(addr);
-    if (hdl == nullptr) {
-        bad.status = "gone";
-        return bad;
-    }
-    XferSlot* s = acquireSlot();
-    if (s == nullptr) {
-        bad.status = "busy";
-        return bad;
-    }
-    s->addr = addr;
-    usb_transfer_t* x = nullptr;
-    if (usb_host_transfer_alloc(kCtrlSetup + len, 0, &x) != ESP_OK || x == nullptr) {
-        releaseSlot(s, nullptr);
-        return bad;
-    }
-    usb_setup_packet_t* setup = (usb_setup_packet_t*)x->data_buffer;
-    setup->bmRequestType = bmRequestType;
-    setup->bRequest = bRequest;
-    setup->wValue = wValue;
-    setup->wIndex = wIndex;
-    setup->wLength = (uint16_t)len;
-    if (data != nullptr && len > 0) memcpy(x->data_buffer + kCtrlSetup, data, len);
-    x->device_handle = hdl;
-    x->bEndpointAddress = 0;
-    x->num_bytes = (int)(kCtrlSetup + len);
-    x->callback = xferCb;
-    x->context = s;
-    s->x = x;
-
-    if (usb_host_transfer_submit_control(s_client, x) != ESP_OK) {
-        releaseSlot(s, x);
-        return bad;
-    }
-    return waitSlot(s, timeoutMs, nullptr, 0, 0);
+    return control(addr, bmRequestType, bRequest, wValue, wIndex, data, nullptr, len, timeoutMs);
 }
 
 Result out(uint8_t addr, uint8_t ep, const uint8_t* data, size_t len, uint32_t timeoutMs) {
     Result bad;
     if (!s_inited || len > kMaxTransfer || (ep & 0x80) != 0) return bad;
     if (data == nullptr && len > 0) return bad;  // sem fonte: nao mandar lixo do alloc
-    usb_device_handle_t hdl = handleFor(addr);
-    if (hdl == nullptr) {
-        bad.status = "gone";
-        return bad;
-    }
-    XferSlot* s = acquireSlot();
-    if (s == nullptr) {
-        bad.status = "busy";
-        return bad;
-    }
-    s->addr = addr;
-    usb_transfer_t* x = nullptr;
-    const size_t bufLen = (len > 0) ? len : 1;
-    if (usb_host_transfer_alloc(bufLen, 0, &x) != ESP_OK || x == nullptr) {
-        releaseSlot(s, nullptr);
-        return bad;
-    }
-    if (data != nullptr && len > 0) memcpy(x->data_buffer, data, len);
-    x->device_handle = hdl;
-    x->bEndpointAddress = ep;
-    x->num_bytes = (int)len;
-    x->callback = xferCb;
-    x->context = s;
-    s->x = x;
-
-    esp_err_t e = usb_host_transfer_submit(x);
-    if (e != ESP_OK) {
-        ESP_LOGW(kTag, "out ep=%02x len=%u: submit falhou (%s)", ep, (unsigned)len,
-                 esp_err_to_name(e));
-        releaseSlot(s, x);
-        UsbHost::Result r;
-        r.ok = false;
-        r.status = "submit";
-        r.transferred = 0;
-        return r;
-    }
-    return waitSlot(s, timeoutMs, nullptr, 0, 0);
+    XferSlot* s = beginXfer(addr, ep, (len > 0) ? len : 1, bad);
+    if (s == nullptr) return bad;
+    if (len > 0) memcpy(s->x->data_buffer, data, len);
+    s->x->num_bytes = (int)len;
+    return submitWait(s, nullptr, 0, timeoutMs);
 }
 
 Result in(uint8_t addr, uint8_t ep, uint8_t* buf, size_t cap, uint32_t timeoutMs) {
     Result bad;
     if (!s_inited || buf == nullptr || cap == 0 || cap > kMaxTransfer || (ep & 0x80) == 0) return bad;
-    usb_device_handle_t hdl = handleFor(addr);
-    if (hdl == nullptr) {
-        bad.status = "gone";
-        return bad;
-    }
-    XferSlot* s = acquireSlot();
-    if (s == nullptr) {
-        bad.status = "busy";
-        return bad;
-    }
-    s->addr = addr;
     // IN sempre multiplo do MPS (ver epMps); o payload devolvido ao JS e
     // cortado em cap, o resto do buffer fica sem uso.
-    const uint16_t mps = epMps(addr, ep);
-    const size_t xferLen = roundToMps(cap, mps);
-    usb_transfer_t* x = nullptr;
-    if (usb_host_transfer_alloc(xferLen, 0, &x) != ESP_OK || x == nullptr) {
-        ESP_LOGW(kTag, "in ep=%02x: alloc %u falhou", ep, (unsigned)xferLen);
-        releaseSlot(s, nullptr);
-        return bad;
-    }
-    x->device_handle = hdl;
-    x->bEndpointAddress = ep;
-    x->num_bytes = (int)xferLen;
-    x->callback = xferCb;
-    x->context = s;
-    s->x = x;
-
-    esp_err_t e = usb_host_transfer_submit(x);
-    if (e != ESP_OK) {
-        ESP_LOGW(kTag, "in ep=%02x len=%u: submit falhou (%s)", ep, (unsigned)xferLen,
-                 esp_err_to_name(e));
-        releaseSlot(s, x);
-        UsbHost::Result r;
-        r.ok = false;
-        r.status = "submit";
-        r.transferred = 0;
-        return r;
-    }
-    return waitSlot(s, timeoutMs, buf, cap, 0);
+    const size_t xferLen = roundToMps(cap, epMps(addr, ep));
+    XferSlot* s = beginXfer(addr, ep, xferLen, bad);
+    if (s == nullptr) return bad;
+    s->x->num_bytes = (int)xferLen;
+    return submitWait(s, buf, cap, timeoutMs);
 }
 
 Result sendFile(uint8_t addr, uint8_t ep, const char* path, size_t maxBytes, uint32_t timeoutMs) {
@@ -937,35 +872,38 @@ Result sendFile(uint8_t addr, uint8_t ep, const char* path, size_t maxBytes, uin
     }
 
     size_t sent = 0;
+    bool ok = true;
     while (sent < maxBytes) {
         size_t want = maxBytes - sent;
         if (want > kFileChunk) want = kFileChunk;
         const size_t n = fread(chunk, 1, want, f);
-        if (n == 0) break;
+        if (n == 0) {
+            // EOF e o fim normal; erro de leitura no meio (SD arrancado) nao
+            // pode virar "ok" com o arquivo cortado na impressora.
+            if (ferror(f)) {
+                ok = false;
+                r.status = "read";
+            }
+            break;
+        }
         Result one = out(addr, ep, chunk, n, timeoutMs);
         if (!one.ok) {
-            r.ok = false;
+            ok = false;
             r.status = one.status;
-            r.transferred = sent;
-            free(chunk);
-            fclose(f);
-            return r;
+            break;
         }
         sent += one.transferred;
         if (one.transferred != n) {
             // Short write em bulk: o device recusou o resto (stall/limite).
-            r.ok = false;
+            ok = false;
             r.status = "short";
-            r.transferred = sent;
-            free(chunk);
-            fclose(f);
-            return r;
+            break;
         }
     }
     free(chunk);
     fclose(f);
-    r.ok = true;
-    r.status = "ok";
+    r.ok = ok;
+    if (ok) r.status = "ok";
     r.transferred = sent;
     return r;
 }

@@ -39,7 +39,9 @@ public:
         count_ = 0;
     }
 
-    // Um sample na taxa de origem (ex.: 1 por ciclo de CPU do 2600).
+    // Um sample na taxa de origem (ex.: 2 por linha na TIA do 2600). Com a
+    // origem MAIS LENTA que o destino (TIA 31,4 kHz -> 44,1 kHz) o mesmo
+    // valor sai repetido (retencao de ordem zero) para manter o ritmo.
     void push(int32_t s)
     {
         sum_ += s;
@@ -49,8 +51,12 @@ public:
             acc_ -= (uint32_t)srcRate_;
             // soma de ate ~1024 samples de 16 bits cabe em int32; divisao de
             // 64 bits chamaria __divdi3, que o blob freestanding nao linka.
-            const int32_t avg = n_ > 0 ? sum_ / n_ : 0;
-            if (count_ < cap_ && out_ != nullptr) out_[count_++] = emu_clamp16(avg);
+            const int16_t avg = emu_clamp16(n_ > 0 ? sum_ / (int32_t)n_ : 0);
+            if (count_ < cap_ && out_ != nullptr) out_[count_++] = avg;
+            while (acc_ >= (uint32_t)srcRate_) {
+                acc_ -= (uint32_t)srcRate_;
+                if (count_ < cap_ && out_ != nullptr) out_[count_++] = avg;
+            }
             sum_ = 0;
             n_ = 0;
         }

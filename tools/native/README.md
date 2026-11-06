@@ -12,8 +12,9 @@ tools/native/
 │   ├── emu_core.h     # ABI canonica core_ctl (0-19) + frame arg
 │   ├── emu_state.h    # save state versionado (CEMU: header + secoes tag/len)
 │   ├── emu_video.h    # RGB565 swap + Scaler nearest por runs
-│   ├── emu_audio.h    # decimador box-average -> PCM16 44,1 kHz
-│   └── cpu6502_cycle.# CPU 6502/6507 cycle-stepped (decimal + ilegais)
+│   ├── emu_audio.h    # box-average -> PCM16 44,1 kHz (decima ou repete)
+│   ├── emu_screen.h   # FRAME_SCREEN: escala + carimbos direto no vidro
+│   └── cpu6502_cycle.# CPU 6502/6507 cycle-stepped, barramento em template
 ├── nes/               # Anemoia (NES, GPLv3) — app Anemoia
 ├── a2600/             # Atari 2600 — app "Atari 2600"
 │   ├── core/          # cpu reaproveitado de common, tia, riot6532, cart
@@ -48,6 +49,27 @@ blob. Comandos canonicos (iguais no NES e no 2600):
 O app nunca hardcoda offsets: INIT/ROM_OFF/... devolvem o layout da scratch.
 O core nao chama o JS, nao aloca task e roda **um quadro por chamada** (o
 watchdog nao ve o codigo nativo).
+
+### Atari 2600: desempenho e video
+
+Bancada 4848 (Pitfall!, audio ligado): emulacao 73 ms -> 10 ms por quadro e
+video ~63 ms -> ~1 ms; o jogo roda a 60 fps (o relogio do Pitfall anda 1 s
+por segundo). O que pesava, em ordem:
+
+- **Barramento por ciclo.** A CPU e cycle-stepped, mas TIA/RIOT nao precisam
+  andar a cada ciclo: o barramento (`A2600::Bus`, inline via `stepT<B>`) so
+  sincroniza a TIA/o RIOT quando o jogo acessa um registrador deles
+  (`advance(n)`), e o WSYNC vira ciclos somados na escrita. Mesmo quadro e
+  mesma contagem de ciclos do modelo ciclo a ciclo.
+- **Desenho preguicoso por trechos.** A TIA pinta o trecho ainda nao
+  desenhado antes de cada escrita/leitura de colisao; objetos sao um byte por
+  pixel remontado so quando o grafico VISIVEL muda (GRP=0 e HMOVE com 0 em
+  toda linha nao custam nada); fundo/playfield puros saem de 4 em 4 pixels.
+- **Video direto (FRAME_SCREEN).** A linha da TIA (RAM interna) vai para o
+  compositor (`common/emu_screen.h`), que escala e compoe os carimbos do
+  overlay no vidro inteiro e so reescreve as linhas que mudaram. O caminho
+  FRAME + SET_SCALE + nativeDraw continua como fallback (sem frameskip
+  automatico no direto: jogos do 2600 piscam sprites em quadros alternados).
 
 ### Extensoes do Atari 2600
 

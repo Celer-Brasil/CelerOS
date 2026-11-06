@@ -13,8 +13,14 @@
 // A instrucao continua sendo executada por um switch (nao ha micro-codigo por
 // ciclo), mas os acessos sao intercalados com os ticks; os ciclos internos que
 // sobram sao consumidos no fim pelo orcamento da tabela. E cycle-accurate nos
-// pontos que a TIA ve (leituras/escritas) e barato o suficiente: 19.912
-// ciclos/quadro no 2600.
+// pontos que a TIA ve (leituras/escritas): 19.912 ciclos/quadro no 2600.
+//
+// Barramento INLINE: o executor e template no tipo do barramento (stepT<B>).
+// Com ponteiros de funcao eram 2-3 chamadas indiretas por ciclo emulado numa
+// pilha funda — no Xtensa (ABI janelada) cada uma ainda arrisca excecao de
+// window overflow/underflow; bancada 4848, Pitfall: ~20 ms so de CPU+TIA por
+// quadro. O core inclui cpu6502_cycle.cpp no TU unico e chama stepT com um
+// barramento de metodos inline; CpuBus + step() continuam para os testes.
 //
 // Cobre a ISA oficial, o modo decimal NMOS e os ilegais que os jogos de 2600
 // realmente usam (LAX/SAX/DCP/ISC/SLO/RLA/SRE/RRA/ANC/ALR/ARR/AXS + NOPs).
@@ -36,6 +42,18 @@ struct CpuBus {
     bool (*irq)(void* ctx) = nullptr;
 };
 
+// Adaptador CpuBus -> barramento de template (testes host).
+struct FnBus {
+    CpuBus* b;
+    uint8_t read(uint16_t a) { return b->read(b->ctx, a); }
+    void write(uint16_t a, uint8_t v) { b->write(b->ctx, a, v); }
+    void tick() { b->tick(b->ctx); }
+    bool stalled() { return b->stalled != nullptr && b->stalled(b->ctx); }
+    bool irq() { return b->irq != nullptr && b->irq(b->ctx); }
+};
+
+#define EMU_CPU_INLINE inline __attribute__((always_inline))
+
 class Cpu6502
 {
 public:
@@ -53,6 +71,13 @@ public:
     void doIrq(CpuBus* bus);
     void doNmi(CpuBus* bus);
 
+    // Barramento de template (B: read/write/tick/stalled/irq inline).
+    // Definidos em cpu6502_cycle.cpp: so o TU que o inclui instancia.
+    template <class B> void resetT(B& b);
+    template <class B> void stepT(B& b);
+    template <class B> void doIrqT(B& b);
+    template <class B> void doNmiT(B& b);
+
     bool flag(uint8_t f) const { return (p & f) != 0; }
     void setFlag(uint8_t f, bool on)
     {
@@ -65,31 +90,31 @@ public:
 
 private:
     // --- barramento -------------------------------------------------------
-    void tick(CpuBus* b);
-    uint8_t rd(CpuBus* b, uint16_t addr);
-    void wr(CpuBus* b, uint16_t addr, uint8_t v);
-    uint8_t fetch(CpuBus* b) { return rd(b, pc++); }
-    uint16_t fetch16(CpuBus* b);
-    uint16_t read16(CpuBus* b, uint16_t addr);
-    void push(CpuBus* b, uint8_t v);
-    uint8_t pull(CpuBus* b);
+    template <class B> EMU_CPU_INLINE void tick(B& b);
+    template <class B> EMU_CPU_INLINE uint8_t rd(B& b, uint16_t addr);
+    template <class B> EMU_CPU_INLINE void wr(B& b, uint16_t addr, uint8_t v);
+    template <class B> EMU_CPU_INLINE uint8_t fetch(B& b) { return rd(b, pc++); }
+    template <class B> EMU_CPU_INLINE uint16_t fetch16(B& b);
+    template <class B> uint16_t read16(B& b, uint16_t addr);
+    template <class B> EMU_CPU_INLINE void push(B& b, uint8_t v);
+    template <class B> EMU_CPU_INLINE uint8_t pull(B& b);
 
     // --- instrucoes -------------------------------------------------------
-    void exec(uint8_t op, CpuBus* b);
-    void execImp(uint8_t op, CpuBus* b);
+    template <class B> void exec(uint8_t op, B& b);
+    template <class B> void execImp(uint8_t op, B& b);
     void execAcc(uint8_t op);
-    void doMem(uint8_t op, uint16_t addr, CpuBus* b);
+    template <class B> void doMem(uint8_t op, uint16_t addr, B& b);
     void doValue(uint8_t op, uint8_t v);
-    void doStore(uint8_t op, uint16_t addr, CpuBus* b);
-    void doRmw(uint8_t op, uint16_t addr, CpuBus* b);
-    void doIndexed(uint8_t op, uint8_t index, CpuBus* b);
-    void doIzy(uint8_t op, CpuBus* b);
-    void branch(CpuBus* b, bool cond);
-    void brk(CpuBus* b);
-    void jsr(CpuBus* b);
-    void rts(CpuBus* b);
-    void rti(CpuBus* b);
-    void jmpInd(CpuBus* b);
+    template <class B> void doStore(uint8_t op, uint16_t addr, B& b);
+    template <class B> void doRmw(uint8_t op, uint16_t addr, B& b);
+    template <class B> void doIndexed(uint8_t op, uint8_t index, B& b);
+    template <class B> void doIzy(uint8_t op, B& b);
+    template <class B> void branch(B& b, bool cond);
+    template <class B> void brk(B& b);
+    template <class B> void jsr(B& b);
+    template <class B> void rts(B& b);
+    template <class B> void rti(B& b);
+    template <class B> void jmpInd(B& b);
 
     // --- ALU --------------------------------------------------------------
     void setZN(uint8_t v)

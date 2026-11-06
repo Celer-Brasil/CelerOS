@@ -11,9 +11,9 @@ void Riot6532::reset()
     portA_ = ddrA_ = portB_ = ddrB_ = 0;
     inputA_ = 0xFF;
     inputB_ = 0x03;  // reset/select soltos
+    // o 6532 liga com o timer correndo no divisor 1024 (valor indefinido)
     timer_ = 0;
-    timint_ = 0;
-    presc_ = 0;
+    interval_ = presc_ = 1024;
     irq_ = false;
 }
 
@@ -37,66 +37,53 @@ void Riot6532::setInputs(uint8_t dirs, uint8_t switches)
 
 uint8_t Riot6532::read(uint16_t addr)
 {
-    const uint16_t a = addr & 0x07;
-    dbg_reads_[a]++;
-    switch (a) {
-    case 0:  // SWCHA
-        return (uint8_t)((portA_ & ddrA_) | (inputA_ & (uint8_t)~ddrA_));
-    case 1:  // SWACNT (DDR A)
-        return ddrA_;
-    case 2:  // SWCHB
-        return (uint8_t)((portB_ & ddrB_) | (inputB_ & (uint8_t)~ddrB_));
-    case 3:  // SWBCNT (DDR B)
-        return ddrB_;
-    case 4: {  // INTIM: le e limpa o flag
-        const uint8_t v = timer_;
+    if ((addr & 0x04) == 0) {
+        const uint16_t a = addr & 0x03;
+        dbg_reads_[a]++;
+        switch (a) {
+        case 0:  // SWCHA
+            return (uint8_t)((portA_ & ddrA_) | (inputA_ & (uint8_t)~ddrA_));
+        case 1:  // SWACNT (DDR A)
+            return ddrA_;
+        case 2:  // SWCHB
+            return (uint8_t)((portB_ & ddrB_) | (inputB_ & (uint8_t)~ddrB_));
+        default:  // SWBCNT (DDR B)
+            return ddrB_;
+        }
+    }
+    if ((addr & 0x01) == 0) {  // INTIM: le e limpa o flag
+        dbg_reads_[4]++;
         irq_ = false;
-        return v;
+        return timer_;
     }
-    case 5:  // TIMINT
-        return (uint8_t)((timint_ & 0x03) | (irq_ ? 0x80 : 0x00));
-    default:
-        return 0;
-    }
+    dbg_reads_[5]++;
+    return irq_ ? 0x80 : 0x00;  // TIMINT
 }
 
 void Riot6532::write(uint16_t addr, uint8_t v)
 {
-    switch (addr & 0x07) {
-    case 0: portA_ = v; break;
-    case 1: ddrA_ = v; break;
-    case 2: portB_ = v; break;
-    case 3: ddrB_ = v; break;
-    case 4:
-        timer_ = v;
-        break;
-    case 5:
-        timint_ = (uint8_t)(v & 0x03);
-        presc_ = 0;
-        break;
-    default:
-        break;
-    }
-}
-
-void Riot6532::tick()
-{
-    static const int kDiv[4] = {1, 8, 64, 1024};
-    const int div = kDiv[timint_ & 0x03];
-    if (++presc_ >= div) {
-        presc_ = 0;
-        if (timer_ == 0) {
-            timer_ = 0xFF;
-            irq_ = true;
-        } else {
-            timer_--;
+    if ((addr & 0x04) == 0) {
+        switch (addr & 0x03) {
+        case 0: portA_ = v; break;
+        case 1: ddrA_ = v; break;
+        case 2: portB_ = v; break;
+        default: ddrB_ = v; break;
         }
+        return;
     }
+    if ((addr & 0x10) == 0) return;  // controle de borda do PA7: sem uso no 2600
+    static const int kDiv[4] = {1, 8, 64, 1024};
+    timer_ = v;
+    interval_ = kDiv[addr & 0x03];
+    // o primeiro decremento sai no ciclo seguinte a carga, depois a cada
+    // `interval_` ciclos
+    presc_ = 1;
+    irq_ = false;
 }
 
 void Riot6532::save(emu::StateWriter& w) const
 {
-    w.begin(emu::emu_tag('R', 'I', 'O', 'T'));
+    w.begin(emu::emu_tag('R', 'I', 'O', '2'));
     w.bytes(ram_, sizeof(ram_));
     w.u8(portA_);
     w.u8(ddrA_);
@@ -105,7 +92,7 @@ void Riot6532::save(emu::StateWriter& w) const
     w.u8(inputA_);
     w.u8(inputB_);
     w.u8(timer_);
-    w.u8(timint_);
+    w.u16((uint16_t)interval_);
     w.u16((uint16_t)presc_);
     w.u8(irq_ ? 1 : 0);
     w.end();
@@ -113,7 +100,7 @@ void Riot6532::save(emu::StateWriter& w) const
 
 bool Riot6532::load(emu::StateReader& r)
 {
-    if (!r.find(emu::emu_tag('R', 'I', 'O', 'T'))) return false;
+    if (!r.find(emu::emu_tag('R', 'I', 'O', '2'))) return false;
     r.bytes(ram_, sizeof(ram_));
     portA_ = r.u8();
     ddrA_ = r.u8();
@@ -122,8 +109,10 @@ bool Riot6532::load(emu::StateReader& r)
     inputA_ = r.u8();
     inputB_ = r.u8();
     timer_ = r.u8();
-    timint_ = r.u8();
-    presc_ = (int16_t)r.u16();
+    interval_ = r.u16();
+    presc_ = r.u16();
+    if (interval_ < 1 || interval_ > 1024) interval_ = 1024;
+    if (presc_ < 1 || presc_ > 1024) presc_ = 1;
     irq_ = r.u8() != 0;
     return r.ok();
 }

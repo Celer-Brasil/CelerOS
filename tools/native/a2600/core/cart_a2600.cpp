@@ -55,13 +55,50 @@ bool CartA2600::load(const uint8_t* rom, uint32_t size, int overrideMapper)
     mapper_ = (overrideMapper >= 0 && validForSize(overrideMapper, size)) ? overrideMapper : def;
     rom_ = rom;
     size_ = size;
+    reset();
     return true;
 }
 
 void CartA2600::reset()
 {
     bank_ = 0;
+    slice_[0] = 4;
+    slice_[1] = 5;
+    slice_[2] = 6;
     memset(ram_, 0, sizeof(ram_));
+    remap();
+}
+
+void CartA2600::remap()
+{
+    switch (mapper_) {
+    case kF8: case kF8SC: case kF6: case kF6SC:
+    case kF4: case kF4SC: case kFE: case kE0:
+        hotRead_ = true;
+        break;
+    default:
+        hotRead_ = false;
+        break;
+    }
+    if (rom_ == nullptr) return;
+    for (int i = 0; i < 4; i++) {
+        uint32_t off;
+        switch (mapper_) {
+        case k2K: off = (uint32_t)(i & 1) * 0x400; break;
+        case k4K: off = (uint32_t)i * 0x400; break;
+        case kE0: off = (uint32_t)(i < 3 ? slice_[i] : 7) * 0x400; break;
+        case k3F:
+        case k3E:
+            off = i < 2 ? (uint32_t)bank_ * 0x800 + (uint32_t)i * 0x400
+                        : size_ - 0x800 + (uint32_t)(i - 2) * 0x400;
+            break;
+        default:  // F8/F6/F4 (+SC), FE, UA: banco de 4K inteiro
+            off = (uint32_t)bank_ * 0x1000 + (uint32_t)i * 0x400;
+            break;
+        }
+        if (off + 0x400 > size_) off = 0;  // estado corrompido: nunca le fora da ROM
+        seg_[i] = rom_ + off;
+    }
 }
 
 const char* CartA2600::mapperName(int m)
@@ -105,58 +142,25 @@ void CartA2600::switchHotspot(uint16_t addr)
         else if (addr >= 0xFF0) bank_ = 1;
         break;
     case kE0:
-        if (addr >= 0xFE0 && addr <= 0xFE7) bank_ = addr & 0x07;
+        if (addr >= 0xFE0 && addr <= 0xFE7) bank_ = slice_[0] = addr & 0x07;
+        else if (addr >= 0xFE8 && addr <= 0xFEF) slice_[1] = addr & 0x07;
+        else if (addr >= 0xFF0 && addr <= 0xFF7) slice_[2] = addr & 0x07;
         break;
     default:
-        break;
+        return;
     }
+    remap();
 }
 
 uint8_t CartA2600::read(uint16_t addr)
 {
     addr &= 0x0FFF;
     if (rom_ == nullptr) return 0;
-
-    // Hotspots de leitura (F8/F6/F4/FE/E0 tambem trocam por leitura).
-    switch (mapper_) {
-    case kF8: case kF8SC: case kF6: case kF6SC:
-    case kF4: case kF4SC: case kFE: case kE0:
-        switchHotspot(addr);
-        break;
-    default:
-        break;
-    }
-
-    switch (mapper_) {
-    case k2K:
-        return rom_[addr & 0x7FF];
-    case k4K:
-        return rom_[addr & 0xFFF];
-    case kF8: case kF8SC:
-        if (mapper_ == kF8SC && addr < 0x80) return ram_[addr & 0x7F];
-        return rom_[(uint32_t)bank_ * 0x1000 + (addr & 0xFFF)];
-    case kF6: case kF6SC:
-        if (mapper_ == kF6SC && addr < 0x80) return ram_[addr & 0x7F];
-        return rom_[(uint32_t)bank_ * 0x1000 + (addr & 0xFFF)];
-    case kF4: case kF4SC:
-        if (mapper_ == kF4SC && addr < 0x80) return ram_[addr & 0x7F];
-        return rom_[(uint32_t)bank_ * 0x1000 + (addr & 0xFFF)];
-    case kFE:
-        return rom_[(uint32_t)bank_ * 0x1000 + (addr & 0xFFF)];
-    case kE0:
-        if (addr < 0x400) return rom_[(uint32_t)bank_ * 0x400 + addr];
-        return rom_[0x1000 + addr];  // ultimos 3K fixos
-    case k3F:
-        return rom_[(uint32_t)bank_ * 0x800 + (addr & 0x7FF)];
-    case k3E:
-        if (addr < 0x400) return ram_[addr & 0x3FF];
-        if (addr < 0x800) return 0;
-        return rom_[(uint32_t)bank_ * 0x800 + (addr & 0x7FF)];
-    case kUA:
-        return rom_[(uint32_t)bank_ * 0x1000 + (addr & 0xFFF)];
-    default:
-        return 0;
-    }
+    // hotspots de leitura (F8/F6/F4/FE/E0) moram todos em $FE0-$FFF
+    if (addr >= 0xFE0 && hotRead_) switchHotspot(addr);
+    if (addr < 0x100 && hasSc()) return ram_[addr & 0x7F];  // porta de leitura em $080
+    if (mapper_ == k3E && addr < 0x800) return addr < 0x400 ? ram_[addr & 0x3FF] : 0;
+    return seg_[addr >> 10][addr & 0x3FF];
 }
 
 void CartA2600::write(uint16_t addr, uint8_t v)
@@ -166,7 +170,8 @@ void CartA2600::write(uint16_t addr, uint8_t v)
 
     if (mapper_ == k3F || mapper_ == k3E) {
         if (addr == 0x03F) {
-            bank_ = v & 0x03;
+            bank_ = v & (uint8_t)((size_ / 0x800) - 1);
+            remap();
             return;
         }
         if (mapper_ == k3E && addr < 0x400) {
@@ -191,6 +196,7 @@ void CartA2600::save(emu::StateWriter& w) const
     w.u8((uint8_t)mapper_);
     w.u8((uint8_t)bank_);
     w.bytes(ram_, sizeof(ram_));
+    w.bytes(slice_, 3);
     w.end();
 }
 
@@ -200,6 +206,10 @@ bool CartA2600::loadState(emu::StateReader& r)
     mapper_ = r.u8();
     bank_ = r.u8();
     r.bytes(ram_, sizeof(ram_));
+    r.bytes(slice_, 3);
+    for (int i = 0; i < 3; i++) slice_[i] &= 0x07;
+    if (!validForSize(mapper_, size_) && defaultMapper(size_) >= 0) mapper_ = defaultMapper(size_);
+    remap();
     return r.ok();
 }
 

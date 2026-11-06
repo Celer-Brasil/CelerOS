@@ -1,6 +1,9 @@
 // CPU 6502 cycle-stepped — implementacao.
 //
-// Ver cpu6502_cycle.h para o porque. A tabela de 256 opcodes traz modo de
+// Ver cpu6502_cycle.h para o porque. Os metodos que tocam o barramento sao
+// templates no tipo do barramento (B): o core que inclui este .cpp no seu TU
+// unico (A2600Core.cpp) instancia com o barramento dele e o compilador poe
+// leitura/escrita/tick INLINE no executor. A tabela de 256 opcodes traz modo de
 // enderecamento + ciclos-base (sem a penalidade de pagina, que o acesso
 // dummy adiciona). O executor intercala os acessos de barramento com tick():
 // a TIA ve cada leitura/escrita no ciclo certo; os ciclos internos que sobram
@@ -156,83 +159,90 @@ bool isRmwOp(uint8_t op)
 
 }  // namespace
 
-void Cpu6502::reset(CpuBus* b)
+template <class B>
+void Cpu6502::resetT(B& b)
 {
     a = x = y = 0;
     sp = 0xFD;
     p = (uint8_t)(kU | kI);
     jammed = false;
     cycles = 0;
-    const uint8_t lo = b->read(b->ctx, 0xFFFC);
-    b->tick(b->ctx);
-    const uint8_t hi = b->read(b->ctx, 0xFFFD);
-    b->tick(b->ctx);
+    const uint8_t lo = b.read(0xFFFC);
+    b.tick();
+    const uint8_t hi = b.read(0xFFFD);
+    b.tick();
     cycles += 2;
     pc = (uint16_t)(lo | (hi << 8));
 }
 
-void Cpu6502::tick(CpuBus* b)
+template <class B>
+void Cpu6502::tick(B& b)
 {
-    b->tick(b->ctx);
+    b.tick();
     cycles++;
     // WSYNC/RDY: o CPU fica parada ate o fim da linha / do DMA. Os ciclos da
     // parada contam como ciclos de barramento (o orcamento da instrucao ja
     // passou, entao step() encerra normalmente).
-    if (b->stalled != nullptr) {
-        while (b->stalled(b->ctx)) {
-            b->tick(b->ctx);
-            cycles++;
-        }
+    while (b.stalled()) {
+        b.tick();
+        cycles++;
     }
 }
 
-uint8_t Cpu6502::rd(CpuBus* b, uint16_t addr)
+template <class B>
+uint8_t Cpu6502::rd(B& b, uint16_t addr)
 {
-    const uint8_t v = b->read(b->ctx, addr);
+    const uint8_t v = b.read(addr);
     tick(b);
     return v;
 }
 
-void Cpu6502::wr(CpuBus* b, uint16_t addr, uint8_t v)
+template <class B>
+void Cpu6502::wr(B& b, uint16_t addr, uint8_t v)
 {
-    b->write(b->ctx, addr, v);
+    b.write(addr, v);
     tick(b);
 }
 
-uint16_t Cpu6502::fetch16(CpuBus* b)
+template <class B>
+uint16_t Cpu6502::fetch16(B& b)
 {
     const uint8_t lo = fetch(b);
     const uint8_t hi = fetch(b);
     return (uint16_t)(lo | (hi << 8));
 }
 
-uint16_t Cpu6502::read16(CpuBus* b, uint16_t addr)
+template <class B>
+uint16_t Cpu6502::read16(B& b, uint16_t addr)
 {
     const uint8_t lo = rd(b, addr);
     const uint8_t hi = rd(b, (uint16_t)(addr + 1));
     return (uint16_t)(lo | (hi << 8));
 }
 
-void Cpu6502::push(CpuBus* b, uint8_t v)
+template <class B>
+void Cpu6502::push(B& b, uint8_t v)
 {
     wr(b, (uint16_t)(0x100 | sp), v);
     sp--;
 }
 
-uint8_t Cpu6502::pull(CpuBus* b)
+template <class B>
+uint8_t Cpu6502::pull(B& b)
 {
     sp++;
     return rd(b, (uint16_t)(0x100 | sp));
 }
 
-void Cpu6502::step(CpuBus* b)
+template <class B>
+void Cpu6502::stepT(B& b)
 {
     if (jammed) {
         tick(b);
         return;
     }
-    if (b->irq != nullptr && b->irq(b->ctx) && !(p & kI)) {
-        doIrq(b);
+    if (b.irq() && !(p & kI)) {
+        doIrqT(b);
         return;
     }
     const uint64_t start = cycles;
@@ -242,7 +252,8 @@ void Cpu6502::step(CpuBus* b)
     while ((int)(cycles - start) < base) tick(b);
 }
 
-void Cpu6502::doIrq(CpuBus* b)
+template <class B>
+void Cpu6502::doIrqT(B& b)
 {
     rd(b, pc);  // leitura dummy do PC
     push(b, (uint8_t)(pc >> 8));
@@ -252,7 +263,8 @@ void Cpu6502::doIrq(CpuBus* b)
     pc = read16(b, 0xFFFE);
 }
 
-void Cpu6502::doNmi(CpuBus* b)
+template <class B>
+void Cpu6502::doNmiT(B& b)
 {
     rd(b, pc);
     push(b, (uint8_t)(pc >> 8));
@@ -262,7 +274,8 @@ void Cpu6502::doNmi(CpuBus* b)
     pc = read16(b, 0xFFFA);
 }
 
-void Cpu6502::exec(uint8_t op, CpuBus* b)
+template <class B>
+void Cpu6502::exec(uint8_t op, B& b)
 {
     switch (op) {
     case 0x00: brk(b); return;
@@ -309,7 +322,8 @@ void Cpu6502::exec(uint8_t op, CpuBus* b)
     }
 }
 
-void Cpu6502::execImp(uint8_t op, CpuBus* b)
+template <class B>
+void Cpu6502::execImp(uint8_t op, B& b)
 {
     switch ((Op)op) {
     case Op::NOP: break;
@@ -372,7 +386,8 @@ void Cpu6502::execAcc(uint8_t op)
     }
 }
 
-void Cpu6502::doMem(uint8_t op, uint16_t addr, CpuBus* b)
+template <class B>
+void Cpu6502::doMem(uint8_t op, uint16_t addr, B& b)
 {
     if (isReadOp(op)) {
         doValue(op, rd(b, addr));
@@ -385,7 +400,8 @@ void Cpu6502::doMem(uint8_t op, uint16_t addr, CpuBus* b)
     }
 }
 
-void Cpu6502::doIndexed(uint8_t op, uint8_t index, CpuBus* b)
+template <class B>
+void Cpu6502::doIndexed(uint8_t op, uint8_t index, B& b)
 {
     const uint16_t base = fetch16(b);
     const uint16_t addr = (uint16_t)(base + index);
@@ -403,7 +419,8 @@ void Cpu6502::doIndexed(uint8_t op, uint8_t index, CpuBus* b)
     doMem(op, addr, b);
 }
 
-void Cpu6502::doIzy(uint8_t op, CpuBus* b)
+template <class B>
+void Cpu6502::doIzy(uint8_t op, B& b)
 {
     const uint8_t zp = fetch(b);
     const uint8_t lo = rd(b, zp);
@@ -473,7 +490,8 @@ void Cpu6502::doValue(uint8_t op, uint8_t v)
     }
 }
 
-void Cpu6502::doStore(uint8_t op, uint16_t addr, CpuBus* b)
+template <class B>
+void Cpu6502::doStore(uint8_t op, uint16_t addr, B& b)
 {
     uint8_t v = 0;
     switch ((Op)op) {
@@ -493,7 +511,8 @@ void Cpu6502::doStore(uint8_t op, uint16_t addr, CpuBus* b)
     wr(b, addr, v);
 }
 
-void Cpu6502::doRmw(uint8_t op, uint16_t addr, CpuBus* b)
+template <class B>
+void Cpu6502::doRmw(uint8_t op, uint16_t addr, B& b)
 {
     const uint8_t v = rd(b, addr);
     uint8_t r = v;
@@ -571,7 +590,8 @@ void Cpu6502::doRmw(uint8_t op, uint16_t addr, CpuBus* b)
     if (setzn) setZN(r);
 }
 
-void Cpu6502::branch(CpuBus* b, bool cond)
+template <class B>
+void Cpu6502::branch(B& b, bool cond)
 {
     const int8_t off = (int8_t)fetch(b);
     if (!cond) return;
@@ -581,7 +601,8 @@ void Cpu6502::branch(CpuBus* b, bool cond)
     if ((old & 0xFF00) != (pc & 0xFF00)) tick(b);
 }
 
-void Cpu6502::brk(CpuBus* b)
+template <class B>
+void Cpu6502::brk(B& b)
 {
     rd(b, pc);  // leitura dummy do byte seguinte
     push(b, (uint8_t)(pc >> 8));
@@ -591,7 +612,8 @@ void Cpu6502::brk(CpuBus* b)
     pc = read16(b, 0xFFFE);
 }
 
-void Cpu6502::jsr(CpuBus* b)
+template <class B>
+void Cpu6502::jsr(B& b)
 {
     const uint8_t lo = fetch(b);
     tick(b);  // ciclo interno antes dos pushes
@@ -601,7 +623,8 @@ void Cpu6502::jsr(CpuBus* b)
     pc = (uint16_t)((hi << 8) | lo);
 }
 
-void Cpu6502::jmpInd(CpuBus* b)
+template <class B>
+void Cpu6502::jmpInd(B& b)
 {
     const uint16_t ptr = fetch16(b);
     const uint8_t lo = rd(b, ptr);
@@ -611,7 +634,8 @@ void Cpu6502::jmpInd(CpuBus* b)
     pc = (uint16_t)((hi << 8) | lo);
 }
 
-void Cpu6502::rts(CpuBus* b)
+template <class B>
+void Cpu6502::rts(B& b)
 {
     rd(b, pc);  // dummy
     const uint8_t lo = pull(b);
@@ -619,7 +643,8 @@ void Cpu6502::rts(CpuBus* b)
     pc = (uint16_t)(((hi << 8) | lo) + 1);
 }
 
-void Cpu6502::rti(CpuBus* b)
+template <class B>
+void Cpu6502::rti(B& b)
 {
     rd(b, pc);  // dummy
     p = (uint8_t)((pull(b) & (uint8_t)~kB) | kU);
@@ -683,6 +708,35 @@ void Cpu6502::cmp(uint8_t reg, uint8_t m)
     setFlag(kZ, (d & 0xFF) == 0);
     setFlag(kN, (d & 0x80) != 0);
 }
+
+// API por ponteiros de funcao (testes host e cores sem barramento inline):
+// o adaptador FnBus instancia os mesmos templates. Fora do blob: la o core
+// usa so o barramento inline e a 2a instancia dobraria o executor (~24 KB).
+#if !defined(EMU_BLOB)
+void Cpu6502::reset(CpuBus* bus)
+{
+    FnBus b{bus};
+    resetT(b);
+}
+
+void Cpu6502::step(CpuBus* bus)
+{
+    FnBus b{bus};
+    stepT(b);
+}
+
+void Cpu6502::doIrq(CpuBus* bus)
+{
+    FnBus b{bus};
+    doIrqT(b);
+}
+
+void Cpu6502::doNmi(CpuBus* bus)
+{
+    FnBus b{bus};
+    doNmiT(b);
+}
+#endif
 
 void Cpu6502::save(StateWriter& w) const
 {

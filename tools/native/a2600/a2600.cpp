@@ -20,13 +20,9 @@ void A2600::reset()
     tia_.setFramebuffer(fb_);
     tia_.setAudio(&audio_);
     tia_.reset();
-    bus_.ctx = this;
-    bus_.read = &A2600::busRead;
-    bus_.write = &A2600::busWrite;
-    bus_.tick = &A2600::busTick;
-    bus_.stalled = &A2600::busStalled;
-    bus_.irq = nullptr;  // o 6507 nao tem pino de IRQ
-    cpu_.reset(&bus_);
+    tiaSync_ = riotSync_ = 0;
+    Bus bus{this};
+    cpu_.resetT(bus);
 }
 
 void A2600::setFramebuffer(uint16_t* fb)
@@ -37,8 +33,8 @@ void A2600::setFramebuffer(uint16_t* fb)
 
 void A2600::setPcm(int16_t* buf, uint32_t cap)
 {
-    // 19.912 ciclos por quadro a 59,94 Hz = 1.193.182 Hz de CPU (NTSC).
-    audio_.configure(1193182, 44100, buf, cap);
+    // a TIA entrega duas amostras por linha (31,4 kHz NTSC)
+    audio_.configure(Tia::kAudioRate, 44100, buf, cap);
 }
 
 void A2600::frame(uint8_t buttons, uint8_t switches, const uint8_t* paddles)
@@ -64,59 +60,57 @@ void A2600::frame(uint8_t buttons, uint8_t switches, const uint8_t* paddles)
     // Roda ate o VSYNC do jogo (borda de descida). O teto de 2 quadros evita
     // travar num ROM que nunca sincroniza; o app continua chamando FRAME.
     const uint64_t cap = cpu_.cycles + 40000;
-    while (!tia_.frameReady() && cpu_.cycles < cap) cpu_.step(&bus_);
+    Bus bus{this};
+    while (!tia_.frameReady() && cpu_.cycles < cap) cpu_.stepT(bus);
 }
 
-uint8_t A2600::busRead(void* ctx, uint16_t addr)
+EMU_CPU_INLINE uint8_t A2600::busRead(uint16_t addr)
 {
-    A2600* s = (A2600*)ctx;
-    if (addr & 0x1000) return s->cart_.read(addr);
+    if (addr & 0x1000) return cart_.read(addr);
     if ((addr & 0x80) == 0) {
         // UA troca banco lendo os espelhos $0220/$0240 (regiao da TIA).
-        if (s->cart_.isUA()) {
-            if (addr == 0x0220) s->cart_.selectBank(0);
-            else if (addr == 0x0240) s->cart_.selectBank(1);
+        if (cart_.isUA()) {
+            if (addr == 0x0220) cart_.selectBank(0);
+            else if (addr == 0x0240) cart_.selectBank(1);
         }
-        return s->tia_.read(addr);
+        syncTia();
+        return tia_.read(addr);
     }
-    if (addr & 0x200) return s->riot_.read(addr);
-    return s->riot_.readRam(addr);
+    if (addr & 0x200) {
+        syncRiot();
+        return riot_.read(addr);
+    }
+    return riot_.readRam(addr);
 }
 
-void A2600::busWrite(void* ctx, uint16_t addr, uint8_t v)
+EMU_CPU_INLINE void A2600::busWrite(uint16_t addr, uint8_t v)
 {
-    A2600* s = (A2600*)ctx;
     if (addr & 0x1000) {
-        s->cart_.write(addr, v);
+        cart_.write(addr, v);
         return;
     }
     if ((addr & 0x80) == 0) {
         // 3F/3E: escrita em $003F troca o banco de 2K (snoop no barramento).
-        if (s->cart_.is3F() && addr == 0x003F) s->cart_.write(0x003F, v);
-        s->tia_.write(addr, v);
+        if (cart_.is3F() && addr == 0x003F) cart_.write(0x003F, v);
+        syncTia();
+        tia_.write(addr, v);
+        // WSYNC: a CPU fica parada ate a borda do blank; os ciclos da parada
+        // entram no relogio e a TIA anda por eles no proximo acesso
+        if ((addr & 0x3F) == 0x02) cpu_.cycles += (uint64_t)tia_.wsyncStall();
         return;
     }
     if (addr & 0x200) {
-        s->riot_.write(addr, v);
+        syncRiot();
+        riot_.write(addr, v);
         return;
     }
-    s->riot_.writeRam(addr, v);
+    riot_.writeRam(addr, v);
 }
 
-void A2600::busTick(void* ctx)
+void A2600::save(StateWriter& w)
 {
-    A2600* s = (A2600*)ctx;
-    s->tia_.tick();
-    s->riot_.tick();
-}
-
-bool A2600::busStalled(void* ctx)
-{
-    return ((A2600*)ctx)->tia_.wsync();
-}
-
-void A2600::save(StateWriter& w) const
-{
+    syncTia();
+    syncRiot();
     cpu_.save(w);
     tia_.save(w);
     cart_.save(w);
@@ -129,6 +123,7 @@ bool A2600::loadState(StateReader& r)
     ok = tia_.load(r) && ok;
     ok = cart_.loadState(r) && ok;
     ok = riot_.load(r) && ok;
+    tiaSync_ = riotSync_ = cpu_.cycles;  // o state foi salvo sincronizado
     return ok;
 }
 

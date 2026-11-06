@@ -14,6 +14,7 @@
 #include "a2600.h"
 #include "cpu6502_cycle.h"
 #include "emu_state.h"
+#include "emu_screen.h"
 #include "emu_video.h"
 #include "cart_a2600.h"
 #include "riot6532.h"
@@ -207,9 +208,11 @@ static void testTia()
         if (t.lineBuffer()[i] != 0) allBlack = false;
     CHECK(allBlack, "TIA fundo preto");
 
-    // player: RESP em clock 66; 8 px = 66..73 (visiveis 0..159). O GRP vem
-    // DEPOIS do RESP: escrito antes, o player aparece na posicao inicial 0
-    // durante os 66 clocks anteriores (fiel ao hardware, mas nao e o teste).
+    // player: RESP no ciclo que comeca no clock 66 vale no FIM do ciclo
+    // (69) + 5 de atraso do contador -> 8 px em 74..81. O GRP vem DEPOIS do
+    // RESP: escrito antes, o player apareceria na posicao inicial durante os
+    // clocks anteriores (fiel ao hardware, mas nao e o teste).
+    const uint16_t gold = t.color565(0x1E);
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
@@ -218,38 +221,82 @@ static void testTia()
     t.write(0x10, 0x00);  // RESP0
     t.write(0x1B, 0xFF);  // GRP0
     tiaLine(t, 54);       // fecha a linha
-    const uint16_t gold = emu_rgb565(255, 226, 80);
-    CHECK(t.lineBuffer()[66] == gold, "player em x=66");
-    CHECK(t.lineBuffer()[73] == gold, "player ate x=73");
+    CHECK(t.lineBuffer()[74] == gold, "player em x=74 (RESP + 5)");
+    CHECK(t.lineBuffer()[81] == gold, "player ate x=81");
     CHECK(t.lineBuffer()[0] == 0, "player nao vaza para x=0");
-    CHECK(t.lineBuffer()[74] == 0, "player termina em x=74");
+    CHECK(t.lineBuffer()[73] == 0, "player comeca em x=74");
+    CHECK(t.lineBuffer()[82] == 0, "player termina em x=82");
 
-    // HMOVE +1 desloca um pixel: 67..74
+    // HMOVE: HMP0 positivo move para a ESQUERDA (0x10 = 1 px), negativo
+    // para a direita (0xF0 = 1 px). O sinal invertido fazia o sprite andar
+    // de costas no ajuste fino e saltar no reposicionamento grosso.
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
     t.write(0x06, 0x1E);
     tiaLine(t, 22);
-    t.write(0x20, 0x10);  // HMP0 = +1
-    t.write(0x10, 0x00);  // RESP0
-    t.write(0x2A, 0x00);  // HMOVE
+    t.write(0x20, 0x10);  // HMP0 = 1 px para a esquerda
+    t.write(0x10, 0x00);  // RESP0 -> 74
+    t.write(0x2A, 0x00);  // HMOVE -> 73
     t.write(0x1B, 0xFF);  // GRP0
     tiaLine(t, 54);
-    CHECK(t.lineBuffer()[66] == 0, "HMOVE desloca de x=66");
-    CHECK(t.lineBuffer()[67] == gold, "HMOVE x=67");
-    CHECK(t.lineBuffer()[74] == gold, "HMOVE ate x=74");
-    CHECK(t.lineBuffer()[75] == 0, "HMOVE termina em x=75");
+    CHECK(t.lineBuffer()[72] == 0, "HMOVE +1: nada em x=72");
+    CHECK(t.lineBuffer()[73] == gold, "HMOVE +1 move para a esquerda (x=73)");
+    CHECK(t.lineBuffer()[80] == gold, "HMOVE +1 ate x=80");
+    CHECK(t.lineBuffer()[81] == 0, "HMOVE +1 termina em x=81");
 
-    // playfield: PF0 bit4 -> x=0..3; PF2 bits 5-7 -> x=68..79 (o playfield
-    // comeca na borda esquerda do vidro, clock 68 da linha)
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    tiaLine(t, 22);
+    t.write(0x20, 0xF0);  // HMP0 = 1 px para a direita
+    t.write(0x10, 0x00);
+    t.write(0x2A, 0x00);
+    t.write(0x1B, 0xFF);
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[74] == 0, "HMOVE -1: saiu de x=74");
+    CHECK(t.lineBuffer()[75] == gold, "HMOVE -1 move para a direita (x=75)");
+
+    // HMOVE no blank: a proxima linha sai com os 8 primeiros pixels pretos
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x09, 0x1E);  // COLUBK ouro
+    tiaLine(t, 54);       // clock 162: blank
+    t.write(0x2A, 0x00);  // HMOVE
+    tiaLine(t, 22 + 76);  // fecha esta linha e desenha a proxima
+    CHECK(t.lineBuffer()[7] == 0, "pente do HMOVE: x=7 preto");
+    CHECK(t.lineBuffer()[8] == gold, "pente do HMOVE: x=8 com fundo");
+
+    // VDELP0: o GRP0 que aparece e o latch VELHO, copiado do novo quando o
+    // jogo escreve GRP1 (kernels de 6 digitos)
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    t.write(0x25, 0x01);  // VDELP0
+    tiaLine(t, 22);
+    t.write(0x10, 0x00);  // RESP0 -> 74
+    t.write(0x1B, 0xFF);  // GRP0 novo = FF (velho ainda 0)
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[74] == 0, "VDELP0: GRP0 novo nao aparece sozinho");
+    t.write(0x1C, 0x00);  // GRP1 copia GRP0 novo -> velho
+    tiaLine(t, 76);
+    CHECK(t.lineBuffer()[74] == gold, "VDELP0: aparece depois do GRP1");
+
+    // playfield: PF0 bits 4-5 -> x=0..7; PF2 bits 5-7 -> x=68..79 (o
+    // playfield comeca na borda esquerda do vidro). Escrita vale no FIM do
+    // ciclo: registradores escritos no clock 0 pegam a partir de x=3, por
+    // isso as checagens abaixo olham x=4.
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
     t.write(0x08, 0x1E);  // COLUPF
-    t.write(0x0D, 0x10);  // PF0
+    t.write(0x0D, 0x30);  // PF0
     t.write(0x0F, 0xE0);  // PF2
     tiaLine(t, 76);
-    CHECK(t.lineBuffer()[0] == gold, "playfield PF0 em x=0");
+    CHECK(t.lineBuffer()[4] == gold, "playfield PF0 em x=4");
     CHECK(t.lineBuffer()[20] == 0, "playfield x=20 off");
     CHECK(t.lineBuffer()[70] == gold, "playfield PF2 alinhado ao vidro (x=70)");
 
@@ -260,7 +307,7 @@ static void testTia()
     t.setFramebuffer(fb);
     memset(fb, 0xAA, sizeof(fb));  // "pixel velho" de proposito
     t.write(0x08, 0x1E);  // COLUPF ouro
-    t.write(0x0D, 0x10);  // PF0
+    t.write(0x0D, 0x30);  // PF0
     t.write(0x01, 0x00);  // VBLANK off: a janela abre na 1a linha
     tiaLine(t, 76);       // y=0 visivel
     tiaLine(t, 76);       // y=1 visivel
@@ -268,11 +315,27 @@ static void testTia()
     tiaLine(t, 76);       // y=2 blankada -> preta
     t.write(0x01, 0x00);  // VBLANK off de novo
     tiaLine(t, 76);       // y=3 visivel, na mesma posicao
-    CHECK(fb[0 * 160 + 0] == gold, "janela: linha 0 visivel");
-    CHECK(fb[2 * 160 + 0] == 0, "linha blankada dentro da janela vira preta");
-    CHECK(fb[3 * 160 + 0] == gold, "linha apos o blank nao pula a posicao");
+    CHECK(fb[0 * 160 + 4] == gold, "janela: linha 0 visivel");
+    CHECK(fb[2 * 160 + 4] == 0, "linha blankada dentro da janela vira preta");
+    CHECK(fb[3 * 160 + 4] == gold, "linha apos o blank nao pula a posicao");
 
-    // colisoes: P0 e P1 em 66; CXPPMM bit7 e limpo na leitura
+    // quadro CURTO (o jogo desenha menos de 192 linhas): a cauda da janela
+    // vira preta no VSYNC em vez de guardar o pixel do quadro anterior
+    t.reset();
+    t.setFramebuffer(fb);
+    memset(fb, 0xAA, sizeof(fb));
+    t.write(0x08, 0x1E);  // COLUPF ouro
+    t.write(0x0D, 0x30);  // PF0
+    t.write(0x01, 0x00);  // VBLANK off
+    tiaLine(t, 76);       // y=0 visivel
+    t.write(0x01, 0x02);  // VBLANK on (fim da area ativa)
+    tiaLine(t, 76);       // y=1 blankada
+    t.write(0x00, 0x02);  // VSYNC on
+    t.write(0x00, 0x00);  // VSYNC off: fecha o quadro e limpa a cauda
+    CHECK(fb[0 * 160 + 4] == gold, "quadro curto: linha 0 visivel");
+    CHECK(fb[191 * 160 + 4] == 0, "quadro curto: cauda da janela vira preta");
+
+    // colisoes: P0 e P1 no mesmo lugar; so o CXCLR limpa
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
@@ -285,7 +348,9 @@ static void testTia()
     t.write(0x11, 0x00);
     tiaLine(t, 54);
     CHECK((t.read(0x37) & 0x80) != 0, "colisao P0-P1");
-    CHECK((t.read(0x37) & 0x80) == 0, "leitura limpa colisao");
+    CHECK((t.read(0x07) & 0x80) != 0, "colisao espelhada e NAO limpa na leitura");
+    t.write(0x2C, 0x00);  // CXCLR
+    CHECK((t.read(0x37) & 0x80) == 0, "CXCLR limpa colisao");
 
     // WSYNC para a CPU ate a borda do horizontal blank (clock 160)
     t.reset();
@@ -301,7 +366,7 @@ static void testTia()
     static AudioDownsampler ds;
     t.reset();
     t.setFramebuffer(fb);
-    ds.configure(1193182, 44100, pcm, 2048);
+    ds.configure(Tia::kAudioRate, 44100, pcm, 2048);
     t.setAudio(&ds);
     t.write(0x15, 0x0C);  // AUDC0
     t.write(0x17, 0x01);  // AUDF0
@@ -364,7 +429,8 @@ static void testCarts()
         CHECK(c.load(rom.data(), (uint32_t)rom.size(), CartA2600::k3F), "cart 3F load");
         c.write(0x03F, 2);
         CHECK(c.bank() == 2, "3F banco");
-        CHECK(c.read(0x800) == rom[2 * 0x800], "3F banco 2 em F800");
+        CHECK(c.read(0x000) == rom[2 * 0x800], "3F banco 2 em F000");
+        CHECK(c.read(0x800) == rom[3 * 0x800], "3F: 2K altos fixos no ultimo banco");
     }
     {
         std::vector<uint8_t> rom = mkRom(8192, 7);
@@ -373,7 +439,12 @@ static void testCarts()
         c.read(0xFE2);
         CHECK(c.bank() == 2, "E0 banco");
         CHECK(c.read(0x000) == rom[2 * 0x400], "E0 1K switch");
-        CHECK(c.read(0x400) == rom[0x1400], "E0 3K fixo");
+        CHECK(c.read(0x400) == rom[0x1400], "E0 fatia 1 inicial = banco 5");
+        c.read(0xFE9);
+        CHECK(c.read(0x400) == rom[1 * 0x400], "E0 fatia 1 troca em FE8-FEF");
+        c.read(0xFF3);
+        CHECK(c.read(0x800) == rom[3 * 0x400], "E0 fatia 2 troca em FF0-FF7");
+        CHECK(c.read(0xC00) == rom[7 * 0x400], "E0 fatia 3 fixa no banco 7");
     }
     {
         std::vector<uint8_t> rom = mkRom(8192, 8);
@@ -387,7 +458,9 @@ static void testCarts()
         CartA2600 c;
         CHECK(c.load(rom.data(), (uint32_t)rom.size(), CartA2600::kF8SC), "cart F8SC load");
         c.write(0x10, 0xAB);
-        CHECK(c.read(0x10) == 0xAB, "SC RAM sobre a ROM");
+        CHECK(c.read(0x90) == 0xAB, "SC RAM: escreve em $000, le em $080");
+        c.read(0xFF9);
+        CHECK(c.read(0x200) == rom[0x1200], "SC: ROM fora da RAM");
     }
     {
         CartA2600 c;
@@ -415,14 +488,36 @@ static void testRiot()
     r.setInputs(0, 0x0C);  // cor + dif A
     CHECK((r.read(0x02) & 0x40) != 0, "SWCHB dificuldade A = D6=1");
 
-    r.write(0x05, 0x00);  // TIMINT: prescaler 1
-    r.write(0x04, 5);     // INTIM = 5
-    for (int i = 0; i < 3; i++) r.tick();
-    CHECK(r.read(0x04) == 2, "RIOT timer decrementa");
-    for (int i = 0; i < 5; i++) r.tick();
-    CHECK((r.read(0x05) & 0x80) != 0, "RIOT timer flag no wrap");
-    r.read(0x04);  // leitura limpa
-    CHECK((r.read(0x05) & 0x80) == 0, "RIOT flag limpo na leitura");
+    // TIM64T (0x296): o divisor sai do endereco, nao do valor. Antes so o
+    // 0x294 carregava o timer e o 0x295 mexia no divisor; TIM64T/T1024T, os
+    // que os jogos usam, eram ignorados (quadro com o tempo errado).
+    r.write(0x296, 3);
+    r.tick();
+    CHECK(r.read(0x284) == 2, "TIM64T: 1o decremento no ciclo seguinte");
+    for (int i = 0; i < 63; i++) r.tick();
+    CHECK(r.read(0x284) == 2, "TIM64T segura 64 ciclos");
+    r.tick();
+    CHECK(r.read(0x284) == 1, "TIM64T decrementa a cada 64");
+    for (int i = 0; i < 128; i++) r.tick();
+    CHECK((r.read(0x285) & 0x80) != 0, "TIMINT D7 no estouro");
+    CHECK(r.read(0x284) == 0xFF, "estouro vai para 0xFF");
+    r.tick();
+    CHECK(r.read(0x284) == 0xFE, "depois do estouro conta a cada ciclo");
+    CHECK((r.read(0x285) & 0x80) == 0, "INTIM limpa o flag");
+    r.write(0x297, 2);  // T1024T
+    for (int i = 0; i < 1025; i++) r.tick();
+    CHECK(r.read(0x284) == 0, "T1024T");
+    r.write(0x294, 2);  // TIM1T
+    r.tick();
+    r.tick();
+    CHECK(r.read(0x284) == 0, "TIM1T");
+    r.write(0x295, 9);  // TIM8T
+    for (int i = 0; i < 9; i++) r.tick();
+    CHECK(r.read(0x284) == 7, "TIM8T");
+    // portas: 0x280..0x283 e espelhos; DDR seleciona saida
+    r.write(0x281, 0xF0);
+    r.write(0x280, 0x00);
+    CHECK((r.read(0x280) & 0xF0) == 0x00, "SWCHA bit de saida le o latch");
 }
 
 // ---------------------------------------------------------------- quadro
@@ -511,11 +606,86 @@ static void testFrame()
     a.frame(0x01, 0, nullptr);
     CHECK(frameCrc(fb) == crcRef, "load state reproduz o quadro");
 
+    // saida por LINHA (FRAME_SCREEN) = mesmo quadro do framebuffer
+    {
+        static uint16_t byLine[160 * 192];
+        StateReader r2(state, n, kConsoleA2600, a.romCrc());
+        CHECK(a.loadState(r2), "load state (linha)");
+        a.setVideoOut(nullptr, [](void* ctx, int y, const uint16_t* line) {
+            memcpy((uint16_t*)ctx + y * 160, line, 320);
+        }, byLine);
+        a.frame(0x01, 0, nullptr);
+        a.setVideoOut(fb, nullptr, nullptr);
+        CHECK(emu_crc32(byLine, sizeof(byLine)) == crcRef, "sink por linha = framebuffer");
+    }
+
     // state de outro console/ROM e recusado
     StateReader bad(state, n, kConsoleA5200, a.romCrc());
     CHECK(!bad.ok(), "state de outro console recusado");
     StateReader badRom(state, n, kConsoleA2600, a.romCrc() ^ 1u);
     CHECK(!badRom.ok(), "state de outra ROM recusado");
+}
+
+// ---------------------------------------------------------------- vidro
+// Compositor do FRAME_SCREEN: quadro centrado no alvo, faixas pretas,
+// carimbo misturado por cima e linha que nao mudou nao e reescrita.
+static void testScreen()
+{
+    static uint8_t scratch[64 * 1024];
+    static uint16_t base[512], mix[512], col[321];
+    static uint16_t tgt[40 * 30];
+    static int puts[30];
+    ScreenComposer sc;
+    sc.init(scratch, 0, 8 * 1024, 16 * 1024, 48 * 1024, base, mix, col);
+    CHECK(sc.setScale(4, 2, 32, 20), "compositor: escala 4x2 -> 32x20");
+    NativeScreen scr;
+    memset(&scr, 0, sizeof(scr));
+    scr.px = tgt;
+    scr.stride = 40;
+    scr.w = 40;
+    scr.h = 30;
+    scr.flags = 1;
+    scr.put = [](void* ctx, int32_t y, const uint16_t* src) {
+        memcpy(tgt + y * 40, src, 80);
+        ((int*)ctx)[y]++;
+    };
+    scr.putCtx = puts;
+    for (int i = 0; i < 40 * 30; i++) tgt[i] = 0x1234;
+    const uint16_t src0[4] = {0x1111, 0x2222, 0x3333, 0x4444};
+    const uint16_t src1[4] = {0x5555, 0x5555, 0x5555, 0x5555};
+    CHECK(sc.begin(&scr), "compositor: begin");
+    sc.row(0, src0);
+    sc.row(1, src1);
+    sc.end();
+    // quadro 32x20 centrado em 40x30: x 4..35, y 5..24
+    CHECK(tgt[0] == 0 && tgt[29 * 40 + 39] == 0, "compositor: faixas pretas");
+    CHECK(tgt[5 * 40 + 3] == 0 && tgt[5 * 40 + 4] == 0x1111, "compositor: borda esquerda do quadro");
+    CHECK(tgt[5 * 40 + 11] == 0x1111 && tgt[5 * 40 + 12] == 0x2222, "compositor: escala x8");
+    CHECK(tgt[5 * 40 + 35] == 0x4444 && tgt[5 * 40 + 36] == 0, "compositor: borda direita");
+    CHECK(tgt[14 * 40 + 4] == 0x1111 && tgt[15 * 40 + 4] == 0x5555, "compositor: escala y10");
+    // 2o quadro igual: nenhuma linha reescrita
+    memset(puts, 0, sizeof(puts));
+    CHECK(sc.begin(&scr), "compositor: begin 2");
+    sc.row(0, src0);
+    sc.row(1, src1);
+    sc.end();
+    int total = 0;
+    for (int y = 0; y < 30; y++) total += puts[y];
+    CHECK(total == 0, "compositor: quadro igual nao reescreve");
+    // carimbo opaco 2x2 branco (grab igual sobre preto e branco) em (0,0)
+    uint16_t* gb = (uint16_t*)scratch;
+    uint16_t* gw = (uint16_t*)(scratch + 8 * 1024);
+    for (int i = 0; i < 4; i++) gb[i] = gw[i] = 0xFFFF;
+    CHECK(sc.stampMake(0, 2, 2), "compositor: carimbo");
+    CHECK(sc.stampPlace(0 | (0 << 4) | (256 << 10) | (256 << 20)), "compositor: place");
+    memset(puts, 0, sizeof(puts));
+    CHECK(sc.begin(&scr), "compositor: begin 3");
+    sc.row(0, src0);
+    sc.row(1, src1);
+    sc.end();
+    CHECK(tgt[0] == 0xFFFF && tgt[41] == 0xFFFF && tgt[2] == 0, "compositor: carimbo na faixa");
+    CHECK(puts[0] == 1 && puts[1] == 1 && puts[2] == 0 && puts[5] == 0,
+          "compositor: so as linhas do carimbo mudam");
 }
 
 int main()
@@ -525,6 +695,7 @@ int main()
     testCarts();
     testRiot();
     testFrame();
+    testScreen();
     printf("%d checks, %d falhas\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
 }

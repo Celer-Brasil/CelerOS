@@ -25,6 +25,12 @@ public:
     void reset();
 
     void setFramebuffer(uint16_t* fb);
+    // quadro sem saida (frameskip) ou por linha (FRAME_SCREEN); ver Tia
+    void setVideoOut(uint16_t* fb, Tia::LineSink sink, void* ctx)
+    {
+        tia_.setFramebuffer(fb);
+        tia_.setLineSink(sink, ctx);
+    }
     void setPcm(int16_t* buf, uint32_t cap);
 
     // buttons: bit0 fire, bit2 select, bit3 reset, bits 4-7 direcoes.
@@ -43,21 +49,55 @@ public:
     uint16_t cpuPc() const { return cpu_.pc; }
     uint32_t dbgInptReads(int i) const { return tia_.dbgInptReads(i); }
     uint32_t dbgPortReads(int r) const { return riot_.dbgReads(r); }
+    // RAM do RIOT (zero page do jogo) para inspecao no host
+    uint8_t dbgRam(uint16_t addr) const { return riot_.readRam(addr); }
+    // posicao horizontal atual de um objeto da TIA (color clocks)
+    int dbgPlayerPos(int i) const { return tia_.dbgPos(i); }
+    uint32_t dbgTiaReadCounter(int a) const { return tia_.dbgReadCounter(a); }
 
-    void save(StateWriter& w) const;
+    // sincroniza TIA/RIOT antes de serializar (o estado pendente vira estado)
+    void save(StateWriter& w);
     bool loadState(StateReader& r);
 
+    // barramento do 6507 (inline no executor via Cpu6502::stepT)
+    uint8_t busRead(uint16_t addr);
+    void busWrite(uint16_t addr, uint8_t v);
+
 private:
-    static uint8_t busRead(void* ctx, uint16_t addr);
-    static void busWrite(void* ctx, uint16_t addr, uint8_t v);
-    static void busTick(void* ctx);
-    static bool busStalled(void* ctx);
+    struct Bus {
+        A2600* s;
+        EMU_CPU_INLINE uint8_t read(uint16_t a) { return s->busRead(a); }
+        EMU_CPU_INLINE void write(uint16_t a, uint8_t v) { s->busWrite(a, v); }
+        // TIA/RIOT andam em lote no acesso (syncTia/syncRiot): o ciclo em si
+        // so conta no relogio da CPU
+        EMU_CPU_INLINE void tick() {}
+        // WSYNC vira ciclos somados na escrita; o 6507 nao tem IRQ
+        bool stalled() { return false; }
+        bool irq() { return false; }
+    };
 
     Cpu6502 cpu_;
     Tia tia_;
     CartA2600 cart_;
     Riot6532 riot_;
-    CpuBus bus_{};
+    // relogio da CPU ate onde TIA/RIOT ja andaram
+    uint64_t tiaSync_ = 0, riotSync_ = 0;
+    void syncTia()
+    {
+        const uint32_t n = (uint32_t)(cpu_.cycles - tiaSync_);
+        if (n != 0) {
+            tia_.advance(n);
+            tiaSync_ = cpu_.cycles;
+        }
+    }
+    void syncRiot()
+    {
+        const uint32_t n = (uint32_t)(cpu_.cycles - riotSync_);
+        if (n != 0) {
+            riot_.advance(n);
+            riotSync_ = cpu_.cycles;
+        }
+    }
     AudioDownsampler audio_;
     uint16_t* fb_ = nullptr;
     uint32_t romCrc_ = 0;

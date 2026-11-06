@@ -7,7 +7,15 @@
 // scratch em PSRAM.
 //
 // Layout da scratch:
-//   PCM 8K | FB 160x192 (60K) | ESCALADO 480x480 (450K) | STATE 40K | ROM
+//   PCM 8K | FB 160x192 (60K) | ESCALADO 480x480 (450K) | STATE 40K |
+//   CARIMBOS 640K | ROM
+//
+// Video: FRAME_SCREEN (API 60, common/emu_screen.h) compoe o quadro escalado
+// + carimbos do overlay direto no vidro, a partir da LINHA da TIA (RAM
+// interna) — sem o framebuffer 160x192 na PSRAM — e so reescreve as linhas
+// que mudaram. O alvo pode ser a tela inteira: o quadro fica centrado e as
+// faixas saem pretas daqui. Os grabs dos carimbos usam a area do ESCALADO
+// (so o caminho antigo FRAME + SET_SCALE + nativeDraw a usa).
 //
 // Extensoes do console (20+):
 //   20 SET_SWITCHES  bits: 2 cor, 3 dif A P0, 4 dif A P1
@@ -24,6 +32,7 @@
 #include "../runtime_new.hpp"
 
 #include "../common/emu_core.h"
+#include "../common/emu_screen.h"
 #include "A2600Core.cpp"
 
 namespace {
@@ -47,7 +56,10 @@ constexpr uint32_t kScaledOff = kFbOff + kFbCap;
 constexpr uint32_t kScaledCap = 480u * 480u * 2u;
 constexpr uint32_t kStateOff = kScaledOff + kScaledCap;
 constexpr uint32_t kStateCap = 40 * 1024;
-constexpr uint32_t kRomOff = kStateOff + kStateCap;
+constexpr uint32_t kStampOff = kStateOff + kStateCap;
+constexpr uint32_t kStampCap = 640 * 1024;  // carimbos do overlay em runs
+constexpr uint32_t kGrabCap = kScaledCap / 2;
+constexpr uint32_t kRomOff = kStampOff + kStampCap;
 constexpr uint32_t kRomMax = 512 * 1024;
 
 // Construtor do A2600 nao roda sozinho no blob (sem .init_array): o INIT
@@ -69,6 +81,20 @@ static int s_mapperOverride = -1;
 static bool s_audioOn = true;
 static uint32_t s_perfEmu = 0;
 static uint32_t s_perfScale = 0;
+
+// composicao direta: linhas montadas na RAM interna (caminho quente)
+static emu::ScreenComposer s_screen;
+static uint16_t s_lineBase[emu::ScreenComposer::kMaxW] CLRN_FAST;
+static uint16_t s_lineMix[emu::ScreenComposer::kMaxW] CLRN_FAST;
+static uint16_t s_col[emu::ScreenComposer::kMaxSrcW + 1] CLRN_FAST;
+static uint32_t s_sinkCycles = 0;
+
+static void screenSink(void*, int y, const uint16_t* line)
+{
+    const uint32_t c0 = ccount();
+    s_screen.row(y, line);
+    s_sinkCycles += ccount() - c0;
+}
 
 }  // namespace
 
@@ -94,6 +120,8 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         s_audioOn = true;
         s_scaler = emu::Scaler();
         s_perfEmu = s_perfScale = 0;
+        s_screen.init(sc, kScaledOff, kGrabCap, kStampOff, kStampCap, s_lineBase, s_lineMix,
+                      s_col);
         if (s_emu == nullptr) s_emu = ::new (static_cast<void*>(s_emu_mem)) emu::a2600::A2600();
         s_emu->setFramebuffer(s_fb);
         // o downsampler conta SAMPLES (int16), nao bytes
@@ -127,6 +155,9 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         const uint8_t buttons = emu::emuFrameButtons(arg);
         const bool render = emu::emuFrameRender(arg);
         s_pcmLen = 0;
+        // quadro pulado nao escreve o framebuffer (60 KB de PSRAM a menos)
+        s_emu->setVideoOut(render ? s_fb : nullptr, nullptr, nullptr);
+        s_screen.invalidate();  // o vidro vai receber o caminho antigo
         const uint32_t c0 = ccount();
         s_emu->frame(buttons, s_switches, s_paddles);
         const uint32_t c1 = ccount();
@@ -159,6 +190,7 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
             return 0;
         }
         if (!s_scaler.configure(160, 192, (int)w, (int)h, s_scaled)) return 0;
+        s_screen.setScale(160, 192, (int)w, (int)h);
         return kScaledOff;
     }
     case emu::kCtlSetAudio:
@@ -167,14 +199,35 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         return 1;
     case emu::kCtlPerf:
         return arg == 0 ? s_perfEmu : s_perfScale;
-    case emu::kCtlFrameScreen:
-        // sem composicao direta: o app cai em FRAME + SET_SCALE + nativeDraw
-        return emu::kNoTarget;
+    case emu::kCtlFrameScreen: {
+        // arg = NativeScreen* (pixel do alvo, stride, w, h, arg do app)
+        const emu::NativeScreen* scr = (const emu::NativeScreen*)(uintptr_t)(uint32_t)arg;
+        if (s_emu == nullptr || scr == nullptr) return emu::kNoTarget;
+        const uint8_t buttons = emu::emuFrameButtons(scr->arg);
+        const bool render = emu::emuFrameRender(scr->arg);
+        // alvo/geometria invalidos: o app cai no FRAME + nativeDraw
+        if (render && !s_screen.begin(scr)) return emu::kNoTarget;
+        s_pcmLen = 0;
+        s_sinkCycles = 0;
+        s_emu->setVideoOut(nullptr, render ? &screenSink : nullptr, nullptr);
+        const uint32_t c0 = ccount();
+        s_emu->frame(buttons, s_switches, s_paddles);
+        const uint32_t c1 = ccount();
+        s_emu->setVideoOut(s_fb, nullptr, nullptr);
+        if (render) s_screen.end();
+        s_perfEmu = c1 - c0 - s_sinkCycles;
+        s_perfScale = s_sinkCycles + (ccount() - c1);
+        s_pcmLen = s_emu->pcmLen();
+        return 1;
+    }
     case emu::kCtlGrabOff:
+        return s_screen.grabOff(arg);
     case emu::kCtlStampMake:
+        return s_screen.stampMake(arg & 31, (arg >> 5) & 1023, (arg >> 15) & 1023) ? 1u : 0u;
     case emu::kCtlStampPlace:
-        return 0;
+        return s_screen.stampPlace(arg) ? 1u : 0u;
     case emu::kCtlStampReset:
+        s_screen.stampReset();
         return 1;
     case 20:  // SET_SWITCHES
         s_switches = (uint8_t)((uint32_t)arg & 0xFFu);

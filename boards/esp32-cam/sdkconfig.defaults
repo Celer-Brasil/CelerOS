@@ -4,6 +4,9 @@
 # dele: PSRAM quad, NimBLE (CelerNet) e a particao propria (apps no SD →
 # littlefs enxuto, slots maiores). ATENCAO: a cam e DUAL-CORE (ver bloco
 # abaixo) — o IRAM-as-heap da CYD/devkit nao existe aqui.
+# Carimbo da placa: o main/CMakeLists.txt recusa build com CELEROS_BOARD
+# diferente (sdkconfig de outra placa nunca mais passa calado).
+CONFIG_CELEROS_SDKCONFIG_BOARD="esp32-cam"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y

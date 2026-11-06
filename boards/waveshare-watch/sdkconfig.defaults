@@ -1,6 +1,9 @@
 # Smartwatch Waveshare ESP32-S3-Touch-AMOLED-2.06 (ESP32-S3R8): 32MB DIO +
 # PSRAM 8MB OCTAL embutida. Derivado do spotpear-dog (mesmo S3R8): console no
 # USB-Serial/JTAG nativo, NimBLE para o Celer Link.
+# Carimbo da placa: o main/CMakeLists.txt recusa build com CELEROS_BOARD
+# diferente (sdkconfig de outra placa nunca mais passa calado).
+CONFIG_CELEROS_SDKCONFIG_BOARD="waveshare-watch"
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

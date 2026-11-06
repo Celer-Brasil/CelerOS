@@ -2,6 +2,9 @@
 # CYD — unicore com IRAM-as-heap e stacks medidos — pois a RAM interna e o
 # slot OTA de 1,56MB (0x190000 = 1.638.400 B) sao os mesmos. Sem slot SD (o
 # FAT/SDSPI sai do binario).
+# Carimbo da placa: o main/CMakeLists.txt recusa build com CELEROS_BOARD
+# diferente (sdkconfig de outra placa nunca mais passa calado).
+CONFIG_CELEROS_SDKCONFIG_BOARD="devkit"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y

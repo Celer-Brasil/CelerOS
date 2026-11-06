@@ -83,12 +83,13 @@ Watch-only: `CELEROS_PHONE_LINK` + `BT_NIMBLE_NVS_PERSIST` (bond), `CELEROS_USB_
 - **CYD folds profile constants: beware `-Werror=int-in-bool-context` inside IDF config macros.** BoardProfile values that are compile-time known on a board (CYD: `.i2s` todo -1) propagate into macro arguments, and macros with internal ternaries over those args (`I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG` compares `bits <= 16BIT`) become constant `?:` — GCC errors. Pattern fix: local `#pragma GCC diagnostic ignored` around the call (`BoardIO.cpp`, from the 32-bit mic slot change).
 - Serial ports on the bench: the two CH340 boards (SmartDisplay, CYD) swap between `/dev/ttyUSB0` and `/dev/ttyUSB1` depending on plug order (2026-10-09: SmartDisplay on USB1) — `celerctl devices -l` prints the board of each port, check before an OTA. `/dev/ttyACM0` = dog **or** watch (flash id disambiguates: 16MB vs 32MB).
 - The watch is flashed over the air (`celerctl ota push`) after first esptool load; a CDC timeout during push is retriable, and an UNKNOWN state heals with a reboot.
+- **One sdkconfig per build dir, always.** Without `-DSDKCONFIG` the IDF falls back to the repo-root `sdkconfig`, shared by every dir configured that way: on 2026-11-06 a watch build wrote USB_NATIVE/PHONE_LINK/32MB there and the next 4848 build inherited it (TinyUSB took GPIO19 = GT911 SDA: touch dead, HostLink on a CDC with no connector). The root `CMakeLists.txt` now defaults `SDKCONFIG` to `<build>/sdkconfig` and `SDKCONFIG_DEFAULTS` to the board's pair; the board stamp catches a foreign sdkconfig at configure; smartdisplay `Board.cpp` `#error`s on USB_NATIVE.
 - `dependencies.lock` records the last-built target; don't commit its build churn.
 
 ## ADDING A BOARD (checklist)
 1. `main/Boards/<b>/`: `Board.cpp` (BoardProfile), `BoardDisplay.h` (LovyanGFX panel + touch; a headless board just includes `../HeadlessDisplay.h`), `BoardTraits.h` — all board `#ifdef`s stay here, nowhere else.
 2. `elseif(CELEROS_BOARD STREQUAL "<b>")` in `main/CMakeLists.txt`.
-3. `boards/<b>/sdkconfig.defaults` (+ partition CSV if a new size).
+3. `boards/<b>/sdkconfig.defaults` (+ partition CSV if a new size), carrying the stamp `CONFIG_CELEROS_SDKCONFIG_BOARD="<b>"` — `main/CMakeLists.txt` refuses a build whose sdkconfig stamp differs from `CELEROS_BOARD`.
 4. `updates/<channel>/update.json` OTA channel and, if needed, a case in `tools/flash_data.sh` (port default + partition CSV).
 5. Matrix entry in `.github/workflows/build.yml` (`firmware` job) — lint coverage is automatic via the `boards/*/data/apps` glob.
 6. Fill `BoardProfile` runtime hooks (`readBatteryPct`, `imuAccel`, `screenSleep`, `watchGestures`, ...) instead of adding ifdefs elsewhere.

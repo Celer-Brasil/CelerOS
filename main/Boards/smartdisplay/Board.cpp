@@ -11,6 +11,13 @@
 #include <hal/lcd_hal.h>
 #include <esp_lcd_io_i80.h>
 #include <driver/gpio.h>
+#include "sdkconfig.h"
+
+// USB-OTG nativo toma GPIO19 (SDA do GT911) e GPIO20 (G1 do RGB): o touch
+// inicia e morre quando o TinyUSB sobe. O conector da placa e so o CH340.
+#if CONFIG_CELEROS_USB_NATIVE
+#error "CONFIG_CELEROS_USB_NATIVE nao pode ser ligado na smartdisplay (GPIO19/20 = touch/painel)"
+#endif
 
 // Perfil da Guition ESP32-S3-4848S040 (SmartDisplay 4").
 //

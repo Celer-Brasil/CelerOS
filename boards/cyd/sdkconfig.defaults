@@ -1,4 +1,7 @@
 # Cheap Yellow Display (ESP32-2432S028R): ESP32 classico 4MB, sem PSRAM
+# Carimbo da placa: o main/CMakeLists.txt recusa build com CELEROS_BOARD
+# diferente (sdkconfig de outra placa nunca mais passa calado).
+CONFIG_CELEROS_SDKCONFIG_BOARD="cyd"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y

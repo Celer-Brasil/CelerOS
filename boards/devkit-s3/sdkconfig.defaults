@@ -3,6 +3,9 @@
 # USB (CELEROS_USB_HOST) e o USB-C "UART" (bridge) segue sendo o console/
 # celerctl e a porta de gravacao. No S3 o OTG e a USB-Serial/JTAG dividem o
 # PHY interno: CELEROS_USB_NATIVE e CELEROS_LINK_ON_USJ ficam desligados.
+# Carimbo da placa: o main/CMakeLists.txt recusa build com CELEROS_BOARD
+# diferente (sdkconfig de outra placa nunca mais passa calado).
+CONFIG_CELEROS_SDKCONFIG_BOARD="devkit-s3"
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

@@ -1,5 +1,14 @@
 menu "CelerOS"
 
+config CELEROS_SDKCONFIG_BOARD
+    string "Placa dona deste sdkconfig (carimbo)"
+    default ""
+    help
+      Gravado pelo boards/<placa>/sdkconfig.defaults. O main/CMakeLists.txt
+      exige que bata com -DCELEROS_BOARD: um sdkconfig gerado para outra
+      placa (ex.: o do watch, com USB_NATIVE, num build do 4848 — o touch
+      GT911 morre no GPIO19) falha no configure em vez de virar firmware.
+
 config CELEROS_USB_NATIVE
     bool "Ativar USB nativo (TinyUSB: CDC dupla shell+celerctl)"
     depends on IDF_TARGET_ESP32S3

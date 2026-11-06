@@ -249,6 +249,18 @@ else()
 endif()
 list(APPEND CELEROS_SRCS "${CELEROS_BOARD_DIR}/Board.cpp")
 
+# O sdkconfig tem que ser DESTA placa (carimbo dos boards/<b>/sdkconfig.defaults).
+# Vazio = os defaults da placa nunca entraram neste sdkconfig.
+# (a varredura de requisitos do IDF roda este arquivo SEM o sdkconfig carregado)
+if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT CONFIG_CELEROS_SDKCONFIG_BOARD STREQUAL CELEROS_BOARD)
+    message(FATAL_ERROR
+        "sdkconfig ${SDKCONFIG} e da placa '${CONFIG_CELEROS_SDKCONFIG_BOARD}', "
+        "mas CELEROS_BOARD='${CELEROS_BOARD}'. Use um build dir por placa com "
+        "-DSDKCONFIG=<dir>/sdkconfig e "
+        "-DSDKCONFIG_DEFAULTS=\"sdkconfig.defaults;boards/${CELEROS_BOARD}/sdkconfig.defaults\" "
+        "(sdkconfig antigo sem carimbo: apague-o para regenerar).")
+endif()
+
 idf_component_register(
     SRCS
         ${CELEROS_SRCS}

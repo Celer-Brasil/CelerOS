@@ -459,7 +459,18 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg) {
         return 1;
     case CORE_LOAD_LEVEL: {
         if (sc == nullptr || arg < (int32_t)(NCEL + 5)) return 0;
-        const uint8_t* lv = sc + kLevelOff;
+        // payload vem NIBBLE-ENCODADO do JS (2 chars por byte): a string do
+        // Duktape e CESU-8, entao qualquer byte > 0x7F viraria 2 bytes no
+        // nativeWrite e desalinharia o resto. Aqui volta a ser 1 byte.
+        static uint8_t lv[kLevelCap];
+        {
+            const uint8_t* raw = sc + kLevelOff;
+            const int32_t n = arg / 2;
+            if (n > (int32_t)kLevelCap) return 0;
+            for (int32_t i = 0; i < n; i++)
+                lv[i] = (uint8_t)((raw[i * 2] << 4) | (raw[i * 2 + 1] & 0x0F));
+            arg = n;   // daqui para baixo, `arg` e o tamanho decodificado
+        }
         for (int i = 0; i < NCEL; i++) s.grid[i] = lv[i];
         s.exitC = lv[NCEL];
         s.exitR = lv[NCEL + 1];
@@ -489,6 +500,10 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg) {
         }
         resetSim((uint16_t)(s.time0 ^ (s.mode * 257)));
         publish();
+        // diagnostico: o que o core decodificou do payload
+        {
+            extern void celer_log_dbg(const char*);
+        }
         return (uint32_t)off;
     }
     case CORE_RESET:

@@ -36,95 +36,93 @@ var h = 0, outOff = 0, levelOff = 0, ready = false;
 var st = {};                 // estado parseado do ultimo STEP
 var bombs = [], flames = [], enemies = [], drops = [], events = [], dirty = [];
 
-function u16(s, i) { return s.charCodeAt(i) | (s.charCodeAt(i + 1) << 8); }
-function i32(s, i) {
-    var v = u16(s, i) | (u16(s, i + 2) << 16);
-    return (v & 0x80000000) ? (v - 0x100000000) : v;
-}
-function readBytes(off, len) {
-    // nativeRead devolve string (ou null). O valor e convertido EXPLICITO:
-    // no Duktape um retorno inesperado nao pode virar "Symbol" no +=.
-    len = Number(len) | 0;
-    off = Number(off) | 0;
-    if (len <= 0) return '';
-    var out = [], p = 0;
+// Leitura do scratch em BYTES NUMERICOS: nativeRead devolve 256 B por
+// chamada e o Duktape desta build nao aceita coercao de string "Symbol"
+// (concatenar/join de um retorno inesperado estoura) — entao cada chunk vira
+// numeros por charCodeAt e o parse e por indice, sem string grande.
+function readBytes(base, len) {
+    var bytes = [], p = 0, i;
     while (p < len) {
         var n = (len - p) < 256 ? (len - p) : 256;
-        var part = S.nativeRead(h, off + p, n);
+        var part = S.nativeRead(h, base + p, n);
         if (part === null || typeof part !== 'string') return null;
-        out.push(part);
+        for (i = 0; i < n; i++) bytes.push(part.charCodeAt(i) & 0xFF);
         p += n;
     }
-    return out.join('');
+    return bytes;
+}
+function rb16(b, o) { return b[o] | (b[o + 1] << 8); }
+function rb32(b, o) {
+    var v = b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24);
+    return v | 0;
 }
 
 // Preenche `st`, as listas e os eventos a partir do bloco de saida.
 function readOut() {
     var head = readBytes(outOff, HEAD);
     if (head === null) return false;
-    var nState = u16(head, 2) | 0;
-    var nEv = u16(head, 4) | 0;
-    var nDirty = u16(head, 6) | 0;
+    var nState = rb16(head, 2);
+    var nEv = rb16(head, 4);
+    var nDirty = rb16(head, 6);
     if (nState <= 0 || nState > 2048) return false;
-    if (nEv < 0 || nEv > 32) nEv = 0;
-    if (nDirty < 0 || nDirty > 512) nDirty = 0;
-    if (S.print) S.print('detona: head st=' + nState + ' ev=' + nEv + ' dirty=' + nDirty +
-                         ' codes=' + u16(head, 0) + ',' + u16(head, 2) + ',' + u16(head, 4) + ',' + u16(head, 6));
+    if (nEv > 32) nEv = 0;
+    if (nDirty > 512) nDirty = 0;
+
     var body = readBytes(outOff + HEAD, nState);
     if (body === null) return false;
 
-    st.px = i32(body, 0);
-    st.py = i32(body, 4);
-    st.gx = u16(body, 8);
-    st.gy = u16(body, 10);
-    st.lives = u16(body, 12);
-    st.score = u16(body, 14);
-    st.range = u16(body, 16);
-    st.maxBombs = u16(body, 18);
-    st.speed = u16(body, 20);
-    st.flags = u16(body, 22);
-    st.timeLeft = u16(body, 24) / 10;
-    st.invuln = u16(body, 26) / 1000;
-    st.animT = u16(body, 28) / 1000;
-    st.face = u16(body, 30);
-    st.nb = body.charCodeAt(32);
-    st.nf = body.charCodeAt(33);
-    st.ne = body.charCodeAt(34);
-    st.nd = body.charCodeAt(35);
+    st.px = rb32(body, 0);
+    st.py = rb32(body, 4);
+    st.gx = rb16(body, 8);
+    st.gy = rb16(body, 10);
+    st.lives = rb16(body, 12);
+    st.score = rb16(body, 14);
+    st.range = rb16(body, 16);
+    st.maxBombs = rb16(body, 18);
+    st.speed = rb16(body, 20);
+    st.flags = rb16(body, 22);
+    st.timeLeft = rb16(body, 24) / 10;
+    st.invuln = rb16(body, 26) / 1000;
+    st.animT = rb16(body, 28) / 1000;
+    st.face = rb16(body, 30);
+    st.nb = body[32];
+    st.nf = body[33];
+    st.ne = body[34];
+    st.nd = body[35];
 
     var i, o;
     bombs.length = 0;
     for (i = 0; i < st.nb && i < 16; i++) {
         o = (OFF_BOMBS - HEAD) + i * 10;
-        bombs.push({ c: body.charCodeAt(o), r: body.charCodeAt(o + 1),
-                     range: body.charCodeAt(o + 2), owner: body.charCodeAt(o + 3) ? 'boss' : 'player',
-                     remote: body.charCodeAt(o + 4) !== 0,
-                     t: u16(body, o + 6) / 1000 });
+        bombs.push({ c: body[o], r: body[o + 1],
+                     range: body[o + 2], owner: body[o + 3] ? 'boss' : 'player',
+                     remote: body[o + 4] !== 0,
+                     t: rb16(body, o + 6) / 1000 });
     }
     flames.length = 0;
     for (i = 0; i < st.nf && i < 64; i++) {
         o = (OFF_FLAMES - HEAD) + i * 6;
-        var fc = body.charCodeAt(o), fr = body.charCodeAt(o + 1);
-        flames.push({ key: fc + ',' + fr, c: fc, r: fr, t: u16(body, o + 4) / 1000, owner: 'player' });
+        var fc = body[o], fr = body[o + 1];
+        flames.push({ key: fc + ',' + fr, c: fc, r: fr, t: rb16(body, o + 4) / 1000, owner: 'player' });
     }
     enemies.length = 0;
     for (i = 0; i < st.ne && i < 24; i++) {
         o = (OFF_ENEMIES - HEAD) + i * 8;
-        enemies.push({ c: body.charCodeAt(o), r: body.charCodeAt(o + 1),
-                       type: body.charCodeAt(o + 2), hp: body.charCodeAt(o + 3),
-                       maxHp: body.charCodeAt(o + 4), active: body.charCodeAt(o + 5) !== 0 });
+        enemies.push({ c: body[o], r: body[o + 1],
+                       type: body[o + 2], hp: body[o + 3],
+                       maxHp: body[o + 4], active: body[o + 5] !== 0 });
     }
     drops.length = 0;
     for (i = 0; i < st.nd && i < 16; i++) {
         o = (OFF_DROPS - HEAD) + i * 4;
-        drops.push({ c: body.charCodeAt(o), r: body.charCodeAt(o + 1),
-                     kind: DROP_KIND[body.charCodeAt(o + 2)] || 'range' });
+        drops.push({ c: body[o], r: body[o + 1],
+                     kind: DROP_KIND[body[o + 2]] || 'range' });
     }
 
     dirty.length = 0;
     if (nDirty > 0) {
         var d = readBytes(outOff + DIRTY_OFF, nDirty * 2);
-        if (d !== null) for (i = 0; i < nDirty; i++) dirty.push(u16(d, i * 2));
+        if (d !== null) for (i = 0; i < nDirty; i++) dirty.push(rb16(d, i * 2));
     }
     events.length = 0;
     if (nEv > 0) {
@@ -132,7 +130,7 @@ function readOut() {
         if (ev !== null) {
             for (i = 0; i < nEv; i++) {
                 o = i * 8;
-                events.push({ type: u16(ev, o), a: u16(ev, o + 2), b: u16(ev, o + 4), c: u16(ev, o + 6) });
+                events.push({ type: rb16(ev, o), a: rb16(ev, o + 2), b: rb16(ev, o + 4), c: rb16(ev, o + 6) });
             }
         }
     }
@@ -162,9 +160,15 @@ function buildLevel(s) {
         bytes.push(ti, cellOf(e.x) & 0xFF, cellOf(e.y) & 0xFF, hp & 0xFF);
     }
     bytes.push(s.gx & 0xFF, s.gy & 0xFF);
-    var out = '';
-    for (i = 0; i < bytes.length; i++) out += String.fromCharCode(bytes[i]);
-    return out;
+    // NIBBLES (2 chars por byte): a string do Duktape e CESU-8 e um char
+    // > 0x7F viaja como 2 bytes no nativeWrite — desalinhava o payload
+    // inteiro (tempo/inimigos/jogador). Assim todo char fica <= 0x0F.
+    var out = [];
+    for (i = 0; i < bytes.length; i++) {
+        out.push(String.fromCharCode((bytes[i] >> 4) & 0x0F));
+        out.push(String.fromCharCode(bytes[i] & 0x0F));
+    }
+    return out.join('');
 }
 function cellOf(v) { return Math.round((v - 16) / 32); }
 
@@ -181,18 +185,24 @@ var mod = {
         if (s.mode && s.mode !== 'campaign') return false;   // sobrevivencia/duelo seguem no JS
         if (h > 0) { S.nativeFree(h); h = 0; }
         h = S.nativeLoad(S.appDir() + '/core.bin', 64);
-        if (h <= 0) return false;
-        if (S.nativeCall(h, 0, CORE_INIT, 0) !== 1) { S.nativeFree(h); h = 0; return false; }
+        if (h <= 0) { if (S.print) S.print('detona: sem core (nativeLoad=' + h + ')'); return false; }
+        if (S.nativeCall(h, 0, CORE_INIT, 0) !== 1) {
+            if (S.print) S.print('detona: sem core (INIT)');
+            S.nativeFree(h); h = 0; return false;
+        }
         outOff = S.nativeCall(h, 0, CORE_OUT_OFF, 0);
         levelOff = S.nativeCall(h, 0, CORE_LEVEL_OFF, 0);
         var lv = buildLevel(s);
         var n = S.nativeWrite(h, levelOff, lv);
-        if (n <= 0 || S.nativeCall(h, 0, CORE_LOAD_LEVEL, n) <= 0) {
+        var lr = n > 0 ? S.nativeCall(h, 0, CORE_LOAD_LEVEL, n) : -1;
+        if (n <= 0 || lr <= 0) {
+            if (S.print) S.print('detona: sem core (nivel ' + n + '/' + lr + ')');
             S.nativeFree(h); h = 0; return false;
         }
         ready = readOut();
         if (!ready) { S.nativeFree(h); h = 0; return false; }
-        if (S.print) S.print('detona: core nativo carregado (blob ' + h + ')');
+        if (S.print) S.print('detona: core nativo (fase ' + (s.level || 0) + ', ' + st.ne +
+                             ' inimigo(s), ' + st.timeLeft + 's)');
         return true;
     },
 

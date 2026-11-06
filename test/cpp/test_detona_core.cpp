@@ -74,9 +74,16 @@ int main() {
 
     check(core_ctl(scratch, CORE_INIT, 0) == 1, "INIT");
 
+    uint8_t raw[512];
+    const uint32_t n = buildLevel(raw);
+    // o core espera o payload NIBBLE-ENCODADO (2 chars por byte), como o
+    // nativeWrite do Duktape entrega (CESU-8)
     uint8_t* level = scratch + core_ctl(scratch, CORE_LEVEL_OFF, 0);
-    const uint32_t n = buildLevel(level);
-    check(core_ctl(scratch, CORE_LOAD_LEVEL, (int32_t)n) > 0, "LOAD_LEVEL");
+    for (uint32_t i = 0; i < n; i++) {
+        level[i * 2] = (uint8_t)(raw[i] >> 4);
+        level[i * 2 + 1] = (uint8_t)(raw[i] & 0x0F);
+    }
+    check(core_ctl(scratch, CORE_LOAD_LEVEL, (int32_t)(n * 2)) > 0, "LOAD_LEVEL");
 
     uint8_t* out = scratch + core_ctl(scratch, CORE_OUT_OFF, 0);
     CelerCoreHead* head = (CelerCoreHead*)out;

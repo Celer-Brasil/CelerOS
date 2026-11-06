@@ -16,7 +16,7 @@
     "type": { "type": "string" },
     "category": { "type": "string" },
     "api": { "type": "integer", "minimum": 1, "maximum": 51 },
-    "requires": { "type": "array", "items": { "const": "psram" } },
+    "requires": { "type": "array", "items": { "enum": ["psram", "native"] } },
     "topbar": { "type": "boolean" },
     "permissions": { "type": "array", "items": { "type": "string" } },
     "deps": {

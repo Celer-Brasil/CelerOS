@@ -38,10 +38,13 @@ function usage() {
     console.log('uso: node tools/sdk/celer.js <comando> [args]');
     console.log('');
     console.log('  new NOME [--pkg br.autor.nome] [--dir BASE] [--game]     cria app de exemplo');
-    console.log('           [--native]                                      (--game: jogo c/ deps celeros.game)');
+    console.log('           [--native] [--native-logic]                     (--game: jogo c/ deps celeros.game)');
     console.log('                                                           (--native: parte nativa, blob CLRN)');
-    console.log('  native PASTA [--src ARQ] [--out ARQ]         build do blob nativo do app (xtensa;');
-    console.log('                                               gates do formato; default: PASTA/core.bin)');
+    console.log('                                                           (--native-logic: core de LOGICA + casca JS)');
+    console.log('  native PASTA [--src ARQ] [--out ARQ] [--include DIR]... [--keep-elf ARQ]');
+    console.log('                                               build do blob nativo do app (xtensa;');
+    console.log('                                               gates do formato; default: PASTA/core.bin;');
+    console.log('                                               -I tools/native e automatico p/ o celeros_core.h)');
     console.log('  deps [PASTA] [--verify]                      deps do app.json + resolucao no hub (--verify: exit 1 se nao resolve)');
     console.log('  deps set NOME RANGE [PASTA]                  grava dep no app.json (\'-\' remove)');
     console.log('  lint [alvos...] [--strict]                   valida ES5 + API (app_lint)');
@@ -75,7 +78,9 @@ function cmdNew(args) {
     const game = !!flags.game;
     const appkit = !!flags.appkit;
     const native = !!flags.native;
+    const nativeLogic = !!flags['native-logic'];
     if (native && game) die('new: --native nao combina com --game');
+    if (nativeLogic && game) die('new: --native-logic nao combina com --game');
 
     // packageName: default br.celer.<slug> (autor troca pelo proprio)
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -113,12 +118,14 @@ function cmdNew(args) {
             'celeros.game.fx': '^' + engineVersion('celeros.game.fx.js'),
         };
     }
-    if (native) {
+    if (native || nativeLogic) {
         // parte nativa (API 57): o core roda fora do heap Duktape em placa
         // S3 com PSRAM — requires "native" e o vocabulario que Loja/Installer
         // usam para o badge/bloqueio "Requer S3" (o blob em si declara chip
-        // e api no cabecalho CLRN; o loader recusa o contrario)
-        appJson.requires = ['native'];
+        // e api no cabecalho CLRN; o loader recusa o contrario). O core de
+        // logica tambem LEVA psram: scratch + estado + assets.
+        appJson.requires = nativeLogic ? ['psram', 'native'] : ['native'];
+        if (nativeLogic) appJson.topbar = false;
     }
     if (appkit) {
         // app geral sobre o CelerKit: o pacote kit (core + fmt + path + data
@@ -135,19 +142,23 @@ function cmdNew(args) {
 
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'app.json'), JSON.stringify(appJson, null, 2) + '\n');
-    const mainSrc = fs.readFileSync(
-        path.join(__dirname,
-                  native ? 'template-native' : game ? 'template-game' : 'template',
-                  'main.js'), 'utf8');
+    const templateDir = nativeLogic ? 'template-native-logic'
+                       : native ? 'template-native' : game ? 'template-game' : 'template';
+    const mainSrc = fs.readFileSync(path.join(__dirname, templateDir, 'main.js'), 'utf8');
     fs.writeFileSync(path.join(dir, 'main.js'),
                      mainSrc.replace(/\{\{APP_NAME\}\}/g, name));
-    if (native) {
+    if (native || nativeLogic) {
         // fontes em native/ (SUBPASTA: o pacote do hub e flat e ignora
         // subpastas — os .c/.h nunca embarcam; o blob compilado core.bin
         // fica na RAIZ, que e o que viaja como asset)
         fs.mkdirSync(path.join(dir, 'native'), { recursive: true });
-        fs.copyFileSync(path.join(__dirname, 'template-native', 'core.c'),
-                        path.join(dir, 'native', 'core.c'));
+        // o template basico guarda o core.c na RAIZ da pasta; o de logica
+        // traz native/core.cpp (com o include do celeros_core.h)
+        const coreSrc = nativeLogic
+            ? path.join(__dirname, templateDir, 'native', 'core.cpp')
+            : path.join(__dirname, templateDir, 'core.c');
+        const coreName = nativeLogic ? 'core.cpp' : 'core.c';
+        fs.copyFileSync(coreSrc, path.join(dir, 'native', coreName));
     }
     fs.writeFileSync(path.join(dir, 'README.md'),
                      fs.readFileSync(path.join(__dirname, 'template', 'README.md'), 'utf8')
@@ -178,10 +189,11 @@ function cmdNew(args) {
 
     console.log('criado: ' + dir + ' (api ' + api +
                 (game ? ', jogo com deps celeros.game + fx' : '') +
-                (native ? ', parte nativa (native/core.c)' : '') +
+                (nativeLogic ? ', core de logica (native/core.cpp)'
+                             : native ? ', parte nativa (native/core.c)' : '') +
                 (appkit ? ', app com dep celeros.app.kit' : '') + ')');
     console.log('proximos passos:');
-    if (native) console.log('  node tools/sdk/celer.js native ' + dir + '   (build do core.bin)');
+    if (native || nativeLogic) console.log('  node tools/sdk/celer.js native ' + dir + '   (build do core.bin)');
     console.log('  node tools/sdk/celer.js lint ' + dir);
     console.log('  node tools/sdk/celer.js emu ' + dir);
     console.log("  python3 tools/celerctl.py dev " + dir);
@@ -774,14 +786,28 @@ function cmdNative(args) {
     const dir = path.resolve(folder);
     if (!fs.existsSync(path.join(dir, 'app.json')))
         die('native: ' + dir + ' nao tem app.json (scaffold: celer.js new NOME --native)');
-    const src = path.resolve(flags.src || path.join(dir, 'native', 'core.c'));
-    if (!fs.existsSync(src))
-        die('native: ' + src + ' nao existe (scaffold cria native/core.c; ou passe --src)');
+    // default: o .cpp do template de logica, senao o core.c do template basico
+    // (--src relativo a PASTA do app, como o --out)
+    const srcs = [flags.src, 'native/core.cpp', 'native/core.c'].filter(Boolean);
+    let src = null;
+    for (const cand of srcs) {
+        const p = path.isAbsolute(cand) ? cand : path.resolve(dir, cand);
+        if (fs.existsSync(p)) { src = p; break; }
+    }
+    if (!src)
+        die('native: nenhuma fonte em ' + dir + '/native (core.cpp/core.c) — '
+            + 'passe --src ou rode celer.js new NOME --native-logic');
     const out = path.resolve(flags.out || path.join(dir, 'core.bin'));
-    const r = spawnSync('python3',
-                        [path.join(ROOT, 'tools', 'native', 'build_core.py'),
-                         '--src', src, '--out', out],
-                        { stdio: 'inherit' });
+    const argv = [path.join(ROOT, 'tools', 'native', 'build_core.py'),
+                  '--src', src, '--out', out];
+    // -I tools/native: o celeros_core.h da ABI do core de logica
+    argv.push('--include', path.join(ROOT, 'tools', 'native'));
+    const inc = flags.include;
+    for (const i of (Array.isArray(inc) ? inc : inc ? [inc] : []))
+        argv.push('--include', path.isAbsolute(i) ? i : path.resolve(dir, i));
+    if (flags['keep-elf'])
+        argv.push('--keep-elf', path.resolve(dir, flags['keep-elf']));
+    const r = spawnSync('python3', argv, { stdio: 'inherit' });
     process.exit(r.status == null ? 1 : r.status);
 }
 

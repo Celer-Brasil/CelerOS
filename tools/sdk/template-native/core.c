@@ -6,13 +6,20 @@
  *     garante os limites — o blob nao sabe o tamanho);
  *   - a0/a1 sao int32 livres (indices, dimensoes, flags...); retorno uint32.
  *
- * Regras do formato (o builder barra o contrario):
- *   - autocontido: sem libc, sem globais, nenhum endereco tomado
- *     (relocation, l32r e callx sao barrados no build);
+ * Regras do formato (estado atual do loader CLRN v2/v3):
+ *   - autocontido: sem libc/RTOS (nada de malloc do sistema, arquivo, task
+ *     ou IO). Incluir "runtime.c" (tools/native) no TU traz memcpy/memset e
+ *     malloc/free de arena se precisar;
+ *   - .data e .bss SAO suportados (o loader copia a imagem, zera o .bss e
+ *     aplica as relocacoes); o estado quente pode morar em .bss/.clrn_fast;
  *   - chamadas internas PC-relative diretas (blob ate 512 KB);
  *   - ordem das entradas = ORDEM DE ENDERECO das funcoes core_* (nm -n; na
  *     pratica, a ordem de definicao no arquivo): o app chama por indice —
- *     System.nativeCall(h, 0, ...) e a primeira core_* definida.
+ *     System.nativeCall(h, 0, ...) e a primeira core_* definida;
+ *   - a scratch e um bloco PSRAM SEPARADO da imagem (o loader aloca os
+ *     dois); o blob nao sabe o tamanho dela — combine no app (nativeLoad).
+ *   - para LOGICA de jogo use o template --native-logic e a ABI de
+ *     tools/native/celeros_core.h (estado/eventos/sujos num bloco fixo).
  *
  * Build: node tools/sdk/celer.js native <pasta do app>   ->  <pasta>/core.bin
  * Load:  System.nativeLoad(System.appDir() + "/core.bin")

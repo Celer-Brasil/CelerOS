@@ -153,8 +153,8 @@ function validateProjectData(p, out) {
         out.push(err('schema.range', 'api', 'api deve ser 1..' + API_CEILING));
     }
     if (p.requires !== undefined) {
-        if (!Array.isArray(p.requires) || p.requires.some((r) => r !== 'psram')) {
-            out.push(err('schema.enum', 'requires', 'unico valor aceito: "psram"'));
+        if (!Array.isArray(p.requires) || p.requires.some((r) => r !== 'psram' && r !== 'native')) {
+            out.push(err('schema.enum', 'requires', 'valores aceitos: "psram", "native"'));
         }
     }
     if (p.deps !== undefined) {

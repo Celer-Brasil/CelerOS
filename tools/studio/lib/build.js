@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const F = require('./format');
 const SC = require('./schema');
 const { Project } = require('./project');
@@ -18,6 +19,7 @@ const APP_RUNTIME = fs.readFileSync(path.join(__dirname, '..', 'templates', 'app
 const LEGACY = fs.readFileSync(path.join(__dirname, '..', 'templates', 'legacy.js'), 'utf8');
 const HEADER = '// GERADO POR CELER STUDIO ' + require('../version').STUDIO_VERSION +
     ' - NAO EDITE. Fonte: celergame.project.json + Assets/**.\n';
+const ROOT = path.resolve(__dirname, '..', '..', '..');
 
 function failBuild(message, extra) {
     const e = new F.StudioError('build.failed', message, extra);
@@ -743,6 +745,51 @@ function buildLegacy(project, check, warnings, buildDir) {
     };
 }
 
+// Parte NATIVA do projeto (native/ -> core.bin na raiz do pacote): as regras
+// do jogo vivem no blob CLRN e o main.js fica so com input/desenho/UI.
+// Convencoes: um TU unico (native/core.cpp inclui os irmaos por #include,
+// molde do NESBlob); um .bin em native/ sem fontes e copiado como blob
+// pronto (build sem toolchain). O -I tools/native da a ABI celeros_core.h.
+function buildNative(project, buildDir, warnings) {
+    const nativeDir = path.join(project.dir, 'native');
+    if (!fs.existsSync(nativeDir) || !fs.statSync(nativeDir).isDirectory()) return null;
+    const entries = fs.readdirSync(nativeDir).sort();
+    const sources = entries.filter((f) => /\.(c|cc|cpp|cxx)$/i.test(f) && fs.statSync(path.join(nativeDir, f)).isFile());
+    const prebuilt = entries.filter((f) => /\.bin$/i.test(f) && fs.statSync(path.join(nativeDir, f)).isFile());
+    if (!sources.length) {
+        if (prebuilt.length) {
+            fs.copyFileSync(path.join(nativeDir, prebuilt[0]), path.join(buildDir, 'core.bin'));
+            warnings.push({ code: 'build.native.prebuilt', path: 'native/' + prebuilt[0],
+                            message: 'blob pre-compilado copiado como core.bin (sem fontes nativas)' });
+            return 'core.bin';
+        }
+        return null;
+    }
+    let main = sources.find((f) => /^core\.(c|cc|cpp|cxx)$/i.test(f));
+    if (!main) {
+        if (sources.length > 1) {
+            failBuild('native/: sem native/core.cpp — o build compila UM TU unico '
+                      + '(core.cpp #include dos irmaos); encontrados: ' + sources.join(', '));
+        }
+        main = sources[0];
+    }
+    const out = path.join(buildDir, 'core.bin');
+    const r = spawnSync('python3',
+        [path.join(ROOT, 'tools', 'native', 'build_core.py'),
+         '--src', path.join(nativeDir, main), '--out', out,
+         '--include', nativeDir,
+         '--include', path.join(ROOT, 'tools', 'native')],
+        { encoding: 'utf8' });
+    if (r.error) failBuild('native: nao consegui rodar build_core.py: ' + r.error.message);
+    if (r.status !== 0) {
+        const tail = ((r.stdout || '') + (r.stderr || '')).trim().split('\n').slice(-5).join(' | ');
+        failBuild('native/' + main + ': build do blob falhou (' + (tail || 'rc ' + r.status) + ')');
+    }
+    const last = ((r.stdout || '').trim().split('\n').pop() || '').trim();
+    if (last) warnings.push({ code: 'build.native', path: 'native/' + main, message: last });
+    return 'core.bin';
+}
+
 function buildProject(dir, opts) {
     opts = opts || {};
     const project = Project.open(dir);
@@ -793,6 +840,9 @@ function buildProject(dir, opts) {
         fs.copyFileSync(s.asset.absPath, path.join(buildDir, s.file));
     }
 
+    // parte nativa: core.bin na raiz do pacote (o hub empacota arquivos da raiz)
+    const nativeBlob = buildNative(project, buildDir, warnings);
+
     // app.json (antes do lint; o manifesto vem do projeto)
     const p = project.data;
     const app = {
@@ -803,8 +853,17 @@ function buildProject(dir, opts) {
         description: p.description || '',
         type: p.type || (isApp ? 'App' : 'Game'),
         category: p.category || (isApp ? 'Utility' : 'Jogos'),
-        api: p.api,
-        requires: p.requires || [],
+        api: nativeBlob ? Math.max(p.api || 0, 58) : p.api,
+        requires: (function () {
+            // blob no pacote exige psram+native (Loja/Installer bloqueiam a
+            // instalacao sem o acelerador; o lint tambem cobra)
+            const rs = (p.requires || []).slice();
+            if (nativeBlob) {
+                if (rs.indexOf('psram') < 0) rs.push('psram');
+                if (rs.indexOf('native') < 0) rs.push('native');
+            }
+            return rs;
+        })(),
         topbar: p.topbar === undefined ? false : !!p.topbar,
         permissions: p.permissions || [],
         deps: p.deps || {},

@@ -52,8 +52,9 @@ require("celeros.emu").run({
     title: "ATARI 2600",
     coreFile: "a2600_core.bin",
     scratchKB: function (romBytes) {
-        // layout fixo ~558 KB (PCM/FB/escalado/state) + a ROM no fim
-        return 600 + Math.ceil((romBytes || 32768) / 1024);
+        // layout fixo ~1198 KB (PCM/FB/escalado/state/carimbos do overlay)
+        // + a ROM no fim
+        return 1240 + Math.ceil((romBytes || 32768) / 1024);
     },
     romDirs: ["/sd/roms/a2600", "/local/roms/a2600"],
     romExts: [".a26", ".bin"],

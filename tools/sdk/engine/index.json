@@ -334,5 +334,8 @@
   },
   "celeros.hw.dht": {
     "deps": {}
+  },
+  "celeros.emu": {
+    "deps": {}
   }
 }

@@ -20,7 +20,7 @@ CODE = bytes([
     0x85, 0x17,              # F00A STA AUDF0
     0xA9, 0x0A,              # F00C LDA #10
     0x85, 0x19,              # F00E STA AUDV0
-    0xA9, 0x14,              # F010 LDA #20 (px inicial)
+    0xA9, 0x05,              # F010 LDA #5 (px inicial, longe da borda do blank)
     0x85, 0x80,              # F012 STA $80
     # frame
     0xA9, 0x02,              # F014 LDA #2
@@ -35,11 +35,11 @@ CODE = bytes([
     0xCA,                    # F026 DEX
     0xD0, 0xFB,              # F027 BNE vb
     0xAD, 0x80, 0x02,        # F029 LDA SWCHA
-    0x29, 0x04,              # F02C AND #4 (esquerda)
+    0x29, 0x40,              # F02C AND #$40 (esquerda = D6 do P0)
     0xD0, 0x02,              # F02E BNE +2
     0xC6, 0x80,              # F030 DEC $80
     0xAD, 0x80, 0x02,        # F032 LDA SWCHA
-    0x29, 0x08,              # F035 AND #8 (direita)
+    0x29, 0x80,              # F035 AND #$80 (direita = D7 do P0)
     0xD0, 0x02,              # F037 BNE +2
     0xE6, 0x80,              # F039 INC $80
     0xA5, 0x80,              # F03B LDA $80

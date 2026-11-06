@@ -34,7 +34,11 @@ public:
     void save(emu::StateWriter& w) const;
     bool load(emu::StateReader& r);
 
+    // diagnostico: quantas leituras por registrador (SWCHA=0, SWCHB=2)
+    uint32_t dbgReads(int reg) const { return dbg_reads_[reg & 7]; }
+
 private:
+    uint32_t dbg_reads_[8] = {0};
     uint8_t ram_[128] = {0};
     uint8_t portA_ = 0, ddrA_ = 0, portB_ = 0, ddrB_ = 0;
     uint8_t inputA_ = 0xFF, inputB_ = 0xFF;

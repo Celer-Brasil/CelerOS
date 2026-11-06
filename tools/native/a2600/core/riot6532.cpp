@@ -19,24 +19,27 @@ void Riot6532::reset()
 
 void Riot6532::setInputs(uint8_t dirs, uint8_t switches)
 {
-    // SWCHA: bits 0-3 do jogador 0, ativo baixo; o jogador 1 (bits 4-7) fica
-    // solto nesta versao (o app tem um d-pad so).
-    inputA_ = (uint8_t)(0xF0 | (~dirs & 0x0F));
+    // SWCHA (Stella Guide 5.3): D7-D4 = P0, D3-D0 = P1; dentro do nibble
+    // D7=right, D6=left, D5=down, D4=up, ativo baixo. `dirs` usa
+    // up=0x01, down=0x02, left=0x04, right=0x08.
+    inputA_ = (uint8_t)(((~dirs & 0x0F) << 4) | 0x0F);  // P1 solto
 
-    // SWCHB: reset/select ativos baixos; bit3 = B/W (0 = cor); bits 6/7 =
-    // dificuldade (0 = A, 1 = B).
+    // SWCHB: D7=P1 dif, D6=P0 dif (0=B/amador, 1=A/pro); D3=cor (0=P/B,
+    // 1=cor); D1=select e D0=reset ativos baixos.
     uint8_t sw = 0x00;
     sw |= (switches & 0x02) ? 0x00 : 0x01;  // reset
     sw |= (switches & 0x01) ? 0x00 : 0x02;  // select
-    sw |= (switches & 0x04) ? 0x00 : 0x08;  // cor/BW
-    sw |= (switches & 0x08) ? 0x00 : 0x40;  // P0 dif B
-    sw |= (switches & 0x10) ? 0x00 : 0x80;  // P1 dif B
+    sw |= (switches & 0x04) ? 0x08 : 0x00;  // 1 = cor
+    sw |= (switches & 0x08) ? 0x40 : 0x00;  // 1 = dif A do P0
+    sw |= (switches & 0x10) ? 0x80 : 0x00;  // 1 = dif A do P1
     inputB_ = sw;
 }
 
 uint8_t Riot6532::read(uint16_t addr)
 {
-    switch (addr & 0x07) {
+    const uint16_t a = addr & 0x07;
+    dbg_reads_[a]++;
+    switch (a) {
     case 0:  // SWCHA
         return (uint8_t)((portA_ & ddrA_) | (inputA_ & (uint8_t)~ddrA_));
     case 1:  // SWACNT (DDR A)

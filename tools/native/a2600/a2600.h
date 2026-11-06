@@ -39,6 +39,11 @@ public:
     uint32_t romCrc() const { return romCrc_; }
     uint64_t cycles() const { return cpu_.cycles; }
 
+    // diagnostico (testes host): PC e quantas leituras de input o jogo fez
+    uint16_t cpuPc() const { return cpu_.pc; }
+    uint32_t dbgInptReads(int i) const { return tia_.dbgInptReads(i); }
+    uint32_t dbgPortReads(int r) const { return riot_.dbgReads(r); }
+
     void save(StateWriter& w) const;
     bool loadState(StateReader& r);
 

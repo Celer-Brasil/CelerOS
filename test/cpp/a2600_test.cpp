@@ -207,44 +207,51 @@ static void testTia()
         if (t.lineBuffer()[i] != 0) allBlack = false;
     CHECK(allBlack, "TIA fundo preto");
 
-    // player: RESP em clock 66; 8 px = 66..73; visiveis 68..73 (x 0..5)
+    // player: RESP em clock 66; 8 px = 66..73 (visiveis 0..159). O GRP vem
+    // DEPOIS do RESP: escrito antes, o player aparece na posicao inicial 0
+    // durante os 66 clocks anteriores (fiel ao hardware, mas nao e o teste).
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
     t.write(0x06, 0x1E);  // COLUP0 ouro
-    t.write(0x1B, 0xFF);  // GRP0
     tiaLine(t, 22);       // clock 66
     t.write(0x10, 0x00);  // RESP0
+    t.write(0x1B, 0xFF);  // GRP0
     tiaLine(t, 54);       // fecha a linha
     const uint16_t gold = emu_rgb565(255, 226, 80);
-    CHECK(t.lineBuffer()[0] == gold, "player em x=0");
-    CHECK(t.lineBuffer()[5] == gold, "player ate x=5");
-    CHECK(t.lineBuffer()[6] == 0, "player termina em x=6");
+    CHECK(t.lineBuffer()[66] == gold, "player em x=66");
+    CHECK(t.lineBuffer()[73] == gold, "player ate x=73");
+    CHECK(t.lineBuffer()[0] == 0, "player nao vaza para x=0");
+    CHECK(t.lineBuffer()[74] == 0, "player termina em x=74");
 
-    // HMOVE +1 desloca um pixel: 67..74 -> x 0..6
+    // HMOVE +1 desloca um pixel: 67..74
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
     t.write(0x06, 0x1E);
-    t.write(0x1B, 0xFF);
     tiaLine(t, 22);
     t.write(0x20, 0x10);  // HMP0 = +1
     t.write(0x10, 0x00);  // RESP0
     t.write(0x2A, 0x00);  // HMOVE
+    t.write(0x1B, 0xFF);  // GRP0
     tiaLine(t, 54);
-    CHECK(t.lineBuffer()[0] == gold, "HMOVE x=0");
-    CHECK(t.lineBuffer()[6] == gold, "HMOVE x=6");
-    CHECK(t.lineBuffer()[7] == 0, "HMOVE termina em x=7");
+    CHECK(t.lineBuffer()[66] == 0, "HMOVE desloca de x=66");
+    CHECK(t.lineBuffer()[67] == gold, "HMOVE x=67");
+    CHECK(t.lineBuffer()[74] == gold, "HMOVE ate x=74");
+    CHECK(t.lineBuffer()[75] == 0, "HMOVE termina em x=75");
 
-    // playfield: PF2 bits 5-7 on -> x 0..11 ligados; x=20 desligado
+    // playfield: PF0 bit4 -> x=0..3; PF2 bits 5-7 -> x=68..79 (o playfield
+    // comeca na borda esquerda do vidro, clock 68 da linha)
     t.reset();
     t.setFramebuffer(fb);
     t.write(0x01, 0x00);
     t.write(0x08, 0x1E);  // COLUPF
+    t.write(0x0D, 0x10);  // PF0
     t.write(0x0F, 0xE0);  // PF2
     tiaLine(t, 76);
-    CHECK(t.lineBuffer()[0] == gold, "playfield x=0");
+    CHECK(t.lineBuffer()[0] == gold, "playfield PF0 em x=0");
     CHECK(t.lineBuffer()[20] == 0, "playfield x=20 off");
+    CHECK(t.lineBuffer()[70] == gold, "playfield PF2 alinhado ao vidro (x=70)");
 
     // colisoes: P0 e P1 em 66; CXPPMM bit7 e limpo na leitura
     t.reset();
@@ -261,14 +268,14 @@ static void testTia()
     CHECK((t.read(0x37) & 0x80) != 0, "colisao P0-P1");
     CHECK((t.read(0x37) & 0x80) == 0, "leitura limpa colisao");
 
-    // WSYNC para a CPU ate o fim da linha
+    // WSYNC para a CPU ate a borda do horizontal blank (clock 160)
     t.reset();
     t.setFramebuffer(fb);
-    tiaLine(t, 10);
+    tiaLine(t, 10);       // clock 30
     t.write(0x02, 0x00);
     CHECK(t.wsync(), "WSYNC liga");
-    tiaLine(t, 66);
-    CHECK(!t.wsync(), "WSYNC solta no fim da linha");
+    tiaLine(t, 44);       // 132 clocks -> 162: passou da borda (160)
+    CHECK(!t.wsync(), "WSYNC solta na borda do blank");
 
     // audio: canal 0 com volume gera PCM no downsampler
     static int16_t pcm[2048];
@@ -376,9 +383,18 @@ static void testRiot()
     Riot6532 r;
     r.reset();
     r.setInputs(0x01, 0x01);  // up pressionado, select pressionado
-    CHECK((r.read(0x00) & 0x01) == 0, "SWCHA up ativo baixo");
-    CHECK((r.read(0x00) & 0x02) != 0, "SWCHA down solto");
+    // SWCHA: P0 no nibble ALTO (D4=up, D5=down, D6=left, D7=right, ativo baixo)
+    CHECK((r.read(0x00) & 0x10) == 0, "SWCHA up ativo baixo (D4)");
+    CHECK((r.read(0x00) & 0x20) != 0, "SWCHA down solto (D5)");
+    CHECK((r.read(0x00) & 0x0F) == 0x0F, "SWCHA P1 solto no nibble baixo");
     CHECK((r.read(0x02) & 0x02) == 0, "SWCHB select ativo baixo");
+
+    // SWCHB D3 = cor (1=cor); D6 = dificuldade do P0 (1=A, 0=B)
+    r.setInputs(0, 0x04);
+    CHECK((r.read(0x02) & 0x08) != 0, "SWCHB cor = D3=1");
+    CHECK((r.read(0x02) & 0x40) == 0, "SWCHB dificuldade B = D6=0");
+    r.setInputs(0, 0x0C);  // cor + dif A
+    CHECK((r.read(0x02) & 0x40) != 0, "SWCHB dificuldade A = D6=1");
 
     r.write(0x05, 0x00);  // TIMINT: prescaler 1
     r.write(0x04, 5);     // INTIM = 5

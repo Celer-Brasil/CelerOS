@@ -113,8 +113,8 @@ uint8_t Tia::read(uint16_t addr)
         const int i = a - 0x38;
         return pot_[i] == 0 ? 0x80 : 0x00;
     }
-    case 0x3C: return inpt_[0];
-    case 0x3D: return inpt_[1];
+    case 0x3C: dbg_inpt_[0]++; return inpt_[0];
+    case 0x3D: dbg_inpt_[1]++; return inpt_[1];
     case 0x3E: case 0x3F: return 0x80;
     default: return 0;  // registradores write-only
     }
@@ -157,11 +157,11 @@ void Tia::write(uint16_t addr, uint8_t v)
     case 0x0D: pf_[0] = v; break;
     case 0x0E: pf_[1] = v; break;
     case 0x0F: pf_[2] = v; break;
-    case 0x10: pos_[0] = clock_; break;
-    case 0x11: pos_[1] = clock_; break;
-    case 0x12: pos_[2] = clock_; break;
-    case 0x13: pos_[3] = clock_; break;
-    case 0x14: pos_[4] = clock_; break;
+    case 0x10: pos_[0] = (clock_ < kVisibleWidth) ? clock_ : 0; break;
+    case 0x11: pos_[1] = (clock_ < kVisibleWidth) ? clock_ : 0; break;
+    case 0x12: pos_[2] = (clock_ < kVisibleWidth) ? clock_ : 0; break;
+    case 0x13: pos_[3] = (clock_ < kVisibleWidth) ? clock_ : 0; break;
+    case 0x14: pos_[4] = (clock_ < kVisibleWidth) ? clock_ : 0; break;
     case 0x15: audc_[0] = v; break;
     case 0x16: audc_[1] = v; break;
     case 0x17: audf_[0] = v; break;
@@ -240,13 +240,15 @@ void Tia::tickClock()
             if (pot_[i] > 0) pot_[i]--;
     }
     clock_++;
+    // Borda do horizontal blank: solta o WSYNC (a CPU prepara a proxima
+    // linha durante os 68 clocks de blank).
+    if (clock_ == kVisibleStart + kVisibleWidth) wsync_ = false;
     if (clock_ >= kColorClocks) endLine();
 }
 
 void Tia::endLine()
 {
     clock_ = 0;
-    wsync_ = false;
     if (!(vblank_ & 0x02)) {
         if (visibleY_ < kVisibleHeight && frame_ != nullptr) {
             memcpy(frame_ + (size_t)visibleY_ * kVisibleWidth, line_, sizeof(line_));
@@ -339,12 +341,16 @@ bool Tia::ballPixel(int c) const
 
 bool Tia::playfieldPixel(int c) const
 {
-    int p;
+    // O playfield comeca a varrer no FIM do horizontal blank (borda esquerda
+    // do vidro), nao no clock 0 da linha: 20 bits de 4 color clocks cobrem a
+    // metade esquerda dos 160 visiveis; a direita duplica (CTRLPF D0=0) ou
+    // espelha (D0=1). `c` e o color clock da LINHA (0..227).
+    int p = c - kVisibleStart;
+    if (p < 0 || p >= kVisibleWidth) return false;
     if (ctrlpf_ & 0x01) {  // reflect: segunda metade espelhada
-        p = c % 160;
         if (p >= 80) p = 159 - p;
     } else {
-        p = c % 80;
+        p %= 80;
     }
     const int idx = p >> 2;  // 20 bits de 4 color clocks cada
     if (idx < 4) return (pf_[0] & (0x10 << idx)) != 0;

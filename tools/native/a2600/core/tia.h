@@ -27,7 +27,11 @@ class Tia
 {
 public:
     static constexpr int kColorClocks = 228;
-    static constexpr int kVisibleStart = 68;
+    // A linha e 160 color clocks VISIVEIS (0..159) seguidos de 68 de
+    // horizontal blank (160..227): o feixe desenha e depois retorna. O WSYNC
+    // libera a CPU na BORDA do blank (clock 160), dando os 68 clocks para o
+    // kernel preparar a proxima linha; RESP durante o blank = borda esquerda.
+    static constexpr int kVisibleStart = 0;
     static constexpr int kVisibleWidth = 160;
     static constexpr int kVisibleHeight = 192;
     static constexpr int kLines = 262;   // NTSC
@@ -47,6 +51,8 @@ public:
     const uint16_t* lineBuffer() const { return line_; }
     // cor TIA (7 bits) -> RGB565 swap; publico para os testes compararem
     uint16_t color565(uint8_t tiaColor) const { return pal_[tiaColor & 0xFE]; }
+    // diagnostico: leituras dos gatilhos (o jogo esta consultando o input?)
+    uint32_t dbgInptReads(int i) const { return dbg_inpt_[i & 1]; }
 
     void save(emu::StateWriter& w) const;
     bool load(emu::StateReader& r);
@@ -87,6 +93,7 @@ private:
 
     uint16_t* frame_ = nullptr;
     uint16_t line_[kVisibleWidth] = {0};  // pixels da linha corrente
+    uint32_t dbg_inpt_[2] = {0, 0};
     uint16_t pal_[256] = {0};
     emu::AudioDownsampler* audio_ = nullptr;
 };

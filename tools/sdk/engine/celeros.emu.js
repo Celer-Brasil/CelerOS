@@ -449,6 +449,29 @@ function run(cfg)
             else if (g.kind === "start") btnsMask |= bits.start;
             else if (g.kind === "select") btnsMask |= bits.select;
         }
+        // gamepad do OS (API 61, canal Input.padState): mescla no MESMO
+        // bitmask depois do toque — dpad e esquerdo = direcao, A/B/SEL/STA =
+        // os botoes da tela. Broadcast: o toque nao derruba o que veio do
+        // pad e vice-versa. O guide nem chega aqui (o servico inputsys
+        // consome a borda dele e sai do app pelo caminho limpo).
+        if (typeof Input !== "undefined" && typeof Input.padState === "function") {
+            var ps = Input.padState();
+            if (ps.seq > 0) {
+                if ((ps.buttons & 1) !== 0) btnsMask |= bits.a;         // A
+                if ((ps.buttons & 2) !== 0 && bits.b) btnsMask |= bits.b;  // B
+                if ((ps.buttons & 256) !== 0) btnsMask |= bits.select;  // select
+                if ((ps.buttons & 512) !== 0) btnsMask |= bits.start;   // start
+                if (ps.dpad & 0x1) btnsMask |= bits.up;
+                if (ps.dpad & 0x4) btnsMask |= bits.down;
+                if (ps.dpad & 0x8) btnsMask |= bits.left;
+                if (ps.dpad & 0x2) btnsMask |= bits.right;
+                var dz = 70;  // esquerdo tambem dirige (~55% do curso)
+                if (ps.lx > dz) btnsMask |= bits.right;
+                else if (ps.lx < -dz) btnsMask |= bits.left;
+                if (ps.ly > dz) btnsMask |= bits.down;
+                else if (ps.ly < -dz) btnsMask |= bits.up;
+            }
+        }
         if (!dpActive) { dpBaseX = DP_HOME_X; dpBaseY = DP_HOME_Y; dpKnobX = DP_HOME_X; dpKnobY = DP_HOME_Y; }
     }
 
@@ -991,6 +1014,9 @@ function run(cfg)
 }
 
 module.exports = {
-    version: "0.2.0",
+    version: "0.3.0",  // 0.3.0: gamepad do OS (Input.padState, API 61) mesclado
+                       // no btnsMask — dpad/esquerdo = direcao, A/B/SEL/STA =
+                       // botoes da tela; toque e pad coexistem. 0.2.0: frameskip
+                       // auto adaptativo e lista com toque/arrasto.
     run: run,
 };

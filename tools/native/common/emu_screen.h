@@ -333,9 +333,12 @@ private:
     uint16_t* lineMix_ = nullptr;
     uint16_t* col_ = nullptr;
     int srcW_ = 0, srcH_ = 0, scaleW_ = 0, scaleH_ = 0;
-    int tgtW_ = -1, tgtH_ = -1, gx_ = 0, gy_ = 0;
-    int lastTarget_ = -1;
-    bool force_ = true;
+    // Inicializadores TODOS zero: o blob pode por o objeto na regiao fast
+    // (.clrn_fast e NOBITS, zerada pelo loader). Os valores reais saem do
+    // init(), chamado no INIT antes de qualquer uso.
+    int tgtW_ = 0, tgtH_ = 0, gx_ = 0, gy_ = 0;
+    int lastTarget_ = 0;
+    bool force_ = false;
     const NativeScreen* scr_ = nullptr;
     uint16_t y0_[kMaxSrcH + 1] = {0};
     uint32_t rowHash_[kMaxSrcH] = {0};

@@ -510,6 +510,20 @@ function run(cfg)
     }
     function drawToast() { if (toastOn()) drawToastAt(8, GY + 8); }
 
+    // Faixas fora do retangulo do jogo (letterbox): o overlay e translucido e
+    // redesenhado todo quadro. Dentro do quadro o proprio jogo repinta por
+    // baixo; FORA dele nada limpa o vidro, entao os circulos/botoes iam
+    // somando e a base flutuante do d-pad deixava as posicoes antigas na
+    // tela. Pinta-las de preto antes do overlay devolve o fundo do app.
+    function clearBands()
+    {
+        S.setAlpha(255);
+        if (GY > 0) S.fillRect(0, 0, W, GY, 0x0000);
+        if (H - GY - GH > 0) S.fillRect(0, GY + GH, W, H - GY - GH, 0x0000);
+        if (GX > 0) S.fillRect(0, 0, GX, H, 0x0000);
+        if (W - GX - GW > 0) S.fillRect(GX + GW, 0, W - GX - GW, H, 0x0000);
+    }
+
     function drawOverlay()
     {
         if (analogOn) drawPaddle(); else drawDpad();
@@ -755,8 +769,11 @@ function run(cfg)
         var render = true;
         if (skipMode) render = (frameNo % 2) === 0;
         N.frame(btnsMask, render);
-        if (render) drawOverlay();
-        if (render) UI.end(skipMode ? 30 : 60);
+        if (render) {
+            clearBands();
+            drawOverlay();
+            UI.end(skipMode ? 30 : 60);
+        }
     }
 
     function pauseGame()
@@ -800,6 +817,6 @@ function run(cfg)
 }
 
 module.exports = {
-    version: "0.1.1",
+    version: "0.1.2",
     run: run,
 };

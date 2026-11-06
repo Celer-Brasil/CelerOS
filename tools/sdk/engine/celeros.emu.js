@@ -9,7 +9,7 @@
 // Uso:
 //   require("celeros.emu").run({
 //       title: "ATARI 2600", coreFile: "a2600_core.bin",
-//       scratchKB: function (romBytes) { return 600 + Math.ceil(romBytes/1024); },
+//       scratchKB: function (romBytes) { return 1240 + Math.ceil(romBytes/1024); },
 //       romDirs: ["/sd/roms/a2600", "/local/roms/a2600"],
 //       romExts: [".a26", ".bin"],
 //       screenW: 160, screenH: 192, aspectW: 4, aspectH: 3,
@@ -22,10 +22,15 @@
 //       menuExtra: function (api) { return [{ label:"...", action:function(api){} }]; },
 //   });
 //
-// O caminho de video e o comprovado FRAME + SET_SCALE + nativeDraw (o core
-// entrega o quadro JA escalado para o retangulo 4:3 do vidro; o overlay e
-// desenhado por cima em JS). Cores que implementam FRAME_SCREEN podem compor
-// direto, mas esta dep nao depende disso.
+// Video (API 60): o core que implementa FRAME_SCREEN compoe o quadro
+// escalado + o overlay DIRETO no vidro inteiro (System.nativeScreen), numa
+// passada so e reescrevendo apenas as linhas que mudaram; o overlay vira
+// CARIMBOS (cada controle e desenhado uma vez sobre preto e branco na
+// abertura da ROM; por quadro so se diz qual carimbo vai onde). Sem alvo
+// (firmware antigo, core sem FRAME_SCREEN, vidro ocupado) cai no caminho
+// FRAME + SET_SCALE + nativeDraw com o overlay em JS. Bancada 4848 (Atari,
+// Pitfall): o caminho antigo gastava ~63 ms de video por quadro renderizado;
+// o direto, ~1 ms.
 
 var S = System;
 
@@ -208,6 +213,9 @@ function run(cfg)
     var N = (function () {
         var h = 0, romOff = 0, pcmOff = 0, fbOff = 0, stateOff = 0, scaleOff = 0;
         var audio = false;
+        var direct = false, slotArg = [];
+        var NO_TARGET = 4294967295;
+        var HAS_SCREEN = typeof S.nativeScreen === "function" && typeof S.nativeGrab === "function";
         function ctl(cmd, arg) { return S.nativeCall(h, 0, cmd, arg || 0); }
         return {
             ctl: function (cmd, arg) { return h > 0 ? ctl(cmd, arg) : 0; },
@@ -219,6 +227,8 @@ function run(cfg)
                 // firmware < API 60 corta a scratch em 1664 KB sem avisar
                 if (S.getAPILevel() < 60 && kb > 1664) kb = 1664;
                 h = S.nativeLoad(S.appDir() + "/" + cfg.coreFile, kb);
+                slotArg = [];
+                direct = false;
                 if (h <= 0) return false;
                 if (ctl(0, kb) < romBytes) return false;
                 romOff = ctl(1);
@@ -234,15 +244,51 @@ function run(cfg)
                 return n > 0 && ctl(6, n) === 1;
             },
             reset: function () { if (h > 0) ctl(7); },
-            frame: function (btns, render) {
+            // canDirect: so com os carimbos prontos (sem eles o overlay sumiria)
+            frame: function (btns, render, canDirect) {
                 if (h <= 0) return;
                 var arg = ((btns | 0) & 0xFF) | (render ? 0x100 : 0);
-                ctl(8, arg);
-                if (render && scaleOff > 0) S.nativeDraw(h, scaleOff, GX, GY, GW, GH);
+                // alvo = vidro inteiro: o core centra o quadro, pinta as
+                // faixas e compoe os carimbos fora do retangulo do jogo
+                direct = canDirect && HAS_SCREEN &&
+                         S.nativeScreen(h, 0, 15, arg, 0, 0, W, H) !== NO_TARGET;
+                if (!direct) {
+                    ctl(8, arg);
+                    if (render && scaleOff > 0) S.nativeDraw(h, scaleOff, GX, GY, GW, GH);
+                }
                 if (audio) {
                     var n = ctl(11);
                     if (n > 0) S.nativeAudio(h, pcmOff, n);
                 }
+            },
+            direct: function () { return direct; },
+            // Carimbo `id` (w x hh) do overlay: draw(x, y) desenha o controle
+            // no quadro do app, uma vez sobre PRETO e outra sobre BRANCO; o
+            // core tira alpha e cor pre-multiplicada da diferenca.
+            stamp: function (id, w, hh, draw) {
+                if (h <= 0 || !HAS_SCREEN) return false;
+                var offs = [ctl(16, 0), ctl(16, 1)], bg = [0x0000, 0xFFFF];
+                if (offs[0] === 0) return false;  // core sem carimbos
+                for (var i = 0; i < 2; i++) {
+                    S.setAlpha(255);
+                    S.fillRect(0, 0, w, hh, bg[i]);
+                    draw();
+                    S.setAlpha(255);
+                    if (!S.nativeGrab(h, offs[i], 0, 0, w, hh)) return false;
+                }
+                return ctl(17, id | (w << 5) | (hh << 15)) === 1;
+            },
+            // slot 0..7 recebe o carimbo id em (x, y) do vidro; id < 0 esvazia
+            place: function (slot, id, x, y) {
+                var a = id < 0 ? (slot | (63 << 4))
+                               : (slot | (id << 4) | ((x + 256) << 10) | ((y + 256) << 20));
+                if (slotArg[slot] === a) return;
+                slotArg[slot] = a;
+                ctl(18, a);
+            },
+            stampReset: function () {
+                if (h > 0) ctl(19);
+                slotArg = [];
             },
             audioStart: function () { audio = h > 0; if (h > 0) ctl(13, 1); return audio; },
             audioStop: function () {
@@ -262,6 +308,8 @@ function run(cfg)
             unload: function () {
                 if (h > 0) { S.nativeAudioStop(h); S.nativeFree(h); h = 0; }
                 audio = false;
+                direct = false;
+                slotArg = [];
             },
         };
     })();
@@ -280,6 +328,7 @@ function run(cfg)
         }
         screen = "game";
         slotMsg = "";
+        buildStamps();      // desenha no quadro do app; o needClear limpa
         needClear = true;
         dpReset();
         toastStart = S.millis();
@@ -443,17 +492,28 @@ function run(cfg)
         drawKnobAt(dpKnobX, dpKnobY, dpActive);
     }
 
+    function paddleKnobX()
+    {
+        return PADDLE_X0 + Math.round((PADDLE_X1 - PADDLE_X0) * paddleValue / 255);
+    }
+    function drawRailAt(x0, y)
+    {
+        S.setAlpha(85);
+        S.fillRoundRect(x0 - 10, y - 22, (PADDLE_X1 - PADDLE_X0) + 20, 44, 22, 0x0000);
+        S.setAlpha(170);
+        S.drawLine(x0, y, x0 + (PADDLE_X1 - PADDLE_X0), y, 0x9CF3);
+    }
+    function drawPaddleKnobAt(kx, ky)
+    {
+        S.setAlpha(210);
+        S.fillCircle(kx, ky, KNOB_R - 6, 0xD69A);
+        S.setAlpha(240);
+        S.drawCircle(kx, ky, KNOB_R, 0xFFFF);
+    }
     function drawPaddle()
     {
-        var kx = PADDLE_X0 + Math.round((PADDLE_X1 - PADDLE_X0) * paddleValue / 255);
-        S.setAlpha(85);
-        S.fillRoundRect(PADDLE_X0 - 10, PADDLE_Y - 22, (PADDLE_X1 - PADDLE_X0) + 20, 44, 22, 0x0000);
-        S.setAlpha(170);
-        S.drawLine(PADDLE_X0, PADDLE_Y, PADDLE_X1, PADDLE_Y, 0x9CF3);
-        S.setAlpha(210);
-        S.fillCircle(kx, PADDLE_Y, KNOB_R - 6, 0xD69A);
-        S.setAlpha(240);
-        S.drawCircle(kx, PADDLE_Y, KNOB_R, 0xFFFF);
+        drawRailAt(PADDLE_X0, PADDLE_Y);
+        drawPaddleKnobAt(paddleKnobX(), PADDLE_Y);
     }
 
     function drawAB(cx, cy, label, on)
@@ -532,6 +592,63 @@ function run(cfg)
         drawPauseBtn();
         drawToast();
         S.setAlpha(255);
+    }
+
+    // ---- overlay em CARIMBOS (caminho direto) -----------------------------
+    // Cada controle/estado vira um carimbo no core na abertura da ROM; por
+    // quadro o app so diz qual carimbo vai em que lugar (N.place manda ao
+    // core so os slots que mudaram) e o core compoe junto com o quadro.
+    var ST_DPAD = 0, ST_KNOB = 3, ST_A = 5, ST_B = 7, ST_SEL = 9, ST_STA = 11,
+        ST_PAUSE = 13, ST_TOAST = 14, ST_RAIL = 15, ST_PKNOB = 16;
+    var DP_BOX = 2 * (DP_RING + 6) + 4, KNOB_BOX = 2 * KNOB_R + 4, AB_BOX = 2 * AB_R + 4,
+        PAUSE_BOX = 2 * PAUSE_R + 4, RAIL_W = (PADDLE_X1 - PADDLE_X0) + 24, RAIL_H = 48;
+    var stampsOk = false;
+
+    function buildStamps()
+    {
+        N.stampReset();
+        var dc = DP_BOX >> 1, kc = KNOB_BOX >> 1, ac = AB_BOX >> 1, pc = PAUSE_BOX >> 1;
+        var ok = N.stamp(ST_DPAD, DP_BOX, DP_BOX, function () { drawDpadAt(dc, dc, false, false); }) &&
+            N.stamp(ST_DPAD + 1, DP_BOX, DP_BOX, function () { drawDpadAt(dc, dc, true, false); }) &&
+            N.stamp(ST_DPAD + 2, DP_BOX, DP_BOX, function () { drawDpadAt(dc, dc, true, true); }) &&
+            N.stamp(ST_KNOB, KNOB_BOX, KNOB_BOX, function () { drawKnobAt(kc, kc, false); }) &&
+            N.stamp(ST_KNOB + 1, KNOB_BOX, KNOB_BOX, function () { drawKnobAt(kc, kc, true); }) &&
+            N.stamp(ST_A, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.a, false); }) &&
+            N.stamp(ST_A + 1, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.a, true); }) &&
+            (!hasB || (N.stamp(ST_B, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.b, false); }) &&
+                       N.stamp(ST_B + 1, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.b, true); }))) &&
+            N.stamp(ST_SEL, SS_W + 4, SS_H + 4, function () { drawPillAt(2, 2, labels.select, false); }) &&
+            N.stamp(ST_SEL + 1, SS_W + 4, SS_H + 4, function () { drawPillAt(2, 2, labels.select, true); }) &&
+            N.stamp(ST_STA, SS_W + 4, SS_H + 4, function () { drawPillAt(2, 2, labels.start, false); }) &&
+            N.stamp(ST_STA + 1, SS_W + 4, SS_H + 4, function () { drawPillAt(2, 2, labels.start, true); }) &&
+            N.stamp(ST_PAUSE, PAUSE_BOX, PAUSE_BOX, function () { drawPauseAt(pc, pc); }) &&
+            N.stamp(ST_TOAST, toastW() + 4, 26, function () { drawToastAt(2, 2); }) &&
+            (!analog || (N.stamp(ST_RAIL, RAIL_W, RAIL_H, function () { drawRailAt(12, 24); }) &&
+                         N.stamp(ST_PKNOB, KNOB_BOX, KNOB_BOX, function () { drawPaddleKnobAt(kc, kc); })));
+        S.setAlpha(255);
+        stampsOk = ok;
+        return ok;
+    }
+
+    function placeStamps()
+    {
+        var dc = DP_BOX >> 1, kc = KNOB_BOX >> 1, ac = AB_BOX >> 1, pc = PAUSE_BOX >> 1;
+        if (analogOn) {
+            N.place(0, ST_RAIL, PADDLE_X0 - 12, PADDLE_Y - 24);
+            N.place(1, ST_PKNOB, paddleKnobX() - kc, PADDLE_Y - kc);
+        } else {
+            var on = (btnsMask & (bits.up | bits.down | bits.left | bits.right)) !== 0;
+            N.place(0, ST_DPAD + (dpActive ? (on ? 2 : 1) : 0),
+                    Math.round(dpBaseX) - dc, Math.round(dpBaseY) - dc);
+            N.place(1, ST_KNOB + (dpActive ? 1 : 0), Math.round(dpKnobX) - kc, Math.round(dpKnobY) - kc);
+        }
+        N.place(2, ST_A + ((btnsMask & bits.a) !== 0 ? 1 : 0), A_X - ac, A_Y - ac);
+        if (hasB) N.place(3, ST_B + ((btnsMask & bits.b) !== 0 ? 1 : 0), B_X - ac, B_Y - ac);
+        else N.place(3, -1, 0, 0);
+        N.place(4, ST_SEL + ((btnsMask & bits.select) !== 0 ? 1 : 0), SEL_X - 2, SS_Y - 2);
+        N.place(5, ST_STA + ((btnsMask & bits.start) !== 0 ? 1 : 0), STA_X - 2, SS_Y - 2);
+        N.place(6, ST_PAUSE, PAUSE_X - pc, PAUSE_Y - pc);
+        N.place(7, toastOn() ? ST_TOAST : -1, 6, GY + 6);
     }
 
     // ---- tela: lista de ROMs ----------------------------------------------
@@ -764,13 +881,20 @@ function run(cfg)
             try { cfg.beforeFrame(api); } catch (e) {}
         }
         if (analog && analogOn) N.ctl(analog.ctl, paddleValue);
+        // Caminho direto: renderizar custa ~1 ms, entao TODO quadro sai (o
+        // frameskip escondia de vez os sprites que o jogo pisca em quadros
+        // alternados). O frameskip so vale no caminho antigo.
+        var direct = N.direct() && stampsOk;
         var render = true;
-        if (skipMode) render = (frameNo % 2) === 0;
-        N.frame(btnsMask, render);
+        if (skipMode && !direct) render = (frameNo % 2) === 0;
+        if (render && stampsOk) placeStamps();
+        N.frame(btnsMask, render, stampsOk);
         if (render) {
-            clearBands();
-            drawOverlay();
-            UI.end(skipMode ? 30 : 60);
+            if (!N.direct()) {
+                clearBands();
+                drawOverlay();
+            }
+            UI.end(skipMode && !direct ? 30 : 60);
         }
     }
 
@@ -815,6 +939,6 @@ function run(cfg)
 }
 
 module.exports = {
-    version: "0.1.3",
+    version: "0.2.0",
     run: run,
 };

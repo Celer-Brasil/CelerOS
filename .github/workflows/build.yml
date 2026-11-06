@@ -58,6 +58,14 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/nes -Itools/native/nes/core -o nes_apu_test test/cpp/nes_apu_test.cpp tools/native/nes/core/apu2A03.cpp
           ./nes_apu_test
+      - name: Core NES (carts/PPU/CPU fora da APU, blob do Anemoia)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/nes -o nes_core_test test/cpp/nes_core_test.cpp tools/native/nes/NesCore.cpp tools/native/nes/Nes.cpp
+          ./nes_core_test
+      - name: Core do Atari 2600 (CPU/TIA/RIOT/carts/quadro no host)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/common -Itools/native/a2600 -Itools/native/a2600/core -o a2600_test test/cpp/a2600_test.cpp tools/native/a2600/A2600Core.cpp
+          ./a2600_test
       - name: celerctl tests (protocolo HostLink contra device simulado)
         run: |
           pip install pyserial

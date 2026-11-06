@@ -1,0 +1,22 @@
+{
+  "name": "Atari 2600",
+  "packageName": "celeros.a2600",
+  "version": "1.0.0",
+  "api": 59,
+  "permissions": [
+    "fs"
+  ],
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Arcade",
+  "description": "Emulador de Atari 2600 (CPU 6507 + TIA + RIOT) como APP NATIVO: o nucleo compilado viaja no pacote (a2600_core.bin, blob CLRN) e roda via System.native* — ROMs em /sd/roms/a2600 e /local/roms/a2600, jogo em tela cheia 4:3 e controles em overlay: d-pad analogico flutuante, FOGO, SEL/RESET, paddle por arrasto (Breakout/Warlords), frameskip, audio e 3 slots de save state. Cartuchos 2K/4K/F8/F6/F4 (+SC), FE, E0, 3F/3E e UA, com selecao de mapper por ROM.",
+  "changelog": "1.0.0 - primeira versao: nucleo nativo do Atari 2600 (CPU 6507 cycle-stepped com modo decimal e opcodes ilegais, TIA com racing-the-beam, RIOT 6532 com timer e portas, cartuchos 2K/4K/F8/F6/F4, F8SC/F6SC/F4SC, FE, E0, 3F/3E e UA). Quadro 160x192 escalado 4:3, audio TIA em 44,1 kHz, 3 slots de save state versionados (container CEMU), frameskip e pausa da malha CelerNet durante o jogo. Controles na tela: d-pad analogico flutuante, FOGO, SEL/RESET, pausa e modo PADDLE (trilho horizontal) para jogos de raquete; menu com Reset, slots, frameskip, audio, cor/BW, dificuldade A/B e o mapper do cartucho (8K e ambiguo entre F8/FE/E0/3F/3E/UA). O app nao vem com jogos.",
+  "deps": {
+    "celeros.emu": "^0.1.0"
+  },
+  "requires": [
+    "psram",
+    "native"
+  ],
+  "topbar": false
+}

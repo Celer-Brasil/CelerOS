@@ -790,10 +790,16 @@ function run(cfg)
         else if (screen === "sel") loopSel();
         else if (screen === "pause") loopPause();
         else loopErr();
+        // Yield OBRIGATORIO: o quadro emulado e um laco puro de JS + blob e o
+        // UI.end nao segura o bastante. Sem esta pausa a IDLE0 do core 0 (com
+        // o audio ligado o player do PcmFeed ainda disputa as janelas) nao
+        // roda e o TASK WDT (15 s) reinicia o aparelho. 1 tick = 1 ms no
+        // CONFIG_FREERTOS_HZ=1000, ou seja ~1% do quadro.
+        S.delay(1);
     }
 }
 
 module.exports = {
-    version: "0.1.0",
+    version: "0.1.1",
     run: run,
 };

@@ -253,6 +253,25 @@ static void testTia()
     CHECK(t.lineBuffer()[20] == 0, "playfield x=20 off");
     CHECK(t.lineBuffer()[70] == gold, "playfield PF2 alinhado ao vidro (x=70)");
 
+    // VBLANK no MEIO da janela de 192 linhas: a linha vira PRETA e consome a
+    // posicao — antes ela era pulada e o framebuffer guardava o pixel do
+    // quadro anterior (o logo do titulo ficava por cima do jogo).
+    t.reset();
+    t.setFramebuffer(fb);
+    memset(fb, 0xAA, sizeof(fb));  // "pixel velho" de proposito
+    t.write(0x08, 0x1E);  // COLUPF ouro
+    t.write(0x0D, 0x10);  // PF0
+    t.write(0x01, 0x00);  // VBLANK off: a janela abre na 1a linha
+    tiaLine(t, 76);       // y=0 visivel
+    tiaLine(t, 76);       // y=1 visivel
+    t.write(0x01, 0x02);  // VBLANK on
+    tiaLine(t, 76);       // y=2 blankada -> preta
+    t.write(0x01, 0x00);  // VBLANK off de novo
+    tiaLine(t, 76);       // y=3 visivel, na mesma posicao
+    CHECK(fb[0 * 160 + 0] == gold, "janela: linha 0 visivel");
+    CHECK(fb[2 * 160 + 0] == 0, "linha blankada dentro da janela vira preta");
+    CHECK(fb[3 * 160 + 0] == gold, "linha apos o blank nao pula a posicao");
+
     // colisoes: P0 e P1 em 66; CXPPMM bit7 e limpo na leitura
     t.reset();
     t.setFramebuffer(fb);

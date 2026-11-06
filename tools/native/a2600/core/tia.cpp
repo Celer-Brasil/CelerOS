@@ -72,6 +72,7 @@ void Tia::reset()
     memset(coll_, 0, sizeof(coll_));
     scanline_ = clock_ = visibleY_ = 0;
     wsync_ = frameReady_ = false;
+    windowOpen_ = false;
     inpt_[0] = inpt_[1] = 0x80;
     paddle_[0] = paddle_[1] = paddle_[2] = paddle_[3] = 0;
     pot_[0] = pot_[1] = pot_[2] = pot_[3] = 0;
@@ -131,6 +132,7 @@ void Tia::write(uint16_t addr, uint8_t v)
             scanline_ = 0;
             clock_ = 0;
             visibleY_ = 0;
+            windowOpen_ = false;
             frameReady_ = true;
         }
         vsync_ = v;
@@ -249,11 +251,19 @@ void Tia::tickClock()
 void Tia::endLine()
 {
     clock_ = 0;
-    if (!(vblank_ & 0x02)) {
-        if (visibleY_ < kVisibleHeight && frame_ != nullptr) {
-            memcpy(frame_ + (size_t)visibleY_ * kVisibleWidth, line_, sizeof(line_));
+    // A janela de 192 linhas abre na primeira linha com o feixe aceso depois
+    // do VSYNC; dai em diante TODA linha consome uma, mesmo as que o jogo
+    // blankar no meio (line_ ja veio preenchida de preto no tickClock): antes
+    // o VBLANK pulava a linha e o pixel do quadro anterior ficava na tela
+    // (o logo ACTIVISION do titulo do Pitfall aparecia por cima do jogo).
+    if (!windowOpen_ && visibleY_ == 0 && !(vblank_ & 0x02)) windowOpen_ = true;
+    if (windowOpen_) {
+        if (visibleY_ < kVisibleHeight) {
+            if (frame_ != nullptr)
+                memcpy(frame_ + (size_t)visibleY_ * kVisibleWidth, line_, sizeof(line_));
             visibleY_++;
         }
+        if (visibleY_ >= kVisibleHeight) windowOpen_ = false;
     }
     if (vdelp_[0]) grp_[0] = grpNew_[0];
     if (vdelp_[1]) grp_[1] = grpNew_[1];
@@ -455,6 +465,7 @@ void Tia::save(emu::StateWriter& w) const
     w.u16((uint16_t)visibleY_);
     w.u8(wsync_ ? 1 : 0);
     w.u8(frameReady_ ? 1 : 0);
+    w.u8(windowOpen_ ? 1 : 0);
     w.u8(inpt_[0]);
     w.u8(inpt_[1]);
     w.bytes(paddle_, 4);
@@ -514,6 +525,7 @@ bool Tia::load(emu::StateReader& r)
     visibleY_ = (int16_t)r.u16();
     wsync_ = r.u8() != 0;
     frameReady_ = r.u8() != 0;
+    windowOpen_ = r.u8() != 0;
     inpt_[0] = r.u8();
     inpt_[1] = r.u8();
     r.bytes(paddle_, 4);

@@ -85,6 +85,12 @@ private:
     uint8_t coll_[8] = {0};
     int scanline_ = 0, clock_ = 0, visibleY_ = 0;
     bool wsync_ = false, frameReady_ = false;
+    // Janela visivel da TV: abre quando o VBLANK cai (primeira linha visivel
+    // do quadro) e consome TODA linha ate fechar as 192 — inclusive as que o
+    // jogo blankar no meio (viram linha PRETA, como no tubo; pular deixava o
+    // pixel velho do quadro anterior, ex.: o logo ACTIVISION do titulo do
+    // Pitfall aparecendo por cima do jogo).
+    bool windowOpen_ = false;
 
     // entrada
     uint8_t inpt_[2] = {0x80, 0x80};

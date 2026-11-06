@@ -104,6 +104,16 @@ public:
         return (int16_t)lgfx::LovyanGFX::textWidth(string.c_str(), CelerFont(font));
     }
 
+    /// Framebuffer do PAINEL para escrita direta por codigo nativo (API 60,
+    /// System.nativeScreen): linhas contiguas de RGB565 com bytes TROCADOS
+    /// (mesma convencao do FrameSprite), `stride` em pixels. nullptr = placa
+    /// sem framebuffer acessivel (o chamador cai no quadro do app). A placa
+    /// que tem (CelerDisplay = BoardDisplay) esconde estes dois por nome.
+    uint16_t* directFb(int32_t* stride) { (void)stride; return nullptr; }
+    /// Writeback das linhas [y, y+h) escritas por fora do LGFX: o DMA do
+    /// painel le a PSRAM, nao a cache.
+    void directFbFlush(int32_t y, int32_t h) { (void)y; (void)h; }
+
     virtual void setTouch(uint16_t* calData) { (void)calData; }
     virtual void calibrateTouch(uint16_t* calData, uint32_t color, uint32_t bg, uint8_t size) {
         (void)calData; (void)color; (void)bg; (void)size;

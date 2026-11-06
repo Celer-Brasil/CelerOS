@@ -561,6 +561,27 @@ bool JSBindings::clipActive() {
     return s_appClipOn || s_sysClipTop > 0;
 }
 
+static bool s_panelTouched = true;
+
+bool JSBindings::takePanelTouched() {
+    const bool t = s_panelTouched;
+    s_panelTouched = false;
+    return t;
+}
+
+bool JSBindings::screenDirectOk() {
+#if CONFIG_CELEROS_UI
+    if (s_frame == nullptr || gfx() != s_frame) return false;
+    if (ScreenPower::suppressAppFrame()) return false;
+    // a faixa e composta no quadro pelo present: escrever por baixo dela no
+    // painel apagaria a faixa ate o proximo push
+    if (s_topbarFixed || s_barShown || bannerActive() || s_barOnGlass) return false;
+    return true;
+#else
+    return false;
+#endif
+}
+
 void JSBindings::present() {
     // Profiling (celerctl top): duracao do present e quais chamadas levaram
     // quadro ao vidro (fps real). RAII cobre os returns antecipados (sem
@@ -661,6 +682,7 @@ void JSBindings::present() {
             // (bancada 2026-10-09); o pushSprite por pixel e mais LENTO
             // justamente por nao afogar o barramento.
             pushedFrame = true;  // profiling: quadro que chegou ao vidro
+            s_panelTouched = true;  // System.nativeScreen: redesenho total
             int32_t cx, cy, cw, ch;
             tftInstance->getClipRect(&cx, &cy, &cw, &ch);
             for (int i = 0; i < nr; i++) {
@@ -1388,6 +1410,9 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
         {"nativeDraw", js_nativeDraw, 6},
         {"nativeAudio", js_nativeAudio, 3},
         {"nativeAudioStop", js_nativeAudioStop, 1},
+        // API 60: escrita direta no vidro + leitura do quadro
+        {"nativeScreen", js_nativeScreen, 8},
+        {"nativeGrab", js_nativeGrab, 6},
     };
     putFns(ctx, kFnsNative);
 #endif  // CONFIG_CELEROS_JS_NATIVE

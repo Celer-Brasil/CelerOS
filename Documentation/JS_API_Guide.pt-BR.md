@@ -4058,7 +4058,8 @@ Formato do blob (`tools/native/build_core.py` constrói e valida):
 #### `System.nativeLoad(path[, scratchKB])` → Integer (API 57, SPIKE)
 Lê o arquivo do blob (mesma jail do `FS.readFile`), valida o cabeçalho
 (chip, api, tamanhos, offsets) e copia para um bloco PSRAM alinhado a 64
-bytes `[código][scratch]`. `scratchKB` default 128, faixa 4 a 1024. Devolve
+bytes `[código][scratch]`. `scratchKB` default 128, faixa 4 a 2560 (API 60;
+1664 antes — pedidos maiores são cortados sem aviso). Devolve
 o handle (1..2, dois blobs por app) ou `-1` em qualquer falha (arquivo
 ausente, magic ruim, chip errado, api mais nova, sem PSRAM, sem slot).
 Depois da cópia o loader roda `esp_cache_msync` (writeback + invalidação de
@@ -4121,6 +4122,55 @@ Um core real (o app `Anemoia`) guarda todo o estado no `.bss` do blob,
 pergunta os offsets com um `nativeCall`, alimenta a ROM com
 `nativeLoadFile`, o input com `nativeCall` e puxa imagem/áudio com
 `nativeDraw`/`nativeAudio` a cada quadro.
+
+#### Direto no vidro (API 60): `System.nativeScreen` e `System.nativeGrab`
+
+O `nativeDraw` custa uma passada inteira de PSRAM por quadro (scratch →
+quadro do app) e o quadro custa outra no `present`. Num painel RGB 480x480
+um jogo em tela cheia gastava ~3 passadas de 432 KB por quadro. A API 60
+deixa o blob escrever a imagem **uma vez**, direto no framebuffer do painel.
+
+#### `System.nativeScreen(h, fnIdx, a0, a1, x, y, w, h)` → Number
+Chama a entrada `fnIdx` como `fn(scratch, a0, &screen)`, com `screen` sendo
+
+```c
+struct NativeScreen {
+    uint16_t* px;     // pixel (x, y) do alvo, RGB565 com bytes trocados
+    int32_t stride;   // pixels por linha do alvo
+    int32_t w, h;     // o retângulo
+    int32_t arg;      // o a1 do app
+    int32_t flags;    // bit0: 1 = framebuffer do painel, 0 = quadro do app;
+                      // bit1: o vidro foi pintado por outro desde a última
+                      //       chamada — redesenhe tudo
+    void (*put)(void* ctx, int32_t y, const uint16_t* src);  // opcional
+    void* putCtx;
+};
+```
+
+e devolve o resultado da entrada. Alvo, nesta ordem: o **framebuffer do
+painel** (placa que o expõe — hoje a SmartDisplay 4848 — com o vidro livre:
+sem faixa/banner por cima do app, tela fora de AOD/apagada), senão o
+**quadro do app** (marcado sujo, o `present` leva). Com `put` presente
+(alvo painel, retângulo da largura toda) o core entrega cada linha pronta
+(`w` px, RAM interna) ao `put` em vez de escrever em `px`: o firmware junta
+linhas contíguas e copia por GDMA em paralelo com o core (a CPU escrevendo
+na PSRAM trava em cada linha de cache — 432 KB levavam ~21 ms). Sem alvo
+nenhum (sprite do app ativo, placa sem quadro) a entrada **não** roda e o
+retorno é `0xFFFFFFFF`: caia no `nativeCall` + `nativeDraw`.
+
+#### `System.nativeGrab(h, off, x, y, w, h)` → Boolean
+Lê um retângulo do alvo corrente (quadro/sprite/display) para o scratch em
+RGB565 com bytes trocados — o formato que o `nativeDraw` recebe. O Anemoia
+desenha cada controle do overlay uma vez sobre preto e outra sobre branco,
+captura as duas e o core tira alpha + cor pré-multiplicada ("carimbos"),
+compostos na imagem na mesma passada.
+
+**Loader (API 60):** o campo do cabeçalho v2/v3 no offset 76 (`fastSize`)
+marca os últimos `fastSize` bytes do `.bss` (seção `.clrn_fast`,
+`CLRN_FAST` em `tools/native/runtime.c`) como estado quente; o loader os
+põe na RAM interna quando há folga (loga `[Native] fast ...`) e redireciona
+as relocações de dados que apontam para lá. Loader antigo ignora o campo e
+a região fica na PSRAM — o mesmo binário roda nos dois.
 
 ## 53. Nível de API 57 — Gamepad Bluetooth LE: `BT.*` e a dep `celeros.gamepad`
 

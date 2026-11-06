@@ -16,6 +16,7 @@
 #include "../../Display/Touch_GT911_IDF.h"
 #include <lgfx/v1/platforms/esp32s3/Panel_RGB.hpp>
 #include <lgfx/v1/platforms/esp32s3/Bus_RGB.hpp>
+#include <esp_cache.h>
 
 // O init do fabricante (embutido na lib) seleciona RGB666 (0x3A=0x60), mas o
 // framebuffer do LCD_CAM e 16-bit (RGB565) — com 0x60 as cores saem corrompidas.
@@ -28,6 +29,8 @@ public:
         command_list(rgb565_patch);
         return true;
     }
+    /// Linha y do framebuffer do LCD_CAM (contiguo, 480 px de 2 B trocados).
+    uint8_t* fbLine(int y) const { return _lines_buffer != nullptr ? _lines_buffer[y] : nullptr; }
 };
 
 // Bus_RGB com duas correcoes (corpo em Board.cpp; o LovyanGFX e submodulo):
@@ -49,6 +52,25 @@ private:
 
 class BoardDisplay : public CelerDisplayBase {
 public:
+    // Escrita direta no framebuffer do painel (Display.h): o core nativo do
+    // Anemoia compoe o quadro escalado AQUI, numa passada so de PSRAM, em vez
+    // de escala -> quadro do app -> present (3 passadas de 432 KB).
+    uint16_t* directFb(int32_t* stride) {
+        uint8_t* l0 = _panel.fbLine(0);
+        if (l0 == nullptr || _panel.fbLine(479) != l0 + 479 * 960) return nullptr;
+        if (stride != nullptr) *stride = 480;
+        return reinterpret_cast<uint16_t*>(l0);
+    }
+    void directFbFlush(int32_t y, int32_t h) {
+        if (y < 0) { h += y; y = 0; }
+        if (y + h > 480) h = 480 - y;
+        uint8_t* l0 = _panel.fbLine(0);
+        if (l0 == nullptr || h <= 0) return;
+        esp_cache_msync(l0 + (size_t)y * 960, (size_t)h * 960,
+                        ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_TYPE_DATA |
+                            ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    }
+
     CelerBusRGB       _bus;
     CelerPanel        _panel;
     lgfx::Light_PWM   _light;

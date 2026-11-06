@@ -786,6 +786,10 @@ function makeEnv() {
             nativeDraw: function () { return true; },     // alvo e so visual
             nativeAudio: function () { return true; },    // sem I2S no host
             nativeAudioStop: function () {},
+            // API 60: o host nao tem framebuffer de painel — sem alvo direto
+            // (0xFFFFFFFF) o app cai no FRAME + nativeDraw; grab sem quadro
+            nativeScreen: function () { return 4294967295; },
+            nativeGrab: function () { return false; },
         };
         return api;
     })();
@@ -1195,6 +1199,8 @@ function makeEnv() {
     nativeDraw: nativeStub.nativeDraw,
     nativeAudio: nativeStub.nativeAudio,
     nativeAudioStop: nativeStub.nativeAudioStop,
+    nativeScreen: nativeStub.nativeScreen,      // API 60: escrita direta no vidro
+    nativeGrab: nativeStub.nativeGrab,
     drawSprite: function() {},
     blitSprite: function() {},   // API 34: restaura o fundo (preview no emulador)
     copySprite: function() {},   // API 45: regiao de sprite -> alvo corrente (preview no emulador)

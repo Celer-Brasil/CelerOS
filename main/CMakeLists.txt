@@ -175,6 +175,11 @@ endif()
 # CELEROS_LINK_ON_USJ (dog); nas demais boards o linker descarta o driver
 set(CELEROS_PRIV_REQUIRES esp_driver_uart esp_driver_usb_serial_jtag)
 # (depois do set acima: um append antes dele era sobrescrito)
+if(CONFIG_CELEROS_JS_NATIVE)
+    # System.nativeScreen (API 60): linhas do blob ate o framebuffer do
+    # painel por GDMA (esp_async_memcpy)
+    list(APPEND CELEROS_PRIV_REQUIRES esp_driver_dma)
+endif()
 if(CONFIG_CELEROS_WAKE_WORD)
     list(APPEND CELEROS_PRIV_REQUIRES esp-tflite-micro)
 endif()
@@ -369,8 +374,8 @@ foreach(page ${CELEROS_WEB_PAGES})
 endforeach()
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    CELEROS_VERSION="1.17.0"
-    CELEROS_API_LEVEL=59
+    CELEROS_VERSION="1.18.0"
+    CELEROS_API_LEVEL=60
 )
 
 # F3: app JS em task propria ("celerapp") — opt-in via Kconfig

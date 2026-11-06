@@ -51,6 +51,12 @@ public:
     static void applyDisplayClip();
     // Algum recorte ativo (fast path do drawPixel pula o LGFX so sem clipe)
     static bool clipActive();
+    /// Vidro livre para escrita direta (System.nativeScreen): app no quadro
+    /// automatico, sem faixa/banner por cima e sem AOD/tela apagada.
+    static bool screenDirectOk();
+    /// O present levou algo do quadro ao vidro desde a ultima consulta (e
+    /// zera): quem escreve direto no painel redesenha tudo.
+    static bool takePanelTouched();
     // y fisico do desenho no alvo corrente (quadro/display descontam a topbar
     // do sistema; o sprite do app e canvas proprio, origem em 0)
     static int mapY(int v);
@@ -130,6 +136,10 @@ private:
     static duk_ret_t js_nativeDraw(duk_context *ctx);
     static duk_ret_t js_nativeAudio(duk_context *ctx);
     static duk_ret_t js_nativeAudioStop(duk_context *ctx);
+    // API 60: o blob escreve direto no vidro (framebuffer do painel) ou no
+    // quadro do app; e le o quadro para o scratch (carimbos do overlay)
+    static duk_ret_t js_nativeScreen(duk_context *ctx);
+    static duk_ret_t js_nativeGrab(duk_context *ctx);
 
     // Timers JS (API 12): globais setTimeout/setInterval/clear*
     static duk_ret_t js_setTimeout(duk_context *ctx);

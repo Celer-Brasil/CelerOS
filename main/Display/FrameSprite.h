@@ -117,6 +117,12 @@ public:
     /// Alguma caixa suja comeca acima de y (faixa da topbar).
     bool dirtyAbove(int32_t y) const { return _dirty.rects.touchesAbove(y); }
 
+    /// Retangulo escrito por fora do LGFX (System.nativeScreen no buffer).
+    void markDirty(int32_t x0, int32_t y0, int32_t x1, int32_t y1) { _dirty.add(x0, y0, x1, y1); }
+
+    /// Largura alocada de linha do buffer em pixels (indexacao de _img16).
+    int32_t stride() const { return _dirty.bitWidth(); }
+
     /// Tudo sujo (vidro foi sujado por fora do quadro).
     void markAllDirty() { _dirty.markAll(); }
 

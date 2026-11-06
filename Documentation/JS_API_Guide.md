@@ -3717,7 +3717,7 @@ Blob format (`tools/native/build_core.py` builds and validates it):
 Reads the blob file (same FS jail as `FS.readFile`), validates the header
 (chip, api, sizes, entry offsets) and copies it into a 64-byte-aligned
 PSRAM block `[code][scratch]`. `scratchKB` defaults to 128, from 4 to
-1024. Returns the handle (1..2, two blobs per app) or `-1` on any failure
+2560 (API 60; 1664 before — larger requests are silently clamped). Returns the handle (1..2, two blobs per app) or `-1` on any failure
 (missing file, bad magic, wrong chip, newer api, no PSRAM, no slot). After
 the copy the loader runs `esp_cache_msync` (writeback + instruction
 invalidate) — the code is immediately callable.
@@ -3781,6 +3781,56 @@ A real core (the NES emulator app `Anemoia`) keeps all of its state in the
 blob's `.bss`, queries its layout offsets with one `nativeCall` and then
 feeds the ROM with `nativeLoadFile`, the input with `nativeCall` and pulls
 the picture/audio with `nativeDraw`/`nativeAudio` every frame.
+
+#### Direct-to-glass (API 60): `System.nativeScreen` and `System.nativeGrab`
+
+`nativeDraw` costs a full PSRAM pass per frame (scratch → app frame), and
+the frame then costs another one in `present`. On a 480x480 RGB panel a
+full-screen game spent ~3 passes of 432 KB per frame. API 60 lets the blob
+write the picture **once**, straight into the panel framebuffer.
+
+#### `System.nativeScreen(h, fnIdx, a0, a1, x, y, w, h)` → Number
+Calls entry `fnIdx` as `fn(scratch, a0, &screen)`, where `screen` is
+
+```c
+struct NativeScreen {
+    uint16_t* px;     // pixel (x, y) of the target, RGB565 byte-swapped
+    int32_t stride;   // pixels per target line
+    int32_t w, h;     // the rectangle
+    int32_t arg;      // the app's a1
+    int32_t flags;    // bit0: 1 = panel framebuffer, 0 = app frame;
+                      // bit1: the glass was painted by someone else since
+                      //       the last call — redraw everything
+    void (*put)(void* ctx, int32_t y, const uint16_t* src);  // optional
+    void* putCtx;
+};
+```
+
+and returns the entry's result. Target, in this order: the **panel
+framebuffer** (boards that expose it — today the SmartDisplay 4848 — while
+the glass is free: no top bar/banner over the app, screen not in AOD/off),
+otherwise the **app frame** (marked dirty, `present` takes it). When `put`
+is set (panel target, full-width rectangle) the core should hand each
+finished line (`w` px, internal RAM) to `put` instead of writing `px`
+itself: the firmware batches contiguous lines and copies them with GDMA in
+parallel with the core (a CPU writing PSRAM stalls on every cache line —
+432 KB took ~21 ms). With no target at all (an app sprite is bound, board
+without app frame) the entry is **not** called and the result is
+`0xFFFFFFFF`: fall back to `nativeCall` + `nativeDraw`.
+
+#### `System.nativeGrab(h, off, x, y, w, h)` → Boolean
+Reads a rectangle of the current target (app frame/sprite/display) into the
+scratch as RGB565 byte-swapped — the same format `nativeDraw` takes. The
+Anemoia app draws each overlay control once on black and once on white,
+grabs both and lets the core derive alpha + premultiplied color ("stamps"),
+which it then composites into the picture in the same pass.
+
+**Loader (API 60):** a v2/v3 header's field at offset 76 (`fastSize`) marks
+the last `fastSize` bytes of `.bss` (section `.clrn_fast`, `CLRN_FAST` in
+`tools/native/runtime.c`) as hot state; the loader places them in internal
+RAM when there is headroom (it logs `[Native] fast ...`) and redirects the
+data relocations that point there. Older loaders ignore the field and keep
+the region in PSRAM, so the same binary runs on both.
 
 ## 53. API Level 57 — Bluetooth LE gamepad: `BT.*` and the `celeros.gamepad` dep
 

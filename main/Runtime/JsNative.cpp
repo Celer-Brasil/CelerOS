@@ -40,6 +40,7 @@
 #include "esp_memory_utils.h"
 #include "esp_mmu_map.h"
 #include "esp_timer.h"
+#include "esp_async_memcpy.h"
 
 #if CONFIG_CELEROS_AUDIO
 #include "../Hardware/AudioPlayer.h"
@@ -54,6 +55,12 @@ constexpr uint32_t kMaxBlob = 512 * 1024;  // alinhado com o teto do hub (era na
 constexpr uint32_t kMaxRelocs = 16384;     // teto de sanidade da tabela (64 KB)
 constexpr uint32_t kRelocChunk = 64;       // sites por leitura de pilha (256 B)
 constexpr uint32_t kMaxEntries = 8;
+// Regiao fast (header +76, API 60): estado quente do core na RAM INTERNA. O
+// teto e a folga protegem o heap interno do sistema (WiFi/BLE/TLS): sem
+// sobra, a regiao fica no .bss (PSRAM) e o core so roda mais devagar.
+constexpr uint32_t kMaxFast = 64 * 1024;
+constexpr size_t kFastReserve = 40 * 1024;    // folga no TOTAL interno livre
+constexpr size_t kFastBlockSlack = 8 * 1024;  // e no maior bloco apos a regiao
 constexpr int kMaxModules = 2;
 // Xtensa windowed ABI: os 2 bits baixos de um ponteiro de funcao codificam
 // a janela (1 = call8, o default do toolchain). O endereco nasce de
@@ -75,6 +82,7 @@ struct NativeModule {
     uint8_t* scratch;    // dados do core em PSRAM (bloco separado)
     uint8_t* data;       // alias de DADOS da imagem (bloco PSRAM do mmap)
     void* mmap_vaddr;    // base mapeada (para esp_mmu_unmap)
+    uint8_t* fast;       // regiao fast do .bss na RAM interna (nullptr = ficou no .bss)
     size_t blobSize;
     size_t scratchSize;
     uint32_t entries[kMaxEntries];
@@ -100,9 +108,14 @@ uint32_t rd32(const uint8_t* p) {
 
 }  // namespace
 
+namespace {
+void dmaFree();
+}  // namespace
+
 void jsNativeReset() {
     // JSBindings::init do proximo app: blobs do anterior saem (malloc
     // incluso) e o PCM do modulo e encerrado. Roda tambem no boot.
+    dmaFree();  // canal GDMA + blocos internos do nativeScreen
     for (int i = 0; i < kMaxModules; i++) {
 #if CONFIG_CELEROS_AUDIO
         if (s_modules[i].feed != nullptr) {
@@ -123,6 +136,10 @@ void jsNativeReset() {
             heap_caps_free(s_modules[i].scratch);
             s_modules[i].scratch = nullptr;
         }
+        if (s_modules[i].fast != nullptr) {
+            heap_caps_free(s_modules[i].fast);
+            s_modules[i].fast = nullptr;
+        }
     }
 }
 
@@ -131,11 +148,11 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     if (!fsPathAllowed(path)) {
         duk_error(ctx, DUK_ERR_RANGE_ERROR, "Native.load: caminho fora da jail");
     }
-    // scratch padrao 128 KB, teto 1664 KB (blob 512 + estado de core real:
-    // NES usa ROM 1MB + framebuffer 120KB + estado)
+    // scratch padrao 128 KB, teto 2560 KB (estado de core real: o NES usa
+    // ROM 1MB + framebuffer 120KB + quadro escalado 450KB + carimbos)
     int32_t scratchKB = duk_is_number(ctx, 1) ? duk_get_int(ctx, 1) : 128;
     if (scratchKB < 4) scratchKB = 4;
-    if (scratchKB > 1664) scratchKB = 1664;
+    if (scratchKB > 2560) scratchKB = 2560;
 
     if (!inService()) present();  // leitura de arquivo: quadro antes
     else esp_task_wdt_reset();    // svchost: present() reentraria o pump
@@ -179,6 +196,7 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     uint32_t bssSize = hsize == kHeaderSizeV2 ? rd32(hdr + 60) : 0;
     uint32_t relocOff = hsize == kHeaderSizeV2 ? rd32(hdr + 64) : 0;
     uint32_t relocCount = hsize == kHeaderSizeV2 ? rd32(hdr + 68) : 0;
+    uint32_t fastSize = hsize == kHeaderSizeV2 ? rd32(hdr + 76) : 0;
     // valida TUDO antes de alocar; recusa e silenciosa (-1) — o app ve o
     // resultado e decide (o motivo real fica no log)
     if (chip != kChip || api > (uint32_t)CELEROS_API_LEVEL ||
@@ -187,6 +205,13 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         fclose(f);
         celer_log_printf("[Native] load: cabecalho invalido (chip=%u api=%u blob=%u)",
                          (unsigned)chip, (unsigned)api, (unsigned)blobSize);
+        duk_push_int(ctx, -1);
+        return 1;
+    }
+    if (fastSize > bssSize || fastSize > kMaxFast) {
+        fclose(f);
+        celer_log_printf("[Native] load: regiao fast invalida (%u de bss %u)",
+                         (unsigned)fastSize, (unsigned)bssSize);
         duk_push_int(ctx, -1);
         return 1;
     }
@@ -303,6 +328,22 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     // bit31 do offset = KIND — 1 aponta para dados/rodata (alias de dados),
     // 0 para funcao (alias executavel). v2 antigo: tudo com a mesma base.
     if (bssSize) memset(baseData + bssOff, 0, bssSize);
+    // Regiao fast = os ULTIMOS fastSize bytes do .bss: vai para a RAM
+    // interna se sobrar folga; as relocacoes de DADOS que caem nela sao
+    // redirecionadas abaixo (codigo nunca aponta para la).
+    uint32_t fastOff = bssOff + bssSize - fastSize;
+    uint8_t* fast = nullptr;
+    if (fastSize) {
+        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        size_t freeInt = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (largest >= (size_t)fastSize + kFastBlockSlack && freeInt >= (size_t)fastSize + kFastReserve) {
+            fast = (uint8_t*)heap_caps_aligned_alloc(16, fastSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            if (fast != nullptr) memset(fast, 0, fastSize);
+        }
+        celer_log_printf("[Native] fast %u B: %s (interna livre %u B, maior bloco %u B)\n",
+                         (unsigned)fastSize, fast != nullptr ? "RAM interna" : "PSRAM",
+                         (unsigned)freeInt, (unsigned)largest);
+    }
     uint32_t relocKindFlag = rd32(hdr + 72);  // 1 = tabela com kind
     bool relocOk = true;
     if (relocCount) {
@@ -318,7 +359,10 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
                 uint32_t o = relocKindFlag ? (raw & 0x7FFFFFFFu) : raw;
                 if ((o & 3u) || (size_t)o + 4 > blobSize) { relocOk = false; break; }
                 uint32_t v = rd32(baseData + o);
-                v += (uint32_t)(uintptr_t)(isData ? baseData : base);
+                if (fast != nullptr && isData && v >= fastOff && v - fastOff <= fastSize)
+                    v = (uint32_t)(uintptr_t)fast + (v - fastOff);
+                else
+                    v += (uint32_t)(uintptr_t)(isData ? baseData : base);
                 memcpy(baseData + o, &v, 4);
             }
             left -= n;
@@ -327,6 +371,7 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     fclose(f);
     CelerKernel::noteAppYield();  // tempo NATIVO da leitura (mold js_readFile)
     if (!relocOk) {
+        if (fast != nullptr) heap_caps_free(fast);
         if (mapped) esp_mmu_unmap(mmapRoot);
         heap_caps_free(baseData);
         heap_caps_free(scratch);
@@ -360,6 +405,7 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     m.data = baseData;    // alias de dados (liberar/unmap)
     m.mmap_vaddr = mmapRoot;
     m.scratch = scratch;
+    m.fast = fast;
     m.blobSize = blobSize;
     m.scratchSize = scratchSize;
     m.entryCount = (int)entryCount;
@@ -377,22 +423,6 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     return 1;
 }
 
-
-// PROBE_NATIVE (bancada, temporario): tempo dentro de call/draw/audio e o
-// resto do laco, log a cada 2 s.
-static int64_t s_pbWin = 0, s_pbCall = 0, s_pbDraw = 0, s_pbAud = 0, s_pbLastFrameEnd = 0;
-static int s_pbN = 0;
-static inline void probeTick(int64_t now)
-{
-    if (s_pbWin == 0) s_pbWin = now;
-    if (now - s_pbWin < 2000000 || s_pbN == 0) return;
-    int64_t span = now - s_pbWin;
-    celer_log_printf("[native] %d frames/2s call %d us draw %d us aud %d us (por frame) span %d ms\n", s_pbN,
-                     (int)(s_pbCall / s_pbN), (int)(s_pbDraw / s_pbN), (int)(s_pbAud / s_pbN), (int)(span / 1000));
-    s_pbWin = now;
-    s_pbCall = s_pbDraw = s_pbAud = 0;
-    s_pbN = 0;
-}
 
 duk_ret_t JSBindings::js_nativeCall(duk_context* ctx) {
     NativeModule* m = moduleAt(duk_require_int(ctx, 0));
@@ -413,11 +443,7 @@ duk_ret_t JSBindings::js_nativeCall(duk_context* ctx) {
     // primeira instrucao (pc = entry+1 -> StoreProhibited). O callx8 que o
     // compilador emite ja define a janela; o endereco vai cru.
     NativeEntry fn = (NativeEntry)(m->code + m->entries[fnIdx]);
-    int64_t pb0 = esp_timer_get_time();
     uint32_t r = fn(m->scratch, a0, a1);  // scratch: bloco PSRAM separado
-    int64_t pb1 = esp_timer_get_time();
-    s_pbCall += pb1 - pb0;
-    if (a0 == 8) { s_pbN++; probeTick(pb1); }
     duk_push_number(ctx, (duk_double_t)r);  // uint32 exato em double
     return 1;
 }
@@ -461,6 +487,8 @@ duk_ret_t JSBindings::js_nativeFree(duk_context* ctx) {
     m->mmap_vaddr = nullptr;
     if (m->scratch != nullptr) heap_caps_free(m->scratch);
     m->scratch = nullptr;
+    if (m->fast != nullptr) heap_caps_free(m->fast);
+    m->fast = nullptr;
     m->blobSize = 0;
     m->scratchSize = 0;
     m->entryCount = 0;
@@ -576,17 +604,247 @@ duk_ret_t JSBindings::js_nativeDraw(duk_context* ctx) {
 #if CONFIG_CELEROS_UI
     lgfx::LGFXBase* tgt = gfx();
     if (tgt == nullptr) { duk_push_boolean(ctx, 0); return 1; }
-    // O buffer pode ter sido escrito pela CPU agora: writeback antes do DMA
-    // (mesmo rito do load, so a direcao de dados).
-    int64_t pb0 = esp_timer_get_time();
-    if (esp_ptr_external_ram(m->scratch)) {
-        size_t syncLen = ((size_t)w * (size_t)h * 2u + 31u) & ~((size_t)31u);
-        esp_cache_msync(m->scratch + off, syncLen, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-    }
+    // Sem writeback do scratch: o pushImage le pela CPU (mesma cache que o
+    // core escreveu), nao por DMA — o msync de ~430 KB por quadro era custo
+    // puro.
     tgt->clearClipRect();
     tgt->pushImage(jsx(x), jsy(y), w, h,
                    reinterpret_cast<const lgfx::swap565_t*>(m->scratch + off));
-    s_pbDraw += esp_timer_get_time() - pb0;
+    CelerKernel::noteAppYield();
+    duk_push_boolean(ctx, 1);
+#else
+    (void)x; (void)y;
+    duk_push_boolean(ctx, 0);
+#endif
+    return 1;
+}
+
+// API 60: o core escreve o quadro DIRETO no vidro. A entrada recebe
+// fn(scratch, a0, &NativeScreen): ponteiro para o pixel (x,y) do alvo,
+// stride em pixels, w/h do retangulo e o a1 do app. Alvo, nesta ordem:
+//  1) framebuffer do PAINEL (placa que o expoe, vidro livre: sem faixa,
+//     sem AOD) — uma passada de PSRAM e nada no present;
+//  2) quadro automatico do app (FrameSprite) + caixa suja — o present leva.
+// Pixels RGB565 com bytes TROCADOS nos dois (convencao do quadro). Sem
+// alvo (sprite do app ativo, placa sem quadro) a entrada NAO roda e o
+// retorno e 0xFFFFFFFF: o app cai no caminho nativeCall + nativeDraw.
+struct NativeScreen {
+    uint16_t* px;
+    int32_t stride;
+    int32_t w;
+    int32_t h;
+    int32_t arg;
+    int32_t flags;  // bit0: 1 = framebuffer do painel, 0 = quadro do app; bit1: redesenho total
+    // Escrita de linha pronta (opcional): o core entrega a linha y (w px,
+    // RAM interna) em vez de escrever no alvo pela CPU. No painel o
+    // firmware junta linhas contiguas e despeja por GDMA — a CPU escrevendo
+    // na PSRAM fica presa na latencia de cada linha de cache (fill +
+    // writeback): 432 KB custavam ~21 ms. nullptr = o core escreve direto.
+    void (*put)(void* ctx, int32_t y, const uint16_t* src);
+    void* putCtx;
+};
+
+// ---- GDMA do nativeScreen ---------------------------------------------------
+// Blocos de kDmaRows linhas na RAM interna (DMA): a linha entra no bloco
+// corrente; bloco cheio (ou linha fora de sequencia) vai por esp_async_memcpy
+// e o proximo bloco livre assume. A GDMA corre em paralelo com o core (que
+// segue emulando as scanlines seguintes). Sem canal/RAM interna: CPU.
+namespace {
+constexpr int kDmaSlots = 3;
+constexpr int kDmaRows = 8;
+constexpr size_t kDmaRowMax = 480 * 2;
+async_memcpy_handle_t s_mcp = nullptr;
+uint8_t* s_dmaBuf[kDmaSlots];
+volatile bool s_dmaBusy[kDmaSlots];
+bool s_dmaTried = false;
+
+struct DmaPut {
+    uint8_t* base;      // pixel (x, 0) do retangulo no framebuffer
+    size_t strideB;     // bytes por linha do framebuffer
+    size_t rowB;        // bytes por linha do retangulo (== strideB: contiguo)
+    int slot;           // bloco corrente (-1 = nenhum)
+    int y0, rows;       // linhas acumuladas no bloco
+    uint32_t cpuRows;   // linhas que cairam na CPU (diagnostico)
+};
+
+bool dmaDone(async_memcpy_handle_t, async_memcpy_event_t*, void* arg) {
+    *(volatile bool*)arg = false;
+    return false;
+}
+
+bool dmaInit() {
+    if (s_mcp != nullptr) return true;
+    if (s_dmaTried) return false;
+    s_dmaTried = true;
+    for (int i = 0; i < kDmaSlots; i++) {
+        s_dmaBuf[i] = (uint8_t*)heap_caps_aligned_alloc(32, kDmaRows * kDmaRowMax,
+                                                        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (s_dmaBuf[i] == nullptr) {
+            celer_log_printf("[Native] dma: sem RAM interna para os blocos\n");
+            return false;
+        }
+    }
+    async_memcpy_config_t cfg = ASYNC_MEMCPY_DEFAULT_CONFIG();
+    cfg.backlog = kDmaSlots;
+    cfg.dma_burst_size = 32;
+    esp_err_t err = esp_async_memcpy_install_gdma_ahb(&cfg, &s_mcp);
+    if (err != ESP_OK) {
+        celer_log_printf("[Native] dma: canal GDMA indisponivel (%d)\n", (int)err);
+        s_mcp = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void dmaFree() {
+    if (s_mcp != nullptr) {
+        for (int i = 0; i < kDmaSlots; i++)
+            while (s_dmaBusy[i]) {}
+        esp_async_memcpy_uninstall(s_mcp);
+        s_mcp = nullptr;
+    }
+    for (int i = 0; i < kDmaSlots; i++) {
+        heap_caps_free(s_dmaBuf[i]);
+        s_dmaBuf[i] = nullptr;
+    }
+    s_dmaTried = false;
+}
+
+void dmaSubmit(DmaPut* d) {
+    if (d->slot < 0 || d->rows == 0) return;
+    uint8_t* dst = d->base + (size_t)d->y0 * d->strideB;
+    const size_t n = (size_t)d->rows * d->rowB;
+    volatile bool* busy = &s_dmaBusy[d->slot];
+    *busy = true;
+    if (esp_async_memcpy(s_mcp, dst, s_dmaBuf[d->slot], n, dmaDone, (void*)busy) != ESP_OK) {
+        // fila cheia/alinhamento: CPU + writeback (o DMA do painel le a PSRAM)
+        *busy = false;
+        memcpy(dst, s_dmaBuf[d->slot], n);
+        esp_cache_msync(dst, n, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+        d->cpuRows += d->rows;
+    }
+    d->slot = -1;
+    d->rows = 0;
+}
+
+void dmaPut(void* ctx, int32_t y, const uint16_t* src) {
+    DmaPut* d = (DmaPut*)ctx;
+    if (d->slot >= 0 && (d->rows == kDmaRows || y != d->y0 + d->rows)) dmaSubmit(d);
+    if (d->slot < 0) {
+        int k = 0;
+        for (;;) {  // proximo bloco livre (a GDMA de 8 linhas leva ~0,1 ms)
+            if (!s_dmaBusy[k]) break;
+            if (++k == kDmaSlots) k = 0;
+        }
+        d->slot = k;
+        d->y0 = y;
+        d->rows = 0;
+    }
+    memcpy(s_dmaBuf[d->slot] + (size_t)d->rows * d->rowB, src, d->rowB);
+    d->rows++;
+}
+
+void dmaFinish(DmaPut* d) {
+    dmaSubmit(d);
+    for (int i = 0; i < kDmaSlots; i++)
+        while (s_dmaBusy[i]) {}
+}
+}  // namespace
+typedef uint32_t (*NativeScreenEntry)(void*, int32_t, NativeScreen*);
+
+duk_ret_t JSBindings::js_nativeScreen(duk_context* ctx) {
+    NativeModule* m = moduleAt(duk_require_int(ctx, 0));
+    int fnIdx = duk_require_int(ctx, 1);
+    const duk_double_t kNoTarget = (duk_double_t)(uint32_t)0xFFFFFFFFu;
+    if (m == nullptr || fnIdx < 0 || fnIdx >= m->entryCount) {
+        duk_push_number(ctx, kNoTarget);
+        return 1;
+    }
+    int32_t a0 = duk_is_number(ctx, 2) ? duk_get_int(ctx, 2) : 0;
+    int32_t a1 = duk_is_number(ctx, 3) ? duk_get_int(ctx, 3) : 0;
+#if CONFIG_CELEROS_UI
+    int32_t x = jsx(duk_is_number(ctx, 4) ? duk_get_int(ctx, 4) : 0);
+    int32_t y = jsy(duk_is_number(ctx, 5) ? duk_get_int(ctx, 5) : 0);
+    int32_t w = duk_is_number(ctx, 6) ? duk_get_int(ctx, 6) : 0;
+    int32_t h = duk_is_number(ctx, 7) ? duk_get_int(ctx, 7) : 0;
+    if (tftInstance == nullptr || s_frame == nullptr || gfx() != s_frame ||
+        w <= 0 || h <= 0 || x < 0 || y < 0 ||
+        x + w > s_frame->width() || y + h > s_frame->height()) {
+        duk_push_number(ctx, kNoTarget);
+        return 1;
+    }
+    NativeScreen scr;
+    int32_t stride = 0;
+    uint16_t* fb = screenDirectOk() ? tftInstance->directFb(&stride) : nullptr;
+    if (fb != nullptr && x + w <= tftInstance->width() && y + h <= tftInstance->height()) {
+        scr.px = fb + (size_t)y * stride + x;
+        scr.stride = stride;
+        scr.flags = 1;
+    } else {
+        fb = nullptr;
+        scr.px = (uint16_t*)s_frame->getBuffer() + (size_t)y * s_frame->stride() + x;
+        scr.stride = s_frame->stride();
+        scr.flags = 0;
+    }
+    if (takePanelTouched()) scr.flags |= 2;  // present pintou o vidro: redesenho total
+    scr.w = w;
+    scr.h = h;
+    scr.arg = a1;
+    scr.put = nullptr;
+    scr.putCtx = nullptr;
+    // GDMA so no painel e com linhas contiguas (retangulo da largura toda,
+    // alinhado ao que a GDMA de PSRAM exige)
+    DmaPut dp;
+    if (fb != nullptr && w == stride && ((uintptr_t)scr.px & 31u) == 0 &&
+        ((size_t)w * 2 & 31u) == 0 && (size_t)w * 2 <= kDmaRowMax && dmaInit()) {
+        dp.base = (uint8_t*)scr.px;
+        dp.strideB = (size_t)stride * 2;
+        dp.rowB = (size_t)w * 2;
+        dp.slot = -1;
+        dp.rows = 0;
+        dp.y0 = 0;
+        dp.cpuRows = 0;
+        scr.put = &dmaPut;
+        scr.putCtx = &dp;
+    }
+    CelerKernel::noteAppYield();
+    NativeScreenEntry fn = (NativeScreenEntry)(m->code + m->entries[fnIdx]);
+    uint32_t r = fn(m->scratch, a0, &scr);
+    if (scr.put != nullptr) {
+        dmaFinish(&dp);  // espera a GDMA: o proximo quadro reusa os blocos
+    } else if (fb != nullptr) {
+        tftInstance->directFbFlush(y, h);  // o DMA do painel le a PSRAM
+    } else {
+        s_frame->markDirty(x, y, x + w - 1, y + h - 1);
+    }
+    duk_push_number(ctx, (duk_double_t)r);
+#else
+    (void)m; (void)a0; (void)a1;
+    duk_push_number(ctx, kNoTarget);
+#endif
+    return 1;
+}
+
+duk_ret_t JSBindings::js_nativeGrab(duk_context* ctx) {
+    // pixels do alvo corrente (quadro/sprite/display) -> scratch[off], RGB565
+    // com bytes TROCADOS (o formato que nativeDraw/nativeScreen usam). O app
+    // desenha algo com a API normal e o core captura (carimbos do overlay).
+    NativeModule* m = moduleAt(duk_require_int(ctx, 0));
+    if (m == nullptr) { duk_push_boolean(ctx, 0); return 1; }
+    int32_t off = duk_is_number(ctx, 1) ? duk_get_int(ctx, 1) : 0;
+    int32_t x = duk_is_number(ctx, 2) ? duk_get_int(ctx, 2) : 0;
+    int32_t y = duk_is_number(ctx, 3) ? duk_get_int(ctx, 3) : 0;
+    int32_t w = duk_is_number(ctx, 4) ? duk_get_int(ctx, 4) : 0;
+    int32_t h = duk_is_number(ctx, 5) ? duk_get_int(ctx, 5) : 0;
+    if (off < 0 || w <= 0 || h <= 0 || (off & 1) ||
+        (size_t)off + (size_t)w * (size_t)h * 2 > m->scratchSize) {
+        duk_push_boolean(ctx, 0);
+        return 1;
+    }
+#if CONFIG_CELEROS_UI
+    lgfx::LGFXBase* tgt = gfx();
+    if (tgt == nullptr) { duk_push_boolean(ctx, 0); return 1; }
+    tgt->readRect(jsx(x), jsy(y), w, h, reinterpret_cast<lgfx::swap565_t*>(m->scratch + off));
     CelerKernel::noteAppYield();
     duk_push_boolean(ctx, 1);
 #else
@@ -621,9 +879,7 @@ duk_ret_t JSBindings::js_nativeAudio(duk_context* ctx) {
         m->feed->start();
     }
     CelerKernel::noteAppYield();
-    int64_t pb0 = esp_timer_get_time();
     bool okw = m->feed->write(m->scratch + off, (size_t)len);
-    s_pbAud += esp_timer_get_time() - pb0;
     duk_push_boolean(ctx, okw);
     return 1;
 #else

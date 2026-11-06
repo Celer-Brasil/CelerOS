@@ -72,10 +72,12 @@ watchdog nao ve o codigo nativo).
 
 ```bash
 # blob do app (toolchain Xtensa do IDF; gera header CLRN v2)
+# ATENCAO: --src e --include sao resolvidos a partir da PASTA do app, nao do
+# repo — passe caminhos ABSOLUTOS (ou relativos a pasta do app).
 node tools/sdk/celer.js native "hub_apps/Atari 2600" \
-  --src tools/native/a2600/A2600Blob.cpp \
-  --out "hub_apps/Atari 2600/a2600_core.bin" \
-  --include tools/native/common --include tools/native/a2600 --include tools/native/a2600/core
+  --src "$PWD/tools/native/a2600/A2600Blob.cpp" \
+  --out "$PWD/hub_apps/Atari 2600/a2600_core.bin" \
+  --include "$PWD/tools/native/common" --include "$PWD/tools/native/a2600" --include "$PWD/tools/native/a2600/core"
 
 # teste host do core (mesmo TU do blob; sem Xtensa)
 g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST \

@@ -416,9 +416,12 @@ void pixelA(int x, int y, uint32_t c565) {
     }
     JSBindings::gfx()->fillRectAlpha(x, y, 1, 1, s_alpha, jsc(c565));
 }
-// Meia-largura inteira do arco: sqrt(r^2 - k^2).
+// Meia-largura inteira do arco: sqrt(r^2 - k^2). k e a DISTANCIA ao centro
+// (o sinal importa para quem varre a linha inteira: fillCircle passa dy de
+// -r a +r, e tratar k<0 como k=0 deixava a metade de cima do disco
+// retangular — o "quadrado" que aparecia no overlay).
 int arcHalf(int r2, int k) {
-    if (k <= 0) return (int)(sqrtf((float)r2) + 0.5f);
+    if (k < 0) k = -k;
     int d = r2 - k * k;
     if (d <= 0) return 0;
     return (int)(sqrtf((float)d) + 0.5f);

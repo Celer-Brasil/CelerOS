@@ -1396,7 +1396,10 @@ void dispatchTouch(const TouchEvent& ev) {
 bool canvasBuffered() { return s_bufMode != Canvas::Direct && s_buf != nullptr; }
 
 void Navigator::begin(CelerDisplay& dev) {
-    if (s_canvas == nullptr) s_canvas = new Canvas(dev);
+    // nothrow (mesmo padrao dos sprites/AppHostScreen): sem excecoes, um new
+    // que falha aborta o aparelho — e o drawFrame guarda s_canvas == nullptr,
+    // entao falhar aqui degrada (sem quadro) em vez de derrubar o boot.
+    if (s_canvas == nullptr) s_canvas = new (std::nothrow) Canvas(dev);
     s_uiTask = xTaskGetCurrentTaskHandle();
     if (s_pendMux == nullptr) s_pendMux = xSemaphoreCreateMutex();
 }

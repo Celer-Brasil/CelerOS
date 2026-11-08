@@ -24,6 +24,10 @@ Cartridge::Cartridge(const uint8_t* data, uint32_t size)
 
     memcpy((uint8_t*)&header, data, sizeof(cartridge_header));
 
+    // Nibble alto do mapper: em iNES E em NES 2.0 ele mora nos bits 4-7 do
+    // byte 7 (bits 2-3 sao o marcador NES 2.0 / PlayChoice, bits 0-1 o tipo
+    // de console — a formula ja os mascara). Auditado na caca: decoder
+    // conforme a spec (nesdev ROM_file_format), nao mude para bits 0-3.
     mapper_ID = (header.mapper2 & 0xF0) | header.mapper1 >> 4;
     hardware_mirror = (header.mapper1 & 0x01) ? MIRROR::VERTICAL : MIRROR::HORIZONTAL;
 
@@ -48,6 +52,21 @@ Cartridge::Cartridge(const uint8_t* data, uint32_t size)
 
     prg_base = sizeof(cartridge_header) + (header.mapper1 & 0x04 ? 512 : 0);
     chr_base = prg_base + (number_PRG_banks * 16384);
+
+    // O arquivo tem mesmo PRG+CHR? (correcao da caca: ROM truncada fazia o
+    // CRC32 e os bancos lerem ALEM do fim do buffer da ROM — segfault no
+    // host e leitura de PSRAM alheia no blob). Sem PRG tambem e invalido
+    // (os mappers fixam o ultimo banco com prg_size - 16/8 KB).
+    const uint32_t rom_need =
+        chr_base + ((uint32_t)number_CHR_banks * 8192u);
+    if (number_PRG_banks == 0 || rom_need > rom_size)
+    {
+        LOGF("Cartridge: ROM curta (declara %uK PRG +%uK CHR, arquivo tem %uK)\n",
+             (unsigned)number_PRG_banks * 16u, (unsigned)number_CHR_banks * 8u,
+             (unsigned)(rom_size / 1024u));
+        is_valid = false;
+        return;
+    }
 
     // CRC32 sobre o PRG (mesmo seed/algoritmo do Anemoia: nome do save state
     // e dedup de ROM copiada na flash; aqui so identificacao)

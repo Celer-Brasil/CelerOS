@@ -184,8 +184,10 @@ static void mapper001_shiftWrite(Bus* bus, uint16_t addr, uint8_t data)
 void mapper001_reset(Mapper* mapper)
 {
     Mapper001_state* state = (Mapper001_state*)mapper->state;
-    memset(state->RAM, 0, 8U * 1024U);
-    if (state->CHR_RAM) memset(state->CHR_RAM, 0, 8U * 1024U);
+    // Correcao da caca: o RESET quente (botao Reset do app) NAO apaga o
+    // PRG-RAM do cartucho — hardware de verdade preserva a bateria. O zero
+    // acontece UMA vez no power-on (createMapper); sem ele, o reaproveitamento
+    // da arena entre ROMs vazaria o save do jogo anterior para o proximo.
 
     if (state->number_CHR_banks == 0)
     {
@@ -334,6 +336,7 @@ Mapper createMapper001(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
 
     state->RAM = (uint8_t*)nes_fast_alloc(8U * 1024U);
     if (!state->RAM) return mapper;
+    memset(state->RAM, 0, 8U * 1024U);  // power-on: SRAM zerada (save vem so do jogo)
     state->number_PRG_banks = PRG_banks;
     state->number_CHR_banks = CHR_banks;
     state->cart = cart;

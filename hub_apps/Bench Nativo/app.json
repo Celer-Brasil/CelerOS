@@ -1,7 +1,7 @@
 {
   "name": "Bench Nativo",
   "packageName": "celeros.benchnativo",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "api": 57,
   "main": "main.js",
   "permissions": [],
@@ -10,5 +10,5 @@
   "type": "Utility",
   "category": "Utility",
   "description": "Primeiro app nativo do catalogo (API 57): carrega o blob CLRN com System.nativeLoad, chama add/fib/fill por System.nativeCall, confere fib(50) com wrap uint32 e o checksum do fill recalculado em JS com a mesma aritmetica do C, le bytes do scratch com System.nativeRead e mede nativo x JS no mesmo tamanho de area. Em placa sem o acelerador (requires native) explica e nao instala.",
-  "changelog": "1.0.0 - primeira versao do spike (blob de teste do tools/native/build_core.py)"
+  "changelog": "1.0.1 - core_native_test.bin recompilado no formato atual (CLRN v2: cabecalho de 128 B com bss/tabela de relocs + sha256 em hdr+80; era v1 de 96 B) pelo tools/native/build_core.py. Mesmas entradas add/fib/fill. "
 }

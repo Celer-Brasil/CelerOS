@@ -11,7 +11,9 @@ static void mapper003_remapCHRPages(Mapper003_state* state, Ppu2C02* ppu)
 static void mapper003_bankWrite(Bus* bus, uint16_t addr, uint8_t data)
 {
     Mapper003_state* state = (Mapper003_state*)bus->cart->mapper.state;
-    uint8_t bank = data & 0x03;
+    // Mascara pelo numero de bancos (correcao da caca: & 0x03 limitava a
+    // CNROM a 4 bancos — jogos com 8+ bancos de CHR trocavam banco errado)
+    uint8_t bank = data & (state->number_CHR_banks > 0 ? state->number_CHR_banks - 1 : 0x07);
     state->ptr_CHR_bank_8K = (uint8_t*)(state->mROM->chr_base + bank * 8U * 1024U);
     mapper003_remapCHRPages(state, &bus->ppu);
 }

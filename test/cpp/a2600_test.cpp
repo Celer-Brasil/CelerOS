@@ -1,10 +1,12 @@
 // Teste host do nucleo do Atari 2600 (gate g++ do CI).
 //
 // Cobre: CPU cycle-stepped (semantica/ciclos/decimal/ilegais/IRQ), TIA
-// (RESP/HMOVE/playfield/colisoes/WSYNC/audio), cartuchos (2K/4K/F8/F6/F4/3F/
-// E0/UA/SC), RIOT (timer/portas) e um quadro real de um kernel sintetico
-// (VSYNC + 37 linhas de VBLANK + 192 visiveis com playfield) + save/load
-// deterministico.
+// (RESP/HMOVE/playfield/colisoes/WSYNC/audio), os casos classicos que os
+// jogos usam de verdade (RESP no blank, HMOVE de 8 px, RESMP do Combat,
+// playfield espelhado/score, prioridade do PF, CXM0P, VDELBL, NUSIZ e o tom
+// do AUDC=12), cartuchos (2K/4K/F8/F6/F4/3F/E0/UA/SC), RIOT (timer pelos
+// 4 enderecos/portas) e um quadro real de um kernel sintetico (VSYNC + 37
+// linhas de VBLANK + 192 visiveis com playfield) + save/load deterministico.
 
 #include <stdio.h>
 #include <string.h>
@@ -375,6 +377,204 @@ static void testTia()
     CHECK(ds.count() > 0, "TIA audio gera PCM");
 }
 
+// ---------------------------------------------------------------- casos classicos
+// Cenarios que os jogos usam de verdade (Combat, Pitfall, Ms. Pac-Man): RESP
+// durante o blank do kernel, HMOVE de 8 px, RESMP travando o missil, playfield
+// espelhado e score, prioridade do PF, colisao M0-P1, VDELBL e NUSIZ.
+static void testTiaCasos()
+{
+    static uint16_t fb[160 * 192];
+    static Tia t;
+    t.reset();  // constroi a paleta antes de calcular as cores esperadas
+    const uint16_t gold = t.color565(0x1E);
+
+    // RESP no blank: borda esquerda do vidro (3 player, 2 missil/bola), o
+    // kernel posiciona o sprite antes do feixe sair do blank
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    t.write(0x1D, 0x02);  // ENAM0
+    t.write(0x1F, 0x02);  // ENABL
+    tiaLine(t, 60);       // clock 180 (blank)
+    t.write(0x10, 0x00);  // RESP0
+    t.write(0x12, 0x00);  // RESM0
+    t.write(0x14, 0x00);  // RESBL
+    CHECK(t.dbgPos(0) == 3, "RESP no blank: player em x=3");
+    CHECK(t.dbgPos(2) == 2, "RESM no blank: missil em x=2");
+    CHECK(t.dbgPos(4) == 2, "RESBL no blank: bola em x=2");
+    t.write(0x1B, 0xFF);  // GRP0
+    tiaLine(t, 16 + 76);  // fecha esta linha e roda a seguinte inteira
+    tiaLine(t, 76);
+    CHECK(t.lineBuffer()[2] == gold, "missil em x=2 com a cor do P0");
+    CHECK(t.lineBuffer()[3] == gold, "player do blank em x=3");
+    CHECK(t.lineBuffer()[10] == gold, "player ate x=10");
+    CHECK(t.lineBuffer()[11] == 0, "player termina em x=11");
+
+    // HMOVE 0x80: o maximo para a direita (+8 px)
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    tiaLine(t, 22);
+    t.write(0x10, 0x00);  // RESP0 -> 74
+    t.write(0x20, 0x80);  // HMP0 = 8 para a direita
+    t.write(0x2A, 0x00);  // HMOVE
+    t.write(0x1B, 0xFF);
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[81] == 0, "HMOVE 0x80: nada em x=81");
+    CHECK(t.lineBuffer()[82] == gold, "HMOVE 0x80: player em x=82");
+    CHECK(t.lineBuffer()[89] == gold, "HMOVE 0x80: player ate x=89");
+    CHECK(t.lineBuffer()[90] == 0, "HMOVE 0x80: termina em x=90");
+
+    // RESMP0 (Combat): D1 trava o missil no centro do player e o esconde; ao
+    // soltar, o missil fica nessa posicao
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    tiaLine(t, 22);
+    t.write(0x10, 0x00);  // RESP0 -> 74
+    t.write(0x12, 0x00);  // RESM0 -> 73
+    t.write(0x28, 0x02);  // RESMP0 liga (D1)
+    t.write(0x1D, 0x02);  // ENAM0
+    t.write(0x1B, 0xFF);
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[73] == 0, "RESMP: missil travado escondido");
+    t.write(0x28, 0x00);  // solta: missil no centro do player (74 + 3)
+    CHECK(t.dbgPos(2) == 77, "RESMP solto: missil no centro do player (77)");
+
+    // playfield espelhado (CTRLPF D0): PF0 nibble alto acende as duas bordas
+    // em ordem INVERSA no lado direito
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x08, 0x1E);
+    t.write(0x0A, 0x01);  // CTRLPF: mirror
+    t.write(0x0D, 0x30);  // PF0: bits 4-5
+    tiaLine(t, 76);
+    CHECK(t.lineBuffer()[4] == gold, "mirror: PF0 em x=4");
+    CHECK(t.lineBuffer()[155] == gold, "mirror: PF0 espelhado em x=155");
+    CHECK(t.lineBuffer()[151] == 0, "mirror: x=151 apagado (ordem invertida)");
+    CHECK(t.lineBuffer()[159] == gold, "mirror: x=159 aceso");
+
+    // score (CTRLPF D1): o PF da esquerda sai com COLUP0 e o da direita com
+    // COLUP1, mesmo com COLUPF setado
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    t.write(0x07, 0x46);
+    t.write(0x08, 0x0E);  // COLUPF branco (o PF NAO usa no score)
+    t.write(0x0A, 0x02);  // CTRLPF: score
+    t.write(0x0D, 0x30);  // PF0
+    tiaLine(t, 76);
+    CHECK(t.lineBuffer()[4] == t.color565(0x1E), "score: PF esquerda com COLUP0");
+    CHECK(t.lineBuffer()[84] == t.color565(0x46), "score: PF direita com COLUP1");
+
+    // prioridade: sem D2 o player passa por cima do PF; com D2 o PF ganha
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x46);  // COLUP0 laranja
+    t.write(0x08, 0x1E);  // COLUPF ouro
+    t.write(0x0F, 0x40);  // PF2: x=72..75
+    tiaLine(t, 22);
+    t.write(0x10, 0x00);  // RESP0 -> 74 (dentro do PF)
+    t.write(0x1B, 0xFF);
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[74] == t.color565(0x46), "sem prioridade: player sobre o PF");
+    t.write(0x0A, 0x04);  // CTRLPF D2: PF priority
+    tiaLine(t, 76);
+    CHECK(t.lineBuffer()[74] == gold, "PF priority: PF sobre o player");
+
+    // colisao M0-P1 (CXM0P D7): missil do P0 sobre o sprite do P1; leitura
+    // nao apaga e CXM1P fica limpo sem M1
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    t.write(0x07, 0x1E);
+    t.write(0x1C, 0xFF);  // GRP1
+    tiaLine(t, 21);
+    t.write(0x11, 0x00);  // RESP1 -> 71
+    tiaLine(t, 1);
+    t.write(0x1D, 0x02);  // ENAM0
+    t.write(0x12, 0x00);  // RESM0 -> 73 (dentro do P1 71..78)
+    tiaLine(t, 54);
+    CHECK((t.read(0x00) & 0x80) != 0, "CXM0P D7: M0-P1 na mesma linha");
+    CHECK((t.read(0x00) & 0x80) != 0, "CXM0P: leitura nao limpa");
+    CHECK((t.read(0x01) & 0x80) == 0, "CXM1P limpo sem M1");
+
+    // VDELBL: o ENABL que aparece e o latch velho, copiado quando o jogo
+    // escreve GRP1 (o mesmo mecanismo do VDELP0)
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x08, 0x1E);
+    t.write(0x27, 0x01);  // VDELBL
+    tiaLine(t, 22);
+    t.write(0x14, 0x00);  // RESBL -> 73
+    t.write(0x1F, 0x02);  // ENABL novo (velho continua 0)
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[73] == 0, "VDELBL: ENABL novo nao aparece sozinho");
+    t.write(0x1C, 0x00);  // GRP1 copia ENABL novo -> velho
+    tiaLine(t, 76);
+    CHECK(t.lineBuffer()[73] == gold, "VDELBL: bola aparece apos GRP1");
+
+    // NUSIZ: 2 copias afastadas 16 px (Combat) e player de largura dupla
+    // (comeca 1 px depois, atraso do escalador)
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    t.write(0x04, 0x01);  // NUSIZ0 = 1: 2 copias, espaco 16
+    tiaLine(t, 22);
+    t.write(0x10, 0x00);  // RESP0 -> 74
+    t.write(0x1B, 0xFF);
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[74] == gold, "NUSIZ1: copia 1 em 74");
+    CHECK(t.lineBuffer()[90] == gold, "NUSIZ1: copia 2 em 90");
+    CHECK(t.lineBuffer()[83] == 0, "NUSIZ1: gap entre as copias");
+    t.reset();
+    t.setFramebuffer(fb);
+    t.write(0x01, 0x00);
+    t.write(0x06, 0x1E);
+    t.write(0x04, 0x05);  // NUSIZ0 = 5: largura dupla
+    tiaLine(t, 22);
+    t.write(0x10, 0x00);
+    t.write(0x1B, 0xFF);
+    tiaLine(t, 54);
+    CHECK(t.lineBuffer()[74] == 0, "NUSIZ5: atraso do escalador em x=74");
+    CHECK(t.lineBuffer()[75] == gold, "NUSIZ5: comeca em x=75");
+    CHECK(t.lineBuffer()[90] == gold, "NUSIZ5: 16 px, termina em x=90");
+
+    // tom puro AUDC=12 com AUDF=0: o modelo do chip divide por 6 -> ~5,2 kHz
+    // no PCM de 44,1 kHz (o divisor antigo andava por color clock: tom errado)
+    {
+        static int16_t pcm[8192];
+        static AudioDownsampler ds;
+        t.reset();
+        t.setFramebuffer(fb);
+        ds.configure(Tia::kAudioRate, 44100, pcm, 8192);
+        t.setAudio(&ds);
+        t.write(0x15, 0x0C);  // AUDC0 = 12 (tom puro)
+        t.write(0x17, 0x00);  // AUDF0 = 0
+        t.write(0x19, 0x0F);  // AUDV0 = 15
+        for (int i = 0; i < 262 * 4 * 76; i++) t.tick();
+        const uint32_t n = ds.count();
+        CHECK(n > 500, "tom: PCM suficiente");
+        if (n > 500) {
+            int flips = 0;
+            for (uint32_t i = 1; i < n; i++)
+                if ((pcm[i] < 0) != (pcm[i - 1] < 0)) flips++;
+            const int hz = (int)(flips / 2.0 * 44100.0 / n);
+            CHECK(hz > 4200 && hz < 6300, "tom AUDC=12 AUDF=0 em ~5,2 kHz");
+        }
+        t.setAudio(nullptr);
+    }
+}
+
 // ---------------------------------------------------------------- carts
 static std::vector<uint8_t> mkRom(uint32_t size, int seed)
 {
@@ -514,6 +714,18 @@ static void testRiot()
     r.write(0x295, 9);  // TIM8T
     for (int i = 0; i < 9; i++) r.tick();
     CHECK(r.read(0x284) == 7, "TIM8T");
+    // TIM1T com carga maior: o primeiro decremento tambem sai no ciclo
+    // seguinte (Stella M6532: subTimer = divider - 1 na carga)
+    r.write(0x294, 100);
+    r.tick();
+    CHECK(r.read(0x284) == 99, "TIM1T: 1 ciclo = 1 decremento");
+    // escrever no TIMINT (0x285) NAO recarrega o timer: com TIM64T = 50 o
+    // estouro tem que chegar em 50*64 ciclos; se 0x285 carregasse 0x7F o
+    // flag nao acenderia aqui
+    r.write(0x296, 50);
+    r.write(0x285, 0x7F);
+    for (int i = 0; i < 3300; i++) r.tick();
+    CHECK((r.read(0x285) & 0x80) != 0, "TIMINT: escrita nele nao recarrega o timer");
     // portas: 0x280..0x283 e espelhos; DDR seleciona saida
     r.write(0x281, 0xF0);
     r.write(0x280, 0x00);
@@ -567,6 +779,16 @@ static void testFrame()
     // roda 3 quadros para o kernel estabilizar (o 1o fecha no VSYNC de init)
     for (int i = 0; i < 3; i++) a.frame(0, 0, nullptr);
     CHECK(a.pcmLen() > 0, "A2600 PCM no quadro");
+
+    // timing do quadro: o kernel tem 233 linhas (VSYNC + 37 VBLANK + 192
+    // visiveis + cauda), ~17,7 mil ciclos por quadro — o RIOT com o timer
+    // decodificado errado fazia o jogo contar o tempo torto
+    {
+        const uint64_t c1 = a.cycles();
+        for (int i = 0; i < 10; i++) a.frame(0, 0, nullptr);
+        const uint64_t per = (a.cycles() - c1) / 10;
+        CHECK(per > 17000 && per < 18500, "ciclos por quadro do kernel (233 linhas)");
+    }
 
     Tia pal;
     pal.reset();
@@ -692,6 +914,7 @@ int main()
 {
     testCpu();
     testTia();
+    testTiaCasos();
     testCarts();
     testRiot();
     testFrame();

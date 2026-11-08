@@ -158,7 +158,7 @@ static inline void celer_core_dirty(CelerCoreOut* o, uint16_t cell) {
 /// Enfileira um evento (som, dano, morte, item, saida...).
 static inline void celer_core_event(CelerCoreOut* o, uint16_t type,
                                     uint16_t a, uint16_t b, uint16_t c) {
-    if (o->eventCount >= CELER_MAX_EVENTS) return;  // ring curto: o novo e o que vale
+    if (o->eventCount >= CELER_MAX_EVENTS) return;  // anel cheio: descarta o novo (estado terminal va nos bits do STEP/head, nao em evento)
     uint16_t* p = (uint16_t*)(o->out + CELER_OUT_HEAD + o->stateBytes + CELER_OUT_DIRTY_BYTES);
     p += (size_t)o->eventCount * 4;
     p[0] = type; p[1] = a; p[2] = b; p[3] = c;

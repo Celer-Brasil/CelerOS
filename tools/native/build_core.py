@@ -144,7 +144,7 @@ def absolute_relocs(rd, elf, secs, nmbin):
     r = run([rd, "-r", "-W", elf])
     if r.returncode != 0:
         die("readelf -r falhou", r.stderr)
-    sites = {}  # site -> kind (0 = codigo/exec, 1 = dados)
+    per_sec = {}  # secao-alvo -> [(off bruto, kind)]; resolve no fim
     bad = []
     cur = None  # secao-alvo (nome sem o prefixo .rela)
     for line in r.stdout.splitlines():
@@ -165,12 +165,6 @@ def absolute_relocs(rd, elf, secs, nmbin):
         else:
             off, typ, sym = int(m.group(1), 16), m.group(2), m.group(3)
         if typ == "R_XTENSA_32":
-            # O readelf dessa toolchain imprime o Offset de .rela.data ja
-            # como ENDERECO (VMA), nao offset-dentro-da-secao (visto na
-            # bancada: .data@7d1c com .data em 0x7d1c). Discriminante: um
-            # offset valido dentro da secao e sempre < size.
-            vma, ssz = secs[cur]
-            site = off if off >= ssz else vma + off
             # Funcao alvo vai para o ALIAS EXECUTAVEL; data/rodata para o
             # endereco de dados. Simbolo de secao ".text" e funcao (ponteiro
             # de codigo). Desconhecido => dados (acesso errado por alias exec
@@ -178,10 +172,10 @@ def absolute_relocs(rd, elf, secs, nmbin):
             # escolha segura e o caso dominante: literais apontam p/ dados).
             st = sym_type.get(sym, "")
             is_code = (st in ("T", "t")) or sym == ".text"
-            sites[site] = 0 if is_code else 1
+            per_sec.setdefault(cur, []).append((off, 0 if is_code else 1, sym))
             if VERBOSE_RELOCS:
-                sys.stderr.write("[reloc] %s@%x -> site 0x%x kind=%d (%s)\n"
-                                 % (cur, off, site, 0 if is_code else 1, sym))
+                sys.stderr.write("[reloc] %s@%x kind=%d (%s)\n"
+                                 % (cur, off, 0 if is_code else 1, sym))
         elif typ in ("R_XTENSA_SLOT0_OP", "R_XTENSA_NONE"):
             continue  # branch PC-relative resolvido / relocacao no-op
         else:
@@ -190,6 +184,28 @@ def absolute_relocs(rd, elf, secs, nmbin):
         die("relocacoes inesperadas (%d): %s — o formato v2 so aplica "
             "R_XTENSA_32" % (len(bad),
                              ", ".join("%s@%x" % (t, o) for o, t in bad[:8])))
+    # r_offset vem como VMA (bancada: .rela.data com .data em 0x7d1c imprime
+    # 0x7d1c) OU como offset-dentro-da-secao. Antes o discriminante era
+    # "off < size = offset" — com secao@VMA nao nula e size > VMA (ex.:
+    # texto minimo + 64 KB de tabelas em .rodata@0x64) os PRIMEIROS sites da
+    # secao caem no ramo errado e a tabela sai deslocada (+VMA): o site real
+    # nunca recebe +base e um byte de tabela leva +base (blob que crasha no
+    # device, com sha proprio conferido pelo loader). Regra robusta: um
+    # r_offset valido SEMPRE aponta dentro da secao — usa VMA se todos os
+    # sites cabem em [vma, vma+size); senao offset (todos em [0, size));
+    # nenhum dos dois = ELF hostil, barra.
+    sites = {}
+    for sec, raws in per_sec.items():
+        vma, ssz = secs[sec]
+        if all(vma <= o < vma + ssz for o, _k, _s in raws):
+            conv = lambda o: o
+        elif all(0 <= o < ssz for o, _k, _s in raws):
+            conv = lambda o: vma + o
+        else:
+            die("relocacoes fora da secao %s (%d sites, secao @0x%x +0x%x)"
+                % (sec, len(raws), vma, ssz))
+        for o, k, _s in raws:
+            sites[conv(o)] = k
     return sorted(sites.items())
 
 

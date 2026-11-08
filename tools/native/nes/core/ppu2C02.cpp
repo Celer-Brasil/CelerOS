@@ -281,6 +281,16 @@ inline void Ppu2C02::renderBackground()
             attr = (attribute_byte >> attribute_shift) & 3;
         }
     }
+    // Coluna esquerda ($2001 bit1 = 0): o hardware esconde o fundo nos 8
+    // primeiros pixels (mostra o backdrop) — as barras de HUD desenhadas
+    // sobre tiles do cenario e o truque de janela dos jogos verticais
+    // dependem disso. (Correcao da caca: o bit nao era lido e a faixa
+    // mostrava os tiles de tras.)
+    if (!mask.render_background_left)
+    {
+        memset(scanline_buffer, palette_table[0], 8);
+        memset(scanline_metadata, 0x80, 8);
+    }
     ptr_scanline_meta = meta;
     ptr_buffer = scanline_buffer + x;
 }
@@ -312,6 +322,9 @@ inline void Ppu2C02::renderSprites()
 
     buffer_offset = scanline_buffer + x;
     metadata_offset = scanline_metadata + x;
+    // Coluna esquerda ($2001 bit2 = 0): sprites nos 8 primeiros pixels nao
+    // desenham nem marcam sprite 0 hit, como no hardware.
+    const int j_left = mask.render_sprite_left ? 0 : 8;
     for (int i = 0; i < 64; i++, ptr_sprite_OAM++)
     {
         sprite_y = ptr_sprite_OAM->y + 1;
@@ -324,6 +337,11 @@ inline void Ppu2C02::renderSprites()
         tile_index = ptr_sprite_OAM->index;
         attribute_byte = ptr_sprite_OAM->attribute;
         attribute = ((attribute_byte & 0x03) << 2);
+
+        // primeiro pixel do sprite que pode sair (j_left = 8 - sprite_x quando
+        // o sprite invade a coluna escondida; >= 8 = sprite inteiro escondido)
+        int j0 = 0;
+        if (j_left != 0 && sprite_x < 8) j0 = 8 - sprite_x;
 
         ptr_buffer = buffer_offset + sprite_x;
         ptr_scanline_meta = metadata_offset + sprite_x;
@@ -376,7 +394,7 @@ inline void Ppu2C02::renderSprites()
             // Check for sprite 0 hit
             if (i == 0 && status.sprite_zero_hit == 0)
             {
-                for (int j = 0; j < 8; j++)
+                for (int j = j0; j < 8; j++)
                 {
                     if (pixel[j] && ((ptr_scanline_meta[j] & 0x80) == 0))
                     {
@@ -390,7 +408,7 @@ inline void Ppu2C02::renderSprites()
             // Sprite Priorty : 1 - behind background | 0 - in front of background
             if (attribute_byte & 0x20)
             {
-                for (int j = 0; j < 8; j++)
+                for (int j = j0; j < 8; j++)
                 {
                     if (pixel[j])
                     {
@@ -401,7 +419,7 @@ inline void Ppu2C02::renderSprites()
             }
             else
             {
-                for (int j = 0; j < 8; j++)
+                for (int j = j0; j < 8; j++)
                 {
                     if (pixel[j] && ((ptr_scanline_meta[j] & 0x40) == 0))
                     {
@@ -415,7 +433,18 @@ inline void Ppu2C02::renderSprites()
         // If sprite overflow, break
         if (++sprite_count == 8)
         {
-            status.sprite_overflow = true;
+            // Overflow so quando um 9o sprite esta na linha (avaliacao da
+            // OAM): com exatamente 8 o hardware nao seta. (Correcao da caca:
+            // o flag subia no 8o desenhado, mesmo sem 9o.)
+            for (int k = i + 1; k < 64; k++)
+            {
+                const uint8_t sy = sprite[k].y + 1;
+                if ((sy > scanline) || (sy <= (scanline - sprite_size)) || (sy == 0) ||
+                    (sy >= 240))
+                    continue;
+                status.sprite_overflow = true;
+                break;
+            }
             break;
         }
     }

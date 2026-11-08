@@ -57,7 +57,14 @@ Mapper createMapper000(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
     Mapper000_state* state = new (std::nothrow) Mapper000_state;
     if (!state) return mapper;
 
-    if (CHR_banks == 0) state->CHR_ROM = (uint8_t*)nes_fast_alloc(8U * 1024U);
+    if (CHR_banks == 0)
+    {
+        state->CHR_ROM = (uint8_t*)nes_fast_alloc(8U * 1024U);
+        // power-on: CHR-RAM zerada (a arena reaproveita o bloco da ROM
+        // anterior; tiles "fantasma" do jogo anterior vazavam para o novo
+        // ate o upload do jogo). O RESET quente preserva o conteudo.
+        if (state->CHR_ROM) memset(state->CHR_ROM, 0, 8U * 1024U);
+    }
     state->mROM = &cart->mROM;
 
     state->number_PRG_banks = PRG_banks;

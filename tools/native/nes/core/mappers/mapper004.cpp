@@ -152,7 +152,8 @@ void mapper004_scanline(Mapper* mapper)
 void mapper004_reset(Mapper* mapper)
 {
     Mapper004_state* state = (Mapper004_state*)mapper->state;
-    memset(state->RAM, 0, 8U * 1024U);
+    // Correcao da caca: o RESET quente nao apaga o PRG-RAM (bateria); o zero
+    // do power-on fica no createMapper.
 
     state->ptr_PRG_bank_8K[0] = (uint8_t*)state->mROM->prg_base;
     state->ptr_PRG_bank_8K[1] = (uint8_t*)state->mROM->prg_base;
@@ -277,6 +278,7 @@ Mapper createMapper004(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
 
     state->RAM = (uint8_t*)nes_fast_alloc(8U * 1024U);
     if (!state->RAM) return mapper;
+    memset(state->RAM, 0, 8U * 1024U);  // power-on: SRAM zerada (save vem so do jogo)
     state->number_PRG_banks = PRG_banks;
     state->number_CHR_banks = CHR_banks;
     state->cart = cart;

@@ -272,10 +272,12 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         return 1;
     }
     case CORE_RESET:
+        if (s_nes == nullptr) return 0;  // sem INIT: comando antes do load
         s_pcm_len = 0;
         s_nes->reset();
         return 1;
     case CORE_FRAME: {
+        if (s_nes == nullptr) return 0;  // sem INIT: comando antes do load
         uint8_t buttons = (uint8_t)((uint32_t)arg & 0xFFu);
         bool render = ((uint32_t)arg >> 8) != 0;
         s_pcm_len = 0;  // o app drena o que este quadro gerar
@@ -324,9 +326,14 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
     case CORE_FRAME_SCREEN: {
         // arg = NativeScreen* (pixel do alvo, stride, w, h, arg do app)
         const emu::NativeScreen* scr = (const emu::NativeScreen*)(uintptr_t)(uint32_t)arg;
-        if (scr == nullptr) return emu::kNoTarget;
+        if (s_nes == nullptr || scr == nullptr) return emu::kNoTarget;
         uint8_t buttons = (uint8_t)((uint32_t)scr->arg & 0xFFu);
         bool render = (((uint32_t)scr->arg >> 8) & 1u) != 0;
+        // bit1 (present pintou o vidro) e latch de consumo unico no JsNative:
+        // num quadro pulado (frameskip) o begin() nao roda e o flag morreria
+        // aqui — o brilho composto no painel ficaria assado ate o jogo
+        // reescrever as linhas. Invalida para o proximo quadro renderizado.
+        if (scr->flags & 2u) s_screen.invalidate();
         // alvo/geometria invalidos: o app cai no FRAME + nativeDraw
         if (render && !s_screen.begin(scr)) return emu::kNoTarget;
         s_pcm_len = 0;

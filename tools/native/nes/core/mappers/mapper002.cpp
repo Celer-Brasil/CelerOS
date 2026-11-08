@@ -12,7 +12,9 @@ static void mapper002_bankWrite(Bus* bus, uint16_t addr, uint8_t data)
 {
     Mapper002_state* state = (Mapper002_state*)bus->cart->mapper.state;
 
-    uint8_t bank = data & 0x0F;
+    // Mascara pelo numero de bancos (correcao da caca: & 0x0F deixa um jogo
+    // de 8 bancos escolher banco 9-15 e ler fora do PRG)
+    uint8_t bank = data & (state->number_PRG_banks > 0 ? state->number_PRG_banks - 1 : 0x0F);
     state->ptr_PRG_bank_16K[0] = (uint8_t*)(state->mROM->prg_base + (bank * 16U * 1024U));
     mapper002_remapWindows(state, bus);
 }
@@ -80,7 +82,12 @@ Mapper createMapper002(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
     Mapper002_state* state = new (std::nothrow) Mapper002_state;
     if (!state) return mapper;
 
-    if (CHR_banks == 0) state->CHR_bank = (uint8_t*)nes_fast_alloc(8U * 1024U);
+    if (CHR_banks == 0)
+    {
+        state->CHR_bank = (uint8_t*)nes_fast_alloc(8U * 1024U);
+        // power-on: CHR-RAM zerada (ver mapper000); o RESET quente preserva
+        if (state->CHR_bank) memset(state->CHR_bank, 0, 8U * 1024U);
+    }
     state->mROM = &cart->mROM;
 
     state->number_PRG_banks = PRG_banks;

@@ -135,8 +135,9 @@ void mapper069_cycle(Mapper* mapper, int cycles)
 void mapper069_reset(Mapper* mapper)
 {
     Mapper069_state* state = (Mapper069_state*)mapper->state;
-    // Correcao do port: o Anemoia fazia memset de 16 KB num malloc de 8 KB
-    if (state->RAM) memset(state->RAM, 0, 8U * 1024U);
+    // Correcao da caca: o RESET quente nao apaga o PRG-RAM (bateria); o zero
+    // do power-on fica no createMapper. (A correcao do port anterior — memset
+    // de 16 KB num malloc de 8 KB — ja saiu daqui.)
     state->ptr_PRG_bank_8K[0] = (uint8_t*)state->mROM->prg_base;
     state->ptr_PRG_bank_8K[1] = (uint8_t*)state->mROM->prg_base;
     state->ptr_PRG_bank_8K[2] = (uint8_t*)state->mROM->prg_base;
@@ -251,6 +252,7 @@ Mapper createMapper069(uint8_t PRG_banks, uint8_t CHR_banks, Cartridge* cart)
 
     state->RAM = (uint8_t*)nes_fast_alloc(8U * 1024U);
     if (!state->RAM) return mapper;
+    memset(state->RAM, 0, 8U * 1024U);  // power-on: SRAM zerada (save vem so do jogo)
     state->number_PRG_banks = PRG_banks;
     state->number_CHR_banks = CHR_banks;
     state->cart = cart;

@@ -205,6 +205,11 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg)
         if (s_emu == nullptr || scr == nullptr) return emu::kNoTarget;
         const uint8_t buttons = emu::emuFrameButtons(scr->arg);
         const bool render = emu::emuFrameRender(scr->arg);
+        // bit1 (present pintou o vidro) e latch de consumo unico no JsNative:
+        // num quadro pulado (frameskip) o begin() nao roda e o flag morreria
+        // aqui — o brilho composto no painel ficaria assado ate o jogo
+        // reescrever as linhas. Invalida para o proximo quadro renderizado.
+        if (scr->flags & 2u) s_screen.invalidate();
         // alvo/geometria invalidos: o app cai no FRAME + nativeDraw
         if (render && !s_screen.begin(scr)) return emu::kNoTarget;
         s_pcmLen = 0;

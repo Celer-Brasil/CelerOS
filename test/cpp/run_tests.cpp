@@ -28,6 +28,8 @@
 #include "../../main/Utils/Verlet2D.h"
 #include "../../main/Utils/ShellLogic.h"
 #include "../../main/USBHost/UsbDesc.h"
+#include "../../main/Bluetooth/HidDesc.h"
+#include "../../main/UI/KeyboardMap.h"
 
 // Componentes base (header-only no host: Event/Timeout tem shim proprio;
 // ErrorCode e constexpr puro)
@@ -3564,6 +3566,143 @@ static void testTimeout() {
     clk.fixed = false;  // devolve o relogio real (higiene para os outros testes)
 }
 
+// ---------------------------------------------------------------------------
+// HidDesc (API 62): classificacao do Report Map do BT HID. Os descriptors
+// abaixo sao os reais (teclado boot HOGP, mouse 3 botoes + roda, o Xbox BLE
+// do teste da dep celeros.gamepad e um combo teclado+mouse).
+// ---------------------------------------------------------------------------
+static void testHidDesc() {
+    using namespace HidDesc;
+
+    // Teclado HOGP: report id 1, 8 mods (0xE0..0xE7) + 6 slots de 8 bits
+    const uint8_t kbd[] = {
+        0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x85, 0x01,
+        0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01,
+        0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+        0x95, 0x01, 0x75, 0x08, 0x81, 0x03,
+        0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65,
+        0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+        0xC0,
+    };
+    CHECK(classify(kbd, sizeof(kbd)) == kKeyboard);
+    CHECK(std::strcmp(kindName(kKeyboard), "kbd") == 0);
+
+    // Mouse: 3 botoes + padding + X/Y/roda assinados (-127..127)
+    const uint8_t mouse[] = {
+        0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00,
+        0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01,
+        0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+        0x95, 0x01, 0x75, 0x05, 0x81, 0x03,
+        0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38,
+        0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
+        0xC0, 0xC0,
+    };
+    CHECK(classify(mouse, sizeof(mouse)) == kMouse);
+    CHECK(std::strcmp(kindName(kMouse), "mouse") == 0);
+
+    // Gamepad Xbox BLE: sticks 0..255, hat 4 bits, 15 botoes, gatilhos 10 bits.
+    // X/Y sozinhos ate pareceriam mouse; o hat + os botoes decidem pad.
+    const uint8_t pad[] = {
+        0x05, 0x01, 0x09, 0x05, 0xA1, 0x01, 0x85, 0x01, 0xA1, 0x00,
+        0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
+        0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
+        0xC0,
+        0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42,
+        0x05, 0x09, 0x19, 0x01, 0x29, 0x0F, 0x15, 0x00, 0x25, 0x01,
+        0x75, 0x01, 0x95, 0x0F, 0x81, 0x02,
+        0x05, 0x01, 0x09, 0x33, 0x09, 0x34,
+        0x15, 0x00, 0x27, 0xFF, 0x03, 0x00, 0x00, 0x75, 0x0A, 0x95, 0x02, 0x81, 0x02,
+        0xC0,
+    };
+    CHECK(classify(pad, sizeof(pad)) == kPad);
+    CHECK(std::strcmp(kindName(kPad), "pad") == 0);
+
+    // Combo (K400 e afins): as duas colecoes no MESMO mapa
+    uint8_t combo[sizeof(kbd) + sizeof(mouse)];
+    std::memcpy(combo, kbd, sizeof(kbd));
+    std::memcpy(combo + sizeof(kbd), mouse, sizeof(mouse));
+    CHECK(classify(combo, sizeof(combo)) == kCombo);
+    CHECK(std::strcmp(kindName(kCombo), "combo") == 0);
+
+    // Consumer control (page 0x0C) sem teclado/mouse: nao e nada nosso
+    const uint8_t media[] = {
+        0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01,
+        0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A, 0xFF, 0x03,
+        0x75, 0x10, 0x95, 0x01, 0x81, 0x00, 0xC0,
+    };
+    CHECK(classify(media, sizeof(media)) == kOther);
+    CHECK(kindName(kOther)[0] == '\0');
+    CHECK(classify(nullptr, 0) == kOther);
+    CHECK(classify(kbd, 0) == kOther);
+
+    // appearance do ADV: so uma dica antes de conectar
+    CHECK(fromAppearance(0x03C1) == kKeyboard);
+    CHECK(fromAppearance(0x03C2) == kMouse);
+    CHECK(fromAppearance(0x03C3) == kPad);
+    CHECK(fromAppearance(0x03C4) == kPad);
+    CHECK(fromAppearance(0x0000) == kOther);
+}
+
+// ---------------------------------------------------------------------------
+// KeyboardMap (API 62): usage HID -> caractere no teclado fisico. Layout US.
+// ---------------------------------------------------------------------------
+static void testKeyboardMap() {
+    using namespace KeyboardMap;
+    const uint8_t kShiftL = 0x02, kShiftR = 0x20;
+
+    Key k = map(0x04, 0, false);          // A
+    CHECK(k.action == kChar && k.ch == 'a');
+    k = map(0x04, kShiftL, false);
+    CHECK(k.action == kChar && k.ch == 'A');
+    k = map(0x04, 0, true);               // caps
+    CHECK(k.action == kChar && k.ch == 'A');
+    k = map(0x04, kShiftR, true);         // shift XOR caps
+    CHECK(k.action == kChar && k.ch == 'a');
+    k = map(0x1D, 0, false);              // Z
+    CHECK(k.ch == 'z');
+
+    k = map(0x1E, 0, false);              // 1
+    CHECK(k.ch == '1');
+    k = map(0x1E, kShiftL, false);        // !
+    CHECK(k.ch == '!');
+    k = map(0x27, kShiftL, false);        // 0 shiftado = )
+    CHECK(k.ch == ')');
+    k = map(0x2D, kShiftL, false);        // _ (hifen shiftado)
+    CHECK(k.ch == '_');
+    k = map(0x38, 0, false);              // /
+    CHECK(k.ch == '/');
+
+    k = map(0x2C, 0, false);              // espaco
+    CHECK(k.action == kChar && k.ch == ' ');
+    k = map(0x28, 0, false);              // Enter
+    CHECK(k.action == kEnter);
+    k = map(0x58, 0, false);              // Enter do keypad
+    CHECK(k.action == kEnter);
+    k = map(0x2A, 0, false);              // Backspace
+    CHECK(k.action == kBackspace);
+    k = map(0x29, 0, false);              // Esc
+    CHECK(k.action == kEscape);
+    k = map(0x39, 0, false);              // Caps Lock
+    CHECK(k.action == kCapsLock);
+    k = map(0xE1, 0, false);              // Shift esquerdo: so estado
+    CHECK(k.action == kNone);
+    k = map(0x35, 0, false);              // `
+    CHECK(k.ch == '`');
+    k = map(0x5A, 0, false);              // keypad 2
+    CHECK(k.ch == '2');
+    k = map(0x62, 0, false);              // keypad 0
+    CHECK(k.ch == '0');
+    k = map(0x2B, 0, false);              // Tab: sem foco, sem efeito
+    CHECK(k.action == kNone);
+    k = map(0x4F, 0, false);              // seta direita: sem foco, sem efeito
+    CHECK(k.action == kNone);
+
+    CHECK(shiftDown(kShiftL) && shiftDown(kShiftR));
+    CHECK(!shiftDown(0x00));
+    CHECK(ctrlDown(0x01) && ctrlDown(0x10));
+}
+
+
 
 // ============================================================
 int main() {
@@ -3616,6 +3755,8 @@ int main() {
     testEvent();
     testTimeout();
     testUsbDesc();
+    testHidDesc();
+    testKeyboardMap();
     if (g_failed == 0) {
         printf("OK: %d checks passaram\n", g_total);
         return 0;

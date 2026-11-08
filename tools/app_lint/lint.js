@@ -79,6 +79,7 @@ const OPTIONAL_ROOTS = {
   USB: 'USB e opcional (placas com USB Host + perm "usb", API 48): proteja com typeof USB !== "undefined" antes de usar',
   Input: 'Input e opcional (so com a perm "input", API 48): proteja com typeof Input !== "undefined" antes de usar',
   Service: 'Service e opcional (so o service.js rodando no svchost, API 42): proteja com typeof Service !== "undefined" antes de usar',
+  BT: 'BT e opcional (gamepad BLE HID: SmartDisplay/watch + perm "input", API 57): proteja com typeof BT !== "undefined" antes de usar',
 };
 
 // Globals do ES5 padrao + o que o firmware/harness injeta. Uso fora daqui sem

@@ -53,6 +53,9 @@ constexpr KeyDef kKeys[] = {
     {"nowifi", Type::Bool, "0", 0, 1},
     {"phone_on", Type::Bool, "1", 0, 1},
     {"celernet", Type::Bool, "0", 0, 1},
+    // API 62: grade do teclado on-screen. 0 = com teclado FISICO conectado o
+    // modal abre so com o campo (o KeyboardScreen le esta chave).
+    {"kbd_keys", Type::Bool, "1", 0, 1},
 };
 
 constexpr size_t kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);

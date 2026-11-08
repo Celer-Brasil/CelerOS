@@ -55,7 +55,18 @@ public:
 
     // Teclado puro (System.keypadOpen({field:false})): sem cabecalho, campo
     // nem X — as teclas comecam no topo e o cancelamento e por keypadClose().
-    void setShowField(bool s) { m_showField = s; }
+    void setShowField(bool s) {
+        if (m_showField == s) return;
+        m_showField = s;
+        if (!s) m_showKeys = true;   // keypad sem campo PRECISA das teclas
+        rebuild();
+    }
+
+    // Esconde a GRADE de teclas e deixa so o campo (API 62): quando ha
+    // teclado fisico conectado e o ajuste kbd_keys esta desligado, o modal
+    // abre assim — o usuario digita no teclado BT/USB e ve o texto no campo.
+    // Nunca esconde o campo: sem grade E sem campo nao haveria como digitar.
+    void setShowKeys(bool s);
 
     // Texto oculto (senha/PIN): campo em bullets com botao ver/ocu ao lado do
     // X. O botao so existe quando o mask esta ligado.
@@ -90,6 +101,10 @@ private:
     static bool isLetters(Mode m) { return m == Lower || m == Upper; }
     void handleKey(int idx);
     void finish(bool ok);
+    // teclado fisico (InputBus): drena a fila de teclas e aplica no buffer
+    void pumpPhysical();
+    void drainPhysical();          // descarta o que chegou antes do campo
+    bool defaultShowKeys() const;  // ajuste kbd_keys + teclado fisico presente
     char labelChar(char ch) const;
     Rect fieldRect() const;
     Rect cancelRect() const;
@@ -106,6 +121,7 @@ private:
     std::vector<Key> m_keys;
     bool m_persistent = false;
     bool m_showField = true;
+    bool m_showKeys = true;        // false = so campo (teclado fisico)
     bool m_mask = false;
     bool m_showPlain = false;      // botao ver/ocu revela apesar do mask
     bool m_capsLock = false;       // toque duplo no shift trava o Upper
@@ -119,6 +135,13 @@ private:
     int m_keysTop = 0;
     int m_flashKey = -1;       // feedback visual do ultimo toque
     uint32_t m_flashMs = 0;
+    // teclado fisico: Caps Lock e o estado do HOST (o report so traz o
+    // evento da tecla); o repeat do backspace e nosso (o device repete o
+    // mesmo report e o diff de bordas nao veria nada)
+    bool m_physCaps = false;
+    int m_physBksp = -1;           // usage do backspace fisico segurado
+    uint32_t m_physNextMs = 0;
+    int m_physRepeat = 0;
     uint32_t m_blinkMs = 0;    // cursor piscando
     bool m_cursorOn = true;
     bool m_done = false;

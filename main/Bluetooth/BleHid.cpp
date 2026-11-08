@@ -13,6 +13,7 @@
 #include "nvs.h"
 
 #include "CelerLink.h"
+#include "HidDesc.h"
 
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
@@ -25,11 +26,13 @@
 #include "sdkconfig.h"
 extern "C" void ble_store_config_init(void);
 
-// Gamepad Bluetooth LE HID (API 57): host HOGP cru. O parsing do HID
-// descriptor e a decodificacao de reports vivem na dep JS celeros.gamepad —
-// aqui so transporte: scan filtrado por HID, conexao + SMP Just Works com
-// bond no NVS, descoberta do servico 0x1812 (Report Map cru, Report
-// Reference por char), CCCD dos reports de entrada e write para o de saida.
+// Gamepad/teclado/mouse Bluetooth LE HID (API 57): host HOGP cru. O parsing
+// do HID descriptor e a decodificacao de reports vivem nas deps JS
+// (celeros.gamepad / celeros.hid) — aqui so transporte: scan filtrado por
+// HID, conexao + SMP Just Works com bond no NVS, descoberta do servico 0x1812
+// (Report Map cru, Report Reference por char), CCCD dos reports de entrada e
+// write para o de saida. A UNICA leitura do descriptor no firmware e a
+// classificacao do HidDesc (kbd/mouse/combo/pad), publicada em BT.state().kind.
 //
 // Mesmo desenho do CelerLink: os procedimentos (scan/connect) rodam na task
 // do app passo a passo, sincronizados por bits de um event group; os
@@ -118,6 +121,7 @@ char s_err[48] = {0};
 uint8_t s_peerAddr[6] = {0};
 uint8_t s_peerAddrType = BLE_ADDR_PUBLIC;
 char s_peerName[BleHid::MAX_NAME + 1] = {0};
+uint8_t s_peerKind = 0;   // HidDesc::Kind do device conectado
 int8_t s_peerRssi = 0;
 volatile int s_battery = -1;
 
@@ -128,9 +132,34 @@ struct PeerCache {
     char name[BleHid::MAX_NAME + 1];
     int8_t rssi;
     uint16_t appearance;
+    bool hid;      // appearance HID ou servico 1812 ja visto NESTE endereco
 };
 PeerCache s_scanCache[BleHid::MAX_PEERS];
 volatile int s_scanCount = 0;
+
+// Dedup da telemetria de scan: loga a 1a vez que cada endereco aparece
+// (reset no scanStart) — o ar chega dezenas de reports por segundo.
+uint8_t s_logSeen[10][6];
+int s_nLogSeen = 0;
+bool logSeen(const uint8_t a[6]) {
+    for (int i = 0; i < s_nLogSeen; i++) {
+        if (memcmp(s_logSeen[i], a, 6) == 0) return true;
+    }
+    if (s_nLogSeen < 10) {
+        memcpy(s_logSeen[s_nLogSeen], a, 6);
+        s_nLogSeen++;
+    }
+    return false;
+}
+
+// quantas entradas do cache sao HID (telemetria do fim do scan)
+int hidCount() {
+    int n = 0;
+    for (int i = 0; i < s_scanCount; i++) {
+        if (s_scanCache[i].hid) n++;
+    }
+    return n;
+}
 
 // chars do servico HID do pad
 struct CharInfo {
@@ -246,6 +275,110 @@ void lastClear() {
     nvs_erase_key(h, K_NVS_LAST_NAME);
     nvs_commit(h);
     nvs_close(h);
+}
+
+// ------------------------------------------------- registro por bond ----
+// Nome + tipo de cada device que JA conectou. O NimBLE guarda o bond mas nao
+// o nome; sem esta tabela o Ajustes so teria o endereco ("AA:BB:..") para
+// mostrar e o teclado on-screen nao saberia que ha teclado fisico. Blob de
+// slots fixos (38 B cada; mac zerado = vazio), no MESMO namespace do resto.
+
+const char* K_NVS_DEVS = "bt_devs";
+constexpr int K_DEV_SLOTS = 4;
+
+struct DevRec {
+    uint8_t mac[6];
+    uint8_t type;
+    uint8_t kind;
+    char name[BleHid::MAX_NAME + 1];
+};
+
+int devLoad(DevRec* out) {
+    nvs_handle_t h;
+    if (nvs_open(K_NVS_NS, NVS_READONLY, &h) != ESP_OK) return 0;
+    DevRec buf[K_DEV_SLOTS];
+    size_t len = sizeof(buf);
+    const bool ok = nvs_get_blob(h, K_NVS_DEVS, buf, &len) == ESP_OK && len == sizeof(buf);
+    nvs_close(h);
+    if (!ok) return 0;
+    int n = 0;
+    for (int i = 0; i < K_DEV_SLOTS; i++) {
+        bool vazio = true;
+        for (int k = 0; k < 6; k++) {
+            if (buf[i].mac[k] != 0) vazio = false;
+        }
+        if (!vazio) out[n++] = buf[i];
+    }
+    return n;
+}
+
+void devStore(const DevRec* recs, int n) {
+    nvs_handle_t h;
+    if (nvs_open(K_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    DevRec buf[K_DEV_SLOTS];
+    memset(buf, 0, sizeof(buf));
+    for (int i = 0; i < n && i < K_DEV_SLOTS; i++) buf[i] = recs[i];
+    nvs_set_blob(h, K_NVS_DEVS, buf, sizeof(buf));
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+// upsert por MAC: atualiza no lugar; cheio, descarta o mais antigo (fim da
+// fila). Nome/tipo sao reescritos a cada connect (o scan pode ter aprendido
+// um nome melhor).
+void devSave(const uint8_t mac[6], uint8_t type, uint8_t kind, const char* name) {
+    DevRec recs[K_DEV_SLOTS];
+    const int n = devLoad(recs);
+    int slot = -1;
+    for (int i = 0; i < n; i++) {
+        if (memcmp(recs[i].mac, mac, 6) == 0) { slot = i; break; }
+    }
+    int total = n;
+    if (slot < 0) {
+        if (n < K_DEV_SLOTS) {
+            slot = n;
+            total = n + 1;
+        } else {
+            for (int i = 1; i < K_DEV_SLOTS; i++) recs[i - 1] = recs[i];
+            slot = K_DEV_SLOTS - 1;
+        }
+    }
+    memset(&recs[slot], 0, sizeof(recs[slot]));
+    memcpy(recs[slot].mac, mac, 6);
+    recs[slot].type = type;
+    recs[slot].kind = kind;
+    snprintf(recs[slot].name, sizeof(recs[slot].name), "%s", name != nullptr ? name : "");
+    devStore(recs, total);
+}
+
+void devForget(const uint8_t mac[6]) {
+    DevRec recs[K_DEV_SLOTS];
+    const int n = devLoad(recs);
+    int out = 0;
+    for (int i = 0; i < n; i++) {
+        if (memcmp(recs[i].mac, mac, 6) != 0) recs[out++] = recs[i];
+    }
+    if (out != n) devStore(recs, out);
+}
+
+void devClearAll() {
+    nvs_handle_t h;
+    if (nvs_open(K_NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_erase_key(h, K_NVS_DEVS);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+bool devFind(const uint8_t mac[6], DevRec* out) {
+    DevRec recs[K_DEV_SLOTS];
+    const int n = devLoad(recs);
+    for (int i = 0; i < n; i++) {
+        if (memcmp(recs[i].mac, mac, 6) == 0) {
+            if (out != nullptr) *out = recs[i];
+            return true;
+        }
+    }
+    return false;
 }
 
 // tipo do endereco: cache do scan > ultimo pad > bond > publico
@@ -370,6 +503,11 @@ int onReadLong(uint16_t conn, const struct ble_gatt_error* err,
     if (err->status == 0 && attr != nullptr) {
         uint16_t len = OS_MBUF_PKTLEN(attr->om);
         uint16_t off = attr->offset;
+        if (off >= BleHid::MAX_MAP) return 0;  // mapa maior que o buffer:
+        // corta no teto SEM underflow (len era uint16 e estourava quando
+        // off ja passou do MAX_MAP — pad com Report Map > 512 B corrompia
+        // memoria alem do s_mapBuf; o resto do mapa chega no proximo chunk
+        // e tambem e ignorado)
         if (off + len > BleHid::MAX_MAP) len = BleHid::MAX_MAP - off;
         if (len > 0) {
             uint16_t got = 0;
@@ -425,6 +563,7 @@ void clearConnState() {
     s_batVal = 0;
     s_battery = -1;
     s_peerName[0] = '\0';
+    s_peerKind = 0;
     portENTER_CRITICAL(&s_ringMux);
     s_ringHead = 0;
     s_ringTail = 0;
@@ -461,48 +600,99 @@ int onHidGapEvent(struct ble_gap_event* event, void* arg) {
             s_mtu = event->mtu.value;
             return 0;
         case BLE_GAP_EVENT_DISC: {
-            // scan de HID: so entrada com appearance da familia HID (0x03C0
-            // ..0x03CF; 0x03C4 = gamepad) ou o servico 0x1812 no adv. O nome
-            // costuma vir na resposta de scan: merge por endereco (igual ao
-            // CelerLink).
+            // scan de HID. O device chega em DOIS eventos separados: o ADV e
+            // a resposta de scan (nome/UUIDs) — classificar por UM evento
+            // unico rejeitava o pad (Xbox anuncia os marcadores HID na
+            // resposta). Mesmo desenho do CelerLink: MERGE por endereco no
+            // cache, com flag hid acumulada; quem classifica e o FIM do
+            // scan (scanResults so devolve hid=true).
+            // Telemetria de bancada: log por endereco novo + quando vira hid
+            // + o cache completo no fim (por que entrou ou ficou fora).
             struct ble_hs_adv_fields f;
+            char id[18];
+            formatAddr(event->disc.addr.val, id);
+            bool novo = !logSeen(event->disc.addr.val);
             if (ble_hs_adv_parse_fields(&f, event->disc.data,
-                                        event->disc.length_data) != 0) return 0;
+                                        event->disc.length_data) != 0) {
+                if (novo) {
+                    ESP_LOGI(TAG, "scan: %s rssi %d ADV nao parseavel (%u B: %02x %02x %02x %02x...)",
+                             id, event->disc.rssi, (unsigned)event->disc.length_data,
+                             event->disc.length_data > 0 ? event->disc.data[0] : 0,
+                             event->disc.length_data > 1 ? event->disc.data[1] : 0,
+                             event->disc.length_data > 2 ? event->disc.data[2] : 0,
+                             event->disc.length_data > 3 ? event->disc.data[3] : 0);
+                }
+                return 0;
+            }
             bool hid = false;
             uint16_t appearance = 0;
             if (f.appearance_is_present) {
                 appearance = f.appearance;
                 if (appearance >= K_APP_HID_LO && appearance <= K_APP_HID_HI) hid = true;
             }
-            if (!hid) {
-                for (int i = 0; i < f.num_uuids16; i++) {
-                    if (f.uuids16[i].value == K_SVC_HID) { hid = true; break; }
-                }
+            bool tem1812 = false;
+            for (int i = 0; i < f.num_uuids16; i++) {
+                if (f.uuids16[i].value == K_SVC_HID) { tem1812 = true; hid = true; break; }
             }
-            if (!hid) return 0;
             PeerCache* e = nullptr;
+            int vazia = -1;
             for (int i = 0; i < s_scanCount; i++) {
                 if (s_scanCache[i].addrType == event->disc.addr.type &&
                     memcmp(s_scanCache[i].addr, event->disc.addr.val, 6) == 0) {
                     e = &s_scanCache[i];
                     break;
                 }
+                if (!s_scanCache[i].hid && vazia < 0) vazia = i;
             }
             if (e == nullptr) {
-                if (s_scanCount >= BleHid::MAX_PEERS) return 0;
-                e = &s_scanCache[s_scanCount];
-                memset(e, 0, sizeof(*e));
+                if (s_scanCount < BleHid::MAX_PEERS) {
+                    e = &s_scanCache[s_scanCount];
+                    memset(e, 0, sizeof(*e));
+                    s_scanCount = s_scanCount + 1;
+                } else if (vazia >= 0) {
+                    // cache cheio: recicla a entrada NAO-HID mais antiga —
+                    // num ar cheio os vizinhos nao podem expulsar o pad
+                    e = &s_scanCache[vazia];
+                    memset(e, 0, sizeof(*e));
+                } else {
+                    return 0;
+                }
                 e->addrType = event->disc.addr.type;
                 memcpy(e->addr, event->disc.addr.val, 6);
-                s_scanCount = s_scanCount + 1;
             }
+            bool virouHid = hid && !e->hid;
             e->rssi = event->disc.rssi;
             e->appearance = appearance;
+            if (hid) e->hid = true;
             if (f.name != nullptr && f.name_len > 0) {
                 size_t n = f.name_len < sizeof(e->name) - 1 ? f.name_len
                                                             : sizeof(e->name) - 1;
                 memcpy(e->name, f.name, n);
                 e->name[n] = '\0';
+            }
+            if (novo) {
+                // evtype: 0 ADV_IND, 2 ADV_SCAN_IND, 4 SCAN_RSP — se o 4
+                // nunca chega, as respostas de scan nao estao sendo
+                // recebidas (coexist WiFi/BLE ou janela do controlador).
+                // Os 10 bytes crus do ADV: layouts de vendor (GIP do Xbox)
+                // nao vao no parse padrao e sao o que identifica o pad.
+                ESP_LOGI(TAG, "scan: %s rssi %d evtype %u len %u \"%s\" app %04x uuid16 %d%s | %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
+                         id, e->rssi, event->disc.event_type,
+                         (unsigned)event->disc.length_data, e->name, appearance,
+                         f.num_uuids16, tem1812 ? " (1812)" : "",
+                         event->disc.length_data > 0 ? event->disc.data[0] : 0,
+                         event->disc.length_data > 1 ? event->disc.data[1] : 0,
+                         event->disc.length_data > 2 ? event->disc.data[2] : 0,
+                         event->disc.length_data > 3 ? event->disc.data[3] : 0,
+                         event->disc.length_data > 4 ? event->disc.data[4] : 0,
+                         event->disc.length_data > 5 ? event->disc.data[5] : 0,
+                         event->disc.length_data > 6 ? event->disc.data[6] : 0,
+                         event->disc.length_data > 7 ? event->disc.data[7] : 0,
+                         event->disc.length_data > 8 ? event->disc.data[8] : 0,
+                         event->disc.length_data > 9 ? event->disc.data[9] : 0);
+            } else if (virouHid) {
+                ESP_LOGI(TAG, "scan: %s \"%s\" vira HID (app %04x%s)",
+                         id, e->name, e->appearance, tem1812 ? ", 1812 no rsp" : "");
             }
             return 0;
         }
@@ -606,6 +796,9 @@ bool BleHid::scan(uint32_t ms) {
 
     s_scanCount = 0;
     memset(s_scanCache, 0, sizeof(s_scanCache));
+    s_nLogSeen = 0;
+    ESP_LOGI(TAG, "scan: iniciando (%u ms, ativo; filtro appearance %04x..%04x ou 1812)",
+             (unsigned)ms, K_APP_HID_LO, K_APP_HID_HI);
     s_phase = K_PHASE_SCAN;
     s_scanning = true;
     CelerLink::setExternalBusy(true);  // ANTES do cancel: a malha solta o ar
@@ -614,9 +807,14 @@ bool BleHid::scan(uint32_t ms) {
     struct ble_gap_disc_params p;
     memset(&p, 0, sizeof(p));
     p.passive = 0;             // ativo: resposta de scan traz o nome
-    p.filter_duplicates = 1;
-    p.itvl = 16;               // 10 ms / 10 ms: scan rapido
-    p.window = 16;
+    p.filter_duplicates = 0;  // o dedup e por endereco no cache — o filtro do
+    // controlador engolia a RESPOSTA de scan (onde o Xbox/8bitdo traz nome +
+    // servico 1812) para enderecos ja vistos no ADV
+    p.itvl = 48;               // 30 ms de ciclo, 15 ms de janela (50% duty):
+    p.window = 24;             // janela continua (100%) com o WiFi no ar
+                               // esmagava o pedido+RESPOSTA de scan sob
+                               // coexistencia — dezenas de scans na bancada
+                               // sem UM evento evtype 4 (2026-11-06)
     xEventGroupClearBits(s_evt, EV_SCANDONE);
     int rc = ble_gap_disc(BLE_OWN_ADDR_PUBLIC, (int32_t)ms, &p, onHidGapEvent, nullptr);
     if (rc != 0) {
@@ -646,18 +844,34 @@ bool BleHid::scan(uint32_t ms) {
     s_scanning = false;
     CelerLink::setExternalBusy(false);
     s_phase = K_PHASE_IDLE;
+    ESP_LOGI(TAG, "scan: fim, %d de %d device(s) sao HID", hidCount(), s_scanCount);
     return true;
 }
 
 int BleHid::scanResults(Peer* out, int max) {
-    int n = s_scanCount;
-    if (n > max) n = max;
-    for (int i = 0; i < n; i++) {
-        formatAddr(s_scanCache[i].addr, out[i].id);
-        snprintf(out[i].name, sizeof(out[i].name), "%s", s_scanCache[i].name);
-        out[i].rssi = s_scanCache[i].rssi;
-        out[i].addrType = s_scanCache[i].addrType;
-        out[i].appearance = s_scanCache[i].appearance;
+    // so os HID: o cache guarda TODO device visto (o merge por endereco
+    // precisa deles ate a resposta de scan chegar); o contrato JS continua
+    // "pads do ultimo scan"
+    int n = 0;
+    for (int i = 0; i < s_scanCount && n < max; i++) {
+        if (!s_scanCache[i].hid) continue;
+        formatAddr(s_scanCache[i].addr, out[n].id);
+        snprintf(out[n].name, sizeof(out[n].name), "%s", s_scanCache[i].name);
+        out[n].rssi = s_scanCache[i].rssi;
+        out[n].addrType = s_scanCache[i].addrType;
+        out[n].appearance = s_scanCache[i].appearance;
+        out[n].kind = (uint8_t)HidDesc::fromAppearance(s_scanCache[i].appearance);
+        n++;
+    }
+    // RSSI mais forte primeiro (insertion sort, <= MAX_PEERS itens)
+    for (int i = 1; i < n; i++) {
+        Peer t = out[i];
+        int j = i - 1;
+        while (j >= 0 && out[j].rssi < t.rssi) {
+            out[j + 1] = out[j];
+            j--;
+        }
+        out[j + 1] = t;
     }
     return n;
 }
@@ -787,6 +1001,13 @@ bool BleHid::connect(const char* id, uint32_t ms) {
                 dscEnd = s_chars[j].val - 1;
             }
         }
+        if (dscEnd <= r->handle) {
+            // sem espaco para descritores (proxima char colada nesta): o
+            // NimBLE devolveria EINVAL e ABORTAVA o connect inteiro por
+            // culpa de uma char de vendor — descarta a char e segue
+            s_curReport = -1;
+            continue;
+        }
         if (ble_gattc_disc_all_dscs(s_conn, r->handle + 1, dscEnd, onDscDisc, nullptr) != 0) {
             snprintf(s_err, sizeof(s_err), "disc_all_dscs falhou");
             goto fail;
@@ -894,9 +1115,12 @@ bool BleHid::connect(const char* id, uint32_t ms) {
         }
     }
     lastSave(addr.val, addr.type, s_peerName);
+    s_peerKind = (uint8_t)HidDesc::classify(s_mapBuf, s_mapLen);
+    devSave(addr.val, addr.type, s_peerKind, s_peerName);
     CelerLink::setExternalBusy(false);
     CelerLink::refreshAdvertising();
-    ESP_LOGI(TAG, "pad pronto (%s, %d reports, mapa %u B%s)", id, s_nReports,
+    ESP_LOGI(TAG, "device pronto (%s, %s, %d reports, mapa %u B%s)", id,
+             HidDesc::kindName((HidDesc::Kind)s_peerKind), s_nReports,
              (unsigned)s_mapLen, s_usesIds ? ", com ids" : "");
     return true;
 
@@ -931,7 +1155,9 @@ bool BleHid::disconnect() {
 bool BleHid::connected() { return s_ready; }
 
 int BleHid::paired(Peer* out, int max) {
-    if (!s_started) return 0;
+    // bonds existem mesmo sem um connect nesta sessao: ensure() sobe o store
+    // do NimBLE (idempotente) para o Ajustes listar sem precisar escanear
+    if (!ensure()) return 0;
     ble_addr_t bonds[K_MAX_BONDS];
     int n = 0;
     if (ble_store_util_bonded_peers(bonds, &n, K_MAX_BONDS) != 0) return 0;
@@ -942,6 +1168,12 @@ int BleHid::paired(Peer* out, int max) {
         out[i].rssi = 0;
         out[i].addrType = bonds[i].type;
         out[i].appearance = 0;
+        out[i].kind = 0;
+        DevRec rec;
+        if (devFind(bonds[i].val, &rec)) {   // nome/tipo do ultimo connect
+            snprintf(out[i].name, sizeof(out[i].name), "%s", rec.name);
+            out[i].kind = rec.kind;
+        }
     }
     return outN;
 }
@@ -951,34 +1183,47 @@ bool BleHid::forget(const char* id) {
     bool ok = false;
     if (id == nullptr || id[0] == '\0') {
         ok = ble_store_clear() == 0;
-    } else {
-        uint8_t mac[6];
-        if (!parseMac(id, mac)) return false;
-        ble_addr_t bonds[K_MAX_BONDS];
-        int n = 0;
-        if (ble_store_util_bonded_peers(bonds, &n, K_MAX_BONDS) != 0) return false;
-        for (int i = 0; i < n; i++) {
-            if (memcmp(bonds[i].val, mac, 6) != 0) continue;
-            ok = ble_store_util_delete_peer(&bonds[i]) == 0 || ok;
-        }
+        devClearAll();
+        lastClear();
+        return ok;
     }
-    lastClear();
+    uint8_t mac[6];
+    if (!parseMac(id, mac)) return false;
+    // esquecer o device CONECTADO tem que derrubar o enlace (senao ele segue
+    // linkado sem bond e o servico re-conecta em loop)
+    if (s_ready && memcmp(s_peerAddr, mac, 6) == 0) disconnect();
+    ble_addr_t bonds[K_MAX_BONDS];
+    int n = 0;
+    if (ble_store_util_bonded_peers(bonds, &n, K_MAX_BONDS) != 0) return false;
+    for (int i = 0; i < n; i++) {
+        if (memcmp(bonds[i].val, mac, 6) != 0) continue;
+        ok = ble_store_util_delete_peer(&bonds[i]) == 0 || ok;
+    }
+    devForget(mac);
+    // o slot "ultimo device" so cai se for ELE — antes qualquer forget
+    // apagava o atalho de reconexao dos outros
+    uint8_t lm[6], lt = BLE_ADDR_PUBLIC;
+    if (lastLoad(lm, &lt) && memcmp(lm, mac, 6) == 0) lastClear();
     return ok;
 }
 
 bool BleHid::poll(uint8_t* id, void* buf, size_t cap, size_t* len) {
+    // copia DENTRO da secao critica: pushReport roda na task do host e, com
+    // a fila cheia, escreve exatamente no slot que este poll acabou de
+    // liberar — copiar fora dava report TRUCADO (metade velho + metade
+    // novo = entrada fantasmas no game). <= 64 B sob secao curta e ok.
     portENTER_CRITICAL(&s_ringMux);
     if (s_ringHead == s_ringTail) {
         portEXIT_CRITICAL(&s_ringMux);
         return false;
     }
     RptSlot* s = &s_ring[s_ringTail];
-    s_ringTail = (s_ringTail + 1) % BleHid::RX_DEPTH;
-    portEXIT_CRITICAL(&s_ringMux);
     size_t n = s->len < cap ? s->len : cap;
     memcpy(buf, s->data, n);
     *id = s->id;
     *len = n;
+    s_ringTail = (s_ringTail + 1) % BleHid::RX_DEPTH;
+    portEXIT_CRITICAL(&s_ringMux);
     return true;
 }
 
@@ -1014,6 +1259,7 @@ void BleHid::info(Info* out) {
     out->rssi = s_peerRssi;
     out->battery = s_battery;
     out->mtu = s_mtu;
+    out->kind = s_ready ? s_peerKind : 0;
     out->nReports = s_nReports;
     for (int i = 0; i < s_nReports && i < MAX_REPORTS; i++) {
         out->reports[i] = s_reports[i];
@@ -1025,6 +1271,8 @@ void BleHid::info(Info* out) {
     out->dropped = s_dropped;
     snprintf(out->err, sizeof(out->err), "%s", s_err);
 }
+
+uint8_t BleHid::kind() { return s_ready ? s_peerKind : 0; }
 
 size_t BleHid::reportMap(uint8_t* out, size_t cap) {
     if (!s_ready) return 0;
@@ -1041,6 +1289,9 @@ void BleHid::appReset() {
     s_scanCount = 0;
     s_dropped = 0;
     s_err[0] = '\0';
+    // falha de ensure() (RAM apertada) nao pode ser permanente: o app que
+    // saiu liberou heap — o proximo app que pede BT merece re-tentar
+    s_hadFail = false;
     if (s_phase == K_PHASE_ERROR) s_phase = K_PHASE_IDLE;
 }
 

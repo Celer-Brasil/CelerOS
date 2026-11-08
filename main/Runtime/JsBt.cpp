@@ -2,6 +2,7 @@
 #include "JsInternal.h"
 
 #include "../Bluetooth/BleHid.h"
+#include "../Bluetooth/HidDesc.h"
 #include "../Kernel/Core/CelerKernel.h"
 #include "../Utils/AppPerms.h"
 
@@ -98,6 +99,10 @@ duk_ret_t JSBindings::js_btScanResults(duk_context *ctx) {
         duk_put_prop_string(ctx, -2, "rssi");
         duk_push_int(ctx, peers[i].appearance);
         duk_put_prop_string(ctx, -2, "appearance");
+        // API 62: dica do tipo pelo appearance do ADV (0x03C1 teclado etc.);
+        // o tipo OFICIAL vem do Report Map no connect (BT.state().kind)
+        duk_push_string(ctx, HidDesc::kindName((HidDesc::Kind)peers[i].kind));
+        duk_put_prop_string(ctx, -2, "kind");
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;
@@ -140,6 +145,10 @@ duk_ret_t JSBindings::js_btState(duk_context *ctx) {
     duk_put_prop_string(ctx, -2, "battery");
     duk_push_int(ctx, info.mtu);
     duk_put_prop_string(ctx, -2, "mtu");
+    // API 62: tipo do device conectado ("kbd"/"mouse"/"combo"/"pad"/"") —
+    // classificado do Report Map no firmware (HidDesc), sem o JS parsear
+    duk_push_string(ctx, HidDesc::kindName((HidDesc::Kind)info.kind));
+    duk_put_prop_string(ctx, -2, "kind");
     duk_push_int(ctx, (int)info.queued);
     duk_put_prop_string(ctx, -2, "queued");
     duk_push_uint(ctx, info.dropped);
@@ -193,6 +202,11 @@ duk_ret_t JSBindings::js_btWrite(duk_context *ctx) {
     // output JA COM o report id no byte 0 quando o pad usa ids
     validateBytes(ctx, 0, kMaxReport, "BT.write: data 0..255");
     btEnter();
+    // o present() rodou timers JS no MESMO contexto: o app pode ter mutado
+    // o array (crescido alem do teto, valor fora de 0..255) — revalida
+    // ANTES de copiar para o buf da pilha (mesma licao do JsUsb::readBytes;
+    // sem isto um timer que deu arr.push() x100 esmagava a stack)
+    validateBytes(ctx, 0, kMaxReport, "BT.write: data 0..255");
     uint8_t buf[kMaxReport];
     const duk_size_t n = duk_get_length(ctx, 0);
     for (duk_size_t i = 0; i < n; i++) {
@@ -224,6 +238,12 @@ duk_ret_t JSBindings::js_btPaired(duk_context *ctx) {
         duk_put_prop_string(ctx, -2, "addr");
         duk_push_int(ctx, peers[i].addrType);
         duk_put_prop_string(ctx, -2, "addrType");
+        // API 62: nome/tipo gravados no ultimo connect ("" / 0 = bond antigo,
+        // anterior a tabela ou feito por outro app)
+        duk_push_string(ctx, peers[i].name);
+        duk_put_prop_string(ctx, -2, "name");
+        duk_push_string(ctx, HidDesc::kindName((HidDesc::Kind)peers[i].kind));
+        duk_put_prop_string(ctx, -2, "kind");
         duk_put_prop_index(ctx, -2, (duk_uarridx_t)i);
     }
     return 1;

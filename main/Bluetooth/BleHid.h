@@ -6,16 +6,22 @@
 
 #if CONFIG_CELEROS_BLE_HID
 
-// Gamepad Bluetooth LE HID (API 57): HOST HOGP cru — o firmware expoe o
-// transporte e NADA de protocolo. Scan de HID devices, conexao + pareamento
-// SMP Just Works (bond no NVS do NimBLE), descoberta do servico HID 0x1812
-// (Report Map cru + Report Reference de cada char) e roteamento: reports de
-// entrada entram na fila que o JS drena com BT.read(); bytes de saida
-// (rumble) saem pelo BT.write() para a char de output report. Todo o
-// parsing do descriptor e decodificacao vive na dep JS celeros.gamepad.
+// Gamepad/teclado/mouse Bluetooth LE HID (API 57): HOST HOGP cru — o
+// firmware expoe o transporte e NADA de protocolo. Scan de HID devices,
+// conexao + pareamento SMP Just Works (bond no NVS do NimBLE), descoberta do
+// servico HID 0x1812 (Report Map cru + Report Reference de cada char) e
+// roteamento: reports de entrada entram na fila que o JS drena com BT.read();
+// bytes de saida (rumble) saem pelo BT.write() para a char de output report.
+// Todo o parsing do descriptor e decodificacao vive nas deps JS
+// celeros.gamepad (pad) e celeros.hid (teclado/mouse).
+//
+// API 62: o connect classifica o Report Map (HidDesc.h) e guarda nome+tipo
+// por bond — BT.state().kind e BT.paired()[].kind dizem o que esta conectado
+// sem o JS precisar parsear nada.
 //
 // Pads testaveis em modo BLE: Xbox One S/Series, 8bitdo BLE. DualShock 4 e
-// Bluetooth CLASSIC — o radio do S3 nao tem BR/EDR e NAO conecta.
+// Bluetooth CLASSIC — o radio do S3 nao tem BR/EDR e NAO conecta. Fones BT
+// (A2DP) tambem nao: o S3 nao tem Classic nem ISO/LE Audio.
 //
 // Concorrencia: os callbacks rodam na task do host NimBLE; scan/connect sao
 // dirigidos pela task do app, passo a passo, sincronizados por bits de um
@@ -38,6 +44,7 @@ public:
         int8_t rssi;
         uint8_t addrType;      // BLE_ADDR_PUBLIC / BLE_ADDR_RANDOM
         uint16_t appearance;   // 0x03C4 = gamepad
+        uint8_t kind;          // HidDesc::Kind (0 = desconhecido)
     };
 
     // Char de report do pad (Report Reference descobre id+tipo).
@@ -57,6 +64,7 @@ public:
         int8_t rssi;
         int battery;          // 0..100, -1 = pad sem Battery Service
         uint16_t mtu;
+        uint8_t kind;         // HidDesc::Kind do device conectado
         ReportInfo reports[MAX_REPORTS];
         int nReports;
         uint16_t queued;      // reports na fila
@@ -96,6 +104,9 @@ public:
     static bool write(const void* data, size_t len);
 
     static void info(Info* out);
+    // Kind do device conectado (HidDesc::Kind; 0 = nada/desconhecido).
+    // O KeyboardScreen usa para esconder a grade quando ha teclado fisico.
+    static uint8_t kind();
     // Report Map cru do pad conectado (null/0 sem mapa lido).
     static size_t reportMap(uint8_t* out, size_t cap);
 
@@ -119,12 +130,12 @@ public:
     static constexpr size_t MAX_MAP = 512;
     static constexpr size_t MAX_REPORT = 64;
     static constexpr int RX_DEPTH = 8;
-    struct Peer { char id[18]; char name[30]; int8_t rssi; uint8_t addrType; uint16_t appearance; };
+    struct Peer { char id[18]; char name[30]; int8_t rssi; uint8_t addrType; uint16_t appearance; uint8_t kind; };
     struct ReportInfo { uint8_t id; uint8_t type; uint16_t handle; uint16_t size; };
     static constexpr int MAX_REPORTS = 8;
     struct Info {
         const char* phase; char addr[18]; char name[30]; int8_t rssi;
-        int battery; uint16_t mtu; ReportInfo reports[MAX_REPORTS];
+        int battery; uint16_t mtu; uint8_t kind; ReportInfo reports[MAX_REPORTS];
         int nReports; uint16_t queued; uint32_t dropped; char err[48];
     };
     static inline bool ensure() { return false; }
@@ -139,6 +150,7 @@ public:
     static inline bool poll(uint8_t*, void*, size_t, size_t*) { return false; }
     static inline bool write(const void*, size_t) { return false; }
     static inline void info(Info*) {}
+    static inline uint8_t kind() { return 0; }
     static inline size_t reportMap(uint8_t*, size_t) { return 0; }
     static inline void appReset() {}
     static inline void tick() {}

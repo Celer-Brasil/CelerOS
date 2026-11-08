@@ -5,6 +5,12 @@
 #include <cstring>
 #include "esp_task_wdt.h"
 
+#include "../Bluetooth/BleHid.h"
+#include "../Bluetooth/HidDesc.h"
+#include "../Hardware/InputBus.h"
+#include "../Utils/Settings.h"
+#include "KeyboardMap.h"
+
 namespace kui {
 
 // ---- keysets ---------------------------------------------------------------
@@ -74,7 +80,93 @@ static void drawBackGlyph(Canvas& c, const Rect& r, uint32_t col) {
 KeyboardScreen::KeyboardScreen(const std::string& prompt, const std::string& initial, int maxLen)
     : m_prompt(prompt), m_text(initial), m_maxLen(maxLen > 0 ? maxLen : 64) {
     if (m_maxLen > 256) m_maxLen = 256;
+    // teclado fisico conectado + ajuste "esconder as teclas": so o campo.
+    // O default do ajuste e mostrar a grade (m_showKeys true).
+    m_showKeys = defaultShowKeys();
+    // Teclas pressionadas ANTES do campo abrir (ex.: Enter que disparou o
+    // prompt) nao podem cair dentro dele: drena e descarta.
+    drainPhysical();
     rebuild();
+}
+
+bool KeyboardScreen::defaultShowKeys() const {
+    if (Settings::getBool("kbd_keys", true)) return true;  // default: mostra
+    const uint8_t k = BleHid::kind();
+    return !(k == HidDesc::kKeyboard || k == HidDesc::kCombo);
+}
+
+void KeyboardScreen::setShowKeys(bool s) {
+    if (m_showKeys == s) return;
+    m_showKeys = s;
+    rebuild();
+}
+
+void KeyboardScreen::drainPhysical() {
+    InputBus::KeyEvent ev;
+    while (InputBus::popKey(ev)) {
+    }
+}
+
+// Teclado fisico -> buffer. Roda no tick do modal (getString) ou do
+// Navigator (KeyboardScreen empilhado): em ambos o app esta bloqueado, entao
+// a fila do InputBus e deste campo enquanto ele existe.
+void KeyboardScreen::pumpPhysical() {
+    InputBus::KeyEvent ev;
+    while (!m_done && InputBus::popKey(ev)) {
+        const KeyboardMap::Key k = KeyboardMap::map(ev.usage, ev.mods, m_physCaps);
+        if (!ev.down) {
+            if (k.action == KeyboardMap::kBackspace) m_physBksp = -1;
+            continue;   // modifier/shift de solta nao muda nada sozinho
+        }
+        switch (k.action) {
+            case KeyboardMap::kCapsLock:
+                m_physCaps = !m_physCaps;
+                break;
+            case KeyboardMap::kBackspace:
+                backspace();
+                m_physBksp = ev.usage;
+                m_physRepeat = 0;
+                m_physNextMs = millis() + 400;
+                markDirty();
+                break;
+            case KeyboardMap::kEnter:
+                if (m_persistent) {          // keypad acoplado: como o OK
+                    if (onEnter) onEnter(m_text);
+                    m_text.clear();
+                    if (onChange) onChange();
+                    markDirty();
+                } else {
+                    finish(true);
+                }
+                break;
+            case KeyboardMap::kEscape:
+                if (!m_persistent) finish(false);
+                break;
+            case KeyboardMap::kChar:
+                if ((int)m_text.size() < m_maxLen) {
+                    m_text += k.ch;
+                    if (onChange) onChange();
+                    markDirty();
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    // Auto-repeat do backspace fisico: o device repete o MESMO report e o
+    // diff de bordas do driver nao veria nada. Segura = apaga de 110 em
+    // 110 ms (60 depois das primeiras), com teto para nunca girar sem fim se
+    // a solta se perder.
+    if (m_physBksp >= 0 && (int32_t)(millis() - m_physNextMs) >= 0) {
+        if (m_physRepeat < 80) {
+            backspace();
+            m_physRepeat++;
+            m_physNextMs = millis() + (m_physRepeat >= 8 ? 60 : 110);
+            markDirty();
+        } else {
+            m_physBksp = -1;
+        }
+    }
 }
 
 void KeyboardScreen::setHint(char h) {
@@ -147,6 +239,10 @@ void KeyboardScreen::backspace() {
 
 void KeyboardScreen::rebuild() {
     m_keys.clear();
+    if (!m_showKeys) {   // so o campo: sem grade, sem area de teclas
+        m_keysTop = UI::H;
+        return;
+    }
 
     const int g = UI::sx(2);
     // unidade = largura de uma tecla da linha de cima (10 keys)
@@ -256,9 +352,12 @@ void KeyboardScreen::rebuild() {
     const bool letters = isLetters(m_mode);
     const char* const* rows = (m_mode == Sym1) ? SY1_ROWS : (m_mode == Sym2) ? SY2_ROWS : LET_ROWS;
 
-    // linhas 0/1: so caracteres, centradas (9 keys na do meio = escalonado)
+    // linhas 0/1: so caracteres, centradas (9 keys na do meio = escalonado).
+    // A 2a linha da pagina de simbolos tem 10 teclas ("@#$%&-+()/"): com o
+    // vetor em 9, o addRow lia uma unidade alem do fim (lixo do stack virava
+    // a largura da 10a tecla) — letras e Sym2 continuam com 9 e nao mudam.
     float one10[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
-    float one9[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+    float one9[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
     Kind kChar[10] = {KChar, KChar, KChar, KChar, KChar, KChar, KChar, KChar, KChar, KChar};
     addRow(0, one10, (int)strlen(rows[0]), kChar, rows[0]);
     addRow(1, one9, (int)strlen(rows[1]), kChar, rows[1]);
@@ -562,6 +661,7 @@ void KeyboardScreen::finish(bool ok) {
 }
 
 void KeyboardScreen::onTick(uint32_t dtMs) {
+    pumpPhysical();   // teclado fisico (BT/USB) digita neste campo
     m_blinkMs += dtMs;
     if (m_blinkMs >= 530) {
         m_blinkMs = 0;

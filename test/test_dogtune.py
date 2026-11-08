@@ -77,6 +77,17 @@ class TestPair(unittest.TestCase):
             self.assertTrue(await D.pair_flow(lk, ask=io([])))   # nao pergunta
         asyncio.run(go())
 
+    def test_link_sem_gate_entra_direto(self):
+        # K_PAIR_OFF (0x00): link aberto, s_pairRequired=0 — NAO e falha de
+        # pareamento (antes virava exit 3 "codigo errado 3x?" sem nenhum
+        # envio; matilha.py, o generalizado deste fluxo, trata como "aberto")
+        async def go():
+            lk = FakeLink()
+            lk.pair = D.PAIR_OPEN
+            self.assertTrue(await D.pair_flow(lk, ask=io([])))   # nao pergunta
+            self.assertEqual(lk.sent, [])
+        asyncio.run(go())
+
 
 class TestPlan(unittest.TestCase):
     def test_default_e_cartesiano(self):

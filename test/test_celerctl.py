@@ -1068,6 +1068,20 @@ class TestCanalHostil(unittest.TestCase):
         with self.assertRaises(C.CelerError):
             link.touch([(True, -5, 100, 0)])
 
+    def test_touch_dedo_fora_do_byte_vira_erro_claro(self):
+        # o dedo vai como u8: --finger 999 era ValueError cru do bytes([999])
+        # no meio do payload, com traceback em vez da mensagem
+        link, dev = make_link()
+        link.hello()
+        with self.assertRaises(C.CelerError) as cm:
+            link.touch([(True, 10, 10, 0, 999)])
+        self.assertIn("dedo", str(cm.exception))
+        # faixa valida passa a guarda (o FakeDevice nao implementa TOUCH: o
+        # erro seguinte e "opcode?", nunca "dedo"/ValueError de bytes)
+        with self.assertRaises(C.CelerError) as cm2:
+            link.touch([(True, 10, 10, 0, 1), (False, 0, 0, 80, 1)])
+        self.assertNotIn("dedo", str(cm2.exception))
+
 
 class TestOpenLink(unittest.TestCase):
     """open_link: o fallback do try_open e para o baud ALTO (device ficou
@@ -3073,6 +3087,40 @@ class TestDepsCompartilhadas(unittest.TestCase):
         self.assertEqual(lock, {"celeros.game": "1.3.0"})
         self.assertIn("Jogo: celeros.game 1.0.0>1.3.0", out)
         self.assertNotIn("Simples", out)  # sem deps: nem entra no plano
+
+    def test_upgrade_le_indice_com_token(self):
+        # dep PRIVADA so existe no indice com credencial: o upgrade lia
+        # /store/deps.json anonimo e o app com dep privada morria em "sem
+        # resolucao no hub" (o install/store ja passavam o token)
+        import celerhub
+        link, dev = make_link()
+        dev.dirs["/local/apps"] = ["Jogo"]
+        dev.files["/local/apps/Jogo/app.json"] = json.dumps(
+            {"name": "Jogo", "deps": {"celeros.game": "^1.0.0"}}).encode()
+        dev.dirs["/local/modules"] = []
+        urls = []
+        orig_http = celerhub.http
+        orig_push = C._push_dep_module
+        orig_tok = os.environ.get("CELER_HUB_TOKEN")
+        os.environ["CELER_HUB_TOKEN"] = "tk"
+
+        def espionando(method, url, *a, **k):
+            urls.append(url)
+            return 200, self.HUB_IDX
+        celerhub.http = espionando
+        C._push_dep_module = lambda lk, n, v, meta: None
+        try:
+            out, err, code = run_cli(["apps", "deps", "--upgrade"], link)
+        finally:
+            celerhub.http = orig_http
+            C._push_dep_module = orig_push
+            if orig_tok is None:
+                os.environ.pop("CELER_HUB_TOKEN", None)
+            else:
+                os.environ["CELER_HUB_TOKEN"] = orig_tok
+        self.assertEqual(code, 0)
+        self.assertTrue(any("/store/deps.json" in u and "token=tk" in u
+                            for u in urls), urls)
 
     def test_upgrade_app_sem_resolucao_nao_aborta_os_outros(self):
         link, dev = make_link()

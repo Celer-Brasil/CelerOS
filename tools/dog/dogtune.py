@@ -126,7 +126,11 @@ async def pair_flow(link, ask=input, code=None):
     if st == PAIR_OK:
         return True
     if st != PAIR_WAIT:
-        return False   # char ausente/aberto: link sem gate
+        # K_PAIR_OFF (CelerLink.cpp): link ABERTO (s_pairRequired=0 ou char
+        # ausente) — nao existe gate, escrever direto. Tratar como falha
+        # recusava o cao sem pareamento exigido com "codigo errado 3x?"
+        # (matilha.py, o generalizado deste fluxo, devolve "aberto")
+        return True
     for _ in range(3):
         if code is None:
             code = ask("codigo de 6 digitos no OLED do cao: ").strip()

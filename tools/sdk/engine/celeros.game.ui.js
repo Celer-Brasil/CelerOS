@@ -16,6 +16,9 @@
 // Tudo desenha com screen: true (fora da camera) e respeita o tema do
 // firmware (E.theme) por baixo dos tokens.
 //
+// 1.4.2: E.ui.list agora respeita a reserva do modal/sheet do 1.4.1 (o tap
+// sobre uma linha com modal aberto escolhia o item de baixo) e o dialog com
+// speed 0/negativa/NaN nao fica mais eternamente vazio (cai no default 30).
 // 1.4.1: modal/sheet sao a camada de CIMA do quadro: o tap que chega com um
 // deles aberto nao e mais reivindicado pelo widget desenhado por baixo (o
 // jogo desenha antes do modal; o "Entendi" do COMO JOGAR do Detona caia no
@@ -473,7 +476,7 @@ function dialogInput(d, o, x, y, w, h) {
 // ------------------------------------------------------------ E.ui ---------
 
 E.ui = {
-    version: '1.4.1',
+    version: '1.4.2',
     tokens: TK,
 
     // patch de tokens (aceita '#rrggbb'); guarda para reaplicar se o E.theme
@@ -1175,8 +1178,15 @@ E.ui = {
             _lpo.shadow = o.shadow;
             _lpo.pad = 0;
             E.gfx.panel(x, y, w, h, _lpo);
-            if (!i.tap) _tapUsed = false;
-            var tap = _tapUsed ? null : i.tap;
+            // 1.4.2: mesmo contrato do tapFree — o quadro sem tap zera as
+            // marcas (a lista nao chamava tapFree e a marca _over de um
+            // modal que o app parou de desenhar ficava presa para sempre);
+            // com tap, a reserva do modal/sheet (`_over` do 1.4.1) vale
+            // aqui tambem: o tap numa linha com modal aberto escolhia o
+            // item de BAIXO. _inOver > 0 = a propria lista de DENTRO do
+            // modal/sheet (drawFn) segue tocavel.
+            if (!i.tap) { _tapUsed = false; _over = false; }
+            var tap = (_tapUsed || (_over && !_inOver)) ? null : i.tap;
             var k0 = Math.floor(st.scroll / st.row);
             var k1 = Math.min(st.items.length - 1,
                               Math.ceil((st.scroll + h) / st.row) - 1);
@@ -1283,8 +1293,14 @@ E.ui = {
         o = o || EMPTY;
         var pages = text && typeof text === 'object' && text.length !== undefined ? text : [text];
         function limpa(t) { return String(t).split('\r').join(''); }
+        // 1.4.2: speed 0/negativa/NaN (config calculada) deixava o dialogo
+        // eternamente vazio: n = floor(t * speed) nunca alcancava o fim e o
+        // tap avancava `t` para Infinity/NaN sem revelar nada. Mesmo acordo
+        // dos guards a prova de NaN da 1.3.3: valor invalido = default 30.
+        var sp = o.speed === undefined ? 30 : o.speed;
+        if (!(sp > 0)) sp = 30;
         var d = { t: 0, done: false, closed: false, page: 0, pages: pages,
-                  speed: o.speed === undefined ? 30 : o.speed, text: limpa(pages[0]),
+                  speed: sp, text: limpa(pages[0]),
                   choice: -1, _w: 0, _lines: null, _rt: 0, _snd: 0 };
         d.next = function () {
             if (d.closed) return false;

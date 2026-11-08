@@ -16,6 +16,9 @@
 // 1.3.0: autotile(c, r, same) — mascara de 4 bits dos vizinhos iguais
 // (1 cima, 2 direita, 4 baixo, 8 esquerda) p/ escolher a peca de parede/
 // agua/estrada sem tabela a mao; neighbors(c, r, fn, diag).
+// 1.3.2: flush com try/finally em volta do paint (codigo do app): paint que
+// lanca deixava E.dirty._mute preso e a camada suja mudava para sempre
+// (mesmo conserto do world 1.1.2).
 // 1.3.1: tilemap sem o.paint avisava nada e o 1o flush estourava no device
 // ("m.paint is not a function") — agora avisa na construcao.
 
@@ -79,18 +82,24 @@ E.tilemap = function (o) {
         dirty: function () { return list.length; },
         // repinta as celulas marcadas (devolve quantas). O que o paint
         // desenha e FUNDO: nao entra na camada suja (senao cada bloco
-        // repintado se apagaria no quadro seguinte, em loop)
+        // repintado se apagaria no quadro seguinte, em loop). 1.3.2: o paint
+        // e CODIGO DO APP — um paint que lanca deixava o _mute preso (>0),
+        // a camada suja parava de registrar para sempre e o vidro virava
+        // lixo (o mesmo conserto do world.bake/painter na 1.1.2 do world)
         flush: function () {
             var n = list.length;
             E.dirty._mute++;
-            for (var j = 0; j < n; j++) {
-                var k = list[j];
-                marks[k] = 0;
-                var c = k % cols, r = (k - c) / cols;
-                m.paint(c, r, ox + c * cw, oy + r * ch, cw, ch);
+            try {
+                for (var j = 0; j < n; j++) {
+                    var k = list[j];
+                    marks[k] = 0;
+                    var c = k % cols, r = (k - c) / cols;
+                    m.paint(c, r, ox + c * cw, oy + r * ch, cw, ch);
+                }
+            } finally {
+                E.dirty._mute--;
+                list.length = 0;
             }
-            E.dirty._mute--;
-            list.length = 0;
             return n;
         },
         cellAt: function (x, y) {
@@ -195,7 +204,7 @@ E.tilemap = function (o) {
     };
     return m;
 };
-E.tilemap.version = '1.3.1';
+E.tilemap.version = '1.3.2';
 
 E._mods.push('tilemap');
 

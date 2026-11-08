@@ -231,6 +231,11 @@ function deepMerge(dst, src) {
         if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k])) {
             if (!dst[k] || typeof dst[k] !== 'object' || Array.isArray(dst[k])) dst[k] = {};
             deepMerge(dst[k], src[k]);
+        } else if (Array.isArray(src[k])) {
+            // array entra por COPIA: por referencia, a op do chamador (e a
+            // copia no journal de auditoria) mudava quando uma op seguinte
+            // do mesmo lote reescrevia as refs (asset.rename)
+            dst[k] = F.deepClone(src[k]);
         } else dst[k] = src[k];
     }
     return dst;
@@ -272,7 +277,7 @@ const OPS = {
                 deepMerge(data[k], op[k]);
             }
         }
-        if (op.deps !== undefined) data.deps = op.deps;
+        if (op.deps !== undefined) data.deps = F.deepClone(op.deps);
         project.markDirty('celergame.project.json');
     },
 
@@ -442,7 +447,9 @@ const OPS = {
                 c.fields = c.fields || {};
                 c.fields.fields = c.fields.fields || {};
                 if (op.value === null) delete c.fields.fields[key];
-                else c.fields.fields[key] = op.value;
+                // objeto/array entra por copia (mesma razao do deepMerge)
+                else c.fields.fields[key] = (op.value && typeof op.value === 'object')
+                    ? F.deepClone(op.value) : op.value;
             } else {
                 const field = rawField;
                 if (!field) F.fail('op.args', 'component.set exige field');
@@ -454,7 +461,8 @@ const OPS = {
                 }
                 c.fields = c.fields || {};
                 if (op.value === null) delete c.fields[field];
-                else c.fields[field] = op.value;
+                else c.fields[field] = (op.value && typeof op.value === 'object')
+                    ? F.deepClone(op.value) : op.value;
             }
         }
         if (kind === 'scene') project.writeScene(obj); else project.writePrefab(obj);

@@ -113,8 +113,19 @@ function studioAppBoot(data, bases) {
     }
 
     // ----------------------------------------------------------- estado ----
+    // chave de persistencia: a NVS recusa chave >15 chars (IDF), e
+    // 'studio.<key>.<persist>' passava disso com telas reais (o Painel gerava
+    // 20 e crashava o boot no Storage.get). FNV-1a de 8 hex = deterministico
+    // (a mesma tela le o mesmo estado) e cabe folgado.
     function persistKey(s) {
-        return 'studio.' + String(s.key) + '.' + s.persist;
+        var h = 2166136261, i, t = 'studio.' + String(s.key) + '.' + s.persist;
+        for (i = 0; i < t.length; i++) {
+            h ^= t.charCodeAt(i) & 0xff;
+            h = (h * 16777619) >>> 0;
+        }
+        var hex = '';
+        for (i = 0; i < 8; i++) { hex = '0123456789abcdef'.charAt(h & 15) + hex; h >>>= 4; }
+        return 'sp.' + hex;
     }
 
     function stateFor(s) {
@@ -513,13 +524,18 @@ function studioAppBoot(data, bases) {
         if (!text) return;
         if (f.busyKey) setSt(s, f.busyKey, true);
         a.busy = true;
+        var started = false;
         try {
-            AIC.speak({ text: text, voice: f.voice || 'Charon', play: true }, function (r) {
+            started = AIC.speak({ text: text, voice: f.voice || 'Charon', play: true }, function (r) {
                 aiOut(s, ent, a, !!(r && r.ok), '', r && (r.detail || r.error));
             });
         } catch (e2) {
             aiOut(s, ent, a, false, '', String(e2));
+            return;
         }
+        // slot ocupado (chat/fala em curso) devolve false SEM callback: sem
+        // isto o busyKey ficava true e a tela muda ate o watchdog de 60s
+        if (!started) aiOut(s, ent, a, false, '', 'IA ocupada');
     }
 
     function aiVision(s, ent, a) {
@@ -546,14 +562,18 @@ function studioAppBoot(data, bases) {
         }];
         if (a.busy) return;
         a.busy = true;
+        var started = false;
         try {
-            AIC.chat({ provider: f.provider || 'openrouter', model: f.model, messages: msgs,
+            started = AIC.chat({ provider: f.provider || 'openrouter', model: f.model, messages: msgs,
                       max_tokens: f.maxTokens || 512 }, function (r) {
                 aiOut(s, ent, a, !!(r && r.ok), r && r.content, r && (r.detail || r.error));
             });
         } catch (e3) {
             aiOut(s, ent, a, false, '', String(e3));
+            return;
         }
+        // mesmo contrato do aiChat: false = slot serial ocupado, sem callback
+        if (!started) aiOut(s, ent, a, false, '', 'IA ocupada');
     }
 
     function tickAi(s, ent) {

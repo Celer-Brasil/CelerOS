@@ -191,8 +191,12 @@ function startStudio(opts) {
         if (!allowed) { sendText(res, 403, 'fora do projeto'); return; }
         fs.readFile(abs, (err, buf) => {
             if (err) { sendText(res, 404, 'nao encontrado'); return; }
-            res.writeHead(200, { 'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
-                                 'Cache-Control': 'no-store' });
+            let type = MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream';
+            // html/htm/svg na pasta de assets (so entram a mao) nao viram
+            // documento executavel na origem do editor: o importer so aceita
+            // png/qoa/wav/js, entao nenhum fluxo normal depende disso
+            if (/\.html?$/i.test(abs) || /\.svg$/i.test(abs)) type = 'text/plain; charset=utf-8';
+            res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
             res.end(buf);
         });
     }
@@ -284,6 +288,10 @@ function startStudio(opts) {
             res.write('data: ' + JSON.stringify({ type: 'hello', play: play ? { url: play.url, running: true } : { running: false } }) + '\n\n');
             clients.add(res);
             req.on('close', () => clients.delete(res));
+            // write depois do end/destroy (ping/broadcast num cliente que
+            // acabou de cair) emite 'error' FORA do try/catch do write: sem
+            // este listener o processo inteiro (GUI + Play) morria
+            res.on('error', () => clients.delete(res));
             return;
         }
 

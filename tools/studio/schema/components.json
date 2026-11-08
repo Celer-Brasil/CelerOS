@@ -830,6 +830,11 @@
           "type": "string",
           "default": "",
           "label": "Chave de ocupado"
+        },
+        "errorKey": {
+          "type": "string",
+          "default": "erro",
+          "label": "Chave de erro"
         }
       }
     },

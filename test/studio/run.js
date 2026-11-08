@@ -1215,9 +1215,19 @@ let built = null;
         check('app runtime: go troca de tela (destroy da anterior)', /DESTROY/.test(log), log);
         check('app runtime: header voltar reentra na tela',
             (log.match(/START/g) || []).length >= 2, log);
-        check('app runtime: estado persiste no Storage',
-            /"on":true/.test(String(run1.env.Storage.get('studio.a.t', '') || '')),
-            String(run1.env.Storage.get('studio.a.t', '')));
+        // a chave de persistencia e 'sp.' + FNV-1a hex de 8 de 'studio.<key>.<persist>'
+        // (a NVS recusa chave >15 chars; o formato antigo dava 20 no Painel)
+        let pk = 2166136261;
+        for (const c of 'studio.a.t') {
+            pk ^= c.charCodeAt(0) & 0xff;
+            pk = (pk * 16777619) >>> 0;
+        }
+        let pkey = '';
+        for (let i = 0; i < 8; i++) { pkey = '0123456789abcdef'.charAt(pk & 15) + pkey; pk >>>= 4; }
+        pkey = 'sp.' + pkey;
+        check('app runtime: estado persiste no Storage (chave NVS-safe)',
+            pkey.length <= 15 && /"on":true/.test(String(run1.env.Storage.get(pkey, '') || '')),
+            pkey + '=' + String(run1.env.Storage.get(pkey, '')));
         const shot = '/tmp/celer-app-shot.png';
         fs.writeFileSync(shot, run1.frames[run1.frames.length - 1].png);
         const png = decodePng(fs.readFileSync(shot));
@@ -1562,6 +1572,71 @@ let built = null;
         for (const x of [dir, appDir, d2]) fs.rmSync(x, { recursive: true, force: true });
     })();
 
+    // --------------------------- ref morta em override + journal integro ----
+    // 1) sprite/script morto dentro do VALOR de um override passava pela
+    //    validate e explodia so no build, com o fid composto da instancia
+    //    ("sprite inexistente em entidade e_x/e_y"). 2) o lote recebia as ops
+    //    por referencia: array de settings gravado por deepMerge era o MESMO
+    //    do chamador, e uma op seguinte do lote (asset.rename) reescrevia o
+    //    pedido original — inclusive a copia no journal de auditoria.
+    (function () {
+        console.log('Studio override/journal:');
+        const dir = tmpDir('ovr');
+        Project.init(dir, { name: 'Ovr', pkg: 'br.celer.ovr' });
+        const png = path.join(dir, 'a.png');
+        fs.writeFileSync(png, encodePng(8, 8, Buffer.alloc(8 * 8 * 3), false));
+        const ga = applyOps(dir, [{ op: 'asset.import', src: png, importer: 'sprite', name: 'A' }], {})
+            .results[0].asset.guid;
+        applyOps(dir, [
+            { op: 'prefab.create', name: 'ZO' },
+            { op: 'entity.create', prefab: 'ZO', fid: 'z1', name: 'Z',
+              components: [{ id: 'cz', type: 'sprite', fields: { sprite: ga } }] },
+            { op: 'prefab.instance', scene: 'Principal', prefab: 'ZO', fid: 'zi' },
+        ], {});
+        // barramento: ref morta no patch e recusada na hora (lote atomico)
+        let busCode = null;
+        try {
+            applyOps(dir, [{ op: 'prefab.override', scene: 'Principal', entity: 'zi', target: 'z1',
+                             component: 'cz', fields: { sprite: '00000000000000000000000000000000#x' } }]);
+        } catch (e) { busCode = e.code; }
+        check('barramento recusa override com sprite morto (validate.failed)',
+            busCode === 'validate.failed', String(busCode));
+        // arquivo editado a mao (sem o barramento): a validate acusa com o
+        // caminho exato do patch em vez de deixar pro build
+        const sc = Project.open(dir).scene('Principal');
+        const zi = sc.entities.find((x) => x.fid === 'zi');
+        zi.overrides = { z1: { components: { cz: { sprite: '00000000000000000000000000000000' } } } };
+        fs.writeFileSync(path.join(dir, 'Assets/Scenes/Principal.scene.json'), JSON.stringify(sc));
+        const v = validateProject(Project.open(dir), {});
+        check('validate acusa ref morta de sprite em override (caminho do patch)',
+            v.errors.some((e) => e.code === 'ref.missing' &&
+                String(e.path).indexOf('.overrides.z1.components.cz.sprite') >= 0),
+            JSON.stringify(v.errors));
+        fs.rmSync(dir, { recursive: true, force: true });
+
+        const dir2 = tmpDir('journal');
+        Project.init(dir2, { name: 'Jr', pkg: 'br.celer.jr' });
+        const png2 = path.join(dir2, 'b.png');
+        fs.writeFileSync(png2, encodePng(8, 8, Buffer.alloc(8 * 8 * 3), false));
+        const gb = applyOps(dir2, [{ op: 'asset.import', src: png2, importer: 'sprite', name: 'B' }], {})
+            .results[0].asset.guid;
+        const lote = [
+            { op: 'scene.set', scene: 'Principal', settings: { assets: ['B'] } },
+            { op: 'asset.rename', asset: gb, name: 'C' },
+        ];
+        const enviado = JSON.stringify(lote);
+        applyOps(dir2, lote, {});
+        const jr = fs.readFileSync(path.join(dir2, '.studio', 'journal.jsonl'), 'utf8')
+            .trim().split('\n');
+        const last = JSON.parse(jr[jr.length - 1]);
+        check('lote nao muta as ops do chamador e o journal reflete o pedido',
+            JSON.stringify(lote) === enviado &&
+            JSON.stringify(last.ops[0].settings.assets) === JSON.stringify(['B']),
+            'lote agora: ' + JSON.stringify(lote[0].settings.assets) +
+            ' / journal: ' + JSON.stringify(last.ops[0].settings.assets));
+        fs.rmSync(dir2, { recursive: true, force: true });
+    })();
+
     // ------------------------------------- pacote enxuto = pacote medido --
     // O teto de 64KB (soma dos .js enxutos) e medido no build e empacotado no
     // deploy: os dois numeros tem de ser os MESMOS (medir sem o `reserved` dos
@@ -1658,6 +1733,43 @@ let built = null;
         const log = (r.log || []).join('\n');
         check('evento e ctx.go de callback entregue no UI.end valem no quadro seguinte',
             /EV ai:done true/.test(log) && /T2 Outra/.test(log), log.slice(0, 400));
+        fs.rmSync(dir, { recursive: true, force: true });
+    })();
+
+    // ----------------------------------- ia.speak com o slot ocupado --------
+    // AI.speak devolve false quando o slot serial esta ocupado (contrato do
+    // firmware e do harness) e NAO chama o callback: aiChat ja tratava, mas
+    // aiSpeak/aiVision ignoravam o retorno e o busyKey ficava true sem
+    // nenhum aviso ate o watchdog de 60s (a tela morria "muda").
+    (function () {
+        console.log('Studio ia.speak ocupado:');
+        const dir = tmpDir('spkbusy');
+        Project.init(dir, { app: true, name: 'Spk', pkg: 'br.celer.spkbusy' });
+        const sid = applyOps(dir, [{ op: 'script.set', name: 'tela', content:
+            'exports.event = function (n, v, ctx) { System.print("EV " + n + " detalhe=" + v.detail); };\n' }],
+            {}).results[0].asset.guid;
+        // errorKey no catalogo: o aiOut do runtime sempre consumiu, mas o
+        // ai.speak so declarava text/textKey/voice/trigger/busyKey e o
+        // barramento recusava o campo ("campo desconhecido em ai.speak")
+        check('catalogo: ai.speak declara errorKey (consumido pelo aiOut)',
+            !!require('../../tools/studio/lib/schema').componentCatalog()['ai.speak'].fields.errorKey);
+        applyOps(dir, [
+            { op: 'project.set', permissions: ['net'] },
+            { op: 'scene.set', scene: 'Principal', settings: { data: { go: true }, scripts: [sid] } },
+            { op: 'entity.create', scene: 'Principal', name: 'Fala', x: 10, y: 60,
+              components: [{ id: 'c_ai', type: 'ai.speak',
+                fields: { trigger: 'go', text: 'oi', busyKey: 'busy', errorKey: 'erro' } }] },
+        ], {});
+        const b = buildProject(dir, {});
+        const r = runAppFolder(b.dir, {
+            render: false, stopAtMs: 400, seed: 7, microsBias: 1,
+            events: (env) => {
+                env.AI.speak = function () { return false; };   // slot ocupado
+            },
+        });
+        const log = (r.log || []).join('\n');
+        check('ai.speak com slot ocupado entrega ai:done "IA ocupada" (nao prende o busy)',
+            /EV ai:done detalhe=IA ocupada/.test(log), log.slice(0, 300));
         fs.rmSync(dir, { recursive: true, force: true });
     })();
 

@@ -171,6 +171,24 @@ function checkEntity(project, e, at, errors, runtime) {
                                               path: at + '.overrides.' + target + '.components.' + cid + '.' + k,
                                               message: 'campo desconhecido em ' + pc.type + ': ' + k,
                                               hint: 'campos: ' + Object.keys(cat.fields).join(', ') });
+                                continue;
+                            }
+                            // ref morta no VALOR do patch: sem isto o lote
+                            // passava e o build falhava depois com um fid de
+                            // instancia ilegivel ("e_xxx/e_yyy")
+                            const ft = cat && cat.fields[k] ? cat.fields[k].type : null;
+                            const pv = patch[k];
+                            if (typeof pv !== 'string' || !pv) continue;
+                            const pat = at + '.overrides.' + target + '.components.' + cid + '.' + k;
+                            if (ft === 'sprite') {
+                                checkSpriteRef(project, pv, pat, errors);
+                            } else if (ft === 'script' || ft === 'asset' || ft === 'tilemap-tileset') {
+                                const pa = project.asset(pv);
+                                if (!pa) {
+                                    errors.push({ code: 'ref.missing', path: pat, message: 'asset inexistente: ' + pv });
+                                } else if (ft === 'script' && pa.kind !== 'script') {
+                                    errors.push({ code: 'ref.script', path: pat, message: pa.name + ' nao e script' });
+                                }
                             }
                         }
                     }
@@ -468,6 +486,42 @@ function checkLimits(project, errors, warnings) {
     }
 }
 
+// Parte nativa do projeto (native/ -> core.bin no pacote): o blob so roda em
+// S3 com PSRAM, entao o projeto PRECISA declarar requires psram+native (o
+// build tambem força) e api >= 60 (o loader/nativeLoad e API 57+; a casca de
+// logica usa o contrato atual). Fonte nativa fora de native/ vazaria pro
+// device no install por pasta.
+function checkNative(project, errors, warnings) {
+    const dir = path.join(project.dir, 'native');
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir); } catch (e) { return; }
+    const sources = entries.filter((f) => /\.(c|cc|cpp|cxx)$/i.test(f));
+    const blobs = entries.filter((f) => /\.bin$/i.test(f));
+    if (!sources.length && !blobs.length) {
+        warnings.push({ code: 'native.empty', path: 'native',
+                        message: 'pasta native/ sem fontes nem blob (nada a empacotar)' });
+        return;
+    }
+    const req = project.data.requires || [];
+    if (req.indexOf('native') < 0 || req.indexOf('psram') < 0) {
+        errors.push({ code: 'native.requires', path: 'requires',
+                      message: 'projeto com native/ precisa de requires ["psram","native"]',
+                      hint: 'o blob CLRN so executa em S3 com PSRAM; a Loja/Installer bloqueiam sem isso' });
+    }
+    if ((project.data.api || 0) < 58) {
+        errors.push({ code: 'native.api', path: 'api',
+                      message: 'projeto com native/ precisa de api >= 58 (tem ' + (project.data.api || 0) + ')',
+                      hint: 'a ponte de dados do blob (nativeWrite/LoadFile/Draw) e API 58' });
+    }
+    if (!sources.length) return;
+    if (sources.length > 1 && !sources.some((f) => /^core\.(c|cc|cpp|cxx)$/i.test(f))) {
+        errors.push({ code: 'native.tu', path: 'native',
+                      message: 'varias fontes sem native/core.cpp: o build compila UM TU unico '
+                          + '(core.cpp #include dos irmaos)' });
+    }
+}
+
 function validateProject(project, opts) {
     opts = opts || {};
     const errors = [];
@@ -527,6 +581,7 @@ function validateProject(project, opts) {
         checkScripts(project, errors, warnings);
         checkLimits(project, errors, warnings);
         checkAppPerms(project, errors);
+        checkNative(project, errors, warnings);
         // campo de script fora de exports.props: typo virava no-op silencioso
         const propsOf = (ref) => {
             const a = project.asset(ref);

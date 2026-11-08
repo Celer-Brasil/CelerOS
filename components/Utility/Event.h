@@ -97,6 +97,9 @@ protected:
     using InvokeFn  = void (*)(void* box, const void* args);
     using DestroyFn = void (*)(void* box);
 
+    /** Invoke nulo do slot aposentado (fila de pendentes cheia; ver removeHandlerImpl). */
+    static void noopInvoke(void*, const void*) {}
+
     EventBase() = default;
     ~EventBase();  // destroi os box pendentes e vivos (sempre fora do lock)
 
@@ -175,24 +178,36 @@ inline void EventBase::removeHandlerImpl(HandlerId id) {
     void* box = nullptr;
     DestroyFn destroy = nullptr;
     EVENT_LOCK();
-    for (Entry& e : entries) {
+    for (unsigned i = 0; i < kMaxHandlers; ++i) {
+        Entry& e = entries[i];
         if (e.box != nullptr && e.id == id) {
             box = e.box;
             destroy = e.destroy;
             e = Entry{};
+            if (triggerDepth > 0) {
+                if (pendingCount < kMaxHandlers) {
+                    // ha snapshot em voo que ainda pode invocar este box:
+                    // adia a destruicao para o fim do trigger mais externo
+                    pendingFree[pendingCount] = DeadEntry{box, destroy};
+                    ++pendingCount;
+                    box = nullptr;  // ja agendado, nao destruir agora
+                } else {
+                    // Fila cheia: era dada como "inatingivel", mas rajada
+                    // de add+remove DENTRO do proprio handler enche a fila
+                    // (cada par consome um slot) e a remocao seguinte de
+                    // um handler ainda vivo no snapshot estourava com
+                    // destroy imediato = use-after-free (o snapshot na
+                    // pilha aponta para o box). Aposenta o slot: o box
+                    // morre so no dtor do evento, o id 0 some do
+                    // removeHandler e o invoke vira no-op para os
+                    // proximos snapshots (o corrente guarda o invoke
+                    // antigo e o handler ainda roda NAQUELE disparo).
+                    e = Entry{0, box, &EventBase::noopInvoke, destroy};
+                    box = nullptr;
+                }
+            }
             break;
         }
-    }
-    if (box != nullptr && triggerDepth > 0) {
-        // ha snapshot em voo que ainda pode invocar este box: adia a
-        // destruicao para o fim do trigger mais externo
-        if (pendingCount < kMaxHandlers) {
-            pendingFree[pendingCount] = DeadEntry{box, destroy};
-            ++pendingCount;
-            box = nullptr;  // ja agendado, nao destruir agora
-        }
-        // pendingCount == kMaxHandlers e inatingivel: cada remocao exige um
-        // slot vivo distinto (max 16) e a fila drena quando depth volta a 0
     }
     EVENT_UNLOCK();
     if (box != nullptr) destroy(box);

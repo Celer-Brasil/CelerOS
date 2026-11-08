@@ -13,6 +13,40 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#else
+// Host (g++ puro, sem FreeRTOS — mesmo padrao do Event.h): tick = ms
+// monotonicos do processo e pdMS_TO_TICKS identidade. timeoutHostClock()
+// deixa o teste congelar o relogio para provar bordas (>=) e wrap de
+// uint32 sem depender de sleep; no firmware esse branch nao existe.
+#include <cstdint>
+#include <ctime>
+
+using TickType_t = uint32_t;
+
+struct TimeoutHostClock {
+    bool fixed = false;   /**< true = xTaskGetTickCount() devolve value fixo */
+    uint32_t value = 0;   /**< tick congelado para o teste */
+};
+
+inline TimeoutHostClock& timeoutHostClock() {
+    static TimeoutHostClock s;
+    return s;
+}
+
+inline TickType_t xTaskGetTickCount() {
+    TimeoutHostClock& c = timeoutHostClock();
+    if (c.fixed) {
+        return static_cast<TickType_t>(c.value);
+    }
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<TickType_t>(static_cast<uint64_t>(ts.tv_sec) * 1000u +
+                                   static_cast<uint64_t>(ts.tv_nsec) / 1000000u);
+}
+
+inline TickType_t pdMS_TO_TICKS(TickType_t ms) {
+    return ms;
+}
 #endif
 
 class Timeout {

@@ -27,14 +27,21 @@ Sistema de eventos thread-safe para arquitetura event-driven. Permite registrar 
 template <typename... Args>
 class Event {
 public:
+    using HandlerId = uint32_t;  // 0 = invalido
+
     Event();
     ~Event();
-    
-    void addHandler(std::function<void(Args...)> handler);
-    void removeHandler(std::function<void(Args...)> handler);
+
+    HandlerId addHandler(std::function<void(Args...)> handler);
+    void removeHandler(HandlerId id);   // id devolvido pelo addHandler
     void trigger(Args... args);
 };
 ```
+
+- `addHandler` devolve um id (0 = teto cheio ou handler vazio) — `std::function`
+  nao tem `operator==` em C++17, entao a remocao e por id.
+- Um handler removido **durante** um disparo em curso ainda roda naquele
+  disparo (o snapshot da lista ja foi tirado); nos seguintes, nao.
 
 ### Exemplo de Uso
 

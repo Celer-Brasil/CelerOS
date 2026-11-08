@@ -26,7 +26,28 @@ desenvolvimento.
 
 ## Novidades
 
-Firmware 1.13.0 — a rodada do CelerKit (API JS níveis 52–55):
+Firmware 1.18.0 — a rodada do vidro nativo (API JS níveis 59–62):
+
+* **Core nativo escreve direto no vidro** — `System.nativeScreen()` (API 60) entrega ao blob carregado uma vista do framebuffer (o framebuffer do próprio painel RGB na SmartDisplay, com as linhas saindo por GDMA) e o `System.nativeGrab()` lê de volta; o Anemoia (emulador de NES) roda a 52–60 fps com som a 480x450. `System.setAlpha(0..255)` (API 59) mistura os primitivos imediatos com o alvo ([API JS](/Celer-Brasil/CelerOS/wiki/API-JS)).
+* **O gamepad virou input do OS** — `Input.pad`/`Input.padState()` (API 61) é um canal de broadcast (estado corrente, sem fila): o driver residente **Controle BT** injeta o pad e o launcher move o foco, abre apps e sai com o guide, enquanto o stick direito dirige o ponteiro com clique no R2. Apps com a permissão `"input"` leem o mesmo canal a cada quadro.
+* **Teclados e mouses Bluetooth** — `BT.state().kind` (API 62) classifica o device conectado pelo HID Report Map (`kbd`/`mouse`/`combo`/`pad`), um teclado físico digita em todo campo de texto (layout US, Shift/Caps, Enter/Esc) e a dep `celeros.hid` decodifica os reports sobre o parser da `celeros.gamepad`. Fones Bluetooth seguem sem funcionar: o rádio S3 não tem Bluetooth Classic (A2DP).
+* **Forense de crash para código nativo** — a linha do `crash.txt` carrega o motivo arquitetural do panic e a base de execução do blob carregado; o loader nativo mantém a imagem na RAM interna com o scratch na PSRAM.
+* **Ociosidade mais leve** — a sonda de maior bloco livre atrás do `System.delay`/`UI.end` roda a cada 500 ms nas placas com PSRAM.
+
+Firmware 1.15.0, antes disso — a rodada do código nativo carregável (API JS níveis 57–58):
+
+* **Código nativo carregável (SPIKE)** — um blob autocontido de C/C++ (`core.bin`, formato CLRN, teto de 512 KB) compilado fora do firmware é carregado com `System.nativeLoad()`, chamado com `System.nativeCall()`, alimentado com `nativeWrite/nativeLoadFile/nativeSaveFile/nativeDraw/nativeAudio` (API 58) e liberado com `System.nativeFree()`; o `System.appDir()` expõe o caminho do pacote instalado. Só em placas S3 com PSRAM.
+* **Anemoia, o emulador de NES** — um core de NES inteiro embarca como blob `core.bin` com a ROM carregada da pasta do app; o transporte de **gamepad Bluetooth LE** (`BT.*`, API 57) tem o parsing na dep `celeros.gamepad`.
+* **Onda da RAM interna** — stack do jsnet, corpos de POST da web, buffers do screencap e encodes WAV do mic migraram para PSRAM-first e os pools do controller BLE enxugaram: a bancada foi de 88 B para ~26 KB estáveis de RAM interna.
+
+Firmware 1.14.0, antes disso — a rodada do OS first-class (API JS nível 56):
+
+* **Contrato do app verificado no aparelho** — o `api` do `app.json` é checado antes do heap ser criado (um app incompatível recebe uma tela nativa de "requer atualização" em vez de morrer em `TypeError`) e o `main` declarado passa a ser honrado. O novo `App.info()` expõe id/name/version/dataDir/api/runtimeApi e as permissões concedidas; o novo `Net.fetch()` espera a rede, repete GETs com backoff e sempre devolve um resultado tipado (`NO_NETWORK`/`TIMEOUT`/`TRANSPORT`/`HTTP`/`TRUNCATED`) em vez de um `null` silencioso.
+* **Boot resiliente** — instalações de app interrompidas são journaladas e revertidas para a última versão que rodou; atualização de app de sistema em boot instável é desfeita; 3 boots falhados seguidos entram em modo seguro (home app e autostart suspensos, com aviso na tela).
+* **Política de atualização nativa** — a checagem automática de firmware saiu do app Nucleo para um serviço do OS (gates puros com teste no host; checagens cacheadas por 5 minutos para o app antigo não bater duas vezes no hub).
+* **Pontas endurecidas na bancada** — erros honestos de scan/connect no portal WiFi, barramento I²C do OLED do cão fechado para apps, pinos de touch/IMU do watch negados a apps, conserto do input do encoder e a camada de tap de modal do game.ui 1.4; a imagem de módulos de fábrica encolheu ~12–30% por módulo (os mesmos bytes que o hub serve).
+
+Firmware 1.13.0, antes disso — a rodada do CelerKit (API JS níveis 52–55):
 
 * **CelerKit UI 2.0** — apps de fábrica e do hub reescritos sobre o kit `celeros.app` (`style`/`icons`/`widgets`/`rows`/`list`/`form`/`caps`): App Store 3.0, Settings, Installer (instalação transacional com rollback) e mais de 14 apps ([guia de apps](/Celer-Brasil/CelerOS/wiki/Guia-de-Apps)).
 * **WiFi virou app JS** — `System.openWifiSetup()` agora abre o `celeros.wifi` 2.0.0, que dirige o portal cativo nativo por `System.wifiPortal*`; o objeto `AI` virou opção de build (`CELEROS_JS_AI`, desligado na CYD). (API 52)
@@ -98,7 +119,7 @@ traduções ficam na seção **Português (BR)**.
 ## Funcionalidades em resumo
 
 * **Runtime de apps JavaScript** — apps interativos em ES5 rodam nativamente
-  via Duktape (API nível 52): desenho estilo canvas, toque e teclado na tela
+  via Duktape (API nível 62): desenho estilo canvas, toque e teclado na tela
   acoplado, sistema de arquivos e rede HTTP/JSON.
 * **IA e voz no aparelho** — `AI.chat()` conversa com a DeepSeek ou a
   OpenRouter de qualquer app (assíncrono, TLS, function calling; as chaves

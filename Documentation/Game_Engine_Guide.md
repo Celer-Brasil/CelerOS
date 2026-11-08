@@ -6,13 +6,13 @@
 
 | Dep | Stripped | What it gives you |
 |---|---|---|
-| **`celeros.game`** (core) | ~65 KB | loop with scenes + transitions, touch gestures, camera-aware drawing, **`E.color` + gfx shadows/gradients/borders/outline**, math/RNG, tweens/timers/`E.seq`, groups/pools, dirty-rect layer, chiptune audio with beat clock, NVS saves, section profiler (`E.prof`), owned sprite pool (`E.slots`), anchored HUD (`E.ax/ay/anchor`) |
-| **`celeros.game.fx`** | ~13 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
-| **`celeros.game.spr`** | ~16 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
-| **`celeros.game.tilemap`** | ~4 KB | grid of dirty cells for big procedural scenarios |
-| **`celeros.game.ui`** | ~55 KB | **UI kit 1.4**: tokens + 4 presets, 24 vector icons (the 12 common ones shared with apps via `celeros.ui.icons`), layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs, the ready title/pause/game-over screens and the derived-height title menu (`E.ui.menuBox`/`menuCard`) |
+| **`celeros.game`** (core) | ~50 KB | loop with scenes + transitions, touch gestures, camera-aware drawing, **`E.color` + gfx shadows/gradients/borders/outline**, math/RNG, tweens/timers/`E.seq`, groups/pools, dirty-rect layer, chiptune audio with beat clock, NVS saves, section profiler (`E.prof`), owned sprite pool (`E.slots`), anchored HUD (`E.ax/ay/anchor`) |
+| **`celeros.game.fx`** | ~10 KB | particles, bursts/rings, floating text, flash, starfield, **continuous emitters, trails, parallax layers** |
+| **`celeros.game.spr`** | ~12 KB | PNG sprites in native slots with painter fallback, flipbooks, **spritesheets (1 PNG, N named regions)**, art metadata (`E.spr.meta`) |
+| **`celeros.game.tilemap`** | ~3 KB | grid of dirty cells for big procedural scenarios |
+| **`celeros.game.ui`** | ~42 KB | **UI kit 1.4**: tokens + 4 presets, 24 vector icons (the 12 common ones shared with apps via `celeros.ui.icons`), layout (stack/grid/card), 12+ widgets, rich lists, generic scroll, modal/sheet, queued toasts, memoized HUD, typewriter dialogs, the ready title/pause/game-over screens and the derived-height title menu (`E.ui.menuBox`/`menuCard`) |
 | **`celeros.engine`** | shim (0.2 KB) | the **whole family assembled** — the pre-modularity API (1.2.x) in one `require`; existing games keep working unchanged |
-| **`celeros.physics`** (optional) | ~7 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
+| **`celeros.physics`** (optional) | ~6 KB | native Verlet ropes/cloth (`P.verletFast`, API 31) and rigid bodies (`P.rigid`, API 33). **Most games need none of it** — the physics ladder in §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | bomberman-style arenas + BFS chase flow, sfx melody tables, CelerNet boilerplate (same family, unrelated modules) |
 
 Sizes are **minified** (jsstrip + jsmin, what the hub publishes and the device
@@ -20,7 +20,7 @@ compiles), measured 2026-10 — check with
 `node tools/sdk/lib/jsstrip.js tools/sdk/engine/<module>.js --min --top` before
 planning. Line breaks are preserved, so device error lines still match the repo.
 
-Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is ~50 KB minified (63 KB stripped)**, under the 64 KB no-PSRAM ceiling, but any real game adds the UI kit (~40 KB) and app code, so every app using the engine still declares `"requires": ["psram"]`; core + UI kit are ~90 KB and the full family is ~255 KB.
+Each module decorates the **same `E`** object (the `require` cache makes the core a singleton): adopting is one line — `require("celeros.game.fx")` and `E.fx` exists. Deps between modules are transitive (fx → core): the store resolves the whole graph at install. You pay for what you adopt — deps count toward the app ceiling EVEN shared, because each game compiles them into its own Duktape heap: **the core alone is ~50 KB minified (63 KB stripped)**, under the 64 KB no-PSRAM ceiling, but any real game adds the UI kit (~42 KB) and app code, so every app using the engine still declares `"requires": ["psram"]`; core + UI kit are ~93 KB and the full family is ~187 KB.
 
 Everything is ES5 (Duktape) and feature-detects the firmware at runtime, so the same game runs on every board — and unchanged in the Node test harness and emulator.
 
@@ -32,7 +32,7 @@ Everything is ES5 (Duktape) and feature-detects the firmware at runtime, so the 
 | Intended boards | The ESP32-S3 boards with PSRAM: SmartDisplay, Waveshare watch, SpotPear dog |
 | Size budget | Deps count toward the app ceiling EVEN shared (they compile inside each game's heap): **the core alone is ~50 KB minified (63 KB stripped)**, under the plain 64 KB budget, but core + UI kit + app code is not — apps using the engine declare `"requires": ["psram"]`, which lifts the budget to 1 MB (the store then blocks installing on non-PSRAM boards). The hub measures deps **stripped**, as the device compiles them |
 | App flavor | `"topbar": false` for fullscreen games (like Supernova) is recommended; the exit button lives in your title menu (`System.exitApp()`) |
-| CYD (no PSRAM) | The engine core alone now fits the 64 KB budget, but every catalog game adds the UI kit (~40 KB) and app code and declares `psram`; no catalog game runs there today. On the CYD, apps use the JS API directly (`System`/`UI`), like the system apps |
+| CYD (no PSRAM) | The engine core alone now fits the 64 KB budget, but every catalog game adds the UI kit (~42 KB) and app code and declares `psram`; no catalog game runs there today. On the CYD, apps use the JS API directly (`System`/`UI`), like the system apps |
 
 ## 2. Getting started
 
@@ -450,7 +450,7 @@ var pick = E.ui.menuCard([
 ], { bottom: 8 });            // returns 'JOGAR' | 'camp' | 'cfg' | null
 ```
 
-The first item uses `h1` (22·U, primary by default) and the rest `h2` (18·U); `x/w/y/bottom/gap/pad/bg/r/elev` are overridable, and the box never leaves the glass (`y` is clamped). `menuBox` alone returns the rect (`{x,y,w,h,pad,h1,h2,gap}`) for games that draw their own panel — it is scratch geometry, valid until the next `menuBox`/`menuCard` call. Since 1.4.1 a modal/sheet open in the same frame **reserves** the tap for itself: the widgets drawn under it no longer swallow the tap of the "Entendi" button of a dialog over a menu.
+The first item uses `h1` (22·U, primary by default) and the rest `h2` (18·U); `x/w/y/bottom/gap/pad/bg/r/elev` are overridable, and the box never leaves the glass (`y` is clamped). `menuBox` alone returns the rect (`{x,y,w,h,pad,h1,h2,gap}`) for games that draw their own panel — it is scratch geometry, valid until the next `menuBox`/`menuCard` call. Since 1.4.1 a modal/sheet open in the same frame **reserves** the tap for itself: the widgets drawn under it no longer swallow the tap of the "Entendi" button of a dialog over a menu. Since 1.4.2 the reservation also covers `E.ui.list`, and a dialog `speed` of 0/negative/NaN no longer leaves the dialog blank forever (it falls back to the default 30).
 
 ### Tokens and presets
 
@@ -1056,7 +1056,7 @@ In-app, expose an introspection hook like `if (typeof __harness !== "undefined")
 
 ## 18. Size and performance
 
-- Deps count toward the app ceiling (each game compiles them in its own heap) — **adopt only what you use**: core ~50 KB minified (63 KB stripped), fx ~10, ui ~40, spr ~12, tilemap ~3 (full family ~131 KB). The core alone fits the 64 KB budget, but the UI kit plus app code does not — apps using the engine declare `"requires": ["psram"]` (1 MB ceiling). The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: comments/indentation out, local names mangled, line breaks kept so error lines still match the source), which is exactly what the device compiles — the firmware's JsStripper is idempotent on that output.
+- Deps count toward the app ceiling (each game compiles them in its own heap) — **adopt only what you use**: core ~50 KB minified (63 KB stripped), fx ~10, ui ~42, spr ~12, tilemap ~3 (full family ~187 KB). The core alone fits the 64 KB budget, but the UI kit plus app code does not — apps using the engine declare `"requires": ["psram"]` (1 MB ceiling). The hub measures deps **as published**: `celerhub publish-dep` uploads them through `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: comments/indentation out, local names mangled, line breaks kept so error lines still match the source), which is exactly what the device compiles — the firmware's JsStripper is idempotent on that output.
 - **No allocations per frame**: use `E.pool`, `swap-pop` removal, and reuse objects. A `new`/`[...]` per frame per entity is what triggers GC pauses. Since engine 1.2.3 the wrappers themselves don't allocate: opts-less `E.gfx.*` calls share one read-only object, `E.font` lookups are memoized and each string's `textWidth` is measured once per style — repeated HUD/score/button text costs no extra firmware calls.
 - If you call `System.setTextDatum` directly, restore `0` when done: engine 1.2.3 only touches the datum when a text asks for a non-default origin, so `E.gfx.text` relies on apps leaving it at `0` (every app in this repo already does).
 - Avoid full-screen `fillScreen` + redraw everything per frame: on the SmartDisplay's RGB panel (framebuffer scanned from PSRAM) it starves the LCD DMA and the image jitters. Use `static` scenes, `E.dirty` and `E.tilemap` (§16b).

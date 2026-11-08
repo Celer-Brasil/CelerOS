@@ -10,7 +10,7 @@ hardware do ESP32.
 ---
 ## Versão do Runtime JS do CelerOS
 ### Runtime JS: v1.0.0
-### Nível de API: 58
+### Nível de API: 62
 ---
 
 ## 1. Especificações do Motor e Compatibilidade ECMAScript
@@ -893,7 +893,9 @@ que 32 KB são truncadas.
   - `contentType` (String, opcional — usado quando há `body`)
   - `headers` (Object, opcional — até 6 cabeçalhos próprios, ex.:
     `{apikey: "...", Authorization: "Bearer ..."}`)
-  - `timeoutMs` (Number, opcional — limitado a 1000..20000, padrão 10000)
+  - `timeoutMs` (Number, opcional — limitado a 1000..12000, padrão 10000; o
+    teto fica abaixo dos 15 s do watchdog da task, então um servidor preso
+    não reinicia mais o aparelho)
 - **Retorna:** `{status: Number, body: String}` para QUALQUER resposta HTTP,
   ou `null` quando o transporte em si falha (DNS/TCP/TLS/timeout, ou sem
   WiFi).
@@ -928,7 +930,7 @@ else System.print("HTTP " + r.status + ": " + r.body);
   - `contentType` (String, opcional)
   - `headers` (Object, opcional — até 6 cabeçalhos, mesmo contrato do
     `Net.request`)
-  - `timeoutMs` (Number, opcional — 1000..20000, padrão 10000)
+  - `timeoutMs` (Number, opcional — limitado a 1000..12000, padrão 10000)
   - `waitOnline` (Number, opcional — ms para esperar a rede voltar antes de
     desistir; 0..60000, padrão 0)
   - `retry` (Number, opcional — tentativas extras, 0..5, padrão 0; **só em
@@ -4119,8 +4121,10 @@ bytes pelo heap do Duktape; os offsets são bytes desde o início do scratch
   para o alvo corrente — **um push por quadro**.
 #### `System.nativeAudio(h, off, len)` → Boolean: PCM16 mono LE do scratch
   na fila compartilhada do `PcmFeed` 44,1 kHz (criada no primeiro uso;
-  bloqueia só com a fila de 32KB cheia). `System.nativeAudioStop(h)`
-  encerra o feed — não chame `playWav` de outra fonte ao mesmo tempo.
+  bloqueia só com a fila de 32KB cheia).
+
+#### `System.nativeAudioStop(h)` — encerra o feed do `nativeAudio`; não
+  chame `playWav` de outra fonte ao mesmo tempo.
 
 Um core real (o app `Anemoia`) guarda todo o estado no `.bss` do blob,
 pergunta os offsets com um `nativeCall`, alimenta a ROM com
@@ -4270,12 +4274,15 @@ Estado do host/pad para renderizar na tela do app:
 
 ```javascript
 { phase: "ready", addr: "5C:BA:37:12:34:56", name: "Xbox Wireless Controller",
-  rssi: -42, battery: 80, mtu: 256, queued: 1, dropped: 0, err: "",
+  kind: "pad", rssi: -42, battery: 80, mtu: 256, queued: 1, dropped: 0, err: "",
   reports: [ { id: 1, type: 1, size: 0 }, { id: 3, type: 2, size: 0 } ] }
 ```
 
 `phase`: `"off"` (sem host), `"idle"`, `"scanning"`, `"connecting"`,
-`"ready"` ou `"error"` (com motivo em `err`). `reports` lista as chars
+`"ready"` ou `"error"` (com motivo em `err`). `kind` (API 62) é a classe do
+device que o firmware leu do Report Map — `"pad"`, `"kbd"`, `"mouse"`,
+`"combo"` (um descriptor com as duas coleções) ou `""` antes da primeira
+conexão. `reports` lista as chars
 Report descobertas com `id`/`type` do Report Reference (1 = entrada,
 2 = saída, 3 = feature) — é daqui que a dep descobre onde escrever o
 rumble. `battery` vem do Battery Service do pad (-1 sem serviço).
@@ -4298,7 +4305,10 @@ com o id certo. Bloqueia até ~1 s; devolve `{ok, sent}` ou
 `{ok: false, err}`.
 
 ### `BT.paired()` (API 57)
-Bonds gravados no NVS do NimBLE: `[{addr, addrType}]`. Útil para oferecer
+Bonds gravados no NVS do NimBLE: `[{addr, addrType, name, kind}]` — `name`
+e `kind` (API 62) vêm preenchidos depois que o firmware já viu esse bond
+conectar; bond feito antes deste firmware carrega `""` até conectar uma
+vez. Útil para oferecer
 "reconectar" sem scan. No watch a lista inclui o celular do Phone Link (o
 store é compartilhado) — filtre pelo endereço do pad.
 
@@ -4393,3 +4403,68 @@ o canal e o ponteiro; a chave `"on"`/`"ptr"` no Storage liga/desliga sem
 reiniciar. Pareia pad novo pela própria tela (scan → connect) ou pelo app
 **Gamepad** do hub. DualShock 4/DualSense/Switch Pro não funcionam (Bluetooth
 CLASSIC — o rádio S3 não tem BR/EDR).
+
+## 56. Nível de API 62 — Teclados e mouses: tipos do `BT.*` e a dep `celeros.hid`
+
+**O que mudou.** O host HID BLE (API 57) deixou de ser só de gamepad.
+`BT.paired()` agora devolve **nome e tipo** para cada bond que o firmware já
+viu conectar, e `BT.state()` expõe o **tipo do device conectado** —
+classificado do Report Map cru pelo firmware, então o JS nunca precisa
+parsear o descriptor para saber com o que está falando.
+
+```javascript
+var st = BT.state();
+// 'kbd' | 'mouse' | 'combo' | 'pad' | ''
+// 'combo' = um descriptor com as duas coleções (teclados estilo K400)
+```
+
+Entradas de `BT.paired()`: `{addr, addrType, name, kind}` (`name` é `""` e
+`kind` é `""` para bond feito antes deste firmware, até conectar uma vez).
+
+**Teclado físico digita no OS.** O teclado on-screen nativo
+(`System.prompt`, `A.form.askText`, `System.keypad*`) drena a fila de teclas
+do `Input.*`: um teclado BLE/USB digita no mesmo campo das teclas de toque
+(layout US; Shift e Caps Lock funcionam; Enter confirma, Esc cancela,
+Backspace repete segurando). Teclas que nenhum campo consumiu continuam na
+fila para o `Input.poll()`, então jogos e drivers não mudam.
+
+**A tela do Ajustes.** *Ajustes → Entrada* tem o ajuste do teclado virtual
+(a grade some quando há teclado físico), pareamento/status de teclado e
+mouse BLE, velocidade do ponteiro e um teste de mouse ao vivo.
+*Ajustes → Bluetooth* lista os pareados com nome/tipo, pareia novos por
+scan, conecta/esquece e explica por que **fones Bluetooth não funcionam**:
+o rádio do ESP32-S3 não tem Bluetooth Classic (A2DP) nem ISO/LE Audio,
+então não existe caminho de áudio.
+
+### `celeros.hid` (dep)
+Decodificador de teclado e mouse HID sobre HOGP, em cima do transporte cru
+`BT.*`. Reusa o parser de Report Map da `celeros.gamepad`.
+
+```javascript
+var H = require("celeros.hid");
+var dev = H.setup();                   // device conectado (state ready)
+if (dev) {
+    var r = BT.read();                 // {id, data:[bytes]}
+    var out = dev.feed(r);             // {kbd?} e/ou {mouse?}
+    if (out && out.kbd) {
+        Input.key(out.kbd.pressed[0], out.kbd.mods, true);
+    }
+    if (out && out.mouse) {
+        var p = Input.pointer();
+        Input.move(p.x + out.mouse.dx, p.y + out.mouse.dy, out.mouse.buttons);
+    }
+}
+```
+
+- `H.attach(mapBytes[, kind])` → `{kind, keyboard, mouse, feed(report)}`;
+  `feed` devolve `null` para report que nenhuma coleção reivindica.
+- `H.keyboard(map)` → `{id, accepts(reportId), feed(report)}` com
+  `{mods, keys, pressed, released}` (usage IDs).
+- `H.mouse(map)` → mesma forma com `{dx, dy, wheel, buttons, pressed, released}`.
+- `H.devices()`/`H.scan(ms)` → devices HID do último scan com `kind`;
+  `H.kind()` → tipo do device conectado; `H.kindOfAppearance(a)`.
+
+**Um device por vez.** O `BleHid` é single-link: conectar um mouse derruba o
+teclado e vice-versa. O serviço Controle BT segue o
+`System.setting("bt_dev")` (escolhido no Ajustes) e reconecta; sem escolha
+explícita, adota um bond conhecido.

@@ -93,7 +93,7 @@ segurança.
 - **Placas sem PSRAM** (ex.: a CYD clássica): o app inteiro (main + módulos + deps) — mais o heap JS e os temporários do compile — tem que caber na RAM interna. O teto aplicado é **64 KB minificados** (bancada: 61 KB cru / 52 KB enxuto compila, 82 KB cru mostra "Sem memória"; comentários, indentação e nomes locais longos são removidos antes do compile, então não custam nada). Apps acima de 64 KB precisam declarar `"requires": ["psram"]`; a loja marca como "Requer PSRAM" e bloqueia o install em placa sem PSRAM.
 - **`permissions`** (opcional, F4): array de capabilities — `"fs"`, `"net"`, `"gpio"`, `"system"`, `"mic"`, `"camera"`, `"usb"`, `"input"`. Sem o campo o app mantém as seis antigas (compatibilidade com a loja existente); `"usb"` e `"input"` (API 48) só entram com declaração explícita, porque dão acesso a qualquer dispositivo USB e ao teclado/mouse do sistema. Com o campo, só o que foi declarado é registrado: `FS` / `Net` / `System.gpio` **e as chamadas de hardware externo** (`System.led`, `System.relay*`, `System.neopixel`), além das que afetam o aparelho, como `restart`/`otaStart`. Arquivos do sistema em `/local` (credenciais Wi-Fi, PIN, config de OTA/boot) exigem `"system"` adicionalmente, mesmo para apps com `"fs"`. Apps de sistema (`"system": true`) sempre recebem tudo.
 - **`api`**: nível de API do CelerOS que o app mira (veja o [Guia da API
-  JS](JS_API_Guide.pt-BR.md) — atualmente `57`). Desde a API 56 o aparelho
+  JS](JS_API_Guide.pt-BR.md) — atualmente `62`). Desde a API 56 o aparelho
   aplica isso duas vezes: a loja/o instalador recusam o pacote na instalação e
   o launcher recusa no lançamento — um app cujo `api` seja ilegível ou maior
   que o firmware recebe uma tela nativa de "requer atualização" em vez de

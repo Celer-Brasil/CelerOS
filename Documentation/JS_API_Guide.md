@@ -7,7 +7,7 @@ Welcome to the **CelerOS JavaScript API Reference**. This document provides deep
 ---
 ## CelerOS JS Runtime Version
 ### JS Runtime: v1.0.0
-### API Level: 58
+### API Level: 62
 ---
 
 ## 1. Engine Specifications & ECMAScript Compliance
@@ -703,7 +703,7 @@ than 32 KB are truncated.
   - `body` (String, optional — up to 64 KB)
   - `contentType` (String, optional — used when a `body` is given)
   - `headers` (Object, optional — up to 6 custom headers, e.g. `{apikey: "...", Authorization: "Bearer ..."}`)
-  - `timeoutMs` (Number, optional — clamped to 1000..20000, default 10000)
+  - `timeoutMs` (Number, optional — clamped to 1000..12000, default 10000; the cap stays under the task watchdog's 15 s, so a hung server can no longer reboot the device)
 - **Returns:** `{status: Number, body: String}` on ANY HTTP response, or `null` when the transport itself fails (DNS/TCP/TLS/timeout, or no WiFi).
 - **Description:** Request with custom headers and a visible status code. `Net.post` cannot send headers (API gateways such as Supabase require an `apikey` header) and collapses every failure into `null`, leaving the script unable to tell "no network" from a 4xx business refusal — `Net.request` answers both. Header names/values reject CR/LF and other control characters (request-line injection) and are capped at 32/256 chars. The response `body` follows the same 32 KB cap as `Net.get`. This is the path for apps talking to authenticated edge functions/APIs.
 - **Example:**
@@ -726,7 +726,7 @@ else System.print("HTTP " + r.status + ": " + r.body);
   - `body` (String, optional — up to 64 KB)
   - `contentType` (String, optional)
   - `headers` (Object, optional — up to 6 headers, same contract as `Net.request`)
-  - `timeoutMs` (Number, optional — 1000..20000, default 10000)
+  - `timeoutMs` (Number, optional — clamped to 1000..12000, default 10000)
   - `waitOnline` (Number, optional — ms to wait for the network to come back; 0..60000, default 0)
   - `retry` (Number, optional — extra attempts, 0..5, default 0; **GET only**)
 - **Returns:** `{ok, status, body, truncated, durationMs, error}`. Never `null` and never throws on transport failure:
@@ -3758,7 +3758,7 @@ else {
 
 #### v2 bridge (API 58): data, video and audio between JS and the blob
 
-`System.nativeLoad` now accepts **v2 (relocatable) blobs**: the loader copies
+`System.nativeLoad` now accepts **v2/v3 (relocatable) blobs**: the loader copies
 the image, zeroes its `.bss`, applies the absolute relocations and can run
 real C/C++ cores (tables, function pointers, globals). The v2 bindings move
 data in and out of the blob's scratch without pushing bytes through the
@@ -3777,9 +3777,11 @@ Duktape heap. Offsets are bytes from the start of the scratch region (a blob
   present, which froze the old sprite push).
 #### `System.nativeAudio(h, off, len)` → Boolean: PCM16 mono LE from the
   scratch into the shared 44.1 kHz `PcmFeed` queue (created on first use;
-  blocks only when the 32KB queue is full). `System.nativeAudioStop(h)`
-  ends the feed. The feed owns the audio guard — do not `playWav` from a
-  second source at the same time.
+  blocks only when the 32KB queue is full).
+
+#### `System.nativeAudioStop(h)` — ends the `nativeAudio` feed. The feed
+  owns the audio guard — do not `playWav` from a second source at the same
+  time.
 
 A real core (the NES emulator app `Anemoia`) keeps all of its state in the
 blob's `.bss`, queries its layout offsets with one `nativeCall` and then
@@ -3931,12 +3933,15 @@ Host/pad state for rendering in the app:
 
 ```javascript
 { phase: "ready", addr: "5C:BA:37:12:34:56", name: "Xbox Wireless Controller",
-  rssi: -42, battery: 80, mtu: 256, queued: 1, dropped: 0, err: "",
+  kind: "pad", rssi: -42, battery: 80, mtu: 256, queued: 1, dropped: 0, err: "",
   reports: [ { id: 1, type: 1, size: 0 }, { id: 3, type: 2, size: 0 } ] }
 ```
 
 `phase`: `"off"` (no host), `"idle"`, `"scanning"`, `"connecting"`,
-`"ready"` or `"error"` (reason in `err`). `reports` lists the discovered
+`"ready"` or `"error"` (reason in `err`). `kind` (API 62) is the device
+class the firmware read from the Report Map — `"pad"`, `"kbd"`, `"mouse"`,
+`"combo"` (one descriptor with both collections) or `""` before the first
+connect. `reports` lists the discovered
 Report characteristics with the Report Reference `id`/`type` (1 = input,
 2 = output, 3 = feature) — this is where the dep learns where to write the
 rumble. `battery` comes from the pad's Battery Service (-1 without it).
@@ -3959,7 +3964,10 @@ report with the right id. Blocks up to ~1 s; returns `{ok, sent}` or
 `{ok: false, err}`.
 
 ### `BT.paired()` (API 57)
-Bonds stored in the NimBLE NVS: `[{addr, addrType}]`. Useful to offer
+Bonds stored in the NimBLE NVS: `[{addr, addrType, name, kind}]` — `name`
+and `kind` (API 62) come filled once the firmware has seen that bond
+connect; a bond made before this firmware carries `""` until it connects
+once. Useful to offer
 "reconnect" without a scan. On the watch the list includes the Phone Link
 phone (the store is shared) — filter by the pad's address.
 
@@ -4055,3 +4063,68 @@ backoff), injects the channel and the pointer; the `"on"`/`"ptr"` Storage
 keys toggle it without a restart. Pair a new pad from its own screen
 (scan → connect) or from the hub **Gamepad** app. DualShock 4/DualSense/
 Switch Pro do not work (Bluetooth CLASSIC — the S3 radio has no BR/EDR).
+
+## 56. API Level 62 — Keyboards and mice: `BT.*` kinds and the `celeros.hid` dep
+
+**What changed.** The BLE HID host (API 57) stopped being gamepad-only.
+`BT.paired()` now returns **name and kind** for every bond the firmware has
+seen connect, and `BT.state()` exposes the **kind of the connected device** —
+classified from the raw HID Report Map by the firmware, so the JS side never
+has to parse the descriptor to know what it is talking to.
+
+```javascript
+var st = BT.state();
+// 'kbd' | 'mouse' | 'combo' | 'pad' | ''
+// 'combo' = one descriptor with both collections (K400-style keyboards)
+```
+
+`BT.paired()` entries: `{addr, addrType, name, kind}` (`name` is `""` and
+`kind` is `""` for a bond made before this firmware, until it connects once).
+
+**Physical keyboards type into the OS.** The native on-screen keyboard
+(`System.prompt`, `A.form.askText`, `System.keypad*`) drains the `Input.*`
+key queue: a BLE/USB keyboard types into the same field as the touch keys
+(US layout; Shift and Caps Lock work; Enter confirms, Esc cancels,
+Backspace repeats while held). Keys not consumed by a text field stay in the
+queue for `Input.poll()`, so games and drivers are unaffected.
+
+**The Settings screen.** *Ajustes → Entrada* has the on-screen keyboard
+toggle (the key grid hides when a physical keyboard is connected),
+pairing/status for a BLE keyboard and a mouse, pointer speed and a live
+mouse test. *Ajustes → Bluetooth* lists bonded devices with name/type,
+pairs new ones by scan, connects/forgets, and explains why **Bluetooth
+headphones do not work**: the ESP32-S3 radio has no Bluetooth Classic
+(A2DP) and no ISO/LE Audio, so there is no audio path at all.
+
+### `celeros.hid` (dep)
+Decoder for HID keyboards and mice over HOGP, on top of the `BT.*` raw
+transport. Reuses `celeros.gamepad`'s Report Map parser.
+
+```javascript
+var H = require("celeros.hid");
+var dev = H.setup();                   // connected device (state ready)
+if (dev) {
+    var r = BT.read();                 // {id, data:[bytes]}
+    var out = dev.feed(r);             // {kbd?} and/or {mouse?}
+    if (out && out.kbd) {
+        Input.key(out.kbd.pressed[0], out.kbd.mods, true);
+    }
+    if (out && out.mouse) {
+        var p = Input.pointer();
+        Input.move(p.x + out.mouse.dx, p.y + out.mouse.dy, out.mouse.buttons);
+    }
+}
+```
+
+- `H.attach(mapBytes[, kind])` → `{kind, keyboard, mouse, feed(report)}`;
+  `feed` returns `null` for a report neither collection claims.
+- `H.keyboard(map)` → `{id, accepts(reportId), feed(report)}` with
+  `{mods, keys, pressed, released}` (usage IDs).
+- `H.mouse(map)` → same shape with `{dx, dy, wheel, buttons, pressed, released}`.
+- `H.devices()`/`H.scan(ms)` → HID devices of the last scan with `kind`;
+  `H.kind()` → kind of the connected device; `H.kindOfAppearance(a)`.
+
+**One device at a time.** `BleHid` is single-link: connecting a mouse drops
+the keyboard and vice versa. The Controle BT service follows
+`System.setting("bt_dev")` (chosen in Settings) and reconnects it; with no
+explicit choice it adopts a known bond.

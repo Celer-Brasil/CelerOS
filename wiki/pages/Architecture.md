@@ -75,7 +75,7 @@ The main loop runs on the main task: `Navigator::tick()`,
   Duktape), with a blocking `while` loop and `System.delay()`.
 * All geometry is drawn in virtual 240x320 coordinates and scaled by
   `UI::sx()/sy()` — apps never see physical pixels.
-* The **API level** (`System.getAPILevel()`, currently 52) is the
+* The **API level** (`System.getAPILevel()`, currently 62) is the
   feature-detection contract for apps. History: 1 base
   (draw/touch/GPIO/FS/time) · 2 `Net` · 3 system apps in JS · 5 docked
   keyboard · 6 custom topbar + streaming `Net.download` · 7 RGB LED, light
@@ -98,7 +98,19 @@ The main loop runs on the main task: `Navigator::tick()`,
   48 USB Host + the OS input bus · 49 `Net.request` with headers +
   `System.epoch()` · 50 background services with network/OTA (svchost) ·
   51 screen state (`System.isScreenOn`/`screenState`) · 52 WiFi setup as
-  a JS app (`celeros.wifi`) + optional `AI` build + S3 UI extras.
+  a JS app (`celeros.wifi`) + optional `AI` build + S3 UI extras ·
+  53 service network window (`System.wifiWake`) · 54 generic I²C bus
+  (`System.i2c`) · 55 native drivers (`System.encoder` PCNT, `System.dht`,
+  `System.gpio.servoUs`) · 56 the app contract enforced on device (the
+  `app.json` `api` gate, `main` honored, `App.info()`, `Net.fetch` with
+  typed errors) · 57–58 loadable native code (`System.native*` on S3 +
+  PSRAM: CLRN blob in a PSRAM scratch, `BT.*` gamepad transport) ·
+  59 alpha blending (`System.setAlpha`) · 60 native frame access
+  (`System.nativeScreen`/`nativeGrab`) · 61 the gamepad as OS input
+  (`Input.pad`/`padState` broadcast channel fed by the resident Controle BT
+  driver) · 62 BLE keyboards and mice (`BT.state().kind` classified from
+  the Report Map, the physical keyboard types into every text field, the
+  `celeros.hid` dep).
 * An optional Duktape debugger (`CONFIG_CELEROS_JS_DEBUGGER`, default on
   the ESP32-S3 targets) exposes breakpoints/step/eval over the celerctl
   channel (`celerctl debug`).

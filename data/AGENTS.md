@@ -13,7 +13,7 @@ data/
 ## WHERE TO LOOK
 | Task | Location |
 |------|----------|
-| System settings (WiFi, time, PIN, brightness, OTA, reset) | `apps/Settings/main.js` (958 LOC); the WiFi setup screen itself is the `apps/WiFi` app (celeros.wifi, API 52) |
+| System settings (WiFi, time, PIN, brightness, OTA, reset) | `apps/Settings/main.js` (1307 LOC); the WiFi setup screen itself is the `apps/WiFi` app (celeros.wifi, API 52) |
 | Hub catalog, install/update/self-update, rotina automatica das 02:00 e trava de versao | `apps/App Store/main.js` (vidro, CelerKit 2.0) + `store.js` (motor sem UI: semver/deps/pins/installZip) + `service.js` (rodada diaria no svchost); hub `https://os.celer.tec.br` |
 | Sideload from SD | `apps/Installer/main.js` |
 | JS API reference | `Documentation/JS_API_Guide.md`; binding source `main/Runtime/JSBindings.cpp` |

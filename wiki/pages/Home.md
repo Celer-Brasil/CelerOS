@@ -27,7 +27,28 @@ development.
 
 ## What's new
 
-Firmware 1.13.0 — the CelerKit round (JS API levels 52–55):
+Firmware 1.18.0 — the native-glass round (JS API levels 59–62):
+
+* **Native core draws straight to the glass** — `System.nativeScreen()` (API 60) hands the loaded blob a framebuffer view (the RGB panel's own framebuffer on the SmartDisplay, lines shipped by GDMA) and `System.nativeGrab()` reads it back; the Anemoia NES emulator runs 52–60 fps with sound at 480x450. `System.setAlpha(0..255)` (API 59) blends the immediate primitives with the target ([JS API](/Celer-Brasil/CelerOS/wiki/JS-API)).
+* **The gamepad became an OS input** — `Input.pad`/`Input.padState()` (API 61) is a broadcast channel (current state, no queue): the resident **Controle BT** driver injects the pad and the launcher moves focus, opens apps and exits with guide, while the right stick drives the pointer with R2 to click. Apps with the `"input"` permission read the same channel every frame.
+* **Bluetooth keyboards and mice** — `BT.state().kind` (API 62) classifies the connected device from the HID Report Map (`kbd`/`mouse`/`combo`/`pad`), a physical keyboard types into every text field (US layout, Shift/Caps, Enter/Esc) and the `celeros.hid` dep decodes reports on top of `celeros.gamepad`'s parser. Bluetooth headphones still do not work: the S3 radio has no Bluetooth Classic (A2DP).
+* **Crash forensics for native code** — the `crash.txt` line carries the architectural panic reason and the exec base of the loaded blob; the native loader keeps the image in internal RAM with the scratch in PSRAM.
+* **Leaner idle** — the largest-free-block probe behind `System.delay`/`UI.end` runs every 500 ms on PSRAM boards.
+
+Firmware 1.15.0, before that — the loadable-native round (JS API levels 57–58):
+
+* **Loadable native code (SPIKE)** — a self-contained C/C++ blob (`core.bin`, CLRN format) compiled outside the firmware is loaded with `System.nativeLoad()`, called with `System.nativeCall()`, fed with `nativeWrite/nativeLoadFile/nativeSaveFile/nativeDraw/nativeAudio` (API 58) and freed with `System.nativeFree()`; `System.appDir()` exposes the installed package path. S3 boards with PSRAM only.
+* **Anemoia, the NES emulator** — a whole NES core ships as a `core.bin` blob with the ROM loaded from the app folder; **Bluetooth LE gamepad** transport (`BT.*`, API 57) with parsing in the `celeros.gamepad` dep.
+* **Internal RAM wave** — jsnet stack, web POST bodies, screencap row buffers and mic WAV encodes moved PSRAM-first and the BLE controller pools were trimmed: the bench went from 88 B to ~26 KB stable internal RAM.
+
+Firmware 1.14.0, before that — the OS first-class round (JS API level 56):
+
+* **App contract enforced on device** — `app.json` `api` is checked before the heap is created (an incompatible app gets a native "update required" screen instead of a `TypeError` crash) and the declared `main` entry is honored. New `App.info()` exposes id/name/version/dataDir/api/runtimeApi and the granted permissions; new `Net.fetch()` waits for the network, retries GETs with backoff and always returns a typed result (`NO_NETWORK`/`TIMEOUT`/`TRANSPORT`/`HTTP`/`TRUNCATED`) instead of a silent `null`.
+* **Boot resilience** — interrupted app installs are journaled and rolled back to the last version that ran; a system-app update on an unstable boot is reverted; 3 failed boots in a row enter safe mode (home app and autostart withheld, with an on-screen notice).
+* **Native update policy** — the automatic firmware check moved out of the Nucleo app into an OS service (pure gates host-tested; checks cached for 5 minutes so the old app does not double-hit the hub).
+* **Bench-hardened edges** — honest scan/connect errors in the WiFi portal, the dog's OLED I²C bus closed to apps, watch touch/IMU pins denied to apps, encoder input fix and the game.ui 1.4 modal tap layer; the factory module image shrank ~12–30% per module (the same bytes the hub serves).
+
+Firmware 1.13.0, before that — the CelerKit round (JS API levels 52–55):
 
 * **CelerKit UI 2.0** — factory and hub apps rewritten on the `celeros.app` kit (`style`/`icons`/`widgets`/`rows`/`list`/`form`/`caps`): App Store 3.0, Settings, Installer (transactional install with rollback) and 14+ more apps ([app development guide](/Celer-Brasil/CelerOS/wiki/App-Development-Guide)).
 * **WiFi became a JS app** — `System.openWifiSetup()` now launches `celeros.wifi` 2.0.0, which drives the native captive portal through `System.wifiPortal*`; the `AI` object became a build option (`CELEROS_JS_AI`, off on the CYD). (API 52)
@@ -99,7 +120,7 @@ the sidebar has the Portuguese translations.
 ## Feature summary
 
 * **JavaScript app runtime** — interactive ES5 apps run natively on Duktape
-  (API level 52): canvas-style drawing, touch and the coupled on-screen
+  (API level 62): canvas-style drawing, touch and the coupled on-screen
   keyboard, file system, HTTP/JSON networking.
 * **On-device AI & voice** — `AI.chat()` talks to DeepSeek or OpenRouter
   from any app (async, TLS, function calling; keys stay outside the JS

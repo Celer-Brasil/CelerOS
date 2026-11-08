@@ -6,13 +6,13 @@ A **CelerGame** é a game engine 2D do CelerOS, entregue como uma **família de 
 
 | Dep | Enxuta | O que entrega |
 |---|---|---|
-| **`celeros.game`** (core) | ~65 KB | loop com cenas + transições, gestos de toque, desenho com câmera, **`E.color` + sombras/gradientes/bordas/outline no gfx**, matemática/RNG, tweens/timers/`E.seq`, grupos/pools, camada suja, áudio chiptune com relógio de batida, saves no NVS, perfilador (`E.prof`), pool de sprites com dono (`E.slots`) e HUD ancorado (`E.ax/ay/anchor`) |
-| **`celeros.game.fx`** | ~13 KB | partículas, bursts/ondas, texto flutuante, flash, campo de estrelas, **emissores contínuos, rastros, parallax** |
-| **`celeros.game.spr`** | ~16 KB | sprites PNG em slots nativos com painter de fallback, flipbooks, **spritesheet (1 PNG, N regiões nomeadas)**, metadados de arte (`E.spr.meta`) |
-| **`celeros.game.tilemap`** | ~4 KB | grade de células sujas p/ cenários procedurais grandes |
-| **`celeros.game.ui`** | ~55 KB | **kit de UI 1.4**: tokens + 4 presets, 24 ícones vetoriais (os 12 comuns vêm do `celeros.ui.icons`, compartilhado com os apps), layout (stack/grid/card), 12+ widgets, listas ricas, scroll genérico, modal/sheet, toasts em fila, HUD memoizado, diálogos com escolhas, as telas de título/pausa/fim prontas e o menu de título de altura derivada (`E.ui.menuBox`/`menuCard`) |
+| **`celeros.game`** (core) | ~50 KB | loop com cenas + transições, gestos de toque, desenho com câmera, **`E.color` + sombras/gradientes/bordas/outline no gfx**, matemática/RNG, tweens/timers/`E.seq`, grupos/pools, camada suja, áudio chiptune com relógio de batida, saves no NVS, perfilador (`E.prof`), pool de sprites com dono (`E.slots`) e HUD ancorado (`E.ax/ay/anchor`) |
+| **`celeros.game.fx`** | ~10 KB | partículas, bursts/ondas, texto flutuante, flash, campo de estrelas, **emissores contínuos, rastros, parallax** |
+| **`celeros.game.spr`** | ~12 KB | sprites PNG em slots nativos com painter de fallback, flipbooks, **spritesheet (1 PNG, N regiões nomeadas)**, metadados de arte (`E.spr.meta`) |
+| **`celeros.game.tilemap`** | ~3 KB | grade de células sujas p/ cenários procedurais grandes |
+| **`celeros.game.ui`** | ~42 KB | **kit de UI 1.4**: tokens + 4 presets, 24 ícones vetoriais (os 12 comuns vêm do `celeros.ui.icons`, compartilhado com os apps), layout (stack/grid/card), 12+ widgets, listas ricas, scroll genérico, modal/sheet, toasts em fila, HUD memoizado, diálogos com escolhas, as telas de título/pausa/fim prontas e o menu de título de altura derivada (`E.ui.menuBox`/`menuCard`) |
 | **`celeros.engine`** | shim (0,2 KB) | a **família inteira montada** — a API pré-modularidade (1.2.x) num `require` só; jogos existentes seguem funcionando sem mudança |
-| **`celeros.physics`** (opcional) | ~7 KB | corda/pano por Verlet nativo (`P.verletFast`, API 31) e corpos rígidos (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15 |
+| **`celeros.physics`** (opcional) | ~6 KB | corda/pano por Verlet nativo (`P.verletFast`, API 31) e corpos rígidos (`P.rigid`, API 33). **A maioria dos jogos não precisa de nada disso** — veja a escada de física no §15 |
 | `celeros.grid`, `celeros.sfx`, `celeros.mesh` | — | arenas estilo bomberman + BFS de perseguição, tabelas de melodias sfx, boilerplate CelerNet (mesma família, módulos à parte) |
 
 Os tamanhos são os **minificados** (jsstrip + jsmin, como o hub publica e o
@@ -21,7 +21,7 @@ aparelho compila), medidos em 2026-10 — confira com
 de planejar. As quebras de linha são preservadas, então a linha do erro no
 device continua batendo com o repo.
 
-Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho são ~50 KB minificados (63 KB enxutos)**, dentro do teto de 64 KB sem PSRAM, mas qualquer jogo real soma o kit de UI (~40 KB) e o código do app, então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~90 KB e a família inteira ~255 KB.
+Cada módulo decora o **mesmo objeto `E`** (o cache do `require` faz o core ser singleton): adotar é uma linha — `require("celeros.game.fx")` e o `E.fx` existe. Deps entre módulos são transitivas (fx → core): a loja resolve o grafo inteiro no install. Você paga pelo que adota — deps somam no teto do app MESMO compartilhadas, porque cada jogo as compila no próprio heap Duktape: **o core sozinho são ~50 KB minificados (63 KB enxutos)**, dentro do teto de 64 KB sem PSRAM, mas qualquer jogo real soma o kit de UI (~42 KB) e o código do app, então todo app com a engine declara `"requires": ["psram"]`; core + kit de UI somam ~93 KB e a família inteira ~187 KB.
 
 Tudo é ES5 (Duktape) e detecta os recursos do firmware em tempo de execução, então o mesmo jogo roda em toda placa — e sem mudanças no harness/emulador Node.
 
@@ -33,7 +33,7 @@ Tudo é ES5 (Duktape) e detecta os recursos do firmware em tempo de execução, 
 | Placas-alvo | As ESP32-S3 com PSRAM: SmartDisplay, watch Waveshare, cão SpotPear |
 | Orçamento de tamanho | Deps somam no teto do app MESMO compartilhadas (compilam no heap de cada jogo): **o core sozinho são ~50 KB minificados (63 KB enxutos)**, dentro do teto simples de 64 KB, mas core + kit de UI + código do app não — apps com a engine declaram `"requires": ["psram"]`, o que sobe o teto para 1 MB (a loja passa a bloquear install em placa sem PSRAM). O hub mede as deps **enxutas**, como o aparelho compila |
 | Sabor do app | `"topbar": false` para jogos em tela cheia (como o Supernova) é recomendado; o botão de saída mora no menu de título do seu jogo (`System.exitApp()`) |
-| CYD (sem PSRAM) | O core da engine sozinho agora cabe no teto de 64 KB, mas todo jogo do catálogo soma o kit de UI (~40 KB) e o código do app e declara `psram`; nenhum jogo do catálogo roda nela hoje. Na CYD, app usa a API JS direto (`System`/`UI`), como os apps de sistema |
+| CYD (sem PSRAM) | O core da engine sozinho agora cabe no teto de 64 KB, mas todo jogo do catálogo soma o kit de UI (~42 KB) e o código do app e declara `psram`; nenhum jogo do catálogo roda nela hoje. Na CYD, app usa a API JS direto (`System`/`UI`), como os apps de sistema |
 
 ## 2. Começando
 
@@ -451,7 +451,7 @@ var pick = E.ui.menuCard([
 ], { bottom: 8 });            // devolve 'JOGAR' | 'camp' | 'cfg' | null
 ```
 
-O primeiro item usa `h1` (22·U, primary por padrão) e os demais `h2` (18·U); `x/w/y/bottom/gap/pad/bg/r/elev` são ajustáveis e a caixa nunca sai do vidro (`y` é limitado). O `menuBox` sozinho devolve o rect (`{x,y,w,h,pad,h1,h2,gap}`) para quem desenha o próprio painel — é geometria de rascunho, vale até a próxima chamada de `menuBox`/`menuCard`. Desde a 1.4.1 um modal/sheet aberto no mesmo quadro **reserva** o tap para si: os widgets desenhados por baixo não engolem mais o toque do "Entendi" de um diálogo sobre um menu.
+O primeiro item usa `h1` (22·U, primary por padrão) e os demais `h2` (18·U); `x/w/y/bottom/gap/pad/bg/r/elev` são ajustáveis e a caixa nunca sai do vidro (`y` é limitado). O `menuBox` sozinho devolve o rect (`{x,y,w,h,pad,h1,h2,gap}`) para quem desenha o próprio painel — é geometria de rascunho, vale até a próxima chamada de `menuBox`/`menuCard`. Desde a 1.4.1 um modal/sheet aberto no mesmo quadro **reserva** o tap para si: os widgets desenhados por baixo não engolem mais o toque do "Entendi" de um diálogo sobre um menu. Desde a 1.4.2 a reserva também vale para o `E.ui.list`, e um `speed` de diálogo 0/negativo/NaN não deixa mais o diálogo eternamente vazio (cai no default 30).
 
 ### Tokens e presets
 
@@ -1052,7 +1052,7 @@ No app, exponha um hook de introspecção tipo `if (typeof __harness !== "undefi
 
 ## 18. Tamanho e performance
 
-- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~50 KB minificados (63 KB enxutos), fx ~10, ui ~40, spr ~12, tilemap ~3 (família inteira ~131 KB). O core sozinho cabe no teto de 64 KB, mas o kit de UI mais o código do app não — app com a engine declara `"requires": ["psram"]` (teto de 1 MB). O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: sem comentários/indentação, nomes locais encurtados, quebras mantidas — a linha do erro continua batendo com o fonte), que é exatamente o que o aparelho compila; o JsStripper do firmware é idempotente nessa saída.
+- As deps somam no teto do app (cada jogo as compila no próprio heap) — **adopte só o que usa**: core ~50 KB minificados (63 KB enxutos), fx ~10, ui ~42, spr ~12, tilemap ~3 (família inteira ~187 KB). O core sozinho cabe no teto de 64 KB, mas o kit de UI mais o código do app não — app com a engine declara `"requires": ["psram"]` (teto de 1 MB). O hub mede as deps **como publicadas**: o `celerhub publish-dep` as sobe pelo `tools/sdk/lib/jsstrip.js --min` (jsstrip + jsmin: sem comentários/indentação, nomes locais encurtados, quebras mantidas — a linha do erro continua batendo com o fonte), que é exatamente o que o aparelho compila; o JsStripper do firmware é idempotente nessa saída.
 - **Zero alocação por frame**: use `E.pool`, remoção swap-pop e reúso de objetos. Um `new`/`[...]` por frame por entidade é o que dispara pausa de GC. Desde a engine 1.2.3 os wrappers também não alocam: chamadas de `E.gfx.*` sem opts compartilham um objeto só de leitura, a busca do `E.font` é memoizada e a largura de cada string (`textWidth`) é medida uma vez por estilo — HUD/placar/botão repetidos não custam chamadas de firmware.
 - Se você chama `System.setTextDatum` direto, devolva o `0` ao terminar: a engine 1.2.3 só toca no datum quando o texto pede origem diferente do default, então o `E.gfx.text` confia que o app o deixou em `0` (todos os apps do repo já fazem).
 - Evite `fillScreen` + redesenho total por frame: no painel RGB do SmartDisplay (framebuffer varrido da PSRAM) isso estrangula o DMA do LCD e a imagem treme. Use cenas `static`, `E.dirty` e `E.tilemap` (§16b).

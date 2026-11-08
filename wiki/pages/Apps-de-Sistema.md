@@ -13,7 +13,9 @@ malha, mostra os membros com o papel de cada um, mensagens diretas e o
 handoff da música itinerante; o WiFi (`celeros.wifi`, API 52) é o app de
 setup de WiFi que o firmware abre por `System.openWifiSetup()`. Placas
 podem acrescentar os seus por cima (overlay): Dog Face no
-dog; Alarmes, Atividade, Celular, Clima, Musica e Timer no watch.
+dog; Alarmes, Atividade, Celular, Clima, Musica e Timer no watch;
+**Controle BT** (o driver residente de gamepad/teclado BLE, API 61) na
+SmartDisplay e no watch.
 
 ## Layout
 
@@ -23,9 +25,10 @@ data/
 └── icons/<id>.png # GERADO por tools/make_icons.py (RGBA quantizado p/ RGB565)
 ```
 
-[`hub_apps/`](hub_apps) — 27 apps hoje (2048, 2D Runner, Bench Fisica,
-Breakout, Calculator, Campo Minado, **Celer Remote**, Clock, Coral,
-Cronometro, Cube 3D, Gravador, **Hardware Lab**, LED Controller, Mural,
+[`hub_apps/`](hub_apps) — 31 apps hoje (2048, 2D Runner, **Anemoia** (o
+emulador de NES), **Atari 2600**, Bench Fisica, Bench Nativo, Breakout,
+Calculator, Campo Minado, **Celer Remote**, Clock, Coral, Cronometro,
+Cube 3D, **Gamepad**, Gravador, **Hardware Lab**, LED Controller, Mural,
 Physics Drop, Pong Duplo, Previsao, Quiz IA, Sentinela, Sonar, System Info,
 Tic Tac Toe, USB Devices, USB Printer, USB Storage e Batata Quente) — segue o
 mesmo layout,

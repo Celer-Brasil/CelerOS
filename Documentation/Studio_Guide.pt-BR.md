@@ -73,14 +73,14 @@ seguras.
   "description": "Jogo feito com a CelerGame",
   "type": "Game",
   "category": "Jogos",
-  "api": 50,
+  "api": 56,
   "requires": ["psram"],
   "topbar": false,
   "permissions": [],
   "deps": {
-    "celeros.game": "^1.4.5",
-    "celeros.game.spr": "^1.5.2",
-    "celeros.game.tilemap": "^1.3.0"
+    "celeros.game": "^1.7.0",
+    "celeros.game.spr": "^1.7.3",
+    "celeros.game.tilemap": "^1.3.2"
   },
   "canvas": { "w": 240, "h": 320, "native": false, "fps": 30 },
   "startScene": "0123456789abcdef0123456789abcdef",
@@ -430,7 +430,7 @@ gravação é debounced (1 s) porque a NVS não pode levar escrita por quadro.
 | `ui.spinner` | `r`, `color` |
 | `ui.field` | `key`, `label`, `mask`, `hint` — abre `System.prompt` (bloqueante) e grava no estado |
 | `ai.chat` | `provider`, `model`, `system`, `prompt`/`promptKey`, `trigger`, `outKey`, `busyKey`, `errorKey`, `history`/`histKey`, `attach` (`mic` manda a última gravação), `maxTokens` |
-| `ai.speak` | `text`/`textKey`, `voice`, `trigger`, `busyKey` |
+| `ai.speak` | `text`/`textKey`, `voice`, `trigger`, `busyKey`, `errorKey` (grava a mensagem de falha, limpa no sucesso) |
 | `ai.vision` | `prompt`, `imageKey` (caminho), `trigger`, `outKey`, `errorKey` |
 | `mic.record` | `key` (WAV em base64), `mode` (`hold`/`toggle`), `label`, `w`, `h`, `maxMs`, `event` |
 

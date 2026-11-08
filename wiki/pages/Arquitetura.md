@@ -74,7 +74,7 @@ bombeiam os mesmos ticks dentro de `System.present()`.
   Duktape), com loop `while` bloqueante e `System.delay()`.
 * Toda geometria é desenhada em coordenadas virtuais 240x320 e escalada por
   `UI::sx()/sy()` — apps nunca veem pixels físicos.
-* O **nível de API** (`System.getAPILevel()`, hoje 52) é o contrato de
+* O **nível de API** (`System.getAPILevel()`, hoje 62) é o contrato de
   feature-detection dos apps. Histórico: 1 base (draw/touch/GPIO/FS/time) ·
   2 `Net` · 3 apps de sistema em JS · 5 teclado acoplado · 6 topbar
   customizada + `Net.download` em streaming · 7 LED RGB, sensor de luz com
@@ -99,7 +99,19 @@ bombeiam os mesmos ticks dentro de `System.present()`.
   do OS · 49 `Net.request` com headers + `System.epoch()` · 50 serviços
   em background com rede/OTA (svchost) · 51 estado do vidro
   (`System.isScreenOn`/`screenState`) · 52 setup de WiFi como app JS
-  (`celeros.wifi`) + `AI` opcional no build + extras de UI nas S3.
+  (`celeros.wifi`) + `AI` opcional no build + extras de UI nas S3 ·
+  53 janela de rede do serviço (`System.wifiWake`) · 54 barramento I²C
+  genérico (`System.i2c`) · 55 drivers nativos (`System.encoder` PCNT,
+  `System.dht`, `System.gpio.servoUs`) · 56 o contrato do app verificado
+  no device (gate do `api` do `app.json`, `main` honrado, `App.info()`,
+  `Net.fetch` com erro tipado) · 57–58 código nativo carregável
+  (`System.native*` nas S3 com PSRAM: blob CLRN em scratch na PSRAM,
+  transporte `BT.*` de gamepad) · 59 mistura alpha (`System.setAlpha`) ·
+  60 acesso nativo ao quadro (`System.nativeScreen`/`nativeGrab`) ·
+  61 o gamepad como input do OS (canal de broadcast `Input.pad`/`padState`
+  alimentado pelo driver residente Controle BT) · 62 teclados e mouses BLE
+  (`BT.state().kind` classificado do Report Map, o teclado físico digita em
+  todo campo de texto, a dep `celeros.hid`).
 * Um debugger Duktape opcional (`CONFIG_CELEROS_JS_DEBUGGER`, default nos
   alvos ESP32-S3) expõe breakpoints/step/eval pelo canal do celerctl
   (`celerctl debug`).

@@ -73,14 +73,14 @@ safe.
   "description": "Jogo feito com a CelerGame",
   "type": "Game",
   "category": "Jogos",
-  "api": 50,
+  "api": 56,
   "requires": ["psram"],
   "topbar": false,
   "permissions": [],
   "deps": {
-    "celeros.game": "^1.4.5",
-    "celeros.game.spr": "^1.5.2",
-    "celeros.game.tilemap": "^1.3.0"
+    "celeros.game": "^1.7.0",
+    "celeros.game.spr": "^1.7.3",
+    "celeros.game.tilemap": "^1.3.2"
   },
   "canvas": { "w": 240, "h": 320, "native": false, "fps": 30 },
   "startScene": "0123456789abcdef0123456789abcdef",
@@ -443,7 +443,7 @@ debounced (1 s) because NVS must not take one per frame.
 | `ui.spinner` | `r`, `color` |
 | `ui.field` | `key`, `label`, `mask`, `hint` — opens `System.prompt` (blocking) and writes the state |
 | `ai.chat` | `provider`, `model`, `system`, `prompt`/`promptKey`, `trigger`, `outKey`, `busyKey`, `errorKey`, `history`/`histKey`, `attach` (`mic` sends the last recording), `maxTokens` |
-| `ai.speak` | `text`/`textKey`, `voice`, `trigger`, `busyKey` |
+| `ai.speak` | `text`/`textKey`, `voice`, `trigger`, `busyKey`, `errorKey` (writes the failure message, cleared on success) |
 | `ai.vision` | `prompt`, `imageKey` (path), `trigger`, `outKey`, `errorKey` |
 | `mic.record` | `key` (base64 WAV), `mode` (`hold`/`toggle`), `label`, `w`, `h`, `maxMs`, `event` |
 

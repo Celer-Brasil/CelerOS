@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Updated:** 2026-10-27
-**Commit:** main @ API 56 (contrato do app verificado no device: gate de API, `main` honrado, App.info, Net.fetch)
+**Updated:** 2026-11-07
+**Commit:** main @ API 62 (era NES/Atari: blobs nativos CLRN + `System.nativeScreen`, gamepad como input do OS via `Input.pad`, teclado/mouse BLE HID no OS)
 **Branch:** main
 
 ## OVERVIEW
@@ -33,7 +33,10 @@ CelerOS/
 |------|----------|-------|
 | Boot flow, kernel, UI, launcher, BLE, power | `main/AGENTS.md` | entry `main/main.cpp` |
 | Multitouch (fingers, injector, `System.getTouches`, `celerctl mtap`) | `main/AGENTS.md` "TOUCH PIPELINE" | primary = oldest finger; system chrome consumes ONLY the primary; call ONE of `getTouch`/`getTouches` per loop |
-| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 56) |
+| Add or change a JS API call / API level | `main/Runtime/AGENTS.md` | bump `CELEROS_API_LEVEL` (now 62) |
+| Physical keyboard / mouse / BT HID devices | `main/UI/Keyboard.{h,cpp}` + `main/Bluetooth/BleHid.*` + `tools/sdk/engine/celeros.hid.js` | keys go through `InputBus`; `BT.state().kind` is classified from the Report Map; one HID link at a time |
+| Gamepad as OS input (API 61) | `main/Runtime/JsInput.cpp` + `main/Hardware/InputBus.*` + `main/Launcher/Screens.cpp` | `Input.pad`/`padState` = broadcast channel fed by the resident Controle BT driver (boards/*/data/apps); launcher focus/A/B/guide + right-stick pointer |
+| Emulator apps and native blobs (NES/Atari/SNES, CLRN) | `tools/native/{nes,a2600,snes,common}/` + `tools/native/build_core.py` + `tools/sdk/engine/celeros.emu.js` | cores host-tested in CI (`test/cpp/nes_*_test`, `test/cpp/a2600_test`, `test/cpp/snes_test`); blob format/loader documented in `Documentation/JS_API_Guide.md` §52; emulator shell is the `celeros.emu` dep; SNES perf/layout/bench method in `tools/native/README.md` |
 | Change system edge gestures / panels | `main/Launcher/WatchPanels.*` + `main/Runtime/JSBindings.cpp` | the gesture map lives TWICE (native hook `edgeGestureHook` + in-app `pollWatchEdges`) and must stay in sync; see both AGENTS.md |
 | Component membership, reviving archived code | `components/AGENTS.md` | git tag `archive/esp_components`; `components/README.md` (PT) = patch list |
 | WiFi STA/AP, captive portal, credentials | `components/Network/AGENTS.md` | NetworkManager owns the radio; OTA flash is `main/OTA` |
@@ -122,6 +125,13 @@ idf.py -B build -DSDKCONFIG=build/sdkconfig \
   -DCELEROS_BOARD=smartdisplay set-target esp32s3
 idf.py -B build build flash -p /dev/ttyUSB0 monitor
 # Other boards: same shape, build-<b>/ dir, boards/<b>/sdkconfig.defaults, -DCELEROS_BOARD=<b>, set-target esp32|esp32s3
+# Since 6dcc17df the explicit flags above are optional: a bare `idf.py -B <dir>` derives
+# SDKCONFIG=<dir>/sdkconfig and SDKCONFIG_DEFAULTS=sdkconfig.defaults + boards/<b>/sdkconfig.defaults
+# itself. Before that, the IDF fell back to the repo-ROOT sdkconfig shared by every dir configured
+# without -DSDKCONFIG — a watch build wrote USB_NATIVE/32MB there and the next 4848 build inherited
+# it (TinyUSB took GPIO19 = GT911 SDA: touch died). The CONFIG_CELEROS_SDKCONFIG_BOARD stamp in
+# every boards/<b>/sdkconfig.defaults makes the configure FAIL on a foreign sdkconfig;
+# `python3 tools/sdkconfig_check.py` diagnoses stamp + drift per bench dir (read-only).
 
 tools/flash_data.sh [smartdisplay|cyd|cyd-vspi|spotpear-dog|waveshare-watch|devkit|devkit-s3|esp32-cam] [PORT]  # LittleFS data partition (needs IDF env)
 python3 tools/celerctl.py devices|shell|push|pull|logcat|apps install ...   # over UART/CDC

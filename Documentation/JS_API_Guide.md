@@ -3717,7 +3717,11 @@ Blob format (`tools/native/build_core.py` builds and validates it):
 Reads the blob file (same FS jail as `FS.readFile`), validates the header
 (chip, api, sizes, entry offsets) and copies it into a 64-byte-aligned
 PSRAM block `[code][scratch]`. `scratchKB` defaults to 128, from 4 to
-2560 (API 60; 1664 before — larger requests are silently clamped). Returns the handle (1..2, two blobs per app) or `-1` on any failure
+6144 (API 62 — a SNES core needs ~0.7 MB plus the whole ROM; 2560 on API
+60-61, 1664 before — larger requests are silently clamped, so an app that
+needs more must declare the API level). Beyond the free PSRAM the load
+fails with `-1` ("PSRAM cheia" in the log); a big ROM is read in 64 KB
+chunks that feed the watchdog. Returns the handle (1..2, two blobs per app) or `-1` on any failure
 (missing file, bad magic, wrong chip, newer api, no PSRAM, no slot). After
 the copy the loader runs `esp_cache_msync` (writeback + instruction
 invalidate) — the code is immediately callable.

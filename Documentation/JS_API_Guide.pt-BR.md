@@ -4058,8 +4058,12 @@ Formato do blob (`tools/native/build_core.py` constrói e valida):
 #### `System.nativeLoad(path[, scratchKB])` → Integer (API 57, SPIKE)
 Lê o arquivo do blob (mesma jail do `FS.readFile`), valida o cabeçalho
 (chip, api, tamanhos, offsets) e copia para um bloco PSRAM alinhado a 64
-bytes `[código][scratch]`. `scratchKB` default 128, faixa 4 a 2560 (API 60;
-1664 antes — pedidos maiores são cortados sem aviso). Devolve
+bytes `[código][scratch]`. `scratchKB` default 128, faixa 4 a 6144 (API 62 —
+um core de SNES pede ~0,7 MB + a ROM inteira; 2560 na API 60-61, 1664
+antes — pedidos maiores são cortados sem aviso, então o app que precisa de
+mais declara o nível de API). Acima da PSRAM livre o load falha com `-1`
+("PSRAM cheia" no log); ROM grande é lida em blocos de 64 KB que alimentam
+o watchdog. Devolve
 o handle (1..2, dois blobs por app) ou `-1` em qualquer falha (arquivo
 ausente, magic ruim, chip errado, api mais nova, sem PSRAM, sem slot).
 Depois da cópia o loader roda `esp_cache_msync` (writeback + invalidação de

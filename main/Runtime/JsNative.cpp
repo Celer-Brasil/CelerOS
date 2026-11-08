@@ -148,11 +148,14 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     if (!fsPathAllowed(path)) {
         duk_error(ctx, DUK_ERR_RANGE_ERROR, "Native.load: caminho fora da jail");
     }
-    // scratch padrao 128 KB, teto 2560 KB (estado de core real: o NES usa
-    // ROM 1MB + framebuffer 120KB + quadro escalado 450KB + carimbos)
+    // scratch padrao 128 KB, teto 6144 KB (API 62; era 2560). Estado de core
+    // real: o NES usa ROM 1MB + framebuffer 120KB + quadro escalado 450KB +
+    // carimbos; o SNES ~0,7 MB fixos + a ROM inteira (o Mario All-Stars tem
+    // 2,5 MB). Acima do que a PSRAM tem, o alloc falha e o load devolve
+    // erro ("PSRAM cheia") — o teto so barra pedido absurdo.
     int32_t scratchKB = duk_is_number(ctx, 1) ? duk_get_int(ctx, 1) : 128;
     if (scratchKB < 4) scratchKB = 4;
-    if (scratchKB > 2560) scratchKB = 2560;
+    if (scratchKB > 6144) scratchKB = 6144;
 
     if (!inService()) present();  // leitura de arquivo: quadro antes
     else esp_task_wdt_reset();    // svchost: present() reentraria o pump
@@ -540,7 +543,17 @@ duk_ret_t JSBindings::js_nativeLoadFile(duk_context* ctx) {
     if (sz < 0) { fclose(f); duk_push_int(ctx, -1); return 1; }
     size_t cap = m->scratchSize - (size_t)off;
     size_t want = (size_t)sz > cap ? cap : (size_t)sz;
-    size_t got = fread(m->scratch + off, 1, want, f);
+    // em blocos: uma ROM de SNES (2,5 MB) leva ~6 s no SD SPI do 4848; um
+    // fread unico prendia a task sem ceder (IDLE parado, watchdog no limite)
+    size_t got = 0;
+    while (got < want) {
+        size_t chunk = want - got > 65536 ? 65536 : want - got;
+        size_t n = fread(m->scratch + off + got, 1, chunk, f);
+        got += n;
+        if (n < chunk) break;
+        esp_task_wdt_reset();
+        vTaskDelay(1);
+    }
     fclose(f);
     CelerKernel::noteAppYield();
     duk_push_int(ctx, (duk_int_t)got);

@@ -109,6 +109,30 @@ int pushResult(duk_context* ctx, const UsbHost::Result& r, bool withData, const 
     return 1;
 }
 
+// Resultado COM dados do buffer malloc do binding: pushBytes cria ate
+// kMaxTransfer entradas de array e um heap Duktape apertado (CYD) lanca no
+// meio (longjmp) — o free do dono depois da chamada nunca rodaria e o bloco
+// de RAM interna vazava ate o reboot (mesmo padrao do jsPushOwnedString do
+// JsInternal.h). O push roda sob duk_safe_call; o buffer e SEMPRE liberado
+// e o erro segue ao script.
+struct UsbPushArg {
+    const UsbHost::Result* r;
+    const uint8_t* data;
+    size_t n;
+};
+
+static duk_ret_t usbPushResultSafe(duk_context* ctx, void* u) {
+    UsbPushArg* a = (UsbPushArg*)u;
+    return pushResult(ctx, *a->r, a->data != nullptr, a->data, a->n);
+}
+
+static void usbPushOwnedData(duk_context* ctx, const UsbHost::Result& r, uint8_t* buf) {
+    UsbPushArg a{&r, buf, r.transferred};
+    duk_int_t rc = duk_safe_call(ctx, usbPushResultSafe, &a, 0, 1);
+    free(buf);
+    if (rc != DUK_EXEC_SUCCESS) duk_throw(ctx);
+}
+
 // Entrada de chamada bloqueante ANTES de qualquer malloc: o present() roda
 // timers/AI e um erro de callback longjmpa para fora do binding — alocar
 // antes vazava o buffer (mesma licao do validateBytes abaixo: o que pode
@@ -252,8 +276,7 @@ duk_ret_t JSBindings::js_usbControlIn(duk_context *ctx) {
     UsbHost::Result r = usbCall([&] {
         return UsbHost::controlIn(addr, type, req, val, idx, buf, (size_t)len, timeout);
     });
-    pushResult(ctx, r, true, buf, r.transferred);
-    free(buf);
+    usbPushOwnedData(ctx, r, buf);  // libera buf mesmo com longjmp do push
     return 1;
 }
 
@@ -310,8 +333,7 @@ duk_ret_t JSBindings::js_usbIn(duk_context *ctx) {
     UsbHost::Result r = usbCall([&] {
         return UsbHost::in(addr, ep, buf, (size_t)len, timeout);
     });
-    pushResult(ctx, r, true, buf, r.transferred);
-    free(buf);
+    usbPushOwnedData(ctx, r, buf);  // libera buf mesmo com longjmp do push
     return 1;
 }
 

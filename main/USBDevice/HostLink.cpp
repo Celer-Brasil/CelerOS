@@ -168,6 +168,14 @@ char s_wrTmp[264] = {0};    // "<destino>.part" (escrita atomica)
 uint32_t s_wrTotal = 0;
 uint16_t s_wrSeq = 0;
 uint32_t s_wrCrc = 0;
+// Ultima escrita fechada com sucesso (crc/tamanho do host, proto 2): um
+// WRITE_END repetido porque a resposta se perdeu no caminho (UART ruidosa,
+// cabo) confirma de novo em vez de responder "escrita nao iniciada" — o
+// push reportava erro com o arquivo completo no destino (o mesmo caso da
+// OTA_END repetida, bancada 2026-10-07). So v2: o v1 nao carrega crc/size
+// para casar o reenvio sem risco de OK falso.
+bool s_wrDone = false;
+uint32_t s_wrDoneCrc = 0, s_wrDoneSize = 0;
 
 // Fecha a escrita em curso. Devolve true so quando o .part virou o destino
 // (fclose + rename ok): o WRITE_END precisa saber — fclose e onde o disco
@@ -531,6 +539,7 @@ void handleWriteBegin(const uint8_t* payload, uint16_t len) {
     s_wrTotal = 0;
     s_wrSeq = 0;
     s_wrCrc = 0;
+    s_wrDone = false;  // nova escrita: o reenvio do END velho volta a recusar
     respond(KL_WRITE_BEGIN, 0);
 }
 
@@ -573,6 +582,17 @@ void handleWriteChunk(const uint8_t* payload, uint16_t len) {
 
 void handleWriteEnd(const uint8_t* payload, uint16_t len) {
     if (s_wrFile == nullptr) {
+        if (s_wrDone && linkCtx() != nullptr && linkCtx()->v2() && len >= 8) {
+            uint32_t crcHost = 0, sizeHost = 0;
+            if (takeU32(payload, len, crcHost) && takeU32(payload, len, sizeHost) &&
+                crcHost == s_wrDoneCrc && sizeHost == s_wrDoneSize) {
+                uint8_t rec[8];
+                le32(rec, s_wrDoneSize);
+                le32(rec + 4, s_wrDoneCrc);
+                respond(KL_WRITE_END, 0, rec, sizeof(rec));  // reenvio do END ja aplicado
+                return;
+            }
+        }
         respondError(KL_WRITE_END, "escrita nao iniciada");
         return;
     }
@@ -594,6 +614,9 @@ void handleWriteEnd(const uint8_t* payload, uint16_t len) {
             respondError(KL_WRITE_END, "falha ao fechar (disco cheio?)");
             return;
         }
+        s_wrDone = true;
+        s_wrDoneCrc = crc;
+        s_wrDoneSize = total;
         uint8_t rec[8];
         le32(rec, total);
         le32(rec + 4, crc);
@@ -605,6 +628,7 @@ void handleWriteEnd(const uint8_t* payload, uint16_t len) {
         respondError(KL_WRITE_END, "falha ao fechar (disco cheio?)");
         return;
     }
+    s_wrDone = false;  // v1: sem crc para casar reenvio — nao mente OK
     uint8_t rec[4];
     le32(rec, total);
     respond(KL_WRITE_END, 0, rec, sizeof(rec));

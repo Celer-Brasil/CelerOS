@@ -8,6 +8,7 @@ stale e crescimento acima do teto. Nao mede firmware nenhum.
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -148,6 +149,57 @@ class LedgerProblemsTest(unittest.TestCase):
 
     def test_placa_selecionada_sem_build_e_sem_ledger_passa(self):
         self.assertEqual(S.ledger_problems({}, {}, ["devkit"], 512), [])
+
+
+class LedgerMergeTest(unittest.TestCase):
+    """--save-ledger mescla: placa medida SEM dados por objeto (esp_idf_size
+    ausente: `--files` volta {}) NAO pode entrar — gravar {} apagava a
+    entrada da placa calado e o check-ledger seguinte a tratava como "fora
+    do ledger" (catraca desligada sem ninguem ver)."""
+
+    def test_medida_vazia_nao_apaga_a_entrada(self):
+        prev = {"cyd": {"A.obj": 100}}
+        results = {"cyd": {"files": {}}, "smartdisplay": {"files": {"B.obj": 7}}}
+        out = S.ledger_merge(dict(prev), results)
+        self.assertEqual(out["cyd"], {"A.obj": 100})      # intacta
+        self.assertEqual(out["smartdisplay"], {"B.obj": 7})  # adotada
+
+    def test_placa_sem_build_nao_toca_o_ledger(self):
+        prev = {"cyd": {"A.obj": 100}}
+        out = S.ledger_merge(dict(prev), {})   # nada medido nesta rodada
+        self.assertEqual(out, {"cyd": {"A.obj": 100}})
+
+    def test_remontagem_atualiza_a_entrada(self):
+        out = S.ledger_merge({}, {"cyd": {"files": {"A.obj": 512}}})
+        self.assertEqual(out, {"cyd": {"A.obj": 512}})
+
+
+class BuildBoardTest(unittest.TestCase):
+    """Identidade do build dir (6dcc17df): o gate do slot/ledger nao pode
+    pesar o binario de OUTRA placa — o dir diz a placa no CMakeCache."""
+
+    def test_le_celeros_board_do_cache(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "CMakeCache.txt").write_text(
+                "CELEROS_BOARD:STRING=cyd\nCMAKE_HOME_DIRECTORY:INTERNAL=/x\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(S.build_board(td), "cyd")
+
+    def test_sem_cache_e_none(self):
+        # sem CMakeCache nao ha identidade: o measure mantem o comportamento
+        # antigo (mede), porque recusar exigiria inventar criterio novo
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(S.build_board(td))
+
+    def test_cache_sem_a_chave_e_none(self):
+        # cache de projeto estranho ao CelerOS (nunca configurado por ele):
+        # None, e nao um chute de placa
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "CMakeCache.txt").write_text(
+                "CMAKE_HOME_DIRECTORY:INTERNAL=/x\n", encoding="utf-8"
+            )
+            self.assertIsNone(S.build_board(td))
 
 
 if __name__ == "__main__":

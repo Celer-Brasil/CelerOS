@@ -27,6 +27,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -104,6 +105,18 @@ def file_sizes(map_path, archives=LEDGER_ARCHIVES):
     return sizes
 
 
+def build_board(bdir):
+    """CELEROS_BOARD gravado no CMakeCache do build dir (None se nao ha cache
+    ou o dir nao foi configurado por este projeto)."""
+    cache = os.path.join(bdir, "CMakeCache.txt")
+    try:
+        with open(cache, encoding="utf-8", errors="replace") as f:
+            m = re.search(r"^CELEROS_BOARD:\w+=(.+)$", f.read(), re.M)
+    except OSError:
+        return None
+    return m.group(1).strip() if m else None
+
+
 def measure(board, want_files=False):
     cfg = BOARDS[board]
     # Local usa apelidos curtos (build-cyd, build-dog...); o CI constroi em
@@ -116,6 +129,15 @@ def measure(board, want_files=False):
             bdir = p
             break
     if bdir is None:
+        return None
+    # O binario tem que ser DESTA placa: um dir reaproveitado para outra
+    # placa media numero alheio nos gates do slot/ledger sem ninguem ver
+    # (a mesma classe do 4848 sem toque, 6dcc17df — la era o sdkconfig da
+    # raiz compartilhado; aqui o CMakeCache e a identidade do dir).
+    real = build_board(bdir)
+    if real is not None and real != board:
+        print(f"  ({bdir} e da placa '{real}' (CELEROS_BOARD); --board {board} "
+              "nao mede build de outra placa — remonte o dir certo)")
         return None
     map_path = os.path.join(bdir, "CelerOS.map")
     out = {
@@ -235,6 +257,22 @@ def ledger_problems(current, ledger, selected, max_growth):
     return out
 
 
+def ledger_merge(out, results):
+    """Mescla as medidas por objeto no ledger em memoria; devolve o dict.
+
+    Placa medida SEM dados por objeto (`--files` do esp_idf_size voltou
+    vazio: ferramenta fora do PATH, JSON em outro formato) NAO entra:
+    gravar {} aqui apagava a entrada da placa CALADO e o --check-ledger
+    seguinte a tratava como "fora do ledger" — a catraca desligava sem
+    ninguem ver (o mesmo motivo de ledger_problems recusar medida vazia).
+    O aviso de quais placas ficaram de fora e do chamador."""
+    for b, m in results.items():
+        files = (m or {}).get("files")
+        if files:
+            out[b] = files
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--board", choices=[*BOARDS, "all"], default="all")
@@ -349,9 +387,12 @@ def main():
                 out = json.load(f)
         out["_doc"] = ("Orcamento por objeto de main/libmain.a (flash+RAM). "
                        "Atualize no mesmo commit que mudar o tamanho.")
-        for b, m in results.items():
-            if "files" in m:
-                out[b] = m["files"]
+        out = ledger_merge(out, results)
+        sem_dados = [b for b, m in results.items() if not (m or {}).get("files")]
+        if sem_dados:
+            print(f"aviso: sem dados por objeto para {', '.join(sem_dados)} — "
+                  "entrada(s) do ledger intacta(s); exporte o ambiente do IDF "
+                  "e remonte antes de gravar de proposito")
         os.makedirs(os.path.dirname(os.path.abspath(args.save_ledger)), exist_ok=True)
         with open(args.save_ledger, "w") as f:
             json.dump(out, f, indent=1, sort_keys=True)

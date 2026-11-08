@@ -170,7 +170,16 @@ void setNativeExec(uint32_t base) {
 void installPanicHook() {
     // O wrap e ligado pelo linker; aqui so garantimos que o espaco RTC existe
     // no binario (referencia viva) e normalizamos um estado inicial.
-    if (s_rec.magic != kMagic) s_rec.magic = 0;
+    if (s_rec.magic != kMagic) {
+        s_rec.magic = 0;
+        // Power-on: a RAM RTC vem com lixo. nativeExec so vale quando um blob
+        // esta carregado (setNativeExec) e no comeco do boot NENHUM foi —
+        // sem esta limpeza, um panic antes do CelerKernel::init gravava no
+        // crash.txt um "nexec 0x<lixo>" e o offset pc-base do addr2line
+        // apontava memoria aleatoria. Um registro valido (magic confere,
+        // panic pendente) NAO e tocado aqui.
+        s_rec.nativeExec = 0;
+    }
 }
 
 bool pending() {

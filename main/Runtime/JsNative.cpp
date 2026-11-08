@@ -20,7 +20,10 @@
 // do SPIRAM_XIP_FROM_PSRAM (ligado no smartdisplay desta rodada).
 //
 // Seguranca: codigo nativo e ring-0 — o sandbox Duktape acaba aqui. O
-// spike nao adiciona permissao; a infra completa desenha consentimento +
+// loader verifica o sha256 do cabecalho contra o conteudo ANTES de
+// mapear/executar (integridade: truncamento/corrupcao/latereco nao roda;
+// nao e autenticidade — quem reescreve o blob reescreve o digest junto).
+// O spike nao adiciona permissao; a infra completa desenha consentimento +
 // assinatura ECDSA (mesma chave de OTA) no estudo.
 //
 // Estado por app: os blobs saem no JSBindings::init do proximo app
@@ -41,6 +44,7 @@
 #include "esp_mmu_map.h"
 #include "esp_timer.h"
 #include "esp_async_memcpy.h"
+#include "psa/crypto.h"  // sha256 do blob (mbedTLS 4/TF-PSA: sem mbedtls/sha256.h)
 
 #if CONFIG_CELEROS_AUDIO
 #include "../Hardware/AudioPlayer.h"
@@ -52,6 +56,10 @@ constexpr uint32_t kMagic = 0x4E524C43u;  // "CLRN" (le do builder)
 constexpr uint32_t kHeaderSize = 96;      // v1 (computacao pura)
 constexpr uint32_t kHeaderSizeV2 = 128;   // v2: data/bss/relocacao
 constexpr uint32_t kMaxBlob = 512 * 1024;  // alinhado com o teto do hub (era nativa)
+// Teto da IMAGEM+BSS mapeada (v2): bssOff/bssSize vem do cabecalho como u32
+// soltos — sem teto, bssOff+bssSize enrola em 32 bits e vira alocacao
+// pequena com memset/fread de GB (corrupcao de heap) ou um pedido absurdo.
+constexpr uint32_t kMaxImgSpan = 4 * 1024 * 1024;
 constexpr uint32_t kMaxRelocs = 16384;     // teto de sanidade da tabela (64 KB)
 constexpr uint32_t kRelocChunk = 64;       // sites por leitura de pilha (256 B)
 constexpr uint32_t kMaxEntries = 8;
@@ -141,6 +149,9 @@ void jsNativeReset() {
             s_modules[i].fast = nullptr;
         }
     }
+    // sem blob nenhum: o panic nao pode atribuir um crash a uma base morta
+    // (addr2line com offset contra memoria ja liberada/remapeada)
+    CrashRecord::setNativeExec(0);
 }
 
 duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
@@ -225,11 +236,28 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         duk_push_int(ctx, -1);
         return 1;
     }
+    // A tabela vem LOGO APOS a imagem no formato v2 (build_core.py escreve
+    // header + imagem + tabela). Em qualquer outro offset ela alias o
+    // proprio cabecalho/imagem ou aponta fora do arquivo — recusa, o sha256
+    // deixa passar bytes errados que por acaso cassem.
+    if (relocCount > 0 && relocOff != hsize + blobSize) {
+        fclose(f);
+        celer_log_printf("[Native] load: tabela de relocs fora de lugar "
+                         "(off %u, esperado %u)",
+                         (unsigned)relocOff, (unsigned)(hsize + blobSize));
+        duk_push_int(ctx, -1);
+        return 1;
+    }
     for (uint32_t i = 0; i < entryCount; i++) {
-        // entrada tem que cair dentro do blob (offset relativo ao inicio)
-        if (rd32(hdr + 24 + 4 * i) >= blobSize) {
+        // entrada tem que cair dentro do blob ALINHADA (offset relativo ao
+        // inicio): o callx salta para code+offset cru — pc desalinhado e
+        // InstrAlignError/reboot (as entradas do builder sao funcoes nm,
+        // sempre multiplos de 4)
+        uint32_t eo = rd32(hdr + 24 + 4 * i);
+        if ((eo & 3u) || eo >= blobSize) {
             fclose(f);
-            celer_log_printf("[Native] load: entrada %u fora do blob", (unsigned)i);
+            celer_log_printf("[Native] load: entrada %u invalida (%u de %u)",
+                             (unsigned)i, (unsigned)eo, (unsigned)blobSize);
             duk_push_int(ctx, -1);
             return 1;
         }
@@ -258,6 +286,16 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
             fclose(f);
             celer_log_printf("[Native] load: bss sobrepoe a imagem (%u+%u)",
                              (unsigned)bssOff, (unsigned)bssSize);
+            duk_push_int(ctx, -1);
+            return 1;
+        }
+        // wrap de u32 ou pedido absurdo (ex.: 0x80000000+0x80000000 = 0 ->
+        // alocacao pequena com fread/memset de GB): teto antes da soma
+        if (bssSize > kMaxImgSpan || bssOff > kMaxImgSpan - bssSize) {
+            fclose(f);
+            celer_log_printf("[Native] load: imagem+bss absurda (%u+%u, max %u)",
+                             (unsigned)bssOff, (unsigned)bssSize,
+                             (unsigned)kMaxImgSpan);
             duk_push_int(ctx, -1);
             return 1;
         }
@@ -327,6 +365,19 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         return 1;
     }
 
+    // Integridade ANTES de qualquer execucao: o digest do cabecalho cobre a
+    // imagem + a tabela CRUA (v2, como o build_core.py computa; digest em
+    // hdr+80) ou so a imagem (v1, digest no proprio cabecalho de 96 B,
+    // hdr+56). Hash streaming: a tabela entra no contexto dentro do loop de
+    // relocs, sobre os bytes como estao no arquivo (antes da aplicacao
+    // in-place). Blob sem sha conferido nao chega a ser executado.
+    const uint8_t* shaWant = hdr + (hsize == kHeaderSizeV2 ? 80 : 56);
+    psa_hash_operation_t shaCtx = PSA_HASH_OPERATION_INIT;
+    bool shaActive = psa_crypto_init() == PSA_SUCCESS &&
+                     psa_hash_setup(&shaCtx, PSA_ALG_SHA_256) == PSA_SUCCESS &&
+                     psa_hash_update(&shaCtx, baseData, blobSize) == PSA_SUCCESS;
+    if (!shaActive) psa_hash_abort(&shaCtx);
+
     // v2/v3: zera o .bss e aplica as relocacoes absolutas. v3 (header r4=1):
     // bit31 do offset = KIND — 1 aponta para dados/rodata (alias de dados),
     // 0 para funcao (alias executavel). v2 antigo: tudo com a mesma base.
@@ -356,13 +407,21 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
         while (relocOk && left) {
             uint32_t n = left < kRelocChunk ? left : kRelocChunk;
             if (fread(chunk, sizeof(uint32_t), n, f) != n) { relocOk = false; break; }
+            // tabela CRUA entra no hash (o digest do builder cobre imagem +
+            // tabela como estao no arquivo)
+            if (shaActive && psa_hash_update(&shaCtx, (const uint8_t*)chunk,
+                                             (size_t)n * sizeof(uint32_t)) !=
+                                 PSA_SUCCESS) {
+                psa_hash_abort(&shaCtx);
+                shaActive = false;
+            }
             for (uint32_t i = 0; i < n; i++) {
                 uint32_t raw = chunk[i];
                 bool isData = relocKindFlag != 0 && (raw & 0x80000000u) != 0;
                 uint32_t o = relocKindFlag ? (raw & 0x7FFFFFFFu) : raw;
                 if ((o & 3u) || (size_t)o + 4 > blobSize) { relocOk = false; break; }
                 uint32_t v = rd32(baseData + o);
-                if (fast != nullptr && isData && v >= fastOff && v - fastOff <= fastSize)
+                if (fast != nullptr && isData && v >= fastOff && v - fastOff < fastSize)
                     v = (uint32_t)(uintptr_t)fast + (v - fastOff);
                 else
                     v += (uint32_t)(uintptr_t)(isData ? baseData : base);
@@ -373,12 +432,29 @@ duk_ret_t JSBindings::js_nativeLoad(duk_context* ctx) {
     }
     fclose(f);
     CelerKernel::noteAppYield();  // tempo NATIVO da leitura (mold js_readFile)
-    if (!relocOk) {
+    // fecha o hash e compara com o digest do cabecalho (recusa ANTES de
+    // registrar o modulo: nada executado, tudo devolvido)
+    bool shaOk = false;
+    if (shaActive) {
+        uint8_t shaGot[32];
+        size_t shaLen = 0;
+        shaOk = psa_hash_finish(&shaCtx, shaGot, sizeof(shaGot), &shaLen) ==
+                    PSA_SUCCESS &&
+                shaLen == sizeof(shaGot) &&
+                memcmp(shaGot, shaWant, sizeof(shaGot)) == 0;
+    }
+    const char* failWhy = !relocOk     ? "relocacao invalida"
+                          : !shaActive ? "sha256 indisponivel (psa)"
+                          : !shaOk     ? "sha256 nao confere (blob corrompido ou "
+                                         "adulterado)"
+                                       : nullptr;
+    if (failWhy != nullptr) {
+        psa_hash_abort(&shaCtx);
         if (fast != nullptr) heap_caps_free(fast);
         if (mapped) esp_mmu_unmap(mmapRoot);
         heap_caps_free(baseData);
         heap_caps_free(scratch);
-        celer_log_printf("[Native] load: relocacao invalida");
+        celer_log_printf("[Native] load: %s", failWhy);
         duk_push_int(ctx, -1);
         return 1;
     }
@@ -495,6 +571,10 @@ duk_ret_t JSBindings::js_nativeFree(duk_context* ctx) {
     m->blobSize = 0;
     m->scratchSize = 0;
     m->entryCount = 0;
+    // a base exec so sai do registro de crash quando NENHUM modulo segue vivo
+    bool anyLeft = false;
+    for (int i = 0; i < kMaxModules; i++) anyLeft = anyLeft || s_modules[i].code != nullptr;
+    if (!anyLeft) CrashRecord::setNativeExec(0);
     duk_push_boolean(ctx, 1);
     return 1;
 }
@@ -609,8 +689,12 @@ duk_ret_t JSBindings::js_nativeDraw(duk_context* ctx) {
     int32_t y = duk_is_number(ctx, 3) ? duk_get_int(ctx, 3) : 0;
     int32_t w = duk_is_number(ctx, 4) ? duk_get_int(ctx, 4) : 0;
     int32_t h = duk_is_number(ctx, 5) ? duk_get_int(ctx, 5) : 0;
+    // w*h*2 em aritmetica de 64 bits: em size_t de 32 bits, w*h*2 enrola
+    // (ex.: 65536x32768 -> 0) e o check passa com pushImage lendo fora do
+    // scratch
     if (off < 0 || w <= 0 || h <= 0 ||
-        (size_t)off + (size_t)w * (size_t)h * 2 > m->scratchSize) {
+        (uint64_t)(uint32_t)off + (uint64_t)(uint32_t)w * (uint64_t)(uint32_t)h * 2u >
+            (uint64_t)m->scratchSize) {
         duk_push_boolean(ctx, 0);
         return 1;
     }
@@ -780,16 +864,20 @@ duk_ret_t JSBindings::js_nativeScreen(duk_context* ctx) {
     int32_t y = jsy(duk_is_number(ctx, 5) ? duk_get_int(ctx, 5) : 0);
     int32_t w = duk_is_number(ctx, 6) ? duk_get_int(ctx, 6) : 0;
     int32_t h = duk_is_number(ctx, 7) ? duk_get_int(ctx, 7) : 0;
+    // soma em u32: x+w como int32 enrola (x=2^30, w=2^30 -> negativo) e o
+    // check passa, gerando px fora do framebuffer que o blob escreve
     if (tftInstance == nullptr || s_frame == nullptr || gfx() != s_frame ||
         w <= 0 || h <= 0 || x < 0 || y < 0 ||
-        x + w > s_frame->width() || y + h > s_frame->height()) {
+        (uint32_t)x + (uint32_t)w > (uint32_t)s_frame->width() ||
+        (uint32_t)y + (uint32_t)h > (uint32_t)s_frame->height()) {
         duk_push_number(ctx, kNoTarget);
         return 1;
     }
     NativeScreen scr;
     int32_t stride = 0;
     uint16_t* fb = screenDirectOk() ? tftInstance->directFb(&stride) : nullptr;
-    if (fb != nullptr && x + w <= tftInstance->width() && y + h <= tftInstance->height()) {
+    if (fb != nullptr && (uint32_t)x + (uint32_t)w <= (uint32_t)tftInstance->width() &&
+        (uint32_t)y + (uint32_t)h <= (uint32_t)tftInstance->height()) {
         scr.px = fb + (size_t)y * stride + x;
         scr.stride = stride;
         scr.flags = 1;
@@ -807,7 +895,9 @@ duk_ret_t JSBindings::js_nativeScreen(duk_context* ctx) {
     scr.putCtx = nullptr;
     // GDMA so no painel e com linhas contiguas (retangulo da largura toda,
     // alinhado ao que a GDMA de PSRAM exige)
-    DmaPut dp;
+    DmaPut dp = {};   // sentinelas antes do if: o build do cao (-Werror) provou
+    dp.slot = -1;     // caminho lendo slot/rows nao inicializados
+    dp.rows = 0;
     if (fb != nullptr && w == stride && ((uintptr_t)scr.px & 31u) == 0 &&
         ((size_t)w * 2 & 31u) == 0 && (size_t)w * 2 <= kDmaRowMax && dmaInit()) {
         dp.base = (uint8_t*)scr.px;
@@ -849,8 +939,10 @@ duk_ret_t JSBindings::js_nativeGrab(duk_context* ctx) {
     int32_t y = duk_is_number(ctx, 3) ? duk_get_int(ctx, 3) : 0;
     int32_t w = duk_is_number(ctx, 4) ? duk_get_int(ctx, 4) : 0;
     int32_t h = duk_is_number(ctx, 5) ? duk_get_int(ctx, 5) : 0;
+    // mesmo wrap de w*h*2 do nativeDraw (readRect escreveria fora do scratch)
     if (off < 0 || w <= 0 || h <= 0 || (off & 1) ||
-        (size_t)off + (size_t)w * (size_t)h * 2 > m->scratchSize) {
+        (uint64_t)(uint32_t)off + (uint64_t)(uint32_t)w * (uint64_t)(uint32_t)h * 2u >
+            (uint64_t)m->scratchSize) {
         duk_push_boolean(ctx, 0);
         return 1;
     }

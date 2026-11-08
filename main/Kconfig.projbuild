@@ -231,13 +231,16 @@ config CELEROS_JS_NATIVE
       SPIKE de viabilidade (Estudo_Native_Loader.pt-BR.md): System.nativeLoad
       copia um blob de codigo Xtensa (asset do pacote, cabecalho "CLRN"
       gerado pelo tools/native/build_core.py) do LittleFS para a PSRAM,
-      sincroniza os caches (writeback C2M e depois invalidacao de I-cache
-      M2C+TYPE_INST — duas chamadas: o IDF recusa as duas flags juntas) e
-      System.nativeCall chama as entradas por ponteiro. So tem sentido em
-      placa S3 com PSRAM e com a rota SPIRAM_XIP_FROM_PSRAM exercitada
-      (smartdisplay). Codigo nativo e ring-0: sem assinatura/permissao
-      ainda — a flag de build e o gate do spike. Desligado, System.native*
-      nao existe (typeof teste).
+      confere o sha256 do conteudo contra o digest do cabecalho ANTES de
+      mapear/executar (integridade — nao e assinatura), sincroniza os caches
+      (writeback C2M e depois invalidacao de I-cache M2C+TYPE_INST — duas
+      chamadas: o IDF recusa as duas flags juntas) e System.nativeCall chama
+      as entradas por ponteiro. So tem sentido em placa S3 com PSRAM e com a
+      rota SPIRAM_XIP_FROM_PSRAM exercitada (smartdisplay, watch e dog hoje).
+      Codigo nativo e ring-0: sem permissao/assinatura ainda — a flag de
+      build e o gate do spike (qualquer app pode carregar blob nativo numa
+      placa com a flag ligada). Desligado, System.native* nao existe
+      (typeof teste).
 
 
 config CELEROS_JS_GPIO

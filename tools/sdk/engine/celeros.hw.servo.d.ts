@@ -32,6 +32,10 @@ declare namespace S {
         maxAngle: number;
         write(angle: number): boolean;
         writeUs(us: number): boolean;
+        /** Angulo logico -> pulso em us (com offset/invert e clamp). */
+        usOf(angle: number): number;
+        /** Pulso em us -> angulo logico (leitura apos writeUs). */
+        angleOf(us: number): number;
         /** Rampa nao bloqueante (S.tick/HW.tick aplica os passos). */
         to(angle: number, ms?: number): boolean;
         /** Rotacao continua: -100..100 em volta do stopUs (false no servo de posicao). */

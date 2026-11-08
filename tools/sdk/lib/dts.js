@@ -23,6 +23,16 @@ const RETURNS = {
     'Storage.get': 'string',          // binding: sempre string (default "")
     'FS.listDir': 'string[]',
     'System.mixColor': 'number',
+    // desenho de imagem: os bindings devolvem ok boolean (JsGfx.cpp/JSBindings.cpp)
+    'System.drawBMP': 'boolean',
+    'System.drawPNG': 'boolean',
+    // canvas virtual: numeros provados nos bindings (js_screenWidth/Height/Height, js_fontHeight, js_color)
+    'System.screenWidth': 'number',
+    'System.screenHeight': 'number',
+    'System.fontHeight': 'number',
+    'System.color': 'number',
+    // chips da faixa (JSBindings.cpp: js_topbarButtons devolve quantos couberam)
+    'System.topbarButtons': 'number',
     // UI (API 22)
     'UI.begin': 'boolean',
     'UI.touch': 'UITouch',
@@ -90,6 +100,19 @@ const RETURNS = {
     'Input.key': 'boolean',
     'Input.poll': '{ key: number; mods: number; down: boolean } | null',
     'Input.pointer': '{ x: number; y: number; buttons: number }',
+    // Gamepad BLE HID (API 57): transporte cru — bytes = arrays 0..255 e
+    // endereco BLE e string "AA:BB:.." (o `addr` generico virava number,
+    // herdando a semantica do USB)
+    'BT.scan': 'boolean',
+    'BT.scanResults': 'Array<{ addr: string; addrType: number; name: string; rssi: number; appearance: number }>',
+    'BT.connect': '{ ok: boolean; err?: string }',
+    'BT.disconnect': 'boolean',
+    'BT.state': '{ phase: "off" | "idle" | "scanning" | "connecting" | "ready" | "error"; addr: string; name: string; rssi: number; battery: number; mtu: number; queued: number; dropped: number; err: string; reports: Array<{ id: number; type: number; size: number }> }',
+    'BT.reportMap': 'number[] | null',
+    'BT.read': '{ id: number; data: number[] } | null',
+    'BT.write': '{ ok: boolean; sent?: number; err?: string }',
+    'BT.paired': 'Array<{ addr: string; addrType: number }>',
+    'BT.forget': 'boolean',
     // I2C generico (API 54): bus cru para as deps de hardware
     'System.i2c.begin': 'I2CBus | null',
     'System.i2c.beginAt': 'I2CBus | null',
@@ -130,6 +153,9 @@ const PARAM_TYPES = {
     'UI.list.items': 'Array<string | UIListItem>',
     'UI.list.opts': '{ rowH?: number; selected?: number }',
     'UI.tabs.labels': 'string[]',
+    // chips da faixa custom (API 6): o binding exige array de STRINGS
+    // (duk_is_array + duk_is_string por item, JSBindings.cpp js_topbarButtons)
+    'System.topbarButtons.labels': 'string[]',
     'UI.card.opts': '{ color?: number; radius?: number; stroke?: boolean }',
     'UI.badge.opts': '{ color?: number; textColor?: number }',
     'UI.confirm.opts': '{ yes?: string; no?: string; danger?: boolean }',
@@ -168,6 +194,11 @@ const PARAM_TYPES = {
     // USB (API 48): payloads sao arrays de bytes, nao um numero
     'USB.controlOut.data': 'number[]',
     'USB.out.data': 'number[]',
+    // Gamepad BLE HID (API 57): endereco do pad e string "AA:BB:.." e o
+    // payload do output report e array de bytes (nao um numero)
+    'BT.connect.addr': 'string',
+    'BT.forget.addr': 'string',
+    'BT.write.data': 'number[]',
     // ids NUMERICOS com nome ambiguo (croma do sprite e cor RGB565, nao texto)
     'System.drawSprite.key': 'number',
     'System.copySprite.key': 'number',
@@ -217,6 +248,9 @@ const REQUIRED_PARAMS = new Set([
     // mas o binding valida o array com readBytes (0 bytes nao existe)
     'System.i2c.write.data',
     'System.i2c.writeReg.data',
+    // BT.write: o binding valida array obrigatorio (js_btWrite: validateBytes
+    // lanca TypeError sem array) — o min=0 do parser mentia com "data?"
+    'BT.write.data',
 ]);
 
 // Nomes de argumento que indicam string (o restante e number: a API e

@@ -33,7 +33,11 @@
 //          reais que fecham byte com Input (Const) entre hat e botoes tinham
 //          todos os campos seguintes deslocados (botoes trocados/fantasmas).
 
-var gamepad = { version: '0.1.1' };
+//   0.1.2: readValue nao estende mais o sinal de Usage/Report Size/Count —
+//          `19 E0` (Usage Min 0xE0 de teclado) virava 0xFFE0 e todo campo de
+//          teclado caia em usage 0 (quebrava o celeros.hid); so Logical
+//          Min/Max sao assinados agora.
+var gamepad = { version: '0.1.2' };
 
 // ---------------------------------------------------------------------------
 // itens do descriptor HID: byte 0 = size(0..1) | type(2..3) | tag(4..7)
@@ -59,7 +63,10 @@ function itemLen(code) {
     return 4;
 }
 
-// valor (little-endian) com sinal: globals (min/max) sao assinados
+// valor CRU do item (little-endian, SEM sinal). Usage / Report Size / Report
+// Count sao valores sem sinal: estender o sinal aqui transformava `19 E0`
+// (Usage Minimum 0xE0 de teclado) em 0xFFE0 e TODO campo de teclado caia em
+// usage 0 (a dep celeros.hid nao conseguia achar modificador/slot).
 function readValue(buf, i, bytes) {
     var v = 0, shift = 0, b;
     for (var k = 0; k < bytes; k++) {
@@ -67,6 +74,12 @@ function readValue(buf, i, bytes) {
         v += b * Math.pow(2, shift);   // sem << em 32 bits: 4 bytes estoura
         shift += 8;
     }
+    return v;
+}
+
+// complemento de dois no tamanho do item — SO para os globais assinados
+// (Logical Min/Max, de onde sai o sinal de um eixo).
+function signedValue(v, bytes) {
     var bits = bytes * 8;
     if (bytes < 4 && v >= Math.pow(2, bits - 1)) v -= Math.pow(2, bits);
     return v;
@@ -92,8 +105,8 @@ gamepad.parseMap = function (map) {
         var val = bytes > 0 ? readValue(map, i + 1, bytes) : 0;
         i += 1 + bytes;
         if (tag === IG_USAGE_PAGE) { g.page = val; continue; }
-        if (tag === IG_LOGICAL_MIN) { g.min = val; continue; }
-        if (tag === IG_LOGICAL_MAX) { g.max = val; continue; }
+        if (tag === IG_LOGICAL_MIN) { g.min = signedValue(val, bytes); continue; }
+        if (tag === IG_LOGICAL_MAX) { g.max = signedValue(val, bytes); continue; }
         if (tag === IG_REPORT_SIZE) { g.size = val; continue; }
         if (tag === IG_REPORT_ID) { curId = val; continue; }
         if (tag === IG_REPORT_COUNT) { g.count = val; continue; }

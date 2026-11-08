@@ -21,11 +21,13 @@ const jsstrip = require(path.join(__dirname, 'lib', 'jsstrip.js'));
 const jsmin = require(path.join(__dirname, 'lib', 'jsmin.js'));
 const check = process.argv.includes('--check');
 
-// versao canonica de cada modulo da arvore (o literal unico gateado pelo sdk)
+// versao canonica de cada modulo da arvore (o literal unico gateado pelo sdk).
+// Aspas simples OU duplas: celeros.emu.js (ferramenta de dev, fora do hub)
+// declara version: "x.y.z" e derrubava o script inteiro.
 const versoes = {};
 for (const f of fs.readdirSync(ENGINE).filter((n) => n.endsWith('.js'))) {
     const m = fs.readFileSync(path.join(ENGINE, f), 'utf8')
-        .match(/version\s*[:=]\s*'([^']+)'/);
+        .match(/version\s*[:=]\s*['"]([^'"]+)['"]/);
     if (!m) throw new Error('sem version: ' + f);
     versoes[f.slice(0, -3)] = m[1];
 }

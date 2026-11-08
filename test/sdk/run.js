@@ -1216,6 +1216,22 @@ function depsSize(nomes) {
           r.grabbed.tm[5] === 2,
           JSON.stringify(r.grabbed.tm));
 
+    // 1.3.2: paint que lanca nao pode deixar E.dirty._mute preso (a camada
+    // suja parava de registrar para sempre — o mesmo conserto do world 1.1.2)
+    r = runEngine(
+        'var E = require("celeros.engine"); E.init({});' +
+        'var m = E.tilemap({ cols: 4, rows: 4, cell: 16, paint: function () { throw new Error("paint ruim"); } });' +
+        'E.dirty.enable(0x0000);' +
+        'var errou = null;' +
+        'm.mark(1, 1);' +
+        'try { m.flush(); } catch (e) { errou = String(e && e.message); }' +
+        'var mute = E.dirty._mute;' +
+        'E.dirty.add(0, 0, 10, 10);' +
+        '__harness.grab("tmf", [errou, mute, E.dirty._cur.length]);');
+    check('tilemap: paint que lanca solta o _mute (a camada suja segue registrando)',
+          r.grabbed.tmf[0] === 'paint ruim' && r.grabbed.tmf[1] === 0 && r.grabbed.tmf[2] === 4,
+          JSON.stringify(r.grabbed.tmf));
+
     // save: prefixo + best (recorde)
     r = runEngine(
         'var E = require("celeros.engine"); E.init({ save: "tst." });' +
@@ -2045,6 +2061,47 @@ function depsSize(nomes) {
     check('modal: tap no botao nao vaza para o menu de baixo (e o menu volta depois)',
           r.mfoco[0] === null && r.mfoco[1] === 'ok' && r.mfoco[2] === 'j',
           JSON.stringify(r.mfoco));
+
+    // 1.4.2: a LISTA tambem e camada de baixo — o tap numa linha com o modal
+    // aberto escolhia o item de BAIXO antes do modal consumir (a lista nao
+    // consultava a marca _over que o 1.4.1 deu aos widgets de tapIn). O tap
+    // do teste cai na linha 1 da lista (y 88..116) e no veu do modal.
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var IT = [{ label: "Jogar", value: "j" }, { label: "Opcoes", value: "o" }];' +
+        'var vazou = null, depois = null, aberto = true, q = 0;' +
+        'var lst = E.ui.list({ items: IT, row: 28 });' +
+        'E.run({ s: { update: function () {' +
+        '  if (++q === 3) __harness.tap(120, 100);' +   // linha da lista, modal aberto
+        '  if (q === 6) aberto = false;' +
+        '  if (q === 16) __harness.tap(120, 100);' +   // modal fechou: a lista volta
+        '  if (q > 40) E.quit();' +
+        '}, draw: function () {' +
+        '  lst.draw(20, 60, 200, 140);' +
+        '  if (lst.picked) { if (q < 6) vazou = lst.picked; else depois = lst.picked; }' +
+        '  if (aberto) E.ui.modal("m", { ms: 0, dismiss: false,' +
+        '    buttons: [{ label: "Entendi", value: "ok" }] });' +
+        '} } }, "s");' +
+        '__harness.grab("lmodal", [vazou, depois]);');
+    check('list sob modal: tap na linha nao vaza (e a lista volta quando o modal fecha)',
+          r.lmodal[0] === null && r.lmodal[1] === 'o', JSON.stringify(r.lmodal));
+
+    // 1.4.2: dialog com speed 0/NaN ficava eternamente vazio (n = floor(t*0)
+    // = NaN nao alcancava o fim); valor invalido cai no default 30.
+    r = runSnippet(
+        'var E = require("celeros.game.ui");' +
+        'E.init({});' +
+        'var d = E.ui.dialog("uma fala de teste", { speed: 0 });' +
+        'var ds = System.drawString, visto = [], cheio = null, q = 0;' +
+        'System.drawString = function (s) { visto.push(String(s)); ds.apply(null, arguments); };' +
+        'E.run({ s: { draw: function () {' +
+        '  if (q++ === 0) { d.next(); d.draw(20, 40, 200); cheio = visto.join(""); E.quit(); }' +
+        '} } }, "s");' +
+        'System.drawString = ds;' +
+        '__harness.grab("sp0", [cheio]);');
+    check('dialog: speed 0 invalida cai no default (next()+draw revela o texto inteiro)',
+          /fala de teste/.test(String(r.sp0[0])), JSON.stringify(r.sp0[0]));
 
     // list: arrasto rola e o tap pega a linha CERTA com o scroll
     r = runSnippet(
@@ -3074,6 +3131,8 @@ require('./ui_extras.js')(check);
 require('./hw_libs.js')(check);
 // gamepad Bluetooth LE HID (API 57): parser do descriptor + decodificador
 require('./gamepad_lib.js')(check);
+// teclado e mouse Bluetooth LE HID (API 62): decode dos reports + combo
+require('./hid_lib.js')(check);
 // jsmin: minificador do publish/deploy (mangle de locais + espaco minimo)
 require('./jsmin.js')(check);
 

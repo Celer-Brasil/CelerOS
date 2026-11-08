@@ -295,6 +295,11 @@
   "celeros.gamepad": {
     "deps": {}
   },
+  "celeros.hid": {
+    "deps": {
+      "celeros.gamepad": "^0.1.2"
+    }
+  },
   "celeros.usb.msc": {
     "deps": {
       "celeros.usb": "^1.0.0"

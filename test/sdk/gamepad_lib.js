@@ -177,6 +177,47 @@ module.exports = function (check) {
         check('gamepad: appearance 0x03C4 marca gamepad (0x03C1 nao)',
               pads[0].gamepad === true && pads[1].gamepad === false);
 
+        // ----------------------------------------- padding Input(Const) ---
+        // Gramatica HID real: items constant fecham byte (hat de 4 bits +
+        // 4 bits de Input (Const) antes dos botoes, comum em pads BLE de
+        // verdade). O offset do parser tem que avancar NOS items constant
+        // tambem — sem isto os botoes saiam 4 bits deslocados.
+        var PADDED_MAP = hex(
+            '05 01 09 05 A1 01' +
+            '85 01' +
+            '09 30 09 31 15 00 26 FF 00 75 08 95 02 81 02' +   // X Y 0..255
+            '09 39 15 00 25 07 75 04 95 01 81 42' +             // hat 4 bits (off 24)
+            '75 01 95 04 81 03' +                                // 4 bits CONST (padding, off 28)
+            '05 09 19 01 29 04 15 00 25 01 75 01 95 04 81 02' + // botoes 1..4 (off 32)
+            'C0'
+        );
+        var mp = G.parseMap(PADDED_MAP);
+        var pin = mp.reports['1|in'];
+        var pBtn1 = null;
+        for (i = 0; i < pin.length; i++) {
+            if (pin[i].page === 9 && pin[i].usage === 1) pBtn1 = pin[i];
+        }
+        check('gamepad: padding Input(Const) avanca o offset (botao 1 no bit 32)',
+              !!pBtn1 && pBtn1.off === 32, JSON.stringify(pBtn1));
+        var gpPad = new G.Gamepad();
+        gpPad.map = mp;
+        gpPad.mainId = 1;
+        gpPad.mainHasId = true;
+        gpPad.inFields = pin;
+        gpPad.fLx = null; gpPad.fLy = null; gpPad.fRx = null; gpPad.fRy = null;
+        gpPad.fL2 = null; gpPad.fR2 = null; gpPad.fHat = null;
+        for (i = 0; i < pin.length; i++) {
+            if (pin[i].page === 1 && pin[i].usage === 0x39) gpPad.fHat = pin[i];
+            else if (pin[i].page === 1 && pin[i].usage === 0x30) gpPad.fLx = pin[i];
+            else if (pin[i].page === 1 && pin[i].usage === 0x31) gpPad.fLy = pin[i];
+        }
+        gpPad.connected = true;
+        var stP = gpPad.decode([1, 255, 128, 0xF0, 0x02]);
+        check('gamepad: report com padding decodifica hat + botao nos bits certos',
+              !!stP && stP.lx === 1 && stP.dpad === 'n' && stP.buttons.b === true,
+              'lx=' + (stP && stP.lx) + ' dpad=' + (stP && stP.dpad) + ' ' +
+              JSON.stringify(stP && stP.buttons));
+
         // ------------------------------------------------ ds4-like --------
         var t2 = setup(DS4_MAP, '8BitDo SN30 Pro');
         var G2 = t2.req('celeros.gamepad');

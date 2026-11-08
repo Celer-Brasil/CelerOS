@@ -14,8 +14,9 @@ module.exports.wire = function (env) {
         env.System.verifyPin = function (p) { return p === '1234' ? true : vp(p); };
         env.__harness.pushPrompt(['1234']);   // entra no menu; o voltar final sai
     }
-    // menu fixo: Wi-Fi, Aplicativos, Hora e fuso, Seguranca, Tela,
-    // Atualizacao, Sobre
+    // menu fixo: Wi-Fi, Aplicativos, Hora e fuso, Seguranca, Tela, Entrada,
+    // Bluetooth, Atualizacao (9 linhas rolam: Sobre fica abaixo do corte e
+    // este wire nao rola)
     env.Sensors = {};
     env.System.getVolume = undefined;
     env.System.notifications = undefined;
@@ -52,14 +53,20 @@ module.exports.wire = function (env) {
     t(120, 140);
     t(120, 140);
     t(20, 20);
-    // Atualizacao (row 5): "Procurar atualizacao" (y=176) sem Wi-Fi -> aviso;
-    // um tap neutro da tempo do estado "Sem conexao" desenhar antes do voltar
+    // Entrada (row 5): form de teclado/mouse; "Teclado na tela" (1a acao,
+    // y=102) cicla kbd_keys; volta
     t(120, 246);
+    t(120, 102);
+    t(20, 20);
+    // Bluetooth (row 6): lista (sem bond, sem scan); volta
+    t(120, 282);
+    t(20, 20);
+    // Atualizacao (row 7, no corte inferior): "Procurar atualizacao" (y=176)
+    // sem Wi-Fi -> aviso; um tap neutro da tempo do estado desenhar
+    t(120, 318);
     t(120, 176);
     t(120, 305);
     t(20, 20);
-    // Sobre (row 6): lista de infos; volta ao menu
-    t(120, 282);
     // volta no menu raiz encerra o app
     t(20, 20);
 };

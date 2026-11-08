@@ -166,6 +166,8 @@ function makeEnv() {
         '/local/config_snake_hi.txt': { data: '17' },
         '/local/roms': { dir: true },
         '/sd/roms': { dir: true },
+        // magic iNES "NES" + 0x1A (o \\u001a literal era corrupcao de escape
+        // da rodada anterior e quebrava quem valida o cabecalho da ROM)
         '/sd/roms/Demo.nes': { data: 'NES\u001a' + new Array(33).join('\u0000') }
     };
 
@@ -864,6 +866,16 @@ function makeEnv() {
         }
         return ch(11, 0x1F) | ch(5, 0x3F) | ch(0, 0x1F);
     },
+    // API 59: alpha global dos primitivos (JsGfx.cpp js_setAlpha): 0..255 com
+    // clamp; undefined e TypeError (duk_require_int). O blend em si e visual:
+    // quem pinta de verdade (Renderer wired) mantem o proprio r.alpha e
+    // sobrepoe este stub; reset por app e de graca (env novo por runApp).
+    setAlpha: function(a) {
+        if (a === undefined) throw new TypeError('setAlpha: alpha obrigatorio');
+        a = a | 0;
+        if (a < 0) a = 0;
+        if (a > 255) a = 255;
+    },
     drawFastVLine: function() {},
     drawFastHLine: function() {},
     drawBMP: function() { return true; },
@@ -962,8 +974,12 @@ function makeEnv() {
             // API 46: o host modela uma placa completa (audio, mic e
             // fisica no build) — os perfis lite (CYD) zeram os tres.
             // hasNative (API 57, SPIKE) segue a mesma ideia: o host
-            // modela o smartdisplay (flag ligada, stub acima)
+            // modela o smartdisplay (flag ligada, stub acima). hasBtHid
+            // (API 57, JsSystem.cpp) e hasUsbHost (API 48) acompanham os
+            // objetos BT/USB do host: sem eles o feature-detect do guia
+            // (System.getInfo().hasBtHid) era falsy aqui e true no device.
             hasAudio: true, hasMic: true, hasPhysics: true, hasNative: true,
+            hasBtHid: true, hasUsbHost: true,
             totalPSRAM: 0, freePSRAM: 0, cpuFreqMHz: 240, chipModel: 'ESP32',
             chipCores: 2, chipRevision: 1, flashSize: 4194304, uptimeMs: clock * 1000,
             macAddress: 'AA:BB:CC:DD:EE:FF', resetReason: 'power on', idfVersion: 'v6.1'
@@ -1913,17 +1929,25 @@ function makeEnv() {
     var btBonded = [];
     var btMap = [];
     var btState = { phase: 'idle', addr: '', name: '', rssi: 0, battery: -1,
-                    mtu: 0, reports: [], queued: 0, dropped: 0 };
+                    mtu: 0, kind: '', reports: [], queued: 0, dropped: 0, err: '' };
     env.BT = {
     scan: function(ms) { btState.phase = 'idle'; return true; },
     scanResults: function() { return btScanList.slice(); },
     connect: function(addr) {
+        // firmware: duk_require_string (JsBt.cpp) — TypeError sem string
+        if (typeof addr !== 'string')
+            throw new TypeError('BT.connect: endereco (string) obrigatorio');
         var nm = '';
         for (var i = 0; i < btScanList.length; i++) {
-            if (btScanList[i].addr === addr) nm = btScanList[i].name || '';
+            if (btScanList[i].addr === addr) {
+                nm = btScanList[i].name || '';
+                // API 62: o firmware classifica o Report Map no connect e
+                // publica BT.state().kind — o fake faz o mesmo pelo scan
+                btState.kind = btScanList[i].kind || '';
+            }
         }
         btState.phase = 'ready';
-        btState.addr = addr || '';
+        btState.addr = addr;
         btState.name = nm;
         btState.reports = btMap.length ? [{ id: 1, type: 1, size: 18 },
                                          { id: 3, type: 2, size: 10 }] : [];
@@ -1934,14 +1958,36 @@ function makeEnv() {
         btState.addr = '';
         btState.name = '';
         btState.reports = [];
+        // API 62: sem enlace o kind volta (firmware: Info.kind=0 -> "")
+        btState.kind = '';
         return true;
     },
     state: function() { btState.queued = btReports.length; return btState; },
     reportMap: function() { return btMap.length ? btMap.slice() : null; },
     read: function() { return btReports.length ? btReports.shift() : null; },
-    write: function(data) { btWrites.push(data.slice()); return { ok: true, sent: data.length }; },
+    write: function(data) {
+        // paridade JsBt.cpp validateBytes: array obrigatorio (TypeError) e
+        // teto 64 bytes / valores 0..255 (RangeError) ANTES de gravar — o
+        // stub permissivo deixava o app testar rumble malformado e morrer
+        // so no device. duk_get_int TRUNCA antes da faixa (1.5 -> 1, NaN ->
+        // 0), entao o host coerciona igual e grava o valor truncado.
+        if (!Array.isArray(data)) throw new TypeError('BT.write: data 0..255');
+        if (data.length > 64) throw new RangeError('BT.write: data 0..255');
+        var out = new Array(data.length);
+        for (var i = 0; i < data.length; i++) {
+            var v = data[i] | 0;
+            if (v < 0 || v > 255) throw new RangeError('BT.write: data 0..255');
+            out[i] = v;
+        }
+        btWrites.push(out);
+        return { ok: true, sent: data.length };
+    },
     paired: function() { return btBonded.slice(); },
     forget: function(addr) {
+        // firmware: ausente = todos os bonds; presente TEM que ser string
+        // (JsBt.cpp: duk_require_string apos o teste de undefined)
+        if (addr !== undefined && typeof addr !== 'string')
+            throw new TypeError('BT.forget: endereco (string) invalido');
         for (var i = 0; i < btBonded.length; i++) {
             if (!addr || btBonded[i].addr === addr) btBonded.splice(i--, 1);
         }
@@ -1952,7 +1998,9 @@ function makeEnv() {
     env.__harness = {
     log: log,
     // API 56: identidade do app (App.info) e script do Net.fetch
-    appInfo: { id: '', name: '', version: '', dataDir: '', api: 0, runtimeApi: 56,
+    // runtimeApi espelha CELEROS_API_LEVEL (62): app que feature-detecta
+    // API 62 por App.info().runtimeApi via verde aqui e morria no device
+    appInfo: { id: '', name: '', version: '', dataDir: '', api: 0, runtimeApi: 62,
                system: false, permissions: [] },
     netResponse: null,   // {status, body, truncated} ou null = falha de transporte
     netOffline: false,   // true = NO_NETWORK (sem rede)
@@ -2020,7 +2068,7 @@ function makeEnv() {
         btWrites.length = 0; btReports.length = 0; btScanList = [];
         btBonded = []; btMap = [];
         btState = { phase: 'idle', addr: '', name: '', rssi: 0, battery: -1,
-                    mtu: 0, reports: [], queued: 0, dropped: 0 };
+                    mtu: 0, kind: '', reports: [], queued: 0, dropped: 0, err: '' };
     },
     inputKeys: function() { return inputKeys.slice(); },
     setAiResponse: function(r) { aiResponse = r; },
@@ -2088,15 +2136,31 @@ function makeEnv() {
     iters: function() { return iters; },
     System: env.System
     };
+    // paridade JsStorage.cpp: chave 1..15 chars (RangeError, limite do NVS);
+    // valor sempre string (undefined vira "undefined", como duk_to_string);
+    // >4 KB = RangeError (o firmware nao devolve false); "" REMOVE a chave
+    // (mesma semantica do CelerSettings); ausente SEM default devolve ""
+    // (o doc promete "sempre string" — o firmware nunca devolve undefined)
+    function storKey(k) {
+        if (typeof k !== 'string' || k.length < 1 || k.length > 15)
+            throw new RangeError('Storage: chave deve ter 1 a 15 caracteres (limite do NVS)');
+        return k;
+    }
     env.Storage = {
-    get: function(k, def) { return storageMap.hasOwnProperty(k) ? storageMap[k] : def; },
+    get: function(k, def) {
+        storKey(k);
+        return storageMap.hasOwnProperty(k) ? storageMap[k]
+             : (def === undefined ? '' : def);
+    },
     set: function(k, v) {
-        v = v === undefined ? '' : String(v);
-        if (v.length > 4096) return false;
-        storageMap[k] = v;
+        storKey(k);
+        v = String(v);
+        if (v.length > 4096) throw new RangeError('Storage: valor acima de 4KB');
+        if (v.length === 0) delete storageMap[k];
+        else storageMap[k] = v;
         return true;
     },
-    remove: function(k) { delete storageMap[k]; },
+    remove: function(k) { storKey(k); delete storageMap[k]; },
     clear: function() { storageMap = {}; return true; },
     clearFor: function() { return true; }
     };
@@ -4544,6 +4608,85 @@ function holdFrames(x, y, n) {
 })();
 
 (function() {
+    console.log('Settings (entrada: teclado virtual):');
+    var setv = {};
+    var r = runApp('data/apps/Settings/main.js', function(env) {
+        var orig = env.System.setting;
+        env.System.setting = function(k, v) {
+            if (v === undefined) return setv.hasOwnProperty(k) ? setv[k] : orig(k);
+            setv[k] = String(v);
+            return true;
+        };
+        // "Entrada" e a linha 5 do menu (y 48 + 5*36 + 18): a 2a linha do
+        // form e a acao "Teclado na tela" (kbd_keys)
+        env.__harness.tap(120, 246);
+        env.__harness.tap(120, 102);
+        env.__harness.tap(20, 20);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('tela Entrada desenha as secoes',
+          j.indexOf('TECLADO VIRTUAL') >= 0 && j.indexOf('MOUSE') >= 0, j);
+    check('acao "Teclado na tela" grava kbd_keys=0', setv.kbd_keys === '0',
+          JSON.stringify(setv));
+})();
+
+(function() {
+    console.log('Settings (Bluetooth: lista e fones):');
+    var alerts = [];
+    var r = runApp('data/apps/Settings/main.js', function(env) {
+        env.__harness.btReset();
+        env.__harness.btSetBonded([
+            { addr: 'AA:BB:CC:DD:EE:01', addrType: 0, name: 'Teclado BLE', kind: 'kbd' }
+        ]);
+        env.__harness.btSetState({ phase: 'ready', addr: 'AA:BB:CC:DD:EE:01',
+                                   name: 'Teclado BLE', kind: 'kbd', battery: 80 });
+        env.UI.alert = function(t, m) { alerts.push(t + ': ' + m); return true; };
+        // "Bluetooth" e a linha 6 (y 48 + 6*36 + 18)
+        env.__harness.tap(120, 282);
+        // lista comeca em TOP+66, linha de 40: "Fones de ouvido" e a 2a
+        env.__harness.tap(120, 174);
+        env.__harness.tap(20, 20);
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    var j = joinLog(r.log);
+    check('lista mostra o pareado com o tipo',
+          j.indexOf('Teclado BLE') >= 0 && j.indexOf('teclado') >= 0, j);
+    check('card de fones aparece sem rolar', j.indexOf('Fones de ouvido') >= 0, j);
+    check('"Fones de ouvido" explica o limite do radio',
+          alerts.length === 1 && alerts[0].indexOf('A2DP') >= 0 &&
+          alerts[0].indexOf('Classic') >= 0, JSON.stringify(alerts));
+})();
+
+(function() {
+    console.log('Settings (Bluetooth: parear pelo scan):');
+    var setv = {};
+    var r = runApp('data/apps/Settings/main.js', function(env) {
+        var orig = env.System.setting;
+        env.System.setting = function(k, v) {
+            if (v === undefined) return setv.hasOwnProperty(k) ? setv[k] : orig(k);
+            setv[k] = String(v);
+            return true;
+        };
+        env.__harness.btReset();
+        env.__harness.btScan([
+            { addr: 'AA:BB:CC:DD:EE:09', name: 'Mouse BLE', rssi: -50,
+              appearance: 0x03C2, kind: 'mouse' }
+        ]);
+        env.__harness.btSetState({ phase: 'idle' });
+        env.__harness.tap(120, 282);          // Bluetooth no menu
+        env.__harness.tap(120, 214);          // "Adicionar device" (3a linha)
+        env.__harness.tap(120, 66);           // 1o item do picker
+        env.__harness.tap(20, 20);            // volta
+    });
+    check('roda sem erro', r.err === null, r.err || '');
+    check('parear grava o endereco escolhido em bt_dev',
+          setv.bt_dev === 'AA:BB:CC:DD:EE:09', JSON.stringify(setv));
+    var j = joinLog(r.log);
+    check('toast de conectado com o tipo', j.indexOf('Conectado: mouse') >= 0, j);
+})();
+
+(function() {
     console.log('Settings (hora: toggle NTP):');
     var calls = [];
     var r = runApp('data/apps/Settings/main.js', function(env) {
@@ -4639,6 +4782,15 @@ function holdFrames(x, y, n) {
         'System.drawString(String(Storage.get("nome", "vazio")), 1, 20);',
         'Storage.set("x", "1"); Storage.clear();',
         'System.drawString(String(Storage.get("x", "limpo")), 1, 40);',
+        // paridade do firmware (JsStorage.cpp): ausente sem default = "";
+        // gravar "" remove a chave; >4 KB e chave fora de 1..15 lancam
+        'System.drawString("N" + Storage.get("ausente") + "Fim", 1, 60);',
+        'Storage.set("vv", "");',
+        'System.drawString("R" + Storage.get("vv", "x"), 1, 80);',
+        'try { Storage.set("grande", new Array(4100).join("x")); }',
+        'catch (e1) { System.drawString("ERR4K", 1, 100); }',
+        'try { Storage.get(new Array(20).join("k")); }',
+        'catch (e2) { System.drawString("ERRKEY", 1, 120); }',
         'System.exitApp();'
     ].join('\n');
     var env = makeEnv();
@@ -4657,6 +4809,10 @@ function holdFrames(x, y, n) {
     check('set/get/serializa/default', j.indexOf('Spot|12|padrao') >= 0, j);
     check('remove apaga', j.indexOf('vazio') >= 0);
     check('clear limpa tudo', j.indexOf('limpo') >= 0);
+    check('ausente sem default devolve "" (nunca undefined)', j.indexOf('NFim') >= 0, j);
+    check('gravar "" remove a chave', j.indexOf('Rx') >= 0, j);
+    check('valor acima de 4KB lanca RangeError', j.indexOf('ERR4K') >= 0, j);
+    check('chave fora de 1..15 lanca RangeError', j.indexOf('ERRKEY') >= 0, j);
 })();
 
 (function() {
@@ -6220,6 +6376,40 @@ function holdFrames(x, y, n) {
     check('scroll: conteudo dentro do viewport pinta e o de fora e recortado',
           dentro === 0xF800 && fora !== 0x07E0,
           'dentro=' + dentro.toString(16) + ' fora=' + fora.toString(16));
+})();
+
+// Paridade BT.* (API 57, JsBt.cpp): o host valida o payload como o firmware
+// (array, teto 64, bytes 0..255) e o feature-detect do guia existe no getInfo
+(function() {
+    console.log('Paridade BT:');
+    var env = makeEnv();
+    check('hasBtHid/hasUsbHost no getInfo (feature-detect do guia)',
+          env.System.getInfo().hasBtHid === true && env.System.getInfo().hasUsbHost === true);
+    check('App.info().runtimeApi segue o CELEROS_API_LEVEL (62)',
+          env.__harness.appInfo.runtimeApi === 62);
+    check('setAlpha existe e clampeia sem estado (void, JsGfx.cpp)',
+          env.System.setAlpha(90) === undefined && env.System.setAlpha(-5) === undefined &&
+          env.System.setAlpha(999) === undefined);
+    env.BT.write([1, 2, 250]);
+    check('BT.write aceita report valido e conta sent',
+          env.__harness.btWrites.length === 1 && env.__harness.btWrites[0][2] === 250);
+    var threw = null;
+    try { env.BT.write(new Array(65).join('0').split('').map(Number).concat([0])); }
+    catch (e) { threw = e.constructor.name; }
+    check('BT.write com 65 bytes lanca RangeError (teto do HOGP)', threw === 'RangeError');
+    threw = null;
+    try { env.BT.write([300]); }
+    catch (e) { threw = e.constructor.name; }
+    check('BT.write com byte >255 lanca RangeError (validateBytes)', threw === 'RangeError');
+    threw = null;
+    try { env.BT.write('rumble'); }
+    catch (e) { threw = e.constructor.name; }
+    check('BT.write sem array lanca TypeError', threw === 'TypeError');
+    threw = null;
+    try { env.BT.connect(1234); }
+    catch (e) { threw = e.constructor.name; }
+    check('BT.connect sem string lanca TypeError (duk_require_string)', threw === 'TypeError');
+    check('BT.state expoe err (Info.err do BleHid)', env.BT.state().err === '');
 })();
 
 // resume

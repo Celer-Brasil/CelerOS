@@ -90,6 +90,142 @@ function notifList() {
     return l;
 }
 
+// ---- Entrada / Bluetooth (API 62) -----------------------------------------
+// Um device HID BLE por vez (o BleHid e single-link). O TIPO vem do firmware
+// (BT.state().kind, classificado do Report Map no connect) — o app nao tem
+// tabela paralela. As chaves sao as MESMAS do servico Controle BT:
+//   bt_on (1/0), bt_dev (endereco), bt_ptr (ponteiro do stick do pad),
+//   mouse_on (1/0), mouse_speed (1..3), kbd_keys (1/0), bt_busy (epoch ms)
+
+var HAS_HID = typeof BT !== "undefined" && typeof Input !== "undefined";
+
+function btPref(k, def) {
+    var v = null;
+    try { v = System.setting(k); } catch (e) { v = null; }
+    return (v === null || v === "") ? def : v;
+}
+function btOn(k, def) { return btPref(k, def ? "1" : "0") !== "0"; }
+function btSet(k, v) {
+    try { System.setting(k, v ? "1" : "0"); } catch (e) {}
+}
+function btSetStr(k, v) {
+    try { System.setting(k, v); } catch (e) {}
+}
+function kindName(k) {
+    if (k === "kbd") return "teclado";
+    if (k === "mouse") return "mouse";
+    if (k === "combo") return "teclado + mouse";
+    if (k === "pad") return "gamepad";
+    return "HID";
+}
+// firmware 57..61 nao publica kind no scan: cai no appearance do ADV
+function kindApp(a) {
+    if (a === 0x03C1) return "kbd";
+    if (a === 0x03C2) return "mouse";
+    if (a === 0x03C3 || a === 0x03C4) return "pad";
+    return "";
+}
+// device conectado agora (BT.state ready) ou null
+function conectado() {
+    if (!HAS_HID) return null;
+    try {
+        var s = BT.state();
+        return s.phase === "ready" ? s : null;
+    } catch (e) { return null; }
+}
+function btLigado() { return btOn("bt_on", true); }
+
+function btEstadoTxt() {
+    if (!HAS_HID) return "sem rádio BT HID nesta placa";
+    try {
+        var s = BT.state();
+        if (s.phase === "ready") return (s.name || s.addr) + " · " + kindName(s.kind);
+        if (s.phase === "connecting") return "conectando...";
+        if (s.phase === "scanning") return "procurando devices...";
+        if (s.phase === "error") return "erro: " + (s.err || "?");
+    } catch (e) {}
+    var alvo = btPref("bt_dev", "");
+    return alvo ? "alvo: " + alvo + " (fora de alcance?)" : "nenhum device escolhido";
+}
+
+// O servico fica pausado enquanto o Ajustes usa o radio (BT.scan/connect
+// sao bloqueantes e nao podem correr junto com a tentativa de reconexao).
+function btBusy() {
+    if (!HAS_HID) return;
+    btSetStr("bt_busy", String(System.millis()));
+}
+function btFree() { btSetStr("bt_busy", ""); }
+
+// scan + escolha + connect. kind "" = qualquer HID; "kbd"/"mouse" filtram
+// (combo serve para os dois).
+function parear(kind) {
+    if (!HAS_HID) return;
+    btBusy();
+    try {
+        if (BT.state().phase === "ready") BT.disconnect();
+        A.busy("Procurando devices...");
+        BT.scan(3000);
+        var todos = BT.scanResults() || [];
+        var lista = [], i;
+        for (i = 0; i < todos.length; i++) {
+            var k = todos[i].kind || kindApp(todos[i].appearance);
+            if (!kind || k === kind || k === "combo") lista.push(todos[i]);
+        }
+        if (!lista.length) {
+            btFree();
+            UI.alert("Bluetooth", "Nenhum device encontrado. Deixe o aparelho em modo de pareamento e tente de novo.");
+            return;
+        }
+        var nomes = [];
+        for (i = 0; i < lista.length; i++) {
+            nomes.push((lista[i].name || lista[i].addr) + " · " +
+                       kindName(lista[i].kind || kindApp(lista[i].appearance)));
+        }
+        var sel = A.form.pick("Escolha o device", nomes);
+        if (sel < 0) { btFree(); return; }
+        A.busy("Conectando...");
+        var r = BT.connect(lista[sel].addr);
+        if (r && r.ok) {
+            btSetStr("bt_dev", lista[sel].addr);
+            UI.toast("Conectado: " + kindName(BT.state().kind));
+        } else {
+            UI.alert("Bluetooth", (r && r.err) ? r.err : "Não foi possível conectar.");
+        }
+    } finally {
+        btFree();
+    }
+}
+
+// teste de mouse modal: mira no ponteiro + botao (o clique sintetico entra
+// no pipeline de toque como dedo, entao este botao e o teste ponta a ponta)
+function testeMouse() {
+    var cliques = 0;
+    for (;;) {
+        UI.begin(T.bg);
+        if (UI.header("Testar mouse", { back: true })) { UI.end(0); return; }
+        var q = { x: 120, y: 160, buttons: 0 };
+        try { q = Input.pointer(); } catch (e) {}
+        // card 146: a legenda x/y em +108 (fixa sob a dica de 2 linhas) termina
+        // em +123 e estourava o piso interno (+112) pintando em cima da borda
+        A.style.card(LX, TOP, LW, 146, {
+            draw: function (c) {
+                UI.text("Mova o mouse e clique no botão abaixo.", c.x, c.y,
+                        { role: "caption", color: T.textDim, bg: c.bg, w: c.w,
+                          lines: 2, id: "mtip" });
+                System.drawCircle(c.x + c.w / 2, c.y + 62, 12, T.accent);
+                System.drawCircle(q.x, q.y, 5, T.ok);
+                UI.text("x " + q.x + "  y " + q.y + "  botões " + q.buttons,
+                        c.x, c.y + 108, { role: "caption", color: T.textDim,
+                                          bg: c.bg, w: c.w, id: "mxy" });
+            }
+        });
+        if (A.style.button("Clique aqui (" + cliques + ")", LX, TOP + 158, LW, 44))
+            cliques++;
+        UI.end(20);
+    }
+}
+
+
 // ---- estado ----------------------------------------------------------------
 
 var MN = [];          // linhas da tela raiz
@@ -160,7 +296,9 @@ function flowNewPin() {
 }
 function askPin(title) {
     var cur = A.form.askText(title, { hint: "num", mask: true });
-    if (cur === null || cur === "") return false;
+    // CANCELAR (null/undefined, mesmo corte do flowNewPin) sai calado: sem
+    // o undefined o X do teclado virava o alerta "PIN incorreto"
+    if (cur === null || cur === undefined || cur === "") return false;
     if (!System.verifyPin(cur)) {
         UI.alert("Segurança", "PIN incorreto");
         return false;
@@ -187,6 +325,16 @@ function buildMenu() {
                  ? System.getBrightness() + "%" +
                    (autoBriSupported() && System.getAutoBrightness() ? " auto" : "")
                  : "" });
+    // Entrada e sempre (o teclado virtual existe em toda placa com tela);
+    // Bluetooth so onde o firmware tem o host BLE HID (4848 e watch).
+    var cv = conectado();
+    a.push({ label: "Entrada", icon: "gear", a: "input",
+             right: cv ? kindName(cv.kind) : "",
+             rightColor: cv ? T.accent : T.textDim });
+    if (HAS_HID)
+        a.push({ label: "Bluetooth", icon: "wifi", a: "bluetooth",
+                 right: btLigado() ? "Ligado" : "Desligado",
+                 rightColor: btLigado() ? T.ok : T.textDim });
     if (typeof System.getVolume === "function")
         a.push({ label: "Som", icon: "play", right: System.getVolume() + "%", a: "som" });
     if (typeof Sensors !== "undefined" && Sensors && Sensors.accel)
@@ -718,21 +866,26 @@ function drawUpdate(full) {
     var ver = "CelerOS v" + System.getOSVersion();
     var i = oIn;
     if (oSt === "avail") {
-        A.style.card(LX, TOP, LW, 192, {
+        // h 200: com o cabecalho empilhado, o bloco rolavel desce e nao cabe
+        // mais nos 192 de antes
+        A.style.card(LX, TOP, LW, 200, {
             full: full,
             draw: function (q) {
                 UI.badge(i.type || "Atualização", q.x, q.y);
-                UI.text("v" + System.getOSVersion() + "  >  v" + i.version,
-                        q.x, q.y + 24, { role: "title", bg: q.bg, w: q.w, id: "otav" });
-                UI.text("Canal: " + (i.type || "estável") +
-                        (i.signed ? " · assinatura ok" : ""),
-                        q.x, q.y + 46, { role: "caption", color: T.textDim,
-                                        bg: q.bg, w: q.w, id: "otach" });
+                // EMPILHADO pela altura devolvida: o titulo mede 28-29 px e a
+                // legenda em +46 fixo caia dentro dele
+                var vy = q.y + 24;
+                vy += UI.text("v" + System.getOSVersion() + "  >  v" + i.version,
+                              q.x, vy, { role: "title", bg: q.bg, w: q.w, id: "otav" }) + 3;
+                vy += UI.text("Canal: " + (i.type || "estável") +
+                              (i.signed ? " · assinatura ok" : ""),
+                              q.x, vy, { role: "caption", color: T.textDim,
+                                         bg: q.bg, w: q.w, id: "otach" }) + 4;
                 // bloco rolavel (changelog + guia)
-                var off = UI.scrollBegin("ota", q.x, q.y + 64, q.w, 112,
+                var off = UI.scrollBegin("ota", q.x, vy, q.w, 112,
                                          Math.max(112, oBh));
                 if (full)
-                    oBh = UI.text(otaText(), q.x, q.y + 64 - off,
+                    oBh = UI.text(otaText(), q.x, vy - off,
                                        { role: "caption", color: T.textDim,
                                          bg: q.bg, w: q.w - 4, lines: 40,
                                          id: "otab" }) + 8;
@@ -937,6 +1090,206 @@ function gateCorrupt() {
     return !!flowNewPin();
 }
 
+// ---- Entrada (teclado virtual, teclado fisico, mouse) ----------------------
+
+function scrInput(c) {
+    UI.invalidate();   // o form abre em frame TOTAL (A.run ja consumiu o begin)
+    A.form.run("Entrada", function () {
+        var a = [];
+        a.push(A.form.secao("Teclado virtual"));
+        var mostra = btOn("kbd_keys", true);
+        // action cicla (o sub explica a regra; rotulo de toggle ficaria longo)
+        a.push(A.form.action("Teclado na tela", function () {
+            btSet("kbd_keys", !btOn("kbd_keys", true));
+        }, { sub: mostra ? "sempre visível" : "esconde com teclado físico" }));
+        a.push(A.form.info("Layout", "QWERTY (US)"));
+        a.push(A.form.action("Testar teclado", function () {
+            var t = A.form.askText("Digite e confirme");
+            if (t !== null) UI.toast(t === "" ? "Confirmado vazio" : "Texto: " + t);
+        }, { sub: "abre um campo de texto" }));
+
+        a.push(A.form.secao("Teclado físico"));
+        if (!HAS_HID) {
+            a.push(A.form.info("Rádio", "sem BT HID nesta placa", T.warn));
+        } else {
+            var s = conectado();
+            var temKbd = s && (s.kind === "kbd" || s.kind === "combo");
+            a.push(A.form.info("Conectado", temKbd ? (s.name || s.addr) : "nenhum",
+                               temKbd ? T.ok : T.textDim));
+            if (temKbd && s.battery >= 0)
+                a.push(A.form.info("Bateria", s.battery + "%"));
+            a.push(A.form.action("Parear teclado", function () {
+                parear("kbd");
+            }, { sub: "teclado BLE HID" }));
+        }
+
+        a.push(A.form.secao("Mouse"));
+        if (!HAS_HID) {
+            a.push(A.form.info("Rádio", "sem BT HID nesta placa", T.warn));
+        } else {
+            a.push(A.form.action("Usar mouse", function () {
+                btSet("mouse_on", !btOn("mouse_on", true));
+            }, { sub: btOn("mouse_on", true) ? "ligado" : "desligado" }));
+            a.push(A.form.stepper("Velocidade", function () {
+                var v = parseInt(btPref("mouse_speed", "2"), 10);
+                return (v >= 1 && v <= 3) ? v : 2;
+            }, function (n) {
+                btSetStr("mouse_speed", String(n));
+            }, { min: 1, max: 3, step: 1, fmt: function (v) {
+                return v === 1 ? "lenta" : (v === 3 ? "rápida" : "normal");
+            }}));
+            var s2 = conectado();
+            var temMs = s2 && (s2.kind === "mouse" || s2.kind === "combo");
+            a.push(A.form.info("Conectado", temMs ? (s2.name || s2.addr) : "nenhum",
+                               temMs ? T.ok : T.textDim));
+            a.push(A.form.action("Parear mouse", function () {
+                parear("mouse");
+            }, { sub: "mouse BLE HID" }));
+            a.push(A.form.action("Testar mouse", function () {
+                testeMouse();
+            }, { sub: "mira + clique" }));
+        }
+        a.push(A.form.info("Nota", "um device BT por vez"));
+        return a;
+    });
+    return A.BACK;
+}
+
+// ---- Bluetooth (lista, pareamento, esquecer) -------------------------------
+
+var BT_PARES = [];   // cache de BT.paired() (NVS: nao consultar por quadro)
+
+function recarregaPares() {
+    BT_PARES = [];
+    if (!HAS_HID) return;
+    try { BT_PARES = BT.paired() || []; } catch (e) { BT_PARES = []; }
+}
+
+function scrBt(c) {
+    if (c.entered) {
+        recarregaPares();
+        UI.resetScroll("btlist");
+    } else if (A.every(2000, "btpares")) {
+        recarregaPares();
+    }
+    if (A.header("Bluetooth")) return A.BACK;
+
+    var ligado = btLigado();
+    var st = conectado();
+    // legenda EMPILHADA pela altura devolvida (mesmo conserto do card da
+    // atualizacao): o titulo mede 28-29 px e o +26 fixo desenhava por cima
+    // dele; o card de 58 (interno de 38) nao cabia o par titulo+legenda (44)
+    A.style.card(LX, TOP, LW, 68, {
+        full: c.full,
+        draw: function (q) {
+            var sy = q.y;
+            sy += UI.text(ligado ? "Bluetooth ligado" : "Bluetooth desligado",
+                          q.x, sy, { role: "title", bg: q.bg, w: q.w, id: "btst" }) + 4;
+            UI.text(btEstadoTxt(), q.x, sy,
+                    { role: "caption", color: T.textDim, bg: q.bg, w: q.w,
+                      lines: 1, id: "btsb" });
+        }
+    });
+
+    var alvo = btPref("bt_dev", "");
+    var rows = [];
+    rows.push({ label: "Driver", sub: "teclado, mouse e gamepad",
+                right: ligado ? "Ligado" : "Desligado",
+                rightColor: ligado ? T.ok : T.textDim, a: "toggle" });
+    // fones logo abaixo do driver: e a pergunta que todo mundo faz, e a
+    // resposta e de HARDWARE (o S3 nao tem Classic/A2DP) — nao some no rolar
+    rows.push({ label: "Fones de ouvido", sub: "áudio BT não suportado neste rádio",
+                right: "?", a: "why" });
+    rows.push({ label: "Adicionar device", sub: "procurar por scan",
+                right: "+", a: "add" });
+    rows.push({ label: "Pareados", k: "secao" });
+    var i;
+    if (!BT_PARES.length) {
+        rows.push({ label: "Nenhum device pareado",
+                    sub: "use Adicionar device", disabled: true });
+    }
+    for (i = 0; i < BT_PARES.length; i++) {
+        var p = BT_PARES[i];
+        var at = st && st.addr === p.addr;
+        rows.push({
+            label: p.name || p.addr,
+            sub: kindName(p.kind) + (at ? " · conectado" : ""),
+            right: at ? "ativo" : "",
+            rightColor: at ? T.ok : T.textDim,
+            a: "dev", arg: i
+        });
+    }
+    if (alvo) rows.push({ label: "Ativo: " + alvo, sub: "escolhido no pareamento",
+                          disabled: true });
+
+    var j = A.list.view("btlist", LX, TOP + 76, LW, BOT - TOP - 80, rows, { row: 40 });
+    if (j < 0) return;
+    var r = rows[j];
+    if (!r || !r.a) return;
+    if (r.a === "toggle") {
+        btSet("bt_on", !ligado);
+        UI.invalidate();
+    } else if (r.a === "add") {
+        parear("");
+    } else if (r.a === "why") {
+        UI.alert("Áudio Bluetooth",
+                 "Este aparelho usa um rádio ESP32-S3, que tem só Bluetooth LE. " +
+                 "Fones usam A2DP (Bluetooth Classic) e o LE Audio precisa de ISO - " +
+                 "nenhum dos dois existe no chip. O rádio aqui serve para teclado, " +
+                 "mouse e gamepad BLE.");
+    } else if (r.a === "dev") {
+        detailDev(BT_PARES[r.arg]);
+    }
+}
+
+// detalhe de um device pareado: usar/desconectar/esquecer
+function detailDev(p) {
+    if (!p) return;
+    UI.invalidate();
+    A.form.run("Device", function () {
+        var at = conectado();
+        var isAt = at && at.addr === p.addr;
+        var a = [];
+        a.push(A.form.info("Nome", p.name || "--"));
+        a.push(A.form.info("Tipo", kindName(p.kind)));
+        a.push(A.form.info("Endereço", p.addr, T.textDim));
+        if (isAt)
+            a.push(A.form.info("Bateria", at.battery >= 0 ? at.battery + "%" : "--"));
+        a.push(A.form.action(isAt ? "Desconectar" : "Usar este", function () {
+            if (isAt) {
+                BT.disconnect();
+                if (btPref("bt_dev", "") === p.addr) btSetStr("bt_dev", "");
+                UI.toast("Desconectado");
+                return;
+            }
+            btBusy();
+            try {
+                A.busy("Conectando...");
+                var r = BT.connect(p.addr);
+                if (r && r.ok) {
+                    btSetStr("bt_dev", p.addr);
+                    UI.toast("Conectado: " + kindName(BT.state().kind));
+                } else {
+                    UI.alert("Bluetooth", (r && r.err) ? r.err : "Não foi possível conectar.");
+                }
+            } finally {
+                btFree();
+            }
+        }));
+        a.push(A.form.action("Esquecer", function () {
+            if (!UI.confirm("Esquecer?",
+                            "Remover o pareamento de " + (p.name || p.addr) + "?",
+                            { yes: "Remover", danger: true })) return false;
+            BT.forget(p.addr);
+            if (btPref("bt_dev", "") === p.addr) btSetStr("bt_dev", "");
+            recarregaPares();
+            UI.toast("Pareamento removido");
+        }, { sub: "apaga o bond" }));
+        return a;
+    });
+    recarregaPares();
+}
+
 // ---- laco principal (A.run e dono do UI.begin/UI.end) ----------------------
 
 var pinSt0 = System.pinState();
@@ -949,6 +1302,8 @@ if (liberado) A.run({
     time: scrTime,
     security: scrSecurity,
     display: scrDisplay,
+    input: scrInput,
+    bluetooth: scrBt,
     som: scrSom,
     sensors: scrSensors,
     watch: scrWatch,

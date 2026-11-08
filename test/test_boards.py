@@ -82,10 +82,34 @@ endif()
         )
         self.assertEqual(G.sdkconfig_psram("CONFIG_SPIRAM_MODE_OCT=y\n"), "none")
 
+    def test_stamp(self):
+        # carimbo do 6dcc17df: com e sem aspas, e ausencia
+        self.assertEqual(
+            G.sdkconfig_stamp('CONFIG_CELEROS_SDKCONFIG_BOARD="cyd"\n'), "cyd"
+        )
+        self.assertEqual(
+            G.sdkconfig_stamp("CONFIG_CELEROS_SDKCONFIG_BOARD=waveshare-watch\n"),
+            "waveshare-watch",
+        )
+        self.assertIsNone(G.sdkconfig_stamp("CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y\n"))
+
 
 class ManifestTest(unittest.TestCase):
     def test_arvore_real_consistente(self):
         self.assertEqual(G.validate(ROOT), [])
+
+    def test_release_matrix_e_subconjunto_do_manifest(self):
+        # O zip de fabrica publica so uma parte das placas (headless ficam
+        # fora), mas o que publica tem que existir no manifest e bater o
+        # target — renomear placa/typo no release.yml pegava so na tag,
+        # dentro do job caro do IDF.
+        release = G.matrix_boards(
+            G.read_text(ROOT / ".github" / "workflows" / "release.yml"))
+        self.assertTrue(release, "release.yml sem matrix de placas?")
+        manifest = G.load(ROOT)
+        for board, target in release.items():
+            self.assertIn(board, manifest)
+            self.assertEqual(manifest[board]["target"], target)
 
     def test_size_report_le_o_manifest(self):
         manifest = G.load(ROOT)
@@ -119,6 +143,12 @@ class ManifestTest(unittest.TestCase):
                     }
                 )
             )
+            # release.yml com placa FORA do manifest: o validador da fabrica
+            # tambem nao pode ser no-op
+            wf = root / ".github" / "workflows"
+            wf.mkdir(parents=True)
+            (wf / "release.yml").write_text(
+                "      - board: fantasma\n        target: esp32\n", encoding="utf-8")
             errors = G.validate(root)
             self.assertTrue(errors)
             joined = "\n".join(errors)
@@ -129,6 +159,11 @@ class ManifestTest(unittest.TestCase):
                 "matrix",
                 "flash_data",
                 "CMake",
+                "release: fantasma nao esta no manifest",
+                # carimbo ausente no defaults do bogus e CMakeLists da raiz
+                # ausente na arvore minima: os dois guards do 6dcc17df
+                "carimbo",
+                "raiz: CMakeLists.txt",
             ):
                 self.assertIn(expected, joined)
 

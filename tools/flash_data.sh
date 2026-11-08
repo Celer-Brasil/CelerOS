@@ -37,6 +37,15 @@ if [ -z "$SIZE" ]; then echo "littlefs nao encontrada em $PART_CSV"; exit 1; fi
 # Overlay opcional da placa: boards/<placa>/data/ soma por cima de data/
 # (apps exclusivos de uma placa — ex.: Dog Face do cao robotico).
 STAGE="$ROOT/build/littlefs-stage-$$"
+IMG=""
+# Falha no meio (data-exclude inexistente, mklittlefs, parttool, Ctrl-C)
+# deixava o stage de ~1 MB (e a .img parcial) para sempre no build/ — cada
+# tentativa malsucedida somava um littlefs-stage-<pid> novo.
+cleanup() {
+    rm -rf "$STAGE"
+    if [ -n "$IMG" ]; then rm -f "$IMG"; fi
+}
+trap cleanup EXIT
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -a "$ROOT/data/." "$STAGE/"
 if [ -d "$ROOT/boards/$BOARD/data" ]; then
@@ -90,4 +99,4 @@ python "$IDF_PATH/components/partition_table/parttool.py" \
     --port "$PORT" \
     write_partition --partition-name=littlefs --input "$IMG"
 echo "OK: data/ gravado na particao littlefs ($BOARD, $SIZE bytes)"
-rm -f "$IMG"
+rm -f "$IMG"; IMG=""

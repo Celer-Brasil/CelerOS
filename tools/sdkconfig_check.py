@@ -9,8 +9,11 @@ enquanto o CI (build limpo) a tinha (2026-10-08).
 
 Para cada build*/ com CMakeCache.txt: le CELEROS_BOARD, junta
 sdkconfig.defaults + boards/<placa>/sdkconfig.defaults (a placa vence) e
-compara cada chave declarada com o sdkconfig do build. Sai com 1 se houver
-divergencia.
+compara cada chave declarada com o sdkconfig do build. O carimbo
+CONFIG_CELEROS_SDKCONFIG_BOARD (6dcc17df) tem diagnostico proprio: ausente =
+sdkconfig anterior ao commit (o reconfigure o adota sozinho); de outra placa =
+exatamente o caso do 4848 sem toque (TinyUSB tomou o GPIO19 do GT911). Sai
+com 1 se houver divergencia.
 
     python3 tools/sdkconfig_check.py            # todos os build*/
     python3 tools/sdkconfig_check.py build-dog  # so esse
@@ -26,6 +29,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LINE = re.compile(r"^(CONFIG_[A-Za-z0-9_]+)=(.*)$")
 UNSET = re.compile(r"^# (CONFIG_[A-Za-z0-9_]+) is not set$")
+# Carimbo da placa gravado pelo boards/<b>/sdkconfig.defaults (6dcc17df); o
+# main/CMakeLists.txt recusa o configure quando ele nao bate com CELEROS_BOARD.
+STAMP = "CONFIG_CELEROS_SDKCONFIG_BOARD"
+
+
+def unquote(val):
+    return val.strip('"')
 
 
 def parse(path):
@@ -46,11 +56,14 @@ def parse(path):
 
 
 def board_of(build):
+    """CELEROS_BOARD do CMakeCache (None se o dir nao foi configurado por este
+    projeto). Era "smartdisplay" quando a chave faltava — chute que reportava
+    divergencia contra os defaults da placa ERRADA num dir estranho."""
     cache = build / "CMakeCache.txt"
     if not cache.is_file():
         return None
     m = re.search(r"^CELEROS_BOARD:\w+=(.+)$", cache.read_text(errors="replace"), re.M)
-    return m.group(1).strip() if m else "smartdisplay"
+    return m.group(1).strip() if m else None
 
 
 def check(build):
@@ -64,6 +77,8 @@ def check(build):
         return None
     diffs, unknown = [], []
     for key, val in sorted(want.items()):
+        if key == STAMP:
+            continue  # diagnostico proprio, devolvido a parte
         if key not in have:
             # nem "=..." nem "is not set": a opcao nao existe neste IDF/alvo
             # (renomeada ou de outro chip) — aviso, nao divergencia
@@ -71,7 +86,11 @@ def check(build):
             continue
         if have[key] != val:
             diffs.append((key, val, have[key]))
-    return board, diffs, unknown
+    # Carimbo: None = sdkconfig anterior ao 6dcc17df (o reconfigure o adota
+    # sozinho — a divergencia de verdade esta nas chaves de cima). Preenchido
+    # com outra placa = o caso do 4848 sem toque: nao confiar no conteudo.
+    stamp = have.get(STAMP)
+    return board, diffs, unknown, (unquote(stamp) if stamp is not None else None)
 
 
 def main(args):
@@ -81,9 +100,24 @@ def main(args):
         r = check(b)
         if r is None:
             continue
-        board, diffs, unknown = r
+        board, diffs, unknown, stamp = r
         if unknown:
             print("%-16s %-16s aviso: chave(s) que o IDF nao conhece: %s" % (b.name, board, ", ".join(unknown)))
+        if stamp is not None and stamp != board:
+            bad += 1
+            print("%-16s %-16s CARIMBO de outra placa: '%s' != '%s' — sdkconfig "
+                  "estrangeiro (o caso do 4848 sem toque: o TinyUSB toma o "
+                  "GPIO19 do GT911). Apague o %s/sdkconfig."
+                  % (b.name, board, stamp, board, b.name))
+            if diffs:
+                print("    + %d divergencia(s) alem do carimbo:" % len(diffs))
+                for key, val, got in diffs:
+                    print("        %s: defaults=%s build=%s" % (key, val, got))
+            continue
+        if stamp is None:
+            print("%-16s %-16s aviso: sdkconfig anterior ao carimbo de 6dcc17df "
+                  "(o reconfigure adota '%s' sozinho; divergencias de baixo "
+                  "podem ser heranca de outra placa)" % (b.name, board, board))
         if not diffs:
             print("%-16s %-16s ok" % (b.name, board))
             continue

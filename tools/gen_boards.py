@@ -88,6 +88,17 @@ def sdkconfig_psram(text):
     return {"oct": "octal", "quad": "quad"}[m.group(1).lower()]
 
 
+def sdkconfig_stamp(text):
+    """Placa no carimbo CONFIG_CELEROS_SDKCONFIG_BOARD="<b>" (None se ausente).
+
+    O carimbo (6dcc17df) e o que o main/CMakeLists.txt compara com
+    -DCELEROS_BOARD: sem ele um sdkconfig de outra placa passa calado — foi
+    assim que o 4848 ficou sem toque (TinyUSB no GPIO19 do GT911).
+    """
+    m = re.search(r'^CONFIG_CELEROS_SDKCONFIG_BOARD="?([\w-]+)"?', text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
 def validate(root=ROOT):
     """Lista de erros (vazia = manifest e os 5 lugares concordam)."""
     root = Path(root)
@@ -126,6 +137,19 @@ def validate(root=ROOT):
         psram_cfg = sdkconfig_psram(text)
         if psram != psram_cfg:
             errors.append(f"{board}: psram={psram} != sdkconfig {psram_cfg}")
+        if defaults.is_file():
+            stamp = sdkconfig_stamp(text)
+            if stamp is None:
+                errors.append(
+                    f'{board}: falta CONFIG_CELEROS_SDKCONFIG_BOARD="{board}" '
+                    f"no sdkconfig.defaults (carimbo; o main/CMakeLists.txt "
+                    "recusa o configure sem ele)"
+                )
+            elif stamp != board:
+                errors.append(
+                    f'{board}: carimbo "{stamp}" no sdkconfig.defaults != '
+                    f'placa (precisa "{board}")'
+                )
 
         has_overlay = (bdir / "data").is_dir()
         if bool(cfg.get("data_overlay")) != has_overlay:
@@ -165,6 +189,19 @@ def validate(root=ROOT):
         if board not in matrix:
             errors.append(f"CI: falta {board} na matrix do build.yml")
 
+    # Matrix do release (fabrica): SUBCONJUNTO das placas — o zip de fabrica
+    # nao publica headless (devkit/cam), mas o que publica tem que existir no
+    # manifest e bater o target (placa renomeada/typo no release pegava só
+    # na tag, dentro do job caro do IDF).
+    release = matrix_boards(read_text(root / ".github" / "workflows" / "release.yml"))
+    for board, target in release.items():
+        if board not in boards:
+            errors.append(f"release: {board} nao esta no manifest")
+        elif boards[board].get("target") != target:
+            errors.append(
+                f"release: {board} target={target} != manifest {boards[board].get('target')}"
+            )
+
     # flash_data.sh.
     flash = flash_data_boards(read_text(root / "tools" / "flash_data.sh"))
     for board, cfg in boards.items():
@@ -186,6 +223,25 @@ def validate(root=ROOT):
     for board in cmake:
         if board not in boards:
             errors.append(f"CMake: {board} nao esta no manifest")
+
+    # Derivacao de sdkconfig POR BUILD DIR na raiz (6dcc17df). Sem os ifs,
+    # o IDF volta ao comportamento de antes: SDKCONFIG = <repo>/sdkconfig
+    # (compartilhado por todo build dir sem -DSDKCONFIG — o 4848 ficou sem
+    # toque quando um build do watch gravou USB_NATIVE la) e
+    # SDKCONFIG_DEFAULTS = so o sdkconfig.defaults da raiz, SEM o overlay da
+    # placa. O CI passa as flags explicitas e nunca exercitaria o caminho
+    # derivado, entao so este validador pega a regressao.
+    cmake_root = read_text(root / "CMakeLists.txt")
+    if (
+        "if(NOT SDKCONFIG)" not in cmake_root
+        or 'set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig"' not in cmake_root
+        or "boards/${CELEROS_BOARD}/sdkconfig.defaults" not in cmake_root
+    ):
+        errors.append(
+            "raiz: CMakeLists.txt nao deriva SDKCONFIG=<build>/sdkconfig + "
+            "SDKCONFIG_DEFAULTS da placa (6dcc17df); sem isso o IDF usa o "
+            "sdkconfig da raiz, compartilhado entre build dirs"
+        )
 
     return errors
 

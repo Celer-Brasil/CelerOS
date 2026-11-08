@@ -9,7 +9,7 @@
       "partitions": "partitions_16MB.csv",
       "ota_channel": "smartdisplay_4848S040",
       "build_dir": "build",
-      "data_overlay": false,
+      "data_overlay": true,
       "data_exclude": false
     },
     "cyd": {

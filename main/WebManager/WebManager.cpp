@@ -809,8 +809,14 @@ static esp_err_t handler_edit_post(httpd_req_t* req) {
     // "path" vai para std::string ANTES do decode in place do "content":
     // o decode reescreve o proprio buffer do corpo.
     std::string path;
-    if (!bodyParam(body, "path", path) || !safePath(req, path)) {
+    if (!bodyParam(body, "path", path)) {
         sendText(req, 400, "Missing parameters");
+        return ESP_OK;
+    }
+    // safePath responde 400 "Invalid storage" ele mesmo: um segundo sendText
+    // aqui escrevia uma SEGUNDA resposta HTTP completa na mesma conexao
+    // (status line+headers+corpo) e envenenava o keep-alive do navegador.
+    if (!safePath(req, path)) {
         return ESP_OK;
     }
     // Conteudo decodificado DENTRO do buffer do corpo (nunca cresce) e

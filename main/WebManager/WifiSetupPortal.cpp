@@ -10,16 +10,31 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include <new>  // std::nothrow
 
-// Estado compartilhado entre a task do httpd (handlers do componente) e o
-// poll. Credenciais sao copiadas antes da flag; races benignas.
+// Estado compartilhado entre a task do httpd (handlers do componente), a
+// task da UI (poll/begin/end) e a portal_conn — TODO ele sob o mutex s_lock.
+// "Credenciais copiadas antes da flag; races benignas" era otimista: o
+// handler atribui std::string na task httpd enquanto o poll copia o valor
+// ANTERIOR na task da UI (dois submits em sequencia, ou flag visivel antes
+// do assign completo num nucleo diferente) — assign concorrente em
+// std::string e use-after-free no buffer antigo (abort no -fno-exceptions).
 static CaptivePortal s_portal;
+static SemaphoreHandle_t s_lock = nullptr;
 static volatile bool s_credsPending = false;
 static std::string s_pendingSsid;
 static std::string s_pendingPass;
 static std::string s_apSsid;
 static bool s_handlersBound = false;
+
+static void credLock() {
+    if (s_lock == nullptr) s_lock = xSemaphoreCreateMutex();
+    if (s_lock != nullptr) xSemaphoreTake(s_lock, portMAX_DELAY);
+}
+static void credUnlock() {
+    if (s_lock != nullptr) xSemaphoreGive(s_lock);
+}
 
 // Conexao em task propria (mesmo formato da wifi_conn da tela local): o
 // poll e chamado no onTick da tela de setup, e conectar no contexto do
@@ -62,6 +77,7 @@ static void portalConnTask(void* arg) {
     nm.getWifiConnection()->setConnectionTimeout(15000);
     ErrorCode err = nm.connect(job->ssid, job->pass, true);  // salva no NVS
     nm.getWifiConnection()->setConnectionTimeout(10000);
+    credLock();
     if (job->gen == s_connGen) {  // geracao trocada (watchdog/nova tentativa): resultado ignorado
         if (err == CommonErrorCodes::None && nm.isConnected()) {
             s_connIp = nm.getIpAddress();  // antes do estado: poll so le apos o 2
@@ -70,6 +86,7 @@ static void portalConnTask(void* arg) {
             s_connState = 3;
         }
     }
+    credUnlock();
     delete job;
     vTaskDelete(nullptr);
 }
@@ -99,19 +116,23 @@ bool WifiSetupPortal::begin() {
     cfg.scanOnStart = true;
     s_portal.setConfig(cfg);
 
+    credLock();  // mutex criado ANTES do portal: o handler do httpd so roda depois
     if (!s_handlersBound) {
         s_handlersBound = true;
-        // Handler roda na task do httpd: so copia e seta flag
+        // Handler roda na task do httpd: so copia (sob o mutex) e seta flag
         s_portal.onCredentialsReceived.addHandler([](const WiFiCredentials& creds) {
+            credLock();
             s_pendingSsid = creds.ssid;
             s_pendingPass = creds.password;
             s_credsPending = true;
+            credUnlock();
         });
     }
 
     s_credsPending = false;
     bumpGen();  // tentativa anterior (se houvesse) nao reporta mais
     s_connState = 0;
+    credUnlock();
     if (!s_portal.start()) {
         celer_log_println("Falha ao iniciar captive portal");
         WebManager::suppressServerStart(false);  // devolve a porta 80 ao web
@@ -122,38 +143,66 @@ bool WifiSetupPortal::begin() {
 
 WifiSetupPortal::State WifiSetupPortal::poll(std::string& detail) {
     // Resultado da task: reporta UMA vez no portal (a pagina ve pelo /status)
-    if (s_connState == 2) {
+    credLock();
+    const int st = s_connState;
+    std::string connIp;
+    if (st == 2) {
+        connIp = s_connIp;
         s_connState = 0;
-        s_portal.reportConnectionState(PortalConnState::Connected, s_connIp);
-        detail = s_connIp;
+    }
+    credUnlock();
+    if (st == 2) {
+        s_portal.reportConnectionState(PortalConnState::Connected, connIp);
+        detail = connIp;
         s_portal.stop();  // APSTA -> STA (conexao preservada)
         WebManager::suppressServerStart(false);  // re-arma o servidor (web_on) no tick
         return Connected;
     }
-    if (s_connState == 3) {
-        s_connState = 0;
+    if (st == 3) {
         s_portal.reportConnectionState(PortalConnState::Failed);
         return Failed;
     }
     // Watchdog: portal_conn que nunca volta nao prende a tela para sempre —
     // geracao invalidada, estado limpo, Failed reportado (a task velha, se
-    // um dia acordar, cai fora pelo casamento de geracao).
-    if (s_connState == 1 && esp_timer_get_time() - s_connStartedUs > K_CONN_WATCHDOG_US) {
-        ESP_LOGW("celer.portal", "portal_conn preso ha 30 s: desistindo da tentativa");
-        bumpGen();  // resultado tardio da task velha e ignorado
-        s_connState = 0;
-        s_portal.reportConnectionState(PortalConnState::Failed);
-        return Failed;
+    // um dia acordar, cai fora pelo casamento de geracao). Reconfere o
+    // estado DENTRO do mutex: um resultado que chegou no intervalo nao e
+    // descartado.
+    if (st == 1 && esp_timer_get_time() - s_connStartedUs > K_CONN_WATCHDOG_US) {
+        bool cancelled = false;
+        credLock();
+        if (s_connState == 1) {
+            bumpGen();  // resultado tardio da task velha e ignorado
+            s_connState = 0;
+            cancelled = true;
+        }
+        credUnlock();
+        if (cancelled) {
+            ESP_LOGW("celer.portal", "portal_conn preso ha 30 s: desistindo da tentativa");
+            s_portal.reportConnectionState(PortalConnState::Failed);
+            return Failed;
+        }
     }
-    if (s_connState == 1 || !s_credsPending) return Waiting;
+    std::string ssid, pass;
+    bool haveCreds = false;
+    credLock();
+    if (st != 1 && s_credsPending) {
+        s_credsPending = false;
+        ssid = s_pendingSsid;
+        pass = s_pendingPass;
+        haveCreds = true;
+    }
+    credUnlock();
+    if (!haveCreds) return Waiting;
 
-    s_credsPending = false;
-    detail = s_pendingSsid;
+    detail = ssid;
     s_portal.reportConnectionState(PortalConnState::Connecting);
 
     // O httpd do portal segue vivo na task dele respondendo /status
     // nothrow: sem excecoes um new que falha aborta o aparelho
-    PortalJob* job = new (std::nothrow) PortalJob{s_pendingSsid, s_pendingPass, bumpGen()};
+    credLock();
+    const uint32_t gen = bumpGen();
+    credUnlock();
+    PortalJob* job = new (std::nothrow) PortalJob{ssid, pass, gen};
     if (job == nullptr) {
         s_portal.reportConnectionState(PortalConnState::Failed);
         return Failed;
@@ -161,11 +210,15 @@ WifiSetupPortal::State WifiSetupPortal::poll(std::string& detail) {
     // Estado ANTES de criar a task: ela pode terminar (falha rapida do
     // connect) antes do "conectando" ser marcado e o resultado seria
     // sobrescrito — a tela ficava 30 s girando e reportava falha.
+    credLock();
     s_connState = 1;
     s_connStartedUs = esp_timer_get_time();
+    credUnlock();
     if (xTaskCreate(portalConnTask, "portal_conn", 6144, job, 5, nullptr) != pdPASS) {
         delete job;
+        credLock();
         s_connState = 0;  // geracao bumpada e morta sem task: nada a invalidar
+        credUnlock();
         s_portal.reportConnectionState(PortalConnState::Failed);
         return Failed;
     }
@@ -173,8 +226,10 @@ WifiSetupPortal::State WifiSetupPortal::poll(std::string& detail) {
 }
 
 void WifiSetupPortal::end() {
+    credLock();
     bumpGen();  // nenhuma tentativa em curso reporta depois daqui
     s_connState = 0;
+    credUnlock();
     s_portal.stop();
     WebManager::suppressServerStart(false);
 }

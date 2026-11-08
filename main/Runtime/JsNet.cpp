@@ -90,7 +90,14 @@ static bool netFetch(duk_context *ctx, bool isPost) {
     {
         HttpClient http;
         http.setTimeout(10000);
-        http.setBodySink([&got](const char* d, size_t len) { return got.append(d, len); });
+        // Chunk recebido alimenta o TWDT: um servidor que goteja 1 byte a
+        // cada <timeout mantem a requisicao viva por MINUTOS na task do app
+        // (cada leitura individual respeita o timeout, mas o total nao tem
+        // teto) — sem isso o watchdog de 15 s reiniciava o aparelho.
+        http.setBodySink([&got](const char* d, size_t len) {
+            esp_task_wdt_reset();
+            return got.append(d, len);
+        });
         HttpResponse resp = isPost ? http.post(url, body, contentType) : http.get(url);
         ok = resp.isOk();
         if (!ok) snprintf(failWhy, sizeof(failWhy), "%s", resp.errorMessage.c_str());  // diagnostico (log)
@@ -190,7 +197,11 @@ duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
     uint32_t timeoutMs = duk_is_number(ctx, -1) ? (uint32_t)duk_get_number(ctx, -1) : 10000;
     duk_pop(ctx);
     if (timeoutMs < 1000) timeoutMs = 1000;
-    if (timeoutMs > 20000) timeoutMs = 20000;
+    // Teto 12 s < 15 s do TWDT (CONFIG_ESP_TASK_WDT_TIMEOUT_S + PANIC=y): a
+    // task do app esta inscrita e o pedido trava SEM alimentar (conecta em
+    // host burro — URL com IP literal pula o DNS — ou servidor sem resposta
+    // apos o header). 20 s passava do watchdog e reiniciava o aparelho.
+    if (timeoutMs > 12000) timeoutMs = 12000;
 
     // Coleta ate 6 cabecalhos; nome/valor sem CR/LF/controle (injecao de
     // pedido) e com teto curto — o valor real de apikey/Bearer cabe em 256.
@@ -235,7 +246,12 @@ duk_ret_t JSBindings::js_netRequest(duk_context *ctx) {
         HttpClient http;
         http.setTimeout(timeoutMs);
         for (int i = 0; i < headerCount; i++) http.setHeader(hNames[i], hValues[i]);
-        http.setBodySink([&got](const char *d, size_t len) { return got.append(d, len); });
+        // Gotejo do servidor alimenta o TWDT (ver comentario no netFetch):
+        // o total da requisicao nao tem teto proprio.
+        http.setBodySink([&got](const char *d, size_t len) {
+            esp_task_wdt_reset();
+            return got.append(d, len);
+        });
         HttpResponse resp;
         if (verb == HttpMethod::POST) resp = http.post(url, body, contentType);
         else if (verb == HttpMethod::PUT) resp = http.put(url, body, contentType);
@@ -381,7 +397,11 @@ duk_ret_t JSBindings::js_netFetch(duk_context *ctx) {
     uint32_t timeoutMs = duk_is_number(ctx, -1) ? (uint32_t)duk_get_number(ctx, -1) : 10000;
     duk_pop(ctx);
     if (timeoutMs < 1000) timeoutMs = 1000;
-    if (timeoutMs > 20000) timeoutMs = 20000;
+    // Teto 12 s < 15 s do TWDT (CONFIG_ESP_TASK_WDT_TIMEOUT_S + PANIC=y): a
+    // task do app esta inscrita e o pedido trava SEM alimentar (conecta em
+    // host burro — URL com IP literal pula o DNS — ou servidor sem resposta
+    // apos o header). 20 s passava do watchdog e reiniciava o aparelho.
+    if (timeoutMs > 12000) timeoutMs = 12000;
 
     duk_get_prop_string(ctx, 0, "waitOnline");
     uint32_t waitMs = duk_is_number(ctx, -1) ? (uint32_t)duk_get_number(ctx, -1) : 0;
@@ -425,7 +445,11 @@ duk_ret_t JSBindings::js_netFetch(duk_context *ctx) {
             HttpClient http;
             http.setTimeout(timeoutMs);
             for (int i = 0; i < headerCount; i++) http.setHeader(hNames[i], hValues[i]);
-            http.setBodySink([&got](const char *d, size_t len) { return got.append(d, len); });
+            // Gotejo do servidor alimenta o TWDT (ver comentario no netFetch).
+            http.setBodySink([&got](const char *d, size_t len) {
+                esp_task_wdt_reset();
+                return got.append(d, len);
+            });
             HttpResponse resp;
             if (verb == HttpMethod::POST) resp = http.post(url, body, contentType);
             else if (verb == HttpMethod::PUT) resp = http.put(url, body, contentType);
@@ -531,7 +555,10 @@ duk_ret_t JSBindings::js_netDownload(duk_context *ctx) {
     bool exitReq = false;  // X/exit pedido de dentro do callback
 
     HttpClient http;
-    http.setTimeout(15000);
+    // 12 s < 15 s do TWDT (ver comentario do clamp em Net.request): sem
+    // progresso (conecta/TTFB preso) nenhum chunk alimentou o watchdog e o
+    // 15 s exato corria junto com o timeout do WDT — PANIC reiniciava.
+    http.setTimeout(12000);
     http.setBufferSize(4096);  // chunk maior = menos chamadas do callback
     // callback SEMPRE presente: o reset do watchdog por chunk cobre o
     // download sem progress (o loop do app nao roda enquanto isso)

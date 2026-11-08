@@ -469,6 +469,16 @@ HttpResponse HttpClient::performRequest(HttpMethod method,
     response.connectMs = _connectMs;
     response.firstByteMs = _firstByteMs;
 
+    // Handle reusado limpo para o proximo pedido: o esp_http_client guarda os
+    // headers do pedido ANTERIOR no handle (so morrem no cleanup) e o
+    // armRequest so sobrescreve nomes iguais — o "Content-Type" de um POST
+    // anterior vazava no GET seguinte (TTS apos chat do AI worker) e header
+    // removido da tabela (removeHeader/clearHeaders) continuaria indo.
+    // O proximo armRequest repoe exatamente a tabela atual.
+    if (_keepHandle) {
+        esp_http_client_delete_all_headers(client);
+    }
+
     if (err == ESP_OK) {
         response.success = true;
         ESP_LOGI(TAG, "Request to %s completed: %d (%d bytes in %lu ms)",

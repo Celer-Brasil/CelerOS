@@ -346,10 +346,14 @@ ErrorCode NetworkManager::connectToKnown() {
 
     // Select best network
     auto bestNetwork = NetworkSelector::instance().selectBestNetwork(scannedNetworks, knownNetworks);
-    
+
     if (!bestNetwork.has_value()) {
         ESP_LOGW(TAG, "No suitable network found");
-        setState(NetworkState::Disconnected);
+        // scan vazio/find nada: o estado acompanha a conexao (a STA pode estar
+        // associada — connectToKnown e chamado de reconnect() ate conectado).
+        // O Disconnected incondicional deixava Net.state mentindo com radio no AR.
+        setState(_wifiConnection->isConnected() ? NetworkState::Connected
+                                                : NetworkState::Disconnected);
         return CommonErrorCodes::FileNotFound;
     }
 

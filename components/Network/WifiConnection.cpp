@@ -590,12 +590,18 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     ret = esp_wifi_scan_get_ap_num(&ap_count);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Erro ao obter número de APs: %s", esp_err_to_name(ret));
+        esp_wifi_clear_ap_list();  // a lista interna do driver fica alocada
         unlockScan(true);
         return -1;
     }
 
     ESP_LOGI(TAG, "Encontradas %d redes WiFi", ap_count);
 
+    // Total ANTES do teto: o esp_wifi_scan_get_ap_records so libera os
+    // registros que copia — o excedente (found - copiados) fica na RAM
+    // interna do driver ate esp_wifi_clear_ap_list (docs IDF 6.1). Regiao
+    // densa (40+ APs, teto de 20) vazava essa lista a cada scan.
+    const uint16_t found = ap_count;
     if (ap_count > max_aps) {
         ap_count = max_aps;
     }
@@ -604,9 +610,13 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
         ret = esp_wifi_scan_get_ap_records(&ap_count, ap_list);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Erro ao obter lista de APs: %s", esp_err_to_name(ret));
+            esp_wifi_clear_ap_list();
             unlockScan(true);
             return -1;
         }
+    }
+    if (found > ap_count) {
+        esp_wifi_clear_ap_list();  // registros nao copiados ficariam sem dono
     }
 
     // Process and cache results
@@ -622,9 +632,15 @@ int WifiConnection::scan(wifi_ap_record_t* ap_list, uint16_t max_aps) {
     // Sort by RSSI
     std::sort(_lastScanResult.networks.begin(), _lastScanResult.networks.end(), compareByRssi);
 
+    // Snapshot AINDA sob a guarda e trigger da COPIA: entre o unlockScan e o
+    // fim do trigger (sincrono) outro scan pode comecar e reescrever
+    // _lastScanResult — o handler que itera a referencia virava
+    // use-after-free (mesma classe do fix do SCAN_DONE async).
+    WiFiScanResult snapshot = _lastScanResult;
+
     unlockScan(true);
 
-    onScanCompleted.trigger(this, _lastScanResult);
+    onScanCompleted.trigger(this, snapshot);
 
     ESP_LOGI(TAG, "Scan concluído, retornando %d redes", ap_count);
     return static_cast<int>(ap_count);
@@ -673,6 +689,7 @@ void WifiConnection::processScanResults(WiFiScanResult& result) {
     // wifi_ap_record_t (~100 B cada) virava um new de >10 KB — sem PSRAM,
     // um new que falha aborta o aparelho (sem excecoes). 32 APs cobrem
     // qualquer lista de UI e malloc devolve erro limpo.
+    const uint16_t found = ap_count;
     constexpr uint16_t kMaxKeptAps = 32;
     if (ap_count > kMaxKeptAps) ap_count = kMaxKeptAps;
     result.count = ap_count;
@@ -690,12 +707,20 @@ void WifiConnection::processScanResults(WiFiScanResult& result) {
     }
 
     ret = esp_wifi_scan_get_ap_records(&ap_count, ap_records);
-    
+
     if (ret != ESP_OK) {
         free(ap_records);
+        // A lista interna do driver nao foi consumida: descarta, senao fica
+        // alocada (mesma doutrina do caminho de malloc falho acima).
+        esp_wifi_clear_ap_list();
         result.success = false;
         result.error = CommonErrorCodes::WifiScanFailed;
         return;
+    }
+    if (found > ap_count) {
+        // get_ap_records so libera o que copia: o excedente do teto de 32
+        // ficava alocado na RAM interna do driver a cada scan denso.
+        esp_wifi_clear_ap_list();
     }
 
     // Convert to ScannedNetwork
@@ -819,6 +844,7 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                     // falhou = scan alhures guarda o lock e consome o
                     // resultado (o esp_wifi_scan_stop dele descarta a lista).
                     bool nosso = false;
+                    WiFiScanResult snapshot;
                     if (self->_scanMutex != nullptr &&
                         xSemaphoreTake(self->_scanMutex, 0) == pdTRUE) {
                         self->_scanInProgress = false;
@@ -830,6 +856,12 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
                             // escrita (use-after-free, o que a guarda so no
                             // leitor nao impedia).
                             self->processScanResults(self->_lastScanResult);
+                            // trigger e SINCRONO: o handler itera a referencia
+                            // que passa — copiar ainda sob a guarda, senao um
+                            // scan que comece entre o give e o fim do trigger
+                            // (outro task) reescreve o vector no meio da
+                            // iteracao (use-after-free).
+                            snapshot = self->_lastScanResult;
                             nosso = true;
                         }
                         xSemaphoreGive(self->_scanMutex);
@@ -837,7 +869,7 @@ void WifiConnection::eventHandler(void *arg, esp_event_base_t event_base,
 
                     if (nosso) {
                         self->setState(WiFiConnectionState::Idle);
-                        self->onScanCompleted.trigger(self, self->_lastScanResult);
+                        self->onScanCompleted.trigger(self, snapshot);
                     }
                 }
                 // For blocking scans, the scan() function handles everything

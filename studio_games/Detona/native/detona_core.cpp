@@ -25,8 +25,11 @@ constexpr int CELL = 32;
 constexpr int NCEL = COLS * ROWS;
 
 constexpr uint32_t kLevelOff = 0;
-constexpr uint32_t kLevelCap = 512;
-constexpr uint32_t kOutOff = 512;
+// area de nivel do scratch: o payload chega NIBBLE-ENCODADO (2 chars por
+// byte), entao a region precisa do dobro do maior payload decodificado
+// (grade 195 + cabecalho + 24 inimigos x 4 + jogador = 299 B -> 598 chars).
+constexpr uint32_t kLevelCap = 1024;
+constexpr uint32_t kOutOff = kLevelCap;
 
 enum CellKind { FREE = 0, SOLID = 1, CRATE = 2, EXITC = 3 };
 enum { MODE_CAMPAIGN = 0, MODE_SURVIVE = 1, MODE_DUEL = 2 };
@@ -55,20 +58,30 @@ struct WireState {
     uint16_t pad;
 };
 struct WireBomb { uint8_t c, r, range, owner, remote, pad0; uint16_t t; uint16_t pad1; };
-struct WireFlame { uint8_t c, r, pad0, pad1; uint16_t t; };
+struct WireFlame { uint8_t c, r, owner, pad1; uint16_t t; };
 struct WireEnemy { uint8_t c, r, type, hp, maxHp, active; uint16_t aiT; };
 struct WireDrop { uint8_t c, r, kind, pad; };
+
+// ABI host x blob (x86 x xtensa, ambos little-endian ILP32): os structs do
+// wire so tem u8/u16/i32 com pad explicito — o sizeof tem que bater nos
+// dois (os valores sao o espelho em Assets/Scripts/detona_core.js).
+static_assert(sizeof(WireState) == 40, "wire estado = 40 B (espelho JS ST=40)");
+static_assert(sizeof(WireBomb) == 10, "wire bomba = 10 B (passo 10 no espelho JS)");
+static_assert(sizeof(WireFlame) == 6, "wire chama = 6 B (passo 6 no espelho JS)");
+static_assert(sizeof(WireEnemy) == 8, "wire inimigo = 8 B (passo 8 no espelho JS)");
+static_assert(sizeof(WireDrop) == 4, "wire drop = 4 B (passo 4 no espelho JS)");
 
 constexpr uint32_t kArraysBytes = 16 * sizeof(WireBomb) + 64 * sizeof(WireFlame)
                                 + 24 * sizeof(WireEnemy) + 16 * sizeof(WireDrop);
 // o bloco de ESTADO do contrato cobre o WireState E os arrays: a lista de
 // sujos comeca em 8+stateBytes (por isso stateBytes = estado + arrays)
 constexpr uint32_t kStateBytes = sizeof(WireState) + kArraysBytes;
+static_assert((kStateBytes % 4) == 0, "stateBytes multiplo de 4 (alinhamento das listas)");
 constexpr uint32_t kOutBytes = CELER_OUT_BYTES(kStateBytes);
 
 // ---------------------------------------------------------------- estado
 struct Bomb { uint8_t c, r, range, owner, remote; uint16_t t; };
-struct Flame { uint8_t c, r; uint16_t t; };
+struct Flame { uint8_t c, r, owner, pad; uint16_t t; };
 struct Enemy { uint8_t c, r, type, hp, maxHp, active; uint16_t aiT; };
 struct Drop { uint8_t c, r, kind; };
 
@@ -82,6 +95,7 @@ struct Sim {
     uint16_t moveT, moving;    // ms
     uint8_t lives, range, maxBombs, shield, remote;
     uint16_t score, speed, invuln, timeLeft, time0, animT;
+    uint16_t clockAcc;         // ms do quadro ainda nao virados em ds
     uint8_t done, lost, won, bossDead;
 
     Bomb bombs[16]; uint8_t nb;
@@ -127,11 +141,12 @@ int bombAt(int c, int r) {
     return -1;
 }
 
-void addFlame(int c, int r) {
+void addFlame(int c, int r, uint8_t owner) {
     for (int i = 0; i < s.nf; i++)
         if (s.flames[i].c == c && s.flames[i].r == r) { s.flames[i].t = 350; markCell(c, r); return; }
     if (s.nf >= 64) return;
-    s.flames[s.nf].c = (uint8_t)c; s.flames[s.nf].r = (uint8_t)r; s.flames[s.nf].t = 350;
+    s.flames[s.nf].c = (uint8_t)c; s.flames[s.nf].r = (uint8_t)r;
+    s.flames[s.nf].owner = owner; s.flames[s.nf].t = 350;
     s.nf++;
     markCell(c, r);
 }
@@ -167,10 +182,13 @@ void destroyCrate(int c, int r) {
     }
 }
 
+void hurtPlayer();
+void hitEnemiesAt(int c, int r, uint8_t owner);
+
 void explode(int bi) {
     const Bomb b = s.bombs[bi];
     s.bombs[bi] = s.bombs[--s.nb];
-    addFlame(b.c, b.r);
+    addFlame(b.c, b.r, b.owner);
     static const int8_t DIRS[4][2] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
     for (int d = 0; d < 4; d++) {
         for (int n = 1; n <= b.range; n++) {
@@ -178,12 +196,21 @@ void explode(int bi) {
             if (c < 0 || r < 0 || c >= COLS || r >= ROWS) break;
             const uint8_t v = gridAt(c, r);
             if (v == SOLID) break;
-            if (v == CRATE) { addFlame(c, r); destroyCrate(c, r); break; }
-            addFlame(c, r);
+            if (v == CRATE) { addFlame(c, r, b.owner); destroyCrate(c, r); break; }
+            addFlame(c, r, b.owner);
             const int other = bombAt(c, r);
             if (other >= 0) s.bombs[other].t = 0;
         }
     }
+    // dano NO INSTANTE da explosao (paridade com o detona.js): chamas do
+    // dono ferem os inimigos uma vez; qualquer chama queima o jogador. O
+    // updateFlames so envelhece — dano por quadro derretia o inimigo parado
+    // no fogo.
+    for (int i = 0; i < s.nf; i++)
+        if (s.flames[i].owner == b.owner)
+            hitEnemiesAt(s.flames[i].c, s.flames[i].r, b.owner);
+    for (int i = 0; i < s.nf; i++)
+        if (s.flames[i].c == s.gc && s.flames[i].r == s.gr) { hurtPlayer(); break; }
     celer_core_event(&g_out, EV_EXPLODE, (uint16_t)(b.r * COLS + b.c), b.owner, 0);
 }
 
@@ -201,7 +228,15 @@ void hurtPlayer() {
     if (s.lives == 0) {
         s.lost = 1; s.done = 1;
         celer_core_event(&g_out, EV_LOSE, 0, 0, 0);
+        return;
     }
+    // volta ao canto seguro (1,1), como o detona.js (hurtPlayer): sem isto o
+    // nativo deixava o jogador em cima da bomba que acabou de ferir
+    s.moving = 0; s.moveT = 0;
+    markCell(s.gc, s.gr);
+    s.gc = 1; s.gr = 1;
+    s.px = fx(center(1)); s.py = fx(center(1));
+    markCell(1, 1);
 }
 
 void hitEnemiesAt(int c, int r, uint8_t owner) {
@@ -274,14 +309,12 @@ void updateBombs(uint16_t dt) {
 }
 
 void updateFlames(uint16_t dt) {
+    // so envelhece: o dano aconteceu uma vez, dentro do explode()
     for (int i = 0; i < s.nf;) {
         if (s.flames[i].t > dt) { s.flames[i].t = (uint16_t)(s.flames[i].t - dt); i++; continue; }
         markCell(s.flames[i].c, s.flames[i].r);
         s.flames[i] = s.flames[--s.nf];
     }
-    for (int i = 0; i < s.nf; i++) hitEnemiesAt(s.flames[i].c, s.flames[i].r, 0);
-    for (int i = 0; i < s.nf; i++)
-        if (s.flames[i].c == s.gc && s.flames[i].r == s.gr) { hurtPlayer(); break; }
 }
 
 uint16_t enemyInterval(const Enemy& e) {
@@ -410,7 +443,7 @@ void publish() {
     WireFlame* wf = (WireFlame*)p;
     for (int i = 0; i < s.nf; i++) {
         wf[i].c = s.flames[i].c; wf[i].r = s.flames[i].r;
-        wf[i].pad0 = wf[i].pad1 = 0; wf[i].t = s.flames[i].t;
+        wf[i].owner = s.flames[i].owner; wf[i].pad1 = 0; wf[i].t = s.flames[i].t;
     }
     p += 64 * sizeof(WireFlame);
     WireEnemy* we = (WireEnemy*)p;
@@ -430,15 +463,25 @@ void publish() {
 }
 
 void resetSim(uint16_t seed) {
-    // comeca um "quadro" novo: as listas de sujos/eventos nao acumulam entre
+    // comeca uma PARTIDA nova: as listas de sujos/eventos nao acumulam entre
     // INIT/LOAD_LEVEL (o celer_core_begin so roda no INIT)
     g_out.dirtyCount = 0;
     g_out.eventCount = 0;
     s.nb = s.nf = s.nd = 0;
+    // o RESET volta o elenco da fase (a saida exige a fase limpa; sem isto um
+    // RESET depois de inimigos mortos entregava a fase concluida)
+    for (int i = 0; i < s.ne; i++) {
+        s.enemies[i].active = 1;
+        s.enemies[i].hp = s.enemies[i].maxHp;
+        s.enemies[i].aiT = 0;
+    }
+    // a saida revelada mora na grade (EXITC): deriva da celula, nao de estado solto
+    s.exitRevealed = (gridAt(s.exitC, s.exitR) == EXITC) ? 1 : 0;
     s.lives = 3; s.range = 1; s.maxBombs = 1; s.speed = 256;
     s.shield = s.remote = s.done = s.lost = s.won = s.bossDead = 0;
     s.invuln = 0; s.score = 0; s.animT = 0;
     s.moving = 0; s.moveT = 0; s.face = DIR_DOWN;
+    s.clockAcc = 0;
     s.timeLeft = s.time0;
     s.rng = 0x9E3779B9u ^ (uint32_t)seed * 2654435761u;
     for (int i = 0; i < NCEL; i++) markCell(i % COLS, i / COLS);
@@ -458,52 +501,48 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg) {
         publish();
         return 1;
     case CORE_LOAD_LEVEL: {
-        if (sc == nullptr || arg < (int32_t)(NCEL + 5)) return 0;
+        if (sc == nullptr) return 0;
         // payload vem NIBBLE-ENCODADO do JS (2 chars por byte): a string do
         // Duktape e CESU-8, entao qualquer byte > 0x7F viraria 2 bytes no
         // nativeWrite e desalinharia o resto. Aqui volta a ser 1 byte.
-        static uint8_t lv[kLevelCap];
-        {
-            const uint8_t* raw = sc + kLevelOff;
-            const int32_t n = arg / 2;
-            if (n > (int32_t)kLevelCap) return 0;
-            for (int32_t i = 0; i < n; i++)
-                lv[i] = (uint8_t)((raw[i * 2] << 4) | (raw[i * 2 + 1] & 0x0F));
-            arg = n;   // daqui para baixo, `arg` e o tamanho decodificado
-        }
-        for (int i = 0; i < NCEL; i++) s.grid[i] = lv[i];
-        s.exitC = lv[NCEL];
-        s.exitR = lv[NCEL + 1];
-        s.mode = lv[NCEL + 2];
+        static uint8_t lv[kLevelCap / 2];
+        const uint8_t* raw = sc + kLevelOff;
+        const int32_t n = arg / 2;
+        // minimo decodificado: grade + cabecalho + 1 inimigo; o teto e a
+        // propria area de nivel (o decode nunca le fora da regiao)
+        if (n < (int32_t)(NCEL + 6) || n > (int32_t)(kLevelCap / 2)) return 0;
+        for (int32_t i = 0; i < n; i++)
+            lv[i] = (uint8_t)((raw[i * 2] << 4) | (raw[i * 2 + 1] & 0x0F));
+        for (int i = 0; i < NCEL; i++) s.grid[i] = lv[i] & 0x03;   // 0 livre..3 saida
+        s.exitC = lv[NCEL] < COLS ? lv[NCEL] : (uint8_t)(COLS - 1);
+        s.exitR = lv[NCEL + 1] < ROWS ? lv[NCEL + 1] : (uint8_t)(ROWS - 1);
+        const uint8_t m = lv[NCEL + 2];
+        s.mode = (m > (uint8_t)MODE_DUEL) ? (uint8_t)MODE_CAMPAIGN : m;
         s.time0 = (uint16_t)(lv[NCEL + 3] | (lv[NCEL + 4] << 8));
         int off = NCEL + 5;
         const int ne = lv[off++];
         s.ne = 0;
         for (int i = 0; i < ne && i < 24; i++) {
+            if (off + 4 > n) break;   // payload truncado: nao le lixo de carga antiga
             Enemy& e = s.enemies[s.ne++];
-            e.type = lv[off];
-            e.c = lv[off + 1];
-            e.r = lv[off + 2];
+            e.type = lv[off] & 0x03;
+            e.c = lv[off + 1] < COLS ? lv[off + 1] : (uint8_t)(COLS - 1);
+            e.r = lv[off + 2] < ROWS ? lv[off + 2] : (uint8_t)(ROWS - 1);
             e.maxHp = lv[off + 3] ? lv[off + 3] : 1;
             e.hp = e.maxHp;
             e.active = 1;
             e.aiT = 0;
             off += 4;
         }
-        s.exitRevealed = 0;
         // jogador: o JS manda a celula inicial no fim do payload
-        if (arg >= off + 2) {
-            s.gc = lv[off];
-            s.gr = lv[off + 1];
+        if (n >= off + 2) {
+            s.gc = lv[off] < COLS ? lv[off] : (uint8_t)(COLS - 1);
+            s.gr = lv[off + 1] < ROWS ? lv[off + 1] : (uint8_t)(ROWS - 1);
             s.px = fx(center(s.gc));
             s.py = fx(center(s.gr));
         }
         resetSim((uint16_t)(s.time0 ^ (s.mode * 257)));
         publish();
-        // diagnostico: o que o core decodificou do payload
-        {
-            extern void celer_log_dbg(const char*);
-        }
         return (uint32_t)off;
     }
     case CORE_RESET:
@@ -539,10 +578,16 @@ extern "C" uint32_t core_ctl(void* scratch, int32_t cmd, int32_t arg) {
         if (s.invuln > 0) s.invuln = (s.invuln > dt) ? (uint16_t)(s.invuln - dt) : 0;
         s.animT = (uint16_t)(s.animT + dt);
         if (s.time0 > 0) {
-            const uint16_t ds = (uint16_t)(dt / 100);
+            // o quadro chega em ms (16..255): acumula e vira ds quando fecha
+            // 100 — o `dt / 100` antigo truncava para 0 no tick de 16 ms e o
+            // relogio da fase NUNCA descia
+            const uint32_t acc = (uint32_t)s.clockAcc + dt;
+            const uint16_t ds = (uint16_t)(acc / 100u);
+            s.clockAcc = (uint16_t)(acc % 100u);
             if (s.timeLeft > ds) s.timeLeft = (uint16_t)(s.timeLeft - ds);
             else {
                 s.timeLeft = 0;
+                s.clockAcc = 0;
                 hurtPlayer();
                 if (!s.lost) s.timeLeft = (uint16_t)(s.time0 / 2);
             }

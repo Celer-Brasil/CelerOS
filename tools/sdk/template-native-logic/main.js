@@ -48,20 +48,24 @@ function loadCore() {
 }
 
 // ---- leitura do scratch em fatias (nativeRead devolve no maximo 256 B) ----
+// Cada chunk vira BYTES NUMERICOS por charCodeAt e o parse e por indice:
+// concatenar os chunks em string (`s += part`) estourou no aparelho real
+// ("cannot string coerce Symbol" ao ler o bloco de eventos — o mesmo bug
+// corrigido na ponte do Detona).
 function readBytes(off, len) {
-    var s = "", p = 0;
+    var b = [], p = 0, i;
     while (p < len) {
         var n = (len - p) < 256 ? (len - p) : 256;
         var part = S.nativeRead(h, off + p, n);
-        if (part === null) return null;
-        s += part;
+        if (part === null || typeof part !== 'string' || part.length !== n) return null;
+        for (i = 0; i < n; i++) b.push(part.charCodeAt(i) & 0xFF);
         p += n;
     }
-    return s;
+    return b;
 }
-function u16(s, i) { return s.charCodeAt(i * 2) | (s.charCodeAt(i * 2 + 1) << 8); }
-function i32(s, i) {
-    var v = u16(s, i) | (u16(s, i + 1) << 16);
+function rb16(b, o) { return b[o] | (b[o + 1] << 8); }
+function i32(b, o) {
+    var v = rb16(b, o) | (rb16(b, o + 2) << 16);
     return (v & 0x80000000) ? (v - 0x100000000) : v;
 }
 function fx(v) { return v / 256; }  // Q16.16 -> px
@@ -73,33 +77,34 @@ var dirty = [], events = [];
 function readOut() {
     var head = readBytes(outOff, OUT_HEAD);
     if (head === null) return false;
-    var nState = u16(head, 1);
-    var nEvents = u16(head, 2);
-    var nDirty = u16(head, 3);
+    if (rb16(head, 0) !== 1) return false;   // CELER_CORE_VERSION
+    var nState = rb16(head, 2);
+    var nEvents = rb16(head, 4);
+    var nDirty = rb16(head, 6);
+    if (nState <= 0 || nState > 2048) return false;
     stateBytes = nState;
 
     var body = readBytes(outOff + OUT_HEAD, nState + nDirty * 2);
     if (body === null) return false;
     st.px = i32(body, 0);
-    st.py = i32(body, 2);
-    st.score = u16(body, 4);
-    st.tick = u16(body, 5);
-    st.flags = u16(body, 6);
-    st.coinMask = u16(body, 7);
-    for (var i = 0; i < 8; i++) st.coinCell[i] = u16(body, 8 + i);
-    st.sparkCell = u16(body, 16);
+    st.py = i32(body, 4);
+    st.score = rb16(body, 8);
+    st.tick = rb16(body, 10);
+    st.flags = rb16(body, 12);
+    st.coinMask = rb16(body, 14);
+    for (var i = 0; i < 8; i++) st.coinCell[i] = rb16(body, 16 + i * 2);
+    st.sparkCell = rb16(body, 32);
 
-    var base = Math.floor(nState / 2);
     dirty.length = 0;
-    for (var d = 0; d < nDirty; d++) dirty.push(u16(body, base + d));
+    for (var d = 0; d < nDirty; d++) dirty.push(rb16(body, nState + d * 2));
 
     events.length = 0;
     if (nEvents > 0) {
         var ev = readBytes(outOff + OUT_HEAD + nState + DIRTY_BYTES, nEvents * 8);
         if (ev !== null) {
             for (var e = 0; e < nEvents; e++) {
-                var o = e * 4;
-                events.push({ type: u16(ev, o), a: u16(ev, o + 1), b: u16(ev, o + 2), c: u16(ev, o + 3) });
+                var o = e * 8;
+                events.push({ type: rb16(ev, o), a: rb16(ev, o + 2), b: rb16(ev, o + 4), c: rb16(ev, o + 6) });
             }
         }
     }

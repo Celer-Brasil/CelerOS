@@ -9,8 +9,8 @@
 //     desenho atual continua valendo sem mudanca.
 //
 // Layout do wire espelhado de detona_core.cpp (WireState/arrays):
-//   head 8B | estado 40B | bombas 16x10 | chamas 64x6 | inimigos 24x8 |
-//   drops 16x4 | sujos 512x2 | eventos 32x8
+//   head 8B | estado 40B | bombas 16x10 | chamas 64x6 (c,r,owner,pad,t) |
+//   inimigos 24x8 | drops 16x4 | sujos 512x2 | eventos 32x8
 // Se mudar o core, mude os dois lados (o teste host cobre o tamanho).
 
 var S = System;
@@ -45,7 +45,9 @@ function readBytes(base, len) {
     while (p < len) {
         var n = (len - p) < 256 ? (len - p) : 256;
         var part = S.nativeRead(h, base + p, n);
-        if (part === null || typeof part !== 'string') return null;
+        // leitura curta (pedaco fora do scratch) vira lixo silencioso: NaN
+        // do charCodeAt passa pelo & 0xFF como 0 — barra aqui
+        if (part === null || typeof part !== 'string' || part.length !== n) return null;
         for (i = 0; i < n; i++) bytes.push(part.charCodeAt(i) & 0xFF);
         p += n;
     }
@@ -61,6 +63,7 @@ function rb32(b, o) {
 function readOut() {
     var head = readBytes(outOff, HEAD);
     if (head === null) return false;
+    if (rb16(head, 0) !== 1) return false;   // CELER_CORE_VERSION: ABI trocou
     var nState = rb16(head, 2);
     var nEv = rb16(head, 4);
     var nDirty = rb16(head, 6);
@@ -103,7 +106,8 @@ function readOut() {
     for (i = 0; i < st.nf && i < 64; i++) {
         o = (OFF_FLAMES - HEAD) + i * 6;
         var fc = body[o], fr = body[o + 1];
-        flames.push({ key: fc + ',' + fr, c: fc, r: fr, t: rb16(body, o + 4) / 1000, owner: 'player' });
+        flames.push({ key: fc + ',' + fr, c: fc, r: fr, t: rb16(body, o + 4) / 1000,
+                      owner: body[o + 2] === 1 ? 'boss' : 'player' });
     }
     enemies.length = 0;
     for (i = 0; i < st.ne && i < 24; i++) {
@@ -231,7 +235,9 @@ var mod = {
             s.player.y = st.py / 256;
         }
         s.lives = st.lives;
-        s.score = st.score;
+        // o core pontua SO a fase: o placar acumulado das fases anteriores
+        // (s.score0) entra aqui, senao o nativo comecava cada fase do zero
+        s.score = (s.score0 || 0) + st.score;
         s.range = st.range;
         s.maxBombs = st.maxBombs;
         s.speed = st.speed / 256;
@@ -258,6 +264,11 @@ var mod = {
             e.y = w.r * 32 + 16;
             e.hp = w.hp;
         }
+        // fim de partida pelos BITS do estado: o anel de eventos do core
+        // descarta o novo quando os 32 slots enchem (explosoa em cadeia) e o
+        // EV_WIN/EV_LOSE do quadro podia se perder — os flags nao se perdem
+        if ((st.flags & 1) !== 0) { s.done = true; s.lost = true; }
+        if ((st.flags & 2) !== 0) { s.done = true; s.won = true; }
         // caixas/saida: o mapa do JS e a fonte do desenho do fundo — so os
         // EVENTOS mudam o mapa (uma celula suja por fogo/passo nao e caixa)
         for (var e2 = 0; e2 < events.length; e2++) {

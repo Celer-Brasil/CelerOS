@@ -3,6 +3,12 @@
 // componentes do Studio sao o nivel; este script le ctx.scene.data e comanda
 // o jogador, bombas, inimigos, powerups e HUD. ES5 (Duktape).
 
+// Core NATIVO da fase (blob CLRN, native/detona_core.cpp): a simulacao
+// roda no binario e este script so manda input e desenha o estado. Sem o
+// blob (harness/CYD/firmware sem native) o jogo segue no caminho JS abaixo.
+var DETCORE = null;
+try { DETCORE = require('s.detona_core'); } catch (e) { DETCORE = null; }
+
 var MENU_SONG = {
     bpm: 96, loops: 8,
     tracks: [
@@ -251,8 +257,17 @@ function netPump(now) {
             NET.envioMsg = '';
         } else if (++NET.envioN > 8) {
             NET.envioMsg = '';
-            if (NET.fase === 'convidei') { NET.fase = 'lobby'; NET.convide = null; }
-            else netEncerra('saiu');
+            if (NET.fase === 'convidei' || NET.fase === 'aguarda') {
+                // convite/aceite sem resposta: de volta ao lobby (a PARTIDA
+                // nem comecou). Antes 'saiu' encerrava em 'fim' e o lobby
+                // morria: sem heartbeat o aparelho saia da lista do outro e
+                // a frase na tela ("procurando Detonas...") era mentira.
+                // Um 'ds' do host que chegar atrasado ainda recupera: o
+                // 's' com round > NET.round reentra na arena.
+                NET.fase = 'lobby';
+                NET.convide = null;
+                if (!NET.host) NET.rival = null;
+            } else netEncerra('saiu');
         } else {
             netSend(NET.envioMsg, false,
                     NET.envioMsg === 'di' && NET.convide ? NET.convide.id : null);
@@ -391,7 +406,6 @@ function waveType(onda) {
 }
 
 function startWave(s, onda) {
-    s.onda = onda;
     // descarta os corpos das ondas anteriores: no sobrevivencia o array so
     // crescia (mortos ficavam para sempre e o laco engordava a cada onda)
     s.enemies = aliveEnemies(s);
@@ -405,10 +419,18 @@ function startWave(s, onda) {
         spawnEnemy(s, waveType(onda), cell.c, cell.r);
         placed++;
     }
+    if (placed === 0 && n > 0) {
+        // arena cheia (nenhuma celula livre longe do jogador): NAO conta a
+        // onda — antes o numero subia sem inimigo nenhum entrar, o "ONDA n"
+        // disparava em sequencia e o recorde de onda inflava parado.
+        // Repete o MESMO numero quando uma celula abrir.
+        s.waveGap = 0.6;
+        return;
+    }
+    s.onda = onda;
     s.msg = 'ONDA ' + onda;
     s.msgT = 1.6;
     if (s.E.audio) s.E.audio.sfx(jingle([72, 76, 79], 70));
-    if (placed === 0) s.waveGap = 0.6;   // arena cheia: tenta de novo
 }
 
 function updateWaves(s, dt) {
@@ -422,8 +444,8 @@ function updateWaves(s, dt) {
 function saveSurviveRecord(s) {
     var hi = s.E.save.num('sobre.hi', 0);
     if (s.score > hi) s.E.save.set('sobre.hi', s.score);
-    var hiOnda = s.E.save.num('sobre.onda', 0);
-    if ((s.onda || 0) > hiOnda) s.E.save.set('sobre.onda', s.onda);
+    var hiOnda = s.E.save.num('s.onda', 0);   // 'detona.s.onda' = 13 chars (limite do NVS e 15; 'detona.sobre.onda' = 17 e a NVS recusa calada)
+    if ((s.onda || 0) > hiOnda) s.E.save.set('s.onda', s.onda);
 }
 
 function center(c) { return c * CELL + CELL / 2; }
@@ -651,6 +673,15 @@ function startGame(s, ctx) {
     applyGameClip(s, E);
     s.gx = s.player ? cellOf(s.player.x) : 1;
     s.gy = s.player ? cellOf(s.player.y) : 1;
+    // parte nativa: o blob assume a simulacao da FASE (campanha). load()
+    // devolve false em sobrevivencia/duelo, sem native ou se o blob faltar.
+    s.nat = null;
+    s.natCmd = 0;
+    s.natWin = false;
+    if (DETCORE && DETCORE.load(s)) {
+        s.nat = DETCORE;
+        DETCORE.apply(s);
+    }
     s.bombs = [];
     s.flames = [];
     s.drops = [];
@@ -762,6 +793,12 @@ function bombAt(s, c, r) {
 }
 
 function step(s, dc, dr) {
+    if (s.nat) {
+        // o core tem o proprio cooldown/parede; aqui so a INTENCAO do quadro
+        if (!s.done && !s.lost && !s.paused)
+            s.natCmd = (s.natCmd || 0) | (dc < 0 ? 4 : dc > 0 ? 8 : dr < 0 ? 1 : 2);
+        return;
+    }
     if (s.moving > 0 || s.done || s.lost || s.paused) return;
     // vira para o lado pedido mesmo contra a parede (le a intencao)
     s.face = dc < 0 ? 'left' : (dc > 0 ? 'right' : (dr < 0 ? 'up' : 'down'));
@@ -786,6 +823,10 @@ function stepDir(s, dir) {
 }
 
 function placeBomb(s) {
+    if (s.nat) {
+        if (!s.done && !s.lost && !s.paused) s.natCmd = (s.natCmd || 0) | 16;
+        return;
+    }
     // SEM guarda de `s.moving`: gx/gy ja sao a celula de DESTINO (step()
     // atualiza a logica antes da arte), entao plantar no meio do passo cai
     // na celula certa. Com a guarda, apertar BOMBA andando era descartado em
@@ -803,6 +844,7 @@ function placeBomb(s) {
 }
 
 function detonateRemote(s) {
+    if (s.nat) { s.natCmd = (s.natCmd || 0) | 32; return; }
     var any = false;
     for (var i = 0; i < s.bombs.length; i++) {
         if (s.bombs[i].remote && s.bombs[i].owner === 'player') { s.bombs[i].t = 0; any = true; }
@@ -1166,7 +1208,57 @@ function gameUpdate(s, E, ctx, dt) {
         E.input.tap.y < BOARD_H - 4) placeBomb(s);
     if (E.input.longpress && !s.joyMoved) detonateRemote(s);
 
-    if (s.time0 > 0) {
+    if (s.nat) {
+        // ---- simulacao no CORE (blob): input+dt -> estado/eventos ----
+        var dms = Math.round(dt * 1000);
+        if (dms < 1) dms = 1;
+        if (dms > 255) dms = 255;
+        s.nat.step(s.natCmd || 0, dms);
+        s.natCmd = 0;
+        s.nat.apply(s);
+        if (s.invuln > 0 && s.player) s.player.active = Math.floor(s.invuln * 10) % 2 === 0;
+        else if (s.player) s.player.active = true;
+        // eventos do core -> FX/audio (o desenho le o estado espelhado)
+        var evs = s.nat.events();
+        for (var iev = 0; iev < evs.length; iev++) {
+            var ev = evs[iev];
+            if (ev.type === 1 || ev.type === 9) {          // explosao / bomba do chefe
+                var ecc = ev.a % COLS, err = (ev.a / COLS) | 0;
+                if (E.fx) {
+                    s.boomCols[0] = s.theme.flame;
+                    s.boomCols[1] = s.theme.flame2;
+                    E.fx.burst(center(ecc), center(err), { n: 16, colors: s.boomCols,
+                                                           speed: 150, life: 0.45, shape: 'spark' });
+                    E.fx.ring(center(ecc), center(err), { speed: 260, color: s.theme.flame2 });
+                }
+                if (E.audio) E.audio.sfx(jingle([50, 55, 60, 55], 40));
+            } else if (ev.type === 4) {                     // inimigo morto
+                if (E.fx) E.fx.burst(center(ev.a % COLS), center((ev.a / COLS) | 0),
+                                     { n: 10, color: 0x07E0, speed: 100, life: 0.4 });
+            } else if (ev.type === 5) {                     // dano no jogador
+                if (E.fx) E.fx.flash(0xF800, 140);
+                if (E.audio) E.audio.sfx(jingle([60, 55, 48], 40));
+            } else if (ev.type === 10) {                    // item pego
+                if (E.audio) E.audio.sfx(jingle([72, 76, 79, 84], 30));
+            }
+        }
+        if (s.done && s.won && !s.natWin) {
+            s.natWin = true;
+            s.stars = starCount(s.timeLeft, s.time0, s.lives);
+            var unlockedN = E.save.num('unlocked', 1);
+            if (s.level + 1 > unlockedN) E.save.set('unlocked', s.level + 1);
+            var oldN = E.save.num('stars.' + s.level, 0);
+            if (s.stars > oldN) E.save.set('stars.' + s.level, s.stars);
+            if (s.score > E.save.num('best', 0)) E.save.set('best', s.score);
+            E.data.score = s.score;
+            if (E.audio) { E.audio.stop(); E.audio.sfx(jingle([72, 76, 79, 84, 79, 84], 90)); }
+        }
+        if (s.done && s.lost && E.audio && !s.natLost) {
+            s.natLost = true;
+            E.audio.stop();
+        }
+    }
+    if (!s.nat && s.time0 > 0) {
         s.timeLeft -= dt;
         if (s.timeLeft <= 0) {
             s.timeLeft = 0;
@@ -1174,16 +1266,16 @@ function gameUpdate(s, E, ctx, dt) {
             if (!s.lost) s.timeLeft = s.time0 * 0.5;
         }
     }
-    if (s.mode === 'survive') updateWaves(s, dt);
-    if (s.mode === 'duel') updateDuel(s, E, ctx, dt);
-    if (s.invuln > 0) {
+    if (!s.nat && s.mode === 'survive') updateWaves(s, dt);
+    if (!s.nat && s.mode === 'duel') updateDuel(s, E, ctx, dt);
+    if (!s.nat && s.invuln > 0) {
         s.invuln -= dt;
         if (s.player) {
             s.player.active = Math.floor(s.invuln * 10) % 2 === 0;
             if (s.invuln <= 0) s.player.active = true;
         }
     }
-    if (s.moving > 0) {
+    if (!s.nat && s.moving > 0) {
         s.mt += dt;
         var k = clamp(s.mt / s.moveT, 0, 1);
         if (s.player) {
@@ -1197,12 +1289,14 @@ function gameUpdate(s, E, ctx, dt) {
             checkExit(s);
         }
     }
-    updateBombs(s, dt);
-    updateFlames(s, dt);
-    updateEnemies(s, dt);
-    updateDrops(s);
-    checkExit(s);
-    s.animT = (s.animT || 0) + dt;
+    if (!s.nat) {
+        updateBombs(s, dt);
+        updateFlames(s, dt);
+        updateEnemies(s, dt);
+        updateDrops(s);
+        checkExit(s);
+        s.animT = (s.animT || 0) + dt;
+    }
     if (s.player && s.art) {
         // parado = quadro de contato da direcao; andando = ciclo de 4
         s.player.spr = ART[FACE[s.face] + (s.moving > 0 ? Math.floor(s.animT * 10) % 4 : 0)];
@@ -1442,7 +1536,7 @@ function drawTitle(s, E) {
     // duas linhas: a frase inteira em px16 mede 592 px e as pontas saiam
     // cortadas no vidro de 480
     E.gfx.text('3 mundos  ·  ' + totalStars(E) + '/18 estrelas', W / 2, 118, SUB_TXT);
-    E.gfx.text('sobrevivencia: onda ' + E.save.num('sobre.onda', 0), W / 2, 142, SUB_TXT);
+    E.gfx.text('sobrevivencia: onda ' + E.save.num('s.onda', 0), W / 2, 142, SUB_TXT);
     // elenco em escala 3 (cena estatica: o afim so roda no repaint)
     if (hasArt(E, ART[0])) {
         E.spr.stamp(ART[0], 92, 178, OPT_BIG);

@@ -45,7 +45,7 @@ public:
     static constexpr int kMaxSrcW = 320;
     static constexpr int kMaxSrcH = 256;
     static constexpr int kMaxStamps = 32;
-    static constexpr int kMaxSlots = 8;
+    static constexpr int kMaxSlots = 12;  // 8 classicos + X/Y/L/R do SNES
 
     // lineBase/lineMix: 2 x kMaxW pixels; col: kMaxSrcW + 1 entradas. O blob
     // passa buffers da regiao fast (RAM interna): sao o caminho quente.
@@ -140,6 +140,16 @@ public:
 
     // ---- carimbos -----------------------------------------------------
     uint32_t grabOff(int which) const { return grabOff_ + (which ? grabCap_ : 0); }
+    // Troca as duas linhas de trabalho (lineBase/lineMix, kMaxW pixels cada)
+    // por buffers do core (ex.: outra memoria durante o quadro).
+    void setLineBuffers(uint16_t* lineBase, uint16_t* lineMix)
+    {
+        lineBase_ = lineBase;
+        lineMix_ = lineMix;
+    }
+
+    // bytes da area de carimbos ja usados (dimensionar o layout do core)
+    uint32_t stampUsed() const { return stampTop_; }
 
     // Carimbo de dois grabs (swap565): alpha pela diferenca de verde entre
     // o fundo branco e o preto; a cor sobre preto JA e a pre-multiplicada.

@@ -21,6 +21,11 @@ tools/native/
 │   ├── a2600.h/.cpp   # fachada: barramento, frame, save/load
 │   ├── A2600Core.cpp  # TU unico (host g++ e blob)
 │   └── A2600Blob.cpp  # fonte do blob: runtime + core + core_ctl
+├── snes/              # SNES (LakeSnes, MIT) — app "SNES"
+│   ├── core/          # LakeSnes + mudancas do CelerOS (ver UPSTREAM/LICENSE)
+│   ├── bench/         # golden contra o LakeSnes original (bancada, nao CI)
+│   ├── SnesCore.cpp   # TU unico (os .c compilam como C++)
+│   └── SnesBlob.cpp   # fonte do blob: layout da scratch + core_ctl
 └── runtime.c          # mem*/malloc de arena + CLRN_FAST (blobs)
 ```
 
@@ -78,6 +83,53 @@ por segundo). O que pesava, em ordem:
 | 20 | SET_SWITCHES | bit2 cor, bit3 dificuldade A do P0, bit4 do P1 |
 | 21 | SET_PADDLE | `paddle0 \| paddle1 << 8` |
 | 22 | MAPPER | >= 0 define o override do proximo LOAD; -1 le o atual |
+
+### SNES: o que mudou no LakeSnes e por que
+
+Base: LakeSnes (angelo-wf, MIT; commit em `snes/core/UPSTREAM`). Toda
+mudanca abaixo foi conferida quadro a quadro (video e audio) contra o
+LakeSnes original em ROMs reais (golden, `snes/bench/README.md`): 68 ROMs,
+3600 quadros de jogatina do Mario All-Stars, 0 diferencas.
+
+| Mudanca | Por que |
+|---|---|
+| Renderizador de linha (`core/ppu_render.c`): camadas decodificadas por sliver de 8 px (planar->chunky por tabela) num z-buffer de rank main/sub; Mode 7 e hires com laco proprio; composicao com cache de cores e color math empacotado (3 canais numa conta) | o original avaliava cada camada e a janela POR PIXEL (75% do host) |
+| Renderizacao ADIADA: no ponto da linha so a foto dos registradores (172 B); as linhas saem em lote antes de escrita em VRAM/CGRAM/OAM, da leitura de $213E e no vblank | mesma saida linha a linha; codigo e VRAM da PPU ficam quentes |
+| Escalonador por eventos + atalho (`nextEv`): so passos com evento rodam `snes_runCycle`; APU e auto-joypad creditados sob demanda | o original rodava 180 mil passos de 2 ciclos por quadro |
+| Relogio da APU inteiro (`apuOwed` + `apuFrac`, sem 64 bits) | o S3 nao tem FPU double e o blob nao linka `__divdi3`; identico ao double |
+| Mapa da CPU por pagina de 8 KB (ponteiro de leitura/escrita + tempo) e barramento direto CPU/SPC (sem ponteiro de funcao) | cada acesso decodificava banco/endereco |
+| Timers do SPC preguicosos (andam no acesso a $F1/$FA-$FF) | 3 decrementos por ciclo de SPC |
+| ROM externa sem copia nem expansao (espelho por tabela de 32 KB) | 2,5 MB do Mario custavam 4 MB |
+| Save state direto num buffer fixo (`snes_saveStateTo`) | o StateHandler crescia por realloc |
+
+**UMA instancia por vez**: o mapa de paginas e as linhas de trabalho sao
+estaticos (o blob roda um console so).
+
+Layout da scratch e extensoes (20 SRAM_OFF, 21 SRAM_SIZE, 22 INFO, 23
+PERF_PART, 24 STAMP_USED, 25 SRAM_SUM, 26 DIAG): topo de `SnesBlob.cpp`.
+Botoes: 12 bits na ordem do controle; os 8 baixos em `arg & 0xFF` e os 4
+altos (A X L R) em `arg >> 16` (casca `celeros.emu` 0.4.0).
+
+**Bancada 4848 (2026-11-07, firmware API 62, Mario All-Stars)**: 4,5 fps
+(LakeSnes como veio) -> ~14 fps desenhados com frameskip 1:2 (~28% da
+velocidade). Media por quadro na jogatina: CPU+barramento ~20 ms, APU ~11
+ms, PPU ~60 ms por quadro DESENHADO. O que a bancada mostrou:
+- a regiao CLRN_FAST cai na PSRAM: com WiFi+BLE o 4848 tem ~28 KB de RAM
+  interna livre (maior bloco ~7 KB);
+- escrever na PSRAM com o dado em cache custa o mesmo que na pilha interna
+  (medido: 2,3 ciclos/palavra nos dois); linhas de trabalho na pilha nao
+  ganharam nada e ~9 KB a mais na pilha da task main derrubavam o aparelho;
+- leitura espalhada da VRAM: ~160 ciclos por falta de cache;
+- o custo dominante e de INSTRUCAO: CPI ~2,5-3 mesmo em laco quente (codigo
+  e dados vem da PSRAM pelo barramento que o DMA do painel RGB usa ~19 MB/s
+  o tempo todo). Uma linha da PPU custa ~50 mil ciclos com cache quente.
+- PSRAM: o Mario (2,5 MB) pede ~3,26 MB de scratch; com a casca aberta o
+  maior bloco e ~3,4 MB (a imagem do blob sai dele antes). Firmware antes da
+  API 62 cortava a scratch em 2560 KB.
+
+Metodo: app de bancada numa pasta de `/sd/apps` (o `/local` enche) chamando
+FRAME_SCREEN em laco e lendo PERF/PERF_PART/DIAG, log por
+`FS.appendTextFile` no SD, `S.delay(1)` por quadro.
 
 ## Formatos
 

@@ -27,6 +27,7 @@ enum ConsoleId : uint8_t {
     kConsoleNes = 1,     // reservado (o Anemoia mantem o formato "ANEMOIA")
     kConsoleA2600 = 2,
     kConsoleA5200 = 3,
+    kConsoleSnes = 4,
 };
 
 // fourcc legivel no hexdump: emu_tag('C','P','U',' ') vira "CPU ".
@@ -91,6 +92,20 @@ public:
         align4();
         emu_wr32(buf_ + secStart_ + 4, pos_ - (secStart_ + 8));
         secStart_ = 0;
+    }
+
+    // Escrita direta (estados grandes, ex.: SNES ~270 KB): o core serializa
+    // em cursor() ate room() bytes e confirma com advance(n) — sem buffer
+    // intermediario.
+    uint8_t* cursor() { return ok_ ? buf_ + pos_ : nullptr; }
+    uint32_t room() const { return ok_ && cap_ > pos_ ? cap_ - pos_ : 0; }
+    void advance(uint32_t n)
+    {
+        if (!ok_ || pos_ + n > cap_) {
+            ok_ = false;
+            return;
+        }
+        pos_ += n;
     }
 
     void u8(uint8_t v)
@@ -272,6 +287,18 @@ public:
         if (n > 0) memcpy(p, buf_ + pos_, n);
         pos_ += n;
         return true;
+    }
+
+    // Leitura direta de n bytes da secao atual (nullptr = passou do fim).
+    const uint8_t* ptr(uint32_t n)
+    {
+        if (!ok_ || pos_ > secEnd_ || n > secEnd_ - pos_) {
+            ok_ = false;
+            return nullptr;
+        }
+        const uint8_t* p = buf_ + pos_;
+        pos_ += n;
+        return p;
     }
 
     uint32_t remaining() const { return ok_ && pos_ <= secEnd_ ? secEnd_ - pos_ : 0; }

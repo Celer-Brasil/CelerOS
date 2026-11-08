@@ -66,6 +66,10 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/common -Itools/native/a2600 -Itools/native/a2600/core -o a2600_test test/cpp/a2600_test.cpp tools/native/a2600/A2600Core.cpp
           ./a2600_test
+      - name: Core do SNES (65816/SPC700/PPU/barramento/estado no host)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -DCELER_HOST_TEST -Itools/native/common -Itools/native/snes -Itools/native/snes/core -o snes_test test/cpp/snes_test.cpp
+          ./snes_test
       - name: celerctl tests (protocolo HostLink contra device simulado)
         run: |
           pip install pyserial

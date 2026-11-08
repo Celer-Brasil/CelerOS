@@ -1,0 +1,12 @@
+// TU unico do core SNES (host g++ e blob). Base: LakeSnes (MIT).
+#include "core/snes.c"
+#include "core/cpu.c"
+#include "core/apu.c"
+#include "core/spc.c"
+#include "core/dsp.c"
+#include "core/dma.c"
+#include "core/ppu.c"
+#include "core/cart.c"
+#include "core/input.c"
+#include "core/statehandler.c"
+#include "core/snes_other.c"

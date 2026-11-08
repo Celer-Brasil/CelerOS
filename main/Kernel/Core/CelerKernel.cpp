@@ -713,6 +713,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         // so e OOM quando o bloco falhou; arquivo ausente/ilegivel tinha que
         // sair como motivo proprio (apps.log acusava fonte_oom a toa)
         s_exitReason = srcOom ? "fonte_oom" : "sem_fonte";
+        s_crashMagic = 0;  // o app nao chegou a rodar: sem atribuicao de crash
         logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         return;
     }
@@ -722,6 +723,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)dukHeapNeed(srcLen),
                          (unsigned)srcLen);
         s_exitReason = "budget_oom";
+        s_crashMagic = 0;
         logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         free(src);
         showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
@@ -735,6 +737,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
         free(src);
         celer_log_println("Failed to create Duktape heap for app.");
         s_exitReason = "heap_oom";
+        s_crashMagic = 0;
         logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
         showRuntimeError(i18n::TR("Sem memória", "Out of memory"), kOomHint);
         return; // Soft exit back to OS
@@ -747,16 +750,21 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     JsDebugger::noteApp(filePath);
     if (JsDebugger::requested()) JsDebugger::attach(ctx);
 
-    // Pasta do app p/ require() de modulos (API 23): so quando o entry e o
-    // main.js de uma pasta de app; .js avulso (shell run) nao ganha modulos
+    // Pasta do app p/ require() de modulos (API 23): qualquer entrada de
+    // pasta que tenha app.json irmao (a API 56 aceita "main" fora do main.js;
+    // encravado no nome do arquivo, um app com "main":"boot.js" abria SEM
+    // require()/deps e o trial de sistema nem revertia no compile-fail).
+    // .js avulso (shell run fora de pasta de app) continua sem modulos.
     {
         extern std::string s_appDir;  // Runtime/JsInternal.h; define JsModules.cpp
         extern void jsLoadAppDeps(const char* appDir);  // idem, JsModules.cpp
         const char* slash = strrchr(filePath, '/');
-        if (slash && strcmp(slash + 1, "main.js") == 0)
+        if (slash) {
             s_appDir.assign(filePath, (size_t)(slash - filePath));
-        else
+            if (!FileSystem::exists((s_appDir + "/app.json").c_str())) s_appDir.clear();
+        } else {
             s_appDir.clear();
+        }
         // Deps compartilhadas (API 30): deps.json da pasta resolve os
         // require() que caem fora dela (cache do hub em /local/modules)
         jsLoadAppDeps(s_appDir.c_str());
@@ -790,6 +798,7 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
             JSBindings::heapDetaching();
             duk_destroy_heap(ctx);
             ctx = nullptr;
+            s_crashMagic = 0;  // o app nem rodou: sem atribuicao de crash
             return;
         }
     }
@@ -847,6 +856,9 @@ void CelerKernel::runFile(const char* filePath, const char* appTitle, bool topba
     ctx = nullptr;
 
     logAppSession(appPkg, s_sessionStart, appLaunchFreeHeap);
+    // App encerrado: o contexto de crash RTC desliga — um panic do LAUNCHER
+    // depois da saida nao pode sair no crash.txt com o nome do ultimo app.
+    s_crashMagic = 0;
 }
 
 void CelerKernel::loop() {

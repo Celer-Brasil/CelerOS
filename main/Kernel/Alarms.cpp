@@ -22,6 +22,14 @@ time_t s_snoozeAt = 0;
 int s_snoozeId = -1;
 std::string s_snoozeLabel;
 time_t s_lastCheck = 0;  // eventos em (s_lastCheck, agora] disparam
+// Lacre de entrega por slot (RAM, zera no boot): a ultima ocorrencia JÁ
+// tocada daquele slot. Sem ele, o disparo tinha duas falhas: avançar
+// s_lastCheck até a ocorrencia do mais cedo engolia o alarme do MESMO
+// hh:mm em outro slot (despertador duplo: só um dos dois tocava), e parar
+// o s_lastCheck re-tocava o slot já disparado no tick seguinte. Epoch
+// absoluto: seguro contra salto de relogio e DST. Zerado em add/set/remove
+// (slot redefinido volta a poder disparar).
+time_t s_firedAt[Alarms::MAX] = {0};
 bool s_ringing = false;
 time_t s_prevNow = 0;    // amostra do relogio do tick anterior
 bool s_prevValid = false;
@@ -114,6 +122,7 @@ int add(const AlarmSpec& a) {
         s_used[id] = true;
         s_alarms[id] = a;
         s_alarms[id].label = celer::alarmCleanLabel(a.label);
+        s_firedAt[id] = 0;
         persistSlot(id);
         return id;
     }
@@ -127,6 +136,7 @@ bool set(int id, const AlarmSpec& a) {
     s_used[id] = true;
     s_alarms[id] = a;
     s_alarms[id].label = celer::alarmCleanLabel(a.label);
+    s_firedAt[id] = 0;
     persistSlot(id);
     return true;
 }
@@ -137,6 +147,7 @@ bool remove(int id) {
     loadLocked();
     if (!s_used[id]) return false;
     s_used[id] = false;
+    s_firedAt[id] = 0;
     persistSlot(id);
     if (s_snoozeId == id) {
         s_snoozeAt = 0;
@@ -235,13 +246,12 @@ bool tick() {
         s_snoozeAt = 0;
         s_snoozeId = -1;
         persistSnooze();
-        // A soneca consome SO a ocorrencia da propria fonte: antes o
-        // s_lastCheck = now engolia todo alarme que venceu junto (alarme das
-        // 8:00 e soneca do timer das 8:00: o alarme nunca tocava — os outros
-        // vencidos do intervalo tocam depois, um por toque). Avancar ate a
-        // ocorrencia da fonte cobre o reencontro pelo olhar de 90 s do boot:
-        // sem isso, a soneca sobrevivente ao reinicio reencontraria o
-        // disparo que o usuario JA adiou e tocava de novo em seguida.
+        // A soneca consome SO a ocorrencia da propria fonte: o reencontro
+        // pelo olhar de 90 s do boot e coberto pelo skip da fonte na varredura
+        // (s_snoozeAt/s_snoozeId) — o lacre s_firedAt de RAM nao sobrevive ao
+        // reinicio. O avanco abaixo segue como defesa: se a ocorrencia da
+        // fonte ainda estiver na janela (s_lastCheck atrasado), ela sai de
+        // alcance sem engolir os outros vencidos do intervalo.
         if (id >= 0 && id < MAX && s_used[id] && s_alarms[id].enabled) {
             time_t occ = celer::nextAlarmAfter(s_alarms[id], s_lastCheck);
             if (occ != 0 && occ > s_lastCheck && occ <= now) s_lastCheck = occ;
@@ -250,17 +260,23 @@ bool tick() {
         return true;
     }
     // Vencido = primeira ocorrencia dentro de (s_lastCheck, agora]. Pega o
-    // MAIS CEDO dos vencidos (a ordem de slot nao e cronologica) e avanca
-    // s_lastCheck so ate ele: os vencidos seguintes do MESMO intervalo tocam
-    // nas proximas voltas, um por toque (antes o s_lastCheck = now descartava
-    // todo o resto que tinha vencido junto — dois alarmes perdidos num deep
-    // sleep tocavam um so, e nem sempre o mais cedo).
+    // MAIS CEDO dos vencidos (a ordem de slot nao e cronologica); o s_lastCheck
+    // NAO avanca no disparo — o lacre s_firedAt e quem impede o re disparo, e
+    // a janela parada deixa os vencidos seguintes do MESMO intervalo tocarem
+    // nas proximas voltas, um por toque (inclusive o do MESMO hh:mm em outro
+    // slot — antes o avanco de s_lastCheck o engolia: so um dos dois tocava).
     int best = -1;
     time_t bestAt = 0;
     for (int i = 0; i < MAX; i++) {
         if (!s_used[i] || !s_alarms[i].enabled) continue;
+        // Fonte de soneca pendente: a ocorrencia dela e a SONECA que ainda
+        // vai tocar. O skip cobre tambem o olhar de 90 s do boot (lacre de
+        // RAM perdido no reinicio): sem ele, reiniciar logo apos adiar
+        // re-tocava o alarme que o usuario JA havia adiado.
+        if (s_snoozeAt != 0 && s_snoozeId == i) continue;
         time_t at = celer::nextAlarmAfter(s_alarms[i], s_lastCheck);
         if (at == 0 || at > now) continue;
+        if (s_firedAt[i] != 0 && at <= s_firedAt[i]) continue;  // ja entregue
         if (best < 0 || at < bestAt) {
             best = i;
             bestAt = at;
@@ -271,7 +287,7 @@ bool tick() {
             s_alarms[best].enabled = false;
             persistSlot(best);
         }
-        s_lastCheck = bestAt;  // monotonico: bestAt > s_lastCheck anterior
+        s_firedAt[best] = bestAt;
         startRingLocked(Kind::Alarm, best, s_alarms[best].label);
         return true;
     }

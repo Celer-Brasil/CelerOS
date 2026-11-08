@@ -421,6 +421,13 @@ void LauncherScreen::padNav() {
     const int total = LauncherUI::gridTotalEntries();
     if (total <= 0) return;
     if (m_focus >= total) m_focus = total - 1;  // rescan encolheu a grade
+    // o dedo paginou por cima do pad (arrasto/elastico): o foco apontava
+    // para uma entrada de OUTRA pagina e um A aqui abria app invisivel.
+    // Foco morre; o proximo A/direcao re-arma na pagina visivel (o propio
+    // navegar do pad troca page E m_focus juntos, nunca cai aqui).
+    if (!listMode() && m_focus >= 0 && m_focus / gridCellsPerPage() != page) {
+        m_focus = -1;
+    }
 
     const uint32_t novo = p.buttons & ~m_prevPadButtons;  // borda de descida
     m_prevPadButtons = p.buttons;

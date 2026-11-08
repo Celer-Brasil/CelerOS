@@ -93,20 +93,39 @@ PadState pad() {
 }
 
 void sysTick(bool inApp) {
+#if !CONFIG_CELEROS_UI
+    (void)inApp;  // headless: sem Navigator, o contexto do pump nao decide nada
+#endif
     const PadState p = pad();
     const bool guide = (p.buttons & kBitGuide) != 0;
-    if (guide == s_prevGuide) return;
-    s_prevGuide = guide;
-    if (!guide) return;  // so a borda de descida age
+    // A borda e consumida UMA vez: os DOIS pumps chamam este tick (celerLoop
+    // na task da UI e present() na task do app — servico ALWAYS). Sem o lock,
+    // os dois liam s_prevGuide antes de qualquer gravar: o guide agia DUAS
+    // vezes (ou no pump errado).
+    bool borda = false;
+    portENTER_CRITICAL(&s_mux);
+    if (guide != s_prevGuide) {
+        s_prevGuide = guide;
+        borda = true;
+    }
+    portEXIT_CRITICAL(&s_mux);
+    if (!borda) return;
+    if (!guide) return;  // so a borda de descida (apertar) age
     // botao de sistema: activity acorda (mesmo hub do toque/botoes fisicos)
     Backlight::noteActivity();
-    if (inApp) {
+    // O flag inApp descreve O PUMP, nao o estado: o celerLoop roda com
+    // inApp=false MESMO com app em foreground, e decidir por ele fazia o
+    // guide dentro do app cair em Navigator::home() (arrancava a pilha de
+    // telas por baixo do app, sem o caminho limpo de saida). Quem manda e o
+    // estado real do launcher; requestAppExit e seguro de qualquer task
+    // (flag com mux proprio) e Navigator::home so roda no pump da UI.
+    if (LauncherUI::appRunning()) {
         LauncherUI::requestAppExit();  // caminho limpo pelo X do topbar
-    } else {
-#if CONFIG_CELEROS_UI
-        kui::Navigator::home();
-#endif
+        return;
     }
+#if CONFIG_CELEROS_UI
+    if (!inApp) kui::Navigator::home();  // celerLoop = task da UI (muta a pilha)
+#endif
 }
 
 void clear() {
@@ -114,6 +133,7 @@ void clear() {
     s_head = s_tail = 0;
     s_pointer = Pointer{};
     s_pad = PadState{};
+    s_prevGuide = false;  // bench reset no meio do guide: a proxima pressao tem que ser borda nova
     portEXIT_CRITICAL(&s_mux);
 }
 

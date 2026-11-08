@@ -83,10 +83,14 @@ CONFIG_BT_NIMBLE_NVS_PERSIST=y
 # SYSINIT_PANIC_ASSERT (o Celer Remote reiniciava o aparelho no 1o scan).
 # Medido: o init passa a consumir ~38 KB internos (sobram ~22 KB)
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
-# Enxugo do CONTROLLER (lib pre-compilada, so aloca interna). O uso real
-# (malha + CelerLink): 1 adv set (os 3 donos revezam pelo s_advMutex),
-# 1 scan e 1 conexao = 3 atividades; cada instancia custa ~828 B.
-CONFIG_BT_CTRL_BLE_MAX_ACT=3
+# Enxugo do CONTROLLER (lib pre-compilada, so aloca interna). Atividade = uma
+# de: adv set, scan, sync OU CONEXAO VIVA (Kconfig do IDF). Com o gamepad BLE
+# HID (API 57) o pior caso real e 2 conexoes (malha/CelerLink + gamepad)
+# + 1 adv set (os 3 donos revezam pelo s_advMutex) + 1 scan (descoberta da
+# malha OU busca do gamepad) = 4; com 3 a quarta atividade falha ao nascer
+# (adv/scan returns busy/error com o pad conectado). Cada instancia custa
+# ~828 B internos (2 economizados vs o default 6).
+CONFIG_BT_CTRL_BLE_MAX_ACT=4
 # Filtro de duplicados do scan e flow control dos reports de adv: os
 # defaults (100/30) reservavam ~3,5 KB + ~0,5 KB internos. Reduzir o cache
 # de duplicados SUPRIME MENOS (chega mais report repetido), nunca perde.

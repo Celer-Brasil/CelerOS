@@ -253,6 +253,11 @@ bool start() {
     s_feCfg.log_scale.scale_shift = 6;
     if (!FrontendPopulateState(&s_feCfg, &s_feState, kSampleRate)) {
         celer_log_printf("[wakeword] ERRO frontend nao alocou (RAM?)\n");
+        // O PopulateState do vendor falha SEM limpar o que ja alocou (e o
+        // zero inicial do estado nao devolve nada): os estagios completos
+        // (window/fft) vazavam a cada tentativa em RAM baixa. free(NULL) e
+        // no-op nos estagios que nao chegaram, entao o free total e seguro.
+        FrontendFreeStateContents(&s_feState);
         return false;
     }
     s_feInited = true;

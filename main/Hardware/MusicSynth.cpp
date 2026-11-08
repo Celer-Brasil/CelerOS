@@ -149,6 +149,7 @@ void taskFunc(void*) {
         // a trilha nem o efeito tem o que tocar.
         const int32_t master = BoardIO::volumePct() * 200;  // = Renderer::reset
         uint32_t total = 0;
+        int stalls = 0;  // writes sem progresso seguidos (vigia do canal)
         for (;;) {
             xSemaphoreTake(mu(), portMAX_DELAY);
             if (s_songPending) {
@@ -191,7 +192,12 @@ void taskFunc(void*) {
             i2s_channel_write(tx, s_frames, sizeof(s_frames), &written,
                               pdMS_TO_TICKS(200));
             AudioPlayer::feedWatchdog();
-            if (written == 0) {  // canal morreu: sai limpo
+            // Canal morto = SEM progresso em 5 tentativas seguidas (~1 s), a
+            // mesma rede de seguranca do writeAll do AudioPlayer/tom. UM stall
+            // so (DMA cheio num pico de carga: escrita de flash, rajada de
+            // rede) derrubava a trilha inteira em silencio, embora o canal
+            // voltasse no bloco seguinte.
+            if (written == 0 && ++stalls >= 5) {  // canal morreu: sai limpo
                 xSemaphoreTake(mu(), portMAX_DELAY);
                 s_musicOn = false;
                 s_sfx.stop();
@@ -199,6 +205,7 @@ void taskFunc(void*) {
                 xSemaphoreGive(mu());
                 break;
             }
+            if (written > 0) stalls = 0;
             if (musicOn) {
                 s_played = s_renderer.pos;
                 if (s_renderer.pos >= total) {  // loops acabaram

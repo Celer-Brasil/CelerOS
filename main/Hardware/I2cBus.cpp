@@ -21,9 +21,11 @@ I2cBus::Info s_info;
 struct Dev {
     uint8_t addr = 0;
     i2c_master_dev_handle_t handle = nullptr;
+    uint32_t used = 0;  // carimbo LRU (maior = mais recente)
 };
 Dev s_devs[kMaxDev];
 int s_devCount = 0;
+uint32_t s_useTick = 0;  // relogio LRU monotonico
 
 bool busExists(int port, i2c_master_bus_handle_t* out) {
     i2c_master_bus_handle_t h = nullptr;
@@ -37,12 +39,27 @@ bool busExists(int port, i2c_master_bus_handle_t* out) {
 
 i2c_master_dev_handle_t devFor(uint8_t addr) {
     if (s_bus == nullptr) return nullptr;
+    s_useTick++;
     for (int i = 0; i < s_devCount; i++) {
-        if (s_devs[i].addr == addr) return s_devs[i].handle;
+        if (s_devs[i].addr == addr) {
+            s_devs[i].used = s_useTick;
+            return s_devs[i].handle;
+        }
     }
+    int slot = s_devCount;
     if (s_devCount >= kMaxDev) {
-        ESP_LOGW("celer.i2c", "cache de devices cheio (max %d)", kMaxDev);
-        return nullptr;
+        // Cache cheio: expulsa o device MENOS RECENTEMENTE usado em vez de
+        // falhar para sempre (antes o 9o endereco morria ate o end()). Seguro:
+        // as transferencias sao sincronas e vem so da task do runtime JS —
+        // entre duas chamadas nao ha transacao em voo no handle expulso.
+        slot = 0;
+        for (int i = 1; i < s_devCount; i++) {
+            if (s_devs[i].used < s_devs[slot].used) slot = i;
+        }
+        ESP_LOGI("celer.i2c", "cache cheio: expulsa 0x%02X pelo 0x%02X (LRU)",
+                 (unsigned)s_devs[slot].addr, (unsigned)addr);
+        i2c_master_bus_rm_device(s_devs[slot].handle);
+        s_devs[slot].handle = nullptr;
     }
     i2c_device_config_t dcfg = {};
     dcfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
@@ -51,11 +68,18 @@ i2c_master_dev_handle_t devFor(uint8_t addr) {
     i2c_master_dev_handle_t h = nullptr;
     if (i2c_master_bus_add_device(s_bus, &dcfg, &h) != ESP_OK || h == nullptr) {
         ESP_LOGW("celer.i2c", "nao consegui adicionar o device 0x%02X", (unsigned)addr);
+        if (slot < s_devCount) {
+            // expulso sem substituto: o ultimo toma o vao (array fica denso)
+            s_devs[slot] = s_devs[s_devCount - 1];
+            s_devs[s_devCount - 1] = Dev{};
+            s_devCount--;
+        }
         return nullptr;
     }
-    s_devs[s_devCount].addr = addr;
-    s_devs[s_devCount].handle = h;
-    s_devCount++;
+    s_devs[slot].addr = addr;
+    s_devs[slot].handle = h;
+    s_devs[slot].used = s_useTick;
+    if (slot == s_devCount) s_devCount++;
     return h;
 }
 

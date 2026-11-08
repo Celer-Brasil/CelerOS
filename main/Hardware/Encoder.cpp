@@ -57,6 +57,20 @@ int create(int pinA, int pinB, bool pullup) {
         return -1;
     }
 
+    // Filtro de glitch do perimetro (10 us): sem ele qualquer ruido de PWM/
+    // servo acoplado em A/B entra como flanco valido e o acumulado deriva
+    // (o quadrature com accum_count soma o desvio, nao cancela). Pulsos de
+    // quadratura reais ficam muuuito acima de 10 us mesmo girando rapido.
+    // O filtro exige a unidade em INIT (antes do canal/enable) e falha nao
+    // e fatal: conta sem filtro, como antes.
+    {
+        pcnt_glitch_filter_config_t flt = {};
+        flt.max_glitch_ns = 10000;
+        if (pcnt_unit_set_glitch_filter(unit, &flt) != ESP_OK) {
+            ESP_LOGW("celer.enc", "filtro de glitch nao aplicou (conta sem filtro)");
+        }
+    }
+
     pcnt_chan_config_t ccfg = {};
     ccfg.edge_gpio_num = pinA;
     ccfg.level_gpio_num = pinB;

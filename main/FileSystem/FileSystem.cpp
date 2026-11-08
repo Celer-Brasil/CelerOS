@@ -402,6 +402,13 @@ static bool pathOk(const char* path) {
     // O prefixo tem que ser um SEGMENTO inteiro: "/localfoo"/"/sdcard"
     // passavam no strncmp e caíam fora do jail (F6).
     if (path == nullptr) return false;
+    // Teto de comprimento: o caminho vem de fora (JS/HostLink/web) e os
+    // caminhos de escrita montam "std::string(path) + \".tmp\"" e buffers de
+    // pilha (writeTextFile/copyFile/makeParentDirs). Sem excecoes, o new de
+    // uma string de 100+ KB aborta a placa (CYD sem PSRAM) — nenhum caminho
+    // legitimo do sistema passa de ~300 (mkdirs tetam 128, writeFileAtomic
+    // 296, HostLink 256). 512 cobre com folga e mata o crescimento sem teto.
+    if (strlen(path) >= 512) return false;
     if (strncmp(path, "/local", 6) == 0) return path[6] == '\0' || path[6] == '/';
     if (strncmp(path, "/sd", 3) == 0) return path[3] == '\0' || path[3] == '/';
     return false;
@@ -547,7 +554,11 @@ bool FileSystem::formatLittleFS() {
 }
 
 int FileSystem::listDir(const char* dirPath, std::string* resultFiles, int maxFiles) {
+    // Mesmo jail das demais entradas publicas; "/" fica porque e a raiz
+    // sintetica do VFS do IDF (lista os pontos de montagem — o `ls /` do
+    // shell depende disso, ver CelerShell cmdLs).
     if (dirPath == nullptr || resultFiles == nullptr) return 0;
+    if (!pathOk(dirPath) && strcmp(dirPath, "/") != 0) return 0;
 
     DIR* dir = opendir(dirPath);
     if (dir == nullptr) return 0;
@@ -567,7 +578,10 @@ int FileSystem::listDir(const char* dirPath, std::string* resultFiles, int maxFi
 }
 
 int FileSystem::listDirectory(const char* dirPath, FileEntry* entries, int maxEntries) {
+    // Mesmo jail das demais entradas publicas; "/" fica por causa do `ls /`
+    // do shell (raiz sintetica do VFS — ver listDir).
     if (dirPath == nullptr || entries == nullptr) return 0;
+    if (!pathOk(dirPath) && strcmp(dirPath, "/") != 0) return 0;
 
     DIR* dir = opendir(dirPath);
     if (dir == nullptr) return 0;
@@ -693,6 +707,9 @@ static int countFilesInDirDepth(const char* dirPath, int depth) {
 }
 
 int FileSystem::countFilesInDir(const char* dirPath) {
+    // Mesmo jail dos outros caminhadores (removeTree/copyTree checam na
+    // entrada; este tambem precisa: o caminhamento sai do jail do prefixo).
+    if (!pathOk(dirPath)) return 0;
     return countFilesInDirDepth(dirPath, 0);
 }
 

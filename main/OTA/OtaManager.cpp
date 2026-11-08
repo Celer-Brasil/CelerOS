@@ -80,6 +80,13 @@ std::string OtaManager::getUpdateJsonUrl() {
             // erase, senao o branco inicial segue na frente do scheme.
             url_Override = kstr::trim(url_Override);
         }
+        if (url_Override.length() > 2048) {
+            // Teto da URL (esp_http_client): um ota_url.txt gigante (acidente
+            // no file manager) nao pode nascer inteiro na heap apertada da
+            // CYD so para falhar depois — override ignorado, segue o hub.
+            ESP_LOGW("celer.ota", "ota_url.txt maior que 2048 chars: ignorado");
+            url_Override = "";
+        }
         if (url_Override.length() > 0) {
             if (!kstr::endsWith(url_Override, ".json")) {
                 if (!kstr::endsWith(url_Override, "/")) url_Override += "/";

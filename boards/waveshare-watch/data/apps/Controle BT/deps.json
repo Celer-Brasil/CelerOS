@@ -1,3 +1,6 @@
 {
-  "celeros.gamepad": "0.1.1"
+  "celeros.app": "1.1.1",
+  "celeros.app.style": "1.1.1",
+  "celeros.gamepad": "0.1.2",
+  "celeros.hid": "0.1.0"
 }

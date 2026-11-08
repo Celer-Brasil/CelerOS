@@ -1,19 +1,20 @@
 {
   "name": "Controle BT",
   "packageName": "celeros.controlebt",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "CelerOS",
-  "description": "Driver do gamepad Bluetooth LE (API 61): mantem o pad pareado conectado e injeta no barramento Input do OS — Input.pad para o direcional/botoes (o launcher navega por foco e os apps leem Input.padState) e Input.move para o ponteiro no stick direito (R2 = clique). Roda como servico de fundo; esta tela mostra status, liga/desliga o driver e o ponteiro e pareia um pad novo.",
+  "description": "Driver dos controles Bluetooth LE (API 62): mantem UM device HID pareado conectado e injeta no barramento Input do OS — gamepad vira Input.pad (o launcher navega por foco) + ponteiro no stick direito; teclado vira Input.key (digita nos campos de texto de qualquer app); mouse vira Input.move (ponteiro absoluto, botao esquerdo clica). Roda como servico de fundo; esta tela mostra o estado e pareia um device novo. Ajustes > Entrada/Bluetooth tem a tela completa.",
   "type": "App",
   "category": "Utility",
-  "api": 61,
+  "api": 62,
   "system": true,
-  "permissions": ["input"],
+  "permissions": ["input", "system"],
   "service": "service.js",
   "deps": {
     "celeros.app": "^1.0.0",
     "celeros.app.style": "^1.0.0",
-    "celeros.gamepad": "^0.1.0"
+    "celeros.gamepad": "^0.1.0",
+    "celeros.hid": "^0.1.0"
   },
-  "changelog": "1.0.0 - primeira versao: servico de fundo que reconecta o pad pareado (bond no NVS) com backoff 15-60 s e injeta Input.pad (bitmask do canal broadcast; launcher navega por foco, guide sai do app) e Input.move (ponteiro do stick direito com R2 = clique, toggle no NVS); tela com status do pad (nome/bateria/fase), liga/desliga driver e ponteiro e parear pad novo por scan; DualShock 4 nao funciona (Bluetooth CLASSIC; o radio S3 nao tem BR/EDR)"
+  "changelog": "1.1.0 - o driver deixa de ser so de gamepad: um device HID por vez (single-link do BleHid), com o tipo vindo do firmware (BT.state().kind, classificado do Report Map) — teclado injeta Input.key, mouse injeta Input.move com aceleracao por nivel, gamepad segue no Input.pad; o device ativo e escolhido no Ajustes (bt_dev) e sem escolha explicita o servico adota um bond conhecido; bt_busy pausa o radio enquanto o Ajustes pareia; painel usa as mesmas chaves do Ajustes (System.setting) e mostra o tipo; o painel TAMBEM seta bt_busy no scan/connect e derruba o enlace antes de escanear (o BleHid recusava com o pad conectado e a lista voltava velha do cache), o servico solta o canal do pad ao pausar (botao preso nao vaza pro launcher) e re-olha os bonds a 0,5 Hz no estado sem alvo (era 40 Hz). 1.0.0 - primeira versao: servico de fundo que reconecta o pad pareado (bond no NVS) com backoff 15-60 s e injeta Input.pad (bitmask do canal broadcast; launcher navega por foco, guide sai do app) e Input.move (ponteiro do stick direito com R2 = clique, toggle no NVS); tela com status do pad (nome/bateria/fase), liga/desliga driver e ponteiro e parear pad novo por scan; DualShock 4 nao funciona (Bluetooth CLASSIC; o radio S3 nao tem BR/EDR)"
 }

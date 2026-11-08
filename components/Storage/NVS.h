@@ -4,6 +4,7 @@
 #include <string>
 #include <map>
 #include <cstdlib>
+#include <type_traits>
 #include <nvs_flash.h>
 #include <nvs_handle.hpp>
 #include <nvs.h>
@@ -98,6 +99,17 @@ public:
 
 private:
     /**
+     * Teto real do NVS: chave e namespace tem no maximo 15 chars
+     * (NVS_KEY_NAME_MAX_SIZE inclui o '\0'). Nome fora do teto voltava
+     * disfarcado (StorageWriteError / StorageInitFailed) sem dizer que o
+     * problema era o nome.
+     */
+    static constexpr size_t kMaxNameLen = NVS_KEY_NAME_MAX_SIZE - 1;
+
+    /** Valida chave/namespace antes de abrir handle (ArgumentError se invalido). */
+    static bool validNvsName(const std::string& s) { return !s.empty() && s.size() <= kMaxNameLen; }
+
+    /**
      * @brief Helper function to open an NVS handle.
      *
      * @param namespaceName The namespace to open.
@@ -112,6 +124,11 @@ private:
 template<typename T>
 ErrorCode NVS::storeValue(const std::string& namespaceName, const std::string& key,
                           const T& value, bool overwrite) {
+    // Chave invalida falha ANTES do open (READWRITE cria o namespace como
+    // efeito colateral) e com o codigo que diz o problema real.
+    if (!validNvsName(key)) {
+        return CommonErrorCodes::ArgumentError;
+    }
     nvs_handle_t handle;
     ErrorCode err = openNamespace(namespaceName, handle, NVS_READWRITE);
     if (err != CommonErrorCodes::None) {
@@ -183,6 +200,9 @@ ErrorCode NVS::storeValue(const std::string& namespaceName, const std::string& k
 
 template<typename T>
 ErrorCode NVS::readValue(const std::string& namespaceName, const std::string& key, T& value) {
+    if (!validNvsName(key)) {
+        return CommonErrorCodes::ArgumentError;
+    }
     nvs_handle_t handle;
     ErrorCode err = openNamespace(namespaceName, handle, NVS_READONLY);
     if (err != CommonErrorCodes::None) {

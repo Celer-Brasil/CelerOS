@@ -36,17 +36,41 @@ ErrorCode NVS::eraseData() {
 }
 
 ErrorCode NVS::eraseKey(const std::string& namespaceName, const std::string& key) {
+    if (!validNvsName(key)) {
+        return CommonErrorCodes::ArgumentError;
+    }
     nvs_handle_t handle;
-    ErrorCode err = openNamespace(namespaceName, handle, NVS_READWRITE);
+    // READONLY primeiro: nvs_open em READWRITE cria o namespace vazio
+    // quando ele ainda nao existe, entao o branch "FileNotFound em
+    // READWRITE" era codigo morto e um eraseKey em namespace novo deixava
+    // um namespace vazio gravado no flash. Namespace ausente = nada a
+    // apagar (no-op documentado), sem efeito colateral.
+    ErrorCode err = openNamespace(namespaceName, handle, NVS_READONLY);
+    if (err == CommonErrorCodes::FileNotFound) {
+        return CommonErrorCodes::None;
+    }
     if (err != CommonErrorCodes::None) {
-        // READWRITE on a namespace that was never written: nothing to erase
-        if (err == CommonErrorCodes::FileNotFound) return CommonErrorCodes::None;
         return err;
     }
-    esp_err_t esp_err = nvs_erase_key(handle, key.c_str());
+    nvs_type_t keyType = NVS_TYPE_ANY;
+    esp_err_t esp_err = nvs_find_key(handle, key.c_str(), &keyType);
+    nvs_close(handle);
+    if (esp_err == ESP_ERR_NVS_NOT_FOUND) {
+        return CommonErrorCodes::None;  // chave ausente: no-op
+    }
+    if (esp_err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to find key '%s' in '%s': %s", key.c_str(),
+                 namespaceName.c_str(), esp_err_to_name(esp_err));
+        return CommonErrorCodes::StorageReadError;
+    }
+    err = openNamespace(namespaceName, handle, NVS_READWRITE);
+    if (err != CommonErrorCodes::None) {
+        return err;
+    }
+    esp_err = nvs_erase_key(handle, key.c_str());
     if (esp_err == ESP_ERR_NVS_NOT_FOUND) {
         nvs_close(handle);
-        return CommonErrorCodes::None;  // no-op, not an error
+        return CommonErrorCodes::None;  // apagada por outra task entre os opens
     }
     if (esp_err != ESP_OK) {
         nvs_close(handle);
@@ -63,6 +87,12 @@ ErrorCode NVS::eraseKey(const std::string& namespaceName, const std::string& key
 }
 
 ErrorCode NVS::openNamespace(const std::string& namespaceName, nvs_handle_t& handle, nvs_open_mode_t readWriteMode) {
+    // Namespace vazio/longo (>15 chars) chegava ao nvs_open e voltava como
+    // StorageInitFailed (READWRITE) — parecia particao quebrada quando o
+    // problema era o nome.
+    if (!validNvsName(namespaceName)) {
+        return CommonErrorCodes::ArgumentError;
+    }
     esp_err_t esp_err = nvs_open_from_partition(NVSConstants::PartitionName, namespaceName.c_str(),
                                                 readWriteMode, &handle);
     if (esp_err != ESP_OK) {

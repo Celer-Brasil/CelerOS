@@ -1,7 +1,7 @@
 {
   "name": "Nucleo",
   "packageName": "celeros.nucleo",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": "CelerOS",
   "description": "Servicos do OS em segundo plano: check de atualizacao e relogio (API 42) com painel ao vivo",
   "api": 42,
@@ -16,5 +16,5 @@
     "celeros.app": "^1.0.0",
     "celeros.app.style": "^1.0.1"
   },
-  "changelog": "2.0.0 - painel 2.0 dos servicos de fundo: card do A.style em secoes com divisores, estado ao vivo (Wi-Fi, ultimo check do svchost lido do Storage, relogio grande com segundos, data/dia da semana, SNTP, fuso e uptime do servico), check manual com A.busy/toast e botao desabilitado sem rede; service.js e policy.js mantem exports, gates e cadencias (o resultado do check ja ia para Storage em last_check) e o app dispensa A.caps para caber no budget de 12 KB da CYD. 1.1.0 - migrado para o CelerKit (dep celeros.app): tela no A.run do kit, header com voltar no lugar do botao Fechar, layout A.L e cores do tema; service.js e policy.js ficam como estao de proposito (gates proprios de wifi/grace/24h no policy e versao notificada em chave compartilhada com a tela - estado compartilhado nao migra para as chaves svc.* do kit)"
+  "changelog": "2.0.1 - o servico nao morre mais com Storage cheio: as escritas do check (last_check/noted_ver) passam por try/catch (um throw no timer encerra o svchost e o relogio perde o SNTP e o check de 24 h)\n2.0.0 - painel 2.0 dos servicos de fundo: card do A.style em secoes com divisores, estado ao vivo (Wi-Fi, ultimo check do svchost lido do Storage, relogio grande com segundos, data/dia da semana, SNTP, fuso e uptime do servico), check manual com A.busy/toast e botao desabilitado sem rede; service.js e policy.js mantem exports, gates e cadencias (o resultado do check ja ia para Storage em last_check) e o app dispensa A.caps para caber no budget de 12 KB da CYD. 1.1.0 - migrado para o CelerKit (dep celeros.app): tela no A.run do kit, header com voltar no lugar do botao Fechar, layout A.L e cores do tema; service.js e policy.js ficam como estao de proposito (gates proprios de wifi/grace/24h no policy e versao notificada em chave compartilhada com a tela - estado compartilhado nao migra para as chaves svc.* do kit)"
 }

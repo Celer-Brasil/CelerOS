@@ -338,19 +338,23 @@ A.run({
                 led(flash ? 255 : 0, 0, 0);
                 System.beep(flash ? 1400 : 900, 60);
             }
-            A.style.card(8, 48, 224, 128, { full: c.full, elev: 0, draw: function (rc) {
+            // empilhado pela altura devolvida: o display no 4848 mede 37 px
+            // e o titulo em +64 fixo caia dentro dele (o caption em +86 caia
+            // dentro do titulo)
+            A.style.card(8, 48, 224, 152, { full: c.full, elev: 0, draw: function (rc) {
                 A.icons.draw("alert", 104, rc.y + 0, 30, { color: T.text });
-                UI.text("ALARME", 120, rc.y + 36, { role: "display", align: "center",
-                                                    color: T.text, bg: rc.bg, id: "al1" });
-                UI.text(ringing.zone, 120, rc.y + 64, { role: "title", align: "center",
-                                                       w: 200, color: T.text, bg: rc.bg, id: "al2" });
-                UI.text(KINDS[ringing.kind] || ringing.kind, 120, rc.y + 86,
+                var ay = rc.y + 36;
+                ay += UI.text("ALARME", 120, ay, { role: "display", align: "center",
+                                                   color: T.text, bg: rc.bg, id: "al1" }) + 2;
+                ay += UI.text(ringing.zone, 120, ay, { role: "title", align: "center",
+                                                       w: 200, color: T.text, bg: rc.bg, id: "al2" }) + 2;
+                UI.text(KINDS[ringing.kind] || ringing.kind, 120, ay,
                         { align: "center", color: T.text, bg: rc.bg, id: "al3" });
             }});
-            if (A.style.button("Silenciar aqui", 8, 196, 224, 40, { variant: "secondary" })) {
+            if (A.style.button("Silenciar aqui", 8, 208, 224, 40, { variant: "secondary" })) {
                 ringing = null; led(0, 0, 0);
             }
-            if (A.style.button("Desarmar tudo (PIN)", 8, 244, 224, 46, { variant: "danger" })) {
+            if (A.style.button("Desarmar tudo (PIN)", 8, 252, 224, 46, { variant: "danger" })) {
                 disarmAll(now);
             }
             return;
@@ -362,13 +366,15 @@ A.run({
         A.style.card(8, 44, 224, 96, { full: c.full, draw: function (rc) {
             A.icons.draw(armed ? "alert" : "dot", rc.x, rc.y + 2, 22,
                          { color: armed ? T.err : T.textDim });
-            UI.text(armed ? "Vigiando" : "Desarmada", rc.x + 30, rc.y,
+            // legenda EMPILHADA pela altura do titulo (no vidro grande o
+            // titulo mede 28 px e o +22 fixo encostava nele)
+            var hy = rc.y + UI.text(armed ? "Vigiando" : "Desarmada", rc.x + 30, rc.y,
                     { role: "title", color: armed ? T.err : T.text, bg: rc.bg,
-                      w: 118, lines: 1, id: "armst" });
+                      w: 118, lines: 1, id: "armst" }) + 2;
             UI.text(armed ? "vigia há " + Math.floor((now - armedAt) / 1000) + " s"
                           : "toque no interruptor para armar",
-                    rc.x + 30, rc.y + 22, { role: "caption", color: T.textDim, bg: rc.bg,
-                                           w: 118, lines: 1, id: "armsub" });
+                    rc.x + 30, hy, { role: "caption", color: T.textDim, bg: rc.bg,
+                                     w: 118, lines: 1, id: "armsub" });
             var sens = [];
             if (useImu) sens.push("movimento");
             if (useMic) sens.push("barulho");
@@ -397,8 +403,11 @@ A.run({
         if (sheetJust) sheetJust = false;
         else {
             // full:false: o veu do sheet cobre os slots do header/lista e o
-            // titulo sumia; sem veu o card sobe e o fundo continua legivel
-            var sh = A.widgets.sheet("guard", { open: sheetOpen, full: false, h: 150,
+            // titulo sumia; sem veu o card sobe e o fundo continua legivel.
+            // h 170: com o corpo empilhado pela altura devolvida (o titulo do
+            // vidro grande mede 28 px e o +22 fixo encostava nele), as quatro
+            // linhas nao cabem mais nos 150 de antes
+            var sh = A.widgets.sheet("guard", { open: sheetOpen, full: false, h: 170,
                                                 title: "Vigia" }, function (r) {
                 var gg = guards[sheetGuard];
                 if (!gg) {
@@ -406,18 +415,19 @@ A.run({
                             { role: "caption", color: T.textDim, bg: r.bg, w: r.w });
                     return;
                 }
-                UI.text(gg.name, r.x, r.y, { role: "title", bg: r.bg, w: r.w, lines: 1 });
-                UI.text(gg.missing ? "SUMIU do ar" : (gg.armed ? "armada" : "desarmada"),
-                        r.x, r.y + 22, { role: "caption",
+                var sy = r.y;
+                sy += UI.text(gg.name, r.x, sy, { role: "title", bg: r.bg, w: r.w, lines: 1 }) + 3;
+                sy += UI.text(gg.missing ? "SUMIU do ar" : (gg.armed ? "armada" : "desarmada"),
+                              r.x, sy, { role: "caption",
                                          color: gg.missing ? T.err : (gg.armed ? T.ok : T.textDim),
-                                         bg: r.bg, w: r.w, lines: 1 });
-                UI.text("Sinal há " + Math.floor((now - gg.at) / 1000) + " s · ID " + sheetGuard,
-                        r.x, r.y + 44, { role: "caption", color: T.textDim, bg: r.bg,
-                                         w: r.w, lines: 1 });
+                                         bg: r.bg, w: r.w, lines: 1 }) + 3;
+                sy += UI.text("Sinal há " + Math.floor((now - gg.at) / 1000) + " s · ID " + sheetGuard,
+                              r.x, sy, { role: "caption", color: T.textDim, bg: r.bg,
+                                         w: r.w, lines: 1 }) + 3;
                 UI.text(gg.missing ? "O watchdog acusou esta vigia para a casa."
                                    : "A vigia manda um sinal a cada 5 s.",
-                        r.x, r.y + 66, { role: "caption", color: T.textDim, bg: r.bg,
-                                         w: r.w, lines: 2 });
+                        r.x, sy, { role: "caption", color: T.textDim, bg: r.bg,
+                                   w: r.w, lines: 2 });
             });
             if (sh === "close") { sheetOpen = false; UI.invalidate(); }
         }
@@ -434,29 +444,35 @@ A.run({
     config: function (c) {
         var h = A.widgets.header("Ajustes", { full: c.full });
         if (h.back) return A.BACK;
-        A.style.card(8, 48, 224, 150, { full: c.full, draw: function (r) {
+        // h 164: com a legenda empilhada pela altura do rotulo (o corpo do
+        // vidro grande mede 19 px), o divider+PIN nao cabem nos 150 de antes;
+        // o card de baixo desceu junto (206 -> 218)
+        A.style.card(8, 48, 224, 164, { full: c.full, draw: function (r) {
             UI.text("Sensores da vigia", r.x, r.y, { role: "caption", color: T.textDim, bg: r.bg, w: r.w });
-            UI.text("Movimento", r.x, r.y + 24,
-                    { w: 150, bg: r.bg, color: hasImu ? T.text : T.textDim, id: "imu" });
-            UI.text(hasImu ? "acelerômetro da placa" : "sem acelerômetro nesta placa",
-                    r.x, r.y + 40, { role: "caption", color: T.textDim, bg: r.bg, w: 150 });
+            var my = r.y + 20;
+            my += UI.text("Movimento", r.x, my,
+                          { w: 150, bg: r.bg, color: hasImu ? T.text : T.textDim, id: "imu" }) + 2;
+            my += UI.text(hasImu ? "acelerômetro da placa" : "sem acelerômetro nesta placa",
+                          r.x, my, { role: "caption", color: T.textDim, bg: r.bg, w: 150 }) + 4;
             if (hasImu) {
                 var ni = UI.toggle(r.x + r.w - 44, r.y + 20, useImu);
                 if (ni !== useImu) { useImu = ni; UI.invalidate(); }
             }
-            UI.text("Barulho", r.x, r.y + 66,
-                    { w: 150, bg: r.bg, color: hasMic ? T.text : T.textDim, id: "mic" });
-            UI.text(hasMic ? "microfone da placa" : "sem microfone nesta placa",
-                    r.x, r.y + 82, { role: "caption", color: T.textDim, bg: r.bg, w: 150 });
+            var ky = my + 6;
+            ky += UI.text("Barulho", r.x, ky,
+                          { w: 150, bg: r.bg, color: hasMic ? T.text : T.textDim, id: "mic" }) + 2;
+            ky += UI.text(hasMic ? "microfone da placa" : "sem microfone nesta placa",
+                          r.x, ky, { role: "caption", color: T.textDim, bg: r.bg, w: 150 }) + 4;
             if (hasMic) {
-                var nm = UI.toggle(r.x + r.w - 44, r.y + 62, useMic);
+                var nm = UI.toggle(r.x + r.w - 44, ky - 40, useMic);
                 if (nm !== useMic) { useMic = nm; UI.invalidate(); }
             }
-            A.style.divider(r.x, r.y + 108, r.w);
-            UI.text("PIN: " + (pinHash ? "definido" : "nenhum"), r.x, r.y + 118,
+            var dy = ky + 8;
+            A.style.divider(r.x, dy, r.w);
+            UI.text("PIN: " + (pinHash ? "definido" : "nenhum"), r.x, dy + 10,
                     { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
         }});
-        A.style.card(8, 206, 224, 84, { full: c.full, draw: function (r) {
+        A.style.card(8, 218, 224, 84, { full: c.full, draw: function (r) {
             UI.text(caps.bt ? "A malha leva o alarme a até 8 saltos; o watchdog acusa a vigia que sumir."
                             : "Sem Bluetooth nesta placa: a vigia e o alarme locais continuam valendo; o disparo entre aparelhos precisa da CelerNet.",
                     r.x, r.y, { role: "caption", color: caps.bt ? T.textDim : T.warn,

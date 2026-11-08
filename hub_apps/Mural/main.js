@@ -62,7 +62,9 @@ function load() {
 function save() {
     var a = [];
     for (var i = 0; i < posts.length; i++) a.push([posts[i].id, posts[i].by, posts[i].txt]);
-    Storage.set("posts", JSON.stringify(a));
+    // NVS cheio nao pode derrubar o app aberto ("Erro no app"): o mural segue
+    // em RAM e a proxima mudanca tenta gravar de novo
+    try { Storage.set("posts", JSON.stringify(a)); } catch (e) {}
 }
 function addPost(id, by, txt, now) {
     if (known[id]) return false;
@@ -190,11 +192,19 @@ function ago(at, now) {
 // ---- portao da malha (2.0) -------------------------------------------------
 function gate(full) {
     if (typeof CelerNet === "undefined" || typeof Pack === "undefined") {
-        A.style.card(10, 56, 220, 108, { full: full, draw: function (r) {
-            UI.text("Esta placa não tem Bluetooth no firmware.", r.x, r.y,
-                    { w: r.w, lines: 2, role: "body", color: T.text, bg: r.bg });
-            UI.text("O mural fala pela malha CelerNet (app Matilha).",
-                    r.x, r.y + 30, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
+        // cartao com a altura DERIVADA do texto (mesmo conserto do portao da
+        // Batata/Sentinela): no 4848 o corpo mede 19 px virtuais e a legenda
+        // em +30 fixo caia dentro do titulo
+        var s1 = "Esta placa não tem Bluetooth no firmware.";
+        var s2 = "O mural fala pela malha CelerNet (app Matilha).";
+        var gw = 220 - 20;                      // pad 10 explicito abaixo
+        var gh = UI.measureWrap(s1, gw, "body") + 6 +
+                 UI.measureWrap(s2, gw, "caption") + 20;
+        A.style.card(10, 56, 220, gh, { full: full, pad: 10, draw: function (r) {
+            var gy = r.y + UI.text(s1, r.x, r.y,
+                    { w: r.w, lines: 64, role: "body", color: T.text, bg: r.bg }) + 6;
+            UI.text(s2, r.x, gy,
+                    { w: r.w, lines: 64, role: "caption", color: T.textDim, bg: r.bg });
         }});
         return false;
     }
@@ -307,11 +317,14 @@ A.run({
                             { role: "caption", color: T.textDim, bg: r.bg, w: r.w });
                     return;
                 }
-                UI.text(p.by, r.x, r.y, { role: "title", bg: r.bg, w: r.w, lines: 1 });
-                UI.text(ago(p.at, System.millis()), r.x, r.y + 22,
-                        { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
-                A.style.divider(r.x, r.y + 38, r.w);
-                UI.text(p.txt, r.x, r.y + 46,
+                // empilhado pela altura devolvida (no vidro grande o titulo
+                // mede 28 px e a legenda em +22 fixo encostava nele)
+                var sy = r.y;
+                sy += UI.text(p.by, r.x, sy, { role: "title", bg: r.bg, w: r.w, lines: 1 }) + 3;
+                sy += UI.text(ago(p.at, System.millis()), r.x, sy,
+                              { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 }) + 3;
+                A.style.divider(r.x, sy, r.w);
+                UI.text(p.txt, r.x, sy + 6,
                         { role: "body", color: T.text, bg: r.bg, w: r.w, lines: 5 });
             });
             if (sh === "close") { sheetOpen = false; UI.invalidate(); }
@@ -330,15 +343,31 @@ A.run({
     sobre: function (c) {
         var h = A.widgets.header("Como funciona", { full: c.full });
         if (h.back) return A.BACK;
+        // paragrafos EMPILHADOS pela altura medida e ROLAVEIS (mesmo conserto
+        // do "Como jogar" da Batata): no 4848 o corpo de 3 linhas passa dos
+        // offsets fixos de 52/104 e os paragrafos se sobrepunham
+        var SOBRE = [
+            { s: "Cada Mural guarda os recados no aparelho e compara um resumo com os vizinhos.",
+              role: "body", color: T.text },
+            { s: "Resumo diferente: os dois empurram o que têm, do mais novo ao mais velho.",
+              role: "caption", color: T.textDim },
+            { s: "Quando todos concordam, o Trickle fica em silêncio e recomeça devagar.",
+              role: "caption", color: T.textDim },
+            { s: "O recado chega até a quem estava desligado: o vizinho que ouviu guarda por você.",
+              role: "caption", color: T.accent }
+        ];
         A.style.card(8, 48, 224, 252, { full: c.full, draw: function (r) {
-            UI.text("Cada Mural guarda os recados no aparelho e compara um resumo com os vizinhos.",
-                    r.x, r.y, { w: r.w, lines: 3, bg: r.bg });
-            UI.text("Resumo diferente: os dois empurram o que têm, do mais novo ao mais velho.",
-                    r.x, r.y + 52, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
-            UI.text("Quando todos concordam, o Trickle fica em silêncio e recomeça devagar.",
-                    r.x, r.y + 104, { w: r.w, lines: 3, role: "caption", color: T.textDim, bg: r.bg });
-            UI.text("O recado chega até a quem estava desligado: o vizinho que ouviu guarda por você.",
-                    r.x, r.y + 166, { w: r.w, lines: 4, role: "caption", color: T.accent, bg: r.bg });
+            var i, tot = 0;
+            for (i = 0; i < SOBRE.length; i++)
+                tot += UI.measureWrap(SOBRE[i].s, r.w, SOBRE[i].role) + 8;
+            var off = UI.scrollBegin("sobre", r.x, r.y, r.w, r.h, tot);
+            var y = r.y - off;
+            for (i = 0; i < SOBRE.length; i++) {
+                y += UI.text(SOBRE[i].s, r.x, y,
+                             { w: r.w, lines: 64, role: SOBRE[i].role,
+                               color: SOBRE[i].color, bg: r.bg }) + 8;
+            }
+            UI.scrollEnd();
         }});
     }
 }, "main");

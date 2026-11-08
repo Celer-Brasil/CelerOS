@@ -13,26 +13,36 @@ var IMIN = 4000, IMAX = 32000;
 
 var posts = [];            // [{id, by, txt}] mais novo primeiro
 var known = {};            // id -> true
+var knownQ = [];           // ids na ordem de entrada (o servico vive dias: sem
+var KNOWN_MAX = 256;       //   teto cada recado ouvido-era somava no heap)
 var wasOpen = true;        // 1o giro recarrega do Storage
 var notifyAt = -999999;
 
+// callback que arremessa PARA o servico (throw no timer encerra o svchost):
+// NVS cheio/erro nao pode matar o Mural em segundo plano
+function mark(id) {
+    if (known[id]) return;
+    known[id] = true;
+    knownQ.push(id);
+    if (knownQ.length > KNOWN_MAX) delete known[knownQ.shift()];
+}
 function load() {
     try {
         var a = JSON.parse(Storage.get("posts", "[]"));
         for (var i = 0; i < a.length; i++) {
             posts.push({ id: a[i][0], by: a[i][1], txt: a[i][2] });
-            known[a[i][0]] = true;
+            mark(a[i][0]);
         }
-    } catch (e) { posts = []; known = {}; }
+    } catch (e) { posts = []; known = {}; knownQ = []; }
 }
 function save() {
     var a = [];
     for (var i = 0; i < posts.length; i++) a.push([posts[i].id, posts[i].by, posts[i].txt]);
-    Storage.set("posts", JSON.stringify(a));
+    try { Storage.set("posts", JSON.stringify(a)); } catch (e) {}
 }
 function addPost(id, by, txt, now) {
     if (known[id]) return false;
-    known[id] = true;
+    mark(id);
     posts.unshift({ id: id, by: by, txt: txt });
     while (posts.length > MAX_POSTS) posts.pop();
     save();
@@ -135,7 +145,7 @@ function tick() {
     if (appOpen()) { wasOpen = true; return; }  // o app da vez drena
     if (wasOpen) {
         wasOpen = false;
-        posts = []; known = {};
+        posts = []; known = {}; knownQ = [];
         load();                                  // o app pode ter mudado o mural
         newInterval(now, IMIN);
     }

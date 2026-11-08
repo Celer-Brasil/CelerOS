@@ -37,11 +37,18 @@ function ring(zone, kind) {
     System.notify("Sentinela", zone + ": " + (KINDS[kind] || kind));
 }
 
+// callback que arremessa PARA o servico (throw no timer encerra o svchost):
+// NVS cheio/erro nao pode matar a sentinela em segundo plano (o contador
+// segue em RAM e o proximo alarme tenta gravar de novo)
+function saveN() {
+    try { Storage.set("n", "" + alarmN); } catch (e) {}
+}
+
 // Vigia sumida DETECTADA aqui: notifica e retransmite para as outras
 // centrais (mesmo formato do app; o dedup "v:id" evita eco duplo)
 function raiseMissing(id, now) {
     alarmN++;
-    Storage.set("n", "" + alarmN);
+    saveN();
     if (TEM_MALHA) CelerNet.broadcast("a!" + alarmN + ".v" + id, 8);
     ring(nameOf(id), "v");
 }

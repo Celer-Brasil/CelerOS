@@ -23,19 +23,25 @@ var lastPersist = -1000000;
 var checkedThisSession = false;
 var lastCheckAt = 0;
 
+// callback que arremessa PARA o servico (throw no timer encerra o svchost):
+// NVS cheio/erro nao pode matar o servico do relogio/check
+function save(k, v) {
+    try { Storage.set(k, v); } catch (e) {}
+}
+
 function doCheck() {
     var r = System.otaCheck();        // bloqueante: fetch do update.json
     // resultado para o painel do app (o svchost nao tem UI): "-" = atualizado,
     // "falha" = hub fora, versao = atualizacao disponivel. Escrita rara (1x
     // por rodada de 24 h), sem desgaste do NVS.
-    if (!r || r.fetchFailed) Storage.set("last_check", "falha");
-    else Storage.set("last_check", r.available ? r.version : "-");
+    if (!r || r.fetchFailed) save("last_check", "falha");
+    else save("last_check", r.available ? r.version : "-");
     if (!r || r.fetchFailed || !r.available) return;
     var noted = Storage.get("noted_ver", "");
     if (pol.shouldNotify(noted, r.version)) {
         System.notify("Atualizacao " + r.version,
                       r.changelog ? r.changelog : "Nova versao disponivel.");
-        Storage.set("noted_ver", r.version);  // reboot nao re-notifica
+        save("noted_ver", r.version);  // reboot nao re-notifica
     }
 }
 

@@ -44,19 +44,21 @@ function refresh() { S = E.snap(); }
 
 function bar(c) {
     var nav = null;
-    UI.card(0, 0, 240, 40, { color: T.card, radius: 0, stroke: false });
+    // h 48 e legenda EMPILHADA pela altura do titulo: o titulo mede 28-29 px
+    // e a legenda em +23 fixo caia dentro dele
+    UI.card(0, 0, 240, 48, { color: T.card, radius: 0, stroke: false });
     if (c.full) {
-        System.fillGradient(0, 0, 240, 40, System.mixColor(T.card, 0xFFFF, 6),
+        System.fillGradient(0, 0, 240, 48, System.mixColor(T.card, 0xFFFF, 6),
                             T.card, 0);
-        System.fillRect(0, 39, 240, 1, T.stroke);
+        System.fillRect(0, 47, 240, 1, T.stroke);
     }
-    if (UI.button("Sair", 4, 6, 44, 28, { style: "ghost", role: "caption" })) nav = "exit";
-    UI.text("Celer Agent", 52, 4, { role: "title", color: T.text,
-                                    bg: T.card, w: 138, lines: 1, id: 1 });
+    if (UI.button("Sair", 4, 10, 44, 28, { style: "ghost", role: "caption" })) nav = "exit";
+    var ty = UI.text("Celer Agent", 52, 3, { role: "title", color: T.text,
+                                             bg: T.card, w: 138, lines: 1, id: 1 }) + 2;
     var st = status(S);
-    UI.text(st.t + (S.beat ? " - " + S.age : ""), 52, 23,
+    UI.text(st.t + (S.beat ? " - " + S.age : ""), 52, ty,
             { role: "caption", color: st.c, bg: T.card, w: 138, lines: 1, id: 2 });
-    if (UI.button("OTA", 194, 6, 42, 28, { style: "ghost", role: "caption" })) nav = "ota";
+    if (UI.button("OTA", 194, 10, 42, 28, { style: "ghost", role: "caption" })) nav = "ota";
     UI.cardEnd();
     return nav;
 }

@@ -126,11 +126,14 @@ function scanFrame(c) {
         A.style.card(LX, 56, LW, 150, { full: c.full, elev: 1, grad: true,
             draw: function (r) {
                 A.icons.draw("wifi", r.x + (r.w - 32) / 2, r.y + 6, 32, { color: T.stroke });
-                UI.text("Nenhum CelerOS por perto", LX + LW / 2, r.y + 48,
-                        { role: "title", align: "center", color: T.textDim, w: r.w });
+                // legenda EMPILHADA pela altura do titulo: no vidro pequeno o
+                // titulo mede 29 px e o +76 fixo encostava nele
+                var ty = r.y + 48;
+                ty += UI.text("Nenhum CelerOS por perto", LX + LW / 2, ty,
+                              { role: "title", align: "center", color: T.textDim, w: r.w }) + 4;
                 UI.text("Ligue o robô (ou outro aparelho com Celer Link), pareie e pilote.",
-                        LX + LW / 2, r.y + 76,
-                        { role: "caption", align: "center", color: T.textDim, w: r.w, lines: 3 });
+                        LX + LW / 2, ty,
+                        { role: "caption", align: "center", color: T.textDim, w: r.w, lines: 2 });
             }
         });
     } else {
@@ -416,17 +419,18 @@ function sheetTricks(c) {
     var r = A.widgets.sheet("tricks", { open: true, h: 280, full: c.full, pad: 12 },
         function (q) {
             UI.text(names.length + " truques", 228, q.y - 9,
-                    { role: "caption", align: "right", color: T.textDim, w: 80 });
+                    { role: "caption", align: "right", color: T.textDim, w: 80, bg: q.bg });
             var rows = [];
             for (var i = 0; i < names.length; i++) rows.push({ label: names[i] });
             var k = UI.list("tricklist", q.x, q.y, q.w, q.h - 28, rows, { rowH: 36 });
             if (k >= 0) pendingTrick = names[k];
-            UI.text("toque fora para fechar", q.x + q.w / 2, q.y + q.h - 16,
-                    { role: "caption", align: "center", color: T.textDim, w: q.w });
-            if (pendingTrick) {
-                UI.text("mandando " + pendingTrick + "...", q.x + q.w / 2, q.y + q.h - 10,
-                        { role: "caption", align: "center", color: T.accent, w: q.w });
-            }
+            // MESMA linha para os dois textos (mutuamente exclusivos): as duas
+            // legendas em -16/-10 fixo se sobrepunham no vidro grande
+            UI.text(pendingTrick ? "mandando " + pendingTrick + "..."
+                                 : "toque fora para fechar",
+                    q.x + q.w / 2, q.y + q.h - 16,
+                    { role: "caption", align: "center", w: q.w,
+                      color: pendingTrick ? T.accent : T.textDim, bg: q.bg });
         });
     if (pendingTrick) {
         var nm = pendingTrick;

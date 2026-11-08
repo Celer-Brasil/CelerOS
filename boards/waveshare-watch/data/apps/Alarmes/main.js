@@ -28,7 +28,13 @@ var ed = null;          // {id, hour, minute, days, label, enabled, opts, li}
 var last = "";
 
 function pad2(n) { return (n < 10 ? "0" : "") + n; }
-function reload() { list = System.alarms(); }
+// guarda: o servico de alarmes pode vir vazio/nao-array (boot sem Alarms) —
+// sem o corte a lista mostra "undefined de 8" e os lacos somem
+function reload() {
+    var l = null;
+    try { l = System.alarms(); } catch (eAl) { l = null; }
+    list = (l && typeof l.length === "number") ? l : [];
+}
 function daysText(d) {
     if (!d) return "uma vez";
     if (d === 0x7F) return "todo dia";

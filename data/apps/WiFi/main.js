@@ -41,10 +41,6 @@ A.icons.map.lock = function (x, y, s, c) {
     System.fillRoundRect(bx, by, w, h, 2, c);
 };
 
-function tx(s, x, y, col, id, role) {
-    UI.text(s, x, y, { role: role || "body", color: col === undefined ? T.text : col,
-                       bg: T.card, id: id });
-}
 function dot(x, y, c) { System.fillCircle(x, y, 4, c); }
 
 function refresh() {
@@ -141,12 +137,16 @@ function stopPortal() {
 
 // ---- card de estado (com radar na varredura) --------------------------------
 function statusCard(c) {
-    A.style.card(X, TOP, W, 64, { full: c.full, elev: C.small ? 1 : 2, grad: false,
+    // h 72 e linhas EMPILHADAS pela altura devolvida: no vidro grande o corpo
+    // mede 19 px e a legenda em +24 fixo encostava nele; a mensagem (1 linha,
+    // cortada) em +36 fixo caia dentro da legenda e saia do cartao
+    A.style.card(X, TOP, W, 72, { full: c.full, elev: C.small ? 1 : 2, grad: false,
         draw: function (q) {
             var scanning = scanAt > 0;
-            dot(q.x + 4, q.y + 11, scanning ? T.accent : (conn ? T.ok : T.warn));
-            tx(scanning ? "Buscando redes..." : (conn ? "Conectado" : "Desconectado"),
-               q.x + 14, q.y + 4, null, "st");
+            dot(q.x + 4, q.y + 9, scanning ? T.accent : (conn ? T.ok : T.warn));
+            var sy = q.y + 2;
+            sy += UI.text(scanning ? "Buscando redes..." : (conn ? "Conectado" : "Desconectado"),
+                          q.x + 14, sy, { color: T.text, bg: T.card, id: "st" }) + 2;
             if (conn && !scanning &&
                 A.style.button("Desconectar", q.x + q.w - 92, q.y + 1, 92, 22,
                                { variant: "ghost", role: "caption" })) {
@@ -156,14 +156,15 @@ function statusCard(c) {
                 refresh();
                 UI.invalidate();
             }
-            tx(scanning ? "a varredura roda no rádio"
+            sy += UI.text(scanning ? "a varredura roda no rádio"
                : (conn ? (st.ip || "sem IP")
                        : (st.savedNetworks ? "reconexão automática armada"
                                            : "toque numa rede para conectar")),
-               q.x, q.y + 24, T.textDim, "sub", "caption");
-            if (msg) UI.text(msg, q.x, q.y + 36,
+               q.x, sy, { role: "caption", color: T.textDim, bg: T.card,
+                          id: "sub", w: q.w }) + 2;
+            if (msg) UI.text(msg, q.x, sy,
                 { role: "caption", color: fail ? T.err : T.textDim, bg: T.card,
-                  id: "msg", w: q.w, lines: 2 });
+                  id: "msg", w: q.w, lines: 1 });
             if (scanning) {
                 var rx = q.x + q.w - 44, ry = q.y + 10;
                 var rd = function (px, py, w, h) {
@@ -212,20 +213,29 @@ function netSheet(c) {
     var H = 200, Y = BOT - H;
     A.style.card(X, Y, W, H, { full: c.full, pad: 12, r: T.radius, grad: false,
         draw: function (q) {
-            UI.text(n.ssid, q.x, q.y, { role: "title", color: T.text, bg: q.bg,
-                                        w: q.w, lines: 1, id: "nt" });
-            A.style.divider(q.x, q.y + 13, q.w);
-            tx("Sinal: " + n.rssi + " dBm", q.x, q.y + 20, null, "sig");
-            bars(q.x, q.y + 40, A.list.bars(n.rssi));
-            tx(n.secure ? "Protegida por senha" : "Rede aberta",
-               q.x, q.y + 62, n.secure ? T.warn : T.ok, "sec", "caption");
-            if (A.style.button("Conectar", q.x, q.y + 88, q.w, 32,
+            // EMPILHADO pela altura devolvida: no vidro grande o titulo mede
+            // 28 px e o divisor em +13 fixo cortava ele (o "Sinal" em +20
+            // desenhou por cima do titulo)
+            var sy = q.y;
+            sy += UI.text(n.ssid, q.x, q.y, { role: "title", color: T.text, bg: q.bg,
+                                             w: q.w, lines: 1, id: "nt" }) + 4;
+            A.style.divider(q.x, sy, q.w);
+            sy += 5;
+            sy += UI.text("Sinal: " + n.rssi + " dBm", q.x, sy,
+                          { color: T.text, bg: T.card, id: "sig" }) + 5;
+            bars(q.x, sy, A.list.bars(n.rssi));
+            sy += 18;
+            sy += UI.text(n.secure ? "Protegida por senha" : "Rede aberta",
+                          q.x, sy, { role: "caption", color: n.secure ? T.warn : T.ok,
+                                     bg: T.card, w: q.w, lines: 1, id: "sec" }) + 8;
+            if (A.style.button("Conectar", q.x, sy, q.w, 32,
                                { variant: "primary" })) {
                 sheet = false;
                 connect(n);
                 return;
             }
-            if (A.style.button("Fechar", q.x, q.y + 128, q.w, 28,
+            sy += 38;
+            if (A.style.button("Fechar", q.x, sy, q.w, 28,
                                { variant: "ghost" })) {
                 sheet = false;
                 UI.invalidate();
@@ -252,7 +262,7 @@ function home(c) {
     statusCard(c);
 
     var rs = rows.rows();
-    var i = A.list.view("nets", X, TOP + 70, W, BOT - TOP - 112, rs, { row: 40 });
+    var i = A.list.view("nets", X, TOP + 78, W, BOT - TOP - 114, rs, { row: 40 });
     if (i >= 0) {
         var v = rs[i].value;
         if (v >= 0) { sel = v; sheet = true; UI.invalidate(); }
@@ -298,18 +308,26 @@ function portal(c) {
 
     A.style.card(X, TOP, W, 190, { full: c.full, elev: C.small ? 1 : 2, grad: false,
         draw: function (q) {
-            tx("1. Conecte-se à rede", q.x, q.y, T.textDim, "p1", "caption");
-            tx(ap || "(abrindo...)", q.x, q.y + 14, T.accent, "ap");
-            tx("2. Abra no navegador", q.x, q.y + 42, T.textDim, "p2", "caption");
-            tx("http://192.168.4.1", q.x, q.y + 56, T.accent, "url");
-            tx(pst === 0 ? "Aguardando configuração..."
+            // EMPILHADO pela altura devolvida: no vidro grande a legenda mede
+            // 15 px e o rotulo em +14/+56 fixo encostava nela
+            var sy = q.y;
+            sy += UI.text("1. Conecte-se à rede", q.x, sy,
+                          { role: "caption", color: T.textDim, bg: T.card, id: "p1" }) + 2;
+            sy += UI.text(ap || "(abrindo...)", q.x, sy,
+                          { color: T.accent, bg: T.card, id: "ap" }) + 6;
+            sy += UI.text("2. Abra no navegador", q.x, sy,
+                          { role: "caption", color: T.textDim, bg: T.card, id: "p2" }) + 2;
+            sy += UI.text("http://192.168.4.1", q.x, sy,
+                          { color: T.accent, bg: T.card, id: "url" }) + 6;
+            sy += UI.text(pst === 0 ? "Aguardando configuração..."
                : pst === 1 ? "Conectando..."
                : pst === 2 ? "Conectado!"
                : pst === 3 ? "Falhou - tente de novo pela página"
                : "Falha ao iniciar o portal",
-               q.x, q.y + 88, pst === 2 ? T.ok : pst === 3 ? T.err : T.textDim,
-               "pst", "caption");
-            if (pdet) tx(pdet, q.x, q.y + 106, T.textDim, "det", "caption");
+               q.x, sy, { role: "caption", color: pst === 2 ? T.ok : pst === 3 ? T.err : T.textDim,
+                          bg: T.card, id: "pst" }) + 4;
+            if (pdet) UI.text(pdet, q.x, sy,
+                              { role: "caption", color: T.textDim, bg: T.card, id: "det" });
         } });
     UI.text("O portal sobe um AP e espera a configuração.", X, TOP + 198,
             { role: "caption", color: T.textDim, bg: T.bg, w: W, lines: 2, id: "hint" });

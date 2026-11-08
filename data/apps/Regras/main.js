@@ -144,18 +144,28 @@ function telaDetalhe(c) {
         UI.cardEnd();
         return;
     }
-    UI.card(LX, 48, LW, 146, { color: T.card, radius: 10, stroke: true });
-    UI.text("QUANDO", LX + 10, 58, { role: "caption", color: T.textDim, bg: T.card, w: LW - 20 });
-    UI.text(String(r.quando || "?"), LX + 10, 72,
-            { role: "title", color: T.accent, bg: T.card, w: LW - 20, lines: 2 });
-    UI.text("ENTÃO", LX + 10, 106, { role: "caption", color: T.textDim, bg: T.card, w: LW - 20 });
-    UI.text(acaoDe(r), LX + 10, 122,
+    // card com a altura MEDIDA e o conteúdo EMPILHADO pela altura devolvida:
+    // o gatilho em 2 linhas (28-29 px por linha no titulo) passava do ENTÃO
+    // em +106 fixo e do card fixo de 146 px
+    var mq = UI.measureWrap(String(r.quando || "?"), LW - 20, "title");
+    var ma = UI.measureWrap(acaoDe(r), LW - 20, "body");
+    var ch = 10 + UI.lineHeight("caption") + 4 + mq + 6 +
+             UI.lineHeight("caption") + 4 + ma + 12;
+    UI.card(LX, 48, LW, ch, { color: T.card, radius: 10, stroke: true });
+    var dy = 58;
+    UI.text("QUANDO", LX + 10, dy, { role: "caption", color: T.textDim, bg: T.card, w: LW - 20 });
+    dy += UI.lineHeight("caption") + 4;
+    dy += UI.text(String(r.quando || "?"), LX + 10, dy,
+                  { role: "title", color: T.accent, bg: T.card, w: LW - 20, lines: 2 }) + 6;
+    UI.text("ENTÃO", LX + 10, dy, { role: "caption", color: T.textDim, bg: T.card, w: LW - 20 });
+    dy += UI.lineHeight("caption") + 4;
+    UI.text(acaoDe(r), LX + 10, dy,
             { role: "body", color: T.text, bg: T.card, w: LW - 20, lines: 3 });
     UI.cardEnd();
 
     var confirma = sairAt > 0 && System.millis() - sairAt < 3000;
     if (UI.button(confirma ? "Toque de novo para apagar" : "Apagar regra",
-                  LX, 208, LW, 34, { style: confirma ? "danger" : "ghost" })) {
+                  LX, 48 + ch + 12, LW, 34, { style: confirma ? "danger" : "ghost" })) {
         if (!confirma) sairAt = System.millis();
         else {
             sairAt = 0;
@@ -222,7 +232,10 @@ function telaNova(c) {
 
     UI.card(LX, 46, LW, 184, { color: T.card, radius: 10, stroke: true });
     UI.text("1. GATILHO", LX + 10, 54, { role: "caption", color: T.textDim, bg: T.card, w: 110 });
-    UI.text(gatilho ? gatilho : "(o campo rule)", LX + 10, 66,
+    // rotulo EMPILHADO pela altura da legenda (no vidro grande ela mede 15 px
+    // e o +66 fixo encostava nela); o mesmo no resumo do valor
+    UI.text(gatilho ? gatilho : "(o campo rule)", LX + 10,
+            54 + UI.lineHeight("caption") + 2,
             { role: "body", color: gatilho ? T.text : T.textDim, bg: T.card,
               w: LW - 90, lines: 1, id: "gat" });
     if (UI.button("Escolher", LX + LW - 82, 56, 70, 26, { style: "ghost", role: "caption" })) {
@@ -246,8 +259,8 @@ function telaNova(c) {
     var resumo = tipo === "guardar" ? (chave ? chave + " = " + valor : "(chave e valor)")
                : tipo === "enviar" ? (destino ? destino + ": " + valor : "(destino e texto)")
                : tipo ? (valor || "(mensagem)") : "(escolha a ação)";
-    UI.text(resumo, LX + 10, 168, { role: "caption", color: T.text, bg: T.card,
-                                    w: LW - 96, lines: 2, id: "val" });
+    UI.text(resumo, LX + 10, 156 + UI.lineHeight("caption") + 2,
+            { role: "caption", color: T.text, bg: T.card, w: LW - 96, lines: 2, id: "val" });
     if (tipo && UI.button("Definir", LX + LW - 82, 160, 70, 26, { style: "ghost", role: "caption" })) escolherValor();
     UI.cardEnd();
 

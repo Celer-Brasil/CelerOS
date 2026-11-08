@@ -1,0 +1,22 @@
+{
+  "name": "SNES",
+  "packageName": "celeros.snes",
+  "version": "1.0.0",
+  "api": 62,
+  "permissions": [
+    "fs"
+  ],
+  "author": "CelerOS",
+  "type": "Game",
+  "category": "Arcade",
+  "description": "Emulador de Super Nintendo como APP NATIVO: o nucleo (LakeSnes, MIT, otimizado para o ESP32-S3) viaja no pacote como snes_core.bin (blob CLRN) e roda via System.native* — CPU 65816, SPC700 + DSP de som, PPU com modos 0-7, janelas, color math, mosaico e HDMA, cartuchos LoROM/HiROM/ExHiROM sem chips especiais. ROMs .sfc/.smc em /sd/roms/snes e /local/roms/snes; jogo em tela cheia 8:7 com d-pad flutuante, A/B/X/Y, L/R, SEL/START, gamepad Bluetooth, 3 slots de save state, SRAM com bateria (.srm) e frameskip automatico.",
+  "changelog": "1.0.0 - primeira versao: nucleo LakeSnes (MIT) otimizado para o ESP32-S3 (CPU 65816, SPC700 + DSP, PPU modos 0-7 com janelas, color math, mosaico, hires e HDMA; LoROM/HiROM/ExHiROM sem chips especiais). Precisa do firmware API 62 (scratch ate 6 MB). Controles na tela com A/B/X/Y em losango e L/R, gamepad Bluetooth, SRAM com bateria (.srm), 3 slots de save state, frameskip, tela original/4:3/esticar. Desempenho no SmartDisplay 4848: jogos leves e menus andam bem; jogos pesados ficam abaixo da velocidade real (Mario All-Stars ~14 fps desenhados).",
+  "deps": {
+    "celeros.emu": "^0.4.0"
+  },
+  "requires": [
+    "psram",
+    "native"
+  ],
+  "topbar": false
+}

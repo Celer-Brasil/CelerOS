@@ -10,6 +10,8 @@ interface EmuRom {
     name: string;
     path: string;
     size: number;
+    /** Slots de save state existentes (0-3), contados no scan. */
+    saves?: number;
 }
 
 interface EmuApi {
@@ -40,6 +42,7 @@ interface EmuConfig {
     screenH: number;
     aspectW?: number;
     aspectH?: number;
+    /** Bits do controle no FRAME: 0-7 em arg & 0xFF, 8-15 em arg >> 16. */
     bits: {
         up: number;
         down: number;
@@ -49,19 +52,33 @@ interface EmuConfig {
         b: number;
         select: number;
         start: number;
+        /** Opcionais (SNES): com x/y o A/B vira losango; com l/r, ombros no topo. */
+        x?: number;
+        y?: number;
+        l?: number;
+        r?: number;
     };
-    labels: { a: string; b: string | null; select: string; start: string };
+    labels: { a: string; b: string | null; select: string; start: string; x?: string; y?: string; l?: string; r?: string };
     labelFont?: number;
     /** Controle analogico opcional (paddle): trilho horizontal -> ctl. */
     analog?: { ctl: number; label?: string };
     stateExt?: string;
+    /**
+     * SRAM do cartucho (bateria): offCtl/sizeCtl dizem onde ela fica na
+     * scratch; sumCtl (opcional) devolve um checksum para gravar o arquivo
+     * so quando muda. Lida ao abrir a ROM; gravada na pausa, ao trocar de
+     * jogo, ao sair e a cada 10 s se mudou.
+     */
+    sram?: { offCtl: number; sizeCtl: number; sumCtl?: number; ext?: string };
+    /** Bancada: ctl que devolve os bytes usados pelos carimbos (log ao abrir). */
+    stampUsedCtl?: number;
     audioDefault?: boolean;
     errorHint?: string;
     /** Chamado entre o INIT e o LOAD (mapper override etc.). */
     coreReady?: (api: EmuApi, rom: EmuRom) => void;
     /** Chamado antes de cada FRAME (switches do console etc.). */
     beforeFrame?: (api: EmuApi) => void;
-    /** Itens extras do menu de pausa (mapper, cor/BW, dificuldade...). */
+    /** Itens extras do submenu Opcoes (mapper, cor/BW, dificuldade...). */
     menuExtra?: (api: EmuApi) => EmuMenuExtra[];
 }
 

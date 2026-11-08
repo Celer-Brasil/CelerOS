@@ -17,10 +17,17 @@
 //       labels: { a:"FOGO", b:null, select:"SEL", start:"RESET" },
 //       labelFont: 2,
 //       analog: { ctl: 21, label: "Paddle" },     // opcional
+//       sram: { offCtl: 20, sizeCtl: 21, sumCtl: 25, ext: ".srm" },  // opcional (bateria)
 //       coreReady: function (api, rom) { ... },   // antes do LOAD (mapper etc.)
 //       beforeFrame: function (api) { ... },      // antes de cada FRAME
 //       menuExtra: function (api) { return [{ label:"...", action:function(api){} }]; },
 //   });
+//
+// Botoes extras (SNES): bits.x/y/l/r + labels.x/y/l/r ligam um losango
+// A/B/X/Y a direita e os ombros L/R no topo. O FRAME leva os 8 bits baixos em
+// arg & 0xFF (como sempre) e os bits 8-15 do controle em arg >> 16: cores
+// antigos ignoram. O gamepad do OS (Input.padState) segue o rotulo (A->A...)
+// ou a posicao Nintendo/Xbox, escolhida em Opcoes.
 //
 // Video (API 60): o core que implementa FRAME_SCREEN compoe o quadro
 // escalado + o overlay DIRETO no vidro inteiro (System.nativeScreen), numa
@@ -66,25 +73,62 @@ function run(cfg)
     var W = S.screenWidth();
     var H = S.screenHeight();
 
-    // ---- geometria: quadro nativo -> retangulo 4:3 centrado no vidro ------
+    // ---- geometria: quadro nativo -> retangulo centrado no vidro ---------
+    // Modos (Opcoes > Tela): 0 = proporcao do console (cfg.aspectW:H),
+    // 1 = 4:3 de TV, 2 = esticar no vidro inteiro.
     var NW = cfg.screenW || 256, NH = cfg.screenH || 240;
-    var AW = cfg.aspectW || 4, AH = cfg.aspectH || 3;
-    var GH = Math.min(H, Math.round(W * AH / AW));
-    var GW = Math.round(GH * AW / AH);
-    if (GW > W) { GW = W; GH = Math.round(GW * AH / AW); }
-    var GX = Math.round((W - GW) / 2);
-    var GY = Math.round((H - GH) / 2);
+    var GW = 0, GH = 0, GX = 0, GY = 0;
+    var aspectMode = 0;
+    if (typeof Storage !== "undefined") {
+        aspectMode = parseInt(Storage.get("tela") || "0", 10) || 0;
+        if (aspectMode < 0 || aspectMode > 2) aspectMode = 0;
+    }
+    function computeGeom()
+    {
+        var AW = cfg.aspectW || 4, AH = cfg.aspectH || 3;
+        if (aspectMode === 1) { AW = 4; AH = 3; }
+        if (aspectMode === 2) {
+            GW = W; GH = H;
+        } else {
+            GH = Math.min(H, Math.round(W * AH / AW));
+            GW = Math.round(GH * AW / AH);
+            if (GW > W) { GW = W; GH = Math.round(GW * AH / AW); }
+        }
+        GX = Math.round((W - GW) / 2);
+        GY = Math.round((H - GH) / 2);
+    }
+    computeGeom();
 
     var bits = cfg.bits || { up: 16, down: 32, left: 64, right: 128, a: 1, b: 2, select: 4, start: 8 };
     var labels = cfg.labels || { a: "A", b: "B", select: "SEL", start: "STA" };
     var labelFont = cfg.labelFont || 4;
     var hasB = labels.b !== null && labels.b !== undefined && bits.b;
+    // losango A/B/X/Y + ombros L/R (SNES): so quando o adapter declara
+    var hasXY = !!(bits.x && bits.y && labels.x && labels.y);
+    var hasLR = !!(bits.l && bits.r && labels.l && labels.r);
+    var sram = cfg.sram || null;
     var romDirs = cfg.romDirs || [];
     var romExts = cfg.romExts || [];
     var stateExt = cfg.stateExt || ".s";
     var analog = cfg.analog || null;
     var audioOn = cfg.audioDefault !== false;
-    var skipMode = (typeof Storage === "undefined") || Storage.get("skip") !== "0";
+    // frameskip: 0 = desenha tudo, 1 = um sim um nao, 2 = um a cada 3,
+    // -1 = auto (adaptativo; ver loopGame). "1" antigo do Storage = auto.
+    var skipSet = -1;
+    if (typeof Storage !== "undefined") {
+        var sk = Storage.get("skip");
+        if (sk === "0") skipSet = 0;
+        else if (sk === "f1") skipSet = 1;
+        else if (sk === "f2") skipSet = 2;
+    }
+    // controles na tela: 0 auto (somem com o gamepad em uso), 1 sempre, 2 nunca
+    var touchUi = 0;
+    // botoes do gamepad: 0 pelo rotulo (A->A), 1 pela posicao (troca A/B e X/Y)
+    var padSwap = 0;
+    if (typeof Storage !== "undefined") {
+        touchUi = parseInt(Storage.get("toque") || "0", 10) || 0;
+        padSwap = Storage.get("padpos") === "1" ? 1 : 0;
+    }
     var analogOn = false;
     if (analog && typeof Storage !== "undefined") analogOn = Storage.get("paddle") === "1";
 
@@ -98,12 +142,24 @@ function run(cfg)
     var DP_ZONE_Y = Math.round(H * 0.45);
     var DEAD = Math.max(10, Math.round(DP_RING * 0.18));
 
-    // A/B: cluster da direita. Sem B, o A desce um pouco (polegar).
-    var AB_R = Math.round(Math.min(W, H) * 0.098);
-    var A_X = W - AB_R - 14;
-    var A_Y = H - Math.round(AB_R * (hasB ? 2.05 : 1.55));
-    var B_X = A_X - Math.round(AB_R * 2.2);
-    var B_Y = A_Y + Math.round(AB_R * 0.67);
+    // A/B: cluster da direita. Sem B, o A desce um pouco (polegar). Com
+    // X/Y vira o losango do controle do SNES (A direita, B baixo, X cima,
+    // Y esquerda) com botoes menores.
+    var AB_R = Math.round(Math.min(W, H) * (hasXY ? 0.072 : 0.098));
+    var A_X, A_Y, B_X, B_Y, X_X = 0, X_Y = 0, Y_X = 0, Y_Y = 0;
+    if (hasXY) {
+        var dd = Math.round(AB_R * 1.95);
+        var cxd = W - dd - AB_R - 10, cyd = H - dd - AB_R - Math.round(H * 0.07);
+        A_X = cxd + dd; A_Y = cyd;
+        B_X = cxd; B_Y = cyd + dd;
+        X_X = cxd; X_Y = cyd - dd;
+        Y_X = cxd - dd; Y_Y = cyd;
+    } else {
+        A_X = W - AB_R - 14;
+        A_Y = H - Math.round(AB_R * (hasB ? 2.05 : 1.55));
+        B_X = A_X - Math.round(AB_R * 2.2);
+        B_Y = A_Y + Math.round(AB_R * 0.67);
+    }
 
     // SEL/STA (ou SEL/RESET): pilulas no meio de baixo
     var SS_W = Math.round(W * 0.130);
@@ -112,10 +168,20 @@ function run(cfg)
     var SEL_X = Math.round(W * 0.275);
     var STA_X = Math.round(W * 0.415);
 
+    // Faixa de cima reservada ao sistema: no modo retratil o terco direito
+    // dela e o gesto de revelar a topbar (pollAppChrome engole o toque) e os
+    // tercos esquerdo/central abrem paineis. Pausa e ombros ficam abaixo.
+    var TOP_SAFE = Math.round(H * 0.075);
+
     // pausa: canto superior direito
     var PAUSE_R = Math.max(11, Math.round(Math.min(W, H) * 0.030));
     var PAUSE_X = W - PAUSE_R - Math.round(PAUSE_R * 0.9);
-    var PAUSE_Y = PAUSE_R + Math.round(PAUSE_R * 0.9);
+    var PAUSE_Y = TOP_SAFE + PAUSE_R + 4;
+
+    // L/R: pilulas de ombro no topo (L a esquerda; R a esquerda da pausa)
+    var SH_W = Math.round(W * 0.16), SH_H = Math.round(H * 0.06);
+    var L_X = 8, L_Y = TOP_SAFE;
+    var R_X = PAUSE_X - PAUSE_R - 12 - SH_W, R_Y = TOP_SAFE;
 
     // paddle: trilho horizontal na zona do d-pad (valor absoluto 0..255)
     var PADDLE_X0 = Math.round(W * 0.06);
@@ -135,6 +201,12 @@ function run(cfg)
     var paddleValue = 0;
     // frameskip auto adaptativo (por ROM aberta): quadros na janela de medida
     var skipHeavy = false, skipT0 = 0, skipN = 0, skipSlow = 0;
+    // velocidade (cabecalho da pausa): quadros emulados/desenhados por s
+    var spdT0 = 0, spdEmu = 0, spdDraw = 0, spdText = "";
+    // gamepad em uso (controles na tela "auto"): ultimo seq visto e quando
+    var padSeq = 0, padSeen = -100000, touchSeen = 0;
+    var sramT = 0;
+    var lastRom = (typeof Storage !== "undefined") ? (Storage.get("ultima") || "") : "";
 
     var fingers = {};
     var freshIds = [];
@@ -172,6 +244,17 @@ function run(cfg)
         return n;
     }
     function slotPath(n) { return dataDir + romBase() + stateExt + n; }
+    function sramPath() { return dataDir + romBase() + (sram && sram.ext ? sram.ext : ".srm"); }
+    function baseOf(name)
+    {
+        var i = name.lastIndexOf(".");
+        return i > 0 ? name.substring(0, i) : name;
+    }
+    function sramFlush(force)
+    {
+        if (!sram || curIdx < 0) return;
+        try { N.sramSave(sramPath(), force); } catch (e) {}
+    }
 
     function scanRoms()
     {
@@ -193,7 +276,12 @@ function run(cfg)
                 if (!ok) continue;
                 var sz = 0;
                 try { sz = FS.getFileSize(p); } catch (e2) {}
-                roms.push({ name: p.substring(p.lastIndexOf("/") + 1), path: p, size: sz });
+                var nm = p.substring(p.lastIndexOf("/") + 1);
+                var saves = 0;
+                for (var sv = 0; sv < 3; sv++) {
+                    if (FS.exists(dataDir + baseOf(nm) + stateExt + sv)) saves++;
+                }
+                roms.push({ name: nm, path: p, size: sz, saves: saves });
             }
         }
         for (var a = 1; a < roms.length; a++) {
@@ -213,7 +301,7 @@ function run(cfg)
     };
 
     var N = (function () {
-        var h = 0, romOff = 0, pcmOff = 0, fbOff = 0, stateOff = 0, scaleOff = 0;
+        var h = 0, romOff = 0, pcmOff = 0, fbOff = 0, stateOff = 0, scaleOff = 0, sramSum = 0;
         var audio = false;
         var direct = false, slotArg = [];
         var NO_TARGET = 4294967295;
@@ -246,10 +334,34 @@ function run(cfg)
                 return n > 0 && ctl(6, n) === 1;
             },
             reset: function () { if (h > 0) ctl(7); },
+            rescale: function () {
+                if (h > 0) scaleOff = ctl(12, (GW << 16) | GH);
+            },
+            // SRAM do cartucho (bateria) <-> arquivo; sumCtl detecta mudanca
+            sramLoad: function (p) {
+                if (h <= 0 || !sram) return false;
+                var off = ctl(sram.offCtl), n = ctl(sram.sizeCtl);
+                if (off <= 0 || n <= 0 || !FS.exists(p)) return false;
+                var got = S.nativeLoadFile(h, off, p);
+                sramSum = sram.sumCtl ? ctl(sram.sumCtl) : 0;
+                return got > 0;
+            },
+            sramSave: function (p, force) {
+                if (h <= 0 || !sram) return false;
+                var off = ctl(sram.offCtl), n = ctl(sram.sizeCtl);
+                if (off <= 0 || n <= 0) return false;
+                if (sram.sumCtl && !force) {
+                    var sum = ctl(sram.sumCtl);
+                    if (sum === sramSum) return false;
+                    sramSum = sum;
+                }
+                return S.nativeSaveFile(h, off, n, p);
+            },
             // canDirect: so com os carimbos prontos (sem eles o overlay sumiria)
             frame: function (btns, render, canDirect) {
                 if (h <= 0) return;
-                var arg = ((btns | 0) & 0xFF) | (render ? 0x100 : 0);
+                // bits 0-7 do controle + render (bit 8) + bits 8-15 em 16-23
+                var arg = ((btns | 0) & 0xFF) | (render ? 0x100 : 0) | (((btns | 0) & 0xFF00) << 8);
                 // alvo = vidro inteiro: o core centra o quadro, pinta as
                 // faixas e compoe os carimbos fora do retangulo do jogo
                 direct = canDirect && HAS_SCREEN &&
@@ -322,6 +434,13 @@ function run(cfg)
         romName = roms[idx].name;
         listOff = 0;
         N.unload();
+        // ROM grande no SD leva segundos (2,5 MB ~6 s no 4848): mostra o que
+        // esta acontecendo em vez da lista congelada
+        S.setAlpha(255);
+        S.fillScreen(C_PANEL);
+        txtCenter(fitText(baseOf(romName), W - 24, 2), W / 2, Math.round(H * 0.42), C_TEXT, 2);
+        txtCenter("carregando " + sizeText(roms[idx].size) + "...", W / 2, Math.round(H * 0.42) + 30, C_DIM);
+        UI.end(30);
         if (!N.load(roms[idx].path, roms[idx])) {
             errMsg = romName + " nao abriu" +
                      (cfg.errorHint ? " (" + cfg.errorHint + ")." : ".");
@@ -330,6 +449,14 @@ function run(cfg)
         }
         screen = "game";
         slotMsg = "";
+        // bateria do cartucho antes do primeiro quadro
+        if (sram) {
+            try { N.sramLoad(sramPath()); } catch (e) {}
+        }
+        sramT = S.millis();
+        lastRom = romName;
+        if (typeof Storage !== "undefined") Storage.set("ultima", romName);
+        spdT0 = 0;
         buildStamps();      // desenha no quadro do app; o needClear limpa
         skipHeavy = false;
         skipT0 = 0;
@@ -446,9 +573,14 @@ function run(cfg)
                 paddleValue = paddleFromX(g.x);
             } else if (g.kind === "a") btnsMask |= bits.a;
             else if (g.kind === "b") btnsMask |= bits.b;
+            else if (g.kind === "x") btnsMask |= bits.x;
+            else if (g.kind === "y") btnsMask |= bits.y;
+            else if (g.kind === "l") btnsMask |= bits.l;
+            else if (g.kind === "r") btnsMask |= bits.r;
             else if (g.kind === "start") btnsMask |= bits.start;
             else if (g.kind === "select") btnsMask |= bits.select;
         }
+        if (freshIds.length > 0) touchSeen = S.millis();
         // gamepad do OS (API 61, canal Input.padState): mescla no MESMO
         // bitmask depois do toque — dpad e esquerdo = direcao, A/B/SEL/STA =
         // os botoes da tela. Broadcast: o toque nao derruba o que veio do
@@ -457,8 +589,20 @@ function run(cfg)
         if (typeof Input !== "undefined" && typeof Input.padState === "function") {
             var ps = Input.padState();
             if (ps.seq > 0) {
-                if ((ps.buttons & 1) !== 0) btnsMask |= bits.a;         // A
-                if ((ps.buttons & 2) !== 0 && bits.b) btnsMask |= bits.b;  // B
+                if (ps.seq !== padSeq) { padSeq = ps.seq; padSeen = S.millis(); }
+                // rotulo (A->A) ou posicao (Nintendo x Xbox: troca A/B e X/Y)
+                var pa = padSwap ? 2 : 1, pb = padSwap ? 1 : 2;
+                var px = padSwap ? 8 : 4, py = padSwap ? 4 : 8;
+                if ((ps.buttons & pa) !== 0) btnsMask |= bits.a;          // A
+                if ((ps.buttons & pb) !== 0 && bits.b) btnsMask |= bits.b;  // B
+                if (hasXY) {
+                    if ((ps.buttons & px) !== 0) btnsMask |= bits.x;      // X
+                    if ((ps.buttons & py) !== 0) btnsMask |= bits.y;      // Y
+                }
+                if (hasLR) {
+                    if ((ps.buttons & (16 | 64)) !== 0) btnsMask |= bits.l;   // L1/L2
+                    if ((ps.buttons & (32 | 128)) !== 0) btnsMask |= bits.r;  // R1/R2
+                }
                 if ((ps.buttons & 256) !== 0) btnsMask |= bits.select;  // select
                 if ((ps.buttons & 512) !== 0) btnsMask |= bits.start;   // start
                 if (ps.dpad & 0x1) btnsMask |= bits.up;
@@ -475,9 +619,35 @@ function run(cfg)
         if (!dpActive) { dpBaseX = DP_HOME_X; dpBaseY = DP_HOME_Y; dpKnobX = DP_HOME_X; dpKnobY = DP_HOME_Y; }
     }
 
+    // controles na tela visiveis? (auto: somem com o gamepad em uso e voltam
+    // ao primeiro toque no vidro)
+    function uiVisible()
+    {
+        if (touchUi === 1) return true;
+        if (touchUi === 2) return false;
+        var now = S.millis();
+        return !(now - padSeen < 8000 && padSeen > touchSeen);
+    }
+
     function classifyArrival(x, y)
     {
         if (dist(x, y, PAUSE_X, PAUSE_Y) <= PAUSE_R + 10) return "pause";
+        if (hasLR) {
+            if (y >= L_Y - 10 && y <= L_Y + SH_H + 10) {
+                if (x >= L_X - 6 && x <= L_X + SH_W + 6) return "l";
+                if (x >= R_X - 6 && x <= R_X + SH_W + 6) return "r";
+            }
+        }
+        if (hasXY) {
+            // losango: o botao mais proximo dentro do raio + folga
+            var best = "", bd = AB_R + 12;
+            var cand = [["a", A_X, A_Y], ["b", B_X, B_Y], ["x", X_X, X_Y], ["y", Y_X, Y_Y]];
+            for (var c = 0; c < cand.length; c++) {
+                var dc = dist(x, y, cand[c][1], cand[c][2]);
+                if (dc <= bd) { bd = dc; best = cand[c][0]; }
+            }
+            if (best) return best;
+        }
         if (dist(x, y, A_X, A_Y) <= AB_R + 10) return "a";
         if (hasB && dist(x, y, B_X, B_Y) <= AB_R + 10) return "b";
         if (y >= SS_Y - 8 && y <= SS_Y + SS_H + 8) {
@@ -566,6 +736,17 @@ function run(cfg)
     }
     function drawPill(x, label, on) { drawPillAt(x, SS_Y, label, on); }
 
+    // ombro L/R: pilula larga no topo
+    function drawShoulderAt(x, y, label, on)
+    {
+        S.setAlpha(on ? 185 : 70);
+        S.fillRoundRect(x, y, SH_W, SH_H, Math.round(SH_H / 2), 0x0000);
+        S.setAlpha(on ? 255 : 120);
+        S.drawRoundRect(x, y, SH_W, SH_H, Math.round(SH_H / 2), on ? C_ACC : 0x8C71);
+        S.setAlpha(255);
+        txtMid(label, x + Math.round(SH_W / 2), y + Math.round(SH_H / 2), on ? 0xFFFF : C_SOFT, 2);
+    }
+
     function drawPauseAt(px, py)
     {
         S.setAlpha(80);
@@ -612,9 +793,23 @@ function run(cfg)
 
     function drawOverlay()
     {
+        if (!uiVisible()) {
+            drawPauseBtn();
+            drawToast();
+            S.setAlpha(255);
+            return;
+        }
         if (analogOn) drawPaddle(); else drawDpad();
         drawAB(A_X, A_Y, labels.a, (btnsMask & bits.a) !== 0);
         if (hasB) drawAB(B_X, B_Y, labels.b, (btnsMask & bits.b) !== 0);
+        if (hasXY) {
+            drawAB(X_X, X_Y, labels.x, (btnsMask & bits.x) !== 0);
+            drawAB(Y_X, Y_Y, labels.y, (btnsMask & bits.y) !== 0);
+        }
+        if (hasLR) {
+            drawShoulderAt(L_X, L_Y, labels.l, (btnsMask & bits.l) !== 0);
+            drawShoulderAt(R_X, R_Y, labels.r, (btnsMask & bits.r) !== 0);
+        }
         drawPill(SEL_X, labels.select, (btnsMask & bits.select) !== 0);
         drawPill(STA_X, labels.start, (btnsMask & bits.start) !== 0);
         drawPauseBtn();
@@ -627,7 +822,8 @@ function run(cfg)
     // quadro o app so diz qual carimbo vai em que lugar (N.place manda ao
     // core so os slots que mudaram) e o core compoe junto com o quadro.
     var ST_DPAD = 0, ST_KNOB = 3, ST_A = 5, ST_B = 7, ST_SEL = 9, ST_STA = 11,
-        ST_PAUSE = 13, ST_TOAST = 14, ST_RAIL = 15, ST_PKNOB = 16;
+        ST_PAUSE = 13, ST_TOAST = 14, ST_RAIL = 15, ST_PKNOB = 16,
+        ST_X = 17, ST_Y = 19, ST_L = 21, ST_R = 23;
     var DP_BOX = 2 * (DP_RING + 6) + 4, KNOB_BOX = 2 * KNOB_R + 4, AB_BOX = 2 * AB_R + 4,
         PAUSE_BOX = 2 * PAUSE_R + 4, RAIL_W = (PADDLE_X1 - PADDLE_X0) + 24, RAIL_H = 48;
     var stampsOk = false;
@@ -652,15 +848,43 @@ function run(cfg)
             N.stamp(ST_PAUSE, PAUSE_BOX, PAUSE_BOX, function () { drawPauseAt(pc, pc); }) &&
             N.stamp(ST_TOAST, toastW() + 4, 26, function () { drawToastAt(2, 2); }) &&
             (!analog || (N.stamp(ST_RAIL, RAIL_W, RAIL_H, function () { drawRailAt(12, 24); }) &&
-                         N.stamp(ST_PKNOB, KNOB_BOX, KNOB_BOX, function () { drawPaddleKnobAt(kc, kc); })));
+                         N.stamp(ST_PKNOB, KNOB_BOX, KNOB_BOX, function () { drawPaddleKnobAt(kc, kc); }))) &&
+            (!hasXY || (N.stamp(ST_X, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.x, false); }) &&
+                        N.stamp(ST_X + 1, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.x, true); }) &&
+                        N.stamp(ST_Y, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.y, false); }) &&
+                        N.stamp(ST_Y + 1, AB_BOX, AB_BOX, function () { drawAB(ac, ac, labels.y, true); }))) &&
+            (!hasLR || (N.stamp(ST_L, SH_W + 4, SH_H + 4, function () { drawShoulderAt(2, 2, labels.l, false); }) &&
+                        N.stamp(ST_L + 1, SH_W + 4, SH_H + 4, function () { drawShoulderAt(2, 2, labels.l, true); }) &&
+                        N.stamp(ST_R, SH_W + 4, SH_H + 4, function () { drawShoulderAt(2, 2, labels.r, false); }) &&
+                        N.stamp(ST_R + 1, SH_W + 4, SH_H + 4, function () { drawShoulderAt(2, 2, labels.r, true); })));
         S.setAlpha(255);
         stampsOk = ok;
+        // bancada: quanto da area de carimbos o overlay usou (dimensiona o
+        // layout da scratch do core; cores sem o comando devolvem 0)
+        if (cfg.stampUsedCtl) S.print("[emu] carimbos " + (ok ? "ok" : "FALHOU") + ": " + Math.round(N.ctl(cfg.stampUsedCtl) / 1024) + " KB");
         return ok;
     }
 
     function placeStamps()
     {
         var dc = DP_BOX >> 1, kc = KNOB_BOX >> 1, ac = AB_BOX >> 1, pc = PAUSE_BOX >> 1;
+        if (!uiVisible()) {
+            // gamepad em uso: so a pausa (e o nome da ROM) ficam no vidro
+            for (var k = 0; k < 12; k++) {
+                if (k !== 6 && k !== 7) N.place(k, -1, 0, 0);
+            }
+            N.place(6, ST_PAUSE, PAUSE_X - pc, PAUSE_Y - pc);
+            N.place(7, toastOn() ? ST_TOAST : -1, 6, GY + 6);
+            return;
+        }
+        if (hasXY) {
+            N.place(8, ST_X + ((btnsMask & bits.x) !== 0 ? 1 : 0), X_X - ac, X_Y - ac);
+            N.place(9, ST_Y + ((btnsMask & bits.y) !== 0 ? 1 : 0), Y_X - ac, Y_Y - ac);
+        }
+        if (hasLR) {
+            N.place(10, ST_L + ((btnsMask & bits.l) !== 0 ? 1 : 0), L_X - 2, L_Y - 2);
+            N.place(11, ST_R + ((btnsMask & bits.r) !== 0 ? 1 : 0), R_X - 2, R_Y - 2);
+        }
         if (analogOn) {
             N.place(0, ST_RAIL, PADDLE_X0 - 12, PADDLE_Y - 24);
             N.place(1, ST_PKNOB, paddleKnobX() - kc, PADDLE_Y - kc);
@@ -680,15 +904,55 @@ function run(cfg)
     }
 
     // ---- tela: lista de ROMs ----------------------------------------------
+    // Linhas: "Continuar" (o ultimo jogo aberto) fixo no topo, depois as ROMs
+    // em ordem alfabetica: nome sem extensao (reticencias se nao couber),
+    // tamanho e quantos slots de save existem. Toque seco abre, arrasto rola,
+    // toque no cabecalho reescaneia; gamepad: cima/baixo escolhe, A/START abre.
     var ROW_H = 44;
-    var LIST_TOP = 50;
+    // cabecalho medido pela fonte do titulo (a fonte 4 desce abaixo de 38 px)
+    var HEAD_H = Math.max(38, S.fontHeight(4) + 10);
+    var LIST_TOP = HEAD_H + 8;
+    var selRow = -1;          // foco do gamepad (-1 = nenhum)
+    var padPrevList = 0, padRepT = 0;
+
+    function listRows()
+    {
+        var rows = [];
+        var cont = -1;
+        if (lastRom) {
+            for (var i = 0; i < roms.length; i++) {
+                if (roms[i].name === lastRom) { cont = i; break; }
+            }
+        }
+        if (cont >= 0) rows.push({ idx: cont, cont: true });
+        for (var j = 0; j < roms.length; j++) rows.push({ idx: j, cont: false });
+        return rows;
+    }
+    function fitText(t, maxW, font)
+    {
+        if (S.textWidth(t, font) <= maxW) return t;
+        var n = t.length;
+        while (n > 1 && S.textWidth(t.substring(0, n) + "...", font) > maxW) n--;
+        return t.substring(0, n) + "...";
+    }
+    function sizeText(b)
+    {
+        if (b >= 1048576) {
+            var mb = Math.round(b * 10 / 1048576) / 10;
+            return String(mb).replace(".", ",") + " MB";
+        }
+        return Math.round(b / 1024) + " KB";
+    }
+    function listView() { return H - LIST_TOP - 24; }
 
     function drawSel()
     {
         S.fillScreen(C_PANEL);
         txt(title, 8, 6, C_ACC, 4);
-        txt(roms.length + (roms.length === 1 ? " ROM" : " ROMs"), W - 74, 26, C_DIM);
-        S.drawLine(0, 38, W, 38, 0x3186);
+        var cnt = roms.length + (roms.length === 1 ? " ROM" : " ROMs");
+        txt(cnt, W - S.textWidth(cnt, 1) - 10, 10, C_DIM);
+        txt("toque: atualizar", W - S.textWidth("toque: atualizar", 1) - 10, 24, 0x3186);
+        S.drawLine(0, HEAD_H, W, HEAD_H, 0x3186);
         if (roms.length === 0) {
             txtCenter("Sem ROMs", W / 2, 110, C_TEXT, 2);
             txtCenter("Ponha " + romExts.join(" ") + " em", W / 2, 146, C_DIM);
@@ -699,20 +963,45 @@ function run(cfg)
             txtCenter("(celerctl push)", W / 2, 196, C_DIM);
             return;
         }
-        var maxOff = roms.length * ROW_H - (H - LIST_TOP - 24);
+        var rows = listRows();
+        var total = rows.length * ROW_H;
+        var maxOff = total - listView();
         if (maxOff < 0) maxOff = 0;
         if (listOff > maxOff) listOff = maxOff;
+        if (listOff < 0) listOff = 0;
         var y = LIST_TOP - listOff;
-        for (var i = 0; i < roms.length; i++) {
-            if (y + ROW_H >= LIST_TOP && y <= H) {
-                var hot = rowArrived(y);
+        for (var i = 0; i < rows.length; i++) {
+            // Linha STRADDLING o cabecalho nao desenha: o nome dela em fonte 2
+            // invadia a faixa do titulo ("N ROMs") e o divisor enquanto rolava.
+            // Recorte padrao de lista: a linha entra quando o topo dela cruza
+            // o divisor (embaixo o vidro recorta sozinho).
+            if (y >= LIST_TOP && y <= H) {
+                var r = roms[rows[i].idx];
+                var hot = rowArrived(y) || i === selRow;
                 if (hot) S.fillRect(0, y, W, ROW_H, 0x1886);
-                txt(roms[i].name, 10, y + 5, hot ? C_ACC : C_TEXT, 2);
-                txt(Math.round(roms[i].size / 1024) + " KB", 10, y + 26, C_DIM);
+                var sz = sizeText(r.size);
+                var szw = S.textWidth(sz, 1);
+                if (rows[i].cont) {
+                    txt("Continuar", 10, y + 4, C_OK, 1);
+                    txt(fitText(baseOf(r.name), W - szw - 30, 2), 10, y + 18, hot ? C_ACC : C_TEXT, 2);
+                } else {
+                    txt(fitText(baseOf(r.name), W - szw - 30, 2), 10, y + 5, hot ? C_ACC : C_TEXT, 2);
+                    var sub = r.saves > 0 ? (r.saves + (r.saves === 1 ? " save" : " saves")) : "";
+                    if (sub) txt(sub, 10, y + 27, C_DIM);
+                }
+                txt(sz, W - szw - 12, y + 16, C_DIM);
+                S.drawLine(10, y + ROW_H - 1, W - 10, y + ROW_H - 1, 0x2124);
             }
             y += ROW_H;
         }
-        txtCenter("toque abre - arraste rola", W / 2, H - 14, 0x3186);
+        // barra de rolagem
+        if (total > listView()) {
+            var vh = listView();
+            var bh = Math.max(20, Math.round(vh * vh / total));
+            var by = LIST_TOP + Math.round((vh - bh) * listOff / (total - vh));
+            S.fillRect(W - 4, by, 3, bh, 0x4208);
+        }
+        txtCenter("toque abre - arraste rola - gamepad: A abre", W / 2, H - 14, 0x3186);
     }
     function rowArrived(y)
     {
@@ -731,22 +1020,68 @@ function run(cfg)
     var TAP_SLOP = 14;   // px de traco que ainda conta como toque seco
     var armIdx = -1;     // linha armada na chegada
     var scrollY = -1;    // y do dedo de rolagem no quadro anterior
+    var armHeader = false;
+
+    // gamepad na lista: borda local (o canal e broadcast) + repeticao
+    function padList(rows)
+    {
+        if (typeof Input === "undefined" || typeof Input.padState !== "function") return -1;
+        var ps = Input.padState();
+        if (ps.seq <= 0) return -1;
+        var cur = ps.buttons | ((ps.dpad & 0xF) << 16);
+        if (ps.ly < -70) cur |= 1 << 16;
+        if (ps.ly > 70) cur |= 4 << 16;
+        var edge = cur & ~padPrevList;
+        var now = S.millis();
+        if ((cur & (5 << 16)) !== 0 && (cur & (5 << 16)) === (padPrevList & (5 << 16)) && now >= padRepT) {
+            edge |= cur & (5 << 16);
+            padRepT = now + 120;
+        } else if (edge & (5 << 16)) {
+            padRepT = now + 400;
+        }
+        padPrevList = cur;
+        if (edge & (1 << 16)) selRow = selRow <= 0 ? 0 : selRow - 1;
+        if (edge & (4 << 16)) selRow = selRow < 0 ? 0 : Math.min(rows.length - 1, selRow + 1);
+        if (selRow >= 0) {
+            var top = selRow * ROW_H;
+            if (top < listOff) listOff = top;
+            if (top + ROW_H > listOff + listView()) listOff = top + ROW_H - listView();
+        }
+        if ((edge & (1 | 2 | 512)) !== 0 && selRow >= 0 && selRow < rows.length) return rows[selRow].idx;
+        return -1;
+    }
 
     function loopSel()
     {
         var ts = pollTouch();
+        for (var h0 = 0; h0 < freshIds.length; h0++) {
+            if (fingers[freshIds[h0]].ay < HEAD_H) armHeader = true;
+        }
+        if (ts.length === 0 && armHeader) {
+            armHeader = false;
+            scanRoms();
+            selRow = -1;
+        }
         if (roms.length === 0) { drawSel(); UI.end(30); return; }
+        var rows = listRows();
+        var padPick = padList(rows);
+        if (padPick >= 0) {
+            fingers = {}; freshIds = [];
+            openRom(padPick);
+            return;
+        }
         for (var i = 0; i < freshIds.length; i++) {
             var f = fingers[freshIds[i]];
             if (f.ay < LIST_TOP || f.ay > H - 24) continue;
-            var idx = Math.floor((f.ay + listOff - LIST_TOP) / ROW_H);
-            if (idx >= 0 && idx < roms.length) armIdx = idx;
+            var ri = Math.floor((f.ay + listOff - LIST_TOP) / ROW_H);
+            if (ri >= 0 && ri < rows.length) { armIdx = rows[ri].idx; selRow = -1; }
         }
         for (var id in fingers) {
             if (!fingers.hasOwnProperty(id)) continue;
             var g = fingers[id];
             if (Math.abs(g.x - g.ax) > TAP_SLOP || Math.abs(g.y - g.ay) > TAP_SLOP) {
                 armIdx = -1;
+                armHeader = false;
                 break;
             }
         }
@@ -773,13 +1108,26 @@ function run(cfg)
 
     // ---- tela: pausa ------------------------------------------------------
     // A lista de pausa tem os itens padrao + os extras do console (mapper,
-    // cor, dificuldade): 11 linhas de 36 px cabem nos 480 sem cortar o Sair.
+    // cor, dificuldade). A altura da linha se adapta ao vidro: com 36 px
+    // fixos, os 11 itens do Atari estouravam os 320 px do SmartDisplay e o
+    // Sair ficava FORA do vidro (impossivel sair pelo menu) enquanto as
+    // linhas invisiveis continuavam alcancaveis pelo toque.
     var MENU_TOP = 28;
     var MENU_H = 36;
     var menuSub = 0;
+    function menuLayout(n)
+    {
+        var h = Math.floor((H - MENU_TOP - 8) / (n > 0 ? n : 1));
+        MENU_H = h < 26 ? 26 : h > 36 ? 36 : h;  // piso = altura de toque
+    }
     var menuHover = -1;
     var menuArm = -1;
     var hadMenuTouch = false;
+    var menuFocus = -1;        // foco do gamepad no menu
+    var padPrevMenu = 0;
+    // o dedo que pausou ainda esta no vidro: sem esperar ele sair, a soltura
+    // caia na linha do menu embaixo dele ("Continuar") e o jogo voltava
+    var menuWaitRelease = false;
 
     function slotInfo(n)
     {
@@ -819,17 +1167,55 @@ function run(cfg)
             return slots;
         }
 
+        if (menuSub === 3) return optionsList();
+
         var items = [
             { label: "Continuar", action: function () { resumeGame(); } },
             { label: "Reset", action: function () { N.reset(); slotMsg = ""; resumeGame(); } },
             { label: "Salvar estado", action: function () { menuSub = 1; menuArm = -1; } },
             { label: "Carregar estado", action: function () { menuSub = 2; menuArm = -1; } },
-            { label: "Frameskip: " + (skipMode ? "auto" : "off"), action: function () {
-                skipMode = !skipMode;
-                if (typeof Storage !== "undefined") Storage.set("skip", skipMode ? "1" : "0");
+            { label: "Opcoes...", action: function () { menuSub = 3; menuArm = -1; } },
+            { label: "Trocar jogo", action: function () { backToList(); } },
+        ];
+        items.push({ label: "Sair", action: function () { sramFlush(false); radioResume(); N.unload(); S.exitApp(); } });
+        return items;
+    }
+
+    function skipLabel()
+    {
+        return skipSet < 0 ? "auto" : skipSet === 0 ? "desenha tudo" : skipSet === 1 ? "1 de 2" : "1 de 3";
+    }
+    function optionsList()
+    {
+        var tela = ["original", "4:3", "esticar"][aspectMode];
+        var toque = ["auto", "sempre", "nunca"][touchUi];
+        var items = [
+            { label: "< Voltar", action: function () { menuSub = 0; menuArm = -1; } },
+            { label: "Frameskip: " + skipLabel(), action: function () {
+                skipSet = skipSet < 0 ? 0 : skipSet === 0 ? 1 : skipSet === 1 ? 2 : -1;
+                skipHeavy = false; skipT0 = 0; skipSlow = 0;
+                if (typeof Storage !== "undefined") {
+                    Storage.set("skip", skipSet < 0 ? "1" : skipSet === 0 ? "0" : "f" + skipSet);
+                }
             } },
             { label: "Audio: " + (audioOn ? "on" : "off"), action: function () {
-                api.setAudio(!audioOn);
+                // na pausa o audio fica parado; vale ao continuar
+                audioOn = !audioOn;
+            } },
+            { label: "Tela: " + tela, action: function () {
+                aspectMode = (aspectMode + 1) % 3;
+                if (typeof Storage !== "undefined") Storage.set("tela", String(aspectMode));
+                computeGeom();
+                N.rescale();
+                needClear = true;
+            } },
+            { label: "Controles na tela: " + toque, action: function () {
+                touchUi = (touchUi + 1) % 3;
+                if (typeof Storage !== "undefined") Storage.set("toque", String(touchUi));
+            } },
+            { label: "Botoes do gamepad: " + (padSwap ? "posicao" : "rotulo"), action: function () {
+                padSwap = padSwap ? 0 : 1;
+                if (typeof Storage !== "undefined") Storage.set("padpos", padSwap ? "1" : "0");
             } },
         ];
         if (analog) {
@@ -844,32 +1230,69 @@ function run(cfg)
         }
         var extra = cfg.menuExtra ? cfg.menuExtra(api) : [];
         for (var e = 0; e < extra.length; e++) items.push(extra[e]);
-        items.push({ label: "Sair", action: function () { radioResume(); N.unload(); S.exitApp(); } });
         return items;
     }
 
     function drawPause()
     {
         S.fillScreen(C_PANEL);
-        txt(romBase(), 8, 6, C_ACC, 2);
+        var head = menuSub === 3 ? "Opcoes" : menuSub === 1 ? "Salvar em..." : menuSub === 2 ? "Carregar de..." : romBase();
+        txt(fitText(head, W - (spdText ? S.textWidth(spdText, 1) + 24 : 16), 2), 8, 6, C_ACC, 2);
+        if (spdText && menuSub === 0) txt(spdText, W - S.textWidth(spdText, 1) - 8, 10, C_DIM);
         S.drawLine(0, 26, W, 26, 0x3186);
         var items = menuList();
+        menuLayout(items.length);
         var y = MENU_TOP;
         for (var i = 0; i < items.length; i++) {
-            var on = (i === menuHover);
+            var on = (i === menuHover || i === menuFocus);
             if (on) S.fillRect(0, y, W, MENU_H, 0x1886);
             txt(items[i].label, 12, y + 10, on ? C_ACC : C_TEXT, 2);
             y += MENU_H;
         }
-        if (slotMsg) txtCenter(slotMsg, W / 2, y + 4, C_OK);
-        txtCenter(labels.select + "+" + labels.start + " pausa - canto sup. dir. tambem",
-                  W / 2, H - 14, 0x3186);
+        // rodape e msg de slot so quando sobra faixa livre (vidros baixos:
+        // as linhas ocupam tudo e sobrepor o texto atrapalha o toque visual)
+        if (slotMsg && y + 12 <= H) txtCenter(slotMsg, W / 2, y + 4, C_OK);
+        if (y + 12 < H - 20) {
+            var foot = menuSub === 3 ? "controles auto: somem com o gamepad, voltam no toque"
+                                     : labels.select + "+" + labels.start + " pausa - gamepad: A escolhe, B volta";
+            txtCenter(foot, W / 2, H - 14, 0x3186);
+        }
+    }
+
+    // gamepad no menu: cima/baixo, A escolhe, B volta (ou continua)
+    function padMenu(items)
+    {
+        if (typeof Input === "undefined" || typeof Input.padState !== "function") return null;
+        var ps = Input.padState();
+        if (ps.seq <= 0) return null;
+        var cur = ps.buttons | ((ps.dpad & 0xF) << 16);
+        var edge = cur & ~padPrevMenu;
+        padPrevMenu = cur;
+        if (edge & (1 << 16)) menuFocus = menuFocus <= 0 ? items.length - 1 : menuFocus - 1;
+        if (edge & (4 << 16)) menuFocus = menuFocus < 0 || menuFocus >= items.length - 1 ? 0 : menuFocus + 1;
+        if ((edge & 1) !== 0 && menuFocus >= 0 && menuFocus < items.length) return items[menuFocus];
+        if ((edge & 2) !== 0) {
+            return { action: function () {
+                if (menuSub !== 0) { menuSub = 0; menuFocus = -1; } else resumeGame();
+            } };
+        }
+        return null;
     }
 
     function loopPause()
     {
         var ts = pollTouch();
         var items = menuList();
+        menuLayout(items.length);
+        var pick = padMenu(items);
+        if (pick) { pick.action(api); return; }
+        if (menuWaitRelease) {
+            if (ts.length === 0) menuWaitRelease = false;
+            freshIds = [];
+            drawPause();
+            UI.end(30);
+            return;
+        }
         menuHover = -1;
         for (var m = 0; m < ts.length; m++) {
             var i3 = Math.floor((ts[m].y - MENU_TOP) / MENU_H);
@@ -944,7 +1367,7 @@ function run(cfg)
         // nao cabe -> alterna e volta a ~59.
         var direct = N.direct() && stampsOk;
         var alt = !direct || skipHeavy;
-        if (direct && !skipHeavy && skipMode) {
+        if (direct && !skipHeavy && skipSet < 0) {
             var now = S.millis();
             if (skipT0 === 0) {
                 skipT0 = now + 500;  // aquecimento: limpeza do vidro, 1o quadro
@@ -960,22 +1383,56 @@ function run(cfg)
             }
         }
         var render = true;
-        if (skipMode && alt) render = (frameNo % 2) === 0;
+        var period = 1;
+        if (skipSet > 0) period = skipSet + 1;
+        else if (skipSet < 0 && alt) period = 2;
+        if (period > 1) render = (frameNo % period) === 0;
         if (render && stampsOk) placeStamps();
         N.frame(btnsMask, render, stampsOk);
+        // velocidade (mostrada na pausa): janelas de 2 s
+        var tn = S.millis();
+        if (spdT0 === 0) { spdT0 = tn; spdEmu = 0; spdDraw = 0; }
+        spdEmu++;
+        if (render) spdDraw++;
+        if (tn - spdT0 >= 2000) {
+            var fe = spdEmu * 1000 / (tn - spdT0), fd = spdDraw * 1000 / (tn - spdT0);
+            spdText = Math.round(fe * 100 / 60) + "% - " + Math.round(fd) + " fps";
+            spdT0 = tn; spdEmu = 0; spdDraw = 0;
+        }
+        // bateria: confere a cada 10 s e grava o .srm so se mudou
+        if (sram && tn - sramT >= 10000) {
+            sramT = tn;
+            sramFlush(false);
+        }
         if (render) {
             if (!N.direct()) {
                 clearBands();
                 drawOverlay();
             }
-            UI.end(skipMode && alt ? 30 : 60);
+            UI.end(period > 1 ? Math.round(60 / period) : 60);
         }
+    }
+
+    function backToList()
+    {
+        sramFlush(false);
+        N.unload();
+        curIdx = -1;
+        radioResume();
+        scanRoms();
+        screen = "sel";
+        listOff = 0;
+        selRow = -1;
+        fingers = {}; freshIds = [];
     }
 
     function pauseGame()
     {
         screen = "pause";
+        sramFlush(false);
         menuSub = 0; menuArm = -1; menuHover = -1; hadMenuTouch = false;
+        menuFocus = -1; padPrevMenu = 0xFFFFFFFF;  // o botao que pausou nao vira escolha
+        menuWaitRelease = true;
         slotMsg = "";
         fingers = {}; freshIds = [];
         S.setAlpha(255);
@@ -988,6 +1445,7 @@ function run(cfg)
         fingers = {}; freshIds = [];
         needClear = true;
         skipT0 = 0;  // a pausa nao entra na medida
+        spdT0 = 0;
         dpReset();
         radioPause();
         if (audioOn) N.audioStart();
@@ -1014,9 +1472,23 @@ function run(cfg)
 }
 
 module.exports = {
-    version: "0.3.0",  // 0.3.0: gamepad do OS (Input.padState, API 61) mesclado
-                       // no btnsMask — dpad/esquerdo = direcao, A/B/SEL/STA =
-                       // botoes da tela; toque e pad coexistem. 0.2.0: frameskip
-                       // auto adaptativo e lista com toque/arrasto.
+    version: "0.4.0",  // 0.4.0: botoes X/Y/L/R opcionais (losango + ombros; bits
+                       // 8-15 do controle no FRAME em arg >> 16), SRAM com bateria
+                       // (cfg.sram: .srm ao abrir, na pausa/troca/saida e a cada
+                       // 10 s se mudou), lista com "Continuar", nomes sem
+                       // extensao, saves por ROM, barra de rolagem, reescan no
+                       // cabecalho e navegacao pelo gamepad; pausa com "Trocar
+                       // jogo", velocidade (% e fps) e submenu Opcoes (frameskip
+                       // auto/0/1/2, audio, tela original/4:3/esticar, controles
+                       // na tela auto/sempre/nunca, botoes do pad por rotulo ou
+                       // posicao + extras do console); gamepad navega os menus.
+                       // 0.3.1: menu de pausa com altura de linha adaptativa ao
+                       // vidro (Sair alcancavel no 240x320; linhas invisiveis
+                       // nao sao mais alcancaveis) e lista sem invadir o
+                       // cabecalho ao rolar. 0.3.0: gamepad do OS (Input.padState,
+                       // API 61) mesclado no btnsMask — dpad/esquerdo = direcao,
+                       // A/B/SEL/STA = botoes da tela; toque e pad coexistem.
+                       // 0.2.0: frameskip auto adaptativo e lista com
+                       // toque/arrasto.
     run: run,
 };

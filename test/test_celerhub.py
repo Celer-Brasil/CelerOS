@@ -837,5 +837,262 @@ class TestListPrivados(unittest.TestCase):
             self.fail("linha do app privado ausente")
 
 
+class TestDepsIndexToken(unittest.TestCase):
+    """O indice /store/deps.json muda com credencial (dep privada so existe
+    nele com token) — mesmo contrato do catalogo /store/all.json. Antes os
+    tres GETs iam anonimos: publish de app com dep privada morria em "sem
+    versao que satisfaca", o pre-flight de anti-downgrade do publish-dep
+    pulava calado e o deps-status cravava "NAO PUBLICADA" (drift falso)."""
+
+    IDX = {"deps": {"celeros.priv": {"1.0.0": {"url": "https://hub/p.js",
+                                               "size": 3, "md5": ""}}}}
+
+    def _fake(self, rec, negar_token=False):
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            rec.append((url, token))
+            if negar_token and token and url.endswith("/store/deps.json"):
+                H.die("servidor recusou (401): token invalido")
+            return 200, {"apps": {}, "deps": self.IDX["deps"]}
+        return fake_http
+
+    def _modulo_commitado(self):
+        import shutil
+        import subprocess
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        for cmd in (["git", "-C", td, "init", "-q"],
+                    ["git", "-C", td, "config", "user.email", "t@t"],
+                    ["git", "-C", td, "config", "user.name", "t"]):
+            subprocess.run(cmd, check=True, capture_output=True)
+        f = Path(td) / "celeros.priv.js"
+        f.write_text("var P = { version: '1.0.0' };\nmodule.exports = P;\n",
+                     encoding="utf-8")
+        subprocess.run(["git", "-C", td, "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", td, "commit", "-qm", "x"], check=True,
+                       capture_output=True)
+        return f
+
+    def test_deps_status_le_indice_com_token(self):
+        from types import SimpleNamespace
+        eng = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, eng, ignore_errors=True)
+        (eng / "celeros.priv.js").write_text(
+            "var P = { version: '1.0.0' };\nmodule.exports = P;\n", encoding="utf-8")
+        rec = []
+        args = SimpleNamespace(index=None, engine_dir=str(eng), hub=None,
+                               token="tk")
+        out = io.StringIO()
+        with patch.object(H, "http", side_effect=self._fake(rec)), \
+                contextlib.redirect_stdout(out):
+            H.cmd_deps_status(args)
+        self.assertTrue(any(u.endswith("/store/deps.json") and t == "tk"
+                            for u, t in rec), rec)
+        self.assertIn("ok", out.getvalue())  # com token a dep existe no indice
+
+    def test_deps_index_cai_para_anonimo_com_token_recusado(self):
+        from types import SimpleNamespace
+        eng = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, eng, ignore_errors=True)
+        (eng / "celeros.priv.js").write_text(
+            "var P = { version: '1.0.0' };\nmodule.exports = P;\n", encoding="utf-8")
+        rec = []
+        args = SimpleNamespace(index=None, engine_dir=str(eng), hub=None,
+                               token="tk-morto")
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(H, "http", side_effect=self._fake(rec, negar_token=True)), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            H.cmd_deps_status(args)
+        self.assertIn("seguindo anonimo", err.getvalue())
+        # a leitura anonima TAMBEM rolou (token-recusado nao derruba o comando)
+        self.assertTrue(any(u.endswith("/store/deps.json") and t is None
+                            for u, t in rec), rec)
+
+    def test_publish_dep_preflight_le_indice_com_token(self):
+        from types import SimpleNamespace
+        f = self._modulo_commitado()
+        rec = []
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            rec.append((url, token))
+            if method == "GET" and url.endswith("/store/deps.json"):
+                # so a versao ANTERIOR no hub: o pre-flight de anti-downgrade
+                # roda (mesma versao/abaixo morreriam aqui) e o POST sai
+                return 200, {"deps": {"celeros.priv": {"0.9.0": {
+                    "url": "https://hub/p.js", "size": 3, "md5": ""}}}}
+            return 200, {"dep": "celeros.priv", "version": "1.0.0",
+                         "size": 3, "md5": "x", "url": "https://hub/p.js"}
+
+        args = SimpleNamespace(dry=False, force=False, file=str(f), name=None,
+                               version=None, min_api=1, dep=None, no_strip=False,
+                               hub=None, token="tk")
+        out = io.StringIO()
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            with patch.object(H, "http", side_effect=fake_http):
+                with contextlib.redirect_stdout(out):
+                    H.cmd_publish_dep(args)
+        self.assertTrue(any(u.endswith("/store/deps.json") and t == "tk"
+                            for u, t in rec), rec)
+        self.assertIn("ok: dep celeros.priv v1.0.0", out.getvalue())
+
+    def test_publish_de_app_le_deps_com_token(self):
+        from types import SimpleNamespace
+        d = Path(tempfile.mkdtemp()) / "AppDep"
+        d.mkdir()
+        self.addCleanup(shutil.rmtree, d.parent, ignore_errors=True)
+        (d / "app.json").write_text(json.dumps(
+            {"name": "AppDep", "packageName": "celeros.appdep",
+             "version": "1.0.0", "api": 30, "author": "t", "description": "d",
+             "deps": {"celeros.priv": "^1.0.0"}}), encoding="utf-8")
+        (d / "main.js").write_text("var m = require('celeros.priv');\n",
+                                   encoding="utf-8")
+        rec = []
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            rec.append((url, token))
+            if method == "GET":
+                if url.endswith("/store/deps.json"):
+                    return 200, {"deps": self.IDX["deps"]}
+                return 200, {"apps": {}}
+            return 200, {"package": "celeros.appdep", "version": "1.0.0",
+                         "size": 1, "md5": "x", "store": {"apps": 1}}
+
+        args = SimpleNamespace(dry=False, force=False, folders=[str(d)],
+                               no_strip=False, token="tk", hub=None)
+        with patch.dict(os.environ, {"CELER_HUB_TOKEN": "fake"}):
+            with patch.object(H, "http", side_effect=fake_http):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit) as cm:
+                        H.cmd_publish(args)
+        self.assertEqual(cm.exception.code, 0)
+        self.assertTrue(any(u.endswith("/store/deps.json") and t == "tk"
+                            for u, t in rec), rec)
+
+
+class TestListTokenMorto(unittest.TestCase):
+    """`celerhub list` com CELER_HUB_TOKEN expirado: o GET com token recusado
+    encerrava o comando inteiro (o catalogo anonimo sempre existiu — cai para
+    ele com o aviso, como o anti-downgrade do publish ja fazia)."""
+
+    def test_cai_para_anonimo_e_lista(self):
+        from types import SimpleNamespace
+        publico = {"apps": {"celeros.a": {"version": "1.0.0", "api": 30,
+                                          "size": 2048, "category": "Utility"}}}
+
+        def fake_http(method, url, token=None, data=None, headers=None, timeout=30):
+            if url.endswith("/store/index.json"):
+                return 200, {"categories": {}}
+            if url.endswith("/api/info"):
+                return 200, {"downloads": {}}
+            if url.endswith("/store/all.json"):
+                if token:
+                    H.die("servidor recusou (401): token invalido")
+                return 200, publico
+            raise AssertionError("url inesperada: " + url)
+
+        args = SimpleNamespace(token="tk-morto", hub="https://hub.teste")
+        out, err = io.StringIO(), io.StringIO()
+        with patch.object(H, "http", side_effect=fake_http), \
+                patch.object(H, "local_packages", return_value={}), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            H.cmd_list(args)
+        self.assertIn("celeros.a", out.getvalue())
+        self.assertIn("catalogo com token recusado", err.getvalue())
+
+
+class TestFreeNamesBytes(unittest.TestCase):
+    """free_names aceita bytes (snapshot do publish): os nomes livres saem do
+    MESMO conteudo que sobe, nao de uma releitura do disco."""
+
+    def test_bytes_e_path_mesmo_resultado(self):
+        src = b"var local = 1;\nSiblingLe(w, local);\n"
+        td = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, td, ignore_errors=True)
+        p = Path(td) / "mod.js"
+        p.write_bytes(src)
+        self.assertEqual(H.free_names([src]), H.free_names([p]))
+        self.assertIn("SiblingLe", H.free_names([src]))
+
+
+class TestPublishSnapshotExtras(unittest.TestCase):
+    """Os EXTRAS entram no snapshot junto com app.json/main.js: tetos,
+    free-names e zip valem o conteudo que sobe. Antes so main/app.json eram
+    snapshot — um modulo trocado no meio do publish (entre o validate e a
+    leitura dos bytes) era validado de um jeito e subia de outro."""
+
+    def _app(self, td, corpo_modulo):
+        d = Path(td) / "App"
+        d.mkdir()
+        (d / "app.json").write_text(
+            '{"name":"App","packageName":"celeros.extrasnap","version":"1.0.0",'
+            '"api":30,"author":"t","description":"d"}', encoding="utf-8")
+        (d / "main.js").write_text("var M = require('mod');\nSystem.delay(1);\n",
+                                   encoding="utf-8")
+        (d / "mod.js").write_text(corpo_modulo, encoding="utf-8")
+        return d
+
+    def test_validate_consome_o_modulo_do_snapshot(self):
+        # modulo gordo no disco, magro no snapshot: a soma do teto e a do
+        # conteudo que sobe (antes contava o disco e o zip levava o snapshot)
+        with tempfile.TemporaryDirectory() as td:
+            gordo = ("// " + "x" * 96 + "\n") * 700 + "Mod.fn = function () {};\n"
+            d = self._app(td, gordo)
+            _, _, js_sum_snap, _ = H.validate(
+                d, strip=True,
+                snapshot={"app.json": (d / "app.json").read_bytes(),
+                          "main.js": (d / "main.js").read_bytes(),
+                          "mod.js": b"Mod.fn = function () {};\n"})
+            _, _, js_sum_disco, _ = H.validate(d, strip=True)
+            self.assertLess(js_sum_snap, 200)
+            self.assertGreater(js_sum_disco, 500)
+
+    def test_extra_mutado_no_meio_do_publish_morre(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "Mod.fn = function () {};\n")
+
+            def mutando(folder, strip=True, snapshot=None):
+                # lint-limpo: o que tem que pegar aqui e o TOCTOU do snapshot,
+                # nao o lint (que le o disco e roda dentro do validate)
+                (Path(folder) / "mod.js").write_text(
+                    "Mod.fn = function () { return 42; };\n", encoding="utf-8")
+            orig = H.validate
+
+            def com_hook(folder, strip=True, snapshot=None):
+                return mutando(folder, strip=strip, snapshot=snapshot) or \
+                    orig(folder, strip=strip, snapshot=snapshot)
+            H.validate = com_hook
+            try:
+                args = SimpleNamespace(dry=True, force=False, folders=[str(d)],
+                                       no_strip=False, hub=None, token=None)
+                msg = die_saida(lambda: H.cmd_publish(args))
+            finally:
+                H.validate = orig
+            self.assertIn("mudaram durante o publish", msg)
+
+    def test_extra_aparecido_no_meio_do_publish_morre(self):
+        # arquivo NOVO na pasta entre o snapshot e a conferencia: a leitura
+        # item a item estourava KeyError com traceback (agora e die claro)
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "Mod.fn = function () {};\n")
+
+            def acrescenta(folder, strip=True, snapshot=None):
+                (Path(folder) / "novo.js").write_text("var n = 1;\n",
+                                                      encoding="utf-8")
+            orig = H.validate
+
+            def com_hook(folder, strip=True, snapshot=None):
+                return acrescenta(folder, strip=strip, snapshot=snapshot) or \
+                    orig(folder, strip=strip, snapshot=snapshot)
+            H.validate = com_hook
+            try:
+                args = SimpleNamespace(dry=True, force=False, folders=[str(d)],
+                                       no_strip=False, hub=None, token=None)
+                msg = die_saida(lambda: H.cmd_publish(args))
+            finally:
+                H.validate = orig
+            self.assertIn("mudaram durante o publish", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

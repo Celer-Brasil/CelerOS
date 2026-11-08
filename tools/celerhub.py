@@ -288,6 +288,25 @@ def user_token(args):
     return args.token or os.environ.get("CELER_HUB_TOKEN") or ""
 
 
+def deps_index(args, tok=""):
+    """Indice /store/deps.json do hub. Com token as deps PRIVADAS do tenant
+    entram (mesmo contrato do catalogo /store/all.json) — sem ele o publish
+    de app que usa dep privada morria em "sem versao que satisfaca", o
+    pre-flight de anti-downgrade do publish-dep pulava calado (o hub
+    recusava la com 409 sem mensagem) e o deps-status cravava "NAO
+    PUBLICADA" em dep publicada. Token recusado cai para o indice anonimo:
+    e conveniencia (o hub reforca no upload) e nao pode derrubar o comando."""
+    if tok:
+        try:
+            _, idx = http("GET", f"{hub_url(args)}/store/deps.json", token=tok)
+            return idx
+        except SystemExit:
+            print("aviso: indice de deps com token recusado; seguindo anonimo "
+                  "(deps privadas ficam de fora)", file=sys.stderr)
+    _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+    return idx
+
+
 def http(method, url, token=None, data=None, headers=None, timeout=30):
     req = request.Request(url, data=data, method=method)
     if token:
@@ -344,6 +363,8 @@ def strip_js(path: Path, code: bytes | None = None, reserved=None, legacy=False)
         out = subprocess.run(cmd, capture_output=True, timeout=60)
     except FileNotFoundError:
         die("node nao encontrado no PATH: necessario para enxugar o .js (ou --sem-strip)")
+    except subprocess.TimeoutExpired:
+        die(f"jsstrip demorou demais em {path.name} (60s): node travado?")
     finally:
         if td is not None:
             td.cleanup()
@@ -362,16 +383,35 @@ def strip_js(path: Path, code: bytes | None = None, reserved=None, legacy=False)
 
 def free_names(paths) -> set:
     """Nomes que os .js dados LEEM sem declarar (resolvem no escopo global).
-    Um main.js nao pode renomear um top-level que um irmao le por esse nome."""
-    files = [str(p) for p in paths if p and Path(p).is_file()]
-    if not files:
-        return set()
-    tool = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+    Um main.js nao pode renomear um top-level que um irmao le por esse nome.
+    Cada item de `paths` pode ser Path OU bytes (snapshot do publish: os
+    nomes livres saem do MESMO conteudo que sobe, nao de uma releitura do
+    disco que pode ter andado)."""
+    temps = []
+    files = []
     try:
-        out = subprocess.run(["node", str(tool), "--free-names"] + files,
-                             capture_output=True, timeout=60)
-    except FileNotFoundError:
-        return set()
+        for p in paths:
+            if isinstance(p, bytes):
+                td = tempfile.TemporaryDirectory()
+                temps.append(td)
+                f = Path(td.name) / "modulo.js"
+                f.write_bytes(p)
+            elif p and Path(p).is_file():
+                f = p
+            else:
+                continue
+            files.append(str(f))
+        if not files:
+            return set()
+        tool = Path(__file__).resolve().parent / "sdk" / "lib" / "jsstrip.js"
+        try:
+            out = subprocess.run(["node", str(tool), "--free-names"] + files,
+                                 capture_output=True, timeout=60)
+        except FileNotFoundError:
+            return set()
+    finally:
+        for td in temps:
+            td.cleanup()
     if out.returncode != 0:
         return set()
     try:
@@ -714,7 +754,7 @@ def cmd_deps_status(args):
     if args.index:
         idx = json.loads(Path(args.index).read_text(encoding="utf-8"))
     else:
-        _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+        idx = deps_index(args, user_token(args))
     hub = idx.get("deps", {})
     # mesma versao no hub mas bytes diferentes: o md5 do hub e do .js
     # ENXUTO (e assim que o publish-dep sobe). Triagem pelo HEAD: HEAD
@@ -781,22 +821,34 @@ def cmd_publish(args):
         # publish nao pode validar uma versao e subir outra)
         raw_meta = (folder / "app.json").read_bytes()
         raw_main = (folder / "main.js").read_bytes()
+        # EXTRAS no mesmo snapshot (uma leitura cada, antes do validate):
+        # tetos, free-names e zip saem dos bytes que sobem — validar sobre
+        # uma leitura do disco e subir outra reabria o TOCTOU pela metade
+        raw_extras = {n: p.read_bytes() for n, p in package_files(folder).items()}
         meta, avisos, js_sum, extras = validate(folder, strip=not args.no_strip,
                                                 snapshot={"app.json": raw_meta,
-                                                          "main.js": raw_main})
+                                                          "main.js": raw_main,
+                                                          **raw_extras})
         # fecha o TOCTOU: qualquer mutacao entre a leitura e aqui (bancada
-        # paralela, editor salvando) aborta — o que sobe e o que foi checado
-        raw_extras = {n: p.read_bytes() for n, p in extras.items()}
+        # paralela, editor salvando) aborta — o que sobe e o que foi checado.
+        # O dict INTEIRO de agora contra o snapshot: arquivo que apareceu
+        # (KeyError na leitura item a item) ou sumiu (FileNotFoundError)
+        # abortava com traceback em vez da mensagem do publish
+        try:
+            agora_extras = {n: p.read_bytes() for n, p in extras.items()}
+        except OSError:
+            agora_extras = None
         if (folder / "app.json").read_bytes() != raw_meta or \
                 (folder / "main.js").read_bytes() != raw_main or \
-                any(p.read_bytes() != raw_extras[n] for n, p in extras.items()):
+                agora_extras != raw_extras:
             die(f"{folder.name}: app.json/main.js/extras mudaram durante o publish — rode de novo")
         # enxuto sai do SNAPSHOT, nao de nova leitura do arquivo
         enxutos = {}
         if not args.no_strip:
             enxutos["main.js"] = strip_js(
                 folder / "main.js", code=raw_main,
-                reserved=free_names([p for n, p in extras.items() if n.endswith(".js")]))
+                reserved=free_names([raw_extras[n] for n in extras
+                                     if n.endswith(".js")]))
             for n, p in extras.items():
                 if n.endswith(".js"):
                     enxutos[n] = strip_js(p, code=raw_extras[n])
@@ -858,8 +910,7 @@ def cmd_publish(args):
                     avisos.append(a)
             else:
                 if hub_deps is None:
-                    _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
-                    hub_deps = idx.get("deps", {})
+                    hub_deps = deps_index(args, tok).get("deps", {})
                 resolved = resolve_dep_ranges(deps, hub_deps)
                 for dname, dver in resolved.items():
                     dmeta = hub_deps[dname][dver]
@@ -1041,7 +1092,7 @@ def cmd_publish_dep(args):
         # "ja existente" e um publish mais antigo que o topo passava aqui e
         # morria la com mensagem vazia
         if not args.dry and not args.force:
-            _, idx = http("GET", f"{hub_url(args)}/store/deps.json")
+            idx = deps_index(args, tok)
             vers = (idx.get("deps", {}).get(name) or {})
             if vers.get(version):
                 die(f"dep {name} v{version} ja esta no hub — suba a version no "
@@ -1128,7 +1179,17 @@ def cmd_list(args):
     # antes); com token, os que so existem la sao marcados "privado" — a
     # vertical ficava invisivel no `list` mesmo depois do publish --private.
     tok = user_token(args)
-    _, data = http("GET", f"{hub_url(args)}/store/all.json", token=tok or None)
+    try:
+        _, data = http("GET", f"{hub_url(args)}/store/all.json", token=tok or None)
+    except SystemExit:
+        if not tok:
+            raise
+        # token morto nao pode apagar a listagem inteira (recuperava o
+        # catalogo anonimo antes do fix do app privado): cai para o anonimo
+        print("aviso: catalogo com token recusado; listando o publico",
+              file=sys.stderr)
+        tok = ""
+        _, data = http("GET", f"{hub_url(args)}/store/all.json")
     _, info = http("GET", f"{hub_url(args)}/api/info")
     apps = data.get("apps", {})
     privados = set()

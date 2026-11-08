@@ -255,6 +255,7 @@ TickType_t deadlineIn(uint32_t ms) {
 bool sealKey(const uint8_t mac[6], uint8_t out[16]);
 bool sealAead(bool enc, const uint8_t key[16], const uint8_t* nonce, const uint8_t* in,
               size_t inLen, uint8_t* out, size_t outCap, size_t* outLen);
+void wipe(void* p, size_t n);  // definicao perto de ctEqual (rascunho de chave)
 
 // Fila cheia descarta a mensagem MAIS ANTIGA: num controle remoto o
 // comando mais novo e o que importa. Roda so na task do host.
@@ -274,8 +275,11 @@ void pushRx(const struct os_mbuf* om) {
         const uint8_t* nonce = s_rxScratch.data + sizeof(K_SEAL_HDR);
         const uint8_t* ct = nonce + K_SEAL_NONCE;
         const size_t ctLen = len - sizeof(K_SEAL_HDR) - K_SEAL_NONCE;
-        if (s_sealedQueue == nullptr || !sealKey(s_peerAddr, key) ||
-            !sealAead(false, key, nonce, ct, ctLen, s_sealScratch.data, sizeof(s_sealScratch.data), &plain)) {
+        const bool opened = sealKey(s_peerAddr, key) &&
+                            sealAead(false, key, nonce, ct, ctLen, s_sealScratch.data,
+                                     sizeof(s_sealScratch.data), &plain);
+        wipe(key, sizeof(key));  // a chave do bond nao fica no rascunho da task do host
+        if (s_sealedQueue == nullptr || !opened) {
             ESP_LOGW(TAG, "mensagem selada descartada (sem bond ou selo invalido)");
             return;
         }
@@ -429,6 +433,9 @@ bool sealKey(const uint8_t mac[6], uint8_t out[16]) {
     uint8_t h[32];
     sha256(buf, sizeof(buf), h);
     memcpy(out, h, 16);
+    wipe(bond, sizeof(bond));
+    wipe(buf, sizeof(buf));
+    wipe(h, sizeof(h));
     return true;
 }
 
@@ -462,6 +469,8 @@ void bondKeyFromCode(const char* code, const uint8_t chal[K_CHAL], uint8_t key[K
     uint8_t h[32];
     sha256(buf, sizeof(buf), h);
     memcpy(key, h, K_BOND_KEY);
+    wipe(buf, sizeof(buf));
+    wipe(h, sizeof(h));
 }
 
 // Resposta ao desafio: prova que conhece K sem manda-la pelo ar
@@ -472,6 +481,8 @@ void bondResponse(const uint8_t key[K_BOND_KEY], const uint8_t chal[K_CHAL], uin
     uint8_t h[32];
     sha256(buf, sizeof(buf), h);
     memcpy(out, h, K_CHAL);
+    wipe(buf, sizeof(buf));
+    wipe(h, sizeof(h));
 }
 
 // comparacao em tempo constante (resposta/codigo)
@@ -479,6 +490,13 @@ bool ctEqual(const uint8_t* a, const uint8_t* b, size_t n) {
     uint8_t d = 0;
     for (size_t i = 0; i < n; i++) d |= a[i] ^ b[i];
     return d == 0;
+}
+
+// Apaga rascunho de chave sem o compilador cortar (memset de buffer que
+// "morre" em seguida e eliminado na -O2; escrita volatil nao).
+void wipe(void* p, size_t n) {
+    volatile uint8_t* v = (volatile uint8_t*)p;
+    while (n--) *v++ = 0;
 }
 
 int onGapEvent(ble_gap_event* event, void* arg);  // usado pelo advRestart
@@ -637,6 +655,7 @@ int onPairAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void*
             uint8_t key[K_BOND_KEY];
             bondKeyFromCode(s_pairCode, s_challenge, key);
             bondAdd(s_peerAddr, key);
+            wipe(key, sizeof(key));
         }
     } else {
         // resposta ao desafio de um central que ja pareou (bond v2)
@@ -644,6 +663,8 @@ int onPairAccess(uint16_t conn, uint16_t attr, ble_gatt_access_ctxt* ctxt, void*
         if (bondFind(s_peerAddr, key)) {
             bondResponse(key, s_challenge, expect);
             ok = ctEqual(in, expect, K_CHAL);
+            wipe(key, sizeof(key));
+            wipe(expect, sizeof(expect));
         }
     }
     if (ok) {
@@ -1428,6 +1449,7 @@ bool CelerLink::connect(const char* idOrName, uint32_t ms) {
             bondFind(s_peerAddr, key)) {
             uint8_t resp[K_CHAL];
             bondResponse(key, s_peerChallenge, resp);
+            wipe(key, sizeof(key));
             xEventGroupClearBits(s_evt, EV_PAIRW | EV_PAIRR);
             if (ble_gattc_write_flat(s_conn, s_peerPairVal, resp, K_CHAL, onPairWrite, nullptr) == 0 &&
                 (waitBits(EV_PAIRW | EV_FAIL, deadline) & EV_PAIRW) &&
@@ -1510,6 +1532,7 @@ bool CelerLink::verify(const char* code) {
         uint8_t key[K_BOND_KEY];
         bondKeyFromCode(code, s_peerChallenge, key);
         bondAdd(s_peerAddr, key);
+        wipe(key, sizeof(key));
     }
     s_pairVerified = true;
     s_pairPending = false;
@@ -1591,8 +1614,10 @@ bool CelerLink::sendSealed(const void* data, size_t len) {
     uint8_t* nonce = frame + sizeof(K_SEAL_HDR);
     esp_fill_random(nonce, K_SEAL_NONCE);
     size_t ctLen = 0;
-    if (!sealAead(true, key, nonce, (const uint8_t*)data, len, nonce + K_SEAL_NONCE,
-                  sizeof(frame) - sizeof(K_SEAL_HDR) - K_SEAL_NONCE, &ctLen)) {
+    const bool sealed = sealAead(true, key, nonce, (const uint8_t*)data, len, nonce + K_SEAL_NONCE,
+                                 sizeof(frame) - sizeof(K_SEAL_HDR) - K_SEAL_NONCE, &ctLen);
+    wipe(key, sizeof(key));  // a chave do bond nao fica no rascunho do chamador
+    if (!sealed) {
         return false;
     }
     const bool ok = send(frame, sizeof(K_SEAL_HDR) + K_SEAL_NONCE + ctLen);

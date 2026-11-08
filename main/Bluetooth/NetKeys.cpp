@@ -24,6 +24,13 @@ constexpr psa_algorithm_t kCcm4 = PSA_ALG_AEAD_WITH_SHORTENED_TAG(PSA_ALG_CCM, 4
 constexpr uint32_t K_PBKDF2_ITER = 4096;
 constexpr uint32_t K_SEQ_BLOCK = 4096;  // reserva no NVS (gravada na metade)
 
+// Apaga rascunho de chave sem o compilador cortar (memset de buffer que
+// "morre" em seguida e eliminado na -O2; escrita volatil nao).
+inline void wipe(void* p, size_t n) {
+    volatile uint8_t* v = (volatile uint8_t*)p;
+    while (n--) *v++ = 0;
+}
+
 Net s_nets[NETS_MAX];
 bool s_inited = false;
 bool s_openSecondary = false;
@@ -105,29 +112,34 @@ void release(Net& n) {
 bool build(Net& n, const char* name, const uint8_t netKey[KEY_LEN], bool open) {
     static const uint8_t kSalt[] = {'c', 'e', 'l', 'e', 'r', 'n', 'e', 't', '-', 'v', '3'};
     uint8_t enc[KEY_LEN], priv[KEY_LEN], admin[KEY_LEN], nid = 0;
-    if (!hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"enc", 3, enc, KEY_LEN) ||
-        !hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"priv", 4, priv, KEY_LEN) ||
-        !hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"admin", 5, admin, KEY_LEN) ||
-        !hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"nid", 3, &nid, 1)) {
-        return false;
-    }
+    bool ok = hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"enc", 3, enc, KEY_LEN) &&
+              hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"priv", 4, priv, KEY_LEN) &&
+              hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"admin", 5, admin, KEY_LEN) &&
+              hkdf(netKey, KEY_LEN, kSalt, sizeof(kSalt), (const uint8_t*)"nid", 3, &nid, 1);
     Net t;
     memset(&t, 0, sizeof(t));
-    if (!importAes(enc, kCcm4, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT, &t.encId) ||
-        !importAes(priv, PSA_ALG_ECB_NO_PADDING, PSA_KEY_USAGE_ENCRYPT, &t.privId)) {
-        release(t);
-        return false;
+    if (ok) {
+        ok = importAes(enc, kCcm4, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT, &t.encId) &&
+             importAes(priv, PSA_ALG_ECB_NO_PADDING, PSA_KEY_USAGE_ENCRYPT, &t.privId);
     }
-    t.used = true;
-    t.open = open;
-    snprintf(t.name, sizeof(t.name), "%s", name);
-    t.nid = nid;
-    t.iv = 0;
-    memcpy(t.netKey, netKey, KEY_LEN);
-    memcpy(t.adminKey, admin, KEY_LEN);
-    release(n);
-    n = t;
-    return true;
+    if (ok) {
+        t.used = true;
+        t.open = open;
+        snprintf(t.name, sizeof(t.name), "%s", name);
+        t.nid = nid;
+        t.iv = 0;
+        memcpy(t.netKey, netKey, KEY_LEN);
+        memcpy(t.adminKey, admin, KEY_LEN);
+        release(n);
+        n = t;
+    } else {
+        release(t);
+    }
+    // as subchaves derivadas ficam no PSA/n; o rascunho da pilha sai limpo
+    wipe(enc, sizeof(enc));
+    wipe(priv, sizeof(priv));
+    wipe(admin, sizeof(admin));
+    return ok;
 }
 
 // chave publica da rede aberta: SHA-256 de um rotulo fixo (sem PBKDF2: o
@@ -138,9 +150,11 @@ bool openKey(uint8_t out[KEY_LEN]) {
     size_t hl = 0;
     if (psa_hash_compute(PSA_ALG_SHA_256, (const uint8_t*)kLabel, sizeof(kLabel) - 1, h, sizeof(h), &hl) !=
         PSA_SUCCESS) {
+        wipe(h, sizeof(h));
         return false;
     }
     memcpy(out, h, KEY_LEN);
+    wipe(h, sizeof(h));
     return true;
 }
 
@@ -240,6 +254,7 @@ bool init() {
         ok = build(s_nets[0], name.c_str(), key, false);
         if (!ok) ESP_LOGW(TAG, "matilha \"%s\" no NVS nao montou: volto para a aberta", name.c_str());
     }
+    wipe(key, sizeof(key));  // a copia que vale esta em s_nets[0]/NVS
     if (!ok) ok = buildOpen(s_nets[0]);
     layout();
     s_inited = ok;
@@ -279,8 +294,13 @@ bool join(const char* name, const char* password) {
     if (strlen(name) >= sizeof(Net::name)) return false;
     std::string salt = std::string("celernet:") + name;
     uint8_t key[KEY_LEN];
-    if (!pbkdf2(password, (const uint8_t*)salt.data(), salt.size(), K_PBKDF2_ITER, key, KEY_LEN)) return false;
-    return joinWithKeys(name, key, nullptr);
+    if (!pbkdf2(password, (const uint8_t*)salt.data(), salt.size(), K_PBKDF2_ITER, key, KEY_LEN)) {
+        wipe(key, sizeof(key));
+        return false;
+    }
+    const bool joined = joinWithKeys(name, key, nullptr);
+    wipe(key, sizeof(key));  // a chave segue no PSA e no NVS (hex), nao na pilha
+    return joined;
 }
 
 void leave() {

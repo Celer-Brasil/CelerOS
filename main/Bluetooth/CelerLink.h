@@ -130,6 +130,9 @@ public:
     // ou criam conexao): a malha CelerNet pausa o scanner dela enquanto
     // isto for true (CelerNet::tick).
     static bool appBusy();
+    // Procedimento de radio de outro modulo (gamepad BLE HID): entra no
+    // mesmo contrato do appBusy() acima.
+    static void setExternalBusy(bool busy);
 
     // Enlace GATT de pe (central OU peripheral, inclusive o Phone Link): a
     // malha troca o scanner continuo por duty-cycle enquanto isto for true

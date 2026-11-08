@@ -804,6 +804,13 @@ void maybeBurst(uint32_t nowMs) {
         s_tokens--;
         s_advBusy = true;
         s_advStartMs = nowMs;
+        // COMPLETE atrasado do burst ANTERIOR (o watchdog derruba o adv e o
+        // evento chega depois, com s_advBusy ja falso): sem limpar aqui o
+        // burst novo nasce "pronto" e o espacamento de 160 ms no ar vira os
+        // 25 ms do respiro — o quadro seguinte para o adv AINDA NO AR com
+        // s_restoreAdv = true e o advertising do Link sobe/desce no meio da
+        // rajada.
+        s_burstDone = false;
         s_txStarted++;
         return;
     }
@@ -1019,6 +1026,10 @@ void CelerNet::netChanged() {
             }
         }
     }
+    // O ultimo quadro autenticado era da rede VELHA: o "mesh replay" da
+    // bancada reinjetaria um quadro que nao decifra mais (MIC falha e a
+    // rodada fica com rxAuthFail mentiroso).
+    s_lastRaw = {};
     s_lastBeatMs = 0;  // BEAT ja na rede nova
     xSemaphoreGiveRecursive(lock());
     ESP_LOGI(TAG, "rede agora \"%s\" (%s)", s_net, NetKeys::provisioned() ? "privada" : "aberta");
@@ -1337,17 +1348,20 @@ void CelerNet::tick() {
         // (o ensureStarted lacha o init em falha — nao pode disparar cedo
         // demais e matar o Phone Link do watch com ele).
         const uint32_t nowMs = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-        // Graca no boot (WiFi primeiro): ~60 s no watch (o BLE do Phone
+        // Graca no boot (WiFi primeiro): 45 s no watch (o BLE do Phone
         // Link la depende dela), 10 s nas demais — o 4848 deep-sleepa antes
-        // dos 60 s de idle e a malha nunca subiria. Depois que o pedido
-        // existiu, o tick tenta a cada 10 s ate a RAM permitir.
+        // dos 60 s de idle e a malha nunca subiria (ca7c00db item 4: a 1a
+        // tentativa tinha que sair NA graca; o literal 60000 da versao
+        // anterior sobreviveu na condicao e adiava o 1o try para os 60 s em
+        // TODAS as placas). Depois, o tick tenta a cada 10 s ate a RAM
+        // permitir.
 #if CONFIG_CELEROS_PHONE_LINK
         constexpr uint32_t kBootGraceMs = 45000;
 #else
         constexpr uint32_t kBootGraceMs = 10000;
 #endif
         if (enabledSetting() && nowMs > kBootGraceMs &&
-            nowMs - s_lastAutoTryMs > (s_lastAutoTryMs == 0 ? 60000 : 10000)) {
+            nowMs - s_lastAutoTryMs > (s_lastAutoTryMs == 0 ? kBootGraceMs : 10000)) {
             s_lastAutoTryMs = nowMs;
             tryStart(nullptr, nullptr, true, false);  // nao regrava o setting
         }

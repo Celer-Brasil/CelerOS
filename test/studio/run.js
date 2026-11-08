@@ -974,7 +974,9 @@ let built = null;
                 else if (lStage === 1 && s && s.pick) { lStage = 2; slots.pick = true; H.tap(240, 336); }
                 else if (lStage === 2 && s && s.screen !== 'title') {
                     lStage = 3;
-                    slots.slot = s.E.save.num('lenda.slot', 0);
+                    // 2.2.6: a chave do jogo e 'slot' (com o prefixo 'lenda.' fecha
+                    // em 10 chars); 'lenda.slot' prefixeda dava 16 e a NVS recusava
+                    slots.slot = s.E.save.num('slot', 0);
                     slots.saved = !!s.E.save.obj('lenda.2', null);
                 } else if (lStage === 3 && now > 2500 && s && s.st) {
                     lStage = 4;

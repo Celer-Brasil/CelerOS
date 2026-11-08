@@ -178,7 +178,7 @@ exports.start = function (ctx) {
         migrateSlots(E);
         s.pick = false;            // seletor de save aberto?
         s.pickDlg = null;
-        s.slot = E.save.num('lenda.slot', 1);
+        s.slot = E.save.num('slot', 1);   // 'lenda.slot' com o prefixo ('lenda.lenda.slot', 16) passava do limite de 15 da NVS e a escolha nunca persistia
         if (s.slot < 1 || s.slot > 3) s.slot = 1;
         s.hasSave = !!slotState(E, s.slot);
         if (s.hasSave) E.data.lenda = null;
@@ -312,7 +312,7 @@ function saveState(s) {
     s.st.area = s.st.area || 'campo';
     s.st.room = s.st.room || '1,1';
     s.st.at = s.st.at || [7, 6];
-    var n = s.E.data.lendaSlot || s.E.save.num('lenda.slot', 1);
+    var n = s.E.data.lendaSlot || s.E.save.num('slot', 1);
     slotSave(s.E, n, s.st);
 }
 
@@ -359,7 +359,7 @@ function goSaved(ctx, st) {
 
 function newGame(E, ctx) {
     var st = newState();
-    var n = E.data.lendaSlot || E.save.num('lenda.slot', 1);
+    var n = E.data.lendaSlot || E.save.num('slot', 1);
     E.data.lenda = st;
     saveState({ E: E, st: st });
     ctx.go('Campo 1,1');
@@ -375,7 +375,7 @@ function updateTitle(s, E, ctx) {
         var n = parseInt(a.substring(5), 10);
         s.slot = n;
         E.data.lendaSlot = n;
-        E.save.set('lenda.slot', n);
+        E.save.set('slot', n);
         var st = slotState(E, n);
         if (st) { E.data.lenda = st; goSaved(ctx, st); }
         else { E.data.lenda = null; newGame(E, ctx); }

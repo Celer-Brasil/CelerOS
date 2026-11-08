@@ -43,7 +43,9 @@ if (err != CommonErrorCodes::None) {
 
 Constantes novas: declarar `inline constexpr ErrorCode Nome{N};` na categoria
 apropriada (próximo id livre) e a descrição em `kDescriptions[]` (`ErrorCode.cpp`),
-na posição `N-1`. O id fica documentado na tabela abaixo.
+na posição `N-1`, além de subir `kMaxKnownId` (`ErrorCode.h`) para o novo teto.
+Os ids são estáveis: dispositivos comparam números, não reordenar nem renumerar.
+O id fica documentado na tabela abaixo.
 
 ## Referência (id → constante)
 

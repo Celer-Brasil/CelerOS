@@ -65,12 +65,17 @@ const char* const kDescriptions[] = {
 
 const size_t kDescriptionCount = sizeof(kDescriptions) / sizeof(kDescriptions[0]);
 
-// kMaxKnownId (ErrorCode.h) precisa cobrir a tabela inteira
-static_assert(kDescriptionCount == 54, "kMaxKnownId fora de sincronia com kDescriptions");
-
 } // namespace
 
 const char* ErrorCode::description() const {
+    // Comparacao contra kMaxKnownId (e nao contra um literal) so cabe aqui
+    // dentro: membro enxerga o privado e a tabela do mesmo TU. O literal
+    // antigo (54) em escopo de arquivo deixava passar o pior drift: tabela
+    // cresce, literal cresce junto, kMaxKnownId fica para tras — compilava,
+    // e isValid() passava a mentir para o id novo ("Invalid Error Code"
+    // para codigo conhecido em campo).
+    static_assert(kDescriptionCount == static_cast<size_t>(kMaxKnownId),
+                  "kMaxKnownId (ErrorCode.h) fora de sincronia com kDescriptions");
     if (!isValid()) {
         return "Invalid Error Code";
     }

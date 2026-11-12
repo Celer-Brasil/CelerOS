@@ -26,6 +26,12 @@ idf_component_register(
         Storage
 )
 
+# Windows: #include "NVS.h" casa com o nvs.h do IDF quando nvs_flash vem
+# antes de Storage na lista de -I (o FS nao diferencia maiusculas). O
+# diretorio do Storage precisa entrar na frente para abrir a classe NVS.
+idf_component_get_property(storage_dir Storage COMPONENT_DIR)
+target_include_directories(${COMPONENT_LIB} BEFORE PRIVATE "${storage_dir}")
+
 # Pagina do captive portal: o .html e a fonte; o build gera o .gz (servido
 # com Content-Encoding: gzip) e embute so ele, como em main/WebManager.
 idf_build_get_property(python PYTHON)

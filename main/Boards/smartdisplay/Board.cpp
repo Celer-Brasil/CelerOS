@@ -1,5 +1,6 @@
 #include "Boards/Board.h"
 #include "../../Hardware/BoardIO.h"
+#include "Ip5306.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -177,6 +178,15 @@ static const BoardProfile s_profile = {
     .mic = {},
     .strips = {},
     .i2c = {.port = 0, .sda = 19, .scl = 45, .hz = 400000},  // GT911
+    // Bateria: conector LiPo 1S com IP5306 (carga + boost). O chip nao mede
+    // tensao — so a barra de 4 LEDs (25% por degrau) e as flags de
+    // carga/cheia. Se esta revisao nao expoe o I2C dele (SDA19/SCL45, como o
+    // GT911), o probe falha e a placa segue sem bateria, como antes.
+    .batteryPin = -1,       // sem divisor no ADC (nao ha pino de ADC livre)
+    .readBatteryMv = Ip5306::readBatteryMv,
+    .readBatteryPct = Ip5306::readBatteryPct,
+    .readChargeState = Ip5306::readChargeState,
+    .chargeDebug = Ip5306::debug,
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
     // Nada do que a placa ja usa vira GPIO de app (requirePin/GpioRes/SensorRes
     // recusam): 0..21 (0x3FFFFF) = painel RGB (D0..D15 = 0,3..15,20; DE/VS/HS/
@@ -206,6 +216,15 @@ static const BoardProfile s_profile = {
     .mic = {},
     .strips = {},  // sem fitas WS2812
     .i2c = {.port = 0, .sda = 19, .scl = 45, .hz = 400000},  // GT911
+    // Bateria: conector LiPo 1S com IP5306 (carga + boost). O chip nao mede
+    // tensao — so a barra de 4 LEDs (25% por degrau) e as flags de
+    // carga/cheia. Se esta revisao nao expoe o I2C dele (SDA19/SCL45, como o
+    // GT911), o probe falha e a placa segue sem bateria, como antes.
+    .batteryPin = -1,       // sem divisor no ADC (nao ha pino de ADC livre)
+    .readBatteryMv = Ip5306::readBatteryMv,
+    .readBatteryPct = Ip5306::readBatteryPct,
+    .readChargeState = Ip5306::readChargeState,
+    .chargeDebug = Ip5306::debug,
     .watchGestures = true,  // bordas: ajustes rapidos / notificacoes / voltar
     // Igual a variante com rele (comentario acima): painel RGB, I2S (aqui o
     // alto-falante de verdade), touch, PSRAM octal, SD e UART0.

@@ -13,6 +13,7 @@
 #include "Display/Backlight.h"
 #include "Boards/Board.h"
 #include "Display/Theme.h"
+#include "../Hardware/BoardIO.h"
 #include "Kernel/DeviceStats.h"
 #include "NetworkManager.h"
 #include "DebugBridge.h"
@@ -554,6 +555,34 @@ int cmdSd(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
           humanSize(total - used).c_str(),
           FileSystem::exists("/sd/apps") ? "/sd/apps ok" : "sem /sd/apps");
     return 0;
+}
+
+// Diagnostico da bateria/charger (hook chargeDebug do perfil da placa) +
+// o que o runtime JS entrega aos apps. Bancada: sem solda, mostra se o chip
+// de carga responde e quais registradores devolve.
+int cmdBat(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
+    const BoardProfile& bp = Board::profile();
+    char buf[512];
+    const int n = bp.chargeDebug != nullptr ? bp.chargeDebug(buf, sizeof(buf)) : -1;
+    if (n > 0) {
+        print(ctx, "%s", buf);
+    } else if (bp.chargeDebug == nullptr) {
+        print(ctx, "esta placa nao tem chip de carga conhecido\r\n");
+    } else {
+        print(ctx, "o chip de carga nao respondeu\r\n");
+    }
+    const int mv = BoardIO::batteryMv();
+    const int pct = BoardIO::batteryPct();
+    const int st = BoardIO::chargeState();
+    print(ctx,
+        "bateria: %d mV, %d%%, estado 0x%X%s%s%s\r\n"
+        "  System.batteryInfo() -> %s\r\n",
+        mv, pct, st,
+        (st > 0 && (st & 1)) ? " carregando" : "",
+        (st > 0 && (st & 2)) ? " usb" : "",
+        (st > 0 && (st & 4)) ? " cheia" : "",
+        mv >= 0 ? "objeto" : "null (placa sem leitura de bateria)");
+    return (n > 0 || mv >= 0) ? 0 : 1;
 }
 
 int cmdFree(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
@@ -2448,7 +2477,7 @@ int cmdUsb(int argc, char** argv, CelerShell::PrintFn print, void* ctx) {
 
 const ShellCmd kCommands[] = {
     {"help", cmdHelp},   {"ls", cmdLs},     {"cat", cmdCat},       {"rm", cmdRm},
-    {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},
+    {"mv", cmdMv},       {"mkdir", cmdMkdir}, {"df", cmdDf},      {"free", cmdFree},   {"bat", cmdBat},
     {"sd", cmdSd},
     {"ps", cmdPs},       {"uptime", cmdUptime}, {"info", cmdInfo}, {"reboot", cmdReboot},
     {"top", cmdTop},

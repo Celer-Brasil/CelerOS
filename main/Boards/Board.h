@@ -1,6 +1,7 @@
 #ifndef CELER_BOARDS_BOARD_H
 #define CELER_BOARDS_BOARD_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>  // struct tm dos hooks readRtc/writeRtc
 #include "../Display/Display.h"
@@ -130,6 +131,10 @@ struct BoardProfile {
                                                   // nullptr = estima pela curva LiPo
     int (*readChargeState)() = nullptr;           // bit0 carregando, bit1 USB,
                                                   // bit2 cheia (-1 = falhou)
+    // Diagnostico do chip de carga para a bancada (shell `bat`): escreve em
+    // buf os registradores crus que a placa sabe ler. Devolve o tamanho
+    // escrito, ou -1 se o chip nao responde / a placa nao tem um.
+    int (*chargeDebug)(char* buf, size_t cap) = nullptr;
     // Botoes fisicos (ativo-baixo, pull-up; -1 = nao ha). Comportamento
     // padrao (buttonToApp = false): botao 1, curto = home/encerra app,
     // segurar ~1,2 s = screenshot; botao 2 acorda a tela. Com buttonToApp

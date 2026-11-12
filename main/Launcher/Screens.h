@@ -23,6 +23,9 @@ public:
 private:
     kui::Rect cellRect(int entryIndex) const;
     void drawStatusBar(kui::Canvas& c);
+    // Suja so a faixa do cabecalho (relogio/rede/nao-lidas). Se ja havia
+    // sujeira de outro tipo, continua sendo quadro cheio.
+    void markHeaderDirty();
     // Arrasto de pagina: a pagina que ENTRA (capa) e o deslocamento dela
     int dragPage() const;
     int dragXOff() const;
@@ -36,6 +39,11 @@ private:
     int m_dragPushed = 0;          // m_dragDx da ultima passada composta (buffer == vidro)
     int m_dragAccum = 0;           // modo direto: dx acumulado do arrasto (flip no release)
     bool m_needClear = true;       // Direct sem sprite: so limpa o fundo quando o desenho muda de fato (anti-flicker)
+    // A unica mudanca pendente e a faixa do cabecalho (relogio/rede/nao-lidas):
+    // o proximo quadro pode ser uma passada PARCIAL dessa faixa. Sem isto o
+    // relogio marcava o quadro inteiro e o 4848 copiava 460 KB por minuto so
+    // para trocar ~150 px do HH:MM. Qualquer outra sujeira derruba a flag.
+    bool m_headerOnly = false;
     int m_scroll = 0;              // modo lista (BoardProfile::launcherList): rolagem vertical em px
     void clampScroll();
 

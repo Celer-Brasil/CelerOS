@@ -90,6 +90,18 @@ int LauncherScreen::dragXOff() const {
 }
 
 bool LauncherScreen::partialFrame(kui::Rect& out) {
+    // So a mudanca do CABECALHO (relogio/rede/nao-lidas): a pagina inteira
+    // ficou parada e a composicao nao mudou, entao recompor e empurrar a
+    // faixa de cima basta. Sem isto o relogio marcava o quadro inteiro e o
+    // 4848 copiava 460 KB (43 ms de compose + 27 ms de push) por minuto para
+    // trocar ~150 px do HH:MM — visivel como "piscada" a cada virar do minuto.
+    // Exige o mesmo pre-requisito do arrasto: o buffer/vidro contem ESTA tela
+    // (m_needClear diz que veio de outra).
+    if (m_headerOnly && !m_needClear) {
+        if (!kui::canvasBuffered()) return false;  // sem buffer nao ha o que reaproveitar
+        out = {0, 0, UI::W, gridHeaderH()};
+        return true;
+    }
     // So a troca de pagina do grid por arrasto: lista rola vertical (todo o
     // miolo muda) e sem arrasto nao ha o que reaproveitar do quadro anterior.
     if (listMode() || m_dragDx == 0 || m_dragPushed == 0) return false;
@@ -129,6 +141,7 @@ void LauncherScreen::onResume() {
     // voltou de app/dialog/erro: o vidro contem conteudo de outra tela —
     // o proximo draw precisa limpar o fundo (modo direto sem sprite)
     m_needClear = true;
+    m_headerOnly = false;  // quadro inteiro, nao passada de cabecalho
 }
 
 void LauncherScreen::onEnter() {
@@ -142,6 +155,7 @@ void LauncherScreen::onEnter() {
     m_noWifiPref = FileSystem::exists("/local/nowifi.txt");
     m_dragDx = 0;
     m_dragPushed = 0;   // o proximo desenho e um quadro inteiro
+    m_headerOnly = false;  // a grade pode ter mudado: nada de passada parcial
 }
 
 // Bateria: corpo + polo + nivel (cor por faixa) e % ao lado; raio quando
@@ -230,7 +244,20 @@ void LauncherScreen::draw(kui::Canvas& c) {
     // redesenha opaco sobre as mesmas coordenadas (sem blink).
     bool clearBg = m_needClear || m_dragDx != 0;
     m_needClear = false;
+    // Passada parcial do cabecalho (relogio/rede): a composicao NAO mudou,
+    // entao o fundo nao precisa ser repintado e so a barra de cima e composta
+    // (o recorte do canvas ja limita tudo a essa faixa).
+    const bool headerPass = m_headerOnly && c.partial();
+    m_headerOnly = false;
     if (clearBg && c.mode() == kui::Canvas::Direct) c.fill(THEME_BG);
+
+    if (headerPass) {
+        // So a faixa do cabecalho mudou: recompoe a barra e para. O recorte
+        // do renderRegion mantem a grade intacta no buffer, e o gradiente da
+        // barra cobre a faixa inteira (nada de pixel velho do HH:MM).
+        if (c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
+        return;
+    }
     // Passada parcial (arrasto): a barra de status ja esta no buffer/vidro
     if (!c.partial() && c.visible({0, 0, UI::W, gridHeaderH()})) drawStatusBar(c);
 
@@ -609,6 +636,7 @@ void LauncherScreen::uninstall(int entry) {
     if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
     clampScroll();  // entrada sumida: rolagem/lista em modo lista volta pro fim
     Navigator::toast(ok ? name + " removido" : "Falha ao remover " + name, ok ? THEME_OK : THEME_ERR);
+    m_needClear = true;  // a grade mudou: quadro inteiro (nao passada de cabecalho)
     markDirty();
 }
 
@@ -732,6 +760,7 @@ void LauncherScreen::onTick(uint32_t dtMs) {
         if (page >= LauncherUI::gridTotalPages()) page = LauncherUI::gridTotalPages() - 1;
         if (page < 0) page = 0;
         clampScroll();  // apps a menos: rolagem antiga apontava alem do fim
+        m_needClear = true;  // grade mudou: quadro inteiro
         markDirty();
     }
 
@@ -787,8 +816,21 @@ void LauncherScreen::onTick(uint32_t dtMs) {
         lastClock = clock;
         lastWifi = wifi;
         lastUnread = unread;
-        markDirty();
+        markHeaderDirty();
     }
+}
+
+// Suja SO a faixa do cabecalho: a pagina nao mudou, so o HH:MM / rede /
+// ponto de nao-lidas. Se ja havia sujeira de composicao (m_needClear de
+// onResume/entrada, arrasto em curso, foco de gamepad), o quadro continua
+// inteiro — a flag so vale quando NADA mais mudou.
+void LauncherScreen::markHeaderDirty() {
+    if (m_needClear || m_dragDx != 0) {
+        markDirty();
+        return;
+    }
+    m_headerOnly = true;
+    markDirty();
 }
 
 // ============================================================ App host =====

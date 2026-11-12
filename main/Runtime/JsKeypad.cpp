@@ -236,6 +236,7 @@ duk_ret_t JSBindings::js_keypadPoll(duk_context *ctx) {
     // pollAppChrome SEMPRE roda: o disparo da saida e no release (readTouch
     // false) — dentro de um if(readTouch) o release nunca seria visto e o X
     // acendia sem sair (bug do Terminal)
+    s_appTouchRead = true;  // este poll ja consultou o chrome do quadro
     bool touched = kui::readTouch(&tx, &ty);
     if (pollAppChrome(touched, tx, ty)) {
         keypadCloseSession();

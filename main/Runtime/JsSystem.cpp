@@ -48,6 +48,7 @@
 bool JSBindings::readAppTouch(duk_context *ctx, int *jx, int *jy) {
     uint16_t tx = 0, ty = 0;
     bool touched = false;
+    s_appTouchRead = true;  // app leu: o chrome deste quadro e dele
     checkRemoteAppExit(ctx);  // shell "exit": encerra antes de tocar no hardware
     present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
     *jx = 0;
@@ -101,6 +102,7 @@ duk_ret_t JSBindings::js_getTouch(duk_context *ctx) {
 // primario (o app nunca ve toque da topbar/X/bordas), espaco virtual 240x320
 // — mas devolve todos os dedos, primario em out[0].
 size_t JSBindings::readAppTouches(duk_context *ctx, kui::TouchPoint *out, size_t max) {
+    s_appTouchRead = true;  // idem readAppTouch: o chrome deste quadro e do app
     checkRemoteAppExit(ctx);  // shell "exit": encerra antes de tocar no hardware
     present();  // app cedeu: o frame desenhado ate aqui vai ao vidro
 #if CONFIG_CELEROS_UI
@@ -202,6 +204,21 @@ duk_ret_t JSBindings::js_delay(duk_context *ctx) {
 void JSBindings::appWait(duk_context *ctx, int ms) {
     checkRemoteAppExit(ctx);  // shell "exit": app parado num delay longo tambem sai
     present();
+    // Chrome sem leitor: quem nao leu o toque neste quadro (Barebone: so LED
+    // e botao; loop de animacao que so chama delay) nunca passaria por
+    // pollAppChrome — nem o X nem os gestos de borda existiam, e a tela
+    // preta nao tinha saida nenhuma. A espera faz a leitura que o app nao
+    // fez: se o toque virou sistema, sai pelo caminho limpo do X. Quem leu
+    // o toque segue intocado (o chrome dele ja rodou no binding, e um
+    // segundo poll no mesmo quadro adiantaria o gesto duas vezes).
+#if CONFIG_CELEROS_UI
+    if (!s_appTouchRead && tftInstance != nullptr) {
+        uint16_t cx = 0, cy = 0;
+        bool ct = kui::readTouch(&cx, &cy);
+        if (pollAppChrome(ct, cx, cy)) throwAppExit(ctx);
+    }
+#endif
+    s_appTouchRead = false;   // marco do quadro: zera na cedida de quadro
     uint32_t t0 = millis();
     // Mark-and-sweep completo (so ciclos; o resto e refcount) custa ms em
     // heaps grandes: antes rodava a CADA delay (loops de 20 ms gastavam boa

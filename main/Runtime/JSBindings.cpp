@@ -80,6 +80,7 @@ uint8_t s_alpha = 255;
 uint32_t s_perms = celer::PERM_ALL;   // capabilities do app corrente (F4)
 std::string s_appPkg;                 // packageName do app corrente (F4)
 bool s_appExitPending = false;        // saida pedida (throwAppExit): relancada nas esperas
+bool s_appTouchRead = false;          // app leu o toque neste quadro (chrome dele)
 static bool s_svcActive = false;      // callback do svchost (nao chamar present)
 
 // Ajustes globais (brilho/volume/auto/tempo de tela) mudados por app sem
@@ -1124,6 +1125,7 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_appPkg = appPkg ? appPkg : "";
     s_perms = perms;
     s_appExitPending = false;
+    s_appTouchRead = false;      // chrome volta a ser do OS ate o app tocar a tela
     s_hwTouched = false;
     s_nativeCanvas = false;  // app anterior pode ter saido no modo nativo
     s_alpha = 255;           // alpha global nao vaza entre apps (API 59)

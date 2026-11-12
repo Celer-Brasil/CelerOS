@@ -96,6 +96,13 @@ inline bool perm(uint32_t bit) { return (s_perms & bit) != 0; }
 // de espera seguinte (delay/getTouch/keypadPoll) relanca. Zerado no init.
 extern bool s_appExitPending;
 
+// O app leu o toque NESTE quadro (getTouch/getTouches/keypadPoll). Quem le
+// ja passa por pollAppChrome no proprio binding; quem nao le (Barebone: so
+// LED e botao, ou um loop de animacao que so chama delay) nunca daria ao OS
+// chance de mostrar o X/gestos — a tela preta ficava SEM SAIDA. O appWait
+// entao faz a leitura do chrome e zera a marca para o quadro seguinte.
+extern bool s_appTouchRead;
+
 [[noreturn]] inline void throwAppExit(duk_context* ctx) {
     s_appExitPending = true;
     duk_push_error_object(ctx, DUK_ERR_ERROR, "app exit");

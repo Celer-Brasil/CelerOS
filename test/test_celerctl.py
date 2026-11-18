@@ -3333,5 +3333,105 @@ class TestOtaCheckLocal(unittest.TestCase):
         self.assertIn("sem canal", err.getvalue())
 
 
+class TestMonitor(unittest.TestCase):
+    """`celerctl monitor`: a serial CRUA, para o log de boot que o logcat
+    nunca ve (o hook do esp_log so existe depois do FileSystem::init).
+
+    Sem placa: o que da para provar aqui e a sequencia do reset (ordem e
+    polaridade, que e o que evita entrar em modo download), a decodificacao
+    tolerante e o arquivo de saida com o buffer parcial.
+    """
+
+    def test_reset_ordem_e_polaridade(self):
+        seq = C.MonitorHelpers.reset_sequence()
+        # no CH340: DTR solto (False) = GPIO0 alto = boot normal; RTS ativo
+        # (True) puxa o EN = reset. O DTR nunca fica ativo no pulso.
+        self.assertEqual(seq[0], ("DTR", False))
+        self.assertEqual(seq[1], ("RTS", True))
+        self.assertEqual(seq[2], ("RTS", False))
+        self.assertEqual(seq[3], ("DTR", False))
+        self.assertFalse(any(v for lin, v in seq if lin == "DTR"),
+                         "DTR ativo = GPIO0 baixo = modo download")
+
+    def test_reset_invertido_troca_a_polaridade(self):
+        seq = C.MonitorHelpers.reset_sequence(invert=True)
+        self.assertEqual(seq[0], ("DTR", True))
+        self.assertEqual(seq[1], ("RTS", False))
+        self.assertEqual(seq[2], ("RTS", True))
+
+    def test_decodifica_byte_invalido(self):
+        # boot log tem byte invalido no meio (reset partindo um UTF-8)
+        dado = b"I (100) boot: ok\n\xe1\xff lixo\n"
+        texto = C.MonitorHelpers.decodifica(dado)
+        self.assertIn("boot: ok", texto)
+        self.assertIn("lixo", texto)
+
+    def test_conta_linhas(self):
+        self.assertEqual(C.MonitorHelpers.conta_linhas(b"a\nb\nc"), 2)
+        self.assertEqual(C.MonitorHelpers.conta_linhas(b""), 0)
+
+    def test_pulse_reset_usa_a_sequencia(self):
+        class Ser:
+            def __init__(self):
+                self.eventos = []
+            def setDTR(self, v):
+                self.eventos.append(("DTR", v))
+            def setRTS(self, v):
+                self.eventos.append(("RTS", v))
+        ser = Ser()
+        orig = time.sleep
+        time.sleep = lambda *_: None      # nao esperar os 120 ms do pulso
+        try:
+            C._pulse_reset(ser)
+        finally:
+            time.sleep = orig
+        self.assertEqual(ser.eventos, C.MonitorHelpers.reset_sequence())
+
+    def test_monitor_grava_arquivo_e_conta_linhas(self):
+        # o arquivo guarda os bytes CRUS e o buffer parcial nao se perde
+        class Ser:
+            def __init__(self, chunks):
+                self.chunks = list(chunks)
+            def read(self, n):
+                return self.chunks.pop(0) if self.chunks else b""
+            def close(self):
+                pass
+            def setDTR(self, v):
+                pass
+            def setRTS(self, v):
+                pass
+
+        ser = Ser([b"I (1) boot: a\n", b"parcial sem quebra"])
+        with tempfile.TemporaryDirectory() as td:
+            destino = str(Path(td) / "boot.log")
+            args = C.build_parser().parse_args(
+                ["monitor", "/dev/ttyFAKE", "--out", destino, "--no-eco",
+                 "--max-vazias", "3"])
+            orig_open = C._open_raw_serial
+            C._open_raw_serial = lambda port, baud: ser
+            err = io.StringIO()
+            try:
+                with redirect_stderr(err):
+                    code = args.func(args)
+            finally:
+                C._open_raw_serial = orig_open
+            dados = Path(destino).read_bytes()
+        self.assertEqual(code, 0)
+        self.assertEqual(dados, b"I (1) boot: a\nparcial sem quebra")
+        self.assertIn("1 linha", err.getvalue())
+
+    def test_monitor_recusa_endereco_de_rede(self):
+        args = C.build_parser().parse_args(["monitor", "192.168.0.50"])
+        err = io.StringIO()
+        code = 0
+        with redirect_stderr(err):
+            try:
+                args.func(args)
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+        self.assertEqual(code, 1)
+        self.assertIn("serial cru", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

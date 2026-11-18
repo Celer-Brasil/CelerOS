@@ -13,6 +13,9 @@ Comandos:
   pair IP[:PORTA] [--token T] pareia com o bridge WiFi e guarda o token
   provision [--wifi SSID SENHA] [--grant APP]  WiFi + token + permissoes (1a vez)
   info                        versao/board/heap/rede/filesystems
+  monitor [PORTA] [--reset]   serial CRUA (sem HostLink): log de boot, panic,
+                              mensagens antes do filesystem. --reset pulsa o EN
+                              para pegar desde a primeira linha; --out grava
   top [-w] [--sort cpu|stack|name]  profiling: CPU% por task em janela,
                               heap interna/PSRAM, consumo do app JS, fps e a
                               linha svchost (giros/overrun/pior) quando o
@@ -2987,6 +2990,196 @@ def _log_chunks(raw):
     return lines
 
 
+# ------------------------------------------------------------------- monitor
+# Serial CRUA: nenhum frame HostLink, nenhum filtro. Existe porque o `logcat`
+# so ve o que o firmware JA gravou no ring — e o hook do esp_log so e instalado
+# depois do FileSystem::init (SerialLink). O log de BOOT (mount do cartao,
+# particoes, primeiros drivers) nunca passa por la: em 2026-10-18 os dois 4848
+# voltaram sem /sd e o `celerctl logcat` nao mostrava nada; as linhas
+# `failed to mount card (13)` (FatFs FR_NO_FILESYSTEM, cartao exFAT) so
+# apareceram na UART crua a 115200. Sem o monitor, esse debug exige sair do
+# celerctl e brigar pelo `idf.py monitor`, que trava a porta.
+#
+# A diferenca de forma em relacao ao `idf.py monitor`: aqui nao ha decoder de
+# panic, nem rebuild, nem reinicio ao abrir. O reset e OPCIONAL (--reset) e
+# explicito, porque no CH340 das placas ESP32 o RTS e o EN e o DTR e o GPIO0 —
+# abrir com as linhas no estado padrao do pyserial reseta a placa (e pode
+# entrar em modo download). A sequencia vem do que a bancada provou.
+
+def cmd_monitor(args):
+    """Le a serial crua ate Ctrl-C, ecoando e (opcionalmente) gravando."""
+    if is_net_addr(args.port or ""):
+        die("monitor e serial cru: nao existe pelo bridge WiFi (use `logcat`)")
+    port = resolve_port(args.port) if args.port else _single_serial(args)
+    baud = args.baudrate
+    out = None
+    ser = None
+    try:
+        if args.out:
+            try:
+                out = open(args.out, "wb")
+            except OSError as e:
+                die(f"nao consegui abrir {args.out}: {e}")
+        try:
+            ser = _open_raw_serial(port, baud)
+        except (serial.SerialException, OSError) as e:
+            die(f"nao abri {port}: {e} (outro celerctl/monitor na porta?)")
+        print(f"monitor {port} @ {baud}  (Ctrl-C sai"
+              f"{', gravando em ' + args.out if args.out else ''})", file=sys.stderr)
+        _monitor_loop(args, ser, out)
+        return 0
+    finally:
+        # Fechar SEMPRE, inclusive quando die() sai no meio: o arquivo aberto
+        # fica com o SO (no Windows, nem apagavel) e o buffer parcial se perde.
+        if out is not None and not out.closed:
+            out.close()
+        if ser is not None:
+            try:
+                ser.close()
+            except (serial.SerialException, OSError):
+                pass
+
+
+def _monitor_loop(args, ser, out):
+    """Corpo da leitura: ecoa e/ou grava ate Ctrl-C (ou --segundos)."""
+    linhas = 0
+    buf = b""
+    if args.reset:
+        _pulse_reset(ser, invert=args.reset_invertido)
+        print("placa reiniciada: o boot comeca agora", file=sys.stderr)
+    fim = time.monotonic() + args.segundos if args.segundos else None
+    vazias = 0
+    try:
+        while True:
+            if fim is not None and time.monotonic() >= fim:
+                break
+            chunk = ser.read(4096)
+            if not chunk:
+                vazias += 1
+                # sem --segundos, uma serial que nunca entrega nada (porta
+                # errada, adaptador morto) ficaria girando para sempre: no
+                # modo teste (sem timeout real) isso e infinito. Um teto de
+                # leituras vazias devolve o controle em vez de travar.
+                if args.max_vazias and vazias >= args.max_vazias:
+                    break
+                time.sleep(0.05)
+                continue
+            vazias = 0
+            buf += chunk
+            if out:
+                out.write(chunk)
+                out.flush()
+            if args.out and not args.eco:
+                # modo gravacao puro: nada de buffer em memoria (o chunk ja
+                # foi para o arquivo; reter faria o "parcial" do finally
+                # escrever tudo de novo)
+                linhas += MonitorHelpers.conta_linhas(chunk)
+                buf = b""
+                continue
+            texto = MonitorHelpers.decodifica(buf)
+            sys.stdout.write(texto)
+            sys.stdout.flush()
+            linhas += texto.count("\n")
+            buf = b""
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # o buffer parcial (linha sem \n) nao pode se perder no arquivo
+        if out:
+            if buf:
+                out.write(buf)
+                buf = b""
+            print(f"gravado: {args.out} ({linhas} linha(s))", file=sys.stderr)
+    return 0
+
+
+class MonitorHelpers:
+    """Funcoes puras do `monitor`, separadas para o teste host.
+
+    O que da para testar sem placa: a sequencia de linhas do reset (ordem e
+    polaridade), a decodificacao tolerante e a contagem de linhas. O socket
+    serial em si e FakeSerial no teste.
+    """
+
+    @staticmethod
+    def reset_sequence(invert=False):
+        """[(linha, valor)] na ordem em que o pulso no EN acontece.
+
+        No CH340 das placas ESP32 classico o RTS chega no EN e o DTR no
+        GPIO0, e as duas linhas sao ATIVAS EM BAIXO na placa: `DTR=False`
+        deixa o GPIO0 ALTO (boot normal) e `RTS=True` puxa o EN (reset).
+        Por isso a sequencia e soltar o DTR e pulsar o RTS — o contrario
+        (DTR ativo) entraria em modo download, nao em boot normal.
+        `invert` cobre o adaptador de polaridade trocada.
+        """
+        if not invert:
+            return [("DTR", False), ("RTS", True), ("RTS", False), ("DTR", False)]
+        return [("DTR", True), ("RTS", False), ("RTS", True), ("DTR", False)]
+
+    @staticmethod
+    def conta_linhas(dados):
+        """Linhas completas (\\n) num bloco de bytes cru."""
+        return dados.count(b"\n")
+
+    @staticmethod
+    def decodifica(dados):
+        """Bytes crus -> texto. Nunca levanta: log de boot tem byte invalido
+        no meio (reset no meio de um UTF-8, lixo de baud errado) e o monitor
+        nao pode morrer por isso."""
+        return dados.decode("utf-8", "replace")
+
+
+def _single_serial(args):
+    """A porta unica quando nao ha -p: recusa adivinhar entre duas placas."""
+    ports = [p.device for p in list_ports.comports() if p.vid in USB_VIDS]
+    if not ports:
+        die("nenhuma porta serial USB: conecte a placa ou passe a porta")
+    if len(ports) > 1:
+        die("varias portas seriais (" + ", ".join(ports) + "): passe a porta")
+    return ports[0]
+
+
+def _open_raw_serial(port, baud):
+    """Abre a serial SEM resetar a placa.
+
+    DTR/RTS em 0 antes do open: no CH340 das placas ESP32 classico o RTS e o
+    EN e o DTR e o GPIO0, e o estado padrao do pyserial (ambos ativos) segura
+    o chip em reset/download. A esp32-cam do clone so abre assim (mesma cura
+    do --linhas-baixas do HostLink).
+    """
+    s = serial.Serial()
+    s.port, s.baudrate = port, baud
+    s.timeout = 0.2
+    s.dtr = False
+    s.rts = False
+    for tentativa in range(5):  # CH340 clone: Errno 71 aleatorio no ioctl
+        try:
+            s.open()
+            return s
+        except OSError:
+            if tentativa == 4:
+                raise
+            time.sleep(1)
+    return s
+
+
+def _pulse_reset(ser, invert=False):
+    """Pulso no EN com o GPIO0 solto = boot normal (nao modo download).
+
+    A sequencia vem de MonitorHelpers.reset_sequence (testada sem placa): no
+    CH340 o DTR solto deixa o GPIO0 alto e o RTS ativo puxa o EN.
+    """
+    seq = MonitorHelpers.reset_sequence(invert)
+    for i, (linha, valor) in enumerate(seq):
+        if linha == "DTR":
+            ser.setDTR(valor)
+        else:
+            ser.setRTS(valor)
+        # largura do pulso: depois de puxar o EN e antes de soltar
+        if i + 1 < len(seq) and seq[i + 1][0] == "RTS" and seq[i + 1][1] != valor:
+            time.sleep(0.12)
+
+
 def cmd_logcat(args):
     flt = _LogFilter(args.since, args.grep)  # valida --since/--grep ja
     link = open_link(args)
@@ -5355,6 +5548,26 @@ def build_parser():
     p = sub.add_parser("reboot", help="reinicia a placa")
     p.set_defaults(func=cmd_reboot)
 
+    p = sub.add_parser("monitor", help="serial cru da placa (log de boot, "
+                                       "panic, mensagens antes do HostLink)")
+    p.add_argument("port", nargs="?", default=None,
+                   help="porta serial (default: a unica placa USB conectada)")
+    p.add_argument("-b", "--baudrate", type=int, default=115200,
+                   help="baud da UART (default 115200, o do console)")
+    p.add_argument("--reset", action="store_true",
+                   help="pulsa o EN antes de ler, para pegar o boot desde a "
+                        "primeira linha (sem isso a placa nao e reiniciada)")
+    p.add_argument("--reset-invertido", action="store_true", dest="reset_invertido",
+                   help="adaptador com a polaridade de RTS/EN trocada")
+    p.add_argument("--out", metavar="ARQ", default=None,
+                   help="grava a captura crua neste arquivo (bytes como chegaram)")
+    p.add_argument("--no-eco", dest="eco", action="store_false", default=True,
+                   help="nao imprime na tela (so grava, com --out)")
+    p.add_argument("--segundos", type=float, default=None, metavar="S",
+                   help="para sozinho depois de S segundos (default: ate Ctrl-C)")
+    p.add_argument("--max-vazias", type=int, default=0, dest="max_vazias",
+                   help=argparse.SUPPRESS)  # teto de leituras vazias (testes)
+    p.set_defaults(func=cmd_monitor)
 
     p = sub.add_parser("logcat", help="stream de logs do dispositivo")
     p.add_argument("--dump", action="store_true",

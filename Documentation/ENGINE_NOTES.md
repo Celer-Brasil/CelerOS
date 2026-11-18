@@ -187,8 +187,8 @@ depois das mudancas do dia:
 | laco `for` puro (100k) | 301 ms | 301 ms |
 
 O que mudou: `DUK_USE_CACHE_ACTIVATION`/`CATCHER` religados nas placas com
-PSRAM (`components/duktape/celeros_fixup.h`; o yaml os desliga pela RAM da
-CYD) — sem eles TODA chamada fazia malloc+free do registro de activation
+PSRAM (`components/duktape/celeros_fixup.h`; na epoca os dois ficavam
+desligados na CYD) — sem eles TODA chamada fazia malloc+free do registro de activation
 no `heap_caps` (lock TLSF) — e cache de instrucao de 32 KB no SmartDisplay
 (o executor do Duktape nao cabia em 16 KB e buscava codigo na flash pelo
 mesmo MSPI da PSRAM). Resultado no Detona: 16 -> 28 fps.
@@ -202,3 +202,27 @@ no caminho quente (cada string nova e alocacao + GC).
 Nao confundir com o tremor de imagem do SmartDisplay (era latencia da ISR
 de VSYNC no nucleo do Duktape, nao velocidade de JS): ver
 `boards/AGENTS.md` "SMARTDISPLAY RGB PANEL".
+
+## Chamadas JS no ESP32 sem PSRAM (2026-11-18)
+
+CYD, CYD-VSPI e devkit passaram a reutilizar os registros de chamada do
+Duktape. O teste em `test/duk/bench_calls` roda a mesma conta 10.000 vezes
+em C, dentro do laco JS, numa funcao JS e num binding C chamado pelo JS.
+As quatro variantes retornaram 11592. O teste tambem calcula uma vez o
+campo de distancias da dep `celeros.grid` em um mapa 15 x 13 com uma parede.
+O percurso de referencia teve 38 passos. A tabela traz o tempo virtual do QEMU
+ESP32 com `-icount 3` e ESP-IDF 6.1. Para JS, usamos a mediana de 5 rodadas.
+O benchmark usa o malloc do IDF com um contador de chamadas.
+
+| Caminho | Antes (ms) | Depois (ms) |
+|---|---:|---:|
+| C chamando funcao C | 0,960 | 0,960 |
+| JS com a conta no proprio laco | 93,013 | 93,008 |
+| JS chamando funcao JS | 275,363 | 194,892 |
+| JS chamando binding C | 215,641 | 138,640 |
+| `celeros.grid.flow`, um mapa | 46,408 | 31,919 |
+
+Nos dois lacos com chamada, o contador passou de 10.002 para 1 malloc por
+rodada aquecida. O cache custa RAM entre coletas. Com recursao de 32 niveis,
+a build nova reteve 1.724 bytes a mais na segunda rodada. Apos o GC, ambas
+voltaram a 292.440 bytes livres. O firmware completo da CYD cresceu 64 bytes.

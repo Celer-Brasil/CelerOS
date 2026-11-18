@@ -215,7 +215,8 @@ def main():
     open(os.path.join(inc, 'sdkconfig.h'), 'w').close()  # duk_config.h inclui
     duk_o = os.path.join(BUILD, 'duktape.o')
     duk_c = os.path.join(DUK, 'duktape.c')
-    if not os.path.exists(duk_o) or os.path.getmtime(duk_o) < os.path.getmtime(duk_c):
+    duk_inputs = [duk_c, os.path.join(DUK, 'duktape.h'), os.path.join(DUK, 'duk_config.h')]
+    if not os.path.exists(duk_o) or os.path.getmtime(duk_o) < max(map(os.path.getmtime, duk_inputs)):
         run(['gcc', '-c', '-O1', '-w', '-I', inc, '-I', DUK, '-o', duk_o, duk_c])
     drv = os.path.join(os.path.dirname(__file__), '.build', 'require_test.cpp')
     open(drv, 'w').write(DRIVER.replace('%BODY%', extract_require()))

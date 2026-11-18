@@ -32,14 +32,13 @@ extern duk_bool_t celer_exec_timeout_check(void *udata);
 #undef DUK_USE_DEBUGGER_SUPPORT
 #endif
 
-/* Placas com PSRAM: cache de activation/catcher ligado. O yaml desliga para
- * a CYD (cada registro em cache segura RAM interna), mas sem ele TODA
- * chamada JS ou nativa faz malloc+free do registro de activation no
- * heap_caps (lock TLSF): medido no SmartDisplay 2026-10-09, ~23 us por
- * chamada — System.millis() custava o mesmo que uma funcao JS inteira.
+/* Uma activation por chamada JS ou nativa. Reusar ao voltar evita
+ * malloc/free no heap_caps a cada chamada, inclusive sem PSRAM. A lista
+ * cresce com a profundidade das chamadas e o mark-and-sweep a libera.
+ * Catchers de try/catch continuam em cache apenas nas placas com PSRAM.
  */
-#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM
 #define DUK_USE_CACHE_ACTIVATION
+#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM
 #define DUK_USE_CACHE_CATCHER
 #endif
 

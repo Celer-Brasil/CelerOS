@@ -1094,5 +1094,175 @@ class TestPublishSnapshotExtras(unittest.TestCase):
             self.assertIn("mudaram durante o publish", msg)
 
 
+class PublishPendingTest(unittest.TestCase):
+    """O detector de "commitado mas nao publicado".
+
+    Nasceu do buraco que o repo ja reconhecia e nao conseguia medir: os
+    detectores antigos comparavam a versao DECLARADA com a do hub, entao uma
+    tarde editando o main.js sem bumpar nao acusava nada. Aqui a comparacao e
+    por CONTEUDO (md5 do main.js enxuto, o que o hub guarda).
+    """
+
+    def _app(self, td, name, version="1.0.0", code="M.x = 1;\n"):
+        d = Path(td) / name
+        d.mkdir(parents=True)
+        (d / "app.json").write_text(json.dumps(
+            {"packageName": name, "version": version}), encoding="utf-8")
+        (d / "main.js").write_text(code, encoding="utf-8")
+        return d
+
+    def test_em_dia(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b")
+            hub = {"a.b": {"version": "1.0.0", "md5": sorted(H.app_js_md5s(d))[0]}}
+            pend, ok = H.pending_apps(hub, [("a.b", d, {"version": "1.0.0"})])
+        self.assertEqual(pend, [])
+        self.assertEqual(ok, [("a.b", "1.0.0")])
+
+    def test_conteudo_mudou_sem_bump(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b")
+            hub = {"a.b": {"version": "1.0.0", "md5": "0" * 32}}
+            pend, ok = H.pending_apps(hub, [("a.b", d, {"version": "1.0.0"})])
+        self.assertEqual(len(pend), 1)
+        self.assertIn("conteudo mudou", pend[0][3])
+        self.assertEqual(ok, [])
+
+    def test_repo_a_frente_do_hub(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b", version="1.1.0")
+            hub = {"a.b": {"version": "1.0.0", "md5": sorted(H.app_js_md5s(d))[0]}}
+            pend, _ = H.pending_apps(hub, [("a.b", d, {"version": "1.1.0"})])
+        self.assertIn("bump sem publish", pend[0][3])
+
+    def test_repo_atras_do_hub(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b", version="0.9.0")
+            hub = {"a.b": {"version": "1.0.0", "md5": ""}}
+            pend, _ = H.pending_apps(hub, [("a.b", d, {"version": "0.9.0"})])
+        self.assertIn("hub a frente", pend[0][3])
+
+    def test_nunca_publicado(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b")
+            pend, _ = H.pending_apps({}, [("a.b", d, {"version": "1.0.0"})])
+        self.assertIn("nunca publicado", pend[0][3])
+
+    def test_sem_md5_no_hub_cai_para_versao(self):
+        # catalogo antigo (sem md5): nao da para afirmar que o conteudo mudou,
+        # e reprovar todo mundo seria ruido. A versao igual = em dia.
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b")
+            pend, ok = H.pending_apps({"a.b": {"version": "1.0.0", "md5": ""}},
+                                      [("a.b", d, {"version": "1.0.0"})])
+        self.assertEqual(pend, [])
+        self.assertEqual(len(ok), 1)
+
+    def test_versao_nao_semver(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b", version="beta")
+            pend, _ = H.pending_apps({"a.b": {"version": "1.0.0", "md5": ""}},
+                                     [("a.b", d, {"version": "beta"})])
+        self.assertIn("nao semver", pend[0][3])
+
+    def test_md5_aceita_o_modo_legado(self):
+        # app publicado antes do jsmin: o hub guarda o md5 do strip antigo e
+        # o app esta em dia — comparar so o modo canonico daria falso positivo
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, "a.b")
+            modos = H.app_js_md5s(d)
+            self.assertGreaterEqual(len(modos), 1)
+            for modo in modos:
+                pend, _ = H.pending_apps({"a.b": {"version": "1.0.0", "md5": modo}},
+                                         [("a.b", d, {"version": "1.0.0"})])
+                self.assertEqual(pend, [], f"modo {modo} deveria contar como em dia")
+
+
+class BoardOnlyTest(unittest.TestCase):
+    def test_overlay_de_placa_fica_de_fora_por_padrao(self):
+        # apps de boards/<b>/data/apps entram pelo flash_data.sh, nao pelo hub
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for rel in ("data/apps/Comum", "hub_apps/Hub", "boards/cyd/data/apps/Placa"):
+                d = root / rel
+                d.mkdir(parents=True)
+                (d / "app.json").write_text(json.dumps(
+                    {"packageName": rel.replace("/", "."), "version": "1.0.0"}))
+            padrao = [n for n, _, _ in H.app_package_dirs(root)]
+            com_placa = [n for n, _, _ in H.app_package_dirs(root, include_board_only=True)]
+        self.assertEqual(len(padrao), 2, padrao)
+        self.assertEqual(len(com_placa), 3, com_placa)
+        self.assertTrue(any("Placa" in n for n in com_placa))
+        self.assertFalse(any("Placa" in n for n in padrao))
+
+
+class BumpTest(unittest.TestCase):
+    def _app(self, td, version="1.0.0", with_cmake=False):
+        d = Path(td) / "App"
+        d.mkdir(parents=True)
+        (d / "app.json").write_text(
+            json.dumps({"packageName": "a.b", "version": version,
+                        "changelog": "x"}, indent=2), encoding="utf-8")
+        if with_cmake:
+            (d / "CMakeLists.txt").write_text(
+                'idf_component_register()\nset(PROJECT_VER "9.9.9")\n')
+        return d
+
+    def test_patch(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td)
+            args = type("A", (), {"targets": [str(d)], "part": "patch",
+                                  "dry_run": False})()
+            with contextlib.redirect_stdout(io.StringIO()):
+                H.cmd_bump(args)
+            meta = json.loads((d / "app.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["version"], "1.0.1")
+        self.assertEqual(meta["changelog"], "x", "so a version muda")
+
+    def test_minor_e_major(self):
+        self.assertEqual(H._bump_semver("1.2.3", "minor"), "1.3.0")
+        self.assertEqual(H._bump_semver("1.2.3", "major"), "2.0.0")
+        self.assertEqual(H._bump_semver("1.2.3", "patch"), "1.2.4")
+
+    def test_cmake_project_ver_junto(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, with_cmake=True)
+            args = type("A", (), {"targets": [str(d)], "part": "minor",
+                                  "dry_run": False})()
+            with contextlib.redirect_stdout(io.StringIO()):
+                H.cmd_bump(args)
+            cm = (d / "CMakeLists.txt").read_text()
+            meta = json.loads((d / "app.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["version"], "1.1.0")
+        self.assertIn('set(PROJECT_VER "1.1.0")', cm)
+
+    def test_dry_run_nao_escreve(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td)
+            antes = (d / "app.json").read_text(encoding="utf-8")
+            args = type("A", (), {"targets": [str(d)], "part": "patch",
+                                  "dry_run": True})()
+            with contextlib.redirect_stdout(io.StringIO()):
+                H.cmd_bump(args)
+            depois = (d / "app.json").read_text(encoding="utf-8")
+        self.assertEqual(antes, depois)
+
+    def test_versao_invalida_morre(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = self._app(td, version="beta")
+            args = type("A", (), {"targets": [str(d)], "part": "patch",
+                                  "dry_run": False})()
+            msg = die_saida(lambda: H.cmd_bump(args))
+        # o campo existe mas nao e x.y.z: o bump para antes de escrever nada
+        self.assertIn("version x.y.z", msg)
+
+    def test_pasta_sem_app_json_morre(self):
+        with tempfile.TemporaryDirectory() as td:
+            args = type("A", (), {"targets": [td], "part": "patch",
+                                  "dry_run": False})()
+            msg = die_saida(lambda: H.cmd_bump(args))
+        self.assertIn("sem app.json", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -785,6 +785,190 @@ def cmd_deps_status(args):
     print(f"ok: {total} dep(s) em paridade com o hub")
 
 
+# ---------------------------------------------------------- publish-pending
+# A regra do repo e dura e repetida em todo lugar: "mudanca de app ou de dep
+# so esta pronta com bump + publish no hub; fix commitado sem publish nao
+# chega a nenhum device". Os detectores que existiam eram PASSIVOS — o
+# `deps-status` compara a versao DECLARADA no repo com a do hub, entao uma
+# tarde inteira editando a engine sem bumpar nao acusava nada. Este subcomando
+# compara o CONTEUDO: o md5 enxuto (o mesmo que o hub guarda) do arquivo no
+# HEAD contra o que o hub tem naquela versao. Divergiu sem bump, aponta.
+
+def app_package_dirs(root=None, include_board_only=False):
+    """[(packageName, pasta, meta)] de data/apps, hub_apps e boards/*/data/apps.
+
+    Os apps de `boards/<b>/data/apps` sao de FABRICA: eles entram na imagem
+    daquela placa pelo `flash_data.sh` e nao existem no catalogo do hub (ver
+    data/AGENTS.md, "board-only factory apps ship via flash_data.sh"). Por
+    isso ficam de fora do padrao do publish-pending — senao todo dog/watch
+    apareceria como "nunca publicado" para sempre. `include_board_only` os
+    traz para quem quer auditar a imagem de fabrica.
+    """
+    root = Path(root) if root else Path(__file__).resolve().parent.parent
+    out = []
+    bases = [root / "data" / "apps", root / "hub_apps"]
+    if include_board_only:
+        bases += sorted((root / "boards").glob("*/data/apps"))
+    for base in bases:
+        if not base.is_dir():
+            continue
+        for pkg in sorted(base.iterdir()):
+            mp = pkg / "app.json"
+            if not mp.is_file():
+                continue
+            try:
+                meta = json.loads(mp.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            name = meta.get("packageName")
+            ver = meta.get("version")
+            if name and ver:
+                out.append((name, pkg, meta))
+    return out
+
+
+def app_js_md5s(folder):
+    """md5 do main.js ENXUTO nos dois modos de strip (canonico e legado) — o
+    mesmo par que o deps-status usa. O hub guarda o md5 do que subiu; apps
+    publicados antes do jsmin tem o md5 do strip antigo, entao a comparacao
+    aceita os dois. Set vazio = sem main.js.
+    """
+    main = Path(folder) / "main.js"
+    if not main.is_file():
+        return set()
+    return strip_md5s(main)
+
+
+def pending_apps(hub_apps, local_apps, md5s_of=app_js_md5s):
+    """Logica pura: (pendentes, em_dia) comparando conteudo x versao do hub.
+
+    hub_apps: {packageName: {"version": v, "md5": m}} do catalogo.
+    local_apps: [(packageName, pasta, meta)].
+    Um app esta em dia quando a versao local ja esta no hub E o md5 do
+    main.js local (enxuto) bate com o publicado nela. Sem md5 no hub (catalogo
+    antigo), cai para a comparacao de versao.
+    """
+    pendentes, em_dia = [], []
+    for name, folder, meta in local_apps:
+        ver = str(meta.get("version") or "")
+        hub = hub_apps.get(name)
+        if hub is None:
+            pendentes.append((name, folder, ver, "nunca publicado no hub"))
+            continue
+        hv = str(hub.get("version") or "")
+        try:
+            mais_novo = vtuple(ver) > vtuple(hv)
+            mais_velho = vtuple(ver) < vtuple(hv)
+        except ValueError:
+            pendentes.append((name, folder, ver, f"versao nao semver (hub {hv})"))
+            continue
+        if mais_novo:
+            pendentes.append((name, folder, ver, f"repo {ver} > hub {hv} (bump sem publish)"))
+            continue
+        if mais_velho:
+            pendentes.append((name, folder, ver, f"repo {ver} < hub {hv} (hub a frente)"))
+            continue
+        hm = str(hub.get("md5") or "")
+        if hm:
+            locais = md5s_of(folder)
+            if locais and hm not in locais:
+                pendentes.append((name, folder, ver,
+                                  f"conteudo mudou e a versao continua {ver}"))
+                continue
+        em_dia.append((name, ver))
+    return pendentes, em_dia
+
+
+def cmd_publish_pending(args):
+    """Lista o que mudou desde o que esta no hub, com o proximo bump sugerido."""
+    tok = user_token(args)
+    _, data = http("GET", f"{hub_url(args)}/store/all.json", token=tok or None)
+    apps = data.get("apps", {})
+    hub_apps = {}
+    for pkg, a in apps.items():
+        hub_apps[pkg] = {"version": a.get("version"), "md5": a.get("md5")}
+    local = app_package_dirs(args.root, include_board_only=args.board_only)
+    pendentes, em_dia = pending_apps(hub_apps, local)
+    if args.json:
+        print(json.dumps({"pending": [
+            {"package": n, "folder": str(f), "version": v, "reason": r}
+            for n, f, v, r in pendentes], "in_sync": len(em_dia)},
+            ensure_ascii=False, indent=2))
+        return 0 if not pendentes else 1
+    if not pendentes:
+        print(f"nada pendente: {len(em_dia)} app(s) publicados e em dia")
+        return 0
+    print(f"{len(pendentes)} app(s) para publicar:")
+    for name, folder, ver, reason in pendentes:
+        prox = _next_patch(ver) if ver else "?"
+        print(f"  {name:<34} {ver:<8} -> {prox:<8} {reason}")
+        print(f"    {folder}")
+    if args.dry_run:
+        print()
+        print("(dry-run: nada foi publicado nem bumpado)")
+    return 1
+
+
+def _next_patch(v):
+    """x.y.z -> x.y.(z+1); devolve o proprio v se nao for semver."""
+    if not VER_RE.match(str(v or "")):
+        return v
+    x, y, z = (int(p) for p in v.split("."))
+    return f"{x}.{y}.{z + 1}"
+
+
+def cmd_bump(args):
+    """Sobe a versao no app.json (e no CMake PROJECT_VER do app, se houver).
+
+    Bumpar a mao e onde a pressa erra: a versao vive em dois lugares no app
+    nativo e o hub recusa republicar a mesma. Este comando muda os dois e
+    imprime o diff para o commit.
+    """
+    partes = args.part
+    alvos = args.targets
+    mudou = 0
+    for alvo in alvos:
+        p = Path(alvo)
+        if not p.is_dir():
+            die(f"{alvo}: nao e uma pasta")
+        aj = p / "app.json"
+        if not aj.is_file():
+            die(f"{alvo}: sem app.json")
+        raw = aj.read_text(encoding="utf-8")
+        m = re.search(r'("version"\s*:\s*")(\d+\.\d+\.\d+)(")', raw)
+        if not m:
+            die(f"{aj}: sem campo version x.y.z")
+        atual = m.group(2)
+        novo = _bump_semver(atual, partes)
+        if args.dry_run:
+            print(f"{p.name}: {atual} -> {novo} (dry-run)")
+            continue
+        raw = raw[:m.start(2)] + novo + raw[m.end(2):]
+        aj.write_text(raw, encoding="utf-8")
+        print(f"{p.name}: app.json {atual} -> {novo}")
+        mudou += 1
+        cm = p / "CMakeLists.txt"
+        if cm.is_file():
+            c = cm.read_text(encoding="utf-8")
+            c2 = re.sub(r'(set\(PROJECT_VER\s+")[^"]+("\))',
+                        lambda x: x.group(1) + novo + x.group(2), c, count=1)
+            if c2 != c:
+                cm.write_text(c2, encoding="utf-8")
+                print(f"{p.name}: CMakeLists PROJECT_VER -> {novo}")
+    return 0 if (mudou or args.dry_run) else 1
+
+
+def _bump_semver(v, part):
+    if not VER_RE.match(str(v or "")):
+        die(f"versao {v!r} nao e semver x.y.z")
+    x, y, z = (int(p) for p in v.split("."))
+    if part == "major":
+        return f"{x + 1}.0.0"
+    if part == "minor":
+        return f"{x}.{y + 1}.0"
+    return f"{x}.{y}.{z + 1}"
+
+
 # ----------------------------------------------------------------- publish -
 def cmd_publish(args):
     tok = "" if args.dry else token_or_die(args)  # dry roda offline
@@ -1298,6 +1482,24 @@ def main():
 
     p = sub.add_parser("list", help="lista o catalogo e compara com o repo")
     p.set_defaults(fn=cmd_list)
+
+    p = sub.add_parser("publish-pending",
+                       help="apps cujo CONTEUDO mudou sem bump/publish (exit 1)")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="nao faz diferenca hoje: o comando so LE (mantido para "
+                        "o habito de conferir antes)")
+    p.add_argument("--json", action="store_true", help="saida em JSON")
+    p.add_argument("--board-only", action="store_true", dest="board_only",
+                   help="inclui boards/*/data/apps (apps de fabrica: entram "
+                        "pelo flash_data.sh, nao pelo hub)")
+    p.add_argument("--root", default=None, help="raiz do repo (default: este)")
+    p.set_defaults(fn=cmd_publish_pending)
+
+    p = sub.add_parser("bump", help="sobe a versao no app.json (+ PROJECT_VER)")
+    p.add_argument("targets", nargs="+", help="pastas de app")
+    p.add_argument("--part", choices=("patch", "minor", "major"), default="patch")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run")
+    p.set_defaults(fn=cmd_bump)
 
     p = sub.add_parser("delete", help="remove um app do hub")
     p.add_argument("package", help="packageName")

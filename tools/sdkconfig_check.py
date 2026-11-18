@@ -70,19 +70,37 @@ def check(build):
     board = board_of(build)
     if board is None:
         return None
-    want = parse(ROOT / "sdkconfig.defaults")
-    want.update(parse(ROOT / "boards" / board / "sdkconfig.defaults"))
+    # A origem da chave importa: uma chave escrita no defaults DA PLACA e que
+    # o kconfig ignorou foi um pedido explicito para ESTE alvo que nao valeu
+    # (o caso do CONFIG_LV_USE_BTNMATRIX do LVGL 8 sobrevivendo ao 9). No
+    # defaults da RAIZ a mesma coisa e esperada: ele carrega opcoes de todas
+    # as placas e o kconfig de um alvo nao conhece as dos outros.
+    root_defaults = parse(ROOT / "sdkconfig.defaults")
+    board_defaults = parse(ROOT / "boards" / board / "sdkconfig.defaults")
+    want = dict(root_defaults)
+    want.update(board_defaults)
     have = parse(build / "sdkconfig")
     if not have:
         return None
-    diffs, unknown = [], []
+    diffs = []
+    unknown = []        # nao existe neste IDF/alvo, vindo do defaults da raiz
+    dead_board = []     # nao existe neste IDF/alvo, vindo do defaults DA PLACA
     for key, val in sorted(want.items()):
         if key == STAMP:
             continue  # diagnostico proprio, devolvido a parte
         if key not in have:
             # nem "=..." nem "is not set": a opcao nao existe neste IDF/alvo
-            # (renomeada ou de outro chip) — aviso, nao divergencia
-            unknown.append(key)
+            # (renomeada ou de outro chip). No defaults da PLACA so reprova
+            # quando havia um PEDIDO de verdade (=y, um numero, uma string):
+            # um "# CONFIG_X is not set" de simbolo inexistente e sujeira
+            # inofensiva e nao pode derrubar o CI de todas as placas.
+            if key in board_defaults:
+                if val != "n":
+                    dead_board.append(key)
+                else:
+                    unknown.append(key)
+            else:
+                unknown.append(key)
             continue
         if have[key] != val:
             diffs.append((key, val, have[key]))
@@ -90,7 +108,7 @@ def check(build):
     # sozinho — a divergencia de verdade esta nas chaves de cima). Preenchido
     # com outra placa = o caso do 4848 sem toque: nao confiar no conteudo.
     stamp = have.get(STAMP)
-    return board, diffs, unknown, (unquote(stamp) if stamp is not None else None)
+    return board, diffs, unknown, (unquote(stamp) if stamp is not None else None), dead_board
 
 
 def main(args):
@@ -100,9 +118,30 @@ def main(args):
         r = check(b)
         if r is None:
             continue
-        board, diffs, unknown, stamp = r
+        board, diffs, unknown, stamp, dead_board = r
         if unknown:
             print("%-16s %-16s aviso: chave(s) que o IDF nao conhece: %s" % (b.name, board, ", ".join(unknown)))
+        if dead_board:
+            # o build dir pode estar VELHO (o defaults mudou depois dele): a
+            # chave nem chegou a ser vista pelo kconfig. So reprova quando o
+            # sdkconfig do build e posterior ao defaults — senao o gate
+            # acusaria todo mundo que nao apagou o build depois deste commit.
+            try:
+                novo = (ROOT / "boards" / board / "sdkconfig.defaults").stat().st_mtime
+                velho = (b / "sdkconfig").stat().st_mtime
+            except OSError:
+                novo = velho = 0
+            if velho >= novo:
+                bad += 1
+                print("%-16s %-16s CHAVE MORTA no defaults da placa: %s — o "
+                      "kconfig desta versao nao conhece o simbolo e a opcao "
+                      "simplesmente nao vale (typo ou nome de outra versao do "
+                      "componente)." % (b.name, board, ", ".join(dead_board)))
+            else:
+                print("%-16s %-16s aviso: chave(s) do defaults da placa que o "
+                      "IDF nao conhece: %s (sdkconfig do build e anterior ao "
+                      "defaults: apague-o e reconfigure para confirmar)"
+                      % (b.name, board, ", ".join(dead_board)))
         if stamp is not None and stamp != board:
             bad += 1
             print("%-16s %-16s CARIMBO de outra placa: '%s' != '%s' — sdkconfig "

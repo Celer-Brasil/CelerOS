@@ -1,0 +1,19 @@
+{
+  "name": "Servidores",
+  "packageName": "br.celer.servidores",
+  "version": "0.2.10",
+  "author": "CelerOS",
+  "description": "Painel visual das máquinas: barras de memória e disco, processador, temperatura e placa. Os containers abrem em cards ao tocar na máquina.",
+  "type": "App",
+  "category": "Utility",
+  "api": 56,
+  "permissions": [
+    "net",
+    "fs"
+  ],
+  "deps": {
+    "celeros.app.kit": "^1.0.0",
+    "celeros.app.style": "^1.0.0"
+  },
+  "changelog": "0.2.10 - o nome do servidor nao cobre mais o sistema quando a letra desce (g, p, y). 0.2.9 - o card ocupa a tela ate os pontos; containers na ultima linha."
+}

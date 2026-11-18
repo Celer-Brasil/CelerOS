@@ -86,6 +86,14 @@ jobs:
         run: python3 test/test_matilha.py
       - name: dogtune tests (dog_music LZW/GIF)
         run: python3 test/test_dogtune.py
+      - name: fw_image tests (cabecalho + app_desc do .bin, guarda de chip)
+        run: python3 test/test_fw_image.py
+      - name: ota_manifest tests (ECDSA P-256 do manifesto OTA, texto canonico)
+        run: python3 test/test_ota_manifest.py
+      - name: sdkconfig_check tests (chave morta do defaults da placa reprova)
+        run: python3 test/test_sdkconfig_check.py
+      - name: celerctl_install tests (shims do PATH, escolha do interpretador)
+        run: python3 test/test_celerctl_install.py
 
   firmware:
     name: firmware (${{ matrix.board }})
@@ -144,6 +152,9 @@ jobs:
                -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;boards/${{ matrix.board }}/sdkconfig.defaults" \
                -DCELEROS_BOARD=${{ matrix.board }} set-target ${{ matrix.target }} &&
              idf.py -B build-${{ matrix.board }} build)
+      - name: sdkconfig dos build dirs x defaults (chave morta reprova)
+        shell: bash
+        run: python3 tools/sdkconfig_check.py build-${{ matrix.board }}
       - name: Orcamento do slot OTA (min 64 KB por placa)
         shell: bash
         run: |

@@ -69,9 +69,11 @@ import json
 import os
 import re
 import secrets
+import shutil
 import select
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -80,6 +82,10 @@ import zlib
 from pathlib import Path
 from urllib import request as _urlreq
 from urllib.parse import quote as _urlquote
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fw_image  # noqa: E402  (leitor de cabecalho/app_desc do .bin do IDF)
+import ota_manifest  # noqa: E402  (verifica o manifesto OTA no host)
 
 try:
     import serial
@@ -103,6 +109,9 @@ USB_VIDS = (0x303A, 0x1A86, 0x10C4)
 CHUNK = 4096  # tamanho maximo de payload HostLink (proto 1)
 DEFAULT_BAUD = 115200
 BRIDGE_PORT = 5555  # porta default do Celer Debug Bridge (TCP e UDP)
+# Bloco contiguo que um record TLS de 16 KB do GitHub exige (esp-tls/mbedtls).
+# O OTA baixa ~2,5 MB pelo WiFi: cada record precisa deste vaozinho inteiro.
+TLS_RECORD_BYTES = 16749
 FORCE_PROTO1 = False  # --proto 1: valida o caminho legado sem CRC/janela
 WIN_CAP = 0  # --win: teto manual da janela anunciada (OTA de firmware antigo)
 
@@ -1586,6 +1595,11 @@ def resolve_port(selector):
         return selector  # Celer Debug Bridge (TCP): o resto nao se aplica
     if selector.startswith("/") or ":" in selector:
         return selector  # caminho (ou COM3: estilo windows)
+    # "COM5" sem os dois pontos: o que o Windows mostra em todo lugar. Sem
+    # isto o seletor caia na busca por serial number e morria em "nenhuma
+    # placa com serial comecando por 'COM5'".
+    if re.fullmatch(r"(?i)com\d+", selector):
+        return selector
     for port in list_ports.comports():
         sn = port.serial_number or ""
         if sn.upper().startswith(selector.upper()):
@@ -1744,6 +1758,267 @@ def cmd_info(args):
     finally:
         link.close()
     print(json.dumps(info, indent=2, ensure_ascii=False))
+
+
+# ------------------------------------------------------------------- doctor
+# Checklist de bancada em UM comando: antes isto vivia espalhado em `devices`,
+# `info`, no proprio IDF e no celerhub, e cada pedaco faltando virava um erro
+# de bancada (build de outra placa, chave de assinatura trocada, dep atrasada
+# no hub). Nao mexe em nada: so le e reporta. Sem device conectado ainda roda
+# o bloco host (git, chave, versao, deps).
+
+def _openssl_exe():
+    """openssl do PATH ou o que vem com o Git for Windows."""
+    exe = shutil.which("openssl")
+    if exe:
+        return exe
+    for cand in (r"C:\Program Files\Git\usr\bin\openssl.exe",
+                 r"C:\Program Files\Git\mingw64\bin\openssl.exe",
+                 "/usr/bin/openssl", "/usr/local/bin/openssl"):
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _pubkey_matches_private(raw65, key_path):
+    """true/false/None: deriva a publica da privada e compara com os 65 B do
+    header. None = nao da para conferir (sem openssl, chave ilegivel)."""
+    exe = _openssl_exe()
+    if not exe:
+        return None
+    try:
+        pub = subprocess.run([exe, "ec", "-in", str(key_path), "-pubout", "-outform", "DER"],
+                             capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    # SubjectPublicKeyInfo DER de P-256 termina nos 65 B uncompressed da curva
+    return pub[-65:] == raw65 if len(pub) >= 65 else None
+
+
+def _deps_status_quiet(root):
+    """(ok, detalhe) do drift tools/sdk/engine x hub, sem rede obrigatoria.
+
+    Sai 1 quando ha dep atrasada OU quando nao ha token (e ai `deps-status`
+    tambem sai 1 sem drift nenhum): so conta como problema o veredito real,
+    a mesma triagem que `celer.js check` faz (senao o doctor mentiria).
+    """
+    try:
+        p = subprocess.run([sys.executable, str(root / "tools" / "celerhub.py"), "deps-status"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return True, f"nao checado ({e})"
+    out = (p.stdout or "") + (p.stderr or "")
+    if p.returncode == 0:
+        n = len(re.findall(r"\bok\b", out))
+        return True, f"em dia ({n} dep(s))" if n else "em dia"
+    if "drift:" in out:
+        linhas = [l.strip() for l in out.splitlines() if "drift" in l.lower()][:3]
+        return False, "; ".join(linhas) or "drift repo x hub"
+    return True, "nao checado (sem token do hub)"
+
+
+def _sdkconfig_drift_quiet(root):
+    """(ok, detalhe) do sdkconfig_check.py: divergencia entre os build*/sdkconfig
+    e o sdkconfig.defaults + boards/<placa>/sdkconfig.defaults."""
+    builds = sorted(root.glob("build*/"))
+    builds = [b for b in builds if (b / "CMakeCache.txt").is_file()]
+    if not builds:
+        return True, "nenhum build dir configurado"
+    try:
+        p = subprocess.run([sys.executable, str(root / "tools" / "sdkconfig_check.py")],
+                           capture_output=True, text=True, timeout=120, cwd=str(root))
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return True, f"nao checado ({e})"
+    if p.returncode == 0:
+        return True, f"{len(builds)} build(s) ok"
+    linhas = [l for l in (p.stdout or "").splitlines()
+              if "divergencia" in l or "CARIMBO" in l][:3]
+    return False, "; ".join(l.strip() for l in linhas) or "divergencia"
+
+
+def _doctor_row(ok, name, detail="", why="", warn_only=False):
+    """Uma linha do checklist. `why` so aparece quando reprova: e a frase que
+    quem ler daqui a seis meses precisa para saber o que quebrou."""
+    tag = "[OK]" if ok else ("[..]" if warn_only else "[!!]")
+    line = f"{tag} {name}"
+    if detail:
+        line += f"  {detail}"
+    print(line)
+    if not ok and why:
+        print(f"     {why}")
+    return ok or warn_only
+
+
+def _read_cmake_versions(root):
+    """(project VERSION da raiz, CELEROS_VERSION do main) — a versao vive nos
+    DOIS e o harness so detecta o drift; aqui o doctor mostra lado a lado."""
+    root_txt = (root / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
+    main_txt = (root / "main" / "CMakeLists.txt").read_text(encoding="utf-8", errors="replace")
+    m = re.search(r"project\s*\(\s*CelerOS\s+VERSION\s+(\S+)\s*\)", root_txt)
+    proj = m.group(1) if m else None
+    m = re.search(r'CELEROS_API_LEVEL=(\d+)', main_txt)
+    api = int(m.group(1)) if m else None
+    m = re.search(r'CELEROS_VERSION="?(\d+\.\d+\.\d+)"?', main_txt)
+    return proj, (m.group(1) if m else None), api
+
+
+def _doctor_device(args):
+    """Bloco de hardware: cada placa conectada, com o chip conferido, mais o
+    tamanho do slot OTA e o que o firmware diz de si.
+
+    A conferencia de chip e a que evita brick: um `ota push` de bin de outra
+    placa grava, reinicia e o bootloader recusa a imagem — o aparelho fica em
+    rollback (ou pior, sem boot) e so sai por USB.
+    """
+    print()
+    print("placas:")
+    try:
+        link_dev = open_link(args, quiet=True)
+    except (CelerError, SystemExit, OSError, serial.SerialException) as e:
+        print(f"[!!] nao abri o canal celerctl: {e}")
+        return
+    try:
+        info = link_dev.info()
+    except CelerError as e:
+        print(f"[!!] o device respondeu o HELLO mas o INFO falhou: {e}")
+        return
+    finally:
+        link_dev.close()
+    board = info.get("board", "?")
+    target = _board_target(board)
+    row_ok = bool(target)
+    _doctor_row(row_ok, f"placa {board}", f"{info.get('version')} api {info.get('api')} "
+                + (target or "alvo desconhecido no boards/boards.json"),
+                "placa fora do manifest: `python3 tools/gen_boards.py --check` "
+                "aponta o que falta registrar" if not target else "")
+    blk = info.get("largest_block")
+    if isinstance(blk, int):
+        # Aviso, nunca reprovacao: em repouso o numero nao decide nada (a
+        # placa ociosa mostra ~86 KB e o download quebrava assim mesmo). O que
+        # importa e o menor bloco DURANTE a transferencia, que ainda nao e
+        # medido — `/status` do HostLink so tem a foto do momento.
+        _doctor_row(blk >= TLS_RECORD_BYTES,
+                    "maior bloco contiguo (em repouso)", f"{blk} B",
+                    "o record TLS do GitHub pede 16749 B contiguos. Em repouso "
+                    "nao decide nada: a placa ociosa mostra dezenas de MB e "
+                    "quebra mesmo assim. Use um download real (celerctl ota "
+                    "push --no-reboot de um binario grande) e observe heap_min "
+                    "em `celerctl info` durante a transferencia", warn_only=True)
+    fs = info.get("fs") or {}
+    local = fs.get("/local") or {}
+    if local.get("total"):
+        livre = local["total"] - local.get("used", 0)
+        _doctor_row(livre > 180 * 1024, "littlefs livre",
+                    f"{livre // 1024} KB",
+                    "a LittleFS enche calada na bancada (3,4 MB, dezenas de "
+                    "apps de teste): o reload da Loja sozinho precisa de ~180 KB",
+                    warn_only=True)
+
+
+def _board_target(board):
+    """target (esp32/esp32s3) de boards/boards.json para o `board` do INFO.
+
+    O id que o firmware anuncia (BoardProfile.id) nem sempre e igual a chave
+    do manifest: "smartdisplay_4in" e "waveshare-amoled206" sao os ids reais
+    de "smartdisplay" e "waveshare-watch". A ponte e o proprio
+    main/Boards/<b>/Board.cpp (.id = "..."), que e a fonte do que a placa
+    diz; boards.json continua sendo a chave do build.
+    """
+    root = Path(__file__).resolve().parent.parent
+    try:
+        data = json.loads((root / "boards" / "boards.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    boards = data.get("boards", {})
+    if board in boards:
+        return boards[board].get("target")
+    for key in boards:
+        src = root / "main" / "Boards" / key / "Board.cpp"
+        try:
+            txt = src.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if re.search(r'\.id\s*=\s*"%s"' % re.escape(board), txt):
+            return boards[key].get("target")
+    return None
+
+
+def _ota_pubkey_const(root):
+    """kOtaPublicKey[] de main/OTA/OtaPublicKey.h (65 B, None se nao houver).
+
+    A leitura vive em tools/ota_manifest.py (que tambem a usa para verificar
+    manifesto): uma so implementacao do formato do header.
+    """
+    return ota_manifest._pubkey_from_header(root / "main" / "OTA")
+
+
+def cmd_doctor(args):
+    root = Path(__file__).resolve().parent.parent
+    failures = 0
+
+    def row(ok, *a, **kw):
+        nonlocal failures
+        if not _doctor_row(ok, *a, **kw):
+            failures += 1
+
+    print(f"doctor — {root.name}")
+    print()
+
+    # --- versao (dois lugares, mesmo valor) ---
+    proj, main_ver, api = _read_cmake_versions(root)
+    row(bool(proj) and proj == main_ver, "versao em CMakeLists.txt x main",
+        f"project()={proj} main={main_ver} api={api}",
+        "a versao vive em DOIS lugares e o firmware reporta a do main: "
+        "com eles divergentes o harness testa contra uma versao que o aparelho nao tem")
+    if api is None:
+        row(False, "CELEROS_API_LEVEL no main/CMakeLists.txt",
+            "", "sem o nivel de API o app_lint e o hub nao sabem o que o firmware aceita")
+
+    # --- chave publica do OTA x chave privada de quem assina ---
+    pub = _ota_pubkey_const(root)
+    keys = sorted({(root.parent / "CelerOS-Server" / "env" / "ota_signing_private.pem"),
+                   root.parent.parent / "CelerOS-Server" / "env" / "ota_signing_private.pem"})
+    key = next((k for k in keys if k.is_file()), None)
+    if pub is None:
+        row(False, "chave publica em main/OTA/OtaPublicKey.h",
+            "", "sem ela o firmware nao verifica assinatura nenhuma")
+    elif key is None:
+        row(True, "chave publica do OTA", f"{len(pub)} B (65 B uncompressed P-256)",
+            warn_only=True)
+        print("     [..] chave privada fora do repo nao encontrada — o publish de "
+              "firmware (publish_firmware.py) precisa dela")
+    else:
+        ok = _pubkey_matches_private(pub, key)
+        row(ok, "chave publica do firmware x chave privada do publish",
+            f"{key.name}",
+            "as duas sao de pares diferentes: o hub assina com uma e a placa "
+            "confere com a outra, e TODO OTA HTTPS morre em 'manifesto sem "
+            "assinatura valida'. Rode `celerctl ota check` para ver o publicado")
+
+    # --- deps compartilhadas repo x hub (gate de push) ---
+    ok, detail = _deps_status_quiet(root)
+    row(ok, "deps do hub (repo x publicado)", detail,
+        "dep editada sem publish-dep nao chega a aparelho nenhum. "
+        "Resolva com `python3 tools/celerhub.py publish-dep <arquivo>.js`")
+
+    # --- build dirs com sdkconfig divergente dos defaults ---
+    ok, detail = _sdkconfig_drift_quiet(root)
+    row(ok, "sdkconfig dos build dirs x defaults", detail,
+        "o IDF nao aplica um default NOVO a um sdkconfig existente: mudar "
+        "sdkconfig.defaults nao chega ao build da bancada. Apague o "
+        "<build>/sdkconfig e reconfigure")
+
+    # --- device (se houver) ---
+    if args.port or find_devices() or find_net_devices(timeout=0.6):
+        _doctor_device(args)
+    else:
+        print("[..] nenhuma placa conectada — checklist de hardware pulado")
+
+    print()
+    if failures:
+        print(f"{failures} problema(s) de bancada. Nao publique nem grave por cima.")
+        sys.exit(1)
+    print("doctor OK.")
 
 
 # --------------------------------------------------------------- top / stats
@@ -2783,14 +3058,37 @@ def cmd_logcat(args):
 
 
 def cmd_ota(args):
+    if args.ota_cmd == "check":
+        return cmd_ota_check(args)
     if args.ota_cmd != "push":
         die("uso: celerctl ota push FIRMWARE.bin")
     if not os.path.isfile(args.file):
         die(f"{args.file} nao existe")
+    # Guarda de placa ANTES de abrir a sessao: um bin de outra placa grava,
+    # reinicia e o bootloader recusa. O aparelho volta por rollback (ou fica
+    # sem boot) e so sai por USB. Conferir o chip_id do header custa 1 s.
+    img = fw_image.read_image(args.file)
+    if not img.ok:
+        if getattr(args, "force", False):
+            print(f"aviso: {img.error} (--force)", file=sys.stderr)
+        else:
+            die(f"{args.file}: {img.error}: nao grave isto por OTA "
+                "(--force ignora a conferencia)")
     if getattr(args, "port", None):
         args.port = stable_port(args.port)  # antes do reboot: ttyACMn renumera
     link = open_link(args)
     try:
+        target = _link_target(link)
+        if img.ok and target:
+            problems = fw_image.check_target(img, target)
+            if problems:
+                if getattr(args, "force", False):
+                    print(f"aviso: {problems[0]} (--force)", file=sys.stderr)
+                else:
+                    link.close()
+                    die(f"recusado: {problems[0]}")
+            else:
+                print(f"imagem confere: {img.version} para {target}")
         part, written = link.ota_write(args.file)
         print(f"OTA ok: {written} bytes em '{part}'")
         if not args.no_reboot:
@@ -2824,6 +3122,130 @@ def stable_port(port):
     except OSError:
         pass
     return port
+
+
+def _link_target(link):
+    """target (esp32/esp32s3) do device pelo `board` do INFO — a mesma fonte
+    do boards/boards.json. None = firmware antigo sem board ou placa fora do
+    manifest (nesse caso a guarda de chip nao opina)."""
+    try:
+        return _board_target(link.info().get("board", ""))
+    except CelerError:
+        return None
+
+
+def _hub_channel(args, link=None):
+    """Canal OTA do target: o da placa conectada (board -> boards.json) ou o
+    de -p. None = nao da para saber (exige --channel)."""
+    board = None
+    if link is not None:
+        try:
+            board = link.info().get("board")
+        except CelerError:
+            board = None
+    if not board:
+        return None
+    path = Path(__file__).resolve().parent.parent / "boards" / "boards.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return (data.get("boards", {}).get(board) or {}).get("ota_channel")
+
+
+def cmd_ota_check(args):
+    """Refaz em terra os passos que a placa faz antes de instalar.
+
+    Nao toca no aparelho quando recebe um arquivo local (`--file`): verifica
+    sha256, assinatura, chip e a versao que o app_desc anuncia. Sem arquivo,
+    baixa o update.json do canal no hub e o .bin que ele aponta — o caminho
+    exato que o OTA do aparelho percorre.
+    """
+    link = None
+    try:
+        if args.channel is None:
+            # o canal vem da placa quando ha uma: e o unico jeito de conferir
+            # o que AQUELE aparelho vai baixar
+            try:
+                link = open_link(args, quiet=True)
+                args.channel = _hub_channel(args, link)
+            except (CelerError, OSError, serial.SerialException):
+                args.channel = None
+        if args.channel is None:
+            die("sem canal: passe --channel <canal> ou conecte a placa (-p)")
+
+        hub = args.hub.rstrip("/")
+        base = f"{hub}/updates/{args.channel}"
+        problems = []
+        fw = None
+        meta = None
+
+        if args.file:
+            if not os.path.isfile(args.file):
+                die(f"{args.file} nao existe")
+            fw = Path(args.file).read_bytes()
+            print(f"arquivo local: {args.file} ({len(fw)} B)")
+        else:
+            man_url = f"{base}/update.json"
+            print(f"manifesto: {man_url}")
+            try:
+                raw = _http_get(man_url, timeout=30)
+            except Exception as e:  # noqa: BLE001 (mensagem ja e a informacao)
+                die(f"nao baixei o manifesto: {e}")
+            try:
+                meta = ota_manifest.parse_update_json(raw)
+            except ValueError as e:
+                die(str(e))
+            ver = meta.get("version", "?")
+            print(f"publicado: v{ver} api {meta.get('api_version', '?')}")
+            fw_url = meta.get("firmware_url") or meta.get("url")
+            if fw_url:
+                if not fw_url.startswith(("http://", "https://")):
+                    fw_url = f"{base}/{fw_url.lstrip('/')}"
+                print(f"binario: {fw_url}")
+                try:
+                    fw = _http_get(fw_url, timeout=300)
+                except Exception as e:  # noqa: BLE001
+                    die(f"nao baixei o binario: {e}")
+                print(f"          {len(fw)} B")
+
+        target = args.target
+        if target is None and link is not None:
+            target = _link_target(link)
+
+        if meta is not None:
+            problems = ota_manifest.verify_manifest(meta, fw)
+        if fw is not None:
+            img = fw_image.parse(fw, args.file or "<hub>")
+            if not img.ok:
+                problems.append(f"binario: {img.error}")
+            else:
+                print(f"app_desc: {img.version} ({img.project}) "
+                      f"chip {img.chip}, IDF {img.idf_ver}")
+                if target:
+                    problems.extend(fw_image.check_target(img, target))
+                    if not fw_image.check_target(img, target):
+                        print(f"chip confere com o aparelho ({target})")
+
+        if args.as_json:
+            print(json.dumps({"channel": args.channel, "problems": problems},
+                             ensure_ascii=False, indent=2))
+        elif problems:
+            print()
+            for p in problems:
+                print(f"[!!] {p}")
+            print()
+            print("OTA reprovado: nao conte com a atualizacao por este canal.")
+            sys.exit(1)
+        else:
+            print()
+            print("OTA conferido: manifesto, sha256, assinatura e app_desc ok.")
+    finally:
+        if link is not None:
+            try:
+                link.close()
+            except (CelerError, OSError, serial.SerialException):
+                pass
 
 
 def verify_ota_boot(args, part, wait_s=60):
@@ -4933,6 +5355,7 @@ def build_parser():
     p = sub.add_parser("reboot", help="reinicia a placa")
     p.set_defaults(func=cmd_reboot)
 
+
     p = sub.add_parser("logcat", help="stream de logs do dispositivo")
     p.add_argument("--dump", action="store_true",
                    help="copia o buffer acumulado no dispositivo e sai (dump repetivel)")
@@ -4956,7 +5379,23 @@ def build_parser():
     po = ota_sub.add_parser("push", help="envia e grava um firmware.bin")
     po.add_argument("file")
     po.add_argument("--no-reboot", action="store_true", help="nao reinicia apos gravar")
+    po.add_argument("--force", action="store_true",
+                    help="grava mesmo com o chip da imagem diferente do aparelho "
+                         "(a guarda le o chip_id do cabecalho do .bin)")
+    po = ota_sub.add_parser("check", help="confere um .bin publicado (assinatura, "
+                                          "sha256, chip e versao do app_desc)")
+    po.add_argument("file", nargs="?", help="arquivo local (omita para baixar do hub)")
+    po.add_argument("--channel", default=None,
+                    help="canal do hub (default: o da placa conectada ou -p)")
+    po.add_argument("--hub", default=os.environ.get("CELER_HUB", "https://os.celer.tec.br"))
+    po.add_argument("--target", default=None,
+                    help="confere o chip contra este alvo (esp32|esp32s3|...)")
+    po.add_argument("--json", action="store_true", dest="as_json")
     p.set_defaults(func=cmd_ota)
+
+    p = sub.add_parser("doctor", help="checklist de bancada: versao, chave do OTA, "
+                                      "deps do hub, sdkconfig e as placas conectadas")
+    p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("coredump", help="baixa o coredump do ultimo crash (ELF)")
     p.add_argument("--out", default="coredump.elf", help="arquivo de saida")

@@ -15,6 +15,7 @@ import re
 import os
 import socket
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -3146,6 +3147,190 @@ class TestDepsCompartilhadas(unittest.TestCase):
             r = C._read_remote_json(link, "/local/apps/X/deps.json")
         self.assertIsNone(r)
         self.assertIn("acima do teto", out.getvalue())
+
+
+class TestGuardaDePlaca(unittest.TestCase):
+    """`ota push` recusa um .bin compilado para outro chip.
+
+    O bootloader recusa a imagem de outro alvo; gravar assim deixa o aparelho
+    em rollback (ou sem boot) recuperavel so por USB. A guarda le o chip_id do
+    cabecalho do .bin ANTES de comecar a escrever, entao o custo de errar cai
+    de "bancada perdida" para uma mensagem.
+    """
+
+    def _img(self, chip_id):
+        import struct
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+        import fw_image as F
+
+        def az(t, n):
+            raw = t.encode()[: n - 1]
+            return raw + b"\x00" * (n - len(raw))
+
+        buf = bytearray(4096)
+        buf[0] = 0xE9
+        buf[1] = 3
+        struct.pack_into("<H", buf, 12, chip_id)
+        b = F.APP_DESC_OFFSET
+        struct.pack_into("<I", buf, b, F.APP_DESC_MAGIC)
+        buf[b + 16:b + 48] = az("1.18.0", 32)
+        buf[b + 48:b + 80] = az("CelerOS", 32)
+        return bytes(buf)
+
+    def _setup(self, board, chip_id, force=False):
+        link, dev = make_link()
+        link.hello()
+        dev.ota = bytearray()   # o FakeDevice so cria no primeiro chunk
+        dev.op_02 = lambda p: dev.reply(
+            KL["INFO"],
+            json.dumps({"version": "1.18.0", "board": board, "api": 62,
+                        "app_part": "app1", "app_state": "valid"}).encode())
+        path = tmpfile(self._img(chip_id))
+        argv = ["ota", "push", path, "--no-reboot"]
+        if force:
+            argv.append("--force")
+        return link, dev, path, argv
+
+    def tearDown(self):
+        C.open_link = C.open_link  # noqa: B018 (run_cli restaura o original)
+
+    def test_chip_certo_grava(self):
+        # "test" nao esta no manifest: a guarda nao opina e o push acontece
+        link, dev, path, argv = self._setup("test", 0x0009)
+        try:
+            out, err, code = run_cli(argv, link)
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(bytes(dev.ota), self._img(0x0009))
+
+    def test_chip_errado_recusa_sem_gravar(self):
+        link, dev, path, argv = self._setup("smartdisplay_4in", 0x0000)
+        try:
+            out, err, code = run_cli(argv, link)
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 1)
+        self.assertIn("recusado", err)
+        self.assertIn("esp32", err)
+        self.assertIn("esp32s3", err)
+        self.assertEqual(bytes(dev.ota), b"", "nada pode ter ido ao slot")
+
+    def test_chip_errado_com_force_grava(self):
+        link, dev, path, argv = self._setup("smartdisplay_4in", 0x0000, force=True)
+        try:
+            out, err, code = run_cli(argv, link)
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 0, err)
+        self.assertIn("--force", err)
+        self.assertEqual(len(bytes(dev.ota)), 4096)
+
+    def test_arquivo_que_nao_e_imagem_recusa(self):
+        junk = b"nao sou firmware" * 200
+        path = tmpfile(junk)
+        link, dev = make_link()
+        link.hello()
+        dev.ota = bytearray()
+        dev.op_02 = lambda p: dev.reply(
+            KL["INFO"], json.dumps({"board": "cyd", "version": "1.18.0"}).encode())
+        try:
+            out, err, code = run_cli(["ota", "push", path, "--no-reboot"], link)
+        finally:
+            os.unlink(path)
+        self.assertEqual(code, 1)
+        self.assertIn("nao e imagem de app", err)
+        self.assertEqual(bytes(dev.ota), b"")
+
+
+class TestDoctor(unittest.TestCase):
+    """O checklist de bancada: o que ele consegue afirmar sem aparelho e o
+    que ele le da placa quando ha uma."""
+
+    def test_board_target_traduz_o_id_do_firmware(self):
+        # o firmware anuncia o id do BoardProfile, que nem sempre e a chave do
+        # boards.json ("smartdisplay_4in" e "smartdisplay")
+        self.assertEqual(C._board_target("smartdisplay_4in"), "esp32s3")
+        self.assertEqual(C._board_target("waveshare-amoled206"), "esp32s3")
+        self.assertEqual(C._board_target("cyd"), "esp32")
+        self.assertIsNone(C._board_target("placa-que-nao-existe"))
+
+    def test_versao_dos_dois_cmake(self):
+        raiz = Path(__file__).resolve().parent.parent
+        proj, main_ver, api = C._read_cmake_versions(raiz)
+        self.assertTrue(proj)
+        self.assertEqual(proj, main_ver, "a versao vive em dois lugares e tem que bater")
+        self.assertIsInstance(api, int)
+
+    def test_chave_publica_do_firmware(self):
+        raiz = Path(__file__).resolve().parent.parent
+        pub = C._ota_pubkey_const(raiz)
+        self.assertIsNotNone(pub)
+        self.assertEqual(len(pub), 65)
+        self.assertEqual(pub[0], 0x04)
+
+    def test_pubkey_com_pem_errado_nao_casa(self):
+        pub = C._ota_pubkey_const(Path(__file__).resolve().parent.parent)
+        if not C._openssl_exe():
+            self.skipTest("sem openssl no PATH")
+        with tempfile.TemporaryDirectory() as td:
+            chave = Path(td) / "outra.pem"
+            subprocess.run([C._openssl_exe(), "ecparam", "-name", "prime256v1",
+                            "-genkey", "-noout", "-out", str(chave)],
+                           capture_output=True, check=True)
+            self.assertFalse(C._pubkey_matches_private(pub, chave))
+
+    def test_doctor_roda_sem_placa(self):
+        # sem device conectado, o bloco de host roda e o de hardware e pulado
+        orig_find = C.find_devices
+        orig_net = C.find_net_devices
+        C.find_devices = lambda verbose=False: []
+        C.find_net_devices = lambda timeout=1.5: []
+        args = C.build_parser().parse_args(["doctor"])
+        out = io.StringIO()
+        code = 0
+        try:
+            with redirect_stdout(out):
+                try:
+                    args.func(args)
+                except SystemExit as e:
+                    code = e.code if isinstance(e.code, int) else 1
+        finally:
+            C.find_devices = orig_find
+            C.find_net_devices = orig_net
+        texto = out.getvalue()
+        self.assertIn("versao em CMakeLists.txt", texto)
+        self.assertIn("chave publica do OTA", texto)
+        self.assertIn("checklist de hardware pulado", texto)
+        self.assertIn(code, (0, 1))
+
+
+class TestOtaCheckLocal(unittest.TestCase):
+    """`ota check --file`: o manifesto e verificado de verdade, sem rede."""
+
+    def test_mensagens_sem_acento_no_fw_image(self):
+        import fw_image as F
+        img = F.parse(b"\x00" * 4096)
+        self.assertEqual(img.error, img.error.encode("ascii", "ignore").decode())
+
+    def test_canal_desconhecido_sem_placa_morre(self):
+        args = C.build_parser().parse_args(["ota", "check"])
+        orig_open = C.open_link
+        C.open_link = lambda a, quiet=False: (_ for _ in ()).throw(
+            C.CelerError("sem device"))
+        err = io.StringIO()
+        code = 0
+        try:
+            with redirect_stderr(err):
+                try:
+                    args.func(args)
+                except SystemExit as e:
+                    code = e.code if isinstance(e.code, int) else 1
+        finally:
+            C.open_link = orig_open
+        self.assertEqual(code, 1)
+        self.assertIn("sem canal", err.getvalue())
 
 
 if __name__ == "__main__":

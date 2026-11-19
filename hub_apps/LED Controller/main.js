@@ -1,17 +1,20 @@
 // CelerOS LED Controller — LED/fita por GPIO com o CelerKit UI 2.0.
-// Formulario do A.form (pino, ligado, brilho PWM, modo) numa lista do
-// A.list.view com pintor proprio (o A.rows inteiro custa 1.9K e o teto
-// deste app e 14K), com preview ao vivo (circulo que acende no brilho e
-// pisca no ritmo do modo). Tocar na linha do pino digita o numero validado
-// pelo A.form.askNum (sem caminhar de 2 a 48). Placa sem GPIO ou sem LED
-// onboard abre e explica, nunca estoura. ES5 (Duktape).
+// Controles adaptativos de pino, brilho e modo, com preview ao vivo.
+// O valor do pino abre o teclado validado do A.form. ES5 (Duktape).
 
 var A = require("celeros.app");
 require("celeros.app.form");      // rows + pedido validado do pino
+require("celeros.app.layout");
 A.init();
 
 var T = A.T || System.theme();
-var LX = A.L.x, LW = A.L.w;
+var area = A.layout.bounds({ top: 40 });
+var wide = A.layout.columns(area, 200, 6) >= 2;
+var capH = UI.lineHeight("caption"), bodyH = UI.lineHeight("body");
+var previewH = Math.max(66, bodyH + 3 * capH + 16);
+var controls = { x: area.x, y: area.y + previewH + 5, w: area.w, h: area.h - previewH - 5 };
+var cells = [];
+for (var n = 0; n < 4; n++) cells.push(A.layout.cell(controls, wide ? 2 : 1, wide ? 2 : 4, n, 4));
 
 var G = (typeof System.gpio === "object" && System.gpio) ? System.gpio : null;
 var HAS_LED = false;
@@ -55,21 +58,25 @@ function preview(c) {
     var lit = on && (mode === 0 || blinkOn);
     var f = (lit ? duty : 0) / 100;
     var sig = Math.round(f * 50) + "|" + (lit ? 1 : 0);
+    var radius = Math.min(24, Math.floor((previewH - 18) / 2)), cx = area.x + radius + 10;
+    var cy = area.y + Math.floor(previewH / 2);
+    UI.card(area.x, area.y, area.w, previewH, { color: T.card, radius: 12 });
     if (c.full || sig !== pvSig) {
         pvSig = sig;
-        var col = lit ? System.mixColor(T.accent, T.card, Math.round((1 - f) * 75)) : T.raised;
-        System.fillSmoothCircle(64, 88, 30, col);
-        System.drawCircle(64, 88, 30, lit ? T.accent : T.stroke);
+        var col = lit ? System.mixColor(T.card, T.accent, duty) : T.raised;
+        System.fillSmoothCircle(cx, cy, radius, col);
+        System.drawCircle(cx, cy, radius, lit ? T.accent : T.stroke);
     }
-    UI.text(on ? "LIGADO" : "DESLIGADO", 108, 54,
-            { role: "title", color: on ? T.ok : T.textDim, bg: T.card, id: 11 });
-    UI.text("GPIO " + pin, 108, 76, { role: "body", color: T.text, bg: T.card, id: 12 });
-    UI.text(MODE_LABELS[mode] + " · " + duty + "%", 108, 94,
-            { role: "caption", color: T.textDim, w: 118, bg: T.card, id: 13 });
-    if (!HAS_LED) {
-        UI.text("sem LED onboard (use um externo)", LX + 10, 116,
-                { role: "caption", color: T.textDim, w: LW - 20, lines: 1, id: "noled" });
-    }
+    var x = cx + radius + 10, w = area.x + area.w - x - 6;
+    var detail = "GPIO " + pin + " · " + MODE_LABELS[mode] + " · " + duty + "%";
+    var detailH = UI.measureWrap(detail, w, "caption");
+    var y = cy - Math.floor((bodyH + detailH + (HAS_LED ? 0 : capH + 2) + 3) / 2);
+    UI.text(on ? "Ligado" : "Desligado", x, y, { role: "body", color: on ? T.ok : T.textDim, w: w });
+    UI.text(detail, x, y + bodyH + 3,
+            { role: "caption", color: T.text, w: w, lines: 2 });
+    if (!HAS_LED) UI.text("Use um LED externo", x, y + bodyH + detailH + 5,
+                          { role: "caption", color: T.textDim, w: w });
+    UI.cardEnd();
 }
 
 // --- formulario (rows do A.form, pintor local) -----------------------------
@@ -95,47 +102,58 @@ function buildRows() {
 }
 var rows = buildRows();
 
-// pintor das linhas do A.form (so os 4 tipos que a tela usa; o A.rows
-// completo custaria 1.9K e este app tem teto de 14K)
-function formRow(r, x, y, w, h) {
-    var lh = UI.lineHeight("body"), cap = UI.lineHeight("caption");
-    var kind = r.k, rw = kind === "stepper" ? 92 : kind === "choice" ? 92 : kind === "toggle" ? 50 : 4;
-    UI.text(r.label, x, y + ((h - lh) >> 1),
-            { role: "body", color: T.text, w: w - rw - 6, lines: 1 });
-    if (kind === "toggle") {
-        var v = UI.toggle(x + w - 44, y + ((h - 24) >> 1), !!r.get());
-        if (v !== r.get()) r.set(v);
-    } else if (kind === "stepper") {
-        var sv = r.get();
-        if (UI.button("-", x + w - 92, y + 2, 26, h - 4, { style: "ghost" }))
-            r.set(Math.max(r.min, sv - r.step));
-        if (UI.button("+", x + w - 30, y + 2, 26, h - 4, { style: "ghost" }))
-            r.set(Math.min(r.max, sv + r.step));
-        // 34 px cabe "100%" (4 glifos de 8) e ainda deixa 2 px ate o "+"
-        UI.text(r.fmt ? r.fmt(sv) : sv, x + w - 66, y + ((h - lh) >> 1),
-                { role: "body", align: "center", color: T.text, w: 34, lines: 1 });
-    } else if (kind === "choice") {
-        UI.text(String(r.opts[r.get() % r.opts.length]), x + w - 8,
-                y + ((h - cap) >> 1), { role: "caption", align: "right",
-                color: T.textDim, w: 84, lines: 1 });
+function control(row, box) {
+    var x = box.x + 4, w = box.w - 8;
+    var y = box.y + 4, h = box.h - 8;
+    UI.card(box.x, box.y, box.w, box.h, { color: T.card, radius: 8 });
+    var value = row.get();
+    if (wide) {
+        UI.text(row.label, x + 3, y, { role: "caption", color: T.textDim, w: w - 6 });
+        y += capH + 4;
+        h -= capH + 4;
     }
+    if (row.k === "stepper") {
+        var bw = wide ? Math.floor((w - 34) / 2) : 27;
+        if (wide && h > 40) { y += Math.floor((h - 40) / 2); h = 40; }
+        if (UI.button("-", x + w - 2 * bw - 34, y, bw, h, { style: "ghost" }))
+            row.set(Math.max(row.min, value - row.step));
+        if (UI.button("+", x + w - bw, y, bw, h, { style: "ghost" }))
+            row.set(Math.min(row.max, value + row.step));
+        var shown = row.fmt ? row.fmt(value) : String(value);
+        var midX = x + w - bw - 34;
+        if (row === rows[0]) {
+            // Tocar no valor abre o teclado para digitar o pino diretamente.
+            if (UI.button(shown, midX, y, 34, h, { style: "ghost", role: "caption" })) askPin();
+        } else {
+            UI.text(shown, midX + 17, y + (h - capH) / 2, { align: "center", role: "caption", w: 34 });
+        }
+        if (!wide) {
+            var labelW = midX - bw - x - 4;
+            if (row === rows[0]) {
+                if (UI.button(row.label, x, y, labelW, h, { style: "ghost", role: "caption" })) askPin();
+            } else UI.text(row.label, x + 3, y + (h - capH) / 2, { role: "caption", w: labelW });
+        }
+    } else if (row.k === "choice") {
+        if (UI.button(wide ? MODE_LABELS[value] : "Modo · " + MODE_LABELS[value], x, y, w, h,
+                      { style: "ghost" })) row.set((value + 1) % MODE_LABELS.length);
+    } else {
+        if (!wide) UI.text(row.label, x + 3, y + (h - bodyH) / 2, { role: "body", w: w - 60 });
+        var next = UI.toggle(wide ? x + (w - 44) / 2 : x + w - 48, y + (h - 24) / 2, value);
+        if (next !== value) row.set(next);
+    }
+    UI.cardEnd();
+}
+
+function askPin() {
+    var p = A.form.askNum("Pino GPIO", { min: PIN_MIN, max: PIN_MAX, initial: pin, hint: "pino (2 a 48)", int: 1 });
+    if (p !== null) selectPin(p);
 }
 
 function tela(c) {
     if (c.entered) { setupPin(); lastBlink = System.millis(); pvSig = ""; }
-
-    UI.header("LED");
-    UI.card(LX, 44, LW, 92);
+    if (A.header("LED")) return A.BACK;
     preview(c);
-    UI.cardEnd();
-
-    // tocar na linha do pino (fora dos botoes) digita o numero validado
-    var i = A.list.view("led", LX, 142, LW, 168, rows, { row: 40, paintRow: formRow });
-    if (i === 0) {
-        var p = A.form.askNum("Pino GPIO", { min: PIN_MIN, max: PIN_MAX,
-            initial: pin, hint: "pino (2 a 48)", int: 1 });
-        if (p !== null) selectPin(p);
-    } else if (i === 2) rows[2].set(((mode | 0) + 1) % MODE_LABELS.length);
+    for (var i = 0; i < rows.length; i++) control(rows[i], cells[i]);
 
     // modo piscar: alterna o nivel no ritmo do modo (o preview acompanha)
     if (on && mode > 0 && System.millis() - lastBlink >= MODE_MS[mode]) {

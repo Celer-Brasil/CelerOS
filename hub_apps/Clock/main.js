@@ -11,15 +11,24 @@ require("celeros.app.style");
 require("celeros.app.icons");
 require("celeros.app.widgets");
 require("celeros.app.list");
+require("celeros.app.layout");
 A.init();
 
 var T = A.style.T;
 
-// layout na area segura (watch redondo encolhe a largura/rodape)
-var LX = A.L.x, LW = A.L.w, BOT = A.L.bottom, CX = A.L.cx;
-var TAB_CW = Math.floor(LW / 5);
-var B2 = Math.floor((LW - 8) / 2);
-var BY2 = BOT - 54;
+var area = A.layout.bounds({ top: 40 });
+var LX = area.x, LW = area.w, BOT = area.y + area.h, CX = LX + LW / 2;
+var capH = UI.lineHeight("caption"), titleH = UI.lineHeight("title"), clockH = UI.lineHeight("display");
+var tabs = { x: LX, y: area.y, w: LW, h: 24 + capH };
+var tabBoxes = [];
+for (var n = 0; n < 5; n++) tabBoxes.push(A.layout.cell(tabs, 5, 1, n, 0));
+var contentY = tabs.y + tabs.h + 5;
+var wide = A.layout.columns(area, 200, 4) >= 2;
+var B2 = Math.floor((LW - 6) / 2), BY2 = BOT - 44 - capH - 3;
+var worldArea = { x: LX, y: contentY, w: LW, h: BOT - contentY };
+var worldCells = [];
+worldCells.push(A.layout.cell(worldArea, 1, 4, 0, 4));
+for (var k = 2; k < 8; k++) worldCells.push(A.layout.cell(worldArea, 2, 4, k, 4));
 var WEEK = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 
 if (typeof System.keepAwake === "function") {
@@ -74,30 +83,23 @@ function glyph(k, x, y, s, c) {
 }
 
 function tabBar(c) {
-    A.style.card(LX, 44, LW, 50, { full: c.full, pad: 0, r: 12, draw: function () {
-        for (var i = 0; i < 5; i++) {
-            var x = LX + i * TAB_CW, on = i === tab;
+    var t = UI.touch();
+    A.style.card(tabs.x, tabs.y, tabs.w, tabs.h, { full: c.full, pad: 0, elev: 0, draw: function () {
+        for (var i = 0; i < TABS.length; i++) {
+            var b = tabBoxes[i], on = i === tab, mid = b.x + b.w / 2;
             if (c.full) {
-                if (on) System.fillRoundRect(x + 3, 47, TAB_CW - 6, 44, 10, T.accent);
-                glyph(i, x + Math.round((TAB_CW - 16) / 2), 49, 16,
-                      on ? T.onAccent : T.textDim);
+                if (on) System.fillRoundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 8, T.accent);
+                glyph(i, mid - 8, b.y + 3, 16, on ? T.onAccent : T.textDim);
             }
-            UI.text(TABS[i], x + TAB_CW / 2, 72, {
-                role: "caption", align: "center", id: "tab" + i, lines: 1, w: TAB_CW - 2,
-                color: on ? T.onAccent : T.textDim,
-                bg: on ? T.accent : T.card
+            UI.text(TABS[i], mid, b.y + 20, {
+                role: "caption", align: "center", w: b.w - 2,
+                color: on ? T.onAccent : T.textDim, bg: on ? T.accent : T.card
             });
+            if (!baseDead && !on && t.tap && t.x >= b.x && t.x < b.x + b.w &&
+                t.y >= b.y && t.y < b.y + b.h) { tab = i; UI.invalidate(); }
         }
     }});
-    var t = UI.touch();
-    if (!baseDead && t.tap && t.y >= 44 && t.y <= 94 &&
-        t.x >= LX && t.x < LX + 5 * TAB_CW) {
-        var n = Math.floor((t.x - LX) / TAB_CW);
-        if (n >= 0 && n < 5 && n !== tab) {
-            tab = n;
-            UI.invalidate();
-        }
-    }
+
 }
 
 // ---- hora local -------------------------------------------------------------
@@ -174,31 +176,43 @@ var worldRows = A.list.make(
 var ringKey = -999;
 
 function tabHora(c) {
-    A.style.card(LX, 100, LW, BOT - 120, { full: c.full, r: 14, pad: 0, draw: function () {
-        var cx = CX, cy = 192, r = 80;
-        var key = now.s;
-        if (c.full || key !== ringKey) {
-            ringKey = key;
-            A.widgets.ring(cx, cy, r, now.s / 60, { th: 8 });
+    var h = BOT - contentY;
+    var radius = Math.floor(Math.min(LW - 20, h - capH * 2 - 20) / 2);
+    var cy = contentY + radius + 5;
+    A.style.card(LX, contentY, LW, h, { full: c.full, elev: 0, pad: 0, draw: function () {
+        if (c.full || now.s !== ringKey) {
+            ringKey = now.s;
+            A.widgets.ring(CX, cy, radius, now.s / 60, { th: 6 });
         }
-        UI.text(hhmm(now.h, now.m), cx, 168,
-                { role: "display", align: "center", id: "hora" });
-        UI.text(A.fmt.pad2(now.s), cx, 190,
-                { role: "title", align: "center", color: T.accent, id: "seg" });
-        UI.text((now.wd ? now.wd + ", " : "") + now.date, cx, 218,
-                { role: "caption", align: "center", color: T.textDim,
-                  w: LW - 52, lines: 1, id: "data" });
+        var y = cy - (clockH + titleH + 2) / 2;
+        UI.text(hhmm(now.h, now.m), CX, y, { role: "display", align: "center", id: "hora" });
+        UI.text(A.fmt.pad2(now.s), CX, y + clockH + 2, { role: "title", align: "center", color: T.accent });
+        UI.text((now.wd ? now.wd + ", " : "") + now.date, CX, BOT - capH - 8,
+                { role: "caption", align: "center", color: T.textDim, w: LW - 12 });
     }});
-    UI.text("fuso " + now.tz, CX, BOT - 14,
-            { role: "caption", align: "center", color: T.textDim, w: LW, id: "tz" });
 }
 
 function tabMundo(c) {
-    var rows = worldRows.rows();
-    var i = A.list.view("clk-world", LX, 100, LW, BOT - 104, rows, { row: 44, r: 14 });
-    if (!baseDead && i >= 0 && rows[i]) {   // toque na linha: confirma a hora
-        A.toast(rows[i].label + "  " + rows[i].right, 1200);
+    var rows = worldRows.rows(), i = -1;
+    if (wide) {
+        var t = UI.touch();
+        for (var k = 0; k < rows.length; k++) {
+            var b = worldCells[k], r = rows[k];
+            UI.card(b.x, b.y, b.w, b.h, { color: k ? T.card : T.raised, radius: 8 });
+            UI.text(r.label, b.x + 6, b.y + 4, { role: "caption", w: b.w - 12, color: T.textDim });
+            var timeY = b.y + (b.h + capH - titleH) / 2;
+            UI.text(r.right, b.x + 6, timeY, { role: "title", w: b.w - 12, color: k ? T.text : T.accent });
+            var zoneW = b.w - UI.measure(r.right, "title") - 16;
+            if (zoneW >= UI.measure(r.sub, "caption"))
+                UI.text(r.sub, b.x + b.w - 6, timeY + titleH - capH, { role: "caption", align: "right", w: zoneW });
+            UI.cardEnd();
+            if (t.tap && t.x >= b.x && t.x < b.x + b.w && t.y >= b.y && t.y < b.y + b.h) i = k;
+        }
+    } else {
+        i = A.list.view("clk-world", LX, contentY, LW, BOT - contentY, rows,
+                        { row: Math.max(34, UI.lineHeight("body") + capH + 5), r: 12 });
     }
+    if (!baseDead && i >= 0 && rows[i]) A.toast(rows[i].label + "  " + rows[i].right, 1200);
 }
 
 // ---- cronometro --------------------------------------------------------------
@@ -207,18 +221,19 @@ var swKey = -999;
 function swElapsed() { return swAcc + (swRun ? System.millis() - swStart : 0); }
 
 function tabCrono(c) {
-    A.style.card(LX, 100, LW, BY2 - 116, { full: c.full, r: 14, pad: 0, draw: function () {
+    var cy = (contentY + BY2 - 5) / 2;
+    A.style.card(LX, contentY, LW, BY2 - 5 - contentY, { full: c.full, r: 14, pad: 0, draw: function () {
         var ms = swElapsed(), key = Math.floor(ms / 50) + (swRun ? 100000 : 0);
         if (c.full || key !== swKey) {
             swKey = key;
-            A.widgets.ring(CX, 168, 60, (ms % 60000) / 60000,
+            A.widgets.ring(CX, cy, Math.floor(Math.min(LW, BY2 - contentY - 13) / 2), (ms % 60000) / 60000,
                            { th: 6, color: swRun ? T.ok : T.raised });
         }
-        UI.text(mmss(ms), CX, 146,
+        UI.text(mmss(ms), CX, cy - (clockH + titleH + capH) / 2,
                 { role: "display", align: "center", id: "sw" });
-        UI.text("." + A.fmt.pad2(Math.floor(ms / 10) % 100), CX, 168,
+        UI.text("." + A.fmt.pad2(Math.floor(ms / 10) % 100), CX, cy + (clockH - titleH - capH) / 2,
                 { role: "title", align: "center", color: T.accent, id: "swcs" });
-        UI.text(swRun ? "correndo" : "parado", CX, 188,
+        UI.text(swRun ? "correndo" : "parado", CX, cy + (clockH + titleH - capH) / 2,
                 { role: "caption", align: "center", color: T.textDim, id: "swst" });
     }});
     var b1 = A.style.button(swRun ? "Pausar" : "Iniciar", LX, BY2, B2, 44,
@@ -228,7 +243,7 @@ function tabCrono(c) {
         else { swStart = System.millis(); swRun = true; }
         UI.invalidate();
     }
-    var b2 = A.style.button("Zerar", LX + B2 + 8, BY2, B2, 44, { variant: "ghost" });
+    var b2 = A.style.button("Zerar", LX + LW - B2, BY2, B2, 44, { variant: "ghost" });
     if (!baseDead && b2) {
         swRun = false;
         swAcc = 0;
@@ -298,21 +313,23 @@ function tabTimer(c) {
         UI.invalidate();
     }
     var presets = [60000, 300000, 600000], plabel = ["1 min", "5 min", "10 min"];
-    var pw = Math.floor((LW - 26) / 3);
+    var presetArea = { x: LX, y: contentY, w: LW, h: 28 };
     for (var i = 0; i < 3; i++) {
-        var pb = A.style.button(plabel[i], LX + i * (pw + 8), 98, pw, 28, { variant: "ghost" });
+        var b = A.layout.cell(presetArea, 3, 1, i, 4);
+        var pb = A.style.button(plabel[i], b.x, b.y, b.w, b.h, { variant: "ghost" });
         if (!baseDead && pb) timerSet(presets[i]);
     }
-    A.style.card(LX, 132, LW, BY2 - 140, { full: c.full, r: 14, pad: 0, draw: function () {
+    var y = contentY + 33, h = BY2 - y - 5, cy = y + h / 2;
+    A.style.card(LX, y, LW, h, { full: c.full, r: 14, pad: 0, draw: function () {
         var key = Math.floor(ms / 50) + (tRun ? 100000 : 0) + (tDone ? 50000 : 0);
         if (c.full || key !== tKey) {
             tKey = key;
-            A.widgets.ring(CX, 192, 48, tTotal > 0 ? ms / tTotal : 0,
+            A.widgets.ring(CX, cy, Math.floor(Math.min(LW, h - 8) / 2), tTotal > 0 ? ms / tTotal : 0,
                            { th: 6, color: tDone ? T.warn : T.accent });
         }
-        UI.text(mmss(ms), CX, 184,
+        UI.text(mmss(ms), CX, cy - (clockH + capH + 2) / 2,
                 { role: "display", align: "center", id: "timer" });
-        UI.text(tDone ? "tempo!" : (tRun ? "correndo" : "parado"), CX, 206,
+        UI.text(tDone ? "tempo!" : (tRun ? "correndo" : "parado"), CX, cy + (clockH - capH) / 2 + 2,
                 { role: "caption", align: "center",
                   color: tDone ? T.warn : T.textDim, id: "tst" });
     }});
@@ -322,9 +339,9 @@ function tabTimer(c) {
         if (tRun) timerPause();
         else timerStart();
     }
-    var tb2 = A.style.button("Zerar", LX + B2 + 8, BY2, B2, 44, { variant: "ghost" });
+    var tb2 = A.style.button("Zerar", LX + LW - B2, BY2, B2, 44, { variant: "ghost" });
     if (!baseDead && tb2) timerSet(5 * 60 * 1000);
-    UI.text("Toca mesmo com o app fechado.", CX, BOT - 8,
+    UI.text("Toca mesmo com o app fechado.", CX, BOT - capH,
             { role: "caption", align: "center", color: T.textDim, w: LW - 4, lines: 1, id: "thint" });
 }
 
@@ -363,18 +380,20 @@ function alarmOpenEdit() {
 function alarmClose() { alOpen = false; alUntil = System.millis() + 260; UI.invalidate(); }
 
 function alarmSheet(c) {
-    return A.widgets.sheet("clk-alarme", { open: alOpen, full: c.full && alOpen, h: 236, title: "Alarme" },
+    return A.widgets.sheet("clk-alarme", { open: alOpen, full: c.full && alOpen, h: 212 + titleH + (320 - BOT), title: "Alarme" },
         function (r) {
             // os controles so agem com o sheet aberto: na animacao de saida
             // o cartao desliza e um toque nao pode reabrir/salvar nada
+            r.x = Math.max(r.x, LX);
+            r.w = 2 * (CX - r.x);
             // hora
             var hm = A.style.button("-", r.x, r.y, 44, 44, { variant: "secondary", role: "title" });
             if (alOpen && hm) edH = (edH + 23) % 24;
-            UI.text(hhmm(edH, edM), r.x + r.w / 2, r.y + 12,
+            UI.text(hhmm(edH, edM), r.x + r.w / 2, r.y + (44 - clockH - capH) / 2,
                     { role: "display", align: "center", id: "edhm" });
             var hp = A.style.button("+", r.x + r.w - 44, r.y, 44, 44, { variant: "secondary", role: "title" });
             if (alOpen && hp) edH = (edH + 1) % 24;
-            UI.text("Hora", r.x + r.w / 2, r.y + 30,
+            UI.text("Hora", r.x + r.w / 2, r.y + (44 + clockH - capH) / 2,
                     { role: "caption", align: "center", color: T.textDim, id: "edhl" });
             // minuto
             var y2 = r.y + 50;
@@ -387,7 +406,8 @@ function alarmSheet(c) {
             // atalhos
             var pre = [["06:00", 6, 0], ["07:00", 7, 0], ["08:00", 8, 0], ["12:00", 12, 0]];
             for (var i = 0; i < 4; i++) {
-                var pb = A.style.button(pre[i][0], r.x + i * 52, r.y + 100, 48, 28, { variant: "ghost" });
+                var b = A.layout.cell({ x: r.x, y: r.y + 100, w: r.w, h: 28 }, 4, 1, i, 4);
+                var pb = A.style.button(pre[i][0], b.x, b.y, b.w, b.h, { variant: "ghost" });
                 if (alOpen && pb) {
                     edH = pre[i][1];
                     edM = pre[i][2];
@@ -395,12 +415,13 @@ function alarmSheet(c) {
                 }
             }
             // salvar / desligar
-            var sv = A.style.button("Salvar", r.x, r.y + 138, 104, 38);
+            var bw = Math.floor((r.w - 6) / 2);
+            var sv = A.style.button("Salvar", r.x, r.y + 138, bw, 38);
             if (alOpen && sv) {
                 alarmSave(edH, edM, true);
                 alarmClose();
             }
-            var off = A.style.button("Desligar", r.x + 112, r.y + 138, 92, 38, { variant: "ghost" });
+            var off = A.style.button("Desligar", r.x + r.w - bw, r.y + 138, bw, 38, { variant: "ghost" });
             if (alOpen && off) {
                 alarmSave(edH, edM, false);
                 alarmClose();
@@ -411,21 +432,21 @@ function alarmSheet(c) {
 function tabAlarme(c) {
     alarmRefresh(false);
     var on = !!(al && al.enabled);
-    A.style.card(LX, 100, LW, 124, { full: c.full, r: 14, draw: function (r) {
+    A.style.card(LX, contentY, LW, BY2 - contentY - 8, { full: c.full, r: 14, draw: function (r) {
         UI.text(al ? hhmm(al.hour, al.minute) : "--:--", r.x, r.y,
                 { role: "display", color: on ? T.accent : T.textDim, id: "alh" });
-        UI.text(al ? (al.label || "Alarme") : "nenhum alarme", r.x, r.y + 26,
+        UI.text(al ? (al.label || "Alarme") : "nenhum alarme", r.x, r.y + clockH + 2,
                 { role: "caption", color: T.textDim, id: "all" });
         var st = UI.toggle(r.x + r.w - 44, r.y + 2, on, { id: "altg" });
         if (!baseDead && st !== on) alarmSave(al ? al.hour : edH, al ? al.minute : edM, st);
         UI.text(al ? (al.days ? "repetido" : "uma vez") : "toque em criar",
-                r.x, r.y + 44, { role: "caption", color: T.textDim, id: "alrep" });
-        UI.text(on ? "ligado" : "desligado", r.x, r.y + 86,
+                r.x, r.y + clockH + capH + 6, { role: "caption", color: T.textDim, id: "alrep" });
+        UI.text(on ? "ligado" : "desligado", r.x, r.y + r.h - UI.lineHeight("body"),
                 { role: "body", color: on ? T.ok : T.textDim, id: "als" });
     }});
-    var ab = A.style.button(al ? "Ajustar" : "Criar alarme", LX, 236, LW, 44);
+    var ab = A.style.button(al ? "Ajustar" : "Criar alarme", LX, BY2, LW, 40);
     if (!baseDead && ab) alarmOpenEdit();
-    UI.text("O alarme do sistema toca mesmo com o app fechado.", CX, BOT - 20,
+    UI.text("Toca mesmo com o app fechado.", CX, BOT - capH,
             { role: "caption", align: "center", color: T.textDim, w: LW, lines: 2, id: "alhint" });
 }
 

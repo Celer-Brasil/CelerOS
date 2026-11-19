@@ -249,6 +249,16 @@ def main():
                   'tabela do lint bate com o device (%d metodos ausentes, %d presentes)' %
                   (len(BUILTINS_AUSENTE), len(BUILTINS_PRESENTE)))
 
+    # Compila o corpo real com millis/WDT de host (os includes de IDF ficam fora).
+    timers = os.path.join(ROOT, 'main', 'Runtime', 'JsTimers.cpp')
+    with open(timers) as src, open(os.path.join(BUILD, 'timers_body.inc'), 'w') as body:
+        body.write(''.join(line for line in src if not line.startswith('#include')))
+    exe = os.path.join(BUILD, 'timers_test')
+    run(['g++', '-std=c++17', '-O2', '-I', inc, '-I', DUK, '-I', BUILD,
+         os.path.join(ROOT, 'test', 'duk', 'timers.cpp'), duk_o, '-o', exe])
+    run([exe])
+    print('  PASS  timers: ociosidade, atraso, wrap, reuso e isolamento do servico')
+
     print()
     if fails:
         print('FALHAS: %d' % fails)

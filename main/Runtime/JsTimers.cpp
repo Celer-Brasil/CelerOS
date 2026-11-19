@@ -30,7 +30,6 @@ namespace {
 
 struct TimerSlot {
     duk_context* ctx = nullptr;  // thread dona do callback (app = o heap do app)
-    bool used = false;
     bool repeat = false;
     uint32_t period = 0;     // ms (interval) / timeout (timeout)
     uint32_t nextFire = 0;   // ms()
@@ -38,9 +37,11 @@ struct TimerSlot {
 };
 
 constexpr int kTimerSlots = 8;
+static_assert(kTimerSlots <= 8, "timer mask capacity");
 
 struct TimerHost {
     TimerSlot slots[kTimerSlots];
+    uint8_t active = 0;  // um bit por slot ocupado
     bool inTick = false;   // callback chamou present(): adia o proximo disparo
     int nextId = 0;
     // svchost (API 42): identidade do DONO do slot durante o dispatch e o
@@ -64,6 +65,7 @@ int s_svcDepth = 0;
 
 void timerHostReset(TimerHost& h) {
     for (auto& t : h.slots) t = TimerSlot{};
+    h.active = 0;
     h.nextId = 0;
     h.inTick = false;
     // As referencias vivem no heap stash: morrem com o heap.
@@ -101,27 +103,28 @@ void setHost(TimerHost* h) { s_cur = h; }
 // servicos). Pode lancar (erro do callback propagando).
 void JSBindings::timersTick(duk_context* ctx) {
     TimerHost& h = *s_cur;
-    if (ctx == nullptr || h.inTick) return;
+    if (ctx == nullptr || h.active == 0 || h.inTick) return;
     uint32_t now = millis();
     for (int i = 0; i < kTimerSlots; i++) {
         TimerSlot& t = h.slots[i];
-        if (!t.used || (int32_t)(now - t.nextFire) < 0) continue;
+        if (!(h.active & (1u << i)) || (int32_t)(now - t.nextFire) < 0) continue;
         duk_context* tctx = t.ctx != nullptr ? t.ctx : ctx;
 
         // Agenda ANTES de disparar: um interval que demora mais que o
         // periodo nao dispara em rajada (pula os atrasados)
         if (t.repeat) {
-            t.nextFire += t.period;
-            while ((int32_t)(now - t.nextFire) >= 0) t.nextFire += t.period;
+            const uint32_t late = now - t.nextFire;
+            t.nextFire = late < t.period ? t.nextFire + t.period
+                                         : now + (t.period - late % t.period);
         } else {
-            t.used = false;
+            h.active &= ~(1u << i);
         }
 
         timerStashArray(tctx);
         duk_get_prop_index(tctx, -1, i);
         duk_require_callable(tctx, -1);  // slot valido sempre tem callable
         // remove a referencia de one-shot JA disparado / de quem cancelou
-        if (!t.used) {
+        if (!t.repeat) {
             duk_push_undefined(tctx);
             duk_put_prop_index(tctx, -3, i);
         }
@@ -160,7 +163,7 @@ static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
 
     int slot = -1;
     for (int i = 0; i < kTimerSlots; i++)
-        if (!h.slots[i].used) { slot = i; break; }
+        if (!(h.active & (1u << i))) { slot = i; break; }
     if (slot < 0) { duk_push_int(ctx, 0); return 1; }  // sem slot
 
     timerStashArray(ctx);
@@ -170,7 +173,6 @@ static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
 
     TimerSlot& t = h.slots[slot];
     t.ctx = ctx;
-    t.used = true;
     t.repeat = repeat;
     // piso de 10ms (dispara no proximo present()); teto de 2^31-1 ms: acima
     // disso millis()+period dava a volta e o timeout de "49 dias" disparava
@@ -181,7 +183,16 @@ static duk_ret_t timerStart(duk_context *ctx, bool repeat) {
     t.nextFire = millis() + t.period;
     // id monotonico por app (nunca o slot): o id de um timeout que ja
     // disparou nao pode cancelar o timer novo que reusou o mesmo slot
-    if (++h.nextId <= 0) h.nextId = 1;
+    // Ao dar a volta, um interval antigo ainda pode guardar o proximo id.
+    bool inUse;
+    do {
+        h.nextId = h.nextId == INT32_MAX ? 1 : h.nextId + 1;
+        inUse = false;
+        for (int i = 0; i < kTimerSlots; ++i) {
+            if ((h.active & (1u << i)) && h.slots[i].id == h.nextId) inUse = true;
+        }
+    } while (inUse);
+    h.active |= 1u << slot;
     t.id = h.nextId;
     duk_push_int(ctx, t.id);  // >= 1 (0 = falha: sem slot)
     return 1;
@@ -203,12 +214,12 @@ static duk_ret_t timerClear(duk_context *ctx) {
     int id = duk_is_number(ctx, 0) ? duk_require_int(ctx, 0) : 0;
     if (id < 1) return 0;
     for (int i = 0; i < kTimerSlots; i++) {
-        if (!h.slots[i].used || h.slots[i].id != id) continue;
+        if (!(h.active & (1u << i)) || h.slots[i].id != id) continue;
         // ids sao POR HOST (no svchost o nextId e unico): um servico nao pode
         // cancelar o timer de OUTRO — slot de outro ctx fica de fora
         if (h.slots[i].ctx != nullptr && h.slots[i].ctx != ctx) continue;
         duk_context* tctx = h.slots[i].ctx != nullptr ? h.slots[i].ctx : ctx;
-        h.slots[i].used = false;
+        h.active &= ~(1u << i);
         timerStashArray(tctx);
         duk_push_undefined(tctx);
         duk_put_prop_index(tctx, -2, i);
@@ -259,7 +270,8 @@ void JSBindings::timersClearCtx(duk_context* ctx) {
     if (ctx == nullptr) return;
     TimerHost& h = s_svcHost;
     for (int i = 0; i < kTimerSlots; i++) {
-        if (!h.slots[i].used || h.slots[i].ctx != ctx) continue;
+        if (!(h.active & (1u << i)) || h.slots[i].ctx != ctx) continue;
+        h.active &= ~(1u << i);
         h.slots[i] = TimerSlot{};
         duk_push_heap_stash(ctx);
         duk_get_prop_string(ctx, -1, "_tmr");

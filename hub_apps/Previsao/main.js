@@ -13,9 +13,31 @@ require("celeros.app.data");      // cache em arquivo + cidade no NVS
 require("celeros.app.text");      // saneamento Latin-1 do que vem de fora
 require("celeros.app.style");     // hero card + botoes tokenizados
 
+require("celeros.app.layout");
+
 A.init();
 var T = A.style.T;
-var L = A.L, LX = L.x, LW = L.w;
+var area = A.layout.bounds({ top: 40 });
+var gap = 5, captionH = UI.lineHeight("caption");
+var sky = System.mixColor(T.card, T.accent, 12);
+var footer = { x: area.x, y: area.y + area.h - 36, w: area.w, h: 36 };
+var refreshButton = A.layout.cell(footer, 2, 1, 0, gap);
+var cityButton = A.layout.cell(footer, 2, 1, 1, gap);
+var statusY = footer.y - captionH - gap;
+var body = { x: area.x, y: area.y, w: area.w, h: statusY - gap - area.y };
+var wide = A.layout.columns(body, 200, gap) >= 2;
+var summary, forecast;
+if (wide) {
+    summary = A.layout.cell(body, 2, 1, 0, gap);
+    forecast = A.layout.cell(body, 2, 1, 1, gap);
+} else {
+    var summaryH = Math.max(54, UI.lineHeight("body") + captionH * 2 + 16);
+    summary = { x: body.x, y: body.y, w: body.w, h: summaryH };
+    forecast = { x: body.x, y: body.y + summaryH + gap, w: body.w, h: body.h - summaryH - gap };
+}
+var dayRects = [];
+for (var n = 0; n < 4; n++) dayRects.push(A.layout.cell(forecast, 2, 2, n, gap));
+var sheetArea = A.layout.bounds({ top: 60 });
 
 var DATA = FS.appData();              // "/local/data/celeros.previsao/"
 var CACHE = DATA + "forecast.json";
@@ -150,7 +172,7 @@ function baixa() {
         d = {
             v: 1, city: A.text.fit(c.n), t: Math.round(r.current.temperature_2m),
             hum: typeof r.current.relative_humidity_2m === "number" ? r.current.relative_humidity_2m : -1,
-            txt: wmo(r.current.weather_code),
+            wc: r.current.weather_code, txt: wmo(r.current.weather_code),
             date: System.getDate(), hour: horaAgora(), days: []
         };
         var dl = r.daily;
@@ -225,6 +247,10 @@ var PLUGIN_SRC = [
     "        d = s ? JSON.parse(s) : null;",
     "    } catch (e) { d = null; }",
     "}",
+    "function faixa() {",
+    "    var hoje = (d.days && d.days[0]) || d;",
+    '    return typeof hoje.tn === "number" && typeof hoje.tx === "number" ? hoje.tn + "°/" + hoje.tx + "°" : "";',
+    "}",
     "function velho() {",
     "    if (!d || !d.date) return true;",
     "    try {",
@@ -238,12 +264,13 @@ var PLUGIN_SRC = [
     "    sig: function () {",
     "        le();",
     "        if (!d) return \"no\";",
-    "        return [d.t, d.txt, d.tn, d.tx, velho() ? 1 : 0].join(\"|\");",
+    "        return [d.t, d.txt, faixa(), velho() ? 1 : 0].join(\"|\");",
     "    },",
     "    line: function () {",
     "        le();",
     "        if (!d) return \"Previsão: abra o app\";",
-    "        return Math.round(d.t) + \"C \" + d.txt + \" \" + d.tn + \"/\" + d.tx;",
+    '        var range = faixa();',
+    '        return Math.round(d.t) + "°C " + d.txt + (range ? " " + range : "");',
     "    },",
     "    draw: function (x, y, w, h, bg) {",
     "        le();",
@@ -253,8 +280,8 @@ var PLUGIN_SRC = [
     "            return;",
     "        }",
     "        var col = velho() ? T.textDim : T.text;",
-    "        var s1 = Math.round(d.t) + \"C \" + d.txt;",
-    "        var s2 = d.tn + \"/\" + d.tx;",
+    '        var s1 = Math.round(d.t) + "°C " + d.txt;',
+    '        var s2 = faixa();',
     "        System.setTextColor(col);",
     "        System.drawString(s1, x + 14, y + 3, 2);",
     "        System.setTextColor(T.textDim);",
@@ -271,16 +298,25 @@ function instalaPlugin() {
     } catch (e) { /* sem fs: o app segue sem o plugin */ }
 }
 
-function tile(c, f, i, tx, tw) {
-    A.style.card(tx, 184, tw, 72, { full: c.full, elev: 0, pad: 4, r: 8,
+function tile(c, f, i) {
+    var box = dayRects[i];
+    A.style.card(box.x, box.y, box.w, box.h, { full: c.full, elev: 0, pad: 4, r: 8,
         draw: function (q) {
-            UI.text(diaLabel(f.dt, i), q.x + q.w / 2, q.y,
-                    { role: "caption", align: "center", color: T.textDim, w: q.w, lines: 1 });
-            glifo(f.wc, q.x + q.w / 2, q.y + 20, T.accent);
-            UI.text(f.tx + "°/" + f.tn + "°", q.x + q.w / 2, q.y + 34,
-                    { role: "caption", align: "center", color: T.text, w: q.w, lines: 1 });
-            UI.text(curto(f.wc), q.x + q.w / 2, q.y + 48,
-                    { role: "caption", align: "center", color: T.textDim, w: q.w, lines: 1 });
+            var cx = q.x + q.w / 2, cy = q.y + q.h / 2;
+            var temps = f.tx + "°/" + f.tn + "°";
+            var role = UI.measure(temps, "body") <= q.w ? "body" : "caption";
+            var lineH = UI.lineHeight(role);
+            var labelY = wide ? q.y + 2 : cy - (2 * captionH + lineH + 4) / 2;
+            var tempY = wide ? cy + 3 : labelY + captionH + 2;
+            var textX = wide ? cx : q.x;
+            var align = wide ? "center" : "left";
+            UI.text(diaLabel(f.dt, i), textX, labelY,
+                    { role: "caption", align: align, color: T.textDim, w: wide ? q.w : q.w - 24 });
+            if (typeof f.wc === "number") glifo(f.wc, wide ? cx : q.x + q.w - 11,
+                                               wide ? (labelY + captionH + tempY) / 2 : labelY + 8, T.accent);
+            UI.text(temps, textX, tempY, { role: role, align: align, color: T.text, w: q.w });
+            UI.text(typeof f.wc === "number" ? curto(f.wc) : f.txt, textX, tempY + lineH + 2,
+                    { role: "caption", align: align, color: T.textDim, w: q.w });
         }
     });
 }
@@ -299,10 +335,10 @@ function sheetCidade(c) {
         UI.invalidate();
     }
     if (shP <= 0.001) return;
-    var H = 320, h = 250, y = H - h * shP;
-    var ins = A.style.inset();
+    var H = System.screenHeight(), h = sheetArea.h;
+    var y = Math.round(H + (sheetArea.y - H) * shP);
     if (c.full) System.fillRect(0, 0, 240, H, System.mixColor(T.bg, 0, Math.round(55 * shP)));
-    var r = A.style.card(Math.round(ins / 2), y, 240 - ins, h,
+    A.style.card(sheetArea.x, y, sheetArea.w, h,
                          { full: c.full, r: T.radius, grad: true, pad: 12,
         draw: function (q) {
             System.fillRoundRect(120 - 20, y + 6, 40, 3, 2, T.stroke);
@@ -310,8 +346,9 @@ function sheetCidade(c) {
             var rows = [];
             for (var i = 0; i < CIDADES.length; i++) rows.push({ label: CIDADES[i].n });
             rows.push({ label: "Outra (lat,lon)", sub: "digitar coordenadas" });
-            var k = UI.list("cidades", q.x, q.y + 18, q.w, q.h - 42, rows, { rowH: 34, selected: sel });
-            UI.text("toque fora para fechar", q.x + q.w / 2, q.y + q.h - 10,
+            var titleH = UI.lineHeight("title") + 4;
+            var k = UI.list("cidades", q.x, q.y + titleH, q.w, q.h - titleH - captionH - 6, rows, { rowH: 36, selected: sel });
+            UI.text("toque fora para fechar", q.x + q.w / 2, q.y + q.h - captionH,
                     { role: "caption", align: "center", color: T.textDim, w: q.w });
             if (k >= 0) uiPick = k;
         }
@@ -353,78 +390,64 @@ function askCoord(titulo, min, max) {
 }
 
 // ---- UI --------------------------------------------------------------------
-var BOTAO_Y = 280;
+function current(c, box, stacked) {
+    A.style.card(box.x, box.y, box.w, box.h, { full: c.full, elev: 0, pad: 8, bg: sky,
+        draw: function (q) {
+            var cx = q.x + q.w / 2, cy = q.y + q.h / 2;
+            if (!d) {
+                UI.text("Sem dados ainda", cx, cy - UI.lineHeight("title"), {
+                    role: "title", align: "center", color: T.text, w: q.w });
+                UI.text(msg || "Toque em Atualizar", cx, cy + 4, {
+                    role: "caption", align: "center", color: msg ? T.warn : T.textDim, w: q.w });
+                return;
+            }
+            var temp = d.t + "°C", tempW = stacked ? q.w : Math.floor(q.w * 0.43);
+            var role = UI.measure(temp, "display") <= tempW ? "display" : "title";
+            var tempH = UI.lineHeight(role), conditionH = UI.lineHeight("body");
+            var onlyCurrent = !d.days || !d.days.length;
+            var extra = (d.hum >= 0 ? captionH + 2 : 0) + (onlyCurrent ? captionH + 2 : 0);
+            var y = cy - (conditionH + extra + (stacked ? tempH + gap : 0)) / 2;
+            if (stacked && typeof d.wc === "number") glifo(d.wc, cx, y - 19, T.accent);
+            UI.text(temp, stacked ? cx : q.x + tempW / 2, stacked ? y : cy - tempH / 2,
+                    { role: role, align: "center", color: d.t >= 30 ? T.warn : T.accent, w: tempW });
+            var x = stacked ? cx : q.x + tempW + gap;
+            var room = stacked ? q.w : q.w - tempW - gap;
+            var align = stacked ? "center" : "left";
+            if (stacked) y += tempH + gap;
+            UI.text(d.txt, x, y, { role: "body", color: T.text, align: align, w: room });
+            y += conditionH + 2;
+            if (d.hum >= 0) {
+                UI.text("Umidade " + d.hum + "%", x, y,
+                        { role: "caption", color: T.textDim, align: align, w: room });
+                y += captionH + 2;
+            }
+            if (onlyCurrent) {
+                var detail = d.src === "phone" ? "Clima do celular" : "Sem previsão por dia";
+                UI.text(detail, x, y, { role: "caption", color: T.textDim, align: align, w: room });
+            }
+        }
+    });
+}
+
 function telaMain(c) {
     FULL = c.full;
-    UI.header("Previsão", { sub: d ? A.text.fit(d.city || "") : A.text.fit((cidade() || {}).n || "") });
-    var cid = cidade();
-
-    if (!d) {
-        A.style.card(LX, 44, LW, 130, { full: c.full, elev: 2, grad: true,
-            draw: function (r) {
-                UI.text("Sem dados ainda", LX + LW / 2, r.y + 18,
-                        { role: "title", align: "center", color: T.textDim, w: r.w });
-                UI.text(msg || "Toque em Atualizar", LX + LW / 2, r.y + 56,
-                        { role: "caption", align: "center", color: msg ? T.err : T.textDim,
-                          w: r.w, lines: 2 });
-                glifo(1, 120, 148, T.stroke);
-            }
-        });
-    } else {
-        // hero: gradiente accentD->card no frame cheio, temperatura grande
-        A.style.card(LX, 44, LW, 132, { full: c.full, elev: 2, grad: false, stroke: false, r: 14,
-            draw: function (r) {
-                if (c.full) System.fillGradient(LX, 44, LW, 132, T.accentD, T.card, 14);
-                UI.text(d.t + "°C", LX + LW / 2, r.y + 2,
-                        { role: "display", align: "center", color: d.t >= 30 ? T.warn : T.text });
-                UI.text(d.txt, LX + LW / 2, r.y + 40,
-                        { role: "title", align: "center", color: T.accent, w: r.w });
-                if (d.hum >= 0) UI.text("umidade " + d.hum + "%", LX + LW / 2, r.y + 62,
-                        { role: "caption", align: "center", color: T.textDim, w: r.w });
-                if (d.days.length) {
-                    A.style.divider(r.x, r.y + 78, r.w);
-                    var f0 = d.days[0];
-                    UI.text("máx " + f0.tx + "° · mín " + f0.tn + "°", LX + LW / 2, r.y + 82,
-                            { role: "caption", align: "center", color: T.text, w: r.w });
-                }
-            }
-        });
-
-        // tiles dos 4 dias com glifo do tempo (largura vem do A.L)
-        var gap = 6, tw = Math.floor((LW - 3 * gap) / 4);
-        for (var i = 0; i < d.days.length && i < 4; i++)
-            tile(c, d.days[i], i, LX + i * (tw + gap), tw);
-
-        // sem dias (clima do celular): explica o vazio em vez de deixar buraco
-        if (!d.days.length) {
-            A.style.card(LX, 184, LW, 72, { full: c.full, elev: 1,
-                draw: function (r) {
-                    UI.text("sem previsão por dia", r.x + r.w / 2, r.y + 8,
-                            { role: "body", align: "center", color: T.text, w: r.w, lines: 1 });
-                    UI.text(d.src === "phone" ? "clima do celular (Gadgetbridge)"
-                                              : "servidor não mandou os dias",
-                            r.x + r.w / 2, r.y + 30, { role: "caption", align: "center",
-                            color: T.textDim, w: r.w, lines: 2 });
-                }
-            });
-        }
+    if (shOpen || shP > 0.001) {
+        sheetCidade(c);
+        return;
     }
-
-    // estado do cache/erro (sem dados o card acima ja mostra o motivo)
+    UI.header("Previsão", { sub: d ? A.text.fit(d.city || "") : cidade().n });
+    var count = d && d.days ? Math.min(4, d.days.length) : 0;
+    current(c, count ? summary : body, wide || !count);
+    for (var i = 0; i < count; i++) tile(c, d.days[i], i);
     var info = d ? (msg || (velho() ? "cache de " + d.date : "de hoje, " + d.hour + "h")) : "";
-    UI.text(info, 120, 264, { role: "caption", align: "center",
-            color: msg ? T.err : T.textDim, w: LW });
-
-    if (!shOpen) {
-        if (A.style.button("Atualizar", LX, BOTAO_Y, 108, 32)) busca();
-        if (A.style.button("Cidade", LX + 116, BOTAO_Y, LW - 116, 32,
-                           { variant: "ghost" })) {
-            shOpen = true;
-            shT = 0;
-            UI.invalidate();
-        }
+    UI.text(info, area.x + area.w / 2, statusY, {
+        role: "caption", align: "center", color: msg ? T.warn : T.textDim, w: area.w });
+    if (A.style.button("Atualizar", refreshButton.x, refreshButton.y, refreshButton.w, refreshButton.h)) busca();
+    if (A.style.button("Cidade", cityButton.x, cityButton.y, cityButton.w, cityButton.h, { variant: "ghost" })) {
+        shOpen = true;
+        shT = 0;
+        UI.invalidate();
     }
-    if (shP > 0.001 || shOpen) sheetCidade(c);
 }
 
 // ---- laco ------------------------------------------------------------------

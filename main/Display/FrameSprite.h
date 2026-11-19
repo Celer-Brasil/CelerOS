@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include "Display.h"
 #include "DirtyRects.h"
 
@@ -74,30 +75,26 @@ public:
     /// ja recortadas ao quadro. 0 = nada mudou.
     int takeDirty(celer::DirtyRect* out) { return _dirty.take(out); }
 
-    /// Mistura um trecho de linha no buffer (API 59, System.setAlpha): o
-    /// pixel que JA esta no quadro recebe `c565` com peso a/255 — e o que
-    /// deixa os controles em overlay TRANSLUCIDOS por cima do jogo. A cor
-    /// chega em RGB565 NATIVO; o buffer guarda os bytes trocados (a mesma
-    /// convencao do Canvas::dim e do pokePixel), entao le e escreve com
-    /// bswap — sem isso o blend reinterpreta os canais e o overlay sai com
-    /// as cores trocadas. Respeita o recorte do quadro e marca a caixa suja.
-    void blendSpan(int32_t x, int32_t y, int32_t w, uint16_t c565, uint8_t a) {
-        if (w <= 0 || a == 0 || y < 0 || y >= height()) return;
-        int32_t x0 = x, x1 = x + w;
+    /// Mistura so a intersecao com o clipe do LGFX (ja limitado ao quadro).
+    /// O buffer guarda RGB565 com bytes trocados. O present consome uma
+    /// unica caixa para o retangulo inteiro.
+    void blendRect(int32_t x, int32_t y, int32_t w, int32_t h, uint16_t c565, uint8_t a) {
+        if (a == 0 || w <= 0 || h <= 0) return;
         int32_t cx, cy, cw, ch;
         getClipRect(&cx, &cy, &cw, &ch);
-        if (y < cy || y >= cy + ch) return;
-        if (x0 < cx) x0 = cx;
-        if (x1 > cx + cw) x1 = cx + cw;
-        if (x0 < 0) x0 = 0;
-        if (x1 > width()) x1 = width();
-        if (x1 <= x0) return;
-        uint16_t* row = _img16 + (size_t)_dirty.bitWidth() * (size_t)y;
-        for (int32_t i = x0; i < x1; i++) {
-            const uint16_t d = (uint16_t)__builtin_bswap16(row[i]);
-            row[i] = (uint16_t)__builtin_bswap16(blend565(d, c565, a));
+        const int32_t x0 = std::max(x, cx), y0 = std::max(y, cy);
+        const int32_t x1 = std::min<int64_t>((int64_t)x + w, cx + cw);
+        const int32_t y1 = std::min<int64_t>((int64_t)y + h, cy + ch);
+        if (x0 >= x1 || y0 >= y1) return;
+        const int32_t pitch = _dirty.bitWidth();
+        for (int32_t yy = y0; yy < y1; ++yy) {
+            uint16_t* row = _img16 + (size_t)yy * pitch;
+            for (int32_t xx = x0; xx < x1; ++xx) {
+                uint16_t dst = __builtin_bswap16(row[xx]);
+                row[xx] = __builtin_bswap16(blend565(dst, c565, a));
+            }
         }
-        _dirty.add(x0, y, x1 - 1, y);
+        _dirty.add(x0, y0, x1 - 1, y1 - 1);
     }
 
     /// Um pixel misturado (drawLine/drawCircle com alpha).

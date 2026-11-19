@@ -195,6 +195,7 @@ inline float appScaleY() {
 // virava 7 fisicos e passava 1px da celula), e apps que apagam circulo com
 // fillRect do retangulo virtual deixavam a ultima linha viva (artefato).
 inline int jsu(int v) {
+    if (s_nativeCanvas) return v;
     int a = UI::sx(v), b = appSh(v);
     return a < b ? a : b;
 }

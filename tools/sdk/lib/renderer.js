@@ -113,13 +113,35 @@ class Renderer {
     }
 
     rect(x, y, w, h, c, filled) {
+        if (w <= 0 || h <= 0) return;
         if (filled) {
             for (let j = 0; j < h; j++) this.hLine(x, y + j, w, c);
         } else {
             this.hLine(x, y, w, c);
-            this.hLine(x, y + h - 1, w, c);
-            this.vLine(x, y, h, c);
-            this.vLine(x + w - 1, y, h, c);
+            if (h > 1) this.hLine(x, y + h - 1, w, c);
+            this.vLine(x, y + 1, h - 2, c);
+            if (w > 1) this.vLine(x + w - 1, y + 1, h - 2, c);
+        }
+    }
+
+    // Mesmo contorno translucido de JsGfx: eixos e diagonais misturados uma vez.
+    alphaOutline(xl, yt, xr, yb, r, c) {
+        if (r === 0) { this.rect(xl, yt, xr - xl + 1, yb - yt + 1, c, false); return; }
+        this.hLine(xl, yt - r, xr - xl + 1, c);
+        this.hLine(xl, yb + r, xr - xl + 1, c);
+        this.vLine(xl - r, yt, yb - yt + 1, c);
+        this.vLine(xr + r, yt, yb - yt + 1, c);
+        const corners = (dx, dy) => {
+            this.px(xl - dx, yt - dy, c); this.px(xr + dx, yt - dy, c);
+            this.px(xl - dx, yb + dy, c); this.px(xr + dx, yb + dy, c);
+        };
+        let dx = r, err = 1 - r;
+        for (let dy = 1; dy <= dx; dy++) {
+            if (err < 0) err += 2 * dy + 1;
+            else { dx--; err += 2 * (dy - dx) + 1; }
+            if (dx < dy) break;
+            corners(dx, dy);
+            if (dx !== dy) corners(dy, dx);
         }
     }
 
@@ -139,6 +161,12 @@ class Renderer {
     }
 
     roundRect(x, y, w, h, r, c, filled) {
+        if (w <= 0 || h <= 0) return;
+        if (!filled && this.alpha < 255) {
+            const cr = Math.max(0, Math.min(r | 0, (Math.min(w, h) - 1) >> 1));
+            this.alphaOutline(x + cr, y + cr, x + w - 1 - cr, y + h - 1 - cr, cr, c);
+            return;
+        }
         const r2 = Math.max(0, Math.min(r, Math.floor(Math.min(w, h) / 2)));
         // miolo + faixas (sem os cantos)
         if (filled) {
@@ -176,7 +204,12 @@ class Renderer {
     }
 
     circle(cx, cy, r, c, filled) {
-        cx |= 0; cy |= 0; r = Math.max(0, r | 0);
+        cx |= 0; cy |= 0;
+        if (!filled && this.alpha < 255) {
+            if (r >= 0) this.alphaOutline(cx, cy, cx, cy, r | 0, c);
+            return;
+        }
+        r = Math.max(0, r | 0);
         for (let dy = -r; dy <= r; dy++) {
             for (let dx = -r; dx <= r; dx++) {
                 const d2 = dx * dx + dy * dy;

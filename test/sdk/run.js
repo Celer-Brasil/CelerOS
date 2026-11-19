@@ -122,6 +122,18 @@ function check(name, ok, detail) {
     r.circle(100, 100, 8, T.accent, true);
     check('fillCircle centro e borda', r.fb[100 * W + 100] === T.accent && r.fb[100 * W + 108] === T.accent);
 
+    var overlay = new Renderer();
+    overlay.alpha = 128;
+    var mixed = Renderer.blend565(T.bg, T.fg, overlay.alpha);
+    overlay.rect(1, 1, 1, 4, T.fg, false);
+    overlay.rect(3, 1, 5, 1, T.fg, false);
+    overlay.roundRect(10, 5, 9, 9, 3, T.fg, false);
+    overlay.circle(30, 10, 4, T.fg, false);
+    check('contornos translucidos aplicam alpha uma vez nos cantos, eixos e diagonais',
+          overlay.fb[W + 1] === mixed && overlay.fb[W + 7] === mixed &&
+          overlay.fb[5 * W + 13] === mixed && overlay.fb[10 * W + 34] === mixed &&
+          overlay.fb.every(px => px === T.bg || px === mixed));
+
     // drawPNG/decodePng: fixture 3x2 RGBA (vermelho/verde/azul na 1a linha;
     // alfa 0, cinza a=128 e branco na 2a) + o fundo.png REAL do Arrasa (paleta)
     var pngPath = path.join(os.tmpdir(), 'sdk_png_fixture.png');

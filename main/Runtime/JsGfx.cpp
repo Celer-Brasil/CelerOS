@@ -20,6 +20,7 @@
 #include "../Boards/Board.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include <math.h>
+#include <algorithm>
 #include <new>
 #include "JsInternal.h"
 #include "JsFsJail.h"
@@ -49,7 +50,7 @@ bool s_nativeCanvas = false;
 // Alpha global dos primitivos (API 59, System.setAlpha): 0..255, 255 =
 // opaco. Nasceu com o overlay do Anemoia — jogo em tela cheia e controles
 // TRANSLUCIDOS por cima. No quadro o blend e direto no buffer de PSRAM
-// (FrameSprite::blendSpan); em sprite do app/display direto cai no
+// (FrameSprite::blendRect); em sprite do app/display direto cai no
 // fillRectAlpha do LGFX. Texto segue opaco. Zerado no init() de cada app.
 uint8_t s_alpha = 255;
 
@@ -402,9 +403,9 @@ bool frameTarget() {
 }
 // Retangulo com o alpha global (s_alpha < 255; o opaco nao passa aqui).
 void fillRectA(int x, int y, int w, int h, uint32_t c565) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || s_alpha == 0) return;
     if (frameTarget()) {
-        for (int i = 0; i < h; i++) s_frame->blendSpan(x, y + i, w, (uint16_t)c565, s_alpha);
+        s_frame->blendRect(x, y, w, h, (uint16_t)c565, s_alpha);
         return;
     }
     JSBindings::gfx()->fillRectAlpha(x, y, w, h, s_alpha, jsc(c565));
@@ -415,6 +416,29 @@ void pixelA(int x, int y, uint32_t c565) {
         return;
     }
     JSBindings::gfx()->fillRectAlpha(x, y, 1, 1, s_alpha, jsc(c565));
+}
+// Contorno com centros de canto (xl/yt, xr/yb). Cada pixel recebe o
+// alpha uma unica vez, inclusive nos eixos e diagonais do circulo.
+void outlineA(int xl, int yt, int xr, int yb, int r, uint32_t color) {
+    if (s_alpha == 0) return;
+    fillRectA(xl, yt - r, xr - xl + 1, 1, color);
+    if (yb + r != yt - r) fillRectA(xl, yb + r, xr - xl + 1, 1, color);
+    const int top = yt + (r == 0), bottom = yb - (r == 0);
+    fillRectA(xl - r, top, 1, bottom - top + 1, color);
+    if (xl - r != xr + r) fillRectA(xr + r, top, 1, bottom - top + 1, color);
+
+    auto corners = [&](int dx, int dy) {
+        pixelA(xl - dx, yt - dy, color); pixelA(xr + dx, yt - dy, color);
+        pixelA(xl - dx, yb + dy, color); pixelA(xr + dx, yb + dy, color);
+    };
+    int dx = r, err = 1 - r;
+    for (int dy = 1; dy <= dx; ++dy) {
+        if (err < 0) err += 2 * dy + 1;
+        else { --dx; err += 2 * (dy - dx) + 1; }
+        if (dx < dy) break;
+        corners(dx, dy);
+        if (dx != dy) corners(dy, dx);
+    }
 }
 // Meia-largura inteira do arco: sqrt(r^2 - k^2). k e a DISTANCIA ao centro
 // (o sinal importa para quem varre a linha inteira: fillCircle passa dy de
@@ -449,10 +473,7 @@ duk_ret_t JSBindings::js_drawRect(duk_context *ctx) {
     uint32_t color = duk_require_uint(ctx, 4);
     if (s_alpha < 255) {
         const int px = jsx(x), py = jsy(y), pw = jsx(w), ph = jsH(h);
-        fillRectA(px, py, pw, 1, color);
-        fillRectA(px, py + ph - 1, pw, 1, color);
-        fillRectA(px, py, 1, ph, color);
-        fillRectA(px + pw - 1, py, 1, ph, color);
+        if (pw > 0 && ph > 0) outlineA(px, py, px + pw - 1, py + ph - 1, 0, color);
         return 0;
     }
     gfx()->drawRect(jsx(x), jsy(y), jsx(w), jsH(h), jsc(color));
@@ -466,6 +487,7 @@ duk_ret_t JSBindings::js_drawLine(duk_context *ctx) {
     int x1 = duk_require_int(ctx, 2);
     int y1 = duk_require_int(ctx, 3);
     uint32_t color = duk_require_uint(ctx, 4);
+    if (s_alpha == 0) return 0;
     if (s_alpha < 255) {
         // Bresenham com blend (contornos: poucos pixels)
         int px0 = jsx(x0), py0 = jsy(y0), px1 = jsx(x1), py1 = jsy(y1);
@@ -492,6 +514,7 @@ duk_ret_t JSBindings::js_drawPixel(duk_context *ctx) {
     int x = duk_require_int(ctx, 0);
     int y = duk_require_int(ctx, 1);
     uint32_t color = duk_require_uint(ctx, 2);
+    if (s_alpha == 0) return 0;
     const int px = jsx(x), py = jsy(y);
     if (s_alpha < 255) { pixelA(px, py, color); return 0; }
     // Fast path: pixel direto no buffer do quadro. Ponto ESPALHADO pelo
@@ -519,18 +542,8 @@ duk_ret_t JSBindings::js_drawCircle(duk_context *ctx) {
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
     if (s_alpha < 255) {
-        // circulo de Bresenham com blend (anel de controle)
         const int cx = jsx(x), cy = jsy(y), rr = jsu(r);
-        int px = rr, py = 0, err = 1 - rr;
-        while (px >= py) {
-            pixelA(cx + px, cy + py, color); pixelA(cx - px, cy + py, color);
-            pixelA(cx + px, cy - py, color); pixelA(cx - px, cy - py, color);
-            pixelA(cx + py, cy + px, color); pixelA(cx - py, cy + px, color);
-            pixelA(cx + py, cy - px, color); pixelA(cx - py, cy - px, color);
-            py++;
-            if (err < 0) err += 2 * py + 1;
-            else { px--; err += 2 * (py - px) + 1; }
-        }
+        if (rr >= 0) outlineA(cx, cy, cx, cy, rr, color);
         return 0;
     }
     gfx()->drawCircle(jsx(x), jsy(y), jsu(r), jsc(color));
@@ -543,6 +556,7 @@ duk_ret_t JSBindings::js_fillCircle(duk_context *ctx) {
     int y = duk_require_int(ctx, 1);
     int r = duk_require_int(ctx, 2);
     uint32_t color = duk_require_uint(ctx, 3);
+    if (s_alpha == 0) return 0;
     if (s_alpha < 255) {
         // disco por linhas: cada linha e um fillRect com blend
         const int cx = jsx(x), cy = jsy(y), rr = jsu(r);
@@ -591,31 +605,10 @@ duk_ret_t JSBindings::js_drawRoundRect(duk_context *ctx) {
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
     if (s_alpha < 255) {
-        // contorno arredondado: retas + 4 arcos de quarto com blend
         const int px = jsx(x), py = jsy(y), pw = jsx(w), ph = jsH(h);
-        int cr = jsu(r);
-        if (cr > pw / 2) cr = pw / 2;
-        if (cr > ph / 2) cr = ph / 2;
-        fillRectA(px + cr, py, pw - 2 * cr, 1, color);
-        fillRectA(px + cr, py + ph - 1, pw - 2 * cr, 1, color);
-        fillRectA(px, py + cr, 1, ph - 2 * cr, color);
-        fillRectA(px + pw - 1, py + cr, 1, ph - 2 * cr, color);
-        if (cr > 0) {
-            // 4 quartos de circulo por Bresenham (sem os buracos de um
-            // ponto por linha perto do topo do arco)
-            int ax = cr, ay = 0, err = 1 - cr;
-            const int xl = px + cr, xr = px + pw - 1 - cr;
-            const int yt = py + cr, yb = py + ph - 1 - cr;
-            while (ax >= ay) {
-                pixelA(xl - ax, yt - ay, color); pixelA(xl - ay, yt - ax, color);
-                pixelA(xr + ax, yt - ay, color); pixelA(xr + ay, yt - ax, color);
-                pixelA(xl - ax, yb + ay, color); pixelA(xl - ay, yb + ax, color);
-                pixelA(xr + ax, yb + ay, color); pixelA(xr + ay, yb + ax, color);
-                ay++;
-                if (err < 0) err += 2 * ay + 1;
-                else { ax--; err += 2 * (ay - ax) + 1; }
-            }
-        }
+        if (pw <= 0 || ph <= 0) return 0;
+        int cr = std::clamp(jsu(r), 0, (std::min(pw, ph) - 1) / 2);
+        outlineA(px + cr, py + cr, px + pw - 1 - cr, py + ph - 1 - cr, cr, color);
         return 0;
     }
     gfx()->drawRoundRect(jsx(x), jsy(y), jsx(w), jsH(h), jsu(r), jsc(color));
@@ -630,17 +623,19 @@ duk_ret_t JSBindings::js_fillRoundRect(duk_context *ctx) {
     int h = duk_require_int(ctx, 3);
     int r = duk_require_int(ctx, 4);
     uint32_t color = duk_require_uint(ctx, 5);
+    if (s_alpha == 0) return 0;
     if (s_alpha < 255) {
         // cantos arredondados por linha (mesma geometria do LGFX)
         const int px = jsx(x), py = jsy(y), pw = jsx(w), ph = jsH(h);
         int cr = jsu(r);
         if (cr > pw / 2) cr = pw / 2;
         if (cr > ph / 2) cr = ph / 2;
-        for (int dy = 0; dy < ph; dy++) {
-            int inset = 0;
-            if (dy < cr) inset = cr - arcHalf(cr * cr, cr - dy);
-            else if (dy >= ph - cr) inset = cr - arcHalf(cr * cr, dy - (ph - cr - 1));
-            fillRectA(px + inset, py + dy, pw - inset * 2, 1, color);
+        if (cr < 0) cr = 0;
+        fillRectA(px, py + cr, pw, ph - 2 * cr, color);
+        for (int dy = 0; dy < cr; dy++) {
+            int inset = cr - arcHalf(cr * cr, cr - dy);
+            fillRectA(px + inset, py + dy, pw - 2 * inset, 1, color);
+            fillRectA(px + inset, py + ph - 1 - dy, pw - 2 * inset, 1, color);
         }
         return 0;
     }

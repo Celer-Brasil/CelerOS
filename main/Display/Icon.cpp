@@ -365,20 +365,41 @@ void Icon::drawAlpha(lgfx::LGFXBase* tft, const uint16_t* px, const uint8_t* a4,
     // (scratch de UMA linha — o de icone inteiro custava 8KB fixos de RAM).
     // So a parte visivel e processada — o Canvas em faixas desenha icones
     // cortados na borda de cada faixa.
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < 0 ? 0 : y;
-    int x1 = x + SIZE > tft->width() ? tft->width() : x + SIZE;
-    int y1 = y + SIZE > tft->height() ? tft->height() : y + SIZE;
+    int32_t cx, cy, cw, ch;
+    tft->getClipRect(&cx, &cy, &cw, &ch);
+    const int x0 = x < cx ? cx : x, y0 = y < cy ? cy : y;
+    const int x1 = x + SIZE < cx + cw ? x + SIZE : cx + cw;
+    const int y1 = y + SIZE < cy + ch ? y + SIZE : cy + ch;
     if (x0 >= x1 || y0 >= y1) return;
     const int vw = x1 - x0, vh = y1 - y0;
 
     uint16_t d[SIZE];
     for (int row = 0; row < vh; row++) {
         const int sp0 = (y0 - y + row) * SIZE + (x0 - x);
-        tft->readRect(x0, y0 + row, vw, 1, d);
-        for (int col = 0; col < vw; col++) {
+        const auto alphaAt = [&](int col) -> uint8_t {
             const int p = sp0 + col;
-            uint32_t a = (p & 1) ? (a4[p >> 1] & 0x0F) : (a4[p >> 1] >> 4);
+            return (p & 1) ? (a4[p >> 1] & 15) : (a4[p >> 1] >> 4);
+        };
+        int left = 0, right = vw;
+        while (left < right && alphaAt(left) == 0) ++left;
+        if (left == right) continue;
+        while (alphaAt(right - 1) == 0) --right;
+
+        // Le o fundo so onde a mascara precisa dele. Uma linha opaca
+        // pode ir direto do cache ao painel, sem usar o scratch.
+        int first = left, last = right;
+        while (first < last && alphaAt(first) == 15) ++first;
+        if (first == last) {
+            tft->pushImage(x0 + left, y0 + row, right - left, 1, px + sp0 + left);
+            continue;
+        }
+        while (alphaAt(last - 1) == 15) --last;
+        memcpy(d + left, px + sp0 + left, (first - left) * sizeof(*d));
+        memcpy(d + last, px + sp0 + last, (right - last) * sizeof(*d));
+        tft->readRect(x0 + first, y0 + row, last - first, 1, d + first);
+        for (int col = first; col < last; col++) {
+            const int p = sp0 + col;
+            uint32_t a = alphaAt(col);
             if (a == 0) continue;                        // transparente: mantem o fundo
             if (a == 15) { d[col] = px[p]; continue; }   // opaco
             uint32_t s = px[p], b = d[col];
@@ -389,7 +410,7 @@ void Icon::drawAlpha(lgfx::LGFXBase* tft, const uint16_t* px, const uint8_t* a4,
             uint32_t bl = ((s & 0x1F) * a + (b & 0x1F) * ia + 7) / 15;
             d[col] = (uint16_t)((r << 11) | (g << 5) | bl);
         }
-        tft->pushImage(x0, y0 + row, vw, 1, d);
+        tft->pushImage(x0 + left, y0 + row, right - left, 1, d + left);
     }
 }
 
@@ -451,11 +472,12 @@ void freeFileSlot(int i) {
 // relia do flash o que a anterior tinha despejado (frame de 4s medido).
 int lruSlot(uint32_t minIdleMs = 0) {
     int slot = -1;
-    uint32_t oldest = UINT32_MAX;
+    uint32_t oldestAge = 0;
     const uint32_t now = millis();
     for (int i = 0; i < fileCacheCap(); i++) {
-        if (g_filePx[i] != nullptr && g_fileLastUse[i] < oldest && now - g_fileLastUse[i] >= minIdleMs) {
-            oldest = g_fileLastUse[i];
+        const uint32_t age = now - g_fileLastUse[i];
+        if (g_filePx[i] != nullptr && age >= minIdleMs && (slot < 0 || age > oldestAge)) {
+            oldestAge = age;
             slot = i;
         }
     }
@@ -575,7 +597,12 @@ void Icon::fillGradientRoundRect(lgfx::LGFXBase* tft, int x, int y, int w, int h
     if (!tft || w <= 0 || h <= 0) return;
     if (r * 2 > h) r = h / 2;
     if (r * 2 > w) r = w / 2;
-    for (int i = 0; i < h; i++) {
+    int32_t cx, cy, cw, ch;
+    tft->getClipRect(&cx, &cy, &cw, &ch);
+    if (x >= cx + cw || x + w <= cx || cw <= 0) return;
+    const int first = y < cy ? cy - y : 0;
+    const int end = y + h > cy + ch ? cy + ch - y : h;
+    for (int i = first; i < end; i++) {
         // recuo horizontal da linha nos cantos arredondados
         int inset = 0;
         int d = (i < r) ? r - i : (i >= h - r ? i - (h - r - 1) : 0);

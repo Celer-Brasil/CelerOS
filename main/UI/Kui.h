@@ -117,21 +117,23 @@ public:
     // Frame PARCIAL: o buffer ja contem o quadro anterior, entao NAO pinta o
     // fundo da tela nem empurra o quadro inteiro — compoe com recorte em `r`
     // e empurra so `r` (o recorte do pushImage do LGFX limita a copia).
-    // So vale no FullFrame (PSRAM); nos outros modos cai no render() normal.
+    // Nas faixas, recompoe do fundo so as faixas da regiao. Direct usa render().
     // Invariante: ao fim de cada passada, buffer e vidro continuam iguais —
     // quem chama compoe exatamente a regiao que mudou desde a ultima.
     void renderRegion(const Rect& r, const std::function<void(Canvas&)>& fn);
 
-    // A passada em andamento e parcial (renderRegion)?
+    // O alvo contem os pixels do quadro anterior (passada parcial em PSRAM)?
     bool partial() const { return m_partial; }
 
     // Modo do frame em andamento
     Mode mode() const { return m_mode; }
 
     // r cruza a area desenhada nesta passada? (Bands: a faixa corrente;
-    // demais modos: sempre). Telas pulam blocos inteiros fora da faixa — o
+    // com regiao suja: tambem limita ao retangulo do quadro). Telas pulam blocos inteiros fora da faixa — o
     // recorte do sprite descarta os pixels, mas nao o custo de calcular.
     bool visible(const Rect& r) const {
+        if (m_clipOn && (r.x >= m_clip.x + m_clip.w || r.x + r.w <= m_clip.x ||
+                         r.y >= m_clip.y + m_clip.h || r.y + r.h <= m_clip.y)) return false;
         if (m_mode != Bands) return true;
         return r.y < m_offY + m_target->height() && r.y + r.h > m_offY;
     }
@@ -186,6 +188,7 @@ public:
     int height() const;
 
 private:
+    void renderBands(const Rect& region, const std::function<void(Canvas&)>& fn, bool full);
     CelerDisplay& m_dev;
     lgfx::LGFXBase* m_target;
     int m_offY = 0;        // topo da faixa corrente (Bands)

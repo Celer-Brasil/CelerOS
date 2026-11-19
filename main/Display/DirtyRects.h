@@ -8,7 +8,7 @@
  * ~460 KB de PSRAM por quadro na 4848 — o DMA do painel RGB, que varre o
  * framebuffer da mesma PSRAM, perdia banda e a imagem "vibrava em
  * flashes". Aqui ate K caixas convivem: um desenho novo funde-se a uma
- * caixa que ele toca (ou passa a menos de kGap px), cascateando; sem vaga,
+ * caixa vizinha quando a area adicional compensa o push, cascateando; sem vaga,
  * entra na caixa que menos cresce. No take(), se as caixas cobrem quase a
  * uniao toda, sai so a uniao (um push grande custa menos que varios
  * sobrepostos).
@@ -57,7 +57,7 @@ public:
         }
         const DirtyRect nr = {l, t, r, b};
         for (int i = 0; i < _n; i++) {
-            if (near(_rs[i], nr)) {
+            if (worthMerging(_rs[i], nr)) {
                 unite(_rs[i], nr);
                 cascade(i);
                 return;
@@ -119,8 +119,21 @@ private:
     static int64_t area(const DirtyRect& a) {
         return (int64_t)(a.r - a.l + 1) * (int64_t)(a.b - a.t + 1);
     }
-    static bool near(const DirtyRect& a, const DirtyRect& b) {
-        return b.l <= a.r + kGap && b.r >= a.l - kGap && b.t <= a.b + kGap && b.b >= a.t - kGap;
+    static bool worthMerging(const DirtyRect& a, const DirtyRect& b) {
+        if (b.l > a.r + kGap || b.r < a.l - kGap || b.t > a.b + kGap || b.b < a.t - kGap)
+            return false;
+        // Spans alinhados e contiguos: a uniao nao inclui pixels extras.
+        if ((a.l == b.l && a.r == b.r && b.t <= a.b + 1 && a.t <= b.b + 1) ||
+            (a.t == b.t && a.b == b.b && b.l <= a.r + 1 && a.l <= b.r + 1)) return true;
+        DirtyRect u = a;
+        unite(u, b);
+        // Dois lados de uma moldura se tocam, mas a caixa deles pode cobrir
+        // o painel inteiro. Aceita alguma folga para amortizar um push curto.
+        const int64_t aa = area(a), ab = area(b);
+        // A folga depende da menor caixa. Usa-la sobre a soma deixava um
+        // pixel por vez inflar a diagonal ate a tela inteira.
+        const int64_t smaller = aa < ab ? aa : ab;
+        return area(u) <= aa + ab + smaller / 4 + 32;
     }
     static void unite(DirtyRect& a, const DirtyRect& b) {
         if (b.l < a.l) a.l = b.l;
@@ -134,7 +147,7 @@ private:
         while (merged) {
             merged = false;
             for (int j = 0; j < _n; j++) {
-                if (j == i || !near(_rs[i], _rs[j])) continue;
+                if (j == i || !worthMerging(_rs[i], _rs[j])) continue;
                 unite(_rs[i], _rs[j]);
                 _rs[j] = _rs[_n - 1];
                 _n--;

@@ -7,6 +7,7 @@
 #include "../Kernel/DeviceStats.h"  // profiling do quadro (celerctl top)
 #include <Arduino.h>
 #include <LovyanGFX.hpp>
+#include "TextLayout.h"
 #include <cmath>
 #include <new>
 #include <cstring>  // memmove do shiftX
@@ -171,57 +172,65 @@ void Canvas::render(const std::function<void(Canvas&)>& fn, bool direct) {
         return;
     }
 
-    m_target = s_buf;
-    m_mode = s_bufMode;
-    if (m_mode == FullFrame) {
-        m_offY = 0;
-        s_buf->clearClipRect();
-        s_buf->fillScreen(THEME_BG);
-        fn(*this);
-        composeUs = (uint32_t)(esp_timer_get_time() - t0);
-        const int64_t t1 = esp_timer_get_time();
-        s_buf->pushSprite(&m_dev, 0, 0);
-        pushUs = (uint32_t)(esp_timer_get_time() - t1);
-    } else {
-        // Uma passada por faixa: tudo fora dela e recortado pelo sprite.
-        // Ping-pong: compoe a faixa N no buffer livre enquanto o DMA envia a
-        // N-1; antes de reusar um buffer, espera o DMA que le dele.
-        m_dev.startWrite();
-        int cur = 0;
-        int64_t composeStart = t0;
-        for (int y = 0; y < m_dev.height(); y += s_bandH) {
-            CelerSprite* b = s_bufs[cur];
-            m_target = b;
-            m_offY = y;
-            b->clearClipRect();
-            b->fillScreen(THEME_BG);
-            fn(*this);
-            const int64_t cEnd = esp_timer_get_time();
-            composeUs += (uint32_t)(cEnd - composeStart);
-            m_dev.waitDMA();  // faixa anterior (outro buffer) terminou de sair
-            b->pushSprite(&m_dev, 0, y);
-            pushUs += (uint32_t)(esp_timer_get_time() - cEnd);
-            composeStart = esp_timer_get_time();
-            cur ^= 1;
-        }
-        m_dev.waitDMA();
-        m_dev.endWrite();
+    if (s_bufMode == Bands) {
+        renderBands({0, 0, m_dev.width(), m_dev.height()}, fn, true);
+        return;
     }
-    m_target = &m_dev;
+    m_mode = FullFrame;
+    m_target = s_buf;
     m_offY = 0;
+    s_buf->clearClipRect();
+    s_buf->fillScreen(THEME_BG);
+    fn(*this);
+    const int64_t t1 = esp_timer_get_time();
+    composeUs = (uint32_t)(t1 - t0);
+    s_buf->pushSprite(&m_dev, 0, 0);
+    pushUs = (uint32_t)(esp_timer_get_time() - t1);
+    m_target = &m_dev;
     m_mode = Direct;
     DeviceStats::noteKuiFrame(composeUs, pushUs, true);
 }
 
-void Canvas::renderRegion(const Rect& r, const std::function<void(Canvas&)>& fn) {
-    // Sem buffer full-frame (faixas na RAM interna / Direct) nao existe
-    // "quadro anterior" guardado para reaproveitar: refaz o quadro inteiro.
-    // O caminho por faixas ja e rapido (a CYD rola a 30+ fps) e o Direct nao
-    // tem buffer nenhum.
-    if (!ensureBuffer(m_dev) || s_bufMode != FullFrame) {
-        render(fn, false);
-        return;
+void Canvas::renderBands(const Rect& region, const std::function<void(Canvas&)>& fn, bool full) {
+    // As faixas nao guardam o quadro anterior. Cada uma recompoe do fundo,
+    // inclusive no arrasto; o vidro so recebe a parte da faixa que mudou.
+    uint32_t composeUs = 0, pushUs = 0;
+    int32_t cx, cy, cw, ch;
+    m_mode = Bands;
+    m_clipOn = !full;
+    m_clip = region;
+    if (!full) {
+        m_dev.getClipRect(&cx, &cy, &cw, &ch);
+        m_dev.setClipRect(region.x, region.y, region.w, region.h);
     }
+    m_dev.startWrite();
+    int cur = 0;
+    for (int y = region.y; y < region.y + region.h; y += s_bandH) {
+        const int64_t t0 = esp_timer_get_time();
+        CelerSprite* band = s_bufs[cur];
+        m_offY = y;
+        m_target = band;
+        clearClip();
+        band->fillScreen(THEME_BG);
+        fn(*this);
+        const int64_t t1 = esp_timer_get_time();
+        composeUs += (uint32_t)(t1 - t0);
+        m_dev.waitDMA();  // libera o buffer anterior antes do proximo envio
+        band->pushSprite(&m_dev, 0, y);
+        pushUs += (uint32_t)(esp_timer_get_time() - t1);
+        cur ^= 1;
+    }
+    m_dev.waitDMA();
+    m_dev.endWrite();
+    if (!full) m_dev.setClipRect(cx, cy, cw, ch);
+    m_clipOn = false;
+    m_offY = 0;
+    m_target = &m_dev;
+    m_mode = Direct;
+    DeviceStats::noteKuiFrame(composeUs, pushUs, full);
+}
+
+void Canvas::renderRegion(const Rect& r, const std::function<void(Canvas&)>& fn) {
     Rect rc = r;
     if (rc.x < 0) { rc.w += rc.x; rc.x = 0; }
     if (rc.y < 0) { rc.h += rc.y; rc.y = 0; }
@@ -229,6 +238,15 @@ void Canvas::renderRegion(const Rect& r, const std::function<void(Canvas&)>& fn)
     if (rc.y + rc.h > m_dev.height()) rc.h = m_dev.height() - rc.y;
     if (rc.w <= 0 || rc.h <= 0) {  // nada mudou: nada a compor nem a empurrar
         DeviceStats::noteKuiFrame(0, 0, false);
+        return;
+    }
+
+    if (!ensureBuffer(m_dev)) {
+        render(fn, true);
+        return;
+    }
+    if (s_bufMode == Bands) {
+        renderBands(rc, fn, false);
         return;
     }
 
@@ -401,7 +419,7 @@ void Canvas::setClip(const Rect& r) {
 
 void Canvas::clearClip() {
     if (m_clipOn) {
-        m_target->setClipRect(m_clip.x, m_clip.y, m_clip.w, m_clip.h);
+        m_target->setClipRect(m_clip.x, Y(m_clip.y), m_clip.w, m_clip.h);
         return;
     }
     m_target->clearClipRect();
@@ -431,68 +449,19 @@ int Canvas::textWidth(const char* s, const lgfx::IFont* font) { return m_target-
 
 int Canvas::fontHeight(const lgfx::IFont* font) { return m_target->fontHeight(font); }
 
+// Mesma medida nas duas operacoes: a quebra usa ellipsize na ultima linha
+// e o firmware pequeno so precisa de uma instancia desse algoritmo.
+static auto measureText(Canvas& canvas, const lgfx::IFont* font) {
+    return [&canvas, font](const char* s) { return canvas.textWidth(s, font); };
+}
+
 std::string Canvas::ellipsize(const std::string& s, const lgfx::IFont* font, int maxW) {
-    if (textWidth(s.c_str(), font) <= maxW) return s;
-    // Busca binaria do maior prefixo que cabe com ".." — antes era um byte
-    // por vez, com uma string temporaria e um textWidth a cada passo, e na
-    // CYD o render em faixas repete o draw da tela ~19x por quadro. Um
-    // buffer so, reaproveitado entre as medidas.
-    std::string out;
-    out.reserve(s.size() + 2);
-    auto withDots = [&](size_t n) {
-        out.assign(s, 0, n);
-        while (!out.empty() && out.back() == ' ') out.pop_back();
-        out += "..";
-    };
-    size_t lo = 0, hi = s.size();  // s inteira nao coube: hi nunca cabe
-    while (hi - lo > 1) {
-        const size_t mid = lo + (hi - lo) / 2;
-        withDots(mid);
-        if (textWidth(out.c_str(), font) <= maxW) {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    // nao corta no meio de um caractere UTF-8 (byte de continuacao 10xxxxxx):
-    // o byte inicial sozinho virava um glifo lixo
-    while (lo > 0 && ((uint8_t)s[lo] & 0xC0) == 0x80) lo--;
-    withDots(lo);
-    return out;
+    return textLayout::ellipsize(s, maxW, measureText(*this, font));
 }
 
 std::vector<std::string> Canvas::wrapText(const std::string& s, const lgfx::IFont* font, int maxW,
                                           int maxLines) {
-    std::vector<std::string> out;
-    // Mede por INDICES na string original: um substr por iteracao do
-    // encolhimento virava alocacao em cada passo — e o render em faixas da
-    // CYD repete o draw da tela ~19x por quadro (grade do launcher). Um
-    // buffer unico apoia a medida; as linhas sao construidas uma vez, no
-    // final de cada quebra.
-    std::string buf;
-    buf.reserve(s.size());
-    size_t pos = 0;  // inicio da linha corrente
-    for (int ln = 0; ln < maxLines && pos < s.size(); ln++) {
-        size_t cut = s.size() - pos;
-        while (cut > 0) {
-            buf.assign(s, pos, cut);
-            if (textWidth(buf.c_str(), font) <= maxW) break;
-            size_t sp = s.rfind(' ', pos + cut - 1);
-            cut = (sp == std::string::npos || sp < pos + 1) ? cut - 1 : sp - pos;
-        }
-        // nao corta no meio de um caractere UTF-8 (byte de continuacao
-        // 10xxxxxx): mesmo recuo do ellipsize — o byte inicial sozinho
-        // virava um glifo lixo
-        while (cut > 0 && ((uint8_t)s[pos + cut] & 0xC0) == 0x80) cut--;
-        if (cut == 0) cut = 1;
-        size_t next = pos + cut;
-        while (next < s.size() && s[next] == ' ') next++;
-        std::string line = s.substr(pos, cut);
-        pos = next;
-        if (ln == maxLines - 1 && pos < s.size()) line = ellipsize(line + " " + s.substr(pos), font, maxW);
-        out.push_back(line);
-    }
-    return out;
+    return textLayout::wrap(s, maxW, maxLines, measureText(*this, font));
 }
 
 int Canvas::width() const { return m_dev.width(); }
@@ -896,10 +865,11 @@ bool List::tick(uint32_t dtMs) {
         return false;
     }
     if (dtMs > 50) dtMs = 50;
+    const int oldScroll = (int)m_scroll;
     m_scroll += m_vel * (float)dtMs;
     m_vel *= std::pow(0.995f, (float)dtMs);  // atrito
     clampScroll();
-    return true;
+    return (int)m_scroll != oldScroll;  // a posicao fracionaria segue acumulando
 }
 
 // ---- Switch / Slider / ProgressBar / Spinner (API 12 do toolkit) --------
@@ -1297,8 +1267,7 @@ bool offUiTask() {
 
 bool s_repaint = true;
 bool s_repaintOnWake = false;   // tela apagou com o Navigator vivo: redesenha ao acender
-bool s_forceFullFrame = false;  // o despertar pediu UM quadro inteiro (o vidro pode
-                                // ter ficado num meio de passada parcial)
+bool s_forceFullFrame = false;  // despertar ou quadro anterior com overlay
 bool s_inputSuspended = false;  // app JS em task propria: UI pausa o pump
 uint32_t s_lastTickMs = 0;
 TouchPump s_pump;
@@ -1321,11 +1290,18 @@ void drawToast(Canvas& c, const Toast& t) {
 void drawFrame() {
     if (s_canvas == nullptr || s_stack.empty()) return;
     Screen* top = s_stack.back();
-    auto paint = [top](Canvas& c) {
+    const bool overlay = s_dialog != nullptr || !s_toasts.empty();
+    const bool restore = s_forceFullFrame && !overlay;
+    s_forceFullFrame = overlay;
+    auto paint = [top, restore](Canvas& c) {
+        if (restore && c.mode() == Canvas::Direct && !top->wantsDirectDraw()) c.fill(THEME_BG);
         top->draw(c);
         if (s_dialog != nullptr) s_dialog->draw(c);
         if (!s_toasts.empty()) {
-            if (s_toasts.front().shownAtMs == 0) s_toasts.front().shownAtMs = millis() | 1;
+            if (s_toasts.front().shownAtMs == 0) {
+                const uint32_t now = millis();
+                s_toasts.front().shownAtMs = now ? now : UINT32_MAX;  // 0 = aguardando o desenho
+            }
             drawToast(c, s_toasts.front());
         }
     };
@@ -1333,12 +1309,7 @@ void drawFrame() {
     // composta e empurrada. Dialogo/toast por cima invalidam a regiao (sao
     // desenhados por cima do conteudo inteiro) e caem no quadro completo.
     Rect pr;
-    // O despertar (tela apagou) pede quadro inteiro: a tela pode ter apagado
-    // no meio de uma passada parcial e o caminho parcial com regiao vazia
-    // nao empurraria pixel nenhum — o vidro ficaria no frame velho.
-    bool full = s_forceFullFrame;
-    s_forceFullFrame = false;
-    if (!full && s_dialog == nullptr && s_toasts.empty() && !top->wantsDirectDraw() &&
+    if (!restore && !overlay && !top->wantsDirectDraw() &&
         top->partialFrame(pr)) {
         s_canvas->renderRegion(pr, paint);
         return;
@@ -1378,9 +1349,9 @@ void dispatchTouch(const TouchEvent& ev) {
         return;
     }
 
+    // onTouch pode trocar a tela no release.
+    if (ev.type != TouchEvent::Drag && !top->wantsDirectDraw()) s_repaint = true;
     if (top->onTouch(ev)) s_repaint = true;
-    // Estado pressionado das telas Kui: redesenha no press/release
-    if (!top->wantsDirectDraw() && ev.type != TouchEvent::Drag) s_repaint = true;
 }
 
 }  // namespace
@@ -1654,7 +1625,7 @@ void Navigator::tick() {
     // suppressRedraw: app JS rodando em task propria e dono do vidro — nem
     // o frame do topo nem toasts podem pintar por cima dele
     if (!s_stack.empty() && !s_stack.back()->suppressRedraw() &&
-        (s_repaint || s_stack.back()->consumeDirty())) {
+        (s_stack.back()->consumeDirty() || s_repaint)) {
         s_repaint = false;
         drawFrame();
     }

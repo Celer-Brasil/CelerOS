@@ -90,6 +90,14 @@ int LauncherScreen::dragXOff() const {
 }
 
 bool LauncherScreen::partialFrame(kui::Rect& out) {
+    // No OLED compacto, icones e fontes ultrapassam as celulas. A faixa
+    // geometrica da grade nao contem todos os pixels que se moveram.
+    if (!listMode() && (gridCellW() < Icon::SIZE || gridCellH() < Icon::SIZE)) return false;
+    if (listMode() && m_scroll != m_drawnScroll) {
+        if (m_needClear || m_headerOnly || !kui::canvasBuffered()) return false;
+        out = {0, gridHeaderH(), UI::W, listBottom() - gridHeaderH()};
+        return true;
+    }
     // So a mudanca do CABECALHO (relogio/rede/nao-lidas): a pagina inteira
     // ficou parada e a composicao nao mudou, entao recompor e empurrar a
     // faixa de cima basta. Sem isto o relogio marcava o quadro inteiro e o
@@ -264,12 +272,18 @@ void LauncherScreen::draw(kui::Canvas& c) {
     if (listMode()) {
         // lista: fundo sempre limpo (a rolagem move tudo); o canvas do watch
         // tem framebuffer, sem piscada
-        if (!clearBg) c.fillRect({0, gridHeaderH(), UI::W, UI::H - gridHeaderH()}, THEME_BG);
-        c.setClip({0, gridHeaderH(), UI::W, listBottom() - gridHeaderH()});
+        m_drawnScroll = m_scroll;
+        const kui::Rect viewport{0, gridHeaderH(), UI::W, listBottom() - gridHeaderH()};
+        // FullFrame e Bands ja comecam com o fundo limpo no quadro completo.
+        if (c.partial() || (c.mode() == kui::Canvas::Direct && !clearBg)) c.fillRect(viewport, THEME_BG);
+        c.setClip(viewport);
         const lgfx::IFont* f = kui::type::body();
-        for (int entry = 0; entry < LauncherUI::gridTotalEntries(); entry++) {
+        const int first = std::max(0, (m_scroll + viewport.y - gridTop()) / listRowH());
+        const int total = LauncherUI::gridTotalEntries();
+        for (int entry = first; entry < total; entry++) {
             kui::Rect r = cellRect(entry);
-            if (r.y + r.h <= gridHeaderH() || r.y >= listBottom()) continue;
+            if (r.y >= listBottom()) break;
+            if (!c.visible(r)) continue;
             kui::Rect card{r.x, r.y + UI::sy(3), r.w, r.h - UI::sy(6)};
             c.fillRoundRect(card, card.h / 2, kui::isPressed(card) ? THEME_RAISED : THEME_CARD);
             if (entry == m_focus) c.drawRoundRect(card, card.h / 2, THEME_ACCENT);  // foco do gamepad
@@ -303,15 +317,16 @@ void LauncherScreen::draw(kui::Canvas& c) {
     kui::Rect cull{0, 0, UI::W, UI::H};  // passada parcial: so as celulas da faixa
     auto drawPage = [&](int pg, int xOff) {
         if (pg < 0 || pg >= LauncherUI::gridTotalPages()) return;
-        for (int entry = pg * gridCellsPerPage();
-             entry < LauncherUI::gridTotalEntries() && entry < (pg + 1) * gridCellsPerPage(); entry++) {
+        const int per = gridCellsPerPage();
+        const int end = std::min(LauncherUI::gridTotalEntries(), (pg + 1) * per);
+        const int labelH = c.fontHeight(labelFont);
+        for (int entry = pg * per; entry < end; entry++) {
             kui::Rect cell = cellRect(entry);
             cell.x += xOff;
             if (cell.x + cell.w <= 0 || cell.x >= UI::W || !c.visible(cell)) continue;
             // fora da faixa que muda: nao recompõe (icone custa readRect+blend)
             if (cell.x + cell.w <= cull.x || cell.x >= cull.x + cull.w) continue;
             int iconX = cell.x + (cell.w - Icon::SIZE) / 2;
-            int labelH = c.fontHeight(labelFont);
             int iconY = cell.y + (cell.h - Icon::SIZE - labelGap - labelH) / 2;
 
             if (xOff == 0 && kui::canvasBuffered() && kui::isPressed(cell)) {
@@ -411,10 +426,10 @@ void LauncherScreen::draw(kui::Canvas& c) {
 int LauncherScreen::entryAt(int x, int y) const {
     if (listMode()) {
         if (y < gridHeaderH() || y >= listBottom()) return -1;
-        for (int entry = 0; entry < LauncherUI::gridTotalEntries(); entry++) {
-            if (cellRect(entry).contains(x, y)) return entry;
-        }
-        return -1;
+        const int offset = y - gridTop() + m_scroll;
+        if (offset < 0) return -1;
+        const int entry = offset / listRowH();
+        return entry < LauncherUI::gridTotalEntries() && cellRect(entry).contains(x, y) ? entry : -1;
     }
     for (int entry = page * gridCellsPerPage();
          entry < (page + 1) * gridCellsPerPage() && entry < LauncherUI::gridTotalEntries(); entry++) {
@@ -532,12 +547,12 @@ void LauncherScreen::padNav() {
     if (row < 0) { row = LauncherUI::gridRows() - 1; npage--; }
     else if (row >= LauncherUI::gridRows()) { row = 0; npage++; }
     if (npage < 0 || npage >= LauncherUI::gridTotalPages()) return;  // borda: fica
-    page = npage;
     int nf = npage * per + row * cols + col;
     if (nf >= total) {
         if (dx != 0) return;  // linha incompleta da direita: nao serpenteia
         nf = total - 1;
     }
+    page = npage;
     m_focus = nf;
     m_needClear = true;  // o contorno de onde o foco estava precisa sair
     markDirty();
@@ -644,6 +659,7 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     const int tp = LauncherUI::gridTotalPages();
 
     if (ev.type == TouchEvent::Press) {
+        m_listDragging = false;
         m_pressMs = millis();
         m_pressEntry = entryAt(ev.x, ev.y);
         m_longFired = false;
@@ -667,9 +683,13 @@ bool LauncherScreen::onTouch(const kui::TouchEvent& ev) {
     if (listMode()) {
         if (ev.type == TouchEvent::Drag) {
             if (kui::touchState().moved && ev.startY > gridHeaderH()) {
+                const int oldScroll = m_scroll;
                 m_scroll -= ev.y - ev.prevY;
                 clampScroll();
-                return true;
+                // O primeiro drag apaga o realce do press mesmo no limite.
+                const bool changed = !m_listDragging || oldScroll != m_scroll;
+                m_listDragging = true;
+                return changed;
             }
             return false;
         }

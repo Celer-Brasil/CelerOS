@@ -40,6 +40,7 @@ static constexpr bool kUiExtras = false;
 #include "../Launcher/Screens.h"
 #include <lgfx/v1/misc/DataWrapper.hpp>
 #include "JsInternal.h"
+#include "../UI/TextLayout.h"
 #if CONFIG_CELEROS_WAKE_WORD
 #include "../Hardware/WakeWord.h"
 #endif
@@ -202,20 +203,16 @@ struct TbButton {
 static std::vector<TbButton> s_tbButtons;      // [0] = o mais a direita
 static std::vector<std::string> s_tbTaps;      // FIFO de toques pendentes
 static std::string s_tbText;                   // vazio = usa o nome do app
-static bool s_tbTextCustom = false;
+#if CONFIG_CELEROS_UI
+static std::string s_tbLabel;                  // titulo ja recortado para esta largura
+static int s_tbLabelWidth = -1;
+#endif
 static int s_tbHotBtn = -1;                    // chip sob o dedo (feedback)
 static int s_tbBtnArmed = 0;                   // chip armado p/ disparo no release (indice+1)
 static bool s_tbDirty = false;                 // faixa precisa recompor
 static int s_tbHotOnGlass = -2;                // hot state ja composto (-2 = nada)
 
-// Banner do SISTEMA na faixa (alarme com app aberto): ocupa a topbar por
-// BANNER_MS mesmo no modo retratil. Vazio = sem banner.
-static std::string s_bannerText;
-static uint32_t s_bannerUntil = 0;
-static const uint32_t BANNER_MS = 8000;
 #if CONFIG_CELEROS_UI
-static bool bannerActive() { return !s_bannerText.empty(); }
-
 // expira a faixa retratil; true se ela acabou de sair. Um press armado no X
 // SOBREVIVE ao expiry: o dedo pousou quando a faixa estava visivel — cortar
 // o armamento no auto-hide engolia o tap na fronteira dos 3 s (o release
@@ -267,13 +264,6 @@ static bool s_frameSuppressed = false;  // AOD/off: vidro mostrou outra coisa
 #if CONFIG_CELEROS_UI
 static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot);
 
-// Tira o ultimo CARACTERE (UTF-8): pop_back puro deixava o byte inicial de
-// "a"/"c" com acento sozinho e a faixa desenhava um glifo lixo
-static void popUtf8(std::string& s) {
-    while (!s.empty() && ((uint8_t)s.back() & 0xC0) == 0x80) s.pop_back();  // continuacoes
-    if (!s.empty()) s.pop_back();
-}
-
 // A faixa e desenhada no MESMO alvo do app (quadro/display): o estado de
 // texto (cor, datum, tamanho) e o recorte do app nao podem vazar para ela
 // (setTextSize(2) do app dobrava o titulo; setClip cortava a faixa) nem ela
@@ -286,19 +276,6 @@ static void drawAppTopbar(lgfx::LGFXBase& g, bool hot) {
 
 static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot) {
     int h = UI::topbarH();
-    if (bannerActive()) {
-        // banner do sistema: faixa inteira em destaque, sem chips nem X
-        // (some sozinho em BANNER_MS; o toque na faixa segue mascarado)
-        g.fillRect(0, 0, UI::W, h, THEME_WARN);
-        std::string label = s_bannerText;
-        while (!label.empty() && g.textWidth(label.c_str(), kui::type::caption()) > UI::W - UI::sx(12)) {
-            popUtf8(label);
-        }
-        g.setTextDatum(MC_DATUM);
-        g.setTextColor(THEME_BG);
-        g.drawString(label.c_str(), UI::W / 2, h / 2, kui::type::caption());
-        return;
-    }
     g.fillRect(0, 0, UI::W, h, THEME_CARD);
     g.drawFastHLine(0, h - 1, UI::W, THEME_STROKE);
 
@@ -334,16 +311,30 @@ static void drawAppTopbarRaw(lgfx::LGFXBase& g, bool hot) {
     }
 
     // texto: custom (topbarText) ou nome do app; corta antes do 1o chip
-    std::string label = s_tbTextCustom ? s_tbText : (s_appTitle ? s_appTitle : "");
     int rightLimit = UI::W - UI::topbarExitW() - UI::inset;
     if (!s_tbButtons.empty()) rightLimit = UI::sx(s_tbButtons.back().x);
-    while (!label.empty() &&
-           g.textWidth(label.c_str(), kui::type::caption()) > rightLimit - UI::sx(10)) {
-        popUtf8(label);
+    const int left = UI::sx(6) + UI::inset;
+    const int width = std::max(0, rightLimit - left - UI::sx(4));
+    if (s_tbLabelWidth != width) {
+        s_tbLabelWidth = width;
+        s_tbLabel = s_tbText.empty() ? s_appTitle : s_tbText.c_str();
+        const auto font = kui::type::caption();
+        if (g.textWidth(s_tbLabel.c_str(), font) > width) {
+            // Mede prefixos no proprio buffer, sem alocar uma string por tentativa.
+            const size_t cut = kui::textLayout::fittingPrefix(s_tbLabel, 0, [&](size_t n) {
+                if (n == s_tbLabel.size()) return false;
+                char saved = s_tbLabel[n];
+                s_tbLabel[n] = '\0';
+                bool fits = g.textWidth(s_tbLabel.c_str(), font) <= width;
+                s_tbLabel[n] = saved;
+                return fits;
+            });
+            s_tbLabel.resize(cut);
+        }
     }
     g.setTextDatum(ML_DATUM);
     g.setTextColor(THEME_TEXT);
-    g.drawString(label.c_str(), UI::sx(6) + UI::inset, h / 2, kui::type::caption());
+    g.drawString(s_tbLabel.c_str(), left, h / 2, kui::type::caption());
 }
 
 // indice do chip sob o x virtual (ou -1)
@@ -584,7 +575,7 @@ bool JSBindings::screenDirectOk() {
     if (ScreenPower::suppressAppFrame()) return false;
     // a faixa e composta no quadro pelo present: escrever por baixo dela no
     // painel apagaria a faixa ate o proximo push
-    if (s_topbarFixed || s_barShown || bannerActive() || s_barOnGlass) return false;
+    if (s_topbarFixed || s_barShown || s_barOnGlass) return false;
     return true;
 #else
     return false;
@@ -644,16 +635,7 @@ void JSBindings::present() {
     }
     ScreenCapture::service();  // captura pedida por outra task (navegador/celerctl)
     retractTick();
-    // Banner da faixa (notificacoes) expira sozinho
-    {
-        const uint32_t now = millis();
-        if (bannerActive() && (int32_t)(now - s_bannerUntil) >= 0) {
-            s_bannerText.clear();
-            s_tbDirty = true;
-            s_frameDirty = true;  // retratil: a area da faixa volta ao app
-        }
-    }
-    bool wantBar = s_topbarFixed || s_barShown || bannerActive();
+    bool wantBar = s_topbarFixed || s_barShown;
     if (s_frame != nullptr) {
         // A topbar vai DENTRO do quadro, antes do push: chega ao vidro atomica
         // com o conteudo do app (nao pisca) e o app nao consegue cobri-la. No
@@ -744,8 +726,12 @@ duk_ret_t JSBindings::js_topbarText(duk_context *ctx) {
     const char *t = duk_require_string(ctx, 0);
     // teto ANTES da copia: atribuir a string crua a um std::string cresce sem
     // excecao e aborta o aparelho no heap apertado (a faixa mostra uma linha)
-    s_tbText.assign(t ? t : "", strnlen(t ? t : "", 96));
-    s_tbTextCustom = (s_tbText[0] != '\0');   // "" volta ao nome do app
+    size_t n = strnlen(t, 96);
+    // Se o limite caiu no meio de um caractere UTF-8, guarda so o prefixo inteiro.
+    while (n && ((uint8_t)t[n] & 0xC0) == 0x80) --n;
+    if (s_tbText.size() == n && memcmp(s_tbText.data(), t, n) == 0) return 0;
+    s_tbText.assign(t, n);
+    s_tbLabelWidth = -1;
     s_tbDirty = true;
     return 0;
 }
@@ -1218,13 +1204,12 @@ void JSBindings::init(duk_context *ctx, CelerDisplay *tft, const char* appTitle,
     s_tbButtons.clear();
     s_tbTaps.clear();
     s_tbText.clear();
-    s_tbTextCustom = false;
     s_tbHotBtn = -1;
     s_tbBtnArmed = 0;
     s_tbDirty = false;
     s_tbHotOnGlass = -2;
-    s_bannerText.clear();
 #if CONFIG_CELEROS_UI
+    s_tbLabelWidth = -1;
     // Gesto de borda do relogio nao atravessa apps (ver pollWatchEdges): o
     // dedo que continua no vidro apos a saida vira um pouso novo.
     s_edgeKind = 0;

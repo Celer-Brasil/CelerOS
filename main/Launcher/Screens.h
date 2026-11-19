@@ -45,6 +45,8 @@ private:
     // para trocar ~150 px do HH:MM. Qualquer outra sujeira derruba a flag.
     bool m_headerOnly = false;
     int m_scroll = 0;              // modo lista (BoardProfile::launcherList): rolagem vertical em px
+    int m_drawnScroll = 0;         // posicao da lista no ultimo quadro
+    bool m_listDragging = false;   // o realce ja saiu no primeiro arrasto
     void clampScroll();
 
     // Navegacao por gamepad (API 61, canal InputBus::pad): dpad/esquerdo

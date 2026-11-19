@@ -311,9 +311,10 @@ public:
         }
         c.setClip({0, top, UI::W, listBottom() - top});
         int y = top - m_scroll;
-        for (int i = 0; i < (int)m_rows.size(); i++) {
+        for (int i = 0; i < (int)m_rows.size() && y < listBottom(); i++) {
             const int h = rowH(i);
-            if (y + h > top && y < listBottom()) drawRow(c, i, {m, y, UI::W - 2 * m, h - UI::sy(6)});
+            const kui::Rect row{m, y, UI::W - 2 * m, h - UI::sy(6)};
+            if (y + h > top && c.visible(row)) drawRow(c, i, row);
             y += h;
         }
         c.clearClip();

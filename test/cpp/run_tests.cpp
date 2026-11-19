@@ -30,6 +30,7 @@
 #include "../../main/USBHost/UsbDesc.h"
 #include "../../main/Bluetooth/HidDesc.h"
 #include "../../main/UI/KeyboardMap.h"
+#include "../../main/UI/TextLayout.h"
 
 // Componentes base (header-only no host: Event/Timeout tem shim proprio;
 // ErrorCode e constexpr puro)
@@ -1138,6 +1139,42 @@ static void testDirtyRectsScattered() {
     for (int k = 0; k < n; k++) area += (long)(out[k].r - out[k].l + 1) * (out[k].b - out[k].t + 1);
     CHECK(n > 1);
     CHECK(area < 480L * 480L / 10);   // < 10% da tela (com K=8 dava 44%)
+
+    for (int i = 0; i < 480; i++) d.add(i, i, i, i);
+    const int diagonal = d.take(out, 480, 480);
+    area = 0;
+    for (int k = 0; k < diagonal; k++) area += (out[k].r - out[k].l + 1) * (out[k].b - out[k].t + 1);
+    CHECK(area < 480L * 480L / 10);
+    for (int i = 0; i < 480; i++) {
+        bool covered = false;
+        for (int k = 0; k < diagonal; k++)
+            covered |= out[k].l <= i && out[k].r >= i && out[k].t <= i && out[k].b >= i;
+        CHECK(covered);
+    }
+}
+
+static void testTextLayout() {
+    using namespace kui::textLayout;
+    size_t measured = 0;
+    auto width = [&](const char* text) {
+        int glyphs = 0;
+        for (; *text; ++text) {
+            if (((uint8_t)*text & 0xC0) != 0x80) glyphs++;
+            measured++;
+        }
+        return glyphs;
+    };
+    CHECK(wrap("", 8, 4, width).empty());
+    CHECK(wrap("abc", 8, 0, width).empty());
+    CHECK(wrap("um  dois três", 5, 4, width) == (std::vector<std::string>{"um ", "dois", "três"}));
+    CHECK(wrap("éíó", 1, 3, width) == (std::vector<std::string>{"é", "í", "ó"}));
+    CHECK(wrap("Ação", 0, 3, width) == (std::vector<std::string>{"A", "ç", ""}));
+    CHECK(ellipsize("Ação e café", 5, width) == "Açã..");
+    CHECK(ellipsize("abc", 1, width) == ".");
+    measured = 0;
+    CHECK(wrap(std::string(16384, 'x'), 12, 2, width) ==
+          (std::vector<std::string>{std::string(12, 'x'), std::string(10, 'x') + ".."}));
+    CHECK(measured < 512);  // o custo acompanha as linhas visiveis
 }
 
 // FrameSprite: varias caixas sujas no lugar da uniao (tremor da 4848)
@@ -1154,6 +1191,29 @@ static void testDirtyRects() {
     int n = d.take(out, 480, 480);
     CHECK(n == 2);
     CHECK(!d.any());
+
+    // Moldura de 1 px: os cantos se tocam; enviar o miolo vazio estourava
+    // o orcamento do quadro. Cada lado inteiro tem que chegar ao vidro.
+    d.add(0, 0, 479, 0);
+    d.add(479, 0, 479, 479);
+    d.add(0, 479, 479, 479);
+    d.add(0, 0, 0, 479);
+    n = d.take(out, 480, 480);
+    int pixels = 0;
+    for (int i = 0; i < n; i++) pixels += (out[i].r - out[i].l + 1) * (out[i].b - out[i].t + 1);
+    CHECK(n == 4 && pixels == 4 * 480);
+    auto containsSide = [&](int l, int t, int r, int b) {
+        for (int i = 0; i < n; i++) {
+            if (out[i].l == l && out[i].t == t && out[i].r == r && out[i].b == b) return true;
+        }
+        return false;
+    };
+    CHECK(containsSide(0, 0, 479, 0) && containsSide(479, 0, 479, 479));
+    CHECK(containsSide(0, 479, 479, 479) && containsSide(0, 0, 0, 479));
+
+    d.add(0, 0, 479, 0);
+    d.add(0, 7, 479, 7);         // seis linhas inteiras de espaco: duas transferencias
+    CHECK(d.take(out, 480, 480) == 2);
 
     // vizinhas (gap < 8) e sobrepostas fundem; contida nao cria caixa
     d.add(100, 100, 120, 120);
@@ -3721,6 +3781,7 @@ int main() {
     testMusicEngine();
     testMusicHandoff();
     testSfxVoice();
+    testTextLayout();
     testDirtyRects();
     testDirtyRectsScattered();
     testJsonMap();

@@ -1,23 +1,31 @@
 // CelerOS System Info — painel do aparelho no CelerKit UI 2.0 (deps
 // celeros.app.*): aneis ao vivo de RAM, PSRAM/flash e bateria (System.fillArc
-// + assinatura, sem repintar o que nao mudou), cards do A.style com tokens
+// + assinatura, sem repintar o que nao mudou), cards adaptativos com tokens
 // do tema e as capacidades da placa pela sonda unica do celeros.app.caps.
 // Bytes/uptime saem no formato do sistema (celeros.app.fmt). Tudo degrada:
 // placa sem PSRAM/bateria/sensores mostra o que tem, nunca estoura.
-// ES5 (Duktape). 240x320 virtuais; layout pelo A.L (o watch redondo encolhe).
+// ES5 (Duktape). 240x320 virtuais; layout pelo A.layout (o watch redondo encolhe).
 
 var A = require("celeros.app");
 require("celeros.app.caps");      // sonda unica da placa (board, psram, battery...)
 require("celeros.app.fmt");       // bytes/uptime no formato do sistema
 require("celeros.app.style");     // tokens + cards (sombra/gradiente no frame cheio)
 
+require("celeros.app.layout");
 A.init();
 var T = A.style.T;
 A.style.preset("soft");
-var L = A.L;
-var LX = L.x, LW = L.w, CX = L.cx;
-var cap = A.caps.probe();         // estatico: a placa nao muda em execucao
-var R1 = LX + 36, R2 = LX + Math.round(LW / 2), R3 = LX + LW - 36;   // aneis
+var cap = A.caps.probe();
+var area = A.layout.bounds({ top: 40 });
+var captionH = UI.lineHeight("caption");
+var gauges = [], panels = [];
+var gaugeH = Math.min(90, Math.floor(area.h / 3));
+var gaugeArea = { x: area.x, y: area.y, w: area.w, h: gaugeH };
+var detail = { x: area.x, y: area.y + gaugeH + 4, w: area.w, h: area.h - gaugeH - 4 };
+var wide = A.layout.columns(detail, 200, 4) >= 2;
+for (var n = 0; n < 3; n++) gauges.push(A.layout.cell(gaugeArea, 3, 1, n, 3));
+// Quatro grupos: hardware, armazenamento, rede/energia e sensores.
+for (var k = 0; k < 4; k++) panels.push(A.layout.cell(detail, wide ? 2 : 1, wide ? 2 : 4, k, 3));
 
 var i = System.getInfo() || {};
 var livre = 0;
@@ -46,22 +54,38 @@ function cor(f) {
 
 // anel: repinta so quando a assinatura muda (ou frame total). O texto do
 // centro muda junto com a fracao, entao o slot nao fica por baixo do arco.
-function anel(id, cx, cy, r, frac, color, txt, cap2, slot) {
+function anel(id, box, frac, color, txt, cap2, slot) {
+    var r = Math.floor(Math.min(box.w - 8, box.h - captionH - 10) / 2);
+    var cx = box.x + Math.floor(box.w / 2), cy = box.y + Math.floor((box.h - captionH - 3) / 2);
     var sig = txt + "|" + color + "|" + Math.round(frac * 200) + "|" + cap2;
     if (!FULL && sigs[id] === sig) return;
     sigs[id] = sig;
     System.fillArc(cx, cy, r - 6, r, 0, 360, T.raised);
     if (frac > 0.01) System.fillArc(cx, cy, r - 6, r, -90, -90 + 360 * frac, color);
-    UI.text(String(txt), cx, cy - 9,
-            { align: "center", role: "title", color: T.text, id: slot });
-    UI.text(String(cap2), cx, cy + r + 2, { align: "center", role: "caption", color: T.textDim });
+    UI.text(String(txt), cx, cy - UI.lineHeight("caption") / 2,
+            { align: "center", role: "caption", color: T.text, w: 2 * r - 12, id: slot });
+    UI.text(String(cap2), cx, cy + r + 2, { align: "center", role: "caption", w: box.w, color: T.textDim });
 }
 
-// linha "rotulo ......... valor" dentro de um card (texto slotizado)
-function linha(x, y, w, rot, val, col) {
-    UI.text(rot, x, y, { role: "caption", color: T.textDim, w: w * 0.5 });
-    UI.text(String(val), x + w, y, { align: "right", role: "caption",
-            color: col === undefined ? T.text : col, w: w, id: rot });
+function panel(box, title, value, sub, color, subColor) {
+    UI.card(box.x, box.y, box.w, box.h, { color: T.card, radius: 8 });
+    var x = box.x + 7, w = box.w - 14;
+    if (wide) {
+        var role = UI.measure(value, "body") <= w ? "body" : "caption";
+        var vh = UI.measureWrap(value, w, role);
+        var sh = UI.measureWrap(sub, w, "caption");
+        var y = box.y + (box.h - captionH - sh - vh - 6) / 2;
+        UI.text(title, x, y, { role: "caption", color: T.textDim, w: w });
+        UI.text(value, x, y + captionH + 3, { role: role, color: color, w: w, lines: 2 });
+        UI.text(sub, x, y + captionH + vh + 6, { role: "caption", color: subColor || T.textDim, w: w, lines: 2 });
+    } else {
+        var top = box.y + (box.h - 2 * captionH - 2) / 2;
+        var tw = UI.measure(title, "caption") + 4;
+        UI.text(title, x, top, { role: "caption", color: T.textDim, w: tw });
+        UI.text(value, x + w, top, { role: "caption", align: "right", color: color, w: w - tw });
+        UI.text(sub, x, top + captionH + 2, { role: "caption", color: subColor || T.text, w: w });
+    }
+    UI.cardEnd();
 }
 
 function tela(c) {
@@ -77,19 +101,19 @@ function tela(c) {
         try { livre = FS.getFreeSpace("/local") || 0; } catch (e4) { /* mantem */ }
     }
 
-    UI.header("Sistema", { sub: cap.board || "CelerOS" });
+    if (A.header("Sistema", { sub: cap.board || "CelerOS" })) return A.BACK;
 
     // --- aneis: RAM, PSRAM (ou flash livre) e bateria (ou rede) -----------
     var temPsram = (i.totalPSRAM || 0) > 0;
     var ramF = pct((i.totalRAM || 0) - (i.freeRAM || 0), i.totalRAM);
-    anel("ram", R1, 86, 28, ramF, cor(ramF), Math.round(ramF * 100) + "%", "RAM", 1);
+    anel("ram", gauges[0], ramF, cor(ramF), Math.round(ramF * 100) + "%", "RAM", 1);
 
     if (temPsram) {
         var psF = pct((i.totalPSRAM || 0) - (i.freePSRAM || 0), i.totalPSRAM);
-        anel("ps", R2, 86, 28, psF, cor(psF), Math.round(psF * 100) + "%", "PSRAM", 2);
+        anel("ps", gauges[1], psF, cor(psF), Math.round(psF * 100) + "%", "PSRAM", 2);
     } else {
         var flF = pct(livre, i.flashSize);
-        anel("fl", R2, 86, 28, flF,
+        anel("fl", gauges[1], flF,
              flF < 0.05 ? T.err : (flF < 0.15 ? T.warn : T.accent),
              Math.round(flF * 100) + "%", "livre", 2);
     }
@@ -99,41 +123,26 @@ function tela(c) {
         try { bi = System.batteryInfo(); } catch (e5) { bi = null; }
         var bF = bi && typeof bi.pct === "number" ? pct(bi.pct, 100) : 0;
         var bTxt = bi && typeof bi.pct === "number" ? bi.pct + "%" : "--";
-        anel("bat", R3, 86, 28, bF, bi && bi.pct <= 20 ? T.err : T.ok, bTxt,
+        anel("bat", gauges[2], bF, bi && bi.pct <= 20 ? T.err : T.ok, bTxt,
              bi && bi.charging ? "carregando" : "bateria", 3);
     } else {
         var w0 = null;
         try { w0 = System.wifiStatus(); } catch (e6) { w0 = null; }
         var on = !!(w0 && w0.connected);
-        anel("net", R3, 86, 28, on ? 1 : 0, on ? T.ok : T.textDim, on ? "on" : "off",
+        anel("net", gauges[2], on ? 1 : 0, on ? T.ok : T.textDim, on ? "on" : "off",
              "rede", 3);
     }
 
-    // --- dispositivo ------------------------------------------------------
-    A.style.card(LX, 130, LW, 62, { full: c.full, elev: 1,
-        draw: function (r) {
-            linha(r.x, r.y, r.w, "chip", (i.chipModel || "?") + " r" + (i.chipRevision || 0));
-            linha(r.x, r.y + 18, r.w, "CPU", (i.chipCores || 0) + "x " + (i.cpuFreqMHz || 0) + " MHz");
-        }
-    });
-    UI.text("flash " + (A.fmt.bytes(i.flashSize) || "?") + "  ·  /local " +
-            (A.fmt.bytes(livre) || "0"), LX + 10, 176, { role: "caption", color: T.textDim,
-            bg: T.card, w: LW - 20, id: "fs" });
-
-    // --- rede e energia ---------------------------------------------------
+    panel(panels[0], "Processador", (i.chipModel || "?") + " r" + (i.chipRevision || 0),
+          (i.chipCores || 0) + "x " + (i.cpuFreqMHz || 0) + " MHz", T.text);
+    panel(panels[1], "Flash", A.fmt.bytes(i.flashSize) || "?", "/local livre " + A.fmt.bytes(livre), T.text);
     var w = null;
     try { w = System.wifiStatus(); } catch (e7) { w = null; }
     var conn = !!(w && w.connected);
     var mv = (cap.battery && HAS_BATT_MV) ? System.battery() : -1;
-    A.style.card(LX, 192, LW, 62, { full: c.full, elev: 1,
-        draw: function (r) {
-            linha(r.x, r.y, r.w, "Wi-Fi", conn ? (w.ip && w.ip.length ? w.ip :
-                 (System.getIPAddress() || "conectado")) : "desligado", conn ? T.ok : T.warn);
-            linha(r.x, r.y + 18, r.w, "energia",
-                 mv >= 0 ? (mv / 1000).toFixed(2) + " V" : (cap.battery ? "sem leitura" : "sem bateria"),
-                 mv >= 0 && mv < 3400 ? T.err : T.text);
-        }
-    });
+    panel(panels[2], "Wi-Fi", conn ? (w.ip || System.getIPAddress() || "conectado") : "desligado",
+          mv >= 0 ? (mv / 1000).toFixed(2) + " V" : (cap.battery ? "sem leitura" : "sem bateria"),
+          conn ? T.ok : T.warn, mv >= 0 && mv < 3400 ? T.err : null);
 
     // --- sensores (mostra o que a placa tem) -------------------------------
     var sLinha = "";
@@ -146,12 +155,7 @@ function tela(c) {
     } else {
         sLinha = "sem sensores";
     }
-    A.style.card(LX, 254, LW, 52, { full: c.full, elev: 1,
-        draw: function (r) {
-            linha(r.x, r.y, r.w, "sensores", sLinha);
-            linha(r.x, r.y + 18, r.w, "ligado ha", A.fmt.uptime(i.uptimeMs || 0));
-        }
-    });
+    panel(panels[3], "Sensores", sLinha, "Ligado há " + A.fmt.uptime(i.uptimeMs || 0), T.text);
 }
 
 A.run({ main: tela }, "main", { fps: 8 });

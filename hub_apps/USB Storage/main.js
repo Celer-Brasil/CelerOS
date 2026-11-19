@@ -16,10 +16,10 @@ var HAS_DISP = System.getInfo().hasDisplay !== false;
 var T = A.T;
 var CB = { color: T.card, radius: 10, stroke: true };
 var HAS_USB = typeof USB !== "undefined";
-var LX = A.L.x, LW = A.L.w, BOT = A.L.bottom;
+
 
 function fmtSize(n) {
-    n = n | 0;
+    n = Math.max(0, Number(n) || 0);
     if (n < 1024) return n + " B";
     if (n < 1048576) return Math.round(n / 1024) + " KB";
     if (n < 1073741824) return Math.round(n / 1048576) + " MB";
@@ -102,6 +102,15 @@ if (!HAS_DISP) {
     }
 }
 
+// O modo headless nao carrega o layout nem consulta fontes da tela.
+require("celeros.app.layout");
+var area = A.layout.bounds({ top: 40 }), LX = area.x, LW = area.w, BOT = area.y + area.h;
+var capH = UI.lineHeight("caption"), bodyH = UI.lineHeight("body"), gap = 5;
+var volumeH = bodyH + 2 * capH + 20;
+var listY = area.y + volumeH + gap, footerY = BOT - 36;
+var footer = { x: LX, y: footerY, w: LW, h: 36 };
+var eject = A.layout.cell(footer, 2, 1, 0, gap), root = A.layout.cell(footer, 2, 1, 1, gap);
+
 // ---- estado ----------------------------------------------------------------
 var vol = null;
 var volAddr = 0;
@@ -138,6 +147,7 @@ function garante(force) {
     vol = montar(d, 3);
     volAddr = vol ? d.addr : 0;
     path = "/";
+    listRev = -1;
     preview = null;
     msg = vol ? "" : "não montou (FAT32/exFAT?)";
     UI.invalidate();
@@ -155,32 +165,32 @@ function telaLista(c) {
     }
 
     if (!HAS_USB) {
-        UI.card(LX, 50, LW, 118, CB);
-        UI.text("Sem USB Host", LX + 12, 60, { role: "title", color: T.warn, w: LW - 24, lines: 1 });
+        UI.card(LX, area.y, LW, area.h, CB);
+        UI.text("Sem USB Host", LX + 12, area.y + 10, { role: "title", color: T.warn, w: LW - 24, lines: 1 });
         UI.text("Sem USB Host (API 48). O pendrive MSC roda no devkit-S3 com a permissão usb.",
-                LX + 12, 86, { role: "caption", color: T.textDim, w: LW - 24, lines: 4, id: "s-nohost" });
+                LX + 12, area.y + 16 + UI.lineHeight("title"), { role: "caption", color: T.textDim, w: LW - 24, lines: 4, id: "s-nohost" });
         UI.cardEnd();
         return;
     }
 
     if (!vol) {
-        UI.card(LX, 50, LW, 104, CB);
-        UI.text("Nenhum pendrive", LX + 12, 60, { role: "body", color: T.text, w: LW - 24, lines: 1 });
+        UI.card(LX, area.y, LW, footerY - gap - area.y, CB);
+        UI.text("Nenhum pendrive", LX + 12, area.y + 10, { role: "body", color: T.text, w: LW - 24, lines: 1 });
         UI.text("Conecte um pendrive FAT32 ou exFAT no USB-C host.",
-                LX + 12, 84, { role: "caption", color: T.textDim, w: LW - 24, lines: 3, id: "s-empty" });
-        if (msg) UI.text(msg, LX + 12, 122, { role: "caption", color: T.warn, w: LW - 24, lines: 2, id: "s-msg" });
+                LX + 12, area.y + bodyH + 16, { role: "caption", color: T.textDim, w: LW - 24, lines: 3, id: "s-empty" });
+        if (msg) UI.text(msg, LX + 12, footerY - 2 * capH - 16, { role: "caption", color: T.warn, w: LW - 24, lines: 2, id: "s-msg" });
         UI.cardEnd();
-        if (findMsc() && UI.button("Tentar de novo", LX, 168, LW, 38)) garante(true);
+        if (findMsc() && UI.button("Tentar de novo", LX, footerY, LW, 36)) garante(true);
         return;
     }
 
     var info = vol.info();
-    UI.card(LX, 44, LW, 58, CB);
+    UI.card(LX, area.y, LW, volumeH, CB);
     UI.text(String(info.type || "").toUpperCase() + " · " + (info.label || "sem rótulo"),
-            LX + 10, 50, { role: "body", color: T.text, w: LW - 20, lines: 1, id: "s-vol" });
-    UI.text(fmtSize(info.totalBytes), LX + 10, 68,
+            LX + 10, area.y + 6, { role: "body", color: T.text, w: LW - 20, lines: 1, id: "s-vol" });
+    UI.text(fmtSize(info.totalBytes), LX + 10, area.y + bodyH + 9,
             { role: "caption", color: T.textDim, w: LW - 20, lines: 1, id: "s-cap" });
-    UI.text(path, LX + 10, 84,
+    UI.text(path, LX + 10, area.y + bodyH + capH + 12,
             { role: "caption", color: T.accent, w: LW - 20, lines: 1, id: "s-path" });
     UI.cardEnd();
 
@@ -203,7 +213,7 @@ function telaLista(c) {
         for (var k = 0; k < raw.length; k++) {
             var f = raw[k];
             rows.push({
-                label: (f.dir ? "[dir] " : "") + f.name,
+                label: f.name,
                 sub: f.dir ? "pasta" : fmtSize(f.size),
                 item: f
             });
@@ -211,7 +221,7 @@ function telaLista(c) {
         UI.resetScroll("st-list");
     }
 
-    var sel = UI.list("st-list", LX, 108, LW, BOT - 158, rows, { rowH: 40 });
+    var sel = UI.list("st-list", LX, listY, LW, footerY - listY - gap, rows, { rowH: Math.max(36, bodyH + capH + 6) });
     if (sel >= 0) {
         var f2 = rows[sel].item;
         if (f2.dir) {
@@ -229,14 +239,13 @@ function telaLista(c) {
             return "prev";
         }
     }
-    var bw = Math.floor((LW - 8) / 2);
-    if (UI.button("Ejetar", LX, BOT - 42, bw, 34, { style: "ghost" })) {
+    if (UI.button("Ejetar", eject.x, eject.y, eject.w, eject.h, { style: "ghost" })) {
         var ea = volAddr;
         solta();
         tentou = ea;
         UI.invalidate();
     }
-    if (UI.button("Raiz", LX + bw + 8, BOT - 42, bw, 34, { style: "ghost" })) {
+    if (UI.button("Raiz", root.x, root.y, root.w, root.h, { style: "ghost" })) {
         path = "/";
         rows = [];
         listRev = -1;
@@ -248,15 +257,15 @@ telaLista.fps = 15;
 
 function telaPreview(c) {
     if (!preview) return A.BACK;
-    if (A.header("Arquivo", { sub: preview.name })) { preview = null; UI.resetScroll("st-prev"); return; }
-    UI.card(LX, 44, LW, BOT - 52, CB);
+    if (A.header("Arquivo", { sub: preview.name })) { preview = null; UI.resetScroll("st-prev"); return A.BACK; }
+    UI.card(LX, area.y, LW, area.h, CB);
     var maxW = LW - 20;
     var body = preview.text;
     var contentH = 0;
     try { contentH = UI.measureWrap(body, maxW, "caption"); } catch (e) { contentH = 400; }
-    var h = BOT - 52 - 12;
-    var off = UI.scrollBegin("st-prev", LX + 10, 50, maxW, h, Math.max(h, contentH + 8));
-    UI.text(body, LX + 10, 50 - off, { role: "caption", color: T.text, w: maxW, lines: 64 });
+    var h = area.h - 16;
+    var off = UI.scrollBegin("st-prev", LX + 10, area.y + 8, maxW, h, Math.max(h, contentH + 8));
+    UI.text(body, LX + 10, area.y + 8 - off, { role: "caption", color: T.text, w: maxW, lines: 64 });
     UI.scrollEnd();
     UI.cardEnd();
 }

@@ -13,6 +13,7 @@ require("celeros.app.style");
 require("celeros.app.icons");
 require("celeros.app.widgets");
 require("celeros.app.caps");
+require("celeros.app.layout");
 
 A.init();
 var HAS_DISP = true;
@@ -22,16 +23,38 @@ var T = A.style.T;
 
 var caps = A.caps.probe();
 var HAS_MIC = !!(caps.mic && typeof Mic !== "undefined" && typeof Mic.start === "function");
-var HAS_WAV = typeof System.playWav === "function";
+var HAS_WAV = caps.speaker && System.getInfo().hasAudio !== false && typeof System.playWav === "function";
 
 var DATA = "/local/";
 try { if (FS.appData) DATA = FS.appData() || "/local/"; } catch (e) { DATA = "/local/"; }
 
-// ---- layout (margem segura do vidro redondo) -------------------------------
-var LX = A.L.x, LW = A.L.w, BOT = A.L.bottom, CX = A.L.cx;
-var CARD_Y = 44, CARD_H = 124;
-var SEG_Y = CARD_Y + CARD_H + 8, SEG_H = 28;
-var LIST_Y = SEG_Y + SEG_H + 20, LIST_H = BOT - LIST_Y;
+// A biblioteca ganha uma coluna propria no painel largo. Em retrato o
+// controle de captura e a duracao compartilham uma faixa acima dos arquivos.
+var area, capture, library, wide, radius, micX, micY, controlX, controlW, tabsY, labelY;
+var lineH, rowH, sheetH;
+if (HAS_DISP) {
+    area = A.layout.bounds({ top: 40 });
+    wide = HAS_MIC && A.layout.columns(area, 200, 6) >= 2;
+    lineH = UI.lineHeight("caption");
+    rowH = Math.max(38, UI.lineHeight("body") + lineH + 6);
+    sheetH = 20 + UI.lineHeight("title") + (lineH + 4) * 2 + 82 +
+             (System.screenHeight() - area.y - area.h) + 4;
+    if (wide) {
+        capture = A.layout.cell(area, 2, 1, 0, 6);
+        library = A.layout.cell(area, 2, 1, 1, 6);
+    } else {
+        var captureH = HAS_MIC ? Math.max(86, 52 + lineH) : UI.lineHeight("body") + lineH * 2 + 22;
+        capture = { x: area.x, y: area.y, w: area.w, h: captureH };
+        library = { x: area.x, y: area.y + captureH + 6, w: area.w, h: area.h - captureH - 6 };
+    }
+    radius = wide ? 39 : 30;
+    micX = capture.x + (wide ? Math.floor(capture.w / 2) : radius + 10);
+    micY = capture.y + Math.floor(capture.h * (wide ? 0.38 : 0.5));
+    controlX = wide ? capture.x + 5 : micX + radius + 10;
+    controlW = capture.x + capture.w - controlX - 5;
+    tabsY = wide ? capture.y + capture.h - 40 : capture.y + capture.h - 34;
+    labelY = tabsY - lineH - 3;
+}
 
 // ---------------------------------------------------------------- estado ---
 var maxS = 5;                  // duracao alvo (2..10 s), persistida
@@ -158,7 +181,13 @@ function stopRec() {
     if (!wav) { A.toast("gravação vazia (muito curta?)"); UI.invalidate(); return false; }
     var name = "voz-" + recCount + ".wav";
     var wrote = false;
-    try { wrote = FS.writeFile(DATA + name, wav); } catch (e) { wrote = false; }
+    try { wrote = FS.writeFile(DATA + name, wav); } catch (e) {
+        if (e.name === "RangeError") {
+            A.toast("WAV acima do limite de 64 KB");
+            UI.invalidate();
+            return false;
+        }
+    }
     if (!wrote) { A.toast("sem espaço para salvar"); UI.invalidate(); return false; }
     recCount++;
     salvaDatas(name);
@@ -207,28 +236,27 @@ function apaga(it) {
 }
 
 // ---------------------------------------------------------------- desenho ---
-// Botao circular: anel do nivel (gravando) ou trilha (parado), circulo
-// central e tempo. Pintado com System.* a cada frame (como o ring do kit).
-function botaoGravar(cy) {
-    var r = 41, x = CX, y = cy;
-    var frac = recording ? Math.max(0, Math.min(1, level / 100)) : 0;
-    // trilha do anel
-    System.fillArc(x, y, r - 7, r, 0, 360, T.raised);
+function botaoGravar(full) {
+    if (!recording && !full) return;
+    var r = radius, x = micX, y = micY;
+    var frac = Math.max(0, Math.min(1, level / 100));
+    System.fillArc(x, y, r - 4, r, 0, 360, recording ? T.raised : T.accentD);
     if (recording) {
-        if (frac > 0.004) System.fillArc(x, y, r - 7, r, -90, -90 + 360 * frac, T.err);
-        var el = System.millis() - recStart;
-        var tf = Math.min(1, el / (maxS * 1000));
-        System.fillArc(x, y, r + 1, r + 4, -90, -90 + 360 * tf, T.warn);
-    } else {
-        System.fillArc(x, y, r - 7, r, -90, 270, T.accentD);
+        if (frac > 0.004) System.fillArc(x, y, r - 4, r, -90, -90 + 360 * frac, T.err);
+        var tf = Math.min(1, (System.millis() - recStart) / (maxS * 1000));
+        System.fillArc(x, y, r + 1, r + 3, -90, -90 + 360 * tf, T.warn);
     }
-    System.fillCircle(x, y, r - 11, recording ? T.err : T.accent);
-    // rotulo/tempo no centro (fonte 2, datum MC)
-    System.setTextDatum(5);
-    System.setTextColor(recording ? T.text : T.onAccent);
-    if (recording) System.drawString(mmss(System.millis() - recStart), x, y - 4, 2);
-    else System.drawString("Gravar", x, y - 4, 2);
-    System.setTextDatum(0);
+    if (full) {
+        System.fillCircle(x, y, r - 8, recording ? T.err : T.accent);
+        if (recording) {
+            System.fillRoundRect(x - 6, y - 6, 12, 12, 2, T.text);
+        } else {
+            System.fillRoundRect(x - 4, y - 11, 8, 14, 4, T.onAccent);
+            System.fillArc(x, y, 7, 9, 0, 180, T.onAccent);
+            System.fillRect(x - 1, y + 7, 3, 5, T.onAccent);
+            System.fillRect(x - 5, y + 11, 11, 2, T.onAccent);
+        }
+    }
 }
 
 function telaMain(c) {
@@ -252,25 +280,27 @@ function telaMain(c) {
         var it = r[fechaSheet];
         if (!it) { fecha(); return; }
         var res = A.widgets.sheet("gv-det", {
-            open: true, full: c.full, h: 170, title: it.label
+            open: true, full: c.full, h: sheetH, title: it.label
         }, function (q) {
+            var x = Math.max(q.x, area.x);
+            var w = Math.min(q.x + q.w, area.x + area.w) - x;
             var y = q.y;
-            UI.text("Duração", q.x, y, { role: "caption", color: T.textDim, w: 72, lines: 1, id: "gv-l0" });
-            UI.text(it.right || "-", q.x + q.w, y,
+            UI.text("Duração", x, y, { role: "caption", color: T.textDim, w: 72, lines: 1, id: "gv-l0" });
+            UI.text(it.right || "-", x + w, y,
                     { role: "caption", align: "right", color: T.text, w: 128, lines: 1, id: "gv-v0" });
-            y += 18;
-            UI.text("Tamanho", q.x, y, { role: "caption", color: T.textDim, w: 72, lines: 1, id: "gv-l1" });
-            UI.text(fmtBytes(it.size) || "-", q.x + q.w, y,
+            y += lineH + 4;
+            UI.text("Tamanho", x, y, { role: "caption", color: T.textDim, w: 72, lines: 1, id: "gv-l1" });
+            UI.text(fmtBytes(it.size) || "-", x + w, y,
                     { role: "caption", align: "right", color: T.text, w: 128, lines: 1, id: "gv-v1" });
-            y += 18;
-            var bw = Math.floor((q.w - 8) / 2);
-            var b1 = A.style.button("Tocar", q.x, y + 4, bw, 38,
-                                    { disabled: !HAS_WAV, icon: "play" });
+            y += lineH + 4;
+            var bw = Math.floor((w - 8) / 2);
+            var b1 = A.style.button(HAS_WAV ? "Tocar" : "Sem áudio", x, y + 4, bw, 38,
+                                    { disabled: !HAS_WAV, icon: HAS_WAV ? "play" : "" });
             if (b1) toca(it);
-            var b2 = A.style.button("Apagar", q.x + bw + 8, y + 4, bw, 38,
+            var b2 = A.style.button("Apagar", x + bw + 8, y + 4, bw, 38,
                                     { variant: "danger" });
             if (b2) apaga(it);
-            var b3 = A.style.button("Fechar", q.x, y + 50, q.w, 32, { variant: "ghost" });
+            var b3 = A.style.button("Fechar", x, y + 50, w, 32, { variant: "ghost" });
             if (b3) fecha();
         });
         if (res === "close") fecha();
@@ -287,56 +317,46 @@ function telaMain(c) {
     }
 
     if (HAS_MIC) {
-        A.style.card(LX, CARD_Y, LW, CARD_H, { full: c.full, pad: 0, draw: function () {
-            botaoGravar(CARD_Y + 48);
-            UI.text(recording ? "gravando · parar" : "toque para gravar",
-                    CX, CARD_Y + CARD_H - 22,
-                    { role: "caption", align: "center", color: recording ? T.err : T.textDim,
-                      w: LW - 16, lines: 1, id: "gv-st" });
-        }});
-        // tap no circulo (o header/segmentado ja consumiram o deles)
-        var t = UI.touch();
-        if (t.tap) {
-            var dx = t.x - CX, dy = t.y - (CARD_Y + 48);
-            if (dx * dx + dy * dy <= 52 * 52) {
-                if (recording) stopRec();
-                else startRec();
+        A.style.card(capture.x, capture.y, capture.w, capture.h, { full: c.full, pad: 0, elev: 0, draw: function () {
+            botaoGravar(c.full);
+            var cx = controlX + controlW / 2;
+            var statusY = wide ? micY + radius + 8 : capture.y + 4;
+            UI.text(recording ? mmss(System.millis() - recStart) : "Gravar", cx, statusY,
+                    { role: "title", align: "center", color: recording ? T.err : T.text, w: controlW });
+            UI.text("Duração (s)", cx, labelY,
+                    { role: "caption", align: "center", color: T.textDim, w: controlW });
+            var idx = maxS === 2 ? 0 : (maxS === 10 ? 2 : 1);
+            var selected = A.widgets.segmented(controlX, tabsY, controlW, 28, ["2", "5", "10"], idx);
+            if (!recording && selected !== idx) {
+                maxS = [2, 5, 10][selected];
+                salvaCfg();
                 UI.invalidate();
             }
+        }});
+        var t = UI.touch(), dx = t.x - micX, dy = t.y - micY;
+        if (t.tap && dx * dx + dy * dy <= (radius + 4) * (radius + 4)) {
+            if (recording) stopRec();
+            else startRec();
         }
     } else {
-        A.style.card(LX, CARD_Y, LW, CARD_H, { full: c.full, draw: function (q) {
-            A.icons.draw("alert", q.x, q.y + 3, 18, { color: T.warn });
-            UI.text("Sem microfone", q.x + 26, q.y,
-                    { role: "body", w: q.w - 26, lines: 1, id: "gv-nomic" });
-            UI.text("Sem mic ou permissão. Toque numa gravação para ouvir ou apagar.",
-                    q.x, q.y + 26,
-                    { role: "caption", color: T.textDim, w: q.w, lines: 4, id: "gv-nomic2" });
+        A.style.card(capture.x, capture.y, capture.w, capture.h, { full: c.full, pad: 6, elev: 0, draw: function (q) {
+            if (c.full) A.icons.draw("alert", q.x, q.y, 16, { color: T.warn });
+            UI.text("Sem microfone", q.x + 22, q.y, { role: "body", w: q.w - 22 });
+            UI.text("Toque numa gravação para ouvir ou apagar.", q.x, q.y + UI.lineHeight("body") + 3,
+                    { role: "caption", color: T.textDim, w: q.w, lines: 2 });
         }});
     }
 
-    // duracao alvo (persistida) — segmented do kit
-    if (HAS_MIC) {
-        var idx = 1;
-        if (maxS === 2) idx = 0; else if (maxS === 10) idx = 2;
-        var sel = A.widgets.segmented(LX, SEG_Y, LW, SEG_H, ["2 s", "5 s", "10 s"], idx);
-        if (!recording && sel !== idx) {
-            maxS = sel === 0 ? 2 : (sel === 2 ? 10 : 5);
-            salvaCfg();
-            UI.invalidate();
-        }
-    }
-
-    // lista de gravacoes (sem mic ela sobe, o segmented nao existe)
-    var ly = HAS_MIC ? LIST_Y : CARD_Y + CARD_H + 18;
-    var lh = BOT - ly;
-    UI.text("Gravações", LX, ly - 14,
-            { role: "caption", color: T.textDim, w: LW - 60, lines: 1, id: "gv-cap" });
+    UI.text("Gravações", library.x + 4, library.y + 3,
+            { role: "caption", color: T.textDim, w: library.w - 8 });
+    var ly = library.y + lineH + 8, lh = library.h - lineH - 8;
     if (!r.length) {
-        UI.text("Nenhuma gravação.", CX, ly + 18,
-                { role: "caption", align: "center", color: T.textDim, w: LW, lines: 1, id: "gv-empty" });
+        A.style.card(library.x, ly, library.w, lh, { full: c.full, elev: 0, pad: 4, draw: function (q) {
+            UI.text("Nenhuma gravação", q.x + q.w / 2, q.y + (q.h - lineH) / 2,
+                    { role: "caption", align: "center", color: T.textDim, w: q.w });
+        }});
     } else {
-        var i = UI.list("gv-list", LX, ly, LW, lh, r, { rowH: 44 });
+        var i = UI.list("gv-list", library.x, ly, library.w, lh, r, { rowH: rowH });
         if (i >= 0) abreSheet(i);
     }
 }

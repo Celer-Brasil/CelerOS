@@ -4936,7 +4936,7 @@ function holdFrames(x, y, n) {
     var r = runApp('data/apps/Help/main.js');
     check('Help roda', r.err === null, r.err || '');
     var j = joinLog(r.log);
-    check('Help abre o indice', j.indexOf('Como usar') >= 0, j.substring(0, 80));
+    check('Help abre o indice', j.indexOf('Guia do CelerOS') >= 0 && j.indexOf('Tópicos') >= 0, j.substring(0, 80));
 })();
 (function() {
     var r = runApp('data/apps/Web Server/main.js');

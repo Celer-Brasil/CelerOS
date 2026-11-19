@@ -1,6 +1,7 @@
 #include "TimeManager.h"
 #include "Alarms.h"
 #include "AppServices.h"
+#include "../WebManager/WebManager.h"
 #include "../FileSystem/FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../Utils/CelerSettings.h"
@@ -218,16 +219,15 @@ bool TimeManager::getAlarm(int& hour, int& minute, std::string& msg) {
     return true;
 }
 
-void TimeManager::tick(bool networkUp) {
+void TimeManager::tick() {
     // Registro ALWAYS: roda nos DOIS pumps (celerLoop e present). O corpo
     // so decide coisas de 30 s / 10 min / gravacao unica do RTC — 1 Hz basta.
     // Sem o portao, cada present() de um jogo pagava o giro inteiro.
-    static uint32_t s_gateMs = 0;
-    static bool s_gateOn = false;
+    static std::atomic<uint32_t> s_gateMs{0u - 1000u};
+    uint32_t previous = s_gateMs.load(std::memory_order_relaxed);
     const uint32_t gateNow = millis();
-    if (s_gateOn && gateNow - s_gateMs < 1000) return;
-    s_gateOn = true;
-    s_gateMs = gateNow;
+    if (gateNow - previous < 1000 ||
+        !s_gateMs.compare_exchange_strong(previous, gateNow, std::memory_order_relaxed)) return;
 
     // No build padrao os pumps sao a mesma task, um atras do outro — sem
     // corrida. Com CELEROS_APP_TASK o present() vem da task do app: os
@@ -245,7 +245,8 @@ void TimeManager::tick(bool networkUp) {
     static uint32_t lastTryMs = 0;
     static uint32_t lastSaveMs = 0;
     const bool svcStale = AppServices::lastTickAgoMs() > 15u * 60u * 1000u;
-    if (svcStale && ntpEnabled && networkUp && !isTimeValid()) {
+    const bool valid = isTimeValid();
+    if (svcStale && ntpEnabled && !valid && WebManager::isActive()) {
         uint32_t now = millis();
         if (lastTryMs == 0 || now - lastTryMs >= 30000) {
             lastTryMs = now;
@@ -254,7 +255,7 @@ void TimeManager::tick(bool networkUp) {
     }
 
     // Hora valida -> persiste (barato: 1 escrita NVS a cada 10 min)
-    if (svcStale && isTimeValid()) {
+    if (svcStale && valid) {
         uint32_t now2 = millis();
         if (lastSaveMs == 0 || now2 - lastSaveMs >= 600000UL) {
             lastSaveMs = now2;
@@ -269,7 +270,7 @@ void TimeManager::tick(bool networkUp) {
     // uma unica vez — o oscilador dele corre sozinho daqui. Falha de I2C nao
     // trava para sempre: retenta a cada 30 s (RTC parado e o pior cenario no
     // reboot sem rede, e gravar de novo e barato).
-    if (isTimeValid()) {
+    if (valid) {
         static bool rtcWritten = false;
         static uint32_t rtcTryMs = 0;
         if (!rtcWritten) {

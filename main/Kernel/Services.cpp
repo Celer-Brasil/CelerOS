@@ -57,7 +57,7 @@ namespace {
 void svcNavigator(bool) { kui::Navigator::tick(); }
 #endif
 void svcWebManager(bool) { WebManager::tick(); }
-void svcTimeManager(bool) { TimeManager::tick(WebManager::isActive()); }
+void svcTimeManager(bool) { TimeManager::tick(); }
 void svcBacklight(bool) { Backlight::tick(); }
 #if CONFIG_CELEROS_UI
 void svcScreenCapture(bool) { ScreenCapture::service(); }

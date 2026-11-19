@@ -9,9 +9,8 @@ class TimeManager {
 public:
     static void init();
     static void syncNTP();
-    // Retentativa de SNTP enquanto a hora for invalida (chamar no loop);
-    // tambem persiste a hora (a cada 10 min) e dispara o alarme do dia
-    static void tick(bool networkUp);
+    // Manutencao do RTC e fallback de SNTP/persistencia se o servico JS parar.
+    static void tick();
     static bool isTimeValid();
     // false = campos fora da faixa (ano 2020..2099); hora nao muda
     static bool setManualTime(int year, int month, int day, int hour, int minute);

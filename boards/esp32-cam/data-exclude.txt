@@ -47,3 +47,5 @@ modules/celeros.mesh
 modules/celeros.ui.icons
 modules/celeros.usb
 modules/celeros.usb.escpos
+# O perfil headless nao inclui os apps que usam o layout de tela.
+modules/celeros.app.layout

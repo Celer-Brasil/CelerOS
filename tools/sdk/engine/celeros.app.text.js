@@ -15,7 +15,7 @@
 var A = require('celeros.app');
 
 A.text = {
-    version: '1.0.1',
+    version: '1.1.0',
 
     // fora do Latin-1 (e fora do \n) some — as fontes nao tem o glifo
     fit: function (s) {
@@ -30,20 +30,21 @@ A.text = {
 
     // Leitor rolante: header com voltar, texto medido na largura do corpo.
     // getText() devolve o texto na hora (o app pode carregar de arquivo).
-    viewer: function (title, getText) {
+    viewer: function (title, getText, area) {
         var T = A.T || System.theme();
         var s = A.text.fit(getText());
         UI.resetScroll('kit:leitor');
-        UI.invalidate();   // 1a moldura inteira: aberto apos um overlay, o
-        var top = 48;      // spinner dele queimava no framebuffer
-        var h = 320 - top - 6;
+        UI.invalidate();
+        var L = A.L || A.init().L;
+        var box = area || { x: L.x, y: L.top, w: L.w, h: L.bottom - L.top };
+        var w = box.w - 12;
+        var contentH = UI.measureWrap(s, w, 'body') + 12;
         for (;;) {
             UI.begin(T.bg);
-            if (UI.header(title, { back: true })) return;
-            var contentH = UI.measureWrap(s, 216, 'body');
-            var off = UI.scrollBegin('kit:leitor', 4, top, 232, h, Math.max(h, contentH + 8));
+            if (UI.header(title, { back: true })) { UI.end(0); UI.invalidate(); return; }
+            var off = UI.scrollBegin('kit:leitor', box.x, box.y, box.w, box.h, Math.max(box.h, contentH));
             // o slot do texto muda com o offset (nova coordenada y): redesenha
-            UI.text(s, 12, top + 4 - off, { w: 216, lines: 64 });
+            UI.text(s, box.x + 6, box.y + 6 - off, { role: 'body', w: w, lines: 64 });
             UI.scrollEnd();
             UI.end(30);
         }

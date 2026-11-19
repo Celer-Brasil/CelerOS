@@ -31,7 +31,7 @@
 var A = require('celeros.app');
 
 A.list = {
-    version: '1.1.2',
+    version: '1.2.0',
 
     // cache por carimbo: getStamp() roda TODO frame (tem que ser barato);
     // build() so roda quando o carimbo muda
@@ -122,7 +122,8 @@ A.list = {
         var panel = o.panel !== false;
         var panelBg = o.panelBg === undefined ? T.card : o.panelBg;
         var rowBg = o.rowBg === undefined ? T.raised : o.rowBg;
-        var contentH = items.length * rowH;
+        var columns = Math.max(1, Math.min(o.columns | 0, Math.floor((w - 2 * pad + 4) / 24)));
+        var contentH = Math.ceil(items.length / columns) * rowH;
         var fired = -1;
         if (panel) {
             UI.card(x, y, w, h, {
@@ -131,19 +132,22 @@ A.list = {
                 stroke: o.stroke !== false
             });
         }
-        var sx = x + pad, sy = y + 2;
-        var sw = w - pad * 2, sh = h - 4;
-        var off = UI.scrollBegin(id || 'kit:list', sx, sy, sw, sh, contentH);
-        var k0 = Math.floor(off / rowH);
-        var k1 = Math.min(items.length - 1, Math.ceil((off + sh) / rowH) - 1);
+        var left = x + pad, sy = y + 2;
+        var width = w - pad * 2, sh = h - 4;
+        var off = UI.scrollBegin(id || 'kit:list', left, sy, width, sh, contentH);
+        var k0 = Math.floor(off / rowH) * columns;
+        var k1 = Math.min(items.length - 1, Math.ceil((off + sh) / rowH) * columns - 1);
         for (var k = k0; k <= k1; k++) {
             var it = items[k];
             if (it === undefined) continue;
             var isStr = typeof it === 'string';
-            var ry = sy + k * rowH - off;
+            var col = k % columns;
+            var start = Math.floor(col * (width + 4) / columns);
+            var sx = left + start, sw = Math.floor((col + 1) * (width + 4) / columns) - start - 4;
+            var ry = sy + Math.floor(k / columns) * rowH - off;
             if (!isStr && (it.section || it.header || it.k === 'secao')) {
                 UI.text(String(it.label === undefined ? it.section : it.label).toUpperCase(),
-                        sx + 8, ry + Math.round((rowH - UI.lineHeight('caption')) / 2),
+                        sx + 8, ry + Math.round((rowH - cap) / 2),
                         { role: 'caption', color: T.textDim, w: sw - 16, lines: 1 });
                 continue;
             }
@@ -187,14 +191,14 @@ A.list = {
                 }
                 if (it.right !== undefined) {
                     UI.text(String(it.right), sx + sw - 8,
-                            ry + Math.round((rowH - UI.lineHeight('caption')) / 2),
+                            ry + Math.round((rowH - cap) / 2),
                             { role: 'caption', align: 'right',
                               color: it.rightColor === undefined ? T.textDim : it.rightColor,
                               w: rw, lines: 1 });
                 } else if (it.badge !== undefined) {
                     UI.badge(String(it.badge),
                              sx + sw - 8 - Math.round(UI.measure(String(it.badge), 'caption') + 14),
-                             ry + Math.round((rowH - (UI.lineHeight('caption') + 6)) / 2),
+                             ry + Math.round((rowH - (cap + 6)) / 2),
                              { color: it.badgeColor });
                 } else if (it.bars >= 0) {
                     var bx = sx + sw - 8 - 23, by = ry + Math.round((rowH - 14) / 2);
@@ -209,8 +213,8 @@ A.list = {
             if (o.widget) o.widget(it, sx, ry, sw, rowH);
             UI.cardEnd();
             var t = UI.touch();
-            if (t.tap && fired < 0 && t.x >= sx && t.x <= sx + sw &&
-                t.y >= ry && t.y <= ry + rowH && !dis) fired = k;
+            if (t.tap && fired < 0 && t.x >= sx && t.x < sx + sw &&
+                t.y >= sy && t.y < sy + sh && t.y >= ry && t.y < ry + rowH && !dis) fired = k;
         }
         UI.scrollEnd();
         if (panel) UI.cardEnd();

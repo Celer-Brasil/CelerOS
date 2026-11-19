@@ -17,11 +17,17 @@ require("celeros.app.style");
 require("celeros.app.icons");
 require("celeros.app.list");
 require("celeros.app.caps");
+require("celeros.app.layout");
 A.init();
 var T = A.style.preset("soft");
 var C = A.caps.probe();
-var X = A.L.x, W = A.L.w, TOP = A.L.top, BOT = A.L.bottom;
+var area = A.layout.bounds({ top: 40 });
+var X = area.x, W = area.w, TOP = area.y, BOT = area.y + area.h;
 
+var capH = UI.lineHeight("caption"), bodyH = UI.lineHeight("body");
+var statusH = Math.max(62, bodyH + 2 * capH + 20);
+var footer = { x: X, y: BOT - 34, w: W, h: 34 };
+var searchButton = A.layout.cell(footer, 2, 1, 0, 5), portalButton = A.layout.cell(footer, 2, 1, 1, 5);
 var nets = null;                  // null = ainda nao escaneou nesta sessao
 var fail = false;
 var msg = "";
@@ -81,7 +87,7 @@ function doScan() {
     }
     if (fail) msg = "Falha ao buscar redes. Toque em Buscar.";
     else if (!nets.length) msg = "Nenhuma rede por perto.";
-    else msg = nets.length + (nets.length === 1 ? " rede" : " redes") + " · toque para conectar";
+    else msg = nets.length + (nets.length === 1 ? " rede encontrada" : " redes encontradas");
     rows.drop();          // SSIDs/RSSI novos: o cache por carimbo nao adivinha
     UI.invalidate();
 }
@@ -140,15 +146,15 @@ function statusCard(c) {
     // h 72 e linhas EMPILHADAS pela altura devolvida: no vidro grande o corpo
     // mede 19 px e a legenda em +24 fixo encostava nele; a mensagem (1 linha,
     // cortada) em +36 fixo caia dentro da legenda e saia do cartao
-    A.style.card(X, TOP, W, 72, { full: c.full, elev: C.small ? 1 : 2, grad: false,
+    A.style.card(X, TOP, W, statusH, { pad: 7, full: c.full, elev: C.small ? 1 : 2, grad: false,
         draw: function (q) {
             var scanning = scanAt > 0;
             dot(q.x + 4, q.y + 9, scanning ? T.accent : (conn ? T.ok : T.warn));
             var sy = q.y + 2;
             sy += UI.text(scanning ? "Buscando redes..." : (conn ? "Conectado" : "Desconectado"),
-                          q.x + 14, sy, { color: T.text, bg: T.card, id: "st" }) + 2;
+                          q.x + 14, sy, { color: T.text, bg: T.card, id: "st", w: q.w - (scanning ? 62 : 16) }) + 2;
             if (conn && !scanning &&
-                A.style.button("Desconectar", q.x + q.w - 92, q.y + 1, 92, 22,
+                A.style.button("Desconectar", q.x + q.w - 84, sy, 84, Math.max(22, capH + 6),
                                { variant: "ghost", role: "caption" })) {
                 try { Net.wifiDisconnect(); } catch (e) {}
                 msg = "Desconectado. Rede salva.";
@@ -161,10 +167,10 @@ function statusCard(c) {
                        : (st.savedNetworks ? "reconexão automática armada"
                                            : "toque numa rede para conectar")),
                q.x, sy, { role: "caption", color: T.textDim, bg: T.card,
-                          id: "sub", w: q.w }) + 2;
+                          id: "sub", w: q.w - (scanning ? 45 : conn ? 86 : 0) }) + 2;
             if (msg) UI.text(msg, q.x, sy,
                 { role: "caption", color: fail ? T.err : T.textDim, bg: T.card,
-                  id: "msg", w: q.w, lines: 1 });
+                  id: "msg", w: conn ? q.w - 86 : q.w, lines: 1 });
             if (scanning) {
                 var rx = q.x + q.w - 44, ry = q.y + 10;
                 var rd = function (px, py, w, h) {
@@ -210,7 +216,7 @@ function bars(x, y, lvl) {
 function netSheet(c) {
     var n = nets && nets[sel];
     if (!n) { sheet = false; return; }
-    var H = 200, Y = BOT - H;
+    var H = Math.min(area.h, 105 + UI.lineHeight("title") + bodyH + capH), Y = BOT - H;
     A.style.card(X, Y, W, H, { full: c.full, pad: 12, r: T.radius, grad: false,
         draw: function (q) {
             // EMPILHADO pela altura devolvida: no vidro grande o titulo mede
@@ -228,14 +234,14 @@ function netSheet(c) {
             sy += UI.text(n.secure ? "Protegida por senha" : "Rede aberta",
                           q.x, sy, { role: "caption", color: n.secure ? T.warn : T.ok,
                                      bg: T.card, w: q.w, lines: 1, id: "sec" }) + 8;
-            if (A.style.button("Conectar", q.x, sy, q.w, 32,
+            if (A.style.button("Conectar", q.x, BOT - 44, Math.floor((q.w - 5) / 2), 32,
                                { variant: "primary" })) {
                 sheet = false;
                 connect(n);
                 return;
             }
-            sy += 38;
-            if (A.style.button("Fechar", q.x, sy, q.w, 28,
+
+            if (A.style.button("Fechar", q.x + Math.floor((q.w - 5) / 2) + 5, BOT - 44, Math.ceil((q.w - 5) / 2), 32,
                                { variant: "ghost" })) {
                 sheet = false;
                 UI.invalidate();
@@ -262,18 +268,17 @@ function home(c) {
     statusCard(c);
 
     var rs = rows.rows();
-    var i = A.list.view("nets", X, TOP + 78, W, BOT - TOP - 114, rs, { row: 40 });
+    var i = A.list.view("nets", X, TOP + statusH + 5, W, footer.y - TOP - statusH - 10, rs, { row: 40 });
     if (i >= 0) {
         var v = rs[i].value;
         if (v >= 0) { sel = v; sheet = true; UI.invalidate(); }
         else if (v === -1) hidden();
     }
 
-    var bw = (W - 12) / 2;
-    if (A.style.button("Buscar", X, BOT - 32, bw, 30,
+    if (A.style.button("Buscar", searchButton.x, footer.y, searchButton.w, footer.h,
                        { variant: "primary" })) startScan();
     if (A.style.button(portalAvail ? "Portal" : "Sem portal",
-                       X + bw + 12, BOT - 32, bw, 30,
+                       portalButton.x, footer.y, portalButton.w, footer.h,
                        { variant: "ghost", disabled: !portalAvail })) {
         var r = startPortal();
         if (r) return r;
@@ -306,7 +311,7 @@ function portal(c) {
     var ap = "";
     try { if (System.wifiPortalSsid) ap = System.wifiPortalSsid(); } catch (e) {}
 
-    A.style.card(X, TOP, W, 190, { full: c.full, elev: C.small ? 1 : 2, grad: false,
+    A.style.card(X, TOP, W, footer.y - TOP - 5, { full: c.full, elev: C.small ? 1 : 2, grad: false,
         draw: function (q) {
             // EMPILHADO pela altura devolvida: no vidro grande a legenda mede
             // 15 px e o rotulo em +14/+56 fixo encostava nela
@@ -329,9 +334,7 @@ function portal(c) {
             if (pdet) UI.text(pdet, q.x, sy,
                               { role: "caption", color: T.textDim, bg: T.card, id: "det" });
         } });
-    UI.text("O portal sobe um AP e espera a configuração.", X, TOP + 198,
-            { role: "caption", color: T.textDim, bg: T.bg, w: W, lines: 2, id: "hint" });
-    if (A.style.button("Cancelar", X, BOT - 32, W, 30, { variant: "ghost" })) {
+    if (A.style.button("Cancelar", X, footer.y, W, footer.h, { variant: "ghost" })) {
         stopPortal();
         return A.BACK;
     }

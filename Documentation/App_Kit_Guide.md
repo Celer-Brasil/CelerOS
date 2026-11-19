@@ -90,6 +90,8 @@ var cr = A.style.card(8, 48, 224, 120, { full: c.full, draw: function (r) {
 
 The rich list (`A.list.view`) supports `{label, sub, icon, right, badge, bars, disabled, section}`, `paintRow`, and a per-row `widget` (embed `UI.toggle`/`UI.button`); the native `UI.list` remains for simple rows.
 
+Set `columns: 2` in the list options to display items in a scrollable two-column grid. The returned index and the order of items stay the same.
+
 Budgets: each module is ≤5 KB; the kit closure stays ~15.4 KB. `style/icons/widgets/rows` are **outside** `celeros.app.kit` (the kit is already 8 deps): apps add what they need. The CYD App Store has ~6.4 KB free, so it can adopt at most `style`; the other apps have room. Native `UI.custom`/`UI.clip`/`UI.style` extras for S3 boards are a separate compile-time round (`CELEROS_UI_EXTRAS`), keeping the CYD on the base UI. The 4 presets and the shared icons are kept equal to the game side by `test/sdk/ui_parity.js` (the two families had already drifted once: shadow, paper radius and neon colors).
 
 **Native extras (API 52, S3):** `CONFIG_CELEROS_UI_EXTRAS` (default `y` on S3) enables `UI.extras`, `UI.custom` and `UI.clip`/`UI.unclip`. The kit exposes them as `A.style.full` (capability) and `A.style.custom(id, x, y, w, h, sig, draw, { bg, clear })`: on S3 the firmware clears/clips the area and only redraws on a full frame or when the signature changes; on the CYD the same helper uses `A.full` from `A.run` plus the signature. Use `A.style.custom` for areas the app paints **entirely** with `System.*` (charts, icons, gauges) — not for areas containing `UI.text`/`UI.card`. The API is identical on both boards; only the internal path changes. The CYD App Store stays on the base UI.

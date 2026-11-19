@@ -49,3 +49,6 @@ modules/celeros.mesh
 modules/celeros.app.fmt
 modules/celeros.usb
 modules/celeros.usb.escpos
+# HID e gamepad sao deps dos controles de outras placas.
+modules/celeros.hid
+modules/celeros.gamepad

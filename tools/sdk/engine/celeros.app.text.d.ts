@@ -12,6 +12,6 @@ declare namespace A {
          * Leitor rolante BLOQUEANTE (header com voltar). getText() devolve
          * o texto na hora da abertura.
          */
-        viewer(title: string, getText: () => string): void;
+        viewer(title: string, getText: () => string, area?: { x: number; y: number; w: number; h: number }): void;
     };
 }

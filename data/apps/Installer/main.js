@@ -15,10 +15,16 @@ require("celeros.app.list");
 require("celeros.app.style");
 require("celeros.app.icons");
 
+require("celeros.app.layout");
 A.init();
 var T = A.T;
-var L = A.L;
+var L = A.layout.bounds({ top: 40 });
+var bottom = L.y + L.h, cx = L.x + L.w / 2;
 
+var capH = UI.lineHeight("caption"), bodyH = UI.lineHeight("body");
+var footerY = bottom - 40, summaryH = Math.max(44, bodyH + capH + 18);
+var listY = L.y + summaryH + 5;
+var infoY = bottom - capH - 3;
 var SD_FLAG = "/local/config_install_sd.txt";
 var SD_APPS = "/sd/apps";
 var LCL_APPS = "/local/apps";
@@ -378,6 +384,7 @@ function rescan() {
     refreshInstalled();
     lerEspacos();
     UI.resetScroll("apps");
+    UI.resetScroll("installer-empty");
     detail = null;
     UI.invalidate();
 }
@@ -385,20 +392,28 @@ function rescan() {
 // ---- tela de detalhe --------------------------------------------------------
 function desenhaDetalhe(c, app) {
     if (A.header(app.name)) { detail = null; return A.BACK; }
-    var y = L.top;
-    A.style.card(L.x, y, L.w, 112, {
+    var y = L.y;
+    var dest = "Destino: " + A.path.join(destBase(), app.pkg);
+    var destH = Math.min(UI.measureWrap(dest, L.w - 16, "caption"), 2 * capH + 3);
+    var statusH = 37 + destH + (app.deps ? 3 : 2) * (capH + 4);
+    var statusY = footerY - 5 - statusH;
+    A.style.card(L.x, y, L.w, statusY - y - 5, {
         full: c.full, elev: 2, grad: true,
         draw: function (r) {
             A.icons.draw("star", r.x, r.y + 1, 20, { color: T.accent });
             // EMPILHADO pela altura devolvida: no vidro grande o titulo mede
             // 28 px e a legenda em +26 fixo caia dentro dele
             var ty = r.y;
-            ty += UI.text("v" + app.version, r.x + 28, r.y,
-                          { role: "title", color: T.text, bg: r.bg, lines: 1 }) + 3;
+            UI.text("v" + app.version, r.x + 28, r.y,
+                          { role: "title", color: T.text, bg: r.bg, w: r.w - 28, lines: 1 });
+            ty += Math.max(22, UI.lineHeight("title")) + 3;
             ty += UI.text("API " + app.api + (app.author.length ? "  ·  " + app.author : ""),
                           r.x, ty, { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 }) + 4;
-            UI.text(app.desc || "Sem descrição.", r.x, ty,
-                    { role: "caption", color: T.text, bg: r.bg, w: r.w, lines: 3 });
+            var desc = app.desc || "Sem descrição.";
+            var height = Math.max(1, r.y + r.h - ty);
+            var off = UI.scrollBegin("pacote-desc", r.x, ty, r.w, height, Math.max(height, UI.measureWrap(desc, r.w, "caption")));
+            UI.text(desc, r.x, ty - off, { role: "caption", color: T.text, bg: r.bg, w: r.w, lines: 64 });
+            UI.scrollEnd();
         }
     });
 
@@ -406,18 +421,21 @@ function desenhaDetalhe(c, app) {
     if (dInst === null) { stTxt = "Não instalado"; stCol = T.textDim; }
     else if (vcmp(app.version, dInst) > 0) { stTxt = "Atualização: v" + dInst + " para v" + app.version; stCol = T.warn; }
     else { stTxt = "Instalado v" + dInst; stCol = T.ok; }
-    A.style.card(L.x, y + 120, L.w, 96, {
+    A.style.card(L.x, statusY, L.w, statusH, { pad: 8,
         full: c.full, elev: 1, grad: true,
         draw: function (r) {
             UI.badge(stTxt, r.x, r.y, { color: T.raised, textColor: stCol });
-            UI.text("Destino: " + A.path.join(destBase(), app.pkg), r.x, r.y + 26,
-                    { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
-            UI.text("Pacote: " + kb(app.size) + "  ·  Livre: " + kb(dLivre), r.x, r.y + 44,
-                    { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
+            var ty = r.y + capH + 11;
+            ty += UI.text(dest, r.x, ty,
+                          { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 2 }) + 4;
+            ty += UI.text("Pacote: " + kb(app.size), r.x, ty,
+                          { role: "caption", bg: r.bg, w: r.w, lines: 1 }) + 4;
+            ty += UI.text("Livre: " + kb(dLivre), r.x, ty,
+                          { role: "caption", bg: r.bg, w: r.w, lines: 1 }) + 4;
             if (app.deps) {
                 UI.text(dDeps && dDeps.length ? "Faltam módulos: " + dDeps.length
                                               : "Dependências no cache",
-                        r.x, r.y + 62,
+                        r.x, ty,
                         { role: "caption", color: (dDeps && dDeps.length) ? T.err : T.ok,
                           bg: r.bg, w: r.w, lines: 1 });
             }
@@ -426,7 +444,7 @@ function desenhaDetalhe(c, app) {
 
     var lbl = "Instalar";
     if (dInst !== null) lbl = vcmp(app.version, dInst) > 0 ? "Atualizar" : "Reinstalar";
-    if (A.style.button(lbl, L.x, 268, L.w, 40) && tryInstall(app)) {
+    if (A.style.button(lbl, L.x, footerY, L.w, 40) && tryInstall(app)) {
         detail = null;
         return A.BACK;
     }
@@ -436,25 +454,24 @@ function desenhaDetalhe(c, app) {
 rescan();   // scan na abertura (busy + lista pronta antes do 1o frame)
 A.run({
     lista: function (c) {
-        // header nativo + icone de reescanear a mao (sem o widgets, que nao
-        // cabe no orcamento deste app)
-        A.header("Installer", { back: false });
-        UI.card(204, 6, 28, 28, { color: T.raised, radius: 14, stroke: false });
-        A.icons.draw("search", 210, 12, 16, { color: T.text });
-        var tt = UI.touch();
-        if (tt.tap && tt.x >= 204 && tt.x <= 232 && tt.y >= 6 && tt.y <= 34) { rescan(); return; }
+        if (A.header("Installer")) return A.BACK;
+        var refreshX = L.x + L.w - 30;
+        var scan = UI.button("", refreshX, 5, 30, 30, { style: "ghost", id: "rescan" });
+        A.icons.draw("search", refreshX + 7, 12, 16, { color: T.text });
+        if (scan) { rescan(); return; }
 
         // destino (toque no toggle alterna flash/SD)
-        A.style.card(L.x, L.top, L.w, 44, {
+        A.style.card(L.x, L.y, L.w, summaryH, {
+            pad: 6,
             full: c.full, elev: 1, grad: true,
             draw: function (r) {
                 var sd = destBase() === SD_APPS;
                 UI.text("Instalar no SD", r.x, r.y + 1,
                         { color: T.text, bg: r.bg, w: r.w - 56, lines: 1 });
                 UI.text(apps.length + " app(s)  ·  " + (sd ? "/sd/apps" : "/local/apps"),
-                        r.x, r.y + 21,
+                        r.x, r.y + bodyH + 3,
                         { role: "caption", color: T.textDim, bg: r.bg, w: r.w - 56, lines: 1 });
-                if (UI.toggle(r.x + r.w - 46, r.y + 10, sd) !== sd) toggleDest();
+                if (UI.toggle(r.x + r.w - 46, r.y + (r.h - 24) / 2, sd) !== sd) toggleDest();
             }
         });
 
@@ -465,41 +482,39 @@ A.run({
             var e1 = sdOk ? "Nenhum pacote em /sd/apps."
                           : "Cartão SD não encontrado ou sem a pasta apps.";
             var e2 = "Copie apps para o cartão ou use o celerctl / App Store.";
-            var ew = L.w - 20;
-            var eh = 36 + UI.lineHeight("title") + 3 +
-                     UI.measureWrap(e1, ew, "caption") + 4 +
-                     UI.measureWrap(e2, ew, "caption") + 10;
-            A.style.card(L.x, L.top + 56, L.w, eh, {
-                full: c.full, elev: 1, grad: true,
+            A.style.card(L.x, listY, L.w, footerY - listY - 5, {
+                full: c.full, elev: 1, pad: 8,
                 draw: function (r) {
-                    A.icons.draw("info", L.cx - 11, r.y + 4, 22, { color: T.warn });
-                    var ty = r.y + 36;
-                    ty += UI.text("SD sem apps", L.cx, ty,
-                                  { role: "title", align: "center", color: T.warn, bg: r.bg, w: r.w, lines: 1 }) + 3;
-                    ty += UI.text(e1, L.cx, ty,
-                                  { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 }) + 4;
-                    UI.text(e2, L.cx, ty,
-                            { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 });
+                    var contentH = 37 + UI.lineHeight("title") + UI.measureWrap(e1, r.w, "caption") +
+                                   UI.measureWrap(e2, r.w, "caption") + 9;
+                    var off = UI.scrollBegin("installer-empty", r.x, r.y, r.w, r.h, Math.max(r.h, contentH));
+                    var ty = r.y + Math.max(0, Math.floor((r.h - contentH) / 2)) - off;
+                    A.icons.draw("info", cx - 11, ty + 2, 22, { color: T.warn });
+                    ty += 32;
+                    ty += UI.text("SD sem apps", cx, ty, { role: "title", align: "center",
+                                  color: T.warn, bg: r.bg, w: r.w }) + 4;
+                    ty += UI.text(e1, cx, ty, { role: "caption", align: "center",
+                                  color: T.textDim, bg: r.bg, w: r.w, lines: 4 }) + 4;
+                    UI.text(e2, cx, ty, { role: "caption", align: "center",
+                            color: T.textDim, bg: r.bg, w: r.w, lines: 4 });
+                    UI.scrollEnd();
                 }
             });
-            if (A.style.button("Procurar de novo", L.x, 268, L.w, 40)) rescan();
+            if (A.style.button("Procurar de novo", L.x, footerY, L.w, 40)) rescan();
             return;
         }
 
         var rows = linhas.rows();
-        var lh = Math.min(180, rows.length * 44 + 4);
-        var i = A.list.view("apps", L.x, L.top + 52, L.w, lh, rows, { row: 44 });
+        var lh = infoY - listY - 5;
+        var i = A.list.view("apps", L.x, listY, L.w, lh, rows, { row: 44 });
         if (i >= 0) {
             var app = abrirApp(i);
-            if (app !== null) { detail = app; return "detalhe"; }
+            if (app !== null) { detail = app; UI.resetScroll("pacote-desc"); return "detalhe"; }
         }
         // espaco livre medido no scan/troca: nunca bloqueia o desenho do frame
         UI.text("Livre: " + kb(espacos.loc) + (sdOk ? "  ·  SD: " + kb(espacos.sd) : ""),
-                L.cx, L.top + 60 + lh, { role: "caption", align: "center", color: T.textDim, w: L.w, lines: 1 });
-        if (L.top + 80 + lh < 300) {
-            UI.text("Toque num pacote para instalar.", L.cx, L.top + 80 + lh,
-                    { role: "caption", align: "center", color: T.textDim, w: L.w, lines: 1 });
-        }
+                cx, infoY, { role: "caption", align: "center", color: T.textDim, w: L.w, lines: 1 });
+
     },
     detalhe: function (c) {
         if (!detail) return A.BACK;

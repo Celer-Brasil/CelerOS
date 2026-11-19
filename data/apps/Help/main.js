@@ -13,9 +13,20 @@ require("celeros.app.list");
 require("celeros.app.style");
 require("celeros.app.icons");
 
+require("celeros.app.layout");
 A.init();
 var T = A.T;
-var L = A.L;
+var L = A.layout.bounds({ top: 40 });
+var bottom = L.y + L.h, cx = L.x + L.w / 2;
+
+var wide = A.layout.columns(L, 200, 4) > 1;
+var heroH = Math.max(56, Math.max(22, UI.lineHeight("title")) + UI.lineHeight("caption") + 23);
+var hint = "Os tópicos e a busca funcionam offline.";
+var hintY = bottom - UI.measureWrap(hint, L.w, "caption");
+var actions = { x: L.x, y: L.y + heroH + 6, w: L.w, h: hintY - L.y - heroH - 12 };
+var topics = A.layout.cell(actions, wide ? 2 : 1, wide ? 2 : 3, 0, 5);
+var online = A.layout.cell(actions, wide ? 2 : 1, wide ? 2 : 3, 1, 5);
+var search = A.layout.cell(actions, 1, wide ? 2 : 3, wide ? 1 : 2, 5);
 
 // ---- conteudo offline -------------------------------------------------------
 var SEC = [
@@ -150,30 +161,29 @@ function buscar(url, msg) {
 // ---- telas ------------------------------------------------------------------
 A.run({
     menu: function (c) {
-        A.header("Central de Ajuda", { back: false });
-        A.style.card(L.x, L.top, L.w, 64, {
+        if (A.header("Central de Ajuda")) return A.BACK;
+        A.style.card(L.x, L.y, L.w, heroH, {
             full: c.full, elev: 2, grad: true,
             draw: function (r) {
                 A.icons.draw("info", r.x, r.y + 1, 20, { color: T.accent });
-                UI.text("Como usar o CelerOS", r.x + 28, r.y,
-                        { role: "title", color: T.text, bg: r.bg, lines: 1 });
+                UI.text("Guia do CelerOS", r.x + 28, r.y,
+                        { role: "title", color: T.text, bg: r.bg, w: r.w - 28, lines: 1 });
                 UI.text("Gestos, Wi-Fi, apps e mais",
-                        r.x, r.y + 26,
+                        r.x, r.y + Math.max(22, UI.lineHeight("title")) + 3,
                         { role: "caption", color: T.textDim, bg: r.bg, w: r.w, lines: 1 });
             }
         });
-        if (A.style.button("Tópicos de ajuda", L.x, 124, L.w, 40)) return "secoes";
-        if (A.style.button("Ajuda Online", L.x, 172, L.w, 40, { variant: "secondary" })) return "online";
-        if (A.style.button("Buscar na ajuda", L.x, 220, L.w, 36, { variant: "ghost" })) {
+        if (A.style.button("Tópicos", topics.x, topics.y, topics.w, topics.h)) return "secoes";
+        if (A.style.button("Ajuda Online", online.x, online.y, online.w, online.h, { variant: "secondary" })) return "online";
+        if (A.style.button("Buscar na ajuda", search.x, search.y, search.w, search.h, { variant: "ghost" })) {
             if (buscarTudo()) return "resultados";
         }
-        UI.text("Este conteúdo funciona offline; a ajuda online precisa de Wi-Fi.",
-                L.cx, 268, { role: "caption", align: "center", color: T.textDim, w: L.w, lines: 3 });
+        UI.text(hint, cx, hintY, { role: "caption", align: "center", color: T.textDim, w: L.w, lines: 3 });
     },
     secoes: function (c) {
         if (c.entered) UI.resetScroll("sec");
         if (A.header("Tópicos de ajuda")) return A.BACK;
-        var i = A.list.view("sec", L.x, L.top, L.w, L.bottom - L.top, linhasSec.rows(),
+        var i = A.list.view("sec", L.x, L.y, L.w, bottom - L.y, linhasSec.rows(),
                             { row: 44 });
         if (i >= 0) { gato = i; return "topicos"; }
     },
@@ -181,39 +191,39 @@ A.run({
         if (c.entered) UI.resetScroll("top");
         if (A.header(SEC[gato].n)) return A.BACK;
         var tp = SEC[gato].t;
-        var i = A.list.view("top", L.x, L.top, L.w, L.bottom - L.top, linhasTop.rows(),
+        var i = A.list.view("top", L.x, L.y, L.w, bottom - L.y, linhasTop.rows(),
                             { row: 48 });
         if (i >= 0) {
             var topico = tp[i];
             // o viewer do kit nao invalida a 1a moldura (spinner de um busy
             // anterior queimaria no frame parcial de entrada)
             UI.invalidate();
-            A.text.viewer(topico.t, function () { return topico.c; });
+            A.text.viewer(topico.t, function () { return topico.c; }, L);
         }
     },
     resultados: function (c) {
         if (c.entered) UI.resetScroll("res");
         if (A.header("Resultados", { sub: buscaRes.length + " de \"" + buscaQ + "\"" })) return A.BACK;
         if (buscaRes.length === 0) {
-            A.style.card(L.x, L.top + 8, L.w, 112, {
+            A.style.card(L.x, L.y + 8, L.w, 112, {
                 full: c.full, elev: 1, grad: true,
                 draw: function (r) {
-                    A.icons.draw("search", L.cx - 11, r.y + 2, 22, { color: T.textDim });
-                    UI.text("Nada encontrado", L.cx, r.y + 34,
+                    A.icons.draw("search", cx - 11, r.y + 2, 22, { color: T.textDim });
+                    UI.text("Nada encontrado", cx, r.y + 34,
                             { role: "title", align: "center", color: T.warn, bg: r.bg, w: r.w, lines: 1 });
                     UI.text("Tente outra palavra. A busca cobre títulos, resumos e o texto dos tópicos.",
-                            L.cx, r.y + 66,
+                            cx, r.y + 66,
                             { role: "caption", align: "center", color: T.textDim, bg: r.bg, w: r.w, lines: 2 });
                 }
             });
             return;
         }
-        var i = A.list.view("res", L.x, L.top, L.w, L.bottom - L.top, linhasRes.rows(),
+        var i = A.list.view("res", L.x, L.y, L.w, bottom - L.y, linhasRes.rows(),
                             { row: 48 });
         if (i >= 0) {
             var r = buscaRes[i];
             UI.invalidate();
-            A.text.viewer(r.t, function () { return r.c; });
+            A.text.viewer(r.t, function () { return r.c; }, L);
         }
     },
     online: function (c) {
@@ -232,7 +242,7 @@ A.run({
             ocats = out;
             UI.invalidate();
         }
-        var i2 = A.list.view("ocat", L.x, L.top, L.w, L.bottom - L.top, linhasOcat.rows(),
+        var i2 = A.list.view("ocat", L.x, L.y, L.w, bottom - L.y, linhasOcat.rows(),
                              { row: 44 });
         if (i2 >= 0) {
             var a = buscar(ocats[i2].url, "Carregando tópicos...");
@@ -251,7 +261,7 @@ A.run({
     otopicos: function (c) {
         if (c.entered) UI.resetScroll("oart");
         if (A.header(ocats[ocat].name)) return A.BACK;
-        var i = A.list.view("oart", L.x, L.top, L.w, L.bottom - L.top, linhasOart.rows(),
+        var i = A.list.view("oart", L.x, L.y, L.w, bottom - L.y, linhasOart.rows(),
                             { row: 44 });
         if (i >= 0) {
             var art = buscar(oarts[i].url, "Carregando artigo...");
@@ -260,7 +270,7 @@ A.run({
                 ? "Conteúdo não encontrado." : String(art.content);
             var titulo = oarts[i].title;
             UI.invalidate();
-            A.text.viewer(titulo, function () { return conteudo; });
+            A.text.viewer(titulo, function () { return conteudo; }, L);
         }
     }
 }, "menu", { fps: 15 });

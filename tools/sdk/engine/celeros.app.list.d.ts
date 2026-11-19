@@ -31,6 +31,8 @@ declare namespace A {
     interface ListViewOpts {
         /** altura da linha (default 36) */
         row?: number;
+        /** Colunas da lista rolante, em ordem de leitura (default 1). */
+        columns?: number;
         /** desenha o painel em volta (default true) */
         panel?: boolean;
         panelBg?: number;

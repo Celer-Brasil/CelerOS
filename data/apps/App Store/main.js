@@ -43,9 +43,13 @@ var HT = U.hubToken, HU = U.hubUrl, gt = U.fetchText, gj = U.fetchJson, gd = U.d
 var cmpV = U.cmpV, depRangeOk = U.depRangeOk, resolveDeps = U.resolveDeps;
 
 // ---- CelerKit UI 2.0 -------------------------------------------------------
-var A = require("celeros.app"); require("celeros.app.style"); require("celeros.app.icons"); require("celeros.app.list"); require("celeros.app.caps"); A.init();
-var T = A.style.preset("soft"); var L = A.L; var CAP = A.caps.probe(); var PS = !!CAP.psram; var NP = !PS; var SM = !!CAP.small;
-var API = System.getAPILevel(); var IS = SM ? 44 : 56;
+var A = require("celeros.app"); require("celeros.app.style"); require("celeros.app.icons"); require("celeros.app.list"); require("celeros.app.caps"); require("celeros.app.layout");
+A.init();
+var T = A.style.preset("soft"); var L = A.layout.bounds({ top: 40 });
+var bottom = L.y + L.h, cx = L.x + L.w / 2; var CAP = A.caps.probe(); var PS = !!CAP.psram; var NP = !PS; var SM = !!CAP.small;
+var storeCols = Math.min(2, A.layout.columns(L, 200, 4));
+var tabH = Math.max(26, UI.lineHeight("body") + 8);
+var API = System.getAPILevel(); var IS = Math.max(32, UI.lineHeight("title") + 8);
 
 // requires psram declarado vence; catalogo sem o campo cai na heuristica
 // calibrada na CYD (61 KB roda, 82 KB nao compila).
@@ -177,6 +181,13 @@ function ROF(j) { var st = SI(j), lo = lm2[j.pkg], sub; if (tb === 1) { var d = 
         sub = "v" + j.ver + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""); }
     return { label: j.name, sub: sub, icon: IC[j.cat] || "menu", j: j, bars: SZB(j.size), st: st }; }
 // linhas ricas: icone + nome/versao + badge de estado + barras de tamanho.
+function storeTile(it, x, y, w, h) {
+    A.icons.draw(it.icon, x, y + 6, 14, { color: T.accent });
+    UI.text(it.st.bd, x + w, y + 6, { align: "right", role: "caption", color: it.st.col, w: w - 18 });
+    var ty = y + 24;
+    UI.text(it.label, x, ty, { role: "body", w: w, lines: 1 });
+    UI.text(it.sub, x, ty + UI.lineHeight("body") + 3, { role: "caption", color: T.textDim, w: w, lines: 1 });
+}
 function PRW(it, x, y, w, h, s) { var j = it.j, st = it.st, t = String(st.bd), bw = UI.measure(t, "caption") + 14;
     if (bw > w - 84) bw = w - 84; var lw = w - 24 - bw - 6;
     A.icons.draw(it.icon, x, y + Math.round((h - 16) / 2), 16, { color: st.col === T.textDim ? T.text : st.col });
@@ -184,7 +195,7 @@ function PRW(it, x, y, w, h, s) { var j = it.j, st = it.st, t = String(st.bd), b
     UI.text(it.sub, x + 22, y + 25, { role: "caption", color: T.textDim, w: it.bars > 0 ? w - 52 : w - 8, lines: 1, bg: T.raised });
     UI.badge(t, x + w - bw, y + 7, { color: st.col, textColor: T.bg });
     if (it.bars > 0) { var bx = x + w - 22, by = y + h - 8, bi; for (bi = 0; bi < 4; bi++) { var bh = 3 + bi * 3;
-            System.fillRect(bx + bi * 5, by - bh + 9, 3, bh, bi < it.bars ? T.accent : T.stroke); } } }
+            System.fillRect(bx + bi * 5, by - bh + 4, 3, bh, bi < it.bars ? T.accent : T.stroke); } } }
 var rl = A.list.make(function () { return vs; }, function () {
     var it = CLS(), out = []; for (var i = 0; i < it.length; i++) out.push(ROF(it[i])); return out; }); function UN(pkg) {
     var d = RID(pkg); if (!d) return false; if (typeof Storage !== "undefined" && Storage.clearFor) { try { Storage.clearFor(pkg); } catch (e) {} }
@@ -200,21 +211,21 @@ function pmt(ps) { if (!ps || !ps.length) return "nenhuma"; var out = []; for (v
 } function CNS(j) { var ps = j.perms || []; if (!ps.length) return true; var ok = UI.confirm("Permissões", j.name + " pede: " + pmt(ps) + ".", { yes: "Continuar" }); if (ok) j.consented = 1; return ok; }
 
 // ---- UI: chrome ------------------------------------------------------------
-function FTY() { return L.bottom - 34; }
+function FTY() { return bottom - 34; }
 // texto curto: tx(texto, x, y, cor, papel, largura, linhas, bg, alinhamento)
-function tx(s, x, y, c, r, w, n, b, a) { UI.text(s, x, y, { color: c, role: r, w: w || 0, lines: n || 1, bg: b === undefined ? T.bg : b, align: a }); }
+function tx(s, x, y, c, r, w, n, b, a) { return UI.text(s, x, y, { color: c, role: r, w: w || 0, lines: n || 1, bg: b === undefined ? T.bg : b, align: a }); }
 // header nativo + acoes (icone) a direita, com contador opcional. Devolve
 // "" | "back" | id da acao.
 function hd(t, back, acts) { if (UI.header(t, { back: !!back })) return "back"; if (!acts) return ""; for (var i = 0; i < acts.length; i++) {
-        var ax = 240 - 8 - (acts.length - i) * 32; var hit = UI.button("", ax, 6, 28, 28, { color: T.raised, id: "h" + acts[i].id });
+        var ax = L.x + L.w - (acts.length - i) * 32; var hit = UI.button("", ax, 6, 28, 28, { color: T.raised, id: "h" + acts[i].id });
         A.icons.draw(acts[i].icon, ax + 6, 12, 16, { color: T.text });
         if (acts[i].count > 0) UI.badge(acts[i].count > 9 ? "9+" : String(acts[i].count), ax + 18, 2, { color: T.err, textColor: T.bg });
         if (hit) return acts[i].id; } return ""; } function TSB() {
-    var nt = UI.tabs(L.x, 44, L.w, 26, ["Loja", "Atualiz.", "Meus"], tb); if (nt !== tb) { tb = nt; si = null; PSD(); BVW();
+    var nt = UI.tabs(L.x, L.y, L.w, tabH, ["Loja", "Atualiz.", "Meus"], tb); if (nt !== tb) { tb = nt; si = null; PSD(); BVW();
         for (var i = 0; i < 3; i++) UI.resetScroll("store" + i); UI.invalidate(); } }
 // categorias: segmentado com a atual (ou a proxima) + "..." para a lista.
 function PKC() { for (;;) { UI.invalidate(); UI.begin(T.bg); if (UI.header("Categorias", { back: true })) { UI.end(15); return ""; } var sel = -1;
-        for (var i = 0; i < ct.length; i++) if (ct[i] === cc) sel = i; var k = UI.list("cats", L.x, 46, L.w, FTY() - 50, ct, { selected: sel }); UI.end(15);
+        for (var i = 0; i < ct.length; i++) if (ct[i] === cc) sel = i; var k = UI.list("cats", L.x, L.y, L.w, L.h, ct, { selected: sel }); UI.end(15);
         if (k >= 0) return ct[k]; } } function CTB(y) { var mid = cc === "Todos" ? (ct[1] || "Todos") : cc;
     var i = UI.tabs(L.x, y, L.w, 22, ["Todos", mid, "..."], cc === "Todos" ? 0 : 1); if (i === 2) { var c = PKC(); UI.invalidate();
         if (c && c !== cc) { cc = c; BVW(); UI.resetScroll("store0"); } return 1; } var w = i === 0 ? "Todos" : mid;
@@ -237,7 +248,7 @@ function HM(c) { var act = hd("App Store", false, [{ icon: q2 ? "close" : "searc
             var s = System.prompt("Buscar app", "", {}); q2 = s ? String(s) : ""; BVW(); UI.resetScroll("store0"); UI.invalidate(); } } else if (act === "go") {
         if (!nc) { UI.toast("Sem internet"); } else if (uc > 0) { UI.toast(uc + " atualizações: aplicando"); return "batch"; }
         else { UI.toast("Recarregando catálogo"); return "load"; } } TSB();
-    var fy = FTY(), top = 74, items = CLS(), lb = L.bottom - 6;
+    var fy = FTY(), top = L.y + tabH + 4, items = CLS(), lb = bottom;
     if (tb === 0) { if (cw) { tx(cw, L.x, top, T.warn, "caption", L.w, 2); top += 24; }
         else if (!nc) { tx("Sem internet: catálogo em cache", L.x, top, T.warn, "caption", L.w, 1); top += 16; }
         else if (q2) { tx("Busca: " + q2, L.x, top, T.textDim, "caption", L.w, 1); top += 16; }
@@ -249,41 +260,43 @@ function HM(c) { var act = hd("App Store", false, [{ icon: q2 ? "close" : "searc
         if (UI.toggle(L.x + L.w - 44, top, au.auto !== false, { id: "auto" }) !== (au.auto !== false)) SETAUTO(au.auto === false);
         top += 30; if (uc > 0) lb = fy - 4; }
     var ly = top + 2, lh = lb - ly;
-    if (items.length && lh > 24) { var i = A.list.view("store" + tb, L.x, ly, L.w, lh, rl.rows(), { row: 46, paintRow: PRW });
+    if (items.length && lh > 24) { var i = A.list.view("store" + tb, L.x, ly, L.w, lh, rl.rows(), { columns: storeCols, row: storeCols > 1 ? 32 + UI.lineHeight("body") + UI.lineHeight("caption") : 46, paintRow: storeCols > 1 ? storeTile : PRW });
         if (i >= 0) { si = items[i]; return "detail"; }
-    } else if (!items.length) { var cy = (L.top + L.bottom) / 2, autoOn = CFG().auto !== false;
+    } else if (!items.length) { var cy = ly + (lh - UI.lineHeight("title") - 2 * UI.lineHeight("caption")) / 2, autoOn = CFG().auto !== false;
         tx(tb === 1 ? (autoOn ? "Tudo em dia!" : "Automático desligado") : tb === 2 ? "Nenhum app instalado" : (q2 ? "Nenhum resultado" : "Catálogo vazio"),
-           120, cy, T.text, "title", L.w, 1, T.bg, "center"); tx(tb === 1 ? (autoOn ? "A rotina confere todo dia às 02:00." : "Ligue o automático acima.")
+           cx, cy, T.text, "title", L.w, 1, T.bg, "center"); tx(tb === 1 ? (autoOn ? "A rotina confere todo dia às 02:00." : "Ligue o automático acima.")
            : tb === 2 ? "Instale um app na aba Loja."
-           : (cw ? "Catálogo parcial." : "Toque no check para recarregar."), 120, cy + 22, T.textDim, "caption", L.w, 2, T.bg, "center"); }
+           : (cw ? "Catálogo parcial." : "Toque no check para recarregar."), cx, cy + UI.lineHeight("title") + 4, T.textDim, "caption", L.w, 2, T.bg, "center"); }
     if (tb === 1 && uc > 0) { if (A.style.button("Atualizar tudo", L.x, fy, L.w, 30, { variant: "primary" })) return "batch"; }
     else if (tb === 2) { var sd = ios(), noSd = sd && sf === 0;
         if (A.style.button("Instalar em: " + (sd ? "SD" : "interno") + (noSd ? " (sem cartão!)" : ""), L.x, fy, L.w, 30, { variant: "ghost" })) {
             SIO(!sd); UI.toast(sd ? "Instalar na memória interna" : "Instalar no cartão SD"); UI.invalidate(); } } }
 
 // ---- detalhe (folha) -------------------------------------------------------
+var detailH = 0;
 function DT(c) { var j = si; if (!j) return RT("home");
     // descricao/changelog/permissoes frescos (o cache compacto nao traz);
     // 1 request por app visto, com frame de busy antes
+    if (c.entered) { detailH = 0; UI.resetScroll("det:" + j.pkg); }
     if (c.entered && j.metaUrl && !j.fetched && Net.isConnected()) { A.busy("Abrindo " + j.name); FIM(j); UI.invalidate(); return; }
     if (UI.header(j.name, { back: true })) return A.BACK;
     var lo = lm2[j.pkg], st = SI(j), conf = !!(lo && cmpV(j.ver, lo.ver) < 0), fy = FTY();
-    var sx = L.x, sw = L.w, top = 48, bh = fy - 6 - top;
+    var sx = L.x, sw = L.w, top = L.y, bh = fy - 6 - top;
     A.style.card(sx, top, sw, bh, { full: c.full, r: 14, pad: 12, draw: function (q) {
         System.fillRoundRect(sx + (sw >> 1) - 16, top + 5, 32, 4, 2, T.stroke);
         var yy = q.y + 8;
         if (c.full) System.fillGradient(q.x, yy, IS, IS, T.accent, T.accentD, 12);
         UI.text(String(j.name || "?").charAt(0).toUpperCase(), q.x + (IS >> 1), yy + ((IS - UI.lineHeight("title")) >> 1), { align: "center", role: "title", color: T.onAccent, bg: T.accentD });
-        var tw = q.w - IS - 8, bw = UI.measure(st.bd, "caption") + 14;
+        var tw = q.w - IS - 8;
         // EMPILHADO pela altura devolvida: o titulo mede 28-29 px e a legenda
         // em +21 fixo caia dentro dele
         var hy = yy + 1;
-        hy += UI.text(j.name, q.x + IS + 8, yy + 1, { role: "title", color: T.text, w: tw - bw - 4, lines: 1, bg: T.card }) + 2;
+        hy += UI.text(j.name, q.x + IS + 8, yy + 1, { role: "title", color: T.text, w: tw, lines: 2, bg: T.card }) + 2;
         hy += UI.text((j.author || "Desconhecido") + (j.size ? " · " + fk(j.size) : "") + (j.deps ? " · deps" : ""), q.x + IS + 8, hy, { role: "caption", color: T.textDim, w: tw, lines: 1, bg: T.card }) + 3;
-        UI.text("v" + j.ver + (lo && lo.ver !== j.ver ? " · instalado v" + lo.ver : ""), q.x + IS + 8, hy, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
-        UI.badge(st.bd, q.x + q.w - bw, yy + 2, { color: st.col, textColor: T.bg });
-        var sy = yy + IS + 8, sh = top + bh - 16 - sy;
-        var off = UI.scrollBegin("det:" + j.pkg, q.x, sy, q.w, sh, 420), x = q.x, w = q.w, y = sy - off + 2;
+        hy += UI.text("v" + j.ver + (lo && lo.ver !== j.ver ? " · instalado v" + lo.ver : ""), q.x + IS + 8, hy, { role: "caption", color: T.text, w: tw, lines: 1, bg: T.card });
+        UI.badge(st.bd, q.x + IS + 8, hy + 3, { color: st.col, textColor: T.bg });
+        var sy = Math.max(yy + IS, hy + UI.lineHeight("caption") + 9) + 6, sh = top + bh - 16 - sy;
+        var off = UI.scrollBegin("det:" + j.pkg, q.x, sy, q.w, sh, Math.max(sh, detailH)), x = q.x, w = q.w, y = sy - off + 2;
         // trava de versao (so faz sentido com o app instalado): desligada, o
         // app nao entra na rotina das 02:00 nem no "Atualizar tudo"; o botao
         // Atualizar abaixo continua valendo.
@@ -293,23 +306,26 @@ function DT(c) { var j = si; if (!j) return RT("home");
             y += 28;
             if (!pn) { y += UI.text("Versão travada em v" + lo.ver + " (o lote e a madrugada não trocam sozinhos).",
                                     x, y, { role: "caption", color: T.textDim, w: w, lines: 2, bg: T.card }) + 4; } }
-        tx("Permissões", x, y, T.textDim, "caption", 100, 1, T.card); tx(pmt(j.perms), x + w - 10, y, T.text, "caption", w - 110, 1, T.card, "right"); y += 27;
-        tx("Descrição", x, y, T.accent, "caption", 0, 1, T.card); y += 15;
+        y += tx("Permissões", x, y, T.accent, "caption", w, 1, T.card) + 2;
+        y += tx(pmt(j.perms), x, y, T.text, "caption", w, 4, T.card) + 6;
+        y += tx("Descrição", x, y, T.accent, "caption", w, 1, T.card) + 2;
         y += UI.text(String(j.desc || "Sem descrição.").replace(/\n/g, " "), x, y, { role: "caption", color: T.textDim, w: w, lines: 4, bg: T.card }) + 6;
-        tx("Novidades", x, y, T.accent, "caption", 0, 1, T.card); y += 15;
+        y += tx("Novidades", x, y, T.accent, "caption", w, 1, T.card) + 2;
         y += UI.text(String(j.changelog || "Sem notas.").replace(/\n/g, " "), x, y, { role: "caption", color: T.textDim, w: w, lines: 8, bg: T.card });
-        if (conf) { y += 8; tx("Instalado v" + lo.ver + " é mais novo que o hub (v" + j.ver + ").", x, y, T.warn, "caption", w, 2, T.card); }
-        else if ((j.api || 1) > API) { y += 8; tx("Requer API " + j.api + " (aqui: " + API + ").", x, y, T.warn, "caption", w, 2, T.card); }
-        else if (st.code === "hw") { y += 8; tx("Exige PSRAM: a RAM interna não basta.", x, y, T.warn, "caption", w, 2, T.card); }
-        else if (st.code === "nat") { y += 8; tx("Requer ESP32-S3 com PSRAM: o app carrega código nativo.", x, y, T.warn, "caption", w, 2, T.card); }
+        if (conf) { y += 8; y += tx("Instalado v" + lo.ver + " é mais novo que o hub (v" + j.ver + ").", x, y, T.warn, "caption", w, 2, T.card); }
+        else if ((j.api || 1) > API) { y += 8; y += tx("Requer API " + j.api + " (aqui: " + API + ").", x, y, T.warn, "caption", w, 2, T.card); }
+        else if (st.code === "hw") { y += 8; y += tx("Exige PSRAM: a RAM interna não basta.", x, y, T.warn, "caption", w, 2, T.card); }
+        else if (st.code === "nat") { y += 8; y += tx("Requer ESP32-S3 com PSRAM: o app carrega código nativo.", x, y, T.warn, "caption", w, 2, T.card); }
+        detailH = y + off - sy + 6;
         UI.scrollEnd(); } });
 
+    var half = Math.floor((L.w - 6) / 2);
     var can = !!j.appUrl && st.code !== "api" && st.code !== "hw" && st.code !== "nat";
     if (can) { var lbl = (st.code === "upd" || st.code === "pin") ? "Atualizar" : st.code === "dep" ? "Atualizar engine" : st.code === "inst" ? "Reinstalar" : "Instalar";
-        if (A.style.button(lbl, L.x, fy, lo ? 108 : L.w, 30, { variant: "primary" })) {
+        if (A.style.button(lbl, L.x, fy, lo ? half : L.w, 30, { variant: "primary" })) {
             if (conf && st.code === "inst" && !UI.confirm("Versão", "Local v" + lo.ver + " > hub v" + j.ver + ". Reinstalar a do hub?", { yes: "Reinstalar" })) return;
             if (!lo && !CNS(j)) return; return st.code === "dep" ? "deps" : "install"; }
-        if (lo && A.style.button("Desinstalar", L.x + 116, fy, 108, 30, { variant: "danger" })) { if (uf(j)) return A.BACK; }
+        if (lo && A.style.button("Desinstalar", L.x + L.w - half, fy, half, 30, { variant: "danger" })) { if (uf(j)) return A.BACK; }
     } else if (lo && A.style.button("Desinstalar", L.x, fy, L.w, 30, { variant: "danger" })) { if (uf(j)) return A.BACK; }
     else if (!lo) A.style.button("Indisponível", L.x, fy, L.w, 30, { variant: "ghost", disabled: true }); }
 

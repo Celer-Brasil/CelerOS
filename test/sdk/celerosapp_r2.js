@@ -207,6 +207,23 @@ module.exports = function (check) {
     check('list.view: secao nao conta e o tap pega a linha certa',
           picked === 2, String(picked));
 
+    // Grade com numero impar de itens: a coluna direita, a folga entre
+    // colunas e a parte de uma linha fora da janela tem alvos distintos.
+    function pickGrid(x, y) {
+        var grid = fresh(['list']), selection = -1;
+        tap(grid.env, x, y);
+        frames(grid, 5, function () {
+            var index = grid.A.list.view('grade', 20, 80, 200, 60,
+                                         ['A', 'B', 'C'], { row: 36, columns: 2 });
+            if (index >= 0) selection = index;
+        });
+        return selection;
+    }
+    check('list.view: grade mapeia coluna e linha ao indice original',
+          pickGrid(160, 98) === 1 && pickGrid(55, 128) === 2);
+    check('list.view: espaco entre colunas, celula vazia e rodape nao selecionam',
+          pickGrid(120, 98) === -1 && pickGrid(160, 128) === -1 && pickGrid(55, 145) === -1);
+
     // widget nativo dentro da linha consome o tap (a linha nao dispara)
     c = fresh(['style', 'icons', 'list']);
     tap(c.env, 200, 80 + 2 + 18);   // toggle da linha 0 (x 168..212)

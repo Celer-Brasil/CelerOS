@@ -1,8 +1,10 @@
 {
   "celeros.app": "1.1.1",
+  "celeros.app.caps": "1.0.0",
   "celeros.app.fsx": "1.0.3",
   "celeros.app.icons": "1.1.0",
-  "celeros.app.list": "1.1.2",
+  "celeros.app.layout": "1.0.0",
+  "celeros.app.list": "1.2.0",
   "celeros.app.path": "1.0.1",
   "celeros.app.style": "1.1.1",
   "celeros.ui.icons": "1.0.0"

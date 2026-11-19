@@ -4,7 +4,7 @@
 // picker/info/secao), menu e listas no A.list.view, cards/botoes do A.style,
 // icones vetoriais do A.icons e as capacidades da placa no A.caps (a CYD sem
 // BT/mic/audio/PSRAM abre e explica, nao some). ES5 puro (Duktape), canvas
-// virtual 240x320 (A.L respeita o inset do vidro redondo).
+// virtual 240x320 com margens seguras do painel.
 
 var A = require("celeros.app");
 require("celeros.app.style");
@@ -14,10 +14,14 @@ require("celeros.app.list");
 require("celeros.app.rows");
 require("celeros.app.caps");
 
+require("celeros.app.layout");
 A.init();
 A.style.preset("soft");
 var T = A.style.T;
-var LX = A.L.x, LW = A.L.w, TOP = A.L.top, BOT = A.L.bottom;
+var area = A.layout.bounds({ top: 40 });
+var LX = area.x, LW = area.w, TOP = area.y, BOT = area.y + area.h;
+var cols = Math.min(2, A.layout.columns(area, 200, 4));
+var half = Math.floor((LW - 6) / 2), actionsY = BOT - 40;
 var CAP = A.caps.probe();          // sonda unica: placa nao muda em execucao
 
 var ISD = "/local/config_install_sd.txt";
@@ -347,10 +351,19 @@ function buildMenu() {
     return a;
 }
 
+function menuTile(item, x, y, w, h) {
+    A.icons.draw(item.icon, x, y + 5, 15, { color: T.accent });
+    var labelY = y + 23;
+    var role = UI.measure(item.label, "body") <= w ? "body" : "caption";
+    UI.text(item.label, x, labelY, { role: role, w: w, lines: 2 });
+    if (item.right) UI.text(item.right, x, labelY + Math.min(2 * UI.lineHeight(role) + 2, UI.measureWrap(item.label, w, role)) + 2,
+                             { role: "caption", color: item.rightColor || T.textDim, w: w });
+}
+
 function scrMenu(c) {
     if (c.entered || A.every(1000, "menu")) MN = buildMenu();
     if (A.header("Ajustes")) return A.BACK;
-    var i = A.list.view("menu", LX, TOP, LW, BOT - TOP, MN, { row: 36 });
+    var i = A.list.view("menu", LX, TOP, LW, BOT - TOP, MN, { columns: cols, row: cols > 1 ? 29 + Math.max(UI.lineHeight("body"), 2 * UI.lineHeight("caption") + 2) + UI.lineHeight("caption") : 36, paintRow: cols > 1 ? menuTile : null });
     if (i < 0) return;
     var r = MN[i];
     if (r && r.a) return r.a;
@@ -526,12 +539,12 @@ function scrAppDetail(c) {
     });
     UI.text("Descrição", LX + 4, TOP + 136, { role: "caption", color: T.accent, id: "adesc" });
     UI.text(ap.desc || "Sem descrição.", LX + 4, TOP + 154,
-            { role: "caption", color: T.textDim, w: LW - 8, lines: 5, id: "adesct" });
-    if (A.style.button("Abrir", LX, 266, 106, 40,
+            { role: "caption", color: T.textDim, w: LW - 8, lines: Math.max(1, Math.floor((actionsY - TOP - 160) / UI.lineHeight("caption"))), id: "adesct" });
+    if (A.style.button("Abrir", LX, actionsY, half, 40,
                        { variant: "primary", disabled: !ap.pkg })) {
         if (ap.pkg) System.launchApp(ap.pkg);
     }
-    if (A.style.button("Desinstalar", LX + 118, 266, 106, 40, { variant: "danger" }) &&
+    if (A.style.button("Desinstalar", LX + LW - half, actionsY, half, 40, { variant: "danger" }) &&
         askUninstall(ap)) return A.BACK;
 }
 function askUninstall(ap) {
@@ -868,7 +881,7 @@ function drawUpdate(full) {
     if (oSt === "avail") {
         // h 200: com o cabecalho empilhado, o bloco rolavel desce e nao cabe
         // mais nos 192 de antes
-        A.style.card(LX, TOP, LW, 200, {
+        A.style.card(LX, TOP, LW, actionsY - TOP - 6, {
             full: full,
             draw: function (q) {
                 UI.badge(i.type || "Atualização", q.x, q.y);
@@ -882,8 +895,8 @@ function drawUpdate(full) {
                               q.x, vy, { role: "caption", color: T.textDim,
                                          bg: q.bg, w: q.w, id: "otach" }) + 4;
                 // bloco rolavel (changelog + guia)
-                var off = UI.scrollBegin("ota", q.x, vy, q.w, 112,
-                                         Math.max(112, oBh));
+                var viewH = Math.max(1, q.y + q.h - vy);
+                var off = UI.scrollBegin("ota", q.x, vy, q.w, viewH, Math.max(viewH, oBh));
                 if (full)
                     oBh = UI.text(otaText(), q.x, vy - off,
                                        { role: "caption", color: T.textDim,
@@ -893,12 +906,12 @@ function drawUpdate(full) {
             }
         });
         if (i.hasFirmware) {
-            if (A.style.button("Instalar", LX, 252, 108, 40)) installFlow();
+            if (A.style.button("Instalar", LX, actionsY, half, 40)) installFlow();
         } else {
-            UI.text("Canal sem firmware: siga o guia.", LX + 4, 258,
-                    { role: "caption", color: T.textDim, w: 108, lines: 2, id: "otag" });
+            UI.text("Canal sem firmware: siga o guia.", LX + 4, actionsY + 4,
+                    { role: "caption", color: T.textDim, w: half - 8, lines: 2, id: "otag" });
         }
-        if (A.style.button("Verificar", LX + 116, 252, 108, 40, { variant: "ghost" }))
+        if (A.style.button("Verificar", LX + LW - half, actionsY, half, 40, { variant: "ghost" }))
             doCheck();
         return;
     }

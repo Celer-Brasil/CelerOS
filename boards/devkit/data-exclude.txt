@@ -21,3 +21,5 @@ apps/Regras
 apps/WiFi
 # Sem launcher visual nao ha grade: icones nao servem de nada.
 icons
+# O perfil headless nao inclui os apps que usam o layout de tela.
+modules/celeros.app.layout

@@ -90,6 +90,8 @@ var cr = A.style.card(8, 48, 224, 120, { full: c.full, draw: function (r) {
 
 A lista rica (`A.list.view`) aceita `{label, sub, icon, right, badge, bars, disabled, section}`, `paintRow` e um `widget` por linha (embute `UI.toggle`/`UI.button`); o `UI.list` nativo continua para linhas simples.
 
+Use `columns: 2` nas opções da lista para mostrar os itens em duas colunas com rolagem. A ordem dos itens e o índice retornado continuam iguais.
+
 Orçamento: cada módulo ≤5 KB; o fecho do kit fica em ~15,4 KB. `style/icons/widgets/rows` ficam **fora** do `celeros.app.kit` (o kit já tem 8 deps): cada app adiciona o que precisa. A Loja na CYD tem ~6,4 KB livres, então adota no máximo o `style`; os outros apps têm folga. Os extras nativos `UI.custom`/`UI.clip`/`UI.style` para as placas S3 são uma rodada separada, habilitada em compilação (`CELEROS_UI_EXTRAS`), mantendo a CYD na UI base. Os 4 presets e os ícones compartilhados são mantidos iguais aos do lado dos jogos pelo `test/sdk/ui_parity.js` (as duas famílias já divergiram uma vez: sombra, raio do paper e cores do neon).
 
 **Extras nativos (API 52, S3):** `CONFIG_CELEROS_UI_EXTRAS` (padrão `y` nas S3) liga `UI.extras`, `UI.custom` e `UI.clip`/`UI.unclip`. O kit expõe isso como `A.style.full` (capacidade) e `A.style.custom(id, x, y, w, h, sig, draw, { bg, clear })`: nas S3 a área é limpa e recortada pelo firmware e só redesenha no frame total ou quando a assinatura muda; na CYD o mesmo helper usa o `A.full` do `A.run` e a assinatura. Use `A.style.custom` em áreas que o app pinta **inteiras** com `System.*` (gráficos, ícones, medidores) — não em áreas com `UI.text`/`UI.card` dentro. A API é a mesma nas duas placas; só o caminho interno muda. A Loja na CYD continua na UI base.

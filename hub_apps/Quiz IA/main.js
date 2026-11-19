@@ -1,7 +1,7 @@
 // Quiz IA — perguntas geradas na hora pelo assistente do aparelho
 // (AI.chat, API 18: DeepSeek/OpenRouter — a chave fica no firmware, nunca
 // no app). CelerKit UI 2.0: configuracao em lista + segmented, progresso em
-// anel, alternativas em cards 2x2 que acendem verde/vermelho, sequencia e
+// anel, alternativas em cards responsivos que acendem verde/vermelho, sequencia e
 // recorde no celeros.app.data. Sem chave (ou se a IA falhar) o jogo cai no
 // banco offline embutido e avisa o motivo. ES5 (Duktape).
 
@@ -12,9 +12,17 @@ require("celeros.app.text");      // Latin-1 do que a IA devolve
 require("celeros.app.style");     // cards/botoes tokenizados
 require("celeros.app.widgets");   // header, anel de progresso, segmented
 
+require("celeros.app.layout");
 A.init();
 var T = A.style.T;
-var L = A.L, LX = L.x, LW = L.w;
+var area = A.layout.bounds({ top: 40 });
+var LX = area.x, LW = area.w, cx = LX + LW / 2, bottom = area.y + area.h;
+var gap = 4, capH = UI.lineHeight("caption"), btnH = 32;
+var columns = Math.min(2, A.layout.columns(area, 180, gap));
+var footerY = bottom - btnH, noteY = footerY - capH - gap;
+var diffY = noteY - 36, topicsY = area.y;
+var viewY = area.y + capH + 13, viewH = noteY - gap - viewY;
+var measured = null, questionH = 0, answerBoxes = [], textHeights = [];
 
 var TOPICS = ["Geral", "Ciências", "História", "Geografia", "Esportes", "Tecnologia"];
 var DIFS = ["fácil", "média", "difícil"];
@@ -198,44 +206,56 @@ function menu(c) {
     if (h.back) return A.BACK;
     var rows = [];
     for (var i = 0; i < TOPICS.length; i++) rows.push({ label: TOPICS[i] });
-    var k = UI.list("topicos", LX, 48, LW, 166, rows, { rowH: 27, selected: topic });
+    var k = UI.list("topicos", LX, topicsY, LW, diffY - gap - topicsY, rows, { rowH: Math.max(27, UI.lineHeight("body") + 6), selected: topic });
     if (k >= 0 && k !== topic) { topic = k; UI.invalidate(); }
-    var nd = A.widgets.segmented(LX, 220, LW, 30, DIFS, dif);
+    var nd = A.widgets.segmented(LX, diffY, LW, 30, DIFS, dif);
     if (nd !== dif) { dif = nd; UI.invalidate(); }
     var ia = iaLigada(), net = A.net.online();
-    UI.badge(ia ? (net ? "IA conectada" : "sem Wi-Fi") : "banco offline", LX + 2, 258,
+    UI.badge(ia ? (net ? "IA conectada" : "sem Wi-Fi") : "banco offline", LX + 2, noteY - 2,
              { color: ia && net ? T.ok : T.accentD, textColor: ia && net ? T.onAccent : T.text });
-    UI.text("recorde " + hi + "/" + TOTAL, LX + LW, 262,
+    UI.text("recorde " + hi + "/" + TOTAL, LX + LW, noteY,
             { role: "caption", align: "right", color: T.textDim, w: 110 });
-    if (A.style.button("Começar", LX, 278, LW, 34)) {
+    if (A.style.button("Começar", LX, footerY, LW, btnH)) {
         startRound();
         return "jogo";
     }
 }
 
 // ---- jogo (wait / quiz / end na mesma tela) --------------------------------
-var ringSig = "";
-function progressRing(c) {
-    var sig = qIndex + "|" + TOTAL;
-    if (!c.full && sig === ringSig) return;
-    ringSig = sig;
-    A.widgets.ring(44, 80, 22, (qIndex + 1) / TOTAL,
-                   { th: 5, label: (qIndex + 1) + "/" + TOTAL, font: 1 });
+// Mede uma vez por pergunta. Conteudo longo continua acessivel por rolagem.
+function measureQuestion() {
+    if (measured === q) return;
+    measured = q;
+    UI.resetScroll("questao");
+    questionH = UI.measureWrap(q.q, LW - 16, "body") + 16;
+    var gridRows = 4 / columns;
+    var grid = { x: LX, y: viewY + questionH + gap, w: LW,
+                 h: Math.max(0, viewH - questionH - gap) };
+    var answerH = Math.max(28, Math.floor((grid.h - gap * (gridRows - 1)) / gridRows));
+    for (var i = 0; i < 4; i++) {
+        var w = A.layout.cell(grid, columns, gridRows, i, gap).w;
+        textHeights[i] = UI.measureWrap(q.a[i], w - 24, "caption");
+        answerH = Math.max(answerH, textHeights[i] + 10);
+    }
+    grid.h = gridRows * answerH + (gridRows - 1) * gap;
+    for (var k = 0; k < 4; k++) answerBoxes[k] = A.layout.cell(grid, columns, gridRows, k, gap);
 }
 
-function altCard(i, x, y, w, h, t) {
-    var done = answered >= 0;
-    var right = done && i === q.c;
-    var wrong = done && i === answered && i !== q.c;
+function altCard(i, t, off) {
+    var box = answerBoxes[i], y = box.y - off;
+    if (y >= viewY + viewH || y + box.h <= viewY) return;
+    var done = answered >= 0, right = done && i === q.c, wrong = done && i === answered && !right;
     var bg = right ? T.ok : wrong ? T.err : T.card;
     var fg = right || wrong ? T.onAccent : (done ? T.textDim : T.text);
-    UI.card(x, y, w, h, { color: bg, radius: 8, stroke: !done });
-    var ty = y + Math.round((h - 16) / 2);   // bloco de 2 linhas centrado
-    UI.text(String.fromCharCode(65 + i), x + 7, ty,
-            { role: "caption", color: fg, w: 12, lines: 2 });
-    UI.text(q.a[i], x + 19, ty, { role: "caption", color: fg, w: w - 25, lines: 2 });
+    UI.card(box.x, y, box.w, box.h, { color: bg, radius: 8, stroke: !done });
+    var textH = textHeights[i];
+    UI.text(String.fromCharCode(65 + i), box.x + 5, y + (box.h - capH) / 2,
+            { role: "caption", color: done ? fg : T.accent, w: 12 });
+    UI.text(q.a[i], box.x + 18, y + (box.h - textH) / 2,
+            { role: "caption", color: fg, w: box.w - 24, lines: 64 });
     UI.cardEnd();
-    if (!done && t.tap && t.x >= x && t.x <= x + w && t.y >= y && t.y <= y + h) responde(i);
+    if (!done && t.tap && t.y >= viewY && t.y < viewY + viewH &&
+        t.x >= box.x && t.x < box.x + box.w && t.y >= y && t.y < y + box.h) responde(i);
 }
 
 function waitFrame(c) {
@@ -244,7 +264,7 @@ function waitFrame(c) {
             { role: "title", align: "center", color: T.text });
     UI.text("consultando o assistente...", 120, 156,
             { role: "caption", align: "center", color: T.textDim });
-    if (A.style.button("Cancelar", 70, 280, 100, 32, { variant: "ghost" })) {
+    if (A.style.button("Cancelar", LX, footerY, LW, btnH, { variant: "ghost" })) {
         if (aiOk) { try { AI.cancel(); } catch (e) { } }
         state = "menu";
         return A.BACK;
@@ -252,55 +272,55 @@ function waitFrame(c) {
 }
 
 function quizFrame(c) {
-    progressRing(c);
-    UI.text("sequência x" + streak, 78, 62, { role: "body", color: streak >= 3 ? T.warn : T.text });
-    UI.text("acertos " + score + "/" + TOTAL, 78, 82, { role: "caption", color: T.textDim });
-    A.style.card(LX, 108, LW, 64, { full: c.full, elev: 1, grad: true,
-        draw: function (r) {
-            var hgt = UI.measureWrap(q.q, r.w, "body");
-            UI.text(q.q, r.x, r.y + Math.max(0, Math.round((r.h - hgt) / 2)),
-                    { role: "body", color: T.text, w: r.w, lines: 3 });
-        }
-    });
-    // uma leitura de toque por frame (os 4 cards compartilham o mesmo estado)
+    UI.text("Pergunta " + (qIndex + 1) + "/" + TOTAL, LX + 2, area.y,
+            { role: "caption", color: T.textDim, w: LW / 2 });
+    UI.text("Sequência " + streak, LX + LW - 2, area.y,
+            { role: "caption", align: "right", color: streak >= 3 ? T.warn : T.textDim, w: LW / 2 });
+    UI.progress(LX, area.y + capH + 3, LW, 4, Math.round(100 * (qIndex + 1) / TOTAL));
+    measureQuestion();
+    var last = answerBoxes[3];
+    var off = UI.scrollBegin("questao", LX, viewY, LW, viewH, last.y + last.h - viewY);
+    UI.card(LX, viewY - off, LW, questionH, { color: T.raised, radius: 9 });
+    UI.text(q.q, LX + 8, viewY - off + 8, { role: "body", color: T.text, w: LW - 16, lines: 64 });
+    UI.cardEnd();
     var t = UI.touch();
-    altCard(0, LX, 178, 108, 46, t);
-    altCard(1, LX + 116, 178, 108, 46, t);
-    altCard(2, LX, 228, 108, 46, t);
-    altCard(3, LX + 116, 228, 108, 46, t);
+    for (var i = 0; i < 4; i++) altCard(i, t, off);
+    UI.scrollEnd();
     if (answered >= 0) {
         var ok = answered === q.c;
         UI.text(ok ? (streak >= 3 ? "certo! sequência x" + streak : "certo!")
                    : "a certa é a letra " + String.fromCharCode(65 + q.c),
-                120, 280, { role: "caption", align: "center", id: 9,
+                cx, noteY, { role: "caption", align: "center", id: 9,
                             color: ok ? T.ok : T.err, w: LW });
         if (A.style.button(qIndex + 1 >= TOTAL ? "Ver resultado" : "Próxima",
-                           70, 292, 100, 24, { role: "caption" })) {
+                           LX, footerY, LW, btnH, { role: "caption" })) {
             proxima();
         }
     } else if (aviso) {
-        UI.text(aviso, 120, 284, { role: "caption", align: "center",
+        UI.text(aviso, cx, noteY, { role: "caption", align: "center",
                 color: T.textDim, w: LW, lines: 1, id: 8 });
     }
 }
 
 function endFrame(c) {
-    A.widgets.ring(120, 108, 52, score / TOTAL,
+    var cy = area.y + (area.h - 134) / 2;
+    var radius = Math.min(52, Math.floor((area.h - 162) / 2));
+    A.widgets.ring(cx, cy, radius, score / TOTAL,
                    { th: 8, color: score >= TOTAL / 2 ? T.ok : T.err,
                      label: score + "/" + TOTAL, font: 2 });
-    UI.text("Fim do quiz", 120, 168, { role: "title", align: "center", color: T.text });
-    UI.text("melhor sequência: " + bestStreak, 120, 190,
+    UI.text("Fim do quiz", cx, cy + radius + 5, { role: "title", align: "center", color: T.text });
+    UI.text("melhor sequência: " + bestStreak, cx, cy + radius + 8 + UI.lineHeight("title"),
             { role: "caption", align: "center", color: T.textDim });
-    if (novoRec) UI.badge("novo recorde!", LX + 2, 206, { color: T.warn, textColor: T.onAccent });
-    else UI.text("recorde " + hi + "/" + TOTAL, 120, 212,
+    if (novoRec) UI.badge("novo recorde!", LX + 2, footerY - 68, { color: T.warn, textColor: T.onAccent });
+    else UI.text("recorde " + hi + "/" + TOTAL, cx, footerY - 68,
                  { role: "caption", align: "center", color: T.textDim });
-    UI.text(lastOrigin, 120, 232, { role: "caption", align: "center",
+    UI.text(lastOrigin, cx, footerY - 36 - capH - 3, { role: "caption", align: "center",
             color: T.textDim, w: LW, lines: 1 });
-    if (A.style.button("Jogar de novo", LX, 250, LW, 34)) {
+    if (A.style.button("Jogar de novo", LX, footerY - 36, LW, btnH)) {
         startRound();
         return undefined;
     }
-    if (A.style.button("Menu", LX, 290, LW, 24, { variant: "ghost", role: "caption" })) {
+    if (A.style.button("Menu", LX, footerY, LW, btnH, { variant: "ghost", role: "caption" })) {
         state = "menu";
         return A.BACK;
     }

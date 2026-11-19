@@ -30,6 +30,7 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 | `celeros.app.style` | 4.7 KB | **design tokens + 4 presets**, safe-area content, stack, card (gradient/shadow), divider, button |
 | `celeros.app.icons` | 0.2 KB | thin shim over the shared icon table below (`A.icons`, same 12 + `dot`) |
 | `celeros.ui.icons` | 2.6 KB | **shared vector icon table** (dot + 12 common), used by apps **and** `celeros.game.ui`; depends only on `System.*` |
+| `celeros.app.layout` | ~2 KB | safe content bounds, physical-width breakpoints and grid cells |
 | `celeros.app.widgets` | 4.7 KB | **header with actions**, icon button, ring/gauge, bottom sheet, segmented |
 | `celeros.app.rows` | 2.0 KB | rich form row painter for `A.list.view` (toggle/gauge/stepper/choice/picker/info) |
 | `celeros.app.launch` | 1.6 KB | installed-app scan (first seen wins), state rows against a hub catalog, open app |
@@ -43,6 +44,23 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 
 The whole family is ~50 KB stripped; the `kit` closure is ~15.4 KB. Every
 module declares its own `version` and registers a unique name in `A._mods`.
+
+## Responsive app layouts
+
+Declare `"celeros.app.layout": "^1.0.0"` in the app dependencies. Compute the rectangles when opening the screen and reuse them for drawing and touch.
+
+`bounds({ top, bottom, pad })` returns the usable rectangle in canvas coordinates. The two bands default to zero and padding defaults to 4. Use `pad: 0` to reach the edge of a rectangular panel. Rounded panels keep their corner inset. The fixed system topbar is already outside the app canvas.
+
+`columns(rect, minWidthPx, gap)` returns how many columns fit, with a minimum of one. Only the minimum column width uses **physical pixels**. The gap and the rectangles passed to widgets use canvas units. `cell(rect, cols, rows, index, gap)` numbers cells from zero in row order and distributes leftover pixels to reach the last edge.
+
+```js
+var A = require("celeros.app");
+require("celeros.app.layout");
+var body = A.layout.bounds({ top: 40, bottom: 48 });
+var cols = Math.min(2, A.layout.columns(body, 200, 6));
+var timer = A.layout.cell(body, cols, 2 / cols, 0, 6);
+var laps = A.layout.cell(body, cols, 2 / cols, 1, 6);
+```
 
 ## UI kit 2.0 (`celeros.app.style`, `.icons`, `.widgets`, `.rows`)
 

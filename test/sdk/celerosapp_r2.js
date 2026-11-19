@@ -97,6 +97,34 @@ module.exports = function (check) {
     check('style: stack encadeia com gap', y1 === 20 && y2 === 44 &&
           st.end() === 34, JSON.stringify([y1, y2, st.end()]));
 
+    var layout = fresh(['layout']).A.layout;
+    var area = layout.bounds({ pad: 0 });
+    check('layout: sem margem ocupa todo o canvas', area.x === 0 && area.y === 0 &&
+          area.w === 240 && area.h === 320 && layout.columns(area, 200, 6) === 1);
+    var panel = fresh(['layout'], function (env) {
+        env.System.getInfo = function () { return { screenW: 480, screenH: 480 }; };
+    }).A.layout;
+    area = panel.bounds({ top: 40, bottom: 48 });
+    check('layout: vidro quadrado comporta duas colunas no mesmo canvas virtual',
+          area.y === 44 && area.h === 224 && panel.columns(area, 200, 6) === 2);
+    var watch = fresh(['layout'], function (env) {
+        env.System.getInfo = function () { return { screenW: 410, screenH: 502, inset: 24 }; };
+    }).A.layout;
+    area = watch.bounds({ top: 40 });
+    check('layout: cantos do relogio e rodape em escalas diferentes',
+          area.x === 24 && area.w === 192 && area.y === 44 && area.y + area.h === 293 &&
+          watch.columns(area, 200, 6) === 1);
+    var odd = { x: 3, y: 7, w: 33, h: 28 };
+    var a = layout.cell(odd, 4, 3, 0, 3), b = layout.cell(odd, 4, 3, 1, 3);
+    var last = layout.cell(odd, 4, 3, 11, 3);
+    var tiny = layout.cell({ x: 0, y: 0, w: 4, h: 1 }, 4, 1, 3, 8);
+    check('layout: grade fecha nas duas bordas, inclusive com gap excessivo',
+          a.x === odd.x && a.y === odd.y && b.x === a.x + a.w + 3 &&
+          last.x + last.w === 36 && last.y + last.h === 35 && tiny.x === 3 && tiny.w === 1);
+    var rejected = false;
+    try { layout.cell(odd, 4, 3, 12); } catch (err) { rejected = err.name === 'RangeError'; }
+    check('layout: indice fora da grade recusado', rejected);
+
     // ================================================================ icons
     c = fresh(['icons']);
     var arcs = 0;
@@ -125,6 +153,22 @@ module.exports = function (check) {
     });
     check('widgets: header devolve back e action', acts[0] === 'back' &&
           acts[1] === 'wifi', JSON.stringify(acts));
+
+    c = fresh(['widgets'], function (env) {
+        env.System.getInfo = function () { return { inset: 24 }; };
+    });
+    var headerText = [];
+    var originalText = c.U.text;
+    c.U.text = function (s, x, y, opts) {
+        headerText.push({ x: x, w: opts.w });
+        return originalText(s, x, y, opts);
+    };
+    frames(c, 1, function (full) {
+        c.A.widgets.header('Um título muito comprido', { sub: 'Um subtítulo comprido', full: full });
+    });
+    check('widgets: titulo e subtitulo cabem entre os cantos sem sobreposicao',
+          headerText[0].x >= 24 && headerText[1].x === 216 &&
+          headerText[0].x + headerText[0].w < headerText[1].x - headerText[1].w);
 
     c = fresh(['style', 'icons', 'widgets']);
     tap(c.env, 60, 60);

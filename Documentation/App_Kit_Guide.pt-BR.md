@@ -30,6 +30,7 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 | `celeros.app.style` | 4.7 KB | **tokens + 4 presets**, safe area, stack, card (gradiente/sombra), divider, botão |
 | `celeros.app.icons` | 0.2 KB | shim fino sobre a tabela compartilhada abaixo (`A.icons`, os mesmos 12 + `dot`) |
 | `celeros.ui.icons` | 2.6 KB | **tabela de ícones vetoriais compartilhada** (dot + 12 comuns), usada pelos apps **e** pelo `celeros.game.ui`; depende só de `System.*` |
+| `celeros.app.layout` | ~2 KB | área útil, colunas por largura física e células de grade |
 | `celeros.app.widgets` | 4.7 KB | **header com ações**, botão com ícone, iconButton, anel/medidor, sheet inferior, segmented |
 | `celeros.app.rows` | 2.0 KB | pintor de linha rico do form no `A.list.view` (toggle/gauge/stepper/choice/picker/info) |
 | `celeros.app.launch` | 1.6 KB | scan dos apps instalados (1ª vista vence), linhas de estado contra o catálogo do hub, abrir app |
@@ -43,6 +44,23 @@ A.run({ main: function (c) { /* ... */ } }, "main");
 
 A família inteira tem ~50 KB stripped; o fecho do `kit`, ~15,4 KB. Todo
 módulo declara o próprio `version` e registra um nome único em `A._mods`.
+
+## Layout adaptável dos apps
+
+Declare `"celeros.app.layout": "^1.0.0"` nas dependências do app. Calcule os retângulos ao abrir a tela e reutilize-os no desenho e no toque.
+
+`bounds({ top, bottom, pad })` devolve a área útil em coordenadas do app. As faixas superior e inferior começam em zero e a margem padrão é 4. Use `pad: 0` para ocupar até a borda de um painel retangular. Painéis arredondados preservam a margem dos cantos. A barra fixa do sistema já fica fora do canvas do app.
+
+`columns(rect, minWidthPx, gap)` calcula quantas colunas cabem, com mínimo de uma. Só a largura mínima da coluna usa **pixels físicos**. O espaçamento e os retângulos dos widgets usam as coordenadas do canvas. `cell(rect, cols, rows, index, gap)` numera as células por linha a partir de zero e distribui os pixels restantes até a última borda.
+
+```js
+var A = require("celeros.app");
+require("celeros.app.layout");
+var body = A.layout.bounds({ top: 40, bottom: 48 });
+var cols = Math.min(2, A.layout.columns(body, 200, 6));
+var timer = A.layout.cell(body, cols, 2 / cols, 0, 6);
+var laps = A.layout.cell(body, cols, 2 / cols, 1, 6);
+```
 
 ## Kit de UI 2.0 (`celeros.app.style`, `.icons`, `.widgets`, `.rows`)
 

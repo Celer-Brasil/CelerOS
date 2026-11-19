@@ -26,15 +26,8 @@ require('celeros.app.style');
 require('celeros.app.icons');
 var S = System;
 
-function mix(a, b, t) {
-    if (t <= 0) return a;
-    if (t >= 1) return b;
-    var r1 = (a >> 11) & 31, g1 = (a >> 5) & 63, b1 = a & 31;
-    var r2 = (b >> 11) & 31, g2 = (b >> 5) & 63, b2 = b & 31;
-    return (Math.round(r1 + (r2 - r1) * t) << 11) |
-           (Math.round(g1 + (g2 - g1) * t) << 5) |
-           Math.round(b1 + (b2 - b1) * t);
-}
+// Margem dos controles no topo do vidro. O fundo continua de borda a borda.
+var headerPad = Math.max(8, A.style.inset());
 
 var _tap = false;
 var _bOn = false;
@@ -60,7 +53,7 @@ function pressIn(x, y, w, h) {
 }
 
 A.widgets = {
-    version: '1.0.2',
+    version: '1.1.0',
 
     // botao com icone (o A.style.button delega para ca quando ha icone).
     // Sem icone o caminho nativo do style (UI.button) e melhor: ele tem
@@ -88,7 +81,7 @@ A.widgets = {
         var on = !dis && pressIn(x, y, w, h);
         if (on !== _bOn) { _bOn = on; UI.invalidate(); }
         UI.card(x, y, w, h, {
-            color: on ? mix(bg, 0x0000, 0.15) : bg,
+            color: on ? S.mixColor(bg, 0, 15) : bg,
             radius: o.r === undefined ? T.radius : o.r,
             stroke: o.stroke === true
         });
@@ -119,7 +112,7 @@ A.widgets = {
         var on = !o.disabled && pressIn(x, y, size, size);
         if (on !== _bOn) { _bOn = on; UI.invalidate(); }
         UI.card(x, y, size, size, {
-            color: on ? mix(bg, 0x0000, 0.15) : bg,
+            color: on ? S.mixColor(bg, 0, 15) : bg,
             radius: o.r === undefined ? Math.round(size / 2) : o.r,
             stroke: false
         });
@@ -140,30 +133,33 @@ A.widgets = {
         var n = acts.length;
         var asz = h - 12;
         var agap = 4;
-        var aw = n ? n * (asz + agap) + 8 : 0;
+        var right = 240 - headerPad;
+        var tx = headerPad + (back ? 22 : 0);
+        var room = right - tx;
+        var subW = o.sub && !n ? Math.min(UI.measure(o.sub, 'caption'), Math.floor(room / 2)) : 0;
+        var titleW = room - n * (asz + agap) - (subW ? subW + agap : 0);
         UI.card(0, 0, 240, h, { color: bg, radius: 0, stroke: false });
         if (o.full) {
-            if (T.grad) S.fillGradient(0, 0, 240, h, mix(bg, 0xFFFF, 0.05), bg, 0);
+            if (T.grad) S.fillGradient(0, 0, 240, h, S.mixColor(bg, 0xFFFF, 5), bg, 0);
             S.fillRect(0, h - 1, 240, 1, T.stroke);
         }
-        if (back) A.icons.draw('back', 6, Math.round((h - 18) / 2), 18, { color: T.accent });
-        var tx = back ? 30 : 8;
-        UI.text(title, tx, Math.round((h - UI.lineHeight('title')) / 2),
-                { role: 'title', color: T.text, bg: bg, w: 240 - tx - aw - 8, lines: 1 });
-        if (o.sub && !n) {
-            UI.text(o.sub, 232, Math.round((h - UI.lineHeight('caption')) / 2),
+        if (back) A.icons.draw('back', headerPad - 2, Math.round((h - 18) / 2), 18, { color: T.accent });
+        if (titleW > 0) UI.text(title, tx, Math.round((h - UI.lineHeight('title')) / 2),
+                { role: 'title', color: T.text, bg: bg, w: titleW, lines: 1 });
+        if (subW) {
+            UI.text(o.sub, right, Math.round((h - UI.lineHeight('caption')) / 2),
                     { role: 'caption', align: 'right', color: T.textDim, bg: bg,
-                      w: 120, lines: 1 });
+                      w: subW, lines: 1 });
         }
         var action = null;
         for (var i = 0; i < n; i++) {
-            var ax = 240 - 8 - asz - (n - 1 - i) * (asz + agap);
+            var ax = right - asz - (n - 1 - i) * (asz + agap);
             if (A.widgets.iconButton(acts[i].icon, ax, Math.round((h - asz) / 2),
                                      asz, { bg: bg, color: T.text })) {
                 action = acts[i].id;
             }
         }
-        var isBack = back && tapIn(0, 0, 44, h);
+        var isBack = back && tapIn(0, 0, headerPad + 36, h);
         UI.cardEnd();
         return { back: isBack, action: action };
     },
@@ -217,7 +213,7 @@ A.widgets = {
         var y = H - h * s.p;
         if (o.full) {
             S.fillRect(0, 0, W, H,
-                       mix(T.bg, 0x0000, (o.dim === undefined ? 55 : o.dim) * s.p / 100));
+                       S.mixColor(T.bg, 0, Math.round((o.dim === undefined ? 55 : o.dim) * s.p)));
         }
         A.style.card(0, y, W, h, {
             full: o.full, r: T.radius, grad: true,

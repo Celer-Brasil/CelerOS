@@ -7,6 +7,7 @@
 
 var A = require("celeros.app");
 require("celeros.app.style");
+require("celeros.app.layout");
 require("celeros.app.icons");
 require("celeros.app.widgets");
 A.init();
@@ -18,16 +19,18 @@ var preset = "";
 try { preset = Storage.get("preset", "") || ""; } catch (e) { preset = ""; }
 if (preset) A.style.preset(preset);
 var T = A.style.T;
+var operatorBg = System.mixColor(T.raised, T.accent, 22);
 
-// layout na area segura (no watch redondo A.L encolhe a largura/rodape)
-var LX = A.L.x, LW = A.L.w, BOT = A.L.bottom;
-var CARD_Y = A.L.top - 4, CARD_H = 88;          // 44/88 no retangular
-var HIW = LW - 96;                             // linha do historico
-var CHIP_W = 66, CHIP_X = LX + LW - CHIP_W - 8;
-var KEY_Y = CARD_Y + CARD_H + 6;
-var KEY_GAP = 5;
-var KEY_W = Math.floor((LW - 3 * KEY_GAP) / 4);
-var KEY_H = Math.floor((BOT - KEY_Y - 4 * KEY_GAP) / 5);
+// O visor reserva a altura real das fontes; o teclado recebe todo o restante.
+var area = A.layout.bounds({ top: 40 });
+var LX = area.x, LW = area.w, CARD_Y = area.y;
+var captionH = UI.lineHeight("caption"), bodyH = UI.lineHeight("body");
+var summaryH = Math.max(20, 2 * captionH + 2);
+var CARD_H = 16 + summaryH + 2 + bodyH + 2 + UI.lineHeight("display");
+var HIW = LW - 96;
+var CHIP_W = 66, CHIP_X = LX + LW - CHIP_W - 8, CHIP_Y = CARD_Y + 8;
+var keypad = { x: LX, y: CARD_Y + CARD_H + 4, w: LW, h: area.h - CARD_H - 4 };
+var keyRects = [];
 
 // ---- estado ----------------------------------------------------------------
 var expr = "";
@@ -186,6 +189,7 @@ function themeSheet(c) {
                 if (shOpen && hit) {
                     preset = i === 0 ? "" : PRESETS[i - 1];
                     A.style.preset(preset || "soft");
+                    operatorBg = System.mixColor(T.raised, T.accent, 22);
                     try { Storage.set("preset", preset); } catch (e) { /* sem nvs */ }
                     closeSheet();
                 }
@@ -203,40 +207,42 @@ var KEYS = [
     ["DEL", "x", ""], ["0", "d", "0"], [".", "d", "."], ["=", "=", ""]
 ];
 
+for (var n = 0; n < KEYS.length; n++) keyRects.push(A.layout.cell(keypad, 4, 5, n, 3));
+
 function keyOpt(k) {
     var t = k[1];
     if (t === "=") return { variant: "primary", role: "title" };
     if (t === "d") return { variant: "secondary", role: "title" };
     if (t === "o" || t === "i")
-        return { variant: "secondary", role: "title", textColor: T.accent };
+        return { color: operatorBg, role: "title", textColor: T.text };
     return { variant: "secondary", role: t === "x" ? "body" : "title",
              textColor: T.warn };
 }
 
 // ---- visor ------------------------------------------------------------------
 function visor(c) {
-    A.style.card(LX, CARD_Y, LW, CARD_H, { full: c.full, draw: function (r) {
+    A.style.card(LX, CARD_Y, LW, CARD_H, { full: c.full, pad: 8, elev: 0, draw: function (r) {
         var bg = r.bg;
         // chip do ANS (desenhado no frame cheio; o texto tem slot proprio)
         if (c.full) {
-            System.fillRoundRect(CHIP_X, r.y - 2, CHIP_W, 20, 10, T.raised);
-            System.drawRoundRect(CHIP_X, r.y - 2, CHIP_W, 20, 10, T.stroke);
+            System.fillRoundRect(CHIP_X, CHIP_Y, CHIP_W, 20, 10, T.raised);
+            System.drawRoundRect(CHIP_X, CHIP_Y, CHIP_W, 20, 10, T.stroke);
         }
         // ultimas contas
-        UI.text(hist.length ? tail(hist[0].e, "caption", HIW) : "pronto",
+        UI.text(hist.length ? tail(hist[0].e, "caption", HIW) : "",
                 r.x, r.y, { role: "caption", color: T.textDim, bg: bg, w: HIW, id: "h0" });
         if (hist.length > 1) {
-            UI.text(tail(hist[1].e, "caption", HIW), r.x, r.y + 11,
+            UI.text(tail(hist[1].e, "caption", HIW), r.x, r.y + captionH + 2,
                     { role: "caption", color: T.textDim, bg: bg, w: HIW, id: "h1" });
         }
-        UI.text("ANS " + fmt(ans), CHIP_X + CHIP_W / 2, r.y + 1,
+        UI.text("ANS " + fmt(ans), CHIP_X + CHIP_W / 2, CHIP_Y + Math.floor((20 - captionH) / 2),
                 { role: "caption", align: "center", color: T.accent, bg: T.raised,
                   w: CHIP_W - 4, id: "ans" });
         // expressao corrente (cauda visivel)
-        UI.text(tail(pretty(expr) || "0", "body", r.w), r.x, r.y + 24,
+        UI.text(tail(pretty(expr), "body", r.w), r.x, r.y + summaryH + 2,
                 { role: "body", color: T.text, bg: bg, w: r.w, id: "expr" });
         // resultado fechado (accent) ou previa viva (dim)
-        var big = "", col = T.accent;
+        var big = expr ? "" : "0", col = T.text;
         if (result !== "") {
             big = result;
             col = result === "erro" ? T.err : T.accent;
@@ -244,7 +250,7 @@ function visor(c) {
             big = "= " + fmt(prevVal);
             col = T.textDim;
         }
-        UI.text(tail(big, "display", r.w), r.x + r.w, r.y + 44,
+        UI.text(tail(big, "display", r.w), r.x + r.w, r.y + summaryH + bodyH + 4,
                 { role: "display", align: "right", color: col, bg: bg, w: r.w, id: "big" });
     }});
 }
@@ -266,16 +272,14 @@ function tela(c) {
 
     // toque no chip do ANS insere o ultimo resultado
     var tp = UI.touch();
-    if (!dead && tp.tap && tp.x >= CHIP_X && tp.x <= CHIP_X + CHIP_W &&
-        tp.y >= CARD_Y + 8 && tp.y <= CARD_Y + 28) {
+    if (!dead && tp.tap && tp.x >= CHIP_X && tp.x < CHIP_X + CHIP_W &&
+        tp.y >= CHIP_Y && tp.y < CHIP_Y + 20) {
         useVal(fmt(ans));
     }
 
     for (var i = 0; i < KEYS.length; i++) {
-        var k = KEYS[i], col = i % 4, row = (i / 4) | 0;
-        if (A.style.button(k[0], LX + col * (KEY_W + KEY_GAP),
-                           KEY_Y + row * (KEY_H + KEY_GAP),
-                           KEY_W, KEY_H, keyOpt(k))) {
+        var k = KEYS[i], r = keyRects[i];
+        if (A.style.button(k[0], r.x, r.y, r.w, r.h, keyOpt(k))) {
             if (!dead) press(k[2], k[1]);
         }
     }
